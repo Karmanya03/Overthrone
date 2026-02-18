@@ -1,9 +1,10 @@
-﻿# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 # Rust / Cargo
 # ═══════════════════════════════════════════════════════════
 /target/
 **/*.rs.bk
-Cargo.lock
+# NOTE: Cargo.lock is NOT ignored — it must be committed for
+# binary crates to ensure reproducible builds across CI/CD.
 
 # ═══════════════════════════════════════════════════════════
 # Build Artifacts
