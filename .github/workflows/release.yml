@@ -1,1 +1,146 @@
-[FILE CONTENT - Release workflow with only x86_64-gnu, macOS, and Windows targets]
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset_name: overthrone-linux-x86_64
+            binary: overthrone
+
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset_name: overthrone-macos-x86_64
+            binary: overthrone
+
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset_name: overthrone-macos-aarch64
+            binary: overthrone
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: overthrone-windows-x86_64.exe
+            binary: overthrone.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.target }}-cargo-
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p overthrone
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          cp ${{ matrix.binary }} ${{ matrix.asset_name }}
+          chmod +x ${{ matrix.asset_name }}
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          cp ${{ matrix.binary }} ${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | head -20
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## 🔥 Overthrone ${{ github.ref_name || 'latest' }}
+
+            **Autonomous Active Directory Red Team Framework.**
+            Every throne falls. Overthrone makes sure of it.
+
+            ---
+
+            ### One-line install
+
+            **Linux / macOS:**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/Karmanya03/Overthrone/main/install.sh | bash
+            ```
+
+            **Windows PowerShell:**
+            ```powershell
+            irm https://raw.githubusercontent.com/Karmanya03/Overthrone/main/install.ps1 | iex
+            ```
+
+            ### Manual download
+            | Platform | Binary |
+            |---|---|
+            | Linux x86_64 | `overthrone-linux-x86_64` |
+            | macOS Intel | `overthrone-macos-x86_64` |
+            | macOS Apple Silicon | `overthrone-macos-aarch64` |
+            | Windows x86_64 | `overthrone-windows-x86_64.exe` |
+
+            Download, `chmod +x`, move to PATH. Done.
+
+            ---
+
+            **Every throne falls. 👑⚔️**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
