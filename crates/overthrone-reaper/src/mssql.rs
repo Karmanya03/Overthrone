@@ -1,9 +1,10 @@
-﻿//! MSSQL instance enumeration via SPN scanning.
+//! MSSQL instance enumeration via SPN scanning.
 
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
+use overthrone_core::proto::ldap::LdapSession;
 use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlInstance {
@@ -17,6 +18,8 @@ pub struct MssqlInstance {
 }
 
 impl MssqlInstance {
+    /// Parse a MSSQLSvc SPN into its components.
+    /// Format: MSSQLSvc/<host>:<port|instance>
     pub fn from_spn(spn: &str, account: &str, dn: &str, enabled: bool) -> Self {
         let parts: Vec<&str> = spn.splitn(2, '/').collect();
         let (hostname, instance, port) = if parts.len() == 2 {
@@ -50,5 +53,77 @@ pub fn mssql_filter() -> String {
 
 pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>> {
     info!("[mssql] Querying {} for MSSQL service accounts", config.dc_ip);
-    Err(OverthroneError::NotImplemented { module: "reaper::mssql".into() })
+
+    let mut conn = LdapSession::connect(
+        &config.dc_ip,
+        &config.domain,
+        &config.username,
+        config.password.as_deref().unwrap_or(""),
+        false,
+    ).await?;
+
+    let filter = mssql_filter();
+    let attrs = &[
+        "sAMAccountName",
+        "distinguishedName",
+        "servicePrincipalName",
+        "userAccountControl",
+        "pwdLastSet",
+        "adminCount",
+    ];
+
+    let entries = match conn.custom_search(&filter, attrs).await {
+        Ok(e) => e,
+        Err(e) => {
+            warn!("[mssql] LDAP search failed: {}", e);
+            let _ = conn.disconnect().await;
+            return Err(e);
+        }
+    };
+
+    let mut results = Vec::new();
+
+    for entry in &entries {
+        let account = entry.attrs
+            .get("sAMAccountName")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_else(|| entry.dn.clone());
+
+        let uac: u32 = entry.attrs
+            .get("userAccountControl")
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let enabled = uac & 0x0002 == 0; // bit 1 = ACCOUNTDISABLE
+
+        let spns: Vec<String> = entry.attrs
+            .get("servicePrincipalName")
+            .cloned()
+            .unwrap_or_default();
+
+        for spn in &spns {
+            // Only include MSSQLSvc SPNs
+            if !spn.to_uppercase().starts_with("MSSQLSVC/") {
+                continue;
+            }
+
+            let instance = MssqlInstance::from_spn(spn, &account, &entry.dn, enabled);
+
+            info!("[mssql]  {} → {} (host: {}, port: {:?})",
+                account,
+                spn,
+                instance.hostname.as_deref().unwrap_or("?"),
+                instance.port);
+
+            results.push(instance);
+        }
+    }
+
+    let _ = conn.disconnect().await;
+
+    info!("[mssql] Found {} MSSQL instances across {} accounts",
+        results.len(), entries.len());
+    Ok(results)
 }
