@@ -83,16 +83,16 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} -p overthrone
 
       - name: Rename binary
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
           if [ -f "overthrone" ]; then
-            mv overthrone ${{ matrix.asset_name }}
+            cp overthrone ${{ matrix.asset_name }}
           elif [ -f "overthrone.exe" ]; then
-            mv overthrone.exe ${{ matrix.asset_name }}
+            cp overthrone.exe ${{ matrix.asset_name }}
           fi
 
       - name: Upload artifact
