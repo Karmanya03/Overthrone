@@ -40,8 +40,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # CLI
 clap = { version = "4.5", features = ["derive", "color", "env", "wrap_help"] }
 
-# LDAP
-ldap3 = "0.12"
+# LDAP — use rustls instead of native-tls to avoid the native-tls 0.2.17
+# Protocol::Tlsv13 non-exhaustive match bug on Linux/OpenSSL.
+# tls-rustls-ring uses ring as the crypto provider (no cmake needed).
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 
 # Graph Engine
 petgraph = "0.8"
