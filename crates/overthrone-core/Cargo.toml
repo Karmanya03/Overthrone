@@ -48,16 +48,19 @@ kerberos_crypto.workspace = true
 # Networking
 hickory-resolver.workspace = true
 
-# SMB (with compatible version)
-smb = "0.11.1"
+async-trait = "0.1"
 
-# WinRM - Native Win32 API
+# ── Windows-only dependencies ──────────────────────────────
+# The `smb` crate depends on sspi → windows-future which only
+# compiles on Windows. The `windows` crate provides Win32 APIs
+# for WinRM that are unavailable on other platforms.
+[target.'cfg(windows)'.dependencies]
+smb = "0.11.1"
 windows = { version = "0.62", features = [
     "Win32_System_RemoteManagement",
     "Win32_Foundation",
     "Win32_Security",
-]} 
-async-trait = "0.1"
+]}
 
 [dev-dependencies]
 tokio-test.workspace = true
