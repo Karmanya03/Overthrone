@@ -355,8 +355,10 @@ impl WizardSession {
                     println!("{}", table);
                     info!("  ✓ Total credentials captured: {}", new_creds.len().to_string().bold().green());
 
+                    // NtHash covers both NTLM hashes and Kerberoast RC4 ticket hashes.
+                    // AesKey covers AES Kerberos ticket hashes.
                     let hash_count = new_creds.iter()
-                        .filter(|c| matches!(c.secret_type, SecretType::NtHash | SecretType::Kerberoast))
+                        .filter(|c| matches!(c.secret_type, SecretType::NtHash | SecretType::AesKey))
                         .count();
 
                     if hash_count > 0 && self.auto_crack {
@@ -474,10 +476,10 @@ impl WizardSession {
 
         let input = self.read_input_with_timeout().await?;
         match input.trim().to_lowercase().as_str() {
-            "" | "y" | "yes"        => Ok(StageDecision::Continue),
-            "n" | "no" | "skip"     => Ok(StageDecision::Skip),
+            "" | "y" | "yes"          => Ok(StageDecision::Continue),
+            "n" | "no" | "skip"       => Ok(StageDecision::Skip),
             "abort" | "quit" | "exit" => Ok(StageDecision::Abort),
-            "replan"                => Ok(StageDecision::Replan),
+            "replan"                  => Ok(StageDecision::Replan),
             _ => {
                 warn!("  Invalid choice, continuing...");
                 Ok(StageDecision::Continue)
@@ -527,7 +529,7 @@ impl WizardSession {
 
         let input = self.read_input_with_timeout().await?;
         Ok(match input.trim().to_lowercase().as_str() {
-            "" => default,
+            ""         => default,
             "y" | "yes" => true,
             "n" | "no"  => false,
             _           => default,
