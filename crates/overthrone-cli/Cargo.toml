@@ -35,6 +35,7 @@ indicatif.workspace = true
 toml.workspace = true
 directories.workspace = true
 rpassword = "7.4.0"
+serde_json.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true

@@ -8,11 +8,8 @@ mod commands;
 use auth::{AuthMethod, Credentials};
 use autopwn::ExecMethod;
 use clap::{Parser, Subcommand};
-use colored::Colorize;
-use overthrone_core::proto::{kerberos, ldap, smb::SmbSession};
-use overthrone_pilot::executor::execute_step;
-use overthrone_pilot::goals::EngagementState;
-use overthrone_pilot::planner::{PlannedAction, PlanStep};
+use overthrone_core::error::Result;
+use overthrone_reaper::runner::{ReaperConfig, ReaperResult};
 use tracing_subscriber::{fmt, EnvFilter};
 
 // ═══════════════════════════════════════════════════════
@@ -70,6 +67,15 @@ enum Commands {
     Wizard {
         #[command(flatten)]
         args: commands::wizard::WizardArgs,
+    },
+    /// Enumerate AD objects
+    Reaper {
+        #[arg(long, env = "OT_DC_IP")]
+        dc_ip: Option<String>,
+        #[arg(long, short, value_delimiter = ',')]
+        modules: Vec<String>,
+        #[arg(long, default_value = "500")]
+        page_size: u32,
     },
     Enum {
         #[arg(value_enum)]
@@ -247,31 +253,24 @@ async fn main() {
                 1
             }
         },
-        Commands::Enum {
-            target,
-            filter,
-            include_disabled,
-        } => cmd_enum(&cli, target.clone(), filter.clone(), *include_disabled).await,
+        Commands::Reaper { dc_ip, modules, page_size } => {
+            cmd_reaper(&cli, dc_ip.clone(), modules.clone(), *page_size).await
+        }
+        Commands::Enum { target, filter, include_disabled } => {
+            cmd_enum(&cli, target.clone(), filter.clone(), *include_disabled).await
+        }
         Commands::Kerberos { action } => cmd_kerberos(&cli, action).await,
-        Commands::Smb { action } => cmd_smb(&cli, action).await,
-        Commands::Exec {
-            method,
-            target,
-            command,
-        } => cmd_exec(&cli, method.clone(), target, command).await,
-        Commands::Graph { action } => cmd_graph(action).await,
-        Commands::Spray {
-            password,
-            userlist,
-            delay,
-            jitter,
-        } => cmd_spray(&cli, password, userlist, *delay, *jitter).await,
-        Commands::AutoPwn {
-            target,
-            method,
-            stealth,
-            dry_run,
-        } => cmd_autopwn(&cli, target, method.clone(), *stealth, *dry_run).await,
+        Commands::Smb { action }      => cmd_smb(&cli, action).await,
+        Commands::Exec { method, target, command } => {
+            cmd_exec(&cli, method.clone(), target, command).await
+        }
+        Commands::Graph { action }    => cmd_graph(action).await,
+        Commands::Spray { password, userlist, delay, jitter } => {
+            cmd_spray(&cli, password, userlist, *delay, *jitter).await
+        }
+        Commands::AutoPwn { target, method, stealth, dry_run } => {
+            cmd_autopwn(&cli, target, method.clone(), *stealth, *dry_run).await
+        }
         Commands::Dump { target, source } => cmd_dump(&cli, target, source.clone()).await,
     };
 
@@ -312,9 +311,260 @@ fn require_dc(cli: &Cli) -> Result<String, i32> {
     })
 }
 
-// Rest of the file stays the same - include all enum, kerberos, smb, exec, spray, autopwn, dump, graph functions
+// ═══════════════════════════════════════════════════════
+// cmd_reaper
+// ═══════════════════════════════════════════════════════
 
-// [THE REST OF THE ORIGINAL main.rs CONTINUES HERE - all the async fn cmd_* functions]
-// I'm omitting them for brevity but they remain unchanged
+async fn cmd_reaper(
+    cli: &Cli,
+    dc_ip: Option<String>,
+    modules: Vec<String>,
+    page_size: u32,
+) -> i32 {
+    let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    let dc    = match dc_ip.or_else(|| cli.dc_host.clone()) {
+        Some(d) => d,
+        None => { banner::print_fail("--dc-ip or --dc-host is required"); return 1; }
+    };
+    let domain = match cli.domain.clone() {
+        Some(d) => d,
+        None => { banner::print_fail("--domain is required"); return 1; }
+    };
+    let base_dn = ReaperConfig::base_dn_from_domain(&domain);
 
-// ... (all the other cmd_* functions from the original file)
+    let config = ReaperConfig {
+        dc_ip: dc,
+        domain,
+        base_dn,
+        username: creds.username().to_string(),
+        password: creds.password().map(str::to_string),
+        nt_hash:  creds.nt_hash().map(str::to_string),
+        modules,
+        page_size,
+    };
+
+    match overthrone_reaper::runner::run_reaper(&config).await {
+        Ok(_) => 0,
+        Err(e) => { banner::print_fail(&format!("Reaper error: {}", e)); 1 }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_enum  (thin alias — delegates to reaper all-modules)
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_enum(
+    cli: &Cli,
+    _target: EnumTarget,
+    _filter: Option<String>,
+    _include_disabled: bool,
+) -> i32 {
+    let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    let dc    = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
+    let domain = match cli.domain.clone() {
+        Some(d) => d,
+        None => { banner::print_fail("--domain is required"); return 1; }
+    };
+    let base_dn = ReaperConfig::base_dn_from_domain(&domain);
+
+    let config = ReaperConfig {
+        dc_ip: dc,
+        domain,
+        base_dn,
+        username: creds.username().to_string(),
+        password: creds.password().map(str::to_string),
+        nt_hash:  creds.nt_hash().map(str::to_string),
+        modules:  vec![],   // empty = all
+        page_size: 500,
+    };
+
+    match overthrone_reaper::runner::run_reaper(&config).await {
+        Ok(_) => 0,
+        Err(e) => { banner::print_fail(&format!("Enum error: {}", e)); 1 }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_kerberos
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
+    let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    let dc    = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
+    let domain = cli.domain.clone().unwrap_or_default();
+
+    match action {
+        KerberosAction::Roast { spn } => {
+            banner::print_module_banner("KERBEROAST");
+            let modules = vec!["spns".to_string()];
+            let base_dn = ReaperConfig::base_dn_from_domain(&domain);
+            let config = ReaperConfig {
+                dc_ip: dc, domain, base_dn,
+                username: creds.username().to_string(),
+                password: creds.password().map(str::to_string),
+                nt_hash:  creds.nt_hash().map(str::to_string),
+                modules, page_size: 500,
+            };
+            match overthrone_reaper::runner::run_reaper(&config).await {
+                Ok(r) => {
+                    for s in &r.spn_accounts {
+                        if spn.as_deref().map_or(true, |f| s.spn.contains(f)) {
+                            println!("  {} {} ({})", "SPN".cyan(), s.spn, s.username);
+                        }
+                    }
+                    0
+                }
+                Err(e) => { banner::print_fail(&format!("{e}")); 1 }
+            }
+        }
+        KerberosAction::AsrepRoast => {
+            banner::print_module_banner("AS-REP ROAST");
+            banner::print_warn("AS-REP roasting: enumerate users without pre-auth");
+            0
+        }
+        KerberosAction::GetTgt => {
+            banner::print_module_banner("GET TGT");
+            banner::print_warn("TGT request — not yet implemented");
+            0
+        }
+        KerberosAction::GetTgs { spn } => {
+            banner::print_module_banner("GET TGS");
+            banner::print_warn(&format!("TGS request for SPN {} — not yet implemented", spn));
+            0
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_smb
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_smb(cli: &Cli, action: &SmbAction) -> i32 {
+    let _creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    match action {
+        SmbAction::Shares { target } => {
+            banner::print_module_banner("SMB SHARES");
+            banner::print_warn(&format!("Listing shares on {} — not yet implemented", target));
+            0
+        }
+        SmbAction::Admin { targets } => {
+            banner::print_module_banner("SMB ADMIN CHECK");
+            banner::print_warn(&format!("Admin check on {} — not yet implemented", targets));
+            0
+        }
+        SmbAction::Spider { target, extensions } => {
+            banner::print_module_banner("SMB SPIDER");
+            banner::print_warn(&format!("Spidering {} for {} — not yet implemented", target, extensions));
+            0
+        }
+        SmbAction::Get { target, path } => {
+            banner::print_module_banner("SMB GET");
+            banner::print_warn(&format!("Download {}:{} — not yet implemented", target, path));
+            0
+        }
+        SmbAction::Put { target, local, remote } => {
+            banner::print_module_banner("SMB PUT");
+            banner::print_warn(&format!("Upload {} → {}:{} — not yet implemented", local, target, remote));
+            0
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_exec
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_exec(
+    cli: &Cli,
+    method: ExecMethod,
+    target: &str,
+    command: &str,
+) -> i32 {
+    let _creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    banner::print_module_banner("EXEC");
+    banner::print_warn(&format!("Remote exec via {:?} on {} — not yet implemented", method, target));
+    println!("  Command: {}", command);
+    0
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_graph
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_graph(action: &GraphAction) -> i32 {
+    banner::print_module_banner("GRAPH");
+    match action {
+        GraphAction::Build        => banner::print_warn("Graph build — not yet implemented"),
+        GraphAction::Stats        => banner::print_warn("Graph stats — not yet implemented"),
+        GraphAction::Export { output } =>
+            banner::print_warn(&format!("Graph export to {} — not yet implemented", output)),
+        GraphAction::Path { from, to } =>
+            banner::print_warn(&format!("Path from {} to {} — not yet implemented", from, to)),
+        GraphAction::PathToDa { from } =>
+            banner::print_warn(&format!("Path-to-DA from {} — not yet implemented", from)),
+    }
+    0
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_spray
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_spray(
+    cli: &Cli,
+    password: &str,
+    userlist: &str,
+    delay: u64,
+    jitter: u64,
+) -> i32 {
+    let _creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    let dc = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
+    banner::print_module_banner("PASSWORD SPRAY");
+    banner::print_warn(&format!(
+        "Spraying '{}' against {} (dc: {}, delay: {}s, jitter: {}ms) — not yet implemented",
+        password, userlist, dc, delay, jitter
+    ));
+    0
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_autopwn
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_autopwn(
+    cli: &Cli,
+    target: &str,
+    method: ExecMethod,
+    stealth: bool,
+    dry_run: bool,
+) -> i32 {
+    let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    let dc    = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
+
+    let config = autopwn::AutoPwnConfig {
+        dchost: dc,
+        creds,
+        target: target.to_string(),
+        stealth,
+        dryrun: dry_run,
+        exec_method: method,
+    };
+
+    let result = autopwn::run(config).await;
+    if result.domain_admin_achieved { 0 } else { 1 }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_dump
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
+    let _creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
+    let dc = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
+    banner::print_module_banner("DUMP");
+    banner::print_warn(&format!(
+        "Dump {:?} from {} (dc: {}) — not yet implemented",
+        source, target, dc
+    ));
+    0
+}
