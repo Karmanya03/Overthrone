@@ -11,10 +11,11 @@ description = "Autonomous Active Directory Red Team Framework"
 name = "overthrone"
 path = "src/main.rs"
 
-# Shorthand alias
+# Shorthand alias — points to its own entry point to avoid the
+# "file found in multiple build targets" warning.
 [[bin]]
 name = "ovt"
-path = "src/main.rs"
+path = "src/bin/ovt.rs"
 
 [dependencies]
 overthrone-core = { path = "../overthrone-core" }
