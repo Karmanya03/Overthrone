@@ -39,3 +39,10 @@ rpassword = "7.4.0"
 [dev-dependencies]
 tokio-test.workspace = true
 pretty_assertions.workspace = true
+
+[features]
+default = []
+vendored-openssl = ["openssl/vendored"]
+
+[target.'cfg(any(target_env = "musl"))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"], optional = false }
