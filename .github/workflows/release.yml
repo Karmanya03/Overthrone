@@ -62,6 +62,9 @@ jobs:
           key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ matrix.target }}-cargo-
 
+      - name: Update lockfile
+        run: cargo update
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p overthrone
 
@@ -110,7 +113,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            ## 🔥 Overthrone ${{ github.ref_name || 'latest' }}
+            ## \U0001F525 Overthrone ${{ github.ref_name || 'latest' }}
 
             **Autonomous Active Directory Red Team Framework.**
             Every throne falls. Overthrone makes sure of it.
@@ -141,6 +144,6 @@ jobs:
 
             ---
 
-            **Every throne falls. 👑⚔️**
+            **Every throne falls. \U0001F451\u2694\uFE0F**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

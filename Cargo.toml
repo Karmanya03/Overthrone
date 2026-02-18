@@ -66,7 +66,7 @@ colored = "3.0"
 indicatif = "0.18"
 console = "0.16"
 
-# Crypto - STABLE VERSIONS (compatible with latest sspi-rs)
+# Crypto - STABLE VERSIONS
 aes = "0.8"
 cbc = "0.1"
 hmac = "0.12"
@@ -109,8 +109,7 @@ tokio-test = "0.4"
 tempfile = "3.14"
 pretty_assertions = "1.4"
 
-# ═══════════════════════════════════════════════════════════
-# PATCH: Use Devolutions' actively maintained sspi-rs fork
-# ═══════════════════════════════════════════════════════════
-[patch.crates-io]
-sspi = { git = "https://github.com/Devolutions/sspi-rs.git", branch = "master" }
+# NOTE: sspi git patch removed — Devolutions master branch pulls in
+# windows-future 0.3.2 which breaks on non-Windows targets.
+# Using crates.io sspi version instead for cross-platform builds.
+# Re-add once sspi-rs fixes their windows crate compatibility.
