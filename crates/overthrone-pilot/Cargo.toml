@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "overthrone-pilot"
 version.workspace = true
 edition.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 description = "Autonomous attack orchestration — goal-driven planning, playbook execution, adaptive re-planning"
 
 [dependencies]
-overthrone-core = { path = "../overthrone-core" }
+overthrone-core   = { path = "../overthrone-core" }
 overthrone-hunter = { path = "../overthrone-hunter" }
 overthrone-crawler = { path = "../overthrone-crawler" }
 tokio.workspace = true
@@ -20,6 +20,7 @@ colored.workspace = true
 indicatif.workspace = true
 uuid.workspace = true
 rand.workspace = true
+comfy-table = "7"
 
 [dev-dependencies]
 tokio-test.workspace = true

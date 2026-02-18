@@ -1,4 +1,4 @@
-﻿//! overthrone-pilot — Autonomous AD attack orchestration engine.
+//! overthrone-pilot — Autonomous AD attack orchestration engine.
 //!
 //! Pilot is the "brain" of Overthrone. Given a goal (e.g., "achieve Domain Admin"),
 //! it plans an attack chain, executes each step, adapts when a step fails,
@@ -11,6 +11,7 @@
 //! - `executor` — Execute individual attack actions via core/hunter/crawler
 //! - `adaptive` — React to failures, re-score paths, try alternatives
 //! - `runner`   — Top-level orchestrator tying everything together
+//! - `wizard`   — Interactive wizard: stage-by-stage with user prompts
 
 #![allow(dead_code, unused_imports)]
 
@@ -20,9 +21,11 @@ pub mod goals;
 pub mod planner;
 pub mod playbook;
 pub mod runner;
+pub mod wizard;
 
 // Re-exports for CLI integration
 pub use goals::{AttackGoal, GoalStatus};
 pub use planner::{AttackPlan, PlanStep};
 pub use playbook::{Playbook, PlaybookId};
-pub use runner::{AutoPwnConfig, AutoPwnResult, ExecMethod, Stage, run};
+pub use runner::{AutoPwnConfig, AutoPwnResult, Credentials, ExecMethod, Stage, run};
+pub use wizard::WizardSession;
