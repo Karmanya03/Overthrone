@@ -6,8 +6,14 @@ authors.workspace = true
 license.workspace = true
 description = "Autonomous Active Directory Red Team Framework"
 
+# Full binary name
 [[bin]]
 name = "overthrone"
+path = "src/main.rs"
+
+# Shorthand alias
+[[bin]]
+name = "ovt"
 path = "src/main.rs"
 
 [dependencies]
