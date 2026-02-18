@@ -1,0 +1,635 @@
+﻿//! Top-level runner — The main autopwn loop that ties together
+//! goals, planner, executor, and adaptive engine into a cohesive
+//! autonomous attack workflow.
+//!
+//! Flow:
+//!   1. Parse config → set goal
+//!   2. Planner builds initial attack plan
+//!   3. Loop over plan steps:
+//!      a. Executor runs the step
+//!      b. Adaptive engine evaluates result
+//!      c. Decision: continue / retry / skip / re-plan / abort
+//!   4. Check if goal is achieved after each step
+//!   5. If blocked, adaptive re-plans with updated state
+//!   6. Return final result with full audit trail
+
+use crate::adaptive::{AdaptiveDecision, AdaptiveEngine, AdaptiveSummary, StepModification};
+use crate::executor::{self, ExecContext};
+use crate::goals::{AttackGoal, EngagementState, GoalStatus};
+use crate::planner::{AttackPlan, PlanStep, Planner};
+use crate::playbook::{Playbook, PlaybookId};
+use chrono::{DateTime, Utc};
+use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+/// Holds domain credentials for the pilot runner.
+#[derive(Debug, Clone)]
+pub struct Credentials {
+    pub domain: String,
+    pub username: String,
+    secret: String,
+    is_hash: bool,
+}
+
+impl Credentials {
+    pub fn password(domain: &str, username: &str, password: &str) -> Self {
+        Self {
+            domain: domain.to_string(),
+            username: username.to_string(),
+            secret: password.to_string(),
+            is_hash: false,
+        }
+    }
+
+    pub fn ntlm_hash(domain: &str, username: &str, hash: &str) -> Self {
+        Self {
+            domain: domain.to_string(),
+            username: username.to_string(),
+            secret: hash.to_string(),
+            is_hash: true,
+        }
+    }
+
+    pub fn secret(&self) -> &str {
+        &self.secret
+    }
+
+    pub fn is_hash(&self) -> bool {
+        self.is_hash
+    }
+}
+use overthrone_core::error::Result;
+use serde::{Deserialize, Serialize};
+use std::time::Instant;
+use tracing::{error, info, warn};
+
+// ═══════════════════════════════════════════════════════════
+// Stages (ordered attack phases)
+// ═══════════════════════════════════════════════════════════
+
+/// Ordered attack stages
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Stage {
+    Enumerate = 0,
+    Attack = 1,
+    Escalate = 2,
+    Lateral = 3,
+    Loot = 4,
+    Cleanup = 5,
+}
+
+impl std::fmt::Display for Stage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Enumerate => write!(f, "ENUM"),
+            Self::Attack => write!(f, "ATTACK"),
+            Self::Escalate => write!(f, "ESCALATE"),
+            Self::Lateral => write!(f, "LATERAL"),
+            Self::Loot => write!(f, "LOOT"),
+            Self::Cleanup => write!(f, "CLEANUP"),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Exec Method (from CLI)
+// ═══════════════════════════════════════════════════════════
+
+/// Remote execution method preference
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecMethod {
+    Auto,
+    PsExec,
+    SmbExec,
+    WmiExec,
+    WinRm,
+}
+
+impl std::fmt::Display for ExecMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::PsExec => write!(f, "psexec"),
+            Self::SmbExec => write!(f, "smbexec"),
+            Self::WmiExec => write!(f, "wmiexec"),
+            Self::WinRm => write!(f, "winrm"),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// AutoPwn Configuration
+// ═══════════════════════════════════════════════════════════
+
+/// Configuration for the autonomous attack runner
+#[derive(Debug, Clone)]
+pub struct AutoPwnConfig {
+    /// Domain controller IP/hostname
+    pub dc_host: String,
+    /// Credentials to start with
+    pub creds: Credentials,
+    /// High-level target (e.g., "Domain Admins")
+    pub target: String,
+    /// Maximum stage to reach
+    pub max_stage: Stage,
+    /// Stealth mode — prefer low-noise methods
+    pub stealth: bool,
+    /// Dry run — plan only, don't execute
+    pub dry_run: bool,
+    /// Preferred execution method
+    pub exec_method: ExecMethod,
+    /// Jitter between steps (milliseconds)
+    pub jitter_ms: u64,
+    /// Use LDAPS
+    pub use_ldaps: bool,
+    /// Operation timeout per step (seconds)
+    pub timeout: u64,
+}
+
+impl AutoPwnConfig {
+    /// Derive the attack goal from the target string
+    pub fn goal(&self) -> AttackGoal {
+        let lower = self.target.to_lowercase();
+
+        if lower == "domain admins" || lower == "da" || lower == "enterprise admins" {
+            AttackGoal::DomainAdmin {
+                target_group: self.target.clone(),
+            }
+        } else if lower == "ntds" || lower == "ntds.dit" || lower == "dcsync" {
+            AttackGoal::DumpNtds { target_dc: None }
+        } else if lower == "recon" || lower == "enum" || lower == "enumerate" {
+            AttackGoal::ReconOnly
+        } else if lower.contains('.') || lower.contains("$") {
+            // Looks like a hostname
+            AttackGoal::CompromiseHost {
+                target_host: self.target.clone(),
+            }
+        } else if lower.contains("\\") || lower.contains("@") {
+            // Looks like a user
+            AttackGoal::CompromiseUser {
+                target_user: self.target.clone(),
+            }
+        } else {
+            // Default: treat as group name → DA-style goal
+            AttackGoal::DomainAdmin {
+                target_group: self.target.clone(),
+            }
+        }
+    }
+
+    /// Build executor context from this config
+    pub fn exec_context(&self) -> ExecContext {
+        ExecContext {
+            dc_ip: self.dc_host.clone(),
+            domain: self.creds.domain.clone(),
+            username: self.creds.username.clone(),
+            secret: self.creds.secret().to_string(),
+            use_hash: self.creds.is_hash(),
+            use_ldaps: self.use_ldaps,
+            timeout: self.timeout,
+            jitter_ms: if self.stealth { 2000.max(self.jitter_ms) } else { self.jitter_ms },
+            dry_run: self.dry_run,
+            override_creds: None,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// AutoPwn Result
+// ═══════════════════════════════════════════════════════════
+
+/// Final result of the autonomous attack run
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoPwnResult {
+    /// Whether the primary goal was achieved
+    pub domain_admin_achieved: bool,
+    /// Final goal status
+    pub goal_status: GoalStatus,
+    /// Final engagement state
+    pub state: EngagementState,
+    /// Adaptive engine summary
+    pub adaptive_summary: AdaptiveSummary,
+    /// Total wall-clock time
+    pub duration_secs: u64,
+    /// Timestamp
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    /// Total steps executed
+    pub steps_executed: usize,
+    /// Steps that succeeded
+    pub steps_succeeded: usize,
+    /// Steps that failed
+    pub steps_failed: usize,
+}
+
+// ═══════════════════════════════════════════════════════════
+// Main Runner
+// ═══════════════════════════════════════════════════════════
+
+/// Run the autonomous attack chain
+pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
+    let started_at = Utc::now();
+    let wall_start = Instant::now();
+
+    // ── Banner ──
+    println!("\n{}", "╔══════════════════════════════════════════════╗".bold().red());
+    println!("{}", "║          OVERTHRONE — PILOT AUTOPWN          ║".bold().red());
+    println!("{}", "╚══════════════════════════════════════════════╝".bold().red());
+
+    let goal = config.goal();
+    info!(
+        "{} Goal: {}",
+        "TARGET".bold().red(),
+        goal.describe().bold()
+    );
+    info!(
+        "{} DC: {} | Domain: {} | User: {} | Stealth: {} | Dry: {}",
+        "CONFIG".bold().blue(),
+        config.dc_host.bold(),
+        config.creds.domain.bold(),
+        config.creds.username.bold(),
+        if config.stealth { "ON".green() } else { "OFF".yellow() },
+        if config.dry_run { "YES".yellow() } else { "NO".dimmed() }
+    );
+    println!();
+
+    // ── Initialize components ──
+    let mut state = EngagementState::new();
+    state.domain = Some(config.creds.domain.clone());
+    state.dc_ip = Some(config.dc_host.clone());
+
+    let planner = Planner::new(config.stealth);
+    let mut adaptive = AdaptiveEngine::new(config.stealth);
+    let mut ctx = config.exec_context();
+
+    let mut steps_executed = 0usize;
+    let mut steps_succeeded = 0usize;
+    let mut steps_failed = 0usize;
+
+    // ── Initial plan ──
+    let mut plan = planner.plan(&goal, &state, adaptive.failed_actions());
+
+    // ── Main execution loop ──
+    'main: loop {
+        // Adjust plan based on accumulated knowledge
+        adaptive.adjust_plan(&mut plan, &state);
+
+        // Find the next unexecuted step
+        let step_idx = match plan.steps.iter().position(|s| !s.executed) {
+            Some(idx) => idx,
+            None => {
+                info!("{} All planned steps executed", "✓".green().bold());
+                break 'main;
+            }
+        };
+
+        // Check stage gate — don't exceed max_stage
+        let step = &plan.steps[step_idx];
+        if step.stage > config.max_stage {
+            info!(
+                "  {} Stage {} exceeds max ({}), stopping",
+                "⊘".dimmed(),
+                step.stage,
+                config.max_stage
+            );
+            break 'main;
+        }
+
+        // Print stage transition banner
+        if step_idx == 0
+            || plan.steps.get(step_idx.wrapping_sub(1)).map(|s| s.stage) != Some(step.stage)
+        {
+            print_stage_banner(step.stage);
+        }
+
+        // ── Execute the step ──
+        let result = executor::execute_step(step, &ctx, &mut state).await;
+        steps_executed += 1;
+
+        // Mark as executed
+        plan.steps[step_idx].executed = true;
+        plan.steps[step_idx].result = Some(result.clone());
+
+        if result.success {
+            steps_succeeded += 1;
+        } else {
+            steps_failed += 1;
+        }
+
+        // ── Adaptive evaluation ──
+        let decision = adaptive.evaluate(
+            &plan.steps[step_idx],
+            &result,
+            &state,
+            &goal,
+        );
+
+        match decision {
+            AdaptiveDecision::Continue => {
+                // Check goal
+                let status = state.evaluate_goal(&goal);
+                if status.is_success() {
+                    info!(
+                        "\n  {} {} {}",
+                        "🎯".bold(),
+                        "GOAL ACHIEVED:".green().bold(),
+                        goal.describe().bold()
+                    );
+                    break 'main;
+                }
+            }
+
+            AdaptiveDecision::Retry { delay_secs, modify } => {
+                info!(
+                    "  {} Retrying in {}s (modification: {:?})",
+                    "🔄".cyan(),
+                    delay_secs,
+                    modify
+                );
+
+                // Apply modifications
+                if let Some(modification) = modify {
+                    match modification {
+                        StepModification::SwapCredentials => {
+                            if let Some((u, s, h)) =
+                                crate::adaptive::rotate_credential(&state, &ctx.username)
+                            {
+                                info!(
+                                    "  {} Swapping to: {}",
+                                    "🔑".cyan(),
+                                    u.bold()
+                                );
+                                ctx.override_creds = Some((u, s, h));
+                            }
+                        }
+                        StepModification::ExtendTimeout => {
+                            ctx.timeout = (ctx.timeout * 2).min(120);
+                        }
+                        StepModification::ReduceNoise => {
+                            ctx.jitter_ms = (ctx.jitter_ms + 1000).min(10_000);
+                        }
+                        StepModification::AlternateMethod => {
+                            // Method swap handled by Substitute decision
+                        }
+                    }
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+
+                // Un-mark so it gets retried
+                plan.steps[step_idx].executed = false;
+                plan.steps[step_idx].retries += 1;
+                plan.steps[step_idx].result = None;
+            }
+
+            AdaptiveDecision::Skip { reason } => {
+                info!("  {} Skipping: {}", "→".dimmed(), reason.dimmed());
+                // Already marked as executed — move on
+            }
+
+            AdaptiveDecision::Substitute { replacement } => {
+                info!(
+                    "  {} Substituting action for: {}",
+                    "🔄".cyan(),
+                    plan.steps[step_idx].description
+                );
+                // Insert a new step with the replacement action right after current
+                let new_step = PlanStep {
+                    id: format!("{}_alt", plan.steps[step_idx].id),
+                    description: format!("{} (alternative)", plan.steps[step_idx].description),
+                    stage: plan.steps[step_idx].stage,
+                    action: replacement,
+                    priority: plan.steps[step_idx].priority - 1,
+                    noise: plan.steps[step_idx].noise,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: plan.steps[step_idx].max_retries,
+                };
+                plan.steps.insert(step_idx + 1, new_step);
+            }
+
+            AdaptiveDecision::Replan { reason } => {
+                info!(
+                    "\n  {} RE-PLANNING: {}",
+                    "🔄".blue().bold(),
+                    reason
+                );
+
+                if adaptive.replans_exhausted() {
+                    warn!("  {} Re-plan limit exhausted — aborting", "✗".red().bold());
+                    break 'main;
+                }
+
+                // Build a fresh plan with updated state + knowledge of failures
+                plan = planner.plan(&goal, &state, adaptive.failed_actions());
+            }
+
+            AdaptiveDecision::Abort { reason } => {
+                error!(
+                    "\n  {} ABORTING: {}",
+                    "✗".red().bold(),
+                    reason
+                );
+                break 'main;
+            }
+
+            AdaptiveDecision::PauseForOperator { message } => {
+                warn!(
+                    "\n  {} OPERATOR INPUT NEEDED: {}",
+                    "⏸".yellow().bold(),
+                    message
+                );
+                // In a real interactive tool, this would wait for stdin
+                // For automated runs, treat as skip
+                info!("  {} Auto-continuing (non-interactive mode)", "→".dimmed());
+            }
+        }
+
+        // Stealth jitter between steps
+        if config.stealth && !config.dry_run {
+            let jitter = rand::random::<u64>() % ctx.jitter_ms.max(500);
+            tokio::time::sleep(tokio::time::Duration::from_millis(jitter)).await;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // Final Report
+    // ═══════════════════════════════════════════════════════
+
+    let finished_at = Utc::now();
+    let duration_secs = wall_start.elapsed().as_secs();
+    let final_status = state.evaluate_goal(&goal);
+    let da_achieved = final_status.is_success()
+        || state.has_domain_admin
+        || matches!(final_status, GoalStatus::Achieved);
+
+    println!("\n{}", "╔══════════════════════════════════════════════╗".bold().cyan());
+    println!("{}", "║            PILOT — FINAL REPORT              ║".bold().cyan());
+    println!("{}", "╚══════════════════════════════════════════════╝".bold().cyan());
+
+    state.print_summary();
+
+    println!(
+        "  Goal:       {} → {}",
+        goal.describe().bold(),
+        final_status
+    );
+    println!(
+        "  Steps:      {} executed, {} succeeded, {} failed",
+        steps_executed,
+        steps_succeeded.to_string().green(),
+        if steps_failed > 0 {
+            steps_failed.to_string().red()
+        } else {
+            steps_failed.to_string().green()
+        }
+    );
+    println!(
+        "  Duration:   {}s",
+        duration_secs
+    );
+    println!(
+        "  DA:         {}",
+        if da_achieved {
+            format!(
+                "ACHIEVED ({})",
+                state.da_user.as_deref().unwrap_or("?")
+            )
+            .green()
+            .bold()
+            .to_string()
+        } else {
+            "NOT ACHIEVED".red().to_string()
+        }
+    );
+
+    let adaptive_summary = adaptive.summary();
+    println!("{}", adaptive_summary);
+
+    // Audit trail
+    if !state.action_log.is_empty() {
+        println!("{}", "═══ AUDIT TRAIL ═══".bold().dimmed());
+        for entry in &state.action_log {
+            let icon = if entry.success { "✓".green() } else { "✗".red() };
+            println!(
+                "  {} [{}] [{}] {} → {}",
+                icon,
+                entry.timestamp.format("%H:%M:%S"),
+                entry.stage,
+                entry.action,
+                if entry.detail.len() > 80 {
+                    format!("{}...", &entry.detail[..77])
+                } else {
+                    entry.detail.clone()
+                }
+            );
+        }
+        println!("{}", "═══════════════════".dimmed());
+    }
+
+    AutoPwnResult {
+        domain_admin_achieved: da_achieved,
+        goal_status: final_status,
+        state,
+        adaptive_summary,
+        duration_secs,
+        started_at,
+        finished_at,
+        steps_executed,
+        steps_succeeded,
+        steps_failed,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════
+
+/// Print a stage transition banner
+fn print_stage_banner(stage: Stage) {
+    let (icon, color_fn): (&str, fn(String) -> colored::ColoredString) = match stage {
+        Stage::Enumerate => ("🔍", |s| s.blue()),
+        Stage::Attack => ("⚔️ ", |s| s.yellow()),
+        Stage::Escalate => ("📈", |s| s.red()),
+        Stage::Lateral => ("🔀", |s| s.magenta()),
+        Stage::Loot => ("💰", |s| s.red()),
+        Stage::Cleanup => ("🧹", |s| s.green()),
+    };
+
+    let banner = format!("══════ {} STAGE: {} ══════", icon, stage);
+    println!("\n{}", color_fn(banner).bold());
+}
+
+// ═══════════════════════════════════════════════════════════
+// Convenience: Run a single playbook
+// ═══════════════════════════════════════════════════════════
+
+/// Execute a named playbook directly (bypasses goal-driven planning)
+pub async fn run_playbook(
+    playbook_id: PlaybookId,
+    config: &AutoPwnConfig,
+) -> AutoPwnResult {
+    let started_at = Utc::now();
+    let wall_start = Instant::now();
+
+    let playbook = Playbook::generate(playbook_id);
+    info!(
+        "{} Running playbook: {} ({})",
+        "PLAY".bold().magenta(),
+        playbook.name.bold(),
+        playbook.description
+    );
+
+    let mut state = EngagementState::new();
+    state.domain = Some(config.creds.domain.clone());
+    state.dc_ip = Some(config.dc_host.clone());
+
+    let ctx = config.exec_context();
+    let mut steps_executed = 0;
+    let mut steps_succeeded = 0;
+    let mut steps_failed = 0;
+
+    let pb = ProgressBar::new(playbook.steps.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("  {spinner:.cyan} [{bar:30.cyan/dim}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("█▓░"),
+    );
+
+    for step in &playbook.steps {
+        pb.set_message(step.description.clone());
+        let result = executor::execute_step(step, &ctx, &mut state).await;
+        steps_executed += 1;
+        if result.success {
+            steps_succeeded += 1;
+        } else {
+            steps_failed += 1;
+        }
+        pb.inc(1);
+    }
+
+    pb.finish_with_message("Done".to_string());
+
+    let finished_at = Utc::now();
+    state.print_summary();
+
+    AutoPwnResult {
+        domain_admin_achieved: state.has_domain_admin,
+        goal_status: GoalStatus::InProgress,
+        state,
+        adaptive_summary: AdaptiveSummary {
+            total_replans: 0,
+            dead_hosts: vec![],
+            blocked_methods: vec![],
+            blacklisted_actions: vec![],
+        },
+        duration_secs: wall_start.elapsed().as_secs(),
+        started_at,
+        finished_at,
+        steps_executed,
+        steps_succeeded,
+        steps_failed,
+    }
+}

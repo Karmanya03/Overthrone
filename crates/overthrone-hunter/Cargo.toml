@@ -1,0 +1,28 @@
+﻿[package]
+name = "overthrone-hunter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Kerberos attack toolkit — AS-REP roasting, Kerberoasting, delegation abuse, coercion, RBCD, ticket operations"
+
+[dependencies]
+overthrone-core = { path = "../overthrone-core" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+colored.workspace = true
+indicatif.workspace = true
+uuid.workspace = true
+hex.workspace = true
+base64.workspace = true
+rand.workspace = true
+kerberos_asn1.workspace = true
+kerberos_crypto.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+pretty_assertions.workspace = true

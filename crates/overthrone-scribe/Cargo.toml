@@ -1,0 +1,27 @@
+﻿[package]
+name = "overthrone-scribe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pentest report generator — Markdown, PDF, MITRE ATT&CK mapping, mitigations, narrative"
+
+[dependencies]
+overthrone-core = { path = "../overthrone-core" }
+overthrone-pilot = { path = "../overthrone-pilot" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+colored.workspace = true
+uuid.workspace = true
+base64.workspace = true
+
+# PDF generation
+printpdf = "0.9.0"
+
+[dev-dependencies]
+tokio-test.workspace = true
+pretty_assertions.workspace = true

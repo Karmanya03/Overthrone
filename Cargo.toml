@@ -1,0 +1,126 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/overthrone-core",
+    "crates/overthrone-reaper",
+    "crates/overthrone-hunter",
+    "crates/overthrone-pilot",
+    "crates/overthrone-crawler",
+    "crates/overthrone-forge",
+    "crates/overthrone-scribe",
+    "crates/overthrone-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Karmanya03"]
+license = "MIT"
+repository = "https://github.com/Karmanya03/Overthrone"
+description = "Autonomous Active Directory Red Team Framework built in Rust"
+rust-version = "1.85"
+
+# Full name
+[[bin]]
+name = "overthrone"
+path = "src/main.rs"
+
+# Shorthand
+[[bin]]
+name = "ovt"
+path = "src/main.rs"
+
+[workspace.dependencies]
+# Async Runtime
+tokio = { version = "1.49", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9.8"
+
+# Error Handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "color", "env", "wrap_help"] }
+
+# LDAP
+ldap3 = "0.12"
+
+# Graph Engine
+petgraph = "0.8"
+
+# TUI
+ratatui = "0.30"
+crossterm = "0.29"
+
+# Report Generation
+genpdf = "0.2"
+pulldown-cmark = "0.13"
+printpdf = "0.9.0"                    # ← NEW: needed by overthrone-scribe PDF renderer
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Terminal Output
+colored = "3.0"
+indicatif = "0.18"
+console = "0.16"
+
+# Crypto - STABLE VERSIONS (compatible with latest sspi-rs)
+aes = "0.8"
+cbc = "0.1"
+hmac = "0.12"
+md-5 = "0.10"
+md4 = "0.10"
+sha2 = "0.10"
+rand = "0.10"
+base64 = "0.22"
+hex = "0.4"
+digest = "0.10"
+des = "0.8.1"                  # ← NEW: needed by overthrone-forge (DES for NTLM)
+rc4 = "0.1"                    # ← NEW: needed by overthrone-forge (RC4 for Kerberos)
+pbkdf2 = "0.12"                # ← NEW: needed by overthrone-forge (key derivation)
+
+# Networking
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+hickory-resolver = "0.25"
+
+# ASN.1 / Kerberos
+rasn = "0.28"
+kerberos_asn1 = "0.2"
+kerberos_crypto = "0.3"
+
+# Byte Handling
+bytes = "1.9"
+byteorder = "1.5"
+
+# Async Utilities
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["full"] }
+
+# Regex
+regex = "1"           # ← NEW: used by various crates for pattern matching
+
+# Config
+directories = "6.0"
+
+# Testing
+tokio-test = "0.4"
+tempfile = "3.14"
+pretty_assertions = "1.4"
+
+# ═══════════════════════════════════════════════════════════
+# PATCH: Use Devolutions' actively maintained sspi-rs fork
+# ═══════════════════════════════════════════════════════════
+[patch.crates-io]
+sspi = { git = "https://github.com/Devolutions/sspi-rs.git", branch = "master" }

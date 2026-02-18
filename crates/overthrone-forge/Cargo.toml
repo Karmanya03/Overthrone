@@ -1,0 +1,30 @@
+﻿[package]
+name = "overthrone-forge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Kerberos ticket forging: Golden, Silver, Diamond, Skeleton, DSRM, DCSync, ACL backdoor"
+
+[dependencies]
+overthrone-core = { path = "../overthrone-core" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+colored.workspace = true
+indicatif.workspace = true
+uuid.workspace = true
+hex.workspace = true
+rand.workspace = true
+kerberos_asn1.workspace = true
+kerberos_crypto.workspace = true
+hmac.workspace = true
+md-5.workspace = true
+digest.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+pretty_assertions.workspace = true

@@ -1,0 +1,90 @@
+﻿//! Domain group enumeration via LDAP.
+
+use overthrone_core::error::{OverthroneError, Result};
+use crate::runner::ReaperConfig;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing::info;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupEntry {
+    pub sam_account_name: String,
+    pub distinguished_name: String,
+    pub description: Option<String>,
+    pub members: Vec<String>,
+    pub member_of: Vec<String>,
+    pub group_type: GroupKind,
+    pub admin_count: bool,
+    pub sid: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GroupKind {
+    DomainLocal,
+    Global,
+    Universal,
+    BuiltIn,
+    Unknown(i64),
+}
+
+impl GroupKind {
+    pub fn from_group_type(gt: i64) -> Self {
+        let base = if gt < 0 { gt & 0x7FFFFFFF } else { gt };
+        match base & 0xF {
+            2 => Self::Global,
+            4 => Self::DomainLocal,
+            8 => Self::Universal,
+            _ if base == 1 => Self::BuiltIn,
+            _ => Self::Unknown(gt),
+        }
+    }
+}
+
+impl GroupEntry {
+    pub fn is_privileged(&self) -> bool {
+        let lower = self.sam_account_name.to_lowercase();
+        matches!(lower.as_str(),
+            "domain admins" | "enterprise admins" | "schema admins" |
+            "administrators" | "account operators" | "backup operators" |
+            "server operators" | "print operators" | "dnsadmins" |
+            "group policy creator owners" | "domain controllers" |
+            "cert publishers" | "exchange windows permissions"
+        ) || self.admin_count
+    }
+}
+
+pub fn group_filter() -> String {
+    "(objectCategory=group)".to_string()
+}
+
+pub fn group_attributes() -> Vec<String> {
+    [
+        "sAMAccountName", "distinguishedName", "description", "member",
+        "memberOf", "groupType", "adminCount", "objectSid",
+    ].iter().map(|s| s.to_string()).collect()
+}
+
+pub async fn enumerate_groups(config: &ReaperConfig) -> Result<Vec<GroupEntry>> {
+    info!("[groups] Querying {} for domain groups", config.dc_ip);
+    Err(OverthroneError::NotImplemented {
+        module: "reaper::groups".into(),
+    })
+}
+
+pub fn parse_group_entry(attrs: &HashMap<String, Vec<String>>) -> GroupEntry {
+    let gt: i64 = first_val(attrs, "groupType").and_then(|v| v.parse().ok()).unwrap_or(0);
+    GroupEntry {
+        sam_account_name: first_val(attrs, "sAMAccountName").unwrap_or_default(),
+        distinguished_name: first_val(attrs, "distinguishedName").unwrap_or_default(),
+        description: first_val(attrs, "description"),
+        members: attrs.get("member").cloned().unwrap_or_default(),
+        member_of: attrs.get("memberOf").cloned().unwrap_or_default(),
+        group_type: GroupKind::from_group_type(gt),
+        admin_count: first_val(attrs, "adminCount").map(|v| v == "1").unwrap_or(false),
+        sid: first_val(attrs, "objectSid"),
+    }
+}
+
+fn first_val(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
+    attrs.get(key).and_then(|v| v.first().cloned())
+}

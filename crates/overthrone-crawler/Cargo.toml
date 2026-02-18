@@ -1,0 +1,25 @@
+﻿[package]
+name = "overthrone-crawler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "AD trust traversal & cross-domain escalation engine"
+
+[dependencies]
+overthrone-core = { path = "../overthrone-core" }
+overthrone-reaper = { path = "../overthrone-reaper" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+colored.workspace = true
+indicatif.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+pretty_assertions.workspace = true

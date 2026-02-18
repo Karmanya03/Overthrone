@@ -1,0 +1,14 @@
+﻿{
+  "techniques": {
+    "T1558.003": "Kerberoasting",
+    "T1558.004": "AS-REP Roasting",
+    "T1003.006": "DCSync",
+    "T1134.001": "Token Impersonation",
+    "T1550.003": "Pass the Ticket",
+    "T1558.001": "Golden Ticket",
+    "T1558.002": "Silver Ticket",
+    "T1484.001": "Group Policy Modification",
+    "T1207": "Rogue Domain Controller",
+    "T1003.001": "LSASS Memory"
+  }
+}

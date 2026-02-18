@@ -1,0 +1,10 @@
+﻿[general]
+threads = 10
+timeout_secs = 30
+output_format = "json"
+verbose = false
+
+[stealth]
+jitter_ms = 500
+randomize_order = true
+avoid_honeypots = true
