@@ -10,7 +10,7 @@ use colored::Colorize;
 use overthrone_pilot::runner::{AutoPwnConfig, Credentials, ExecMethod, Stage};
 use overthrone_pilot::WizardSession;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::info;
 
 #[derive(Debug, Clone, Parser)]
 #[command(about = "Interactive wizard mode for AD engagements")]
@@ -164,9 +164,9 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
     }
 
     // ── New session — validate required args ──
-    let target  = args.target.ok_or_else(|| anyhow::anyhow!("--target is required (or use --resume)"))?;
-    let dc_host = args.dc_host.ok_or_else(|| anyhow::anyhow!("--dc-host / OT_DC_HOST required"))?;
-    let domain  = args.domain.ok_or_else(|| anyhow::anyhow!("--domain / OT_DOMAIN required"))?;
+    let target   = args.target.ok_or_else(|| anyhow::anyhow!("--target is required (or use --resume)"))?;
+    let dc_host  = args.dc_host.ok_or_else(|| anyhow::anyhow!("--dc-host / OT_DC_HOST required"))?;
+    let domain   = args.domain.ok_or_else(|| anyhow::anyhow!("--domain / OT_DOMAIN required"))?;
     let username = args.username.ok_or_else(|| anyhow::anyhow!("--username / OT_USERNAME required"))?;
 
     let creds = if let Some(hash) = args.nt_hash {
@@ -182,7 +182,7 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         dc_host,
         creds,
         target,
-        max_stage: args.max_stage.into(),
+        max_stage:   args.max_stage.into(),
         stealth:     args.stealth,
         dry_run:     args.dry_run,
         exec_method: args.exec_method.into(),

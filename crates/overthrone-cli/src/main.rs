@@ -8,8 +8,8 @@ mod commands;
 use auth::{AuthMethod, Credentials};
 use autopwn::ExecMethod;
 use clap::{Parser, Subcommand};
-use overthrone_core::error::Result;
-use overthrone_reaper::runner::{ReaperConfig, ReaperResult};
+use colored::Colorize;
+use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{fmt, EnvFilter};
 
 // ═══════════════════════════════════════════════════════
@@ -68,7 +68,7 @@ enum Commands {
         #[command(flatten)]
         args: commands::wizard::WizardArgs,
     },
-    /// Enumerate AD objects
+    /// Full AD enumeration via reaper modules
     Reaper {
         #[arg(long, env = "OT_DC_IP")]
         dc_ip: Option<String>,
@@ -77,6 +77,7 @@ enum Commands {
         #[arg(long, default_value = "500")]
         page_size: u32,
     },
+    /// Enumerate specific AD object types
     Enum {
         #[arg(value_enum)]
         target: EnumTarget,
@@ -213,7 +214,7 @@ enum GraphAction {
     },
 }
 
-#[derive(Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, clap::ValueEnum)]
 enum DumpSource {
     Sam,
     Lsa,
@@ -260,11 +261,11 @@ async fn main() {
             cmd_enum(&cli, target.clone(), filter.clone(), *include_disabled).await
         }
         Commands::Kerberos { action } => cmd_kerberos(&cli, action).await,
-        Commands::Smb { action }      => cmd_smb(&cli, action).await,
+        Commands::Smb     { action } => cmd_smb(&cli, action).await,
         Commands::Exec { method, target, command } => {
             cmd_exec(&cli, method.clone(), target, command).await
         }
-        Commands::Graph { action }    => cmd_graph(action).await,
+        Commands::Graph { action } => cmd_graph(action).await,
         Commands::Spray { password, userlist, delay, jitter } => {
             cmd_spray(&cli, password, userlist, *delay, *jitter).await
         }
@@ -278,10 +279,10 @@ async fn main() {
 }
 
 // ═══════════════════════════════════════════════════════
-// Credential / DC helpers
+// Helpers
 // ═══════════════════════════════════════════════════════
 
-fn require_creds(cli: &Cli) -> Result<Credentials, i32> {
+fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
     let domain = cli.domain.as_deref().unwrap_or_else(|| {
         banner::print_fail("--domain is required");
         std::process::exit(1)
@@ -304,10 +305,34 @@ fn require_creds(cli: &Cli) -> Result<Credentials, i32> {
     })
 }
 
-fn require_dc(cli: &Cli) -> Result<String, i32> {
+fn require_dc(cli: &Cli) -> std::result::Result<String, i32> {
     cli.dc_host.clone().ok_or_else(|| {
         banner::print_fail("--dc-host is required");
         1
+    })
+}
+
+fn make_reaper_config(
+    cli: &Cli,
+    creds: &Credentials,
+    dc: String,
+    modules: Vec<String>,
+    page_size: u32,
+) -> std::result::Result<ReaperConfig, i32> {
+    let domain = cli.domain.clone().unwrap_or_else(|| {
+        banner::print_fail("--domain is required");
+        std::process::exit(1)
+    });
+    let base_dn = ReaperConfig::base_dn_from_domain(&domain);
+    Ok(ReaperConfig {
+        dc_ip:    dc,
+        domain,
+        base_dn,
+        username: creds.username.clone(),
+        password: creds.password().map(str::to_string),
+        nt_hash:  creds.nthash().map(str::to_string),
+        modules,
+        page_size,
     })
 }
 
@@ -322,35 +347,21 @@ async fn cmd_reaper(
     page_size: u32,
 ) -> i32 {
     let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
-    let dc    = match dc_ip.or_else(|| cli.dc_host.clone()) {
+    let dc = match dc_ip.or_else(|| cli.dc_host.clone()) {
         Some(d) => d,
         None => { banner::print_fail("--dc-ip or --dc-host is required"); return 1; }
     };
-    let domain = match cli.domain.clone() {
-        Some(d) => d,
-        None => { banner::print_fail("--domain is required"); return 1; }
+    let config = match make_reaper_config(cli, &creds, dc, modules, page_size) {
+        Ok(c) => c, Err(e) => return e,
     };
-    let base_dn = ReaperConfig::base_dn_from_domain(&domain);
-
-    let config = ReaperConfig {
-        dc_ip: dc,
-        domain,
-        base_dn,
-        username: creds.username().to_string(),
-        password: creds.password().map(str::to_string),
-        nt_hash:  creds.nt_hash().map(str::to_string),
-        modules,
-        page_size,
-    };
-
     match overthrone_reaper::runner::run_reaper(&config).await {
-        Ok(_) => 0,
+        Ok(_)  => 0,
         Err(e) => { banner::print_fail(&format!("Reaper error: {}", e)); 1 }
     }
 }
 
 // ═══════════════════════════════════════════════════════
-// cmd_enum  (thin alias — delegates to reaper all-modules)
+// cmd_enum
 // ═══════════════════════════════════════════════════════
 
 async fn cmd_enum(
@@ -360,26 +371,12 @@ async fn cmd_enum(
     _include_disabled: bool,
 ) -> i32 {
     let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
-    let dc    = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
-    let domain = match cli.domain.clone() {
-        Some(d) => d,
-        None => { banner::print_fail("--domain is required"); return 1; }
+    let dc    = match require_dc(cli)    { Ok(d) => d, Err(e) => return e };
+    let config = match make_reaper_config(cli, &creds, dc, vec![], 500) {
+        Ok(c) => c, Err(e) => return e,
     };
-    let base_dn = ReaperConfig::base_dn_from_domain(&domain);
-
-    let config = ReaperConfig {
-        dc_ip: dc,
-        domain,
-        base_dn,
-        username: creds.username().to_string(),
-        password: creds.password().map(str::to_string),
-        nt_hash:  creds.nt_hash().map(str::to_string),
-        modules:  vec![],   // empty = all
-        page_size: 500,
-    };
-
     match overthrone_reaper::runner::run_reaper(&config).await {
-        Ok(_) => 0,
+        Ok(_)  => 0,
         Err(e) => { banner::print_fail(&format!("Enum error: {}", e)); 1 }
     }
 }
@@ -390,26 +387,24 @@ async fn cmd_enum(
 
 async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
     let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
-    let dc    = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
-    let domain = cli.domain.clone().unwrap_or_default();
+    let dc    = match require_dc(cli)    { Ok(d) => d, Err(e) => return e };
 
     match action {
-        KerberosAction::Roast { spn } => {
+        KerberosAction::Roast { spn: spn_filter } => {
             banner::print_module_banner("KERBEROAST");
-            let modules = vec!["spns".to_string()];
-            let base_dn = ReaperConfig::base_dn_from_domain(&domain);
-            let config = ReaperConfig {
-                dc_ip: dc, domain, base_dn,
-                username: creds.username().to_string(),
-                password: creds.password().map(str::to_string),
-                nt_hash:  creds.nt_hash().map(str::to_string),
-                modules, page_size: 500,
+            let config = match make_reaper_config(cli, &creds, dc, vec!["spns".to_string()], 500) {
+                Ok(c) => c, Err(e) => return e,
             };
             match overthrone_reaper::runner::run_reaper(&config).await {
                 Ok(r) => {
-                    for s in &r.spn_accounts {
-                        if spn.as_deref().map_or(true, |f| s.spn.contains(f)) {
-                            println!("  {} {} ({})", "SPN".cyan(), s.spn, s.username);
+                    for account in &r.spn_accounts {
+                        for spn in &account.service_principal_names {
+                            if spn_filter.as_deref().map_or(true, |f| spn.contains(f)) {
+                                println!("  {} {} ({})",
+                                    "SPN".cyan(),
+                                    spn,
+                                    account.sam_account_name);
+                            }
                         }
                     }
                     0
@@ -419,7 +414,7 @@ async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
         }
         KerberosAction::AsrepRoast => {
             banner::print_module_banner("AS-REP ROAST");
-            banner::print_warn("AS-REP roasting: enumerate users without pre-auth");
+            banner::print_warn("AS-REP roasting — not yet implemented");
             0
         }
         KerberosAction::GetTgt => {
@@ -429,7 +424,7 @@ async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
         }
         KerberosAction::GetTgs { spn } => {
             banner::print_module_banner("GET TGS");
-            banner::print_warn(&format!("TGS request for SPN {} — not yet implemented", spn));
+            banner::print_warn(&format!("TGS for {} — not yet implemented", spn));
             0
         }
     }
@@ -494,14 +489,11 @@ async fn cmd_exec(
 async fn cmd_graph(action: &GraphAction) -> i32 {
     banner::print_module_banner("GRAPH");
     match action {
-        GraphAction::Build        => banner::print_warn("Graph build — not yet implemented"),
-        GraphAction::Stats        => banner::print_warn("Graph stats — not yet implemented"),
-        GraphAction::Export { output } =>
-            banner::print_warn(&format!("Graph export to {} — not yet implemented", output)),
-        GraphAction::Path { from, to } =>
-            banner::print_warn(&format!("Path from {} to {} — not yet implemented", from, to)),
-        GraphAction::PathToDa { from } =>
-            banner::print_warn(&format!("Path-to-DA from {} — not yet implemented", from)),
+        GraphAction::Build             => banner::print_warn("Graph build — not yet implemented"),
+        GraphAction::Stats             => banner::print_warn("Graph stats — not yet implemented"),
+        GraphAction::Export { output } => banner::print_warn(&format!("Graph export to {} — not yet implemented", output)),
+        GraphAction::Path { from, to } => banner::print_warn(&format!("Path {} → {} — not yet implemented", from, to)),
+        GraphAction::PathToDa { from } => banner::print_warn(&format!("Path-to-DA from {} — not yet implemented", from)),
     }
     0
 }
@@ -539,7 +531,7 @@ async fn cmd_autopwn(
     dry_run: bool,
 ) -> i32 {
     let creds = match require_creds(cli) { Ok(c) => c, Err(e) => return e };
-    let dc    = match require_dc(cli) { Ok(d) => d, Err(e) => return e };
+    let dc    = match require_dc(cli)    { Ok(d) => d, Err(e) => return e };
 
     let config = autopwn::AutoPwnConfig {
         dchost: dc,
