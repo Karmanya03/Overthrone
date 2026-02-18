@@ -1,15 +1,13 @@
-ï»¿//! SMB2/3 client operations for share enumeration, file access, and lateral movement.
+//! SMB2/3 client operations for share enumeration, file access, and lateral movement.
 //!
 //! On Windows: full implementation using the `smb` crate (NTLM via sspi).
-//! On Linux/macOS: stub implementation — types are available but all operations
+//! On Linux/macOS: stub implementation -- types are available but all operations
 //! return errors. This allows the rest of the codebase to compile cross-platform.
 
 use crate::error::{OverthroneError, Result};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
-//  Windows-only imports
-// ═══════════════════════════════════════════════════════════
+// Windows-only imports
 
 #[cfg(windows)]
 use smb::{
@@ -19,17 +17,13 @@ use smb::{
 #[cfg(windows)]
 use std::str::FromStr;
 
-// ═══════════════════════════════════════════════════════════
-//  Constants
-// ═══════════════════════════════════════════════════════════
+// Constants
 
 pub const SMB_PORT: u16 = 445;
 pub const ADMIN_SHARES: &[&str] = &["C$", "ADMIN$", "IPC$"];
 const READ_BUF_SIZE: usize = 65536;
 
-// ═══════════════════════════════════════════════════════════
-//  Public Types (available on all platforms)
-// ═══════════════════════════════════════════════════════════
+// Public Types (available on all platforms)
 
 pub struct SmbSession {
     #[cfg(windows)]
@@ -62,9 +56,7 @@ pub struct AdminCheckResult {
     pub accessible_shares: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Windows: Full Implementation
-// ═══════════════════════════════════════════════════════════
+// Windows: Full Implementation
 
 #[cfg(windows)]
 impl SmbSession {
@@ -195,9 +187,9 @@ impl SmbSession {
             }
         }
         if has_admin {
-            info!("SMB: ✓ ADMIN ACCESS on {} ({:?})", self.target, accessible);
+            info!("SMB: ADMIN ACCESS on {} ({:?})", self.target, accessible);
         } else {
-            info!("SMB: ✗ No admin on {} ({:?})", self.target, accessible);
+            info!("SMB: No admin on {} ({:?})", self.target, accessible);
         }
         AdminCheckResult {
             target: self.target.clone(),
@@ -293,7 +285,7 @@ impl SmbSession {
     }
 
     pub async fn write_file(&self, share: &str, remote_path: &str, data: &[u8]) -> Result<()> {
-        info!("SMB: Writing {} bytes → \\\\{}\\{}\\{}", data.len(), self.target, share, remote_path);
+        info!("SMB: Writing {} bytes to \\\\{}\\{}\\{}", data.len(), self.target, share, remote_path);
         let unc = self.unc(share, Some(remote_path))?;
         let create_args = FileCreateArgs::make_overwrite(
             FileAttributes::default(),
@@ -342,7 +334,7 @@ impl SmbSession {
         tokio::fs::write(local_path, &data).await.map_err(|e| {
             OverthroneError::Smb(format!("Cannot write local file '{}': {e}", local_path))
         })?;
-        info!("SMB: Downloaded {} → {} ({} bytes)", remote_path, local_path, size);
+        info!("SMB: Downloaded {} -> {} ({} bytes)", remote_path, local_path, size);
         Ok(size)
     }
 
@@ -352,7 +344,7 @@ impl SmbSession {
         })?;
         let size = data.len();
         self.write_file(share, remote_path, &data).await?;
-        info!("SMB: Uploaded {} → {} ({} bytes)", local_path, remote_path, size);
+        info!("SMB: Uploaded {} -> {} ({} bytes)", local_path, remote_path, size);
         Ok(size)
     }
 
@@ -411,10 +403,8 @@ impl SmbSession {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Non-Windows: Stub Implementation
-//  Types compile everywhere; operations return errors.
-// ═══════════════════════════════════════════════════════════
+// Non-Windows: Stub Implementation
+// Types compile everywhere; operations return errors.
 
 #[cfg(not(windows))]
 impl SmbSession {
@@ -491,13 +481,11 @@ impl SmbSession {
     }
 
     pub async fn cleanup_payload(&self, _filename: &str) -> Result<()> {
-        Ok(()) // Cleanup is best-effort, don't error
+        Ok(())
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Bulk Operations (multi-target)
-// ═══════════════════════════════════════════════════════════
+// Bulk Operations (multi-target)
 
 pub async fn check_admin_targets(
     targets: &[String],
