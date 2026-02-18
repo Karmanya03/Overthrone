@@ -1,4 +1,4 @@
-﻿//! Top-level runner — The main autopwn loop that ties together
+//! Top-level runner — The main autopwn loop that ties together
 //! goals, planner, executor, and adaptive engine into a cohesive
 //! autonomous attack workflow.
 //!
@@ -21,7 +21,17 @@ use crate::playbook::{Playbook, PlaybookId};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+use overthrone_core::error::Result;
+use serde::{Deserialize, Serialize};
+use std::time::Instant;
+use tracing::{error, info, warn};
+
+// ═══════════════════════════════════════════════════════════
+// Credentials
+// ═══════════════════════════════════════════════════════════
+
 /// Holds domain credentials for the pilot runner.
+/// Private `secret` field is intentional — use `CredentialSnapshot` for serde.
 #[derive(Debug, Clone)]
 pub struct Credentials {
     pub domain: String,
@@ -56,11 +66,37 @@ impl Credentials {
     pub fn is_hash(&self) -> bool {
         self.is_hash
     }
+
+    /// Convert to serializable snapshot (for checkpoint save)
+    pub fn to_snapshot(&self) -> CredentialSnapshot {
+        CredentialSnapshot {
+            domain: self.domain.clone(),
+            username: self.username.clone(),
+            secret: self.secret.clone(),
+            is_hash: self.is_hash,
+        }
+    }
+
+    /// Restore from snapshot (for checkpoint load)
+    pub fn from_snapshot(snap: CredentialSnapshot) -> Self {
+        Self {
+            domain: snap.domain,
+            username: snap.username,
+            secret: snap.secret,
+            is_hash: snap.is_hash,
+        }
+    }
 }
-use overthrone_core::error::Result;
-use serde::{Deserialize, Serialize};
-use std::time::Instant;
-use tracing::{error, info, warn};
+
+/// Serializable credential snapshot used in checkpoints.
+/// Stores all fields plaintext — only write to disk in a secure context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSnapshot {
+    pub domain: String,
+    pub username: String,
+    pub secret: String,
+    pub is_hash: bool,
+}
 
 // ═══════════════════════════════════════════════════════════
 // Stages (ordered attack phases)
@@ -70,28 +106,28 @@ use tracing::{error, info, warn};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Stage {
     Enumerate = 0,
-    Attack = 1,
-    Escalate = 2,
-    Lateral = 3,
-    Loot = 4,
-    Cleanup = 5,
+    Attack    = 1,
+    Escalate  = 2,
+    Lateral   = 3,
+    Loot      = 4,
+    Cleanup   = 5,
 }
 
 impl std::fmt::Display for Stage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Enumerate => write!(f, "ENUM"),
-            Self::Attack => write!(f, "ATTACK"),
-            Self::Escalate => write!(f, "ESCALATE"),
-            Self::Lateral => write!(f, "LATERAL"),
-            Self::Loot => write!(f, "LOOT"),
-            Self::Cleanup => write!(f, "CLEANUP"),
+            Self::Attack    => write!(f, "ATTACK"),
+            Self::Escalate  => write!(f, "ESCALATE"),
+            Self::Lateral   => write!(f, "LATERAL"),
+            Self::Loot      => write!(f, "LOOT"),
+            Self::Cleanup   => write!(f, "CLEANUP"),
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════
-// Exec Method (from CLI)
+// Exec Method
 // ═══════════════════════════════════════════════════════════
 
 /// Remote execution method preference
@@ -107,11 +143,11 @@ pub enum ExecMethod {
 impl std::fmt::Display for ExecMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Auto => write!(f, "auto"),
+            Self::Auto   => write!(f, "auto"),
             Self::PsExec => write!(f, "psexec"),
             Self::SmbExec => write!(f, "smbexec"),
             Self::WmiExec => write!(f, "wmiexec"),
-            Self::WinRm => write!(f, "winrm"),
+            Self::WinRm  => write!(f, "winrm"),
         }
     }
 }
@@ -119,6 +155,22 @@ impl std::fmt::Display for ExecMethod {
 // ═══════════════════════════════════════════════════════════
 // AutoPwn Configuration
 // ═══════════════════════════════════════════════════════════
+
+/// Serializable config used by WizardSession checkpointing.
+/// Mirrors AutoPwnConfig but uses CredentialSnapshot for serde.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoPwnConfigSnapshot {
+    pub dc_host: String,
+    pub creds: CredentialSnapshot,
+    pub target: String,
+    pub max_stage: Stage,
+    pub stealth: bool,
+    pub dry_run: bool,
+    pub exec_method: ExecMethod,
+    pub jitter_ms: u64,
+    pub use_ldaps: bool,
+    pub timeout: u64,
+}
 
 /// Configuration for the autonomous attack runner
 #[derive(Debug, Clone)]
@@ -158,18 +210,15 @@ impl AutoPwnConfig {
             AttackGoal::DumpNtds { target_dc: None }
         } else if lower == "recon" || lower == "enum" || lower == "enumerate" {
             AttackGoal::ReconOnly
-        } else if lower.contains('.') || lower.contains("$") {
-            // Looks like a hostname
+        } else if lower.contains('.') || lower.contains('$') {
             AttackGoal::CompromiseHost {
                 target_host: self.target.clone(),
             }
-        } else if lower.contains("\\") || lower.contains("@") {
-            // Looks like a user
+        } else if lower.contains('\\') || lower.contains('@') {
             AttackGoal::CompromiseUser {
                 target_user: self.target.clone(),
             }
         } else {
-            // Default: treat as group name → DA-style goal
             AttackGoal::DomainAdmin {
                 target_group: self.target.clone(),
             }
@@ -191,6 +240,38 @@ impl AutoPwnConfig {
             override_creds: None,
         }
     }
+
+    /// Convert to serializable snapshot (for checkpointing)
+    pub fn to_snapshot(&self) -> AutoPwnConfigSnapshot {
+        AutoPwnConfigSnapshot {
+            dc_host: self.dc_host.clone(),
+            creds: self.creds.to_snapshot(),
+            target: self.target.clone(),
+            max_stage: self.max_stage,
+            stealth: self.stealth,
+            dry_run: self.dry_run,
+            exec_method: self.exec_method,
+            jitter_ms: self.jitter_ms,
+            use_ldaps: self.use_ldaps,
+            timeout: self.timeout,
+        }
+    }
+
+    /// Restore from snapshot (for checkpoint load)
+    pub fn from_snapshot(snap: AutoPwnConfigSnapshot) -> Self {
+        Self {
+            dc_host: snap.dc_host,
+            creds: Credentials::from_snapshot(snap.creds),
+            target: snap.target,
+            max_stage: snap.max_stage,
+            stealth: snap.stealth,
+            dry_run: snap.dry_run,
+            exec_method: snap.exec_method,
+            jitter_ms: snap.jitter_ms,
+            use_ldaps: snap.use_ldaps,
+            timeout: snap.timeout,
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -200,24 +281,15 @@ impl AutoPwnConfig {
 /// Final result of the autonomous attack run
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoPwnResult {
-    /// Whether the primary goal was achieved
     pub domain_admin_achieved: bool,
-    /// Final goal status
     pub goal_status: GoalStatus,
-    /// Final engagement state
     pub state: EngagementState,
-    /// Adaptive engine summary
     pub adaptive_summary: AdaptiveSummary,
-    /// Total wall-clock time
     pub duration_secs: u64,
-    /// Timestamp
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
-    /// Total steps executed
     pub steps_executed: usize,
-    /// Steps that succeeded
     pub steps_succeeded: usize,
-    /// Steps that failed
     pub steps_failed: usize,
 }
 
@@ -230,7 +302,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let started_at = Utc::now();
     let wall_start = Instant::now();
 
-    // ── Banner ──
     println!("\n{}", "╔══════════════════════════════════════════════╗".bold().red());
     println!("{}", "║          OVERTHRONE — PILOT AUTOPWN          ║".bold().red());
     println!("{}", "╚══════════════════════════════════════════════╝".bold().red());
@@ -252,7 +323,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     );
     println!();
 
-    // ── Initialize components ──
     let mut state = EngagementState::new();
     state.domain = Some(config.creds.domain.clone());
     state.dc_ip = Some(config.dc_host.clone());
@@ -265,15 +335,11 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let mut steps_succeeded = 0usize;
     let mut steps_failed = 0usize;
 
-    // ── Initial plan ──
     let mut plan = planner.plan(&goal, &state, adaptive.failed_actions());
 
-    // ── Main execution loop ──
     'main: loop {
-        // Adjust plan based on accumulated knowledge
         adaptive.adjust_plan(&mut plan, &state);
 
-        // Find the next unexecuted step
         let step_idx = match plan.steps.iter().position(|s| !s.executed) {
             Some(idx) => idx,
             None => {
@@ -282,7 +348,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         };
 
-        // Check stage gate — don't exceed max_stage
         let step = &plan.steps[step_idx];
         if step.stage > config.max_stage {
             info!(
@@ -294,18 +359,15 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             break 'main;
         }
 
-        // Print stage transition banner
         if step_idx == 0
             || plan.steps.get(step_idx.wrapping_sub(1)).map(|s| s.stage) != Some(step.stage)
         {
             print_stage_banner(step.stage);
         }
 
-        // ── Execute the step ──
         let result = executor::execute_step(step, &ctx, &mut state).await;
         steps_executed += 1;
 
-        // Mark as executed
         plan.steps[step_idx].executed = true;
         plan.steps[step_idx].result = Some(result.clone());
 
@@ -315,7 +377,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             steps_failed += 1;
         }
 
-        // ── Adaptive evaluation ──
         let decision = adaptive.evaluate(
             &plan.steps[step_idx],
             &result,
@@ -325,7 +386,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
         match decision {
             AdaptiveDecision::Continue => {
-                // Check goal
                 let status = state.evaluate_goal(&goal);
                 if status.is_success() {
                     info!(
@@ -345,19 +405,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     delay_secs,
                     modify
                 );
-
-                // Apply modifications
                 if let Some(modification) = modify {
                     match modification {
                         StepModification::SwapCredentials => {
                             if let Some((u, s, h)) =
                                 crate::adaptive::rotate_credential(&state, &ctx.username)
                             {
-                                info!(
-                                    "  {} Swapping to: {}",
-                                    "🔑".cyan(),
-                                    u.bold()
-                                );
+                                info!("  {} Swapping to: {}", "🔑".cyan(), u.bold());
                                 ctx.override_creds = Some((u, s, h));
                             }
                         }
@@ -367,15 +421,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                         StepModification::ReduceNoise => {
                             ctx.jitter_ms = (ctx.jitter_ms + 1000).min(10_000);
                         }
-                        StepModification::AlternateMethod => {
-                            // Method swap handled by Substitute decision
-                        }
+                        StepModification::AlternateMethod => {}
                     }
                 }
-
                 tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
-
-                // Un-mark so it gets retried
                 plan.steps[step_idx].executed = false;
                 plan.steps[step_idx].retries += 1;
                 plan.steps[step_idx].result = None;
@@ -383,7 +432,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
             AdaptiveDecision::Skip { reason } => {
                 info!("  {} Skipping: {}", "→".dimmed(), reason.dimmed());
-                // Already marked as executed — move on
             }
 
             AdaptiveDecision::Substitute { replacement } => {
@@ -392,7 +440,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     "🔄".cyan(),
                     plan.steps[step_idx].description
                 );
-                // Insert a new step with the replacement action right after current
                 let new_step = PlanStep {
                     id: format!("{}_alt", plan.steps[step_idx].id),
                     description: format!("{} (alternative)", plan.steps[step_idx].description),
@@ -410,53 +457,32 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
 
             AdaptiveDecision::Replan { reason } => {
-                info!(
-                    "\n  {} RE-PLANNING: {}",
-                    "🔄".blue().bold(),
-                    reason
-                );
-
+                info!("\n  {} RE-PLANNING: {}", "🔄".blue().bold(), reason);
                 if adaptive.replans_exhausted() {
                     warn!("  {} Re-plan limit exhausted — aborting", "✗".red().bold());
                     break 'main;
                 }
-
-                // Build a fresh plan with updated state + knowledge of failures
                 plan = planner.plan(&goal, &state, adaptive.failed_actions());
             }
 
             AdaptiveDecision::Abort { reason } => {
-                error!(
-                    "\n  {} ABORTING: {}",
-                    "✗".red().bold(),
-                    reason
-                );
+                error!("\n  {} ABORTING: {}", "✗".red().bold(), reason);
                 break 'main;
             }
 
             AdaptiveDecision::PauseForOperator { message } => {
-                warn!(
-                    "\n  {} OPERATOR INPUT NEEDED: {}",
-                    "⏸".yellow().bold(),
-                    message
-                );
-                // In a real interactive tool, this would wait for stdin
-                // For automated runs, treat as skip
+                warn!("\n  {} OPERATOR INPUT NEEDED: {}", "⏸".yellow().bold(), message);
                 info!("  {} Auto-continuing (non-interactive mode)", "→".dimmed());
             }
         }
 
-        // Stealth jitter between steps
         if config.stealth && !config.dry_run {
             let jitter = rand::random::<u64>() % ctx.jitter_ms.max(500);
             tokio::time::sleep(tokio::time::Duration::from_millis(jitter)).await;
         }
     }
 
-    // ═══════════════════════════════════════════════════════
-    // Final Report
-    // ═══════════════════════════════════════════════════════
-
+    // ── Final Report ──
     let finished_at = Utc::now();
     let duration_secs = wall_start.elapsed().as_secs();
     let final_status = state.evaluate_goal(&goal);
@@ -479,26 +505,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         "  Steps:      {} executed, {} succeeded, {} failed",
         steps_executed,
         steps_succeeded.to_string().green(),
-        if steps_failed > 0 {
-            steps_failed.to_string().red()
-        } else {
-            steps_failed.to_string().green()
-        }
+        if steps_failed > 0 { steps_failed.to_string().red() } else { steps_failed.to_string().green() }
     );
-    println!(
-        "  Duration:   {}s",
-        duration_secs
-    );
+    println!("  Duration:   {}s", duration_secs);
     println!(
         "  DA:         {}",
         if da_achieved {
-            format!(
-                "ACHIEVED ({})",
-                state.da_user.as_deref().unwrap_or("?")
-            )
-            .green()
-            .bold()
-            .to_string()
+            format!("ACHIEVED ({})", state.da_user.as_deref().unwrap_or("?")).green().bold().to_string()
         } else {
             "NOT ACHIEVED".red().to_string()
         }
@@ -507,7 +520,6 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let adaptive_summary = adaptive.summary();
     println!("{}", adaptive_summary);
 
-    // Audit trail
     if !state.action_log.is_empty() {
         println!("{}", "═══ AUDIT TRAIL ═══".bold().dimmed());
         for entry in &state.action_log {
@@ -518,11 +530,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 entry.timestamp.format("%H:%M:%S"),
                 entry.stage,
                 entry.action,
-                if entry.detail.len() > 80 {
-                    format!("{}...", &entry.detail[..77])
-                } else {
-                    entry.detail.clone()
-                }
+                if entry.detail.len() > 80 { format!("{}...", &entry.detail[..77]) } else { entry.detail.clone() }
             );
         }
         println!("{}", "═══════════════════".dimmed());
@@ -542,28 +550,20 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════════════
+// ── Helpers ──
 
-/// Print a stage transition banner
 fn print_stage_banner(stage: Stage) {
     let (icon, color_fn): (&str, fn(String) -> colored::ColoredString) = match stage {
         Stage::Enumerate => ("🔍", |s| s.blue()),
-        Stage::Attack => ("⚔️ ", |s| s.yellow()),
-        Stage::Escalate => ("📈", |s| s.red()),
-        Stage::Lateral => ("🔀", |s| s.magenta()),
-        Stage::Loot => ("💰", |s| s.red()),
-        Stage::Cleanup => ("🧹", |s| s.green()),
+        Stage::Attack    => ("⚔️ ", |s| s.yellow()),
+        Stage::Escalate  => ("📈", |s| s.red()),
+        Stage::Lateral   => ("🔀", |s| s.magenta()),
+        Stage::Loot      => ("💰", |s| s.red()),
+        Stage::Cleanup   => ("🧹", |s| s.green()),
     };
-
     let banner = format!("══════ {} STAGE: {} ══════", icon, stage);
     println!("\n{}", color_fn(banner).bold());
 }
-
-// ═══════════════════════════════════════════════════════════
-// Convenience: Run a single playbook
-// ═══════════════════════════════════════════════════════════
 
 /// Execute a named playbook directly (bypasses goal-driven planning)
 pub async fn run_playbook(
@@ -602,11 +602,7 @@ pub async fn run_playbook(
         pb.set_message(step.description.clone());
         let result = executor::execute_step(step, &ctx, &mut state).await;
         steps_executed += 1;
-        if result.success {
-            steps_succeeded += 1;
-        } else {
-            steps_failed += 1;
-        }
+        if result.success { steps_succeeded += 1; } else { steps_failed += 1; }
         pb.inc(1);
     }
 
