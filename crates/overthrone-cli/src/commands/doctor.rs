@@ -59,9 +59,9 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
         };
 
         println!(
-            "  {} {:<20} {}",
+            "  {} {}: {}",
             status,
-            result.name.white(),
+            result.name,
             result.message
         );
 
