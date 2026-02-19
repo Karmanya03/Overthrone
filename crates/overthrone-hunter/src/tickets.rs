@@ -11,9 +11,9 @@
 use crate::runner::HuntConfig;
 use chrono::{DateTime, TimeZone, Utc};
 use colored::Colorize;
+use kerberos_asn1::{Asn1Object, Ticket};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{self, TicketGrantingData};
-use kerberos_asn1::{Asn1Object, Ticket};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -92,9 +92,7 @@ pub enum TicketRequest {
         format: TicketFormat,
     },
     /// Import a ticket from file
-    Import {
-        path: PathBuf,
-    },
+    Import { path: PathBuf },
     /// Export a ticket to file (from current session)
     Export {
         output: PathBuf,
@@ -107,9 +105,7 @@ pub enum TicketRequest {
         target_format: TicketFormat,
     },
     /// Inspect a ticket file
-    Inspect {
-        path: PathBuf,
-    },
+    Inspect { path: PathBuf },
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -133,9 +129,10 @@ pub struct TicketInfo {
 pub fn inspect_ticket_bytes(data: &[u8]) -> Result<TicketInfo> {
     // Try parsing as KRB-CRED (kirbi)
     if let Ok((_, krb_cred)) = kerberos_asn1::KrbCred::parse(data)
-        && let Some(ticket) = krb_cred.tickets.first() {
-            return Ok(extract_ticket_info(ticket));
-        }
+        && let Some(ticket) = krb_cred.tickets.first()
+    {
+        return Ok(extract_ticket_info(ticket));
+    }
 
     // Try parsing as raw Ticket
     if let Ok((_, ticket)) = Ticket::parse(data) {
@@ -177,9 +174,7 @@ fn extract_ticket_info(ticket: &Ticket) -> TicketInfo {
 
 /// Wrap a TicketGrantingData into a KRB-CRED ASN.1 structure (.kirbi)
 pub fn to_kirbi(tgd: &TicketGrantingData) -> Vec<u8> {
-    use kerberos_asn1::{
-        EncKrbCredPart, EncryptedData, KrbCred, KrbCredInfo,
-    };
+    use kerberos_asn1::{EncKrbCredPart, EncryptedData, KrbCred, KrbCredInfo};
 
     let cred_info = KrbCredInfo {
         key: kerberos_asn1::EncryptionKey {
@@ -316,10 +311,10 @@ fn write_ccache_times(buf: &mut Vec<u8>, end_time: Option<&kerberos_asn1::Kerber
         })
         .unwrap_or(now + 36000);
 
-    buf.extend_from_slice(&now.to_be_bytes());   // authtime
-    buf.extend_from_slice(&now.to_be_bytes());   // starttime
-    buf.extend_from_slice(&end.to_be_bytes());   // endtime
-    buf.extend_from_slice(&end.to_be_bytes());   // renew_till
+    buf.extend_from_slice(&now.to_be_bytes()); // authtime
+    buf.extend_from_slice(&now.to_be_bytes()); // starttime
+    buf.extend_from_slice(&end.to_be_bytes()); // endtime
+    buf.extend_from_slice(&end.to_be_bytes()); // renew_till
 }
 
 fn write_ccache_credential(buf: &mut Vec<u8>, tgd: &TicketGrantingData) {
@@ -327,11 +322,7 @@ fn write_ccache_credential(buf: &mut Vec<u8>, tgd: &TicketGrantingData) {
     write_ccache_principal(buf, &tgd.client_principal, &tgd.client_realm);
 
     // Service principal (from ticket sname)
-    let sname = tgd
-        .ticket
-        .sname
-        .name_string
-        .join("/");
+    let sname = tgd.ticket.sname.name_string.join("/");
     write_ccache_principal(buf, &sname, &tgd.client_realm);
 
     // Session key
@@ -375,11 +366,186 @@ pub fn from_ccache(data: &[u8]) -> Result<TicketGrantingData> {
         )));
     }
 
-    // For full ccache parsing, we'd need to walk the binary format.
-    // This is a simplified implementation that extracts essential fields.
-    Err(OverthroneError::NotImplemented {
-        module: "ccache_import".to_string(),
+    let mut pos: usize = 2;
+
+    // Header length (v4 has a header section)
+    let header_len = read_u16_be(data, &mut pos)? as usize;
+    // Skip header data
+    if pos + header_len > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache header truncated".to_string(),
+        ));
+    }
+    pos += header_len;
+
+    // Default principal
+    let (default_principal, default_realm) = read_ccache_principal(data, &mut pos)?;
+
+    // Read the first credential entry
+    if pos >= data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache has no credentials".to_string(),
+        ));
+    }
+
+    // Client principal
+    let (client_principal, client_realm) = read_ccache_principal(data, &mut pos)?;
+
+    // Server principal (service)
+    let (_server_principal, _server_realm) = read_ccache_principal(data, &mut pos)?;
+
+    // Session key
+    let (session_key_etype, session_key) = read_ccache_keyblock(data, &mut pos)?;
+
+    // Times: authtime, starttime, endtime, renew_till (4 × u32)
+    let _authtime = read_u32_be(data, &mut pos)?;
+    let _starttime = read_u32_be(data, &mut pos)?;
+    let _endtime = read_u32_be(data, &mut pos)?;
+    let _renew_till = read_u32_be(data, &mut pos)?;
+
+    // is_skey (1 byte)
+    if pos >= data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache credential truncated at is_skey".to_string(),
+        ));
+    }
+    pos += 1;
+
+    // Ticket flags (u32)
+    let _flags = read_u32_be(data, &mut pos)?;
+
+    // Addresses count + skip
+    let addr_count = read_u32_be(data, &mut pos)?;
+    for _ in 0..addr_count {
+        let _addr_type = read_u16_be(data, &mut pos)?;
+        let addr_len = read_u32_be(data, &mut pos)? as usize;
+        if pos + addr_len > data.len() {
+            return Err(OverthroneError::Kerberos(
+                "CCache address truncated".to_string(),
+            ));
+        }
+        pos += addr_len;
+    }
+
+    // Authdata count + skip
+    let authdata_count = read_u32_be(data, &mut pos)?;
+    for _ in 0..authdata_count {
+        let _ad_type = read_u16_be(data, &mut pos)?;
+        let ad_len = read_u32_be(data, &mut pos)? as usize;
+        if pos + ad_len > data.len() {
+            return Err(OverthroneError::Kerberos(
+                "CCache authdata truncated".to_string(),
+            ));
+        }
+        pos += ad_len;
+    }
+
+    // Ticket data (ASN.1 encoded)
+    let ticket_len = read_u32_be(data, &mut pos)? as usize;
+    if pos + ticket_len > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache ticket data truncated".to_string(),
+        ));
+    }
+    let ticket_bytes = &data[pos..pos + ticket_len];
+    pos += ticket_len;
+
+    // Second ticket (skip)
+    let _second_ticket_len = read_u32_be(data, &mut pos)?;
+
+    // Parse the ASN.1 ticket
+    let (_, ticket) = Ticket::parse(ticket_bytes).map_err(|e| {
+        OverthroneError::Kerberos(format!("Failed to parse ticket from ccache: {e}"))
+    })?;
+
+    // Use the default principal if client principal is empty
+    let final_principal = if client_principal.is_empty() {
+        default_principal
+    } else {
+        client_principal
+    };
+    let final_realm = if client_realm.is_empty() {
+        default_realm
+    } else {
+        client_realm
+    };
+
+    Ok(TicketGrantingData {
+        ticket,
+        session_key,
+        session_key_etype,
+        client_principal: final_principal,
+        client_realm: final_realm,
+        end_time: None, // Times were u32 epoch, not ASN.1 KerberosTime
     })
+}
+
+fn read_u16_be(data: &[u8], pos: &mut usize) -> Result<u16> {
+    if *pos + 2 > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache truncated reading u16".to_string(),
+        ));
+    }
+    let val = u16::from_be_bytes([data[*pos], data[*pos + 1]]);
+    *pos += 2;
+    Ok(val)
+}
+
+fn read_u32_be(data: &[u8], pos: &mut usize) -> Result<u32> {
+    if *pos + 4 > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache truncated reading u32".to_string(),
+        ));
+    }
+    let val = u32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
+    *pos += 4;
+    Ok(val)
+}
+
+fn read_ccache_principal(data: &[u8], pos: &mut usize) -> Result<(String, String)> {
+    let name_type = read_u32_be(data, pos)?;
+    let num_components = read_u32_be(data, pos)?;
+
+    // Realm
+    let realm_len = read_u32_be(data, pos)? as usize;
+    if *pos + realm_len > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache principal realm truncated".to_string(),
+        ));
+    }
+    let realm = String::from_utf8_lossy(&data[*pos..*pos + realm_len]).to_string();
+    *pos += realm_len;
+
+    // Components
+    let mut components = Vec::new();
+    for _ in 0..num_components {
+        let comp_len = read_u32_be(data, pos)? as usize;
+        if *pos + comp_len > data.len() {
+            return Err(OverthroneError::Kerberos(
+                "CCache principal component truncated".to_string(),
+            ));
+        }
+        let comp = String::from_utf8_lossy(&data[*pos..*pos + comp_len]).to_string();
+        *pos += comp_len;
+        components.push(comp);
+    }
+
+    let principal = components.join("/");
+    let _ = name_type; // Used for type classification but not needed for TGD
+    Ok((principal, realm))
+}
+
+fn read_ccache_keyblock(data: &[u8], pos: &mut usize) -> Result<(i32, Vec<u8>)> {
+    let etype = read_u16_be(data, pos)? as i32;
+    let key_len = read_u32_be(data, pos)? as usize;
+    if *pos + key_len > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "CCache keyblock truncated".to_string(),
+        ));
+    }
+    let key = data[*pos..*pos + key_len].to_vec();
+    *pos += key_len;
+    Ok((etype, key))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -412,11 +578,7 @@ impl TicketOps {
     }
 
     /// Save a ticket to file in the specified format
-    pub async fn save(
-        tgd: &TicketGrantingData,
-        path: &Path,
-        format: TicketFormat,
-    ) -> Result<()> {
+    pub async fn save(tgd: &TicketGrantingData, path: &Path, format: TicketFormat) -> Result<()> {
         let data = match format {
             TicketFormat::Kirbi => to_kirbi(tgd),
             TicketFormat::CCache => to_ccache(tgd),
@@ -458,11 +620,7 @@ impl TicketOps {
     }
 
     /// Convert ticket between formats
-    pub async fn convert(
-        input: &Path,
-        output: &Path,
-        target_format: TicketFormat,
-    ) -> Result<()> {
+    pub async fn convert(input: &Path, output: &Path, target_format: TicketFormat) -> Result<()> {
         let tgd = Self::load(input).await?;
         Self::save(&tgd, output, target_format).await?;
         info!(
@@ -477,8 +635,8 @@ impl TicketOps {
     /// Inspect a ticket file and print metadata
     pub async fn inspect(path: &Path) -> Result<TicketInfo> {
         let data = tokio::fs::read(path).await?;
-        let format = TicketFormat::detect_from_bytes(&data)
-            .or_else(|| TicketFormat::detect_from_path(path));
+        let format =
+            TicketFormat::detect_from_bytes(&data).or_else(|| TicketFormat::detect_from_path(path));
 
         let info = inspect_ticket_bytes(&data)?;
 
@@ -486,7 +644,9 @@ impl TicketOps {
         println!("  File:      {}", path.display());
         println!(
             "  Format:    {}",
-            format.map(|f| f.to_string()).unwrap_or("unknown".to_string())
+            format
+                .map(|f| f.to_string())
+                .unwrap_or("unknown".to_string())
         );
         println!("  Service:   {}", info.service_principal.bold());
         println!("  Realm:     {}", info.service_realm.cyan());
@@ -509,10 +669,7 @@ impl TicketOps {
 // ═══════════════════════════════════════════════════════════
 
 /// Handle a ticket request dispatched by the runner
-pub async fn handle_request(
-    config: &HuntConfig,
-    request: &TicketRequest,
-) -> Result<()> {
+pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Result<()> {
     match request {
         TicketRequest::RequestTgt { output, format } => {
             info!("{}", "═══ REQUEST TGT ═══".bold().green());
@@ -529,7 +686,11 @@ pub async fn handle_request(
             }
         }
 
-        TicketRequest::RequestTgs { spn, output, format } => {
+        TicketRequest::RequestTgs {
+            spn,
+            output,
+            format,
+        } => {
             info!("{}", "═══ REQUEST TGS ═══".bold().green());
             let tgt = match &config.tgt {
                 Some(t) => t.clone(),
@@ -597,14 +758,20 @@ mod tests {
     fn test_format_detection_kirbi() {
         // kirbi starts with 0x76 (APPLICATION 22)
         let data = [0x76, 0x82, 0x01, 0x00];
-        assert_eq!(TicketFormat::detect_from_bytes(&data), Some(TicketFormat::Kirbi));
+        assert_eq!(
+            TicketFormat::detect_from_bytes(&data),
+            Some(TicketFormat::Kirbi)
+        );
     }
 
     #[test]
     fn test_format_detection_ccache() {
         // ccache v4 starts with 0x05 0x04
         let data = [0x05, 0x04, 0x00, 0x00];
-        assert_eq!(TicketFormat::detect_from_bytes(&data), Some(TicketFormat::CCache));
+        assert_eq!(
+            TicketFormat::detect_from_bytes(&data),
+            Some(TicketFormat::CCache)
+        );
     }
 
     #[test]
@@ -617,10 +784,7 @@ mod tests {
             TicketFormat::detect_from_path(Path::new("admin.ccache")),
             Some(TicketFormat::CCache)
         );
-        assert_eq!(
-            TicketFormat::detect_from_path(Path::new("admin.txt")),
-            None
-        );
+        assert_eq!(TicketFormat::detect_from_path(Path::new("admin.txt")), None);
     }
 
     #[test]

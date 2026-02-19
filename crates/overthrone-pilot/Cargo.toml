@@ -21,6 +21,9 @@ indicatif.workspace = true
 uuid.workspace = true
 rand.workspace = true
 comfy-table = "7"
+md4 = "0.10"
+md-5 = "0.10"
+hmac = "0.12"
 
 [dev-dependencies]
 tokio-test.workspace = true

@@ -1,7 +1,7 @@
 ﻿//! Domain group enumeration via LDAP.
 
-use overthrone_core::error::{OverthroneError, Result};
 use crate::runner::ReaperConfig;
+use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
@@ -43,12 +43,21 @@ impl GroupKind {
 impl GroupEntry {
     pub fn is_privileged(&self) -> bool {
         let lower = self.sam_account_name.to_lowercase();
-        matches!(lower.as_str(),
-            "domain admins" | "enterprise admins" | "schema admins" |
-            "administrators" | "account operators" | "backup operators" |
-            "server operators" | "print operators" | "dnsadmins" |
-            "group policy creator owners" | "domain controllers" |
-            "cert publishers" | "exchange windows permissions"
+        matches!(
+            lower.as_str(),
+            "domain admins"
+                | "enterprise admins"
+                | "schema admins"
+                | "administrators"
+                | "account operators"
+                | "backup operators"
+                | "server operators"
+                | "print operators"
+                | "dnsadmins"
+                | "group policy creator owners"
+                | "domain controllers"
+                | "cert publishers"
+                | "exchange windows permissions"
         ) || self.admin_count
     }
 }
@@ -59,20 +68,59 @@ pub fn group_filter() -> String {
 
 pub fn group_attributes() -> Vec<String> {
     [
-        "sAMAccountName", "distinguishedName", "description", "member",
-        "memberOf", "groupType", "adminCount", "objectSid",
-    ].iter().map(|s| s.to_string()).collect()
+        "sAMAccountName",
+        "distinguishedName",
+        "description",
+        "member",
+        "memberOf",
+        "groupType",
+        "adminCount",
+        "objectSid",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 pub async fn enumerate_groups(config: &ReaperConfig) -> Result<Vec<GroupEntry>> {
     info!("[groups] Querying {} for domain groups", config.dc_ip);
-    Err(OverthroneError::NotImplemented {
-        module: "reaper::groups".into(),
-    })
+
+    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
+        &config.dc_ip,
+        &config.domain,
+        &config.username,
+        config.password.as_deref().unwrap_or(""),
+        false,
+    )
+    .await?;
+
+    let filter = group_filter();
+    let attr_list = group_attributes();
+    let attrs: Vec<&str> = attr_list.iter().map(|s| s.as_str()).collect();
+
+    let entries = match conn.custom_search(&filter, &attrs).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[groups] LDAP search failed: {}", e);
+            let _ = conn.disconnect().await;
+            return Err(e);
+        }
+    };
+
+    let mut results = Vec::new();
+    for entry in &entries {
+        results.push(parse_group_entry(&entry.attrs));
+    }
+
+    let _ = conn.disconnect().await;
+    info!("[groups] Found {} domain groups", results.len());
+    Ok(results)
 }
 
 pub fn parse_group_entry(attrs: &HashMap<String, Vec<String>>) -> GroupEntry {
-    let gt: i64 = first_val(attrs, "groupType").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let gt: i64 = first_val(attrs, "groupType")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     GroupEntry {
         sam_account_name: first_val(attrs, "sAMAccountName").unwrap_or_default(),
         distinguished_name: first_val(attrs, "distinguishedName").unwrap_or_default(),
@@ -80,7 +128,9 @@ pub fn parse_group_entry(attrs: &HashMap<String, Vec<String>>) -> GroupEntry {
         members: attrs.get("member").cloned().unwrap_or_default(),
         member_of: attrs.get("memberOf").cloned().unwrap_or_default(),
         group_type: GroupKind::from_group_type(gt),
-        admin_count: first_val(attrs, "adminCount").map(|v| v == "1").unwrap_or(false),
+        admin_count: first_val(attrs, "adminCount")
+            .map(|v| v == "1")
+            .unwrap_or(false),
         sid: first_val(attrs, "objectSid"),
     }
 }

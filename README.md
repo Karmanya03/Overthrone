@@ -223,21 +223,21 @@ Grab the latest from [**Releases**](https://github.com/Karmanya03/Overthrone/rel
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.0/overthrone-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.0/overthrone-linux-x86_64) | x86_64 (musl, static) |
-| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.0/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-linux-x86_64) | x86_64 (musl, static) |
+| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick manual install:**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.0/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.0/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # Kali (you're probably already here)
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.0/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
 ```
 
 ### Build from source
@@ -327,6 +327,24 @@ cargo uninstall overthrone
 | **macOS** | Full support | Kerberos and LDAP work natively. `brew install samba` for SMB directory listing. Tim Cook would not approve. |
 | **WSL** | Full support | The best of both worlds — Windows target, Linux attacker, one machine, one electrical outlet. |
 | **FreeBSD** | Probably works | We haven't tested it. If you're pentesting AD from FreeBSD, you're a different breed and we salute you. |
+
+## Changelog
+
+### v0.1.1 — The "Total Control" Update
+
+**New Features:**
+- **BloodHound v4 Export**: Export users, groups, computers, and domains to BloodHound-compatible JSON.
+- **Ccache Import**: Import Kerberos tickets from binary ccache files (v4) for Pass-the-Ticket.
+- **Full LDAP Enumeration**: Complete implementation of user, group, and computer enumeration modules.
+- **Attack Graph Engine**:
+  - `GraphBuilder` fully implemented to digest enumeration data.
+  - `PathFinder` added with `shortest_path`, `paths_to_da`, and `high_value_targets` queries.
+- **Stub Elimination**: Zero `unimplemented!()` or `todo!()` macros remain in the codebase.
+
+**Improvements:**
+- `overthrone-reaper` now handles all LDAP object types.
+- `overthrone-hunter` correctly parses ccache headers and credentials.
+- `overthrone-core` graph module now supports weighted edges for cost-based pathfinding.
 
 ## Usage
 

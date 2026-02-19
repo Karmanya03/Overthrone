@@ -1,8 +1,8 @@
 ﻿//! Domain computer enumeration via LDAP.
 
-use overthrone_core::error::{OverthroneError, Result};
 use crate::runner::ReaperConfig;
-use crate::users::{UAC_TRUSTED_FOR_DELEGATION, UAC_TRUSTED_TO_AUTH_FOR_DELEGATION, UAC_DISABLED};
+use crate::users::{UAC_DISABLED, UAC_TRUSTED_FOR_DELEGATION, UAC_TRUSTED_TO_AUTH_FOR_DELEGATION};
+use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
@@ -29,14 +29,24 @@ impl ComputerEntry {
     pub fn is_high_value(&self) -> bool {
         self.is_domain_controller
             || self.unconstrained_delegation
-            || self.operating_system.as_deref().map(|os| os.contains("Server")).unwrap_or(false)
+            || self
+                .operating_system
+                .as_deref()
+                .map(|os| os.contains("Server"))
+                .unwrap_or(false)
     }
 
     pub fn is_legacy_os(&self) -> bool {
-        self.operating_system.as_deref().map(|os| {
-            os.contains("2008") || os.contains("2003") || os.contains("XP")
-                || os.contains("7") || os.contains("Vista")
-        }).unwrap_or(false)
+        self.operating_system
+            .as_deref()
+            .map(|os| {
+                os.contains("2008")
+                    || os.contains("2003")
+                    || os.contains("XP")
+                    || os.contains("7")
+                    || os.contains("Vista")
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -46,17 +56,55 @@ pub fn computer_filter() -> String {
 
 pub fn computer_attributes() -> Vec<String> {
     [
-        "sAMAccountName", "dNSHostName", "distinguishedName", "operatingSystem",
-        "operatingSystemVersion", "userAccountControl", "msDS-AllowedToDelegateTo",
-        "servicePrincipalName", "lastLogonTimestamp", "objectSid",
-    ].iter().map(|s| s.to_string()).collect()
+        "sAMAccountName",
+        "dNSHostName",
+        "distinguishedName",
+        "operatingSystem",
+        "operatingSystemVersion",
+        "userAccountControl",
+        "msDS-AllowedToDelegateTo",
+        "servicePrincipalName",
+        "lastLogonTimestamp",
+        "objectSid",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 pub async fn enumerate_computers(config: &ReaperConfig) -> Result<Vec<ComputerEntry>> {
     info!("[computers] Querying {} for domain computers", config.dc_ip);
-    Err(OverthroneError::NotImplemented {
-        module: "reaper::computers".into(),
-    })
+
+    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
+        &config.dc_ip,
+        &config.domain,
+        &config.username,
+        config.password.as_deref().unwrap_or(""),
+        false,
+    )
+    .await?;
+
+    let filter = computer_filter();
+    let attr_list = computer_attributes();
+    let attrs: Vec<&str> = attr_list.iter().map(|s| s.as_str()).collect();
+
+    let entries = match conn.custom_search(&filter, &attrs).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[computers] LDAP search failed: {}", e);
+            let _ = conn.disconnect().await;
+            return Err(e);
+        }
+    };
+
+    let mut results = Vec::new();
+    for entry in &entries {
+        results.push(parse_computer_entry(&entry.attrs));
+    }
+
+    let _ = conn.disconnect().await;
+    info!("[computers] Found {} domain computers", results.len());
+    Ok(results)
 }
 
 pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEntry {
@@ -66,8 +114,14 @@ pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEnt
     let enabled = uac & UAC_DISABLED == 0;
     let unconstrained = uac & UAC_TRUSTED_FOR_DELEGATION != 0;
     let constrained = uac & UAC_TRUSTED_TO_AUTH_FOR_DELEGATION != 0;
-    let delegate_to = attrs.get("msDS-AllowedToDelegateTo").cloned().unwrap_or_default();
-    let spns = attrs.get("servicePrincipalName").cloned().unwrap_or_default();
+    let delegate_to = attrs
+        .get("msDS-AllowedToDelegateTo")
+        .cloned()
+        .unwrap_or_default();
+    let spns = attrs
+        .get("servicePrincipalName")
+        .cloned()
+        .unwrap_or_default();
     let is_dc = spns.iter().any(|s| s.to_lowercase().starts_with("ldap/"));
 
     ComputerEntry {

