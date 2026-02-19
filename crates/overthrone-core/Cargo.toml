@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Core library: protocols, crypto, types, graph engine"
+# v2 - cache bust
 
 [dependencies]
 # Async & Core
