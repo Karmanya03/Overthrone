@@ -62,7 +62,7 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
             "  {} {:<20} {}",
             status,
             result.name.white(),
-            result.message.dimmed()
+            result.message
         );
 
         if let Some(ref hint) = result.hint {
