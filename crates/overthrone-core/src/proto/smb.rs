@@ -408,10 +408,13 @@ impl SmbSession {
 // Non-Windows: Full implementation via pavao (libsmbclient)
 
 #[cfg(not(windows))]
+use pavao::{SmbClient, SmbCredentials, SmbDirentType, SmbOptions, SmbOpenOptions};
+#[cfg(not(windows))]
+use std::io::{Read, Write};
+
+#[cfg(not(windows))]
 mod pavao_impl {
     use super::*;
-    use pavao::{SmbClient, SmbCredentials, SmbDirentType, SmbOptions, SmbOpenOptions};
-    use std::io::{Read, Write};
 
     pub fn make_client(
         target: &str,
@@ -670,10 +673,11 @@ impl SmbSession {
             &self.password,
         )?;
         let path = format!("/{}", pavao_impl::make_path(remote_path));
+        let remote_path_owned = remote_path.to_string();
         tokio::task::spawn_blocking(move || {
             client
                 .unlink(&path)
-                .map_err(|e| OverthroneError::Smb(format!("Delete '{}': {e}", remote_path)))
+                .map_err(|e| OverthroneError::Smb(format!("Delete '{}': {e}", remote_path_owned)))
         })
         .await
         .map_err(|e| OverthroneError::Smb(format!("task: {e}")))??;
