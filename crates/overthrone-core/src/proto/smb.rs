@@ -611,11 +611,12 @@ impl SmbSession {
             &self.password,
         )?;
         let path = format!("/{}", pavao_impl::make_path(remote_path));
+        let remote_path_owned = remote_path.to_string();
         let data = tokio::task::spawn_blocking(move || {
             let opts = SmbOpenOptions::default().read(true);
             let mut f = client
                 .open_with(&path, opts)
-                .map_err(|e| OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path)))?;
+                .map_err(|e| OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path_owned)))?;
             let mut buf = Vec::new();
             f.read_to_end(&mut buf)
                 .map_err(|e| OverthroneError::Smb(format!("Read error: {e}")))?;
@@ -628,9 +629,10 @@ impl SmbSession {
     }
 
     pub async fn write_file(&self, share: &str, remote_path: &str, data: &[u8]) -> Result<()> {
+        let data_len = data.len();
         info!(
             "SMB: Writing {} bytes to \\\\{}\\{}\\{}",
-            data.len(),
+            data_len,
             self.target,
             share,
             remote_path
@@ -643,6 +645,7 @@ impl SmbSession {
             &self.password,
         )?;
         let path = format!("/{}", pavao_impl::make_path(remote_path));
+        let remote_path_owned = remote_path.to_string();
         let data = data.to_vec();
         tokio::task::spawn_blocking(move || {
             let opts = SmbOpenOptions::default()
@@ -651,7 +654,7 @@ impl SmbSession {
                 .truncate(true);
             let mut f = client
                 .open_with(&path, opts)
-                .map_err(|e| OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path)))?;
+                .map_err(|e| OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path_owned)))?;
             f.write_all(&data)
                 .map_err(|e| OverthroneError::Smb(format!("Write error: {e}")))?;
             f.flush().map_err(|e| OverthroneError::Smb(format!("Flush: {e}")))?;
@@ -659,7 +662,7 @@ impl SmbSession {
         })
         .await
         .map_err(|e| OverthroneError::Smb(format!("task: {e}")))??;
-        info!("SMB: Write complete ({} bytes)", data.len());
+        info!("SMB: Write complete ({} bytes)", data_len);
         Ok(())
     }
 
@@ -725,11 +728,12 @@ impl SmbSession {
             &self.password,
         )?;
         let path = format!("/{}", pipe_name.trim_start_matches('/').trim_start_matches('\\'));
+        let pipe_name_owned = pipe_name.to_string();
         let req = request.to_vec();
         let response = tokio::task::spawn_blocking(move || {
             let opts = SmbOpenOptions::default().read(true).write(true);
             let mut pipe = client.open_with(&path, opts).map_err(|e| {
-                OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name))
+                OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name_owned))
             })?;
             pipe.write_all(&req)
                 .map_err(|e| OverthroneError::Smb(format!("Pipe write: {e}")))?;
