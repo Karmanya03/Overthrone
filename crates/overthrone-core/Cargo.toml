@@ -62,6 +62,18 @@ windows = { version = "0.62", features = [
     "Win32_Security",
 ]}
 
+# ── Linux/macOS cross-platform dependencies ─────────────────
+# pavao: libsmbclient bindings for SMB file I/O + named pipes
+# ntlmclient: pure Rust NTLM for WS-Man/WinRM
+# quick-xml: WS-Man SOAP XML parsing
+# reqwest: HTTP client for WinRM WS-Man
+[target.'cfg(not(windows))'.dependencies]
+pavao = "0.2"
+ntlmclient = "0.2"
+quick-xml = { version = "0.39", features = ["serialize"] }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+
 [dev-dependencies]
 tokio-test.workspace = true
 pretty_assertions.workspace = true

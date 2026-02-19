@@ -90,7 +90,8 @@ enum Commands {
         #[command(flatten)]
         args: commands::wizard::WizardArgs,
     },
-    /// Full AD enumeration via reaper modules
+    /// Full AD enumeration via reaper modules (alias: enum)
+    #[command(alias = "enum")]
     Reaper {
         #[arg(long, env = "OT_DC_IP")]
         dc_ip: Option<String>,
@@ -108,14 +109,18 @@ enum Commands {
         #[arg(long, default_value = "false")]
         include_disabled: bool,
     },
+    /// Kerberos operations (alias: krb)
+    #[command(alias = "krb")]
     Kerberos {
         #[command(subcommand)]
         action: KerberosAction,
     },
+    /// SMB operations
     Smb {
         #[command(subcommand)]
         action: SmbAction,
     },
+    /// Remote command execution
     Exec {
         #[arg(short, long, value_enum, default_value = "auto")]
         method: ExecMethod,
@@ -124,10 +129,12 @@ enum Commands {
         #[arg(short, long)]
         command: String,
     },
+    /// Attack graph operations
     Graph {
         #[command(subcommand)]
         action: GraphAction,
     },
+    /// Password spraying
     Spray {
         #[arg(short, long)]
         password: String,
@@ -138,7 +145,8 @@ enum Commands {
         #[arg(long, default_value = "0")]
         jitter: u64,
     },
-    #[command(name = "auto-pwn")]
+    /// Autonomous attack chain (alias: auto)
+    #[command(name = "auto-pwn", alias = "auto")]
     AutoPwn {
         #[arg(short, long, default_value = "Domain Admins")]
         target: String,
@@ -149,11 +157,22 @@ enum Commands {
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },
+    /// Credential dumping (SAM, LSA, NTDS, DCC2)
     Dump {
         #[arg(short, long)]
         target: String,
         #[arg(value_enum)]
         source: DumpSource,
+    },
+    /// Environment diagnostics — check dependencies and connectivity
+    #[command(alias = "check", alias = "env")]
+    Doctor {
+        /// Specific checks to run (smb, kerberos, winrm, network)
+        #[arg(long, short, value_delimiter = ',')]
+        checks: Vec<String>,
+        /// Domain controller to test connectivity against
+        #[arg(long, short)]
+        dc: Option<String>,
     },
 }
 
@@ -307,6 +326,7 @@ async fn main() {
             dry_run,
         } => cmd_autopwn(&cli, target, method.clone(), *stealth, *dry_run).await,
         Commands::Dump { target, source } => cmd_dump(&cli, target, source.clone()).await,
+        Commands::Doctor { checks, dc } => cmd_doctor(&cli, checks.clone(), dc.as_deref()).await,
     };
 
     std::process::exit(exit_code);
@@ -1404,4 +1424,38 @@ async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         banner::print_fail(&result.output);
         1
     }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_doctor
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
+    // If DC is specified, also run DC connectivity checks
+    if let Some(dc_host) = dc {
+        let dc_results = commands::doctor::check_dc_connectivity(dc_host).await;
+        
+        // Print DC connectivity results
+        println!("\n  {} DC Connectivity: {}\n", "▸".bright_black(), dc_host.cyan());
+        for result in &dc_results {
+            let status = if result.passed {
+                "✓".green().bold()
+            } else {
+                "✗".red().bold()
+            };
+            println!(
+                "  {} {:<25} {}",
+                status,
+                result.name.white(),
+                result.message.dimmed()
+            );
+            if let Some(ref hint) = result.hint {
+                println!("    {} {}", "→".yellow(), hint.yellow().dimmed());
+            }
+        }
+    }
+    
+    // Run general environment checks
+    let check_filter = if checks.is_empty() { None } else { Some(checks) };
+    commands::doctor::run(check_filter).await
 }
