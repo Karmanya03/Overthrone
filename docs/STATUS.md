@@ -113,12 +113,4 @@ The lateral movement *library code* lives in `overthrone-core/src/exec/` and is 
 | **Cross-Forest Trust Abuse** | One forest at a time. |
 | **`ovt move` CLI Command** | Never existed. The library has lateral movement. The CLI uses `ovt exec`. |
 
----
-
-## Housekeeping
-
-| Item | Details |
-|---|---|
-| `cracked_credentials.txt` | Dev artifact in project root. Should be `.gitignore`'d. |
-| `overthrone-cli/` in root | Duplicate/old folder (not in `crates/`). May contain unused files. |
-| `target/` | Already in `.gitignore`. Cargo's territory. |
+---|
