@@ -480,6 +480,11 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             let jitter = rand::random::<u64>() % ctx.jitter_ms.max(500);
             tokio::time::sleep(tokio::time::Duration::from_millis(jitter)).await;
         }
+
+        // Auto-save state every 10 steps for recovery
+        if steps_executed % 10 == 0 {
+            state.auto_save();
+        }
     }
 
     // ── Final Report ──

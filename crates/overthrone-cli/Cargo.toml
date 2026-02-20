@@ -38,6 +38,7 @@ directories.workspace = true
 rpassword = "7.4.0"
 serde_json.workspace = true
 kerberos_asn1.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true

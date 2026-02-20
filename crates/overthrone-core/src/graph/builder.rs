@@ -176,10 +176,13 @@ pub fn enrich_with_acls(
             "WriteOwner" => EdgeType::WriteOwner,
             "WriteDacl" => EdgeType::WriteDacl,
             "ForceChangePassword" => EdgeType::ForceChangePassword,
-            "AddMembers" | "Self" => EdgeType::AddMembers,
-            "ReadLAPSPassword" => EdgeType::ReadLapsPassword,
-            "ReadGMSAPassword" => EdgeType::ReadGmsaPassword,
+            "AddMembers" | "AddMember" | "Self" => EdgeType::AddMember,
+            "ReadLAPSPassword" | "ReadLapsPassword" => EdgeType::ReadLapsPassword,
+            "ReadGMSAPassword" | "ReadGmsaPassword" => EdgeType::ReadGmsaPassword,
             "Owns" => EdgeType::Owns,
+            "AllExtendedRights" => EdgeType::AllExtendedRights,
+            "AllowedToDelegate" => EdgeType::AllowedToDelegate,
+            "AllowedToAct" => EdgeType::AllowedToAct,
             other => EdgeType::Custom(other.to_string()),
         };
 

@@ -406,6 +406,74 @@ impl LdapSession {
         Ok(())
     }
 
+    /// Add values to an attribute on a DN (raw LDAP modify-add).
+    /// Used by Shadow Credentials to write msDS-KeyCredentialLink.
+    pub async fn modify_add(&mut self, dn: &str, attr: &str, values: &[String]) -> Result<()> {
+        use ldap3::Mod;
+        use std::collections::HashSet;
+        debug!("LDAP modify-add: dn={dn}, attr={attr}, {} values", values.len());
+
+        let value_set: HashSet<String> = values.iter().cloned().collect();
+        let mods = vec![Mod::Add(attr.to_string(), value_set)];
+
+        let result = self
+            .ldap
+            .modify(dn, mods)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("Modify-add failed: {e}"),
+            })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!(
+                    "Modify-add rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP modify-add successful on {dn}");
+        Ok(())
+    }
+
+    /// Remove specific values from an attribute on a DN (raw LDAP modify-delete-values).
+    /// Used by Shadow Credentials cleanup to remove specific key credentials.
+    pub async fn modify_delete_values(&mut self, dn: &str, attr: &str, values: &[String]) -> Result<()> {
+        use ldap3::Mod;
+        use std::collections::HashSet;
+        debug!("LDAP modify-delete-values: dn={dn}, attr={attr}, {} values", values.len());
+
+        let value_set: HashSet<String> = values.iter().cloned().collect();
+        let mods = vec![Mod::Delete(attr.to_string(), value_set)];
+
+        let result = self
+            .ldap
+            .modify(dn, mods)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("Modify-delete-values failed: {e}"),
+            })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!(
+                    "Modify-delete-values rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP modify-delete-values successful on {dn}");
+        Ok(())
+    }
+
     // ═══════════════════════════════════════════════════════
     //  Raw Search Helper
     // ═══════════════════════════════════════════════════════

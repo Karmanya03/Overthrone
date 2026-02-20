@@ -24,5 +24,8 @@ pub mod runner;
 pub mod session;
 
 // Re-exports
-pub use runner::{ReportConfig, ReportFormat, ReportOutput, generate_report};
+pub use runner::{
+    generate_from_file, generate_from_session, generate_report, load_session,
+    merge_sessions, save_session, ReportConfig, ReportFormat, ReportOutput,
+};
 pub use session::{EngagementSession, Finding, Severity};

@@ -3,11 +3,14 @@
 //! Provides multiple lateral movement execution methods:
 //! - PSExec-style (SMB service creation)
 //! - SmbExec (command-only, no binary drop)
-//! - WinRM (WS-Management via native Win32 API)
-//! - WMI (Win32_Process Create)
+//! - WinRM (WS-Management via native Win32 API or pure Rust)
+//! - WMI (Win32_Process Create, with SCM fallback)
+//! - AtExec (Scheduled Tasks via ATSVC)
 //!
 //! Each method implements the `RemoteExecutor` trait for a unified interface.
+//! All methods are cross-platform (Linux/macOS/Windows).
 
+pub mod atexec;
 pub mod psexec;
 pub mod smbexec;
 pub mod winrm;
@@ -33,6 +36,7 @@ pub enum ExecMethod {
     SmbExec,
     WinRM,
     WmiExec,
+    AtExec,
 }
 
 impl std::fmt::Display for ExecMethod {
@@ -42,6 +46,7 @@ impl std::fmt::Display for ExecMethod {
             Self::SmbExec => write!(f, "SMBExec"),
             Self::WinRM   => write!(f, "WinRM"),
             Self::WmiExec => write!(f, "WMIExec"),
+            Self::AtExec  => write!(f, "AtExec"),
         }
     }
 }
@@ -94,7 +99,7 @@ fn base64_encode_ps(script: &str) -> String {
 
 /// Try all available execution methods in order of stealth
 /// 
-/// Order: WMI → WinRM → SmbExec → PSExec (stealthiest first)
+/// Order: WinRM → AtExec → SmbExec → PSExec → WMI (most reliable/stealthy first)
 pub async fn auto_exec(
     target: &str,
     command: &str,
@@ -102,12 +107,13 @@ pub async fn auto_exec(
 ) -> Result<ExecOutput> {
     use tracing::info;
 
-    // Order: WMI → WinRM → SmbExec → PsExec (stealthiest first)
+    // Order: WinRM → AtExec → SmbExec → PsExec → WMI (most reliable first)
     let executors: Vec<Box<dyn RemoteExecutor>> = vec![
-        Box::new(wmiexec::WmiExecutor::new(creds.clone())),
         Box::new(winrm::WinRmExecutor::new(creds.clone())),
+        Box::new(atexec::AtExecutor::new(creds.clone())),
         Box::new(smbexec::SmbExecutor::new(creds.clone())),
         Box::new(psexec::PsExecutor::new(creds.clone())),
+        Box::new(wmiexec::WmiExecutor::new(creds.clone())),
     ];
 
     for executor in &executors {

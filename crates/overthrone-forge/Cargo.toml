@@ -23,6 +23,7 @@ kerberos_asn1.workspace = true
 kerberos_crypto.workspace = true
 hmac.workspace = true
 md-5.workspace = true
+md4.workspace = true
 digest.workspace = true
 
 [dev-dependencies]

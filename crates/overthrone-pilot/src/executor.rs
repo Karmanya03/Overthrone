@@ -2353,7 +2353,7 @@ async fn exec_silver_ticket(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Hash Cracking Executor (external tool invocation)
+// Hash Cracking Executor (inline cracker with hashcat fallback)
 // ═══════════════════════════════════════════════════════════
 
 async fn exec_crack_hashes(
@@ -2370,130 +2370,72 @@ async fn exec_crack_hashes(
         };
     }
 
-    info!("  Cracking {} hashes...", hashes.len());
+    info!("  Cracking {} hashes with inline cracker...", hashes.len());
 
-    // Write hashes to temp file
-    let hash_file = format!("/tmp/overthrone_hashes_{}.txt", rand::random::<u32>());
-    let hash_content = hashes.join("\n");
-    if let Err(e) = tokio::fs::write(&hash_file, &hash_content).await {
-        return StepResult {
-            success: false,
-            output: format!("Failed to write hash file: {e}"),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        };
-    }
-
-    // Try hashcat first, fall back to john
-    let (tool, args) = if which_tool("hashcat").await {
-        (
-            "hashcat",
-            vec![
-                "-m".to_string(),
-                "13100".to_string(), // Kerberoast TGS-REP
-                "-a".to_string(),
-                "0".to_string(), // dictionary attack
-                hash_file.clone(),
-                "/usr/share/wordlists/rockyou.txt".to_string(),
-                "--potfile-disable".to_string(),
-                "--force".to_string(),
-            ],
-        )
-    } else if which_tool("john").await {
-        (
-            "john",
-            vec![
-                hash_file.clone(),
-                "--wordlist=/usr/share/wordlists/rockyou.txt".to_string(),
-                "--format=krb5tgs".to_string(),
-            ],
-        )
-    } else {
-        return StepResult {
-            success: false,
-            output: "Neither hashcat nor john found in PATH".to_string(),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        };
-    };
-
-    info!("  Using {} with {} hashes", tool, hashes.len());
-
-    // Run the cracking tool with a timeout
-    let output = match tokio::time::timeout(
-        tokio::time::Duration::from_secs(300), // 5 minute timeout
-        tokio::process::Command::new(tool).args(&args).output(),
-    )
-    .await
-    {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
+    // Use inline cracker from overthrone-hunter
+    let config = overthrone_core::crypto::CrackerConfig::default();
+    let report = match overthrone_hunter::crack_hashes(hashes, &config) {
+        Ok(r) => r,
+        Err(e) => {
             return StepResult {
                 success: false,
-                output: format!("{} execution failed: {e}", tool),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
-        Err(_) => {
-            return StepResult {
-                success: false,
-                output: format!("{} timed out after 300s", tool),
+                output: format!("Inline cracker failed: {e}"),
                 new_credentials: 0,
                 new_admin_hosts: 0,
             };
         }
     };
 
-    // Parse cracked results
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
     let mut cracked_count = 0;
 
-    // hashcat potfile format: hash:password
-    // john --show format: user:password
-    for line in stdout.lines().chain(stderr.lines()) {
-        if line.contains(':') && !line.starts_with('[') && !line.starts_with("Session") {
-            let parts: Vec<&str> = line.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                let (hash_or_user, password) = (parts[0].trim(), parts[1].trim());
-                if !password.is_empty() && password.len() < 128 {
-                    info!(
-                        "  {} Cracked: {}:{}",
-                        "✓".green(),
-                        hash_or_user.bold(),
-                        password.red()
-                    );
-                    state
-                        .cracked
-                        .insert(hash_or_user.to_string(), password.to_string());
+    // Register cracked credentials
+    for cracked in &report.cracked {
+        info!(
+            "  {} Cracked: {} → {}",
+            "✓".green(),
+            cracked.hash_type.cyan(),
+            cracked.password.red()
+        );
 
-                    // Try to map back to a username and register as credential
-                    state.add_credential(CompromisedCred {
-                        username: hash_or_user.to_string(),
-                        secret: password.to_string(),
-                        secret_type: SecretType::Password,
-                        source: format!("{}_crack", tool),
-                        is_admin: false,
-                        admin_on: vec![],
-                    });
+        // Extract username from cracked credential
+        let username = if cracked.username.is_empty() {
+            "unknown".to_string()
+        } else {
+            cracked.username.clone()
+        };
+        
+        // Store in cracked map using password as value
+        state.cracked.insert(format!("{}:{}", cracked.hash_type, username), cracked.password.clone());
+        
+        state.add_credential(CompromisedCred {
+            username,
+            secret: cracked.password.clone(),
+            secret_type: SecretType::Password,
+            source: format!("inline_crack_{}", cracked.hash_type),
+            is_admin: false,
+            admin_on: vec![],
+        });
 
-                    cracked_count += 1;
-                }
-            }
-        }
+        cracked_count += 1;
     }
 
-    // Cleanup
-    let _ = tokio::fs::remove_file(&hash_file).await;
-
+    // Print summary
     let msg = format!(
-        "Cracked {}/{} hashes using {}",
+        "Cracked {}/{} hashes ({}ms)",
         cracked_count,
-        hashes.len(),
-        tool
+        report.total_hashes,
+        report.time_ms
     );
     info!("{} {}", "  ✓".green(), msg);
+
+    // If inline cracker failed and we have many hashes, suggest hashcat
+    if cracked_count == 0 && hashes.len() > 5 && which_tool("hashcat").await {
+        info!(
+            "  {} Tip: For GPU-accelerated cracking, run: hashcat -m 13100 hashes.txt rockyou.txt",
+            "→".yellow()
+        );
+    }
+
     StepResult {
         success: cracked_count > 0,
         output: msg,

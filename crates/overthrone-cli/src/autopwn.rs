@@ -7,6 +7,7 @@ use overthrone_pilot::executor::execute_step;
 use overthrone_pilot::goals::{AttackGoal, EngagementState};
 use overthrone_pilot::planner::Planner;
 use tracing::info;
+use std::time::Instant;
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum ExecMethod {
@@ -188,10 +189,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         }
 
-        // Check if goal achieved — has_domain_admin is a field, not a method
+    // Check if goal achieved — has_domain_admin is a field, not a method
         if state.has_domain_admin {
             result.domain_admin_achieved = true;
-            banner::print_success("Domain Admin achieved! 🎉");
+            // Find the DA user and host
+            let da_user = state.da_user.as_deref().unwrap_or("unknown");
+            let da_host = state.admin_hosts.iter().next().map(|h| h.as_str()).unwrap_or("unknown");
+            banner::print_da_achieved(da_user, da_host);
             break;
         }
 

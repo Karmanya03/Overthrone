@@ -116,6 +116,19 @@ pub enum EdgeType {
 }
 
 impl EdgeType {
+    /// Whether this edge type represents a traversable attack path.
+    /// Marker edges (HasSpn, DontReqPreauth) are not traversable - they
+    /// indicate properties, not exploitable relationships.
+    pub fn is_traversable(&self) -> bool {
+        match self {
+            // Marker edges - not traversable
+            Self::HasSpn => false,
+            Self::DontReqPreauth => false,
+            // All other edges are traversable
+            _ => true,
+        }
+    }
+
     /// Default "cost" for this edge type when computing shortest paths.
     /// Lower cost = more desirable / easier to exploit.
     pub fn default_cost(&self) -> u32 {
@@ -683,6 +696,7 @@ impl AttackGraph {
 
     /// Find the shortest attack path between two nodes.
     /// Uses Dijkstra with edge-type-based costs.
+    /// Filters out non-traversable edges (markers like HasSpn, DontReqPreauth).
     pub fn shortest_path(&self, from: &str, to: &str) -> Result<AttackPath> {
         let src_idx = self.find_node(from)
             .ok_or_else(|| OverthroneError::NodeNotFound(from.to_string()))?;
@@ -690,7 +704,12 @@ impl AttackGraph {
             .ok_or_else(|| OverthroneError::NodeNotFound(to.to_string()))?;
 
         let pet_costs = dijkstra(&self.graph, src_idx, Some(tgt_idx), |e| {
-            e.weight().default_cost()
+            // Non-traversable edges get infinite cost (effectively filtered out)
+            if !e.weight().is_traversable() {
+                u32::MAX
+            } else {
+                e.weight().default_cost()
+            }
         });
 
         // Convert petgraph's hashbrown::HashMap to std::collections::HashMap
@@ -953,6 +972,161 @@ impl AttackGraph {
         "edges": edges,
     }))
     .map_err(|e| OverthroneError::Graph(format!("JSON serialization failed: {e}")))
+}
+
+    /// Export graph in BloodHound-compatible JSON format.
+    /// Produces data compatible with BloodHound CE import.
+    pub fn export_bloodhound(&self) -> Result<String> {
+        let mut users = Vec::new();
+        let mut computers = Vec::new();
+        let mut groups = Vec::new();
+        let mut domains = Vec::new();
+        let mut gpos = Vec::new();
+        let mut ous = Vec::new();
+
+        // Categorize nodes by type
+        for idx in self.graph.node_indices() {
+            let node = self.graph.node_weight(idx).unwrap();
+            let object_id = format!("{}@{}", node.name, node.domain);
+            
+            let props = &node.properties;
+
+            match node.node_type {
+                NodeType::User => {
+                    users.push(serde_json::json!({
+                        "ObjectIdentifier": object_id,
+                        "Name": node.name,
+                        "Domain": node.domain,
+                        "Enabled": node.enabled,
+                        "IsAdminCount": props.get("admin_count").map(|v| v == "true").unwrap_or(false),
+                        "IsHasSPN": props.contains_key("spns"),
+                        "IsDONTREQPREAUTH": props.get("dont_req_preauth").map(|v| v == "true").unwrap_or(false),
+                        "HasSIDHistory": props.get("sid_history").is_some(),
+                    }));
+                }
+                NodeType::Computer => {
+                    computers.push(serde_json::json!({
+                        "ObjectIdentifier": object_id,
+                        "Name": node.name,
+                        "Domain": node.domain,
+                        "Enabled": node.enabled,
+                        "IsDC": props.get("is_dc").map(|v| v == "true").unwrap_or(false),
+                        "IsUnconstrainedDelegation": props.get("unconstrained_delegation").map(|v| v == "true").unwrap_or(false),
+                        "DNSHostName": props.get("dns_hostname").cloned().unwrap_or_default(),
+                        "OperatingSystem": props.get("operating_system").cloned().unwrap_or_default(),
+                    }));
+                }
+                NodeType::Group => {
+                    groups.push(serde_json::json!({
+                        "ObjectIdentifier": object_id,
+                        "Name": node.name,
+                        "Domain": node.domain,
+                        "IsAdminCount": props.get("admin_count").map(|v| v == "true").unwrap_or(false),
+                        "MemberCount": props.get("member_count").and_then(|v| v.parse().ok()).unwrap_or(0),
+                    }));
+                }
+                NodeType::Domain => {
+                    domains.push(serde_json::json!({
+                        "ObjectIdentifier": object_id,
+                        "Name": node.name,
+                    }));
+                }
+                NodeType::Gpo => {
+                    gpos.push(serde_json::json!({
+                        "ObjectIdentifier": object_id,
+                        "Name": node.name,
+                        "Domain": node.domain,
+                    }));
+                }
+                NodeType::Ou => {
+                    ous.push(serde_json::json!({
+                        "ObjectIdentifier": object_id,
+                        "Name": node.name,
+                        "Domain": node.domain,
+                    }));
+                }
+            }
+        }
+
+        // Build ACL edges (BloodHound format)
+        let mut aces = Vec::new();
+        let mut has_sessions = Vec::new();
+        let mut member_of = Vec::new();
+        let mut admin_to = Vec::new();
+        let mut all_edges = Vec::new();
+
+        for edge in self.graph.edge_references() {
+            let src = self.graph.node_weight(edge.source()).unwrap();
+            let tgt = self.graph.node_weight(edge.target()).unwrap();
+            let src_id = format!("{}@{}", src.name, src.domain);
+            let tgt_id = format!("{}@{}", tgt.name, tgt.domain);
+
+            let edge_entry = serde_json::json!({
+                "Source": src_id,
+                "Target": tgt_id,
+                "Type": format!("{}", edge.weight()),
+            });
+            all_edges.push(edge_entry.clone());
+
+            // Categorize by edge type for BloodHound format
+            match edge.weight() {
+                EdgeType::MemberOf => {
+                    member_of.push(serde_json::json!({
+                        "ObjectIdentifier": src_id,
+                        "GroupSID": tgt_id,
+                    }));
+                }
+                EdgeType::HasSession => {
+                    has_sessions.push(serde_json::json!({
+                        "ComputerSID": src_id,
+                        "UserSID": tgt_id,
+                    }));
+                }
+                EdgeType::AdminTo => {
+                    admin_to.push(serde_json::json!({
+                        "ObjectIdentifier": src_id,
+                        "ComputerSID": tgt_id,
+                    }));
+                }
+                // ACL-based edges
+                EdgeType::GenericAll | EdgeType::GenericWrite | EdgeType::WriteOwner 
+                | EdgeType::WriteDacl | EdgeType::ForceChangePassword | EdgeType::AddMembers
+                | EdgeType::AddSelf | EdgeType::Owns => {
+                    aces.push(serde_json::json!({
+                        "PrincipalSID": src_id,
+                        "ObjectSID": tgt_id,
+                        "RightName": format!("{}", edge.weight()),
+                        "IsInherited": false,
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        // Build BloodHound-compatible structure
+        serde_json::to_string_pretty(&serde_json::json!({
+            "meta": {
+                "type": "BloodHoundData",
+                "version": 5,
+                "collector": "Overthrone",
+            },
+            "data": {
+                "users": users,
+                "computers": computers,
+                "groups": groups,
+                "domains": domains,
+                "gpos": gpos,
+                "ous": ous,
+            },
+            "edges": {
+                "all": all_edges,
+                "memberof": member_of,
+                "hassession": has_sessions,
+                "adminto": admin_to,
+                "aces": aces,
+            },
+        }))
+        .map_err(|e| OverthroneError::Graph(format!("BloodHound export failed: {e}")))
 }
 
 }

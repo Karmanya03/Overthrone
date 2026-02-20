@@ -1,14 +1,23 @@
-//! Windows Registry Hive Binary Parser
+//! Windows Registry Hive Binary Parser + Remote WINREG RPC
+//!
+//! # Offline Hive Parser
 //!
 //! Parses offline registry hive files (regf format) as saved by `reg save`.
 //! Supports navigating keys, reading values, and extracting class names —
 //! everything needed for SAM/SYSTEM/SECURITY hive credential extraction.
 //!
+//! # Remote WINREG RPC
+//!
+//! Provides remote registry access via DCE/RPC over SMB named pipes.
+//! Uses the `\pipe\winreg` endpoint for reading/writing registry values
+//! on remote Windows systems.
+//!
 //! Reference: <https://github.com/msuhanov/regf/blob/master/Windows%20registry%20file%20format%20specification.md>
+//! Reference: MS-RRP (Remote Registry Protocol)
 
 use crate::error::{OverthroneError, Result};
 use std::collections::HashMap;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Constants
@@ -406,6 +415,533 @@ fn utf16le_to_string(bytes: &[u8]) -> String {
 }
 
 
+// ═══════════════════════════════════════════════════════════
+// Remote WINREG RPC (MS-RRP)
+// ═══════════════════════════════════════════════════════════
+
+/// WINREG interface UUID
+pub const WINREG_UUID: &str = "338cd001-2244-31f1-aaaa-900038001003";
+pub const WINREG_VERSION: u16 = 1;
+
+/// WINREG opnums
+#[allow(dead_code)]
+pub mod winreg_opnum {
+    pub const OPEN_LOCAL_MACHINE: u16 = 0;
+    pub const OPEN_CLASSES_ROOT: u16 = 1;
+    pub const OPEN_CURRENT_USER: u16 = 2;
+    pub const OPEN_PERFORMANCE_DATA: u16 = 3;
+    pub const OPEN_USERS: u16 = 4;
+    pub const OPEN_KEY: u16 = 5;
+    pub const QUERY_VALUE: u16 = 6;
+    pub const SET_VALUE: u16 = 7;
+    pub const CREATE_KEY: u16 = 8;
+    pub const ENUM_KEY: u16 = 9;
+    pub const ENUM_VALUE: u16 = 10;
+    pub const CLOSE_KEY: u16 = 14;
+    pub const DELETE_KEY: u16 = 15;
+    pub const DELETE_VALUE: u16 = 16;
+    pub const GET_KEY_SECURITY: u16 = 19;
+    pub const SET_KEY_SECURITY: u16 = 20;
+}
+
+/// Predefined registry hive handles (HKEY_*)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PredefinedHive {
+    /// HKEY_CLASSES_ROOT
+    ClassesRoot,
+    /// HKEY_CURRENT_USER
+    CurrentUser,
+    /// HKEY_LOCAL_MACHINE
+    LocalMachine,
+    /// HKEY_USERS
+    Users,
+    /// HKEY_PERFORMANCE_DATA
+    PerformanceData,
+}
+
+impl PredefinedHive {
+    /// Get the WINREG opnum for opening this hive
+    pub fn open_opnum(&self) -> u16 {
+        match self {
+            Self::ClassesRoot => winreg_opnum::OPEN_CLASSES_ROOT,
+            Self::CurrentUser => winreg_opnum::OPEN_CURRENT_USER,
+            Self::LocalMachine => winreg_opnum::OPEN_LOCAL_MACHINE,
+            Self::Users => winreg_opnum::OPEN_USERS,
+            Self::PerformanceData => winreg_opnum::OPEN_PERFORMANCE_DATA,
+        }
+    }
+}
+
+/// Remote registry session via WINREG RPC over SMB
+pub struct RemoteRegistry {
+    /// SMB tree connect to \\host\IPC$
+    tree_id: u16,
+    /// WINREG RPC handle (opened via Bind)
+    bind_handle: Option<[u8; 20]>,
+    /// Current open key handle
+    key_handles: HashMap<u32, [u8; 20]>,
+    /// Next key handle ID
+    next_handle_id: u32,
+}
+
+/// Remote registry value
+#[derive(Debug, Clone)]
+pub struct RemoteRegValue {
+    /// Value name
+    pub name: String,
+    /// Value type
+    pub data_type: u32,
+    /// Raw data
+    pub data: Vec<u8>,
+}
+
+/// Remote registry key info
+#[derive(Debug, Clone)]
+pub struct RemoteRegKeyInfo {
+    /// Key name
+    pub name: String,
+    /// Last write time (FILETIME)
+    pub last_write_time: u64,
+    /// Number of subkeys
+    pub subkey_count: u32,
+    /// Number of values
+    pub value_count: u32,
+}
+
+impl RemoteRegistry {
+    /// Create a new remote registry session
+    pub fn new() -> Self {
+        Self {
+            tree_id: 0,
+            bind_handle: None,
+            key_handles: HashMap::new(),
+            next_handle_id: 1,
+        }
+    }
+
+    /// Build DCE/RPC Bind request for WINREG
+    pub fn build_bind_request(&self, call_id: u32) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // RPC version (5.0)
+        pkt.push(0x05); // version
+        pkt.push(0x00); // minor version
+
+        // Packet type: Bind (11)
+        pkt.push(0x0B);
+        // Flags
+        pkt.push(0x03); // PFC_FIRST_FRAG | PFC_LAST_FRAG
+
+        // Data representation (little-endian, ASCII, IEEE float)
+        pkt.extend_from_slice(&0x00000010u32.to_le_bytes());
+
+        // Fragment length (will update later)
+        let frag_len_offset = pkt.len();
+        pkt.extend_from_slice(&0u16.to_le_bytes());
+
+        // Auth length
+        pkt.extend_from_slice(&0u16.to_le_bytes());
+
+        // Call ID
+        pkt.extend_from_slice(&call_id.to_le_bytes());
+
+        // Max xmit frag
+        pkt.extend_from_slice(&0x0BDCu16.to_le_bytes());
+        // Max recv frag
+        pkt.extend_from_slice(&0x0BDCu16.to_le_bytes());
+
+        // Assoc group
+        pkt.extend_from_slice(&0u32.to_le_bytes());
+
+        // Num ctx items
+        pkt.push(0x01);
+        // Padding
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00]);
+
+        // Context item
+        // Container ID
+        pkt.extend_from_slice(&0u32.to_le_bytes());
+        // Num trans items
+        pkt.push(0x01);
+        // Padding
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00]);
+
+        // Interface UUID (WINREG)
+        let uuid_bytes = parse_uuid(WINREG_UUID);
+        pkt.extend_from_slice(&uuid_bytes);
+
+        // Interface version
+        pkt.extend_from_slice(&WINREG_VERSION.to_le_bytes());
+        // Minor version
+        pkt.extend_from_slice(&0u16.to_le_bytes());
+
+        // Transfer syntax UUID (NDR)
+        pkt.extend_from_slice(&parse_uuid("8a885d04-1ceb-11c9-9fe8-08002b104860"));
+        // Transfer syntax version
+        pkt.extend_from_slice(&2u32.to_le_bytes());
+
+        // Update fragment length
+        let frag_len = pkt.len() as u16;
+        pkt[frag_len_offset..frag_len_offset + 2].copy_from_slice(&frag_len.to_le_bytes());
+
+        pkt
+    }
+
+    /// Build OpenLocalMachine request
+    pub fn build_open_hive_request(&self, hive: PredefinedHive, call_id: u32) -> Vec<u8> {
+        self.build_open_hive_ex_request(hive, call_id, 0x00020019) // KEY_READ | KEY_WRITE
+    }
+
+    /// Build OpenHive request with custom access mask
+    pub fn build_open_hive_ex_request(
+        &self,
+        _hive: PredefinedHive,
+        call_id: u32,
+        access_mask: u32,
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // RPC header
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id)); // Request
+
+        // Opnum (varies by hive)
+        let opnum = match _hive {
+            PredefinedHive::LocalMachine => winreg_opnum::OPEN_LOCAL_MACHINE,
+            PredefinedHive::ClassesRoot => winreg_opnum::OPEN_CLASSES_ROOT,
+            PredefinedHive::CurrentUser => winreg_opnum::OPEN_CURRENT_USER,
+            PredefinedHive::Users => winreg_opnum::OPEN_USERS,
+            PredefinedHive::PerformanceData => winreg_opnum::OPEN_PERFORMANCE_DATA,
+        };
+
+        // Allocate hint
+        pkt.extend_from_slice(&0u32.to_le_bytes());
+        // Context handle (null for initial call)
+        pkt.extend_from_slice(&[0u8; 20]);
+        // Access mask
+        pkt.extend_from_slice(&access_mask.to_le_bytes());
+        // Opnum in header
+        pkt.extend_from_slice(&opnum.to_le_bytes());
+
+        pkt
+    }
+
+    /// Build OpenKey request
+    pub fn build_open_key_request(
+        &self,
+        parent_handle: &[u8; 20],
+        subkey_name: &str,
+        call_id: u32,
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // RPC header
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id));
+
+        // Parent key handle
+        pkt.extend_from_slice(parent_handle);
+
+        // Subkey name (RPC_UNICODE_STRING)
+        let name_utf16: Vec<u8> = subkey_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
+        pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
+        pkt.extend_from_slice(&name_utf16);
+
+        // Pad to 4-byte alignment
+        while pkt.len() % 4 != 0 {
+            pkt.push(0);
+        }
+
+        // Access mask (KEY_READ)
+        pkt.extend_from_slice(&0x00020019u32.to_le_bytes());
+
+        // Opnum
+        pkt.extend_from_slice(&winreg_opnum::OPEN_KEY.to_le_bytes());
+
+        pkt
+    }
+
+    /// Build QueryValue request
+    pub fn build_query_value_request(
+        &self,
+        key_handle: &[u8; 20],
+        value_name: &str,
+        call_id: u32,
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // RPC header
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id));
+
+        // Key handle
+        pkt.extend_from_slice(key_handle);
+
+        // Value name (RPC_UNICODE_STRING)
+        let name_utf16: Vec<u8> = value_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
+        pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
+        pkt.extend_from_slice(&name_utf16);
+
+        // Pad to 4-byte alignment
+        while pkt.len() % 4 != 0 {
+            pkt.push(0);
+        }
+
+        // Value type pointer (NULL - we want it returned)
+        pkt.extend_from_slice(&0u32.to_le_bytes());
+
+        // Data length pointer (NULL - we want it returned)
+        pkt.extend_from_slice(&0u32.to_le_bytes());
+
+        // Data pointer (NULL - we want it returned)
+        pkt.extend_from_slice(&0u32.to_le_bytes());
+
+        // Opnum
+        pkt.extend_from_slice(&winreg_opnum::QUERY_VALUE.to_le_bytes());
+
+        pkt
+    }
+
+    /// Build SetValue request
+    pub fn build_set_value_request(
+        &self,
+        key_handle: &[u8; 20],
+        value_name: &str,
+        value_type: u32,
+        data: &[u8],
+        call_id: u32,
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // RPC header
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id));
+
+        // Key handle
+        pkt.extend_from_slice(key_handle);
+
+        // Value name (RPC_UNICODE_STRING)
+        let name_utf16: Vec<u8> = value_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
+        pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
+        pkt.extend_from_slice(&name_utf16);
+
+        // Pad to 4-byte alignment
+        while pkt.len() % 4 != 0 {
+            pkt.push(0);
+        }
+
+        // Value type
+        pkt.extend_from_slice(&value_type.to_le_bytes());
+
+        // Data length
+        pkt.extend_from_slice(&(data.len() as u32).to_le_bytes());
+
+        // Data
+        pkt.extend_from_slice(data);
+
+        // Pad to 4-byte alignment
+        while pkt.len() % 4 != 0 {
+            pkt.push(0);
+        }
+
+        // Opnum
+        pkt.extend_from_slice(&winreg_opnum::SET_VALUE.to_le_bytes());
+
+        pkt
+    }
+
+    /// Build CloseKey request
+    pub fn build_close_key_request(&self, key_handle: &[u8; 20], call_id: u32) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // RPC header
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id));
+
+        // Key handle
+        pkt.extend_from_slice(key_handle);
+
+        // Opnum
+        pkt.extend_from_slice(&winreg_opnum::CLOSE_KEY.to_le_bytes());
+
+        pkt
+    }
+
+    /// Parse OpenHive response and extract the key handle
+    pub fn parse_open_hive_response(&mut self, response: &[u8]) -> Result<[u8; 20]> {
+        // Skip to the handle (after RPC header ~24 bytes + status)
+        if response.len() < 48 {
+            return Err(OverthroneError::custom("OpenHive response too short"));
+        }
+
+        let mut handle = [0u8; 20];
+        handle.copy_from_slice(&response[24..44]);
+
+        info!("RemoteRegistry: Opened hive, handle={:02x?}", &handle[..8]);
+        Ok(handle)
+    }
+
+    /// Parse QueryValue response
+    pub fn parse_query_value_response(&self, response: &[u8]) -> Result<RemoteRegValue> {
+        if response.len() < 32 {
+            return Err(OverthroneError::custom("QueryValue response too short"));
+        }
+
+        // Parse the response structure
+        // [RPC header][type:u32][len:u32][data...]
+        let offset = 24; // Skip RPC header
+        let data_type = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+        let data_len = u32::from_le_bytes(response[offset + 4..offset + 8].try_into().unwrap()) as usize;
+
+        if offset + 8 + data_len > response.len() {
+            return Err(OverthroneError::custom("QueryValue data truncated"));
+        }
+
+        let data = response[offset + 8..offset + 8 + data_len].to_vec();
+
+        Ok(RemoteRegValue {
+            name: String::new(), // Name was in request
+            data_type,
+            data,
+        })
+    }
+
+    /// Store a key handle and return a local ID
+    pub fn store_handle(&mut self, handle: [u8; 20]) -> u32 {
+        let id = self.next_handle_id;
+        self.next_handle_id += 1;
+        self.key_handles.insert(id, handle);
+        id
+    }
+
+    /// Get a key handle by ID
+    pub fn get_handle(&self, id: u32) -> Option<&[u8; 20]> {
+        self.key_handles.get(&id)
+    }
+
+    /// Remove a key handle
+    pub fn remove_handle(&mut self, id: u32) -> Option<[u8; 20]> {
+        self.key_handles.remove(&id)
+    }
+}
+
+impl Default for RemoteRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// WINREG RPC Helpers
+// ═══════════════════════════════════════════════════════════
+
+/// Parse a UUID string to bytes
+fn parse_uuid(uuid_str: &str) -> [u8; 16] {
+    let clean = uuid_str.replace('-', "");
+    let mut bytes = [0u8; 16];
+    for i in 0..16 {
+        if let Ok(b) = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16) {
+            bytes[i] = b;
+        }
+    }
+    bytes
+}
+
+/// Build a minimal DCE/RPC request header
+fn build_rpc_header(_packet_type: u8, call_id: u32) -> Vec<u8> {
+    let mut hdr = Vec::new();
+
+    // RPC version (5.0)
+    hdr.push(0x05);
+    hdr.push(0x00);
+
+    // Packet type: Request (0)
+    hdr.push(0x00);
+
+    // Flags: PFC_FIRST_FRAG | PFC_LAST_FRAG
+    hdr.push(0x03);
+
+    // Data representation (little-endian)
+    hdr.extend_from_slice(&0x00000010u32.to_le_bytes());
+
+    // Fragment length (placeholder)
+    hdr.extend_from_slice(&0u16.to_le_bytes());
+
+    // Auth length
+    hdr.extend_from_slice(&0u16.to_le_bytes());
+
+    // Call ID
+    hdr.extend_from_slice(&call_id.to_le_bytes());
+
+    // Alloc hint
+    hdr.extend_from_slice(&0u32.to_le_bytes());
+
+    // Context ID
+    hdr.extend_from_slice(&0u16.to_le_bytes());
+
+    // Opnum (placeholder)
+    hdr.extend_from_slice(&0u16.to_le_bytes());
+
+    hdr
+}
+
+// ═══════════════════════════════════════════════════════════
+// High-Level Remote Registry Operations
+// ═══════════════════════════════════════════════════════════
+
+/// Read a remote registry value
+///
+/// This is a high-level function that orchestrates the WINREG RPC calls
+/// to read a value from a remote registry. Requires an SMB session with
+/// access to IPC$.
+///
+/// # Arguments
+/// * `smb_session` - Active SMB session
+/// * `hive` - Predefined hive (HKLM, HKCU, etc.)
+/// * `path` - Registry path (e.g., "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
+/// * `value_name` - Value to read (empty string for default value)
+///
+/// # Returns
+/// The registry value data, or an error.
+#[allow(dead_code)]
+pub async fn read_remote_registry_value(
+    _smb_session: &mut crate::proto::smb::SmbSession,
+    _hive: PredefinedHive,
+    _path: &str,
+    _value_name: &str,
+) -> Result<RemoteRegValue> {
+    // Implementation would:
+    // 1. Open SMB pipe \pipe\winreg
+    // 2. DCE/RPC Bind to WINREG interface
+    // 3. Open the predefined hive
+    // 4. Open each path component
+    // 5. Query the value
+    // 6. Close all handles
+    // 7. Return the value
+    
+    // This requires SMB named pipe support which is in the SMB module
+    // For now, return an informative error
+    Err(OverthroneError::custom(
+        "Remote registry requires SMB named pipe support - use SmbSession::open_pipe() then call WINREG RPC methods directly"
+    ))
+}
+
+/// Common remote registry paths for security assessments
+pub mod registry_paths {
+    /// Windows Defender exclusion paths
+    pub const DEFENDER_EXCLUSIONS: &str = "SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
+    /// LSA configuration
+    pub const LSA_CONFIG: &str = "SYSTEM\\CurrentControlSet\\Control\\Lsa";
+    /// Cached domain logons
+    pub const CACHED_LOGONS: &str = "SECURITY\\Cache";
+    /// SAM account keys
+    pub const SAM_ACCOUNTS: &str = "SAM\\Domains\\Account\\Users";
+    /// Boot key (for decrypting SAM/SECURITY)
+    pub const BOOT_KEY_PATH: &str = "SYSTEM\\CurrentControlSet\\Control\\Lsa";
+    /// Run keys (persistence)
+    pub const RUN_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+    /// Service configuration
+    pub const SERVICES_PATH: &str = "SYSTEM\\CurrentControlSet\\Services";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +957,45 @@ mod tests {
     fn test_utf16le_with_null() {
         let bytes = [0x41, 0x00, 0x00, 0x00];
         assert_eq!(utf16le_to_string(&bytes), "A");
+    }
+
+    #[test]
+    fn test_parse_uuid() {
+        let uuid = parse_uuid(WINREG_UUID);
+        assert_eq!(uuid.len(), 16);
+        assert_eq!(uuid[0], 0x33);
+        assert_eq!(uuid[1], 0x8c);
+    }
+
+    #[test]
+    fn test_build_bind_request() {
+        let reg = RemoteRegistry::new();
+        let bind = reg.build_bind_request(1);
+        assert!(bind.len() > 50);
+        assert_eq!(bind[0], 0x05); // Version
+        assert_eq!(bind[2], 0x0B); // Bind packet type
+    }
+
+    #[test]
+    fn test_predefined_hive_opnum() {
+        assert_eq!(PredefinedHive::LocalMachine.open_opnum(), 0);
+        assert_eq!(PredefinedHive::ClassesRoot.open_opnum(), 1);
+        assert_eq!(PredefinedHive::Users.open_opnum(), 4);
+    }
+
+    #[test]
+    fn test_remote_registry_handle_storage() {
+        let mut reg = RemoteRegistry::new();
+        let handle = [0xAA; 20];
+        let id = reg.store_handle(handle);
+        assert_eq!(id, 1);
+
+        let retrieved = reg.get_handle(id);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap()[0], 0xAA);
+
+        let removed = reg.remove_handle(id);
+        assert!(removed.is_some());
+        assert!(reg.get_handle(id).is_none());
     }
 }

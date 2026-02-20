@@ -73,6 +73,8 @@ ehthumbs.db
 *hashdump*
 *.kirbi
 *.ccache
+cracked_credentials.txt
+*cracked*.txt
 
 # ═══════════════════════════════════════════════════════════
 # Overthrone — Payloads & Staging

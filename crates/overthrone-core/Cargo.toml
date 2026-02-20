@@ -25,6 +25,10 @@ des.workspace = true
 rc4.workspace = true
 pbkdf2.workspace = true
 
+# Parallel Processing & Compression
+rayon.workspace = true
+zstd.workspace = true
+
 # Protocols
 ldap3.workspace = true
 petgraph.workspace = true

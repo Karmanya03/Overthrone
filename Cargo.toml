@@ -100,6 +100,12 @@ byteorder = "1.5"
 futures = "0.3"
 tokio-util = { version = "0.7", features = ["full"] }
 
+# Parallel Processing
+rayon = "1.10"
+
+# Compression (for embedded wordlist)
+zstd = "0.13"
+
 # Regex
 regex = "1"
 

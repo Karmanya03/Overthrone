@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Goal Definitions
@@ -282,9 +282,102 @@ pub struct ActionLogEntry {
     pub detail: String,
 }
 
+/// Summary statistics for engagement state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateStats {
+    pub total_users: usize,
+    pub total_computers: usize,
+    pub total_groups: usize,
+    pub credentials_obtained: usize,
+    pub admin_hosts: usize,
+    pub kerberoastable: usize,
+    pub asrep_roastable: usize,
+    pub cracked_passwords: usize,
+    pub domain_admin: bool,
+    pub da_user: Option<String>,
+    pub actions_logged: usize,
+    pub loot_items: usize,
+}
+
+impl std::fmt::Display for StateStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Users: {} | Computers: {} | Groups: {}", 
+            self.total_users, self.total_computers, self.total_groups)?;
+        writeln!(f, "Credentials: {} | Admin Hosts: {}", 
+            self.credentials_obtained, self.admin_hosts)?;
+        writeln!(f, "Kerberoast: {} | AS-REP: {} | Cracked: {}", 
+            self.kerberoastable, self.asrep_roastable, self.cracked_passwords)?;
+        writeln!(f, "Domain Admin: {} ({})", 
+            if self.domain_admin { "YES" } else { "NO" },
+            self.da_user.as_deref().unwrap_or("N/A"))?;
+        writeln!(f, "Actions: {} | Loot: {}", 
+            self.actions_logged, self.loot_items)
+    }
+}
+
 impl EngagementState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Save state to a JSON file
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load state from a JSON file
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        let state: Self = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        Ok(state)
+    }
+
+    /// Auto-save to default location (engagement_state.json)
+    pub fn auto_save(&self) {
+        let path = std::path::Path::new("engagement_state.json");
+        if let Err(e) = self.save_to_file(path) {
+            warn!("Failed to auto-save state: {}", e);
+        } else {
+            debug!("State auto-saved to engagement_state.json");
+        }
+    }
+
+    /// Merge credentials from another state (useful for checkpoint loading)
+    pub fn merge_credentials(&mut self, other: &Self) {
+        for (user, cred) in &other.credentials {
+            if !self.credentials.contains_key(user) {
+                self.credentials.insert(user.clone(), cred.clone());
+            }
+        }
+        for host in &other.admin_hosts {
+            self.admin_hosts.insert(host.clone());
+        }
+        if other.has_domain_admin && !self.has_domain_admin {
+            self.has_domain_admin = true;
+            self.da_user = other.da_user.clone();
+        }
+    }
+
+    /// Get statistics summary for reporting
+    pub fn stats_summary(&self) -> StateStats {
+        StateStats {
+            total_users: self.users.len(),
+            total_computers: self.computers.len(),
+            total_groups: self.groups.len(),
+            credentials_obtained: self.credentials.len(),
+            admin_hosts: self.admin_hosts.len(),
+            kerberoastable: self.kerberoastable.len(),
+            asrep_roastable: self.asrep_roastable.len(),
+            cracked_passwords: self.cracked.len(),
+            domain_admin: self.has_domain_admin,
+            da_user: self.da_user.clone(),
+            actions_logged: self.action_log.len(),
+            loot_items: self.loot.len(),
+        }
     }
 
     /// Log an action to the audit trail

