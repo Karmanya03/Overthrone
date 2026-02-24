@@ -30,6 +30,8 @@
 *.swp
 *.swo
 *~
+.agent/
+.agents/
 
 # ═══════════════════════════════════════════════════════════
 # OS Generated
@@ -90,6 +92,14 @@ cracked_credentials.txt
 *.log
 *.trace
 /logs/
+check.json
+check.txt
+check_errors.txt
+err.json
+err.log
+err2.txt
+error.log
+errors.txt
 
 # ═══════════════════════════════════════════════════════════
 # Test Lab / Vagrant / Docker
