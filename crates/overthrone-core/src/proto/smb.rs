@@ -11,8 +11,8 @@ use tracing::{debug, info, warn};
 
 #[cfg(windows)]
 use smb::{
-    Client, ClientConfig, CreateOptions, FileAccessMask, FileAttributes, FileCreateArgs,
-    ReadAt, Resource, UncPath, WriteAt,
+    Client, ClientConfig, CreateOptions, FileAccessMask, FileAttributes, FileCreateArgs, ReadAt,
+    Resource, UncPath, WriteAt,
 };
 #[cfg(windows)]
 use std::str::FromStr;
@@ -35,6 +35,8 @@ pub struct SmbSession {
     pub domain: String,
     /// Kerberos ticket for authentication (TGT or TGS)
     ticket: Option<KerberosTicket>,
+    /// NTLM or Kerberos session key for cryptographic operations
+    session_key: Option<Vec<u8>>,
 }
 
 /// Kerberos ticket wrapper for ticket-based authentication
@@ -53,7 +55,12 @@ pub struct KerberosTicket {
 impl KerberosTicket {
     /// Create a new Kerberos ticket
     pub fn new(data: Vec<u8>, session_key: Vec<u8>, is_tgt: bool, spn: Option<String>) -> Self {
-        Self { data, session_key, is_tgt, spn }
+        Self {
+            data,
+            session_key,
+            is_tgt,
+            spn,
+        }
     }
 
     /// Load from a .kirbi file
@@ -108,9 +115,8 @@ impl SmbSession {
 
         let client = Client::new(ClientConfig::default());
         let ipc_path = format!(r"\\{}\IPC$", target);
-        let unc = UncPath::from_str(&ipc_path).map_err(|e| {
-            OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}"))
-        })?;
+        let unc = UncPath::from_str(&ipc_path)
+            .map_err(|e| OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}")))?;
 
         client
             .share_connect(&unc, username, password.to_string())
@@ -129,7 +135,12 @@ impl SmbSession {
             username: username.to_string(),
             domain: domain.to_string(),
             ticket: None,
+            session_key: None,
         })
+    }
+
+    pub fn session_key(&self) -> Option<Vec<u8>> {
+        self.session_key.clone()
     }
 
     fn unc(&self, share: &str, path: Option<&str>) -> Result<UncPath> {
@@ -161,7 +172,11 @@ impl SmbSession {
             Ok(u) => u,
             Err(_) => return false,
         };
-        match self.client.share_connect(&unc, &self.username, String::new()).await {
+        match self
+            .client
+            .share_connect(&unc, &self.username, String::new())
+            .await
+        {
             Ok(_) => {
                 debug!("SMB: Read access on \\\\{}\\{}", self.target, share);
                 true
@@ -176,10 +191,8 @@ impl SmbSession {
             Ok(u) => u,
             Err(_) => return false,
         };
-        let create_args = FileCreateArgs::make_create_new(
-            FileAttributes::default(),
-            CreateOptions::default(),
-        );
+        let create_args =
+            FileCreateArgs::make_create_new(FileAttributes::default(), CreateOptions::default());
         match self.client.create_file(&unc, &create_args).await {
             Ok(resource) => {
                 if let Resource::File(file) = resource {
@@ -242,7 +255,10 @@ impl SmbSession {
         share: &str,
         remote_path: &str,
     ) -> Result<Vec<RemoteFileInfo>> {
-        info!("SMB: Listing \\\\{}\\{}\\{}", self.target, share, remote_path);
+        info!(
+            "SMB: Listing \\\\{}\\{}\\{}",
+            self.target, share, remote_path
+        );
         let smb_path = remote_path
             .replace('/', "\\")
             .trim_start_matches('\\')
@@ -263,7 +279,10 @@ impl SmbSession {
             .map_err(|e| OverthroneError::Smb(format!("smbclient failed: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(OverthroneError::Smb(format!("smbclient listing failed: {}", stderr.trim())));
+            return Err(OverthroneError::Smb(format!(
+                "smbclient listing failed: {}",
+                stderr.trim()
+            )));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut entries = Vec::new();
@@ -277,15 +296,26 @@ impl SmbSession {
                 continue;
             }
             let parts: Vec<&str> = trimmed.splitn(2, char::is_whitespace).collect();
-            if parts.len() < 2 { continue; }
+            if parts.len() < 2 {
+                continue;
+            }
             let name = parts[0].to_string();
-            if name == "." || name == ".." { continue; }
+            if name == "." || name == ".." {
+                continue;
+            }
             let rest = parts[1].trim();
             let is_directory = rest.contains('D');
-            let size = rest.split_whitespace().find_map(|tok| tok.parse::<u64>().ok()).unwrap_or(0);
+            let size = rest
+                .split_whitespace()
+                .find_map(|tok| tok.parse::<u64>().ok())
+                .unwrap_or(0);
             entries.push(RemoteFileInfo {
                 name: name.clone(),
-                path: if smb_path.is_empty() { name } else { format!("{}\\{}", smb_path, name) },
+                path: if smb_path.is_empty() {
+                    name
+                } else {
+                    format!("{}\\{}", smb_path, name)
+                },
                 is_directory,
                 size,
             });
@@ -295,47 +325,70 @@ impl SmbSession {
     }
 
     pub async fn read_file(&self, share: &str, remote_path: &str) -> Result<Vec<u8>> {
-        info!("SMB: Reading \\\\{}\\{}\\{}", self.target, share, remote_path);
-        let unc = self.unc(share, Some(remote_path))?;
-        let open_args = FileCreateArgs::make_open_existing(
-            FileAccessMask::new().with_generic_read(true),
+        info!(
+            "SMB: Reading \\\\{}\\{}\\{}",
+            self.target, share, remote_path
         );
-        let resource = self.client.create_file(&unc, &open_args).await.map_err(|e| {
-            OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path))
-        })?;
+        let unc = self.unc(share, Some(remote_path))?;
+        let open_args =
+            FileCreateArgs::make_open_existing(FileAccessMask::new().with_generic_read(true));
+        let resource = self
+            .client
+            .create_file(&unc, &open_args)
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path)))?;
         let file = match resource {
             Resource::File(f) => f,
-            _ => return Err(OverthroneError::Smb(format!("'{remote_path}' is not a file"))),
+            _ => {
+                return Err(OverthroneError::Smb(format!(
+                    "'{remote_path}' is not a file"
+                )));
+            }
         };
         let mut data = Vec::new();
         let mut offset: u64 = 0;
         loop {
             let mut buf = vec![0u8; READ_BUF_SIZE];
-            let bytes_read = file.read_at(&mut buf, offset).await.map_err(|e| {
-                OverthroneError::Smb(format!("Read error at offset {offset}: {e}"))
-            })?;
-            if bytes_read == 0 { break; }
+            let bytes_read = file
+                .read_at(&mut buf, offset)
+                .await
+                .map_err(|e| OverthroneError::Smb(format!("Read error at offset {offset}: {e}")))?;
+            if bytes_read == 0 {
+                break;
+            }
             data.extend_from_slice(&buf[..bytes_read]);
             offset += bytes_read as u64;
         }
-        file.close().await.map_err(|e| OverthroneError::Smb(format!("Close failed: {e}")))?;
+        file.close()
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Close failed: {e}")))?;
         info!("SMB: Read {} bytes from {}", data.len(), remote_path);
         Ok(data)
     }
 
     pub async fn write_file(&self, share: &str, remote_path: &str, data: &[u8]) -> Result<()> {
-        info!("SMB: Writing {} bytes to \\\\{}\\{}\\{}", data.len(), self.target, share, remote_path);
-        let unc = self.unc(share, Some(remote_path))?;
-        let create_args = FileCreateArgs::make_overwrite(
-            FileAttributes::default(),
-            CreateOptions::default(),
+        info!(
+            "SMB: Writing {} bytes to \\\\{}\\{}\\{}",
+            data.len(),
+            self.target,
+            share,
+            remote_path
         );
-        let resource = self.client.create_file(&unc, &create_args).await.map_err(|e| {
-            OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path))
-        })?;
+        let unc = self.unc(share, Some(remote_path))?;
+        let create_args =
+            FileCreateArgs::make_overwrite(FileAttributes::default(), CreateOptions::default());
+        let resource = self
+            .client
+            .create_file(&unc, &create_args)
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path)))?;
         let file = match resource {
             Resource::File(f) => f,
-            _ => return Err(OverthroneError::Smb(format!("'{remote_path}' is not a file"))),
+            _ => {
+                return Err(OverthroneError::Smb(format!(
+                    "'{remote_path}' is not a file"
+                )));
+            }
         };
         let mut offset: u64 = 0;
         for chunk in data.chunks(READ_BUF_SIZE) {
@@ -344,20 +397,27 @@ impl SmbSession {
             })?;
             offset += chunk.len() as u64;
         }
-        file.close().await.map_err(|e| OverthroneError::Smb(format!("Close failed: {e}")))?;
+        file.close()
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Close failed: {e}")))?;
         info!("SMB: Write complete ({} bytes)", data.len());
         Ok(())
     }
 
     pub async fn delete_file(&self, share: &str, remote_path: &str) -> Result<()> {
-        info!("SMB: Deleting \\\\{}\\{}\\{}", self.target, share, remote_path);
-        let unc = self.unc(share, Some(remote_path))?;
-        let open_args = FileCreateArgs::make_open_existing(
-            FileAccessMask::new().with_delete(true),
+        info!(
+            "SMB: Deleting \\\\{}\\{}\\{}",
+            self.target, share, remote_path
         );
-        let resource = self.client.create_file(&unc, &open_args).await.map_err(|e| {
-            OverthroneError::Smb(format!("Cannot open for delete '{}': {e}", remote_path))
-        })?;
+        let unc = self.unc(share, Some(remote_path))?;
+        let open_args = FileCreateArgs::make_open_existing(FileAccessMask::new().with_delete(true));
+        let resource = self
+            .client
+            .create_file(&unc, &open_args)
+            .await
+            .map_err(|e| {
+                OverthroneError::Smb(format!("Cannot open for delete '{}': {e}", remote_path))
+            })?;
         if let Resource::File(file) = resource {
             file.close().await.map_err(|e| {
                 OverthroneError::Smb(format!("Delete failed '{}': {e}", remote_path))
@@ -367,54 +427,91 @@ impl SmbSession {
         Ok(())
     }
 
-    pub async fn download_file(&self, share: &str, remote_path: &str, local_path: &str) -> Result<usize> {
+    pub async fn download_file(
+        &self,
+        share: &str,
+        remote_path: &str,
+        local_path: &str,
+    ) -> Result<usize> {
         let data = self.read_file(share, remote_path).await?;
         let size = data.len();
         tokio::fs::write(local_path, &data).await.map_err(|e| {
             OverthroneError::Smb(format!("Cannot write local file '{}': {e}", local_path))
         })?;
-        info!("SMB: Downloaded {} -> {} ({} bytes)", remote_path, local_path, size);
+        info!(
+            "SMB: Downloaded {} -> {} ({} bytes)",
+            remote_path, local_path, size
+        );
         Ok(size)
     }
 
-    pub async fn upload_file(&self, local_path: &str, share: &str, remote_path: &str) -> Result<usize> {
-        let data = tokio::fs::read(local_path).await.map_err(|e| {
-            OverthroneError::Smb(format!("Cannot read '{}': {e}", local_path))
-        })?;
+    pub async fn upload_file(
+        &self,
+        local_path: &str,
+        share: &str,
+        remote_path: &str,
+    ) -> Result<usize> {
+        let data = tokio::fs::read(local_path)
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Cannot read '{}': {e}", local_path)))?;
         let size = data.len();
         self.write_file(share, remote_path, &data).await?;
-        info!("SMB: Uploaded {} -> {} ({} bytes)", local_path, remote_path, size);
+        info!(
+            "SMB: Uploaded {} -> {} ({} bytes)",
+            local_path, remote_path, size
+        );
         Ok(size)
     }
 
     pub async fn pipe_transact(&self, pipe_name: &str, request: &[u8]) -> Result<Vec<u8>> {
-        info!("SMB: Pipe transact '{}' ({} bytes)", pipe_name, request.len());
+        info!(
+            "SMB: Pipe transact '{}' ({} bytes)",
+            pipe_name,
+            request.len()
+        );
         let unc = self.unc("IPC$", Some(pipe_name))?;
         let open_args = FileCreateArgs::make_pipe();
-        let resource = self.client.create_file(&unc, &open_args).await.map_err(|e| {
-            OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name))
-        })?;
+        let resource = self
+            .client
+            .create_file(&unc, &open_args)
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name)))?;
         let pipe = match resource {
             Resource::Pipe(p) => p,
-            _ => return Err(OverthroneError::Smb(format!("'{pipe_name}' is not a named pipe"))),
+            _ => {
+                return Err(OverthroneError::Smb(format!(
+                    "'{pipe_name}' is not a named pipe"
+                )));
+            }
         };
         let response = pipe
             .ioctl(0x0011C017, request.to_vec(), READ_BUF_SIZE as u32)
             .await
-            .map_err(|e| OverthroneError::Smb(format!("Pipe transact failed on '{}': {e}", pipe_name)))?;
-        pipe.close().await.map_err(|e| OverthroneError::Smb(format!("Pipe close failed: {e}")))?;
+            .map_err(|e| {
+                OverthroneError::Smb(format!("Pipe transact failed on '{}': {e}", pipe_name))
+            })?;
+        pipe.close()
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Pipe close failed: {e}")))?;
         debug!("SMB: Pipe response: {} bytes", response.len());
         Ok(response)
     }
 
-    pub async fn deploy_payload(&self, payload_bytes: &[u8], remote_filename: &str) -> Result<String> {
+    pub async fn deploy_payload(
+        &self,
+        payload_bytes: &[u8],
+        remote_filename: &str,
+    ) -> Result<String> {
         info!("SMB: Deploying '{}' to {}", remote_filename, self.target);
         let (share, remote_path) = if self.check_share_read("ADMIN$").await {
             ("ADMIN$", format!("Temp\\{}", remote_filename))
         } else if self.check_share_read("C$").await {
             ("C$", format!("Windows\\Temp\\{}", remote_filename))
         } else {
-            return Err(OverthroneError::Smb(format!("No admin share access on {}", self.target)));
+            return Err(OverthroneError::Smb(format!(
+                "No admin share access on {}",
+                self.target
+            )));
         };
         self.write_file(share, &remote_path, payload_bytes).await?;
         let full_path = if share == "ADMIN$" {
@@ -457,9 +554,8 @@ impl SmbSession {
 
         let client = Client::new(ClientConfig::default());
         let ipc_path = format!(r"\\{}\IPC$", target);
-        let unc = UncPath::from_str(&ipc_path).map_err(|e| {
-            OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}"))
-        })?;
+        let unc = UncPath::from_str(&ipc_path)
+            .map_err(|e| OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}")))?;
 
         // Try to authenticate using the ticket's session key as a hash
         // Note: This is a simplified approach - full impl would use SPNEGO/Kerberos
@@ -468,9 +564,7 @@ impl SmbSession {
             .share_connect(&unc, username, session_key_hex)
             .await
             .map_err(|e| {
-                OverthroneError::Smb(format!(
-                    "Kerberos auth failed to \\\\{target}\\IPC$: {e}"
-                ))
+                OverthroneError::Smb(format!("Kerberos auth failed to \\\\{target}\\IPC$: {e}"))
             })?;
 
         info!("SMB: Authenticated with Kerberos ticket to \\\\{target}");
@@ -480,17 +574,17 @@ impl SmbSession {
             target: target.to_string(),
             username: username.to_string(),
             domain: domain.to_string(),
-            ticket: Some(ticket),
+            ticket: Some(ticket.clone()),
+            session_key: Some(ticket.session_key),
         })
     }
 
     /// Reset a user's password via SAMR (requires account operator or admin rights)
-    pub async fn samr_password_reset(
-        &self,
-        target_user: &str,
-        new_password: &str,
-    ) -> Result<()> {
-        info!("SMB: SAMR password reset for '{}' on {}", target_user, self.target);
+    pub async fn samr_password_reset(&self, target_user: &str, new_password: &str) -> Result<()> {
+        info!(
+            "SMB: SAMR password reset for '{}' on {}",
+            target_user, self.target
+        );
 
         // Build SAMR request for SamrSetPasswordForUser (opnum 59)
         // MS-SAMR: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-samr/
@@ -549,7 +643,9 @@ impl SmbSession {
             info!("SMB: Password reset successful for '{}'", target_user);
             Ok(())
         } else {
-            Err(OverthroneError::Smb("SamrSetPasswordForUser failed".to_string()))
+            Err(OverthroneError::Smb(
+                "SamrSetPasswordForUser failed".to_string(),
+            ))
         }
     }
 }
@@ -624,7 +720,9 @@ fn build_samr_lookup_names(domain_handle: &[u8], names: &[&str]) -> Vec<u8> {
 fn parse_samr_rid(resp: &[u8]) -> Result<u32> {
     // RID is typically at offset 48+ after the header
     if resp.len() < 52 {
-        return Err(OverthroneError::Smb("Invalid SAMR lookup response".to_string()));
+        return Err(OverthroneError::Smb(
+            "Invalid SAMR lookup response".to_string(),
+        ));
     }
     Ok(u32::from_le_bytes([resp[48], resp[49], resp[50], resp[51]]))
 }
@@ -691,7 +789,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
 // Non-Windows: Full implementation via pavao (libsmbclient)
 
 #[cfg(not(windows))]
-use pavao::{SmbClient, SmbCredentials, SmbDirentType, SmbOptions, SmbOpenOptions};
+use pavao::{SmbClient, SmbCredentials, SmbDirentType, SmbOpenOptions, SmbOptions};
 #[cfg(not(windows))]
 use std::io::{Read, Write};
 
@@ -742,6 +840,7 @@ impl SmbSession {
             username: username.to_string(),
             domain: domain.to_string(),
             ticket: None,
+            session_key: None,
         })
     }
 
@@ -784,7 +883,10 @@ impl SmbSession {
         };
         let test_file = format!("__overthrone_test_{}.tmp", rand::random::<u32>());
         let path = pavao_impl::make_path(&test_file);
-        let opts = SmbOpenOptions::default().create(true).write(true).exclusive(true);
+        let opts = SmbOpenOptions::default()
+            .create(true)
+            .write(true)
+            .exclusive(true);
         let result = client.open_with(&path, opts);
         if let Ok(mut f) = result {
             let _ = f.write_all(b"x");
@@ -846,7 +948,10 @@ impl SmbSession {
         share: &str,
         remote_path: &str,
     ) -> Result<Vec<RemoteFileInfo>> {
-        info!("SMB: Listing \\\\{}\\{}\\{}", self.target, share, remote_path);
+        info!(
+            "SMB: Listing \\\\{}\\{}\\{}",
+            self.target, share, remote_path
+        );
         let client = pavao_impl::make_client(
             &self.target,
             share,
@@ -855,9 +960,34 @@ impl SmbSession {
             &self.password,
         )?;
         let base = pavao_impl::make_path(remote_path);
-        let path = if base.is_empty() { "/".to_string() } else { format!("/{}", base) };
+        let path = if base.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", base)
+        };
+        let share_name = share.to_string();
+        let target_name = self.target.clone();
         let entries = tokio::task::spawn_blocking(move || {
-            client.list_dir(&path).map_err(|e| OverthroneError::Smb(format!("list_dir: {e}")))
+            client.list_dir(&path).map_err(|e| {
+                let msg = format!("{e}");
+                // Catch OS-level "bad file descriptor" and permission errors
+                // that occur when spidering admin shares (C$, ADMIN$)
+                if msg.contains("bad file descriptor")
+                    || msg.contains("Bad file descriptor")
+                    || msg.contains("Permission denied")
+                    || msg.contains("NT_STATUS_ACCESS_DENIED")
+                {
+                    OverthroneError::Smb(format!(
+                        "Cannot list \\\\{}\\{}: access denied or bad descriptor ({})",
+                        target_name, share_name, msg
+                    ))
+                } else {
+                    OverthroneError::Smb(format!(
+                        "list_dir \\\\{}\\{}: {}",
+                        target_name, share_name, msg
+                    ))
+                }
+            })
         })
         .await
         .map_err(|e| OverthroneError::Smb(format!("task join: {e}")))??;
@@ -886,7 +1016,10 @@ impl SmbSession {
     }
 
     pub async fn read_file(&self, share: &str, remote_path: &str) -> Result<Vec<u8>> {
-        info!("SMB: Reading \\\\{}\\{}\\{}", self.target, share, remote_path);
+        info!(
+            "SMB: Reading \\\\{}\\{}\\{}",
+            self.target, share, remote_path
+        );
         let client = pavao_impl::make_client(
             &self.target,
             share,
@@ -898,9 +1031,9 @@ impl SmbSession {
         let remote_path_owned = remote_path.to_string();
         let data = tokio::task::spawn_blocking(move || {
             let opts = SmbOpenOptions::default().read(true);
-            let mut f = client
-                .open_with(&path, opts)
-                .map_err(|e| OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path_owned)))?;
+            let mut f = client.open_with(&path, opts).map_err(|e| {
+                OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path_owned))
+            })?;
             let mut buf = Vec::new();
             f.read_to_end(&mut buf)
                 .map_err(|e| OverthroneError::Smb(format!("Read error: {e}")))?;
@@ -916,10 +1049,7 @@ impl SmbSession {
         let data_len = data.len();
         info!(
             "SMB: Writing {} bytes to \\\\{}\\{}\\{}",
-            data_len,
-            self.target,
-            share,
-            remote_path
+            data_len, self.target, share, remote_path
         );
         let client = pavao_impl::make_client(
             &self.target,
@@ -936,12 +1066,13 @@ impl SmbSession {
                 .write(true)
                 .create(true)
                 .truncate(true);
-            let mut f = client
-                .open_with(&path, opts)
-                .map_err(|e| OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path_owned)))?;
+            let mut f = client.open_with(&path, opts).map_err(|e| {
+                OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path_owned))
+            })?;
             f.write_all(&data)
                 .map_err(|e| OverthroneError::Smb(format!("Write error: {e}")))?;
-            f.flush().map_err(|e| OverthroneError::Smb(format!("Flush: {e}")))?;
+            f.flush()
+                .map_err(|e| OverthroneError::Smb(format!("Flush: {e}")))?;
             Ok::<_, OverthroneError>(())
         })
         .await
@@ -951,7 +1082,10 @@ impl SmbSession {
     }
 
     pub async fn delete_file(&self, share: &str, remote_path: &str) -> Result<()> {
-        info!("SMB: Deleting \\\\{}\\{}\\{}", self.target, share, remote_path);
+        info!(
+            "SMB: Deleting \\\\{}\\{}\\{}",
+            self.target, share, remote_path
+        );
         let client = pavao_impl::make_client(
             &self.target,
             share,
@@ -983,7 +1117,10 @@ impl SmbSession {
         tokio::fs::write(local_path, &data).await.map_err(|e| {
             OverthroneError::Smb(format!("Cannot write local file '{}': {e}", local_path))
         })?;
-        info!("SMB: Downloaded {} -> {} ({} bytes)", remote_path, local_path, size);
+        info!(
+            "SMB: Downloaded {} -> {} ({} bytes)",
+            remote_path, local_path, size
+        );
         Ok(size)
     }
 
@@ -998,12 +1135,19 @@ impl SmbSession {
             .map_err(|e| OverthroneError::Smb(format!("Cannot read '{}': {e}", local_path)))?;
         let size = data.len();
         self.write_file(share, remote_path, &data).await?;
-        info!("SMB: Uploaded {} -> {} ({} bytes)", local_path, remote_path, size);
+        info!(
+            "SMB: Uploaded {} -> {} ({} bytes)",
+            local_path, remote_path, size
+        );
         Ok(size)
     }
 
     pub async fn pipe_transact(&self, pipe_name: &str, request: &[u8]) -> Result<Vec<u8>> {
-        info!("SMB: Pipe transact '{}' ({} bytes)", pipe_name, request.len());
+        info!(
+            "SMB: Pipe transact '{}' ({} bytes)",
+            pipe_name,
+            request.len()
+        );
         let client = pavao_impl::make_client(
             &self.target,
             "IPC$",
@@ -1011,7 +1155,10 @@ impl SmbSession {
             &self.username,
             &self.password,
         )?;
-        let path = format!("/{}", pipe_name.trim_start_matches('/').trim_start_matches('\\'));
+        let path = format!(
+            "/{}",
+            pipe_name.trim_start_matches('/').trim_start_matches('\\')
+        );
         let pipe_name_owned = pipe_name.to_string();
         let req = request.to_vec();
         let response = tokio::task::spawn_blocking(move || {

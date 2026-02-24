@@ -1,9 +1,8 @@
-﻿use thiserror::Error;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum OverthroneError {
-    // ── Protocol Errors ──
-
+    // Protocol Errors
     #[error("LDAP error on '{target}': {reason}")]
     Ldap { target: String, reason: String },
 
@@ -25,8 +24,20 @@ pub enum OverthroneError {
     #[error("DNS resolution failed for '{target}': {reason}")]
     Dns { target: String, reason: String },
 
-    // ── Auth Errors ──
+    #[error("RPC error on '{target}': {reason}")]
+    Rpc { target: String, reason: String },
 
+    // ADCS Errors
+    #[error("ADCS error: {0}")]
+    Adcs(String),
+
+    #[error("Certificate request failed: {0}")]
+    CertificateRequest(String),
+
+    #[error("ESC{esc_number} attack failed: {reason}")]
+    EscAttack { esc_number: u8, reason: String },
+
+    // Auth Errors
     #[error("Authentication failed: {0}")]
     Auth(String),
 
@@ -36,8 +47,7 @@ pub enum OverthroneError {
     #[error("Invalid NTLM hash format: expected 32 hex characters, got {0}")]
     InvalidHash(String),
 
-   // ── Graph Errors ──
-
+    // Graph Errors
     #[error("Graph error: {0}")]
     Graph(String),
 
@@ -46,9 +56,8 @@ pub enum OverthroneError {
 
     #[error("Node not found in graph: {0}")]
     NodeNotFound(String),
-    
-    // ── Crypto Errors ──
 
+    // Crypto Errors
     #[error("Encryption error: {0}")]
     Encryption(String),
 
@@ -58,8 +67,32 @@ pub enum OverthroneError {
     #[error("Ticket forging failed: {0}")]
     TicketForge(String),
 
-    // ── I/O & Serialization ──
+    // Execution Errors
+    #[error("Execution failed on '{target}': {reason}")]
+    Exec { target: String, reason: String },
 
+    #[error("Shell error: {0}")]
+    Shell(String),
+
+    // Scan Errors
+    #[error("Scan error: {0}")]
+    Scan(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
+
+    // Connection Errors
+    #[error("Connection to '{target}' failed: {reason}")]
+    Connection { target: String, reason: String },
+
+    #[error("Protocol error in {protocol}: {reason}")]
+    Protocol { protocol: String, reason: String },
+
+    // Relay Errors
+    #[error("Relay error: {0}")]
+    Relay(String),
+
+    // I/O & Serialization
     #[error("Network error: {0}")]
     Network(#[from] std::io::Error),
 
@@ -69,8 +102,7 @@ pub enum OverthroneError {
     #[error("Timeout after {0} seconds")]
     Timeout(u64),
 
-    // ── General ──
-
+    // General
     #[error("Module '{module}' not yet implemented")]
     NotImplemented { module: String },
 
@@ -91,7 +123,10 @@ impl OverthroneError {
     }
 
     /// Create a structured LDAP error with target context
-    pub fn ldap_with_target(target: impl std::fmt::Display, reason: impl std::fmt::Display) -> Self {
+    pub fn ldap_with_target(
+        target: impl std::fmt::Display,
+        reason: impl std::fmt::Display,
+    ) -> Self {
         Self::Ldap {
             target: target.to_string(),
             reason: reason.to_string(),
@@ -122,5 +157,30 @@ impl OverthroneError {
     /// Check if this error is a network/connectivity issue
     pub fn is_network_error(&self) -> bool {
         matches!(self, Self::Network(_) | Self::Timeout(_) | Self::Dns { .. })
+    }
+}
+
+/// Relay error type for overthrone-relay crate
+#[derive(Debug, thiserror::Error)]
+pub enum RelayError {
+    #[error("Network error: {0}")]
+    Network(String),
+    #[error("Socket error: {0}")]
+    Socket(String),
+    #[error("Protocol error: {0}")]
+    Protocol(String),
+    #[error("Authentication error: {0}")]
+    Auth(String),
+    #[error("Configuration error: {0}")]
+    Config(String),
+    #[error("Connection error: {0}")]
+    Connection(String),
+    #[error("Authentication failed: {0}")]
+    Authentication(String),
+}
+
+impl From<RelayError> for OverthroneError {
+    fn from(err: RelayError) -> Self {
+        OverthroneError::Relay(err.to_string())
     }
 }

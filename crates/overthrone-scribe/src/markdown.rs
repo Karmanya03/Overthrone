@@ -83,7 +83,7 @@ pub fn render(session: &EngagementSession) -> String {
 fn render_title_page(md: &mut String, session: &EngagementSession) {
     md.push_str(&format!("# {}\n\n", session.title));
     md.push_str(&format!("**Classification:** {}\n\n", session.classification));
-    md.push_str(&"| | |\n|---|---|\n".to_string());
+    md.push_str("| | |\n|---|---|\n");
     md.push_str(&format!("| **Client** | {} |\n", session.client_name));
     md.push_str(&format!("| **Assessor** | {} ({}) |\n", session.assessor_name, session.assessor_company));
     md.push_str(&format!("| **Engagement Type** | {} |\n", session.engagement_type));

@@ -99,3 +99,9 @@ docker-compose.override.yml
 *.vmdk
 *.ova
 *.ovf
+# CodeBuddy
+.codebuddy/*
+!.codebuddy/skills/
+!.codebuddy/rules/
+!.codebuddy/prompts/
+!.codebuddy/config.json

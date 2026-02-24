@@ -274,6 +274,259 @@ pub fn is_empty_lm_hash(hash: &[u8]) -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════
+// NTLM Message Building (for authentication)
+// ═══════════════════════════════════════════════════════════
+
+/// NTLM signature bytes
+const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
+
+/// NTLM message types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NtlmMessageType {
+    Negotiate = 1,
+    Challenge = 2,
+    Authenticate = 3,
+}
+
+/// Parsed NTLM Challenge message
+#[derive(Debug, Clone)]
+pub struct NtlmChallengeMessage {
+    pub message_type: NtlmMessageType,
+    pub target_name: Option<String>,
+    pub challenge: [u8; 8],
+    pub target_info: Option<Vec<u8>>,
+    pub flags: u32,
+}
+
+/// Build NTLM Type 1 (Negotiate) message
+///
+/// This message is sent from client to server to initiate NTLM authentication.
+pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
+    let mut msg = Vec::new();
+
+    // Signature
+    msg.extend_from_slice(NTLM_SIGNATURE);
+
+    // Message type (Type 1 = Negotiate)
+    msg.extend_from_slice(&1u32.to_le_bytes());
+
+    // NTLM negotiate flags
+    // NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_OEM | NTLMSSP_REQUEST_TARGET |
+    // NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_NEGOTIATE_ALWAYS_SIGN | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+    let flags: u32 = 0x00000202 | 0x00020000 | 0x00000010 | 0x00000200 | 0x00008000 | 0x00080000;
+    msg.extend_from_slice(&flags.to_le_bytes());
+
+    // Domain name (optional, we'll include if provided)
+    if !domain.is_empty() {
+        let domain_utf16: Vec<u8> = domain.to_uppercase()
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        
+        // Domain length and offset
+        msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes()); // Max length
+        msg.extend_from_slice(&32u32.to_le_bytes()); // Offset after header
+        
+        // Workstation (empty)
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&32u32.to_le_bytes());
+        
+        // Payload
+        msg.extend_from_slice(&domain_utf16);
+    } else {
+        // Empty domain and workstation
+        msg.extend_from_slice(&0u16.to_le_bytes()); // Domain length
+        msg.extend_from_slice(&0u16.to_le_bytes()); // Domain max
+        msg.extend_from_slice(&0u32.to_le_bytes()); // Domain offset
+        msg.extend_from_slice(&0u16.to_le_bytes()); // Workstation length
+        msg.extend_from_slice(&0u16.to_le_bytes()); // Workstation max
+        msg.extend_from_slice(&0u32.to_le_bytes()); // Workstation offset
+    }
+
+    // Version (Windows 7.1 = 6.1 = 0x0601)
+    msg.extend_from_slice(&[0x06, 0x01, 0xB1, 0x1D, 0x00, 0x00, 0x00, 0x0F]);
+
+    msg
+}
+
+/// Parse NTLM Type 2 (Challenge) message from server
+pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
+    if data.len() < 48 {
+        return Err(OverthroneError::Ntlm("Challenge message too short".to_string()));
+    }
+
+    // Verify signature
+    if &data[0..8] != NTLM_SIGNATURE {
+        return Err(OverthroneError::Ntlm("Invalid NTLM signature".to_string()));
+    }
+
+    // Check message type
+    let msg_type = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+    if msg_type != 2 {
+        return Err(OverthroneError::Ntlm(format!("Expected Type 2 message, got {}", msg_type)));
+    }
+
+    // Extract target name
+    let target_len = u16::from_le_bytes([data[12], data[13]]) as usize;
+    let target_offset = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
+    
+    let target_name = if target_len > 0 && target_offset + target_len <= data.len() {
+        Some(String::from_utf16_lossy(
+            &data[target_offset..target_offset + target_len]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>()
+        ))
+    } else {
+        None
+    };
+
+    // Extract challenge (8 bytes at offset 24)
+    let mut challenge = [0u8; 8];
+    challenge.copy_from_slice(&data[24..32]);
+
+    // Extract flags
+    let flags = u32::from_le_bytes([data[20], data[21], data[22], data[23]]);
+
+    // Extract target info if present
+    let target_info = if data.len() >= 48 {
+        let info_len = u16::from_le_bytes([data[40], data[41]]) as usize;
+        let info_offset = u32::from_le_bytes([data[44], data[45], data[46], data[47]]) as usize;
+        
+        if info_len > 0 && info_offset + info_len <= data.len() {
+            Some(data[info_offset..info_offset + info_len].to_vec())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(NtlmChallengeMessage {
+        message_type: NtlmMessageType::Challenge,
+        target_name,
+        challenge,
+        target_info,
+        flags,
+    })
+}
+
+/// Compute NTOWFv1 (same as NT hash)
+pub fn ntowfv1(password: &str) -> Vec<u8> {
+    nt_hash(password)
+}
+
+/// Build NTLM Type 3 (Authenticate) message
+///
+/// This message contains the proof of identity using the NTLMv2 response.
+pub fn build_authenticate_message(
+    domain: &str,
+    username: &str,
+    nt_hash: &[u8],
+    server_challenge: &[u8; 8],
+    target_info: Option<&[u8]>,
+    password: Option<&str>,
+) -> Vec<u8> {
+    let mut msg = Vec::new();
+
+    // Compute NTLMv2 hash
+    let ntlmv2_h = ntlmv2_hash(nt_hash, username, domain);
+
+    // Generate random client challenge
+    let client_challenge: [u8; 8] = rand::random();
+
+    // Build client blob
+    let timestamp = windows_filetime_now();
+    let target_info_bytes = target_info.unwrap_or(&[]);
+    let client_blob = build_ntlmv2_client_blob(timestamp, &client_challenge, target_info_bytes);
+
+    // Compute NTLMv2 response
+    let nt_response = ntlmv2_response(&ntlmv2_h, server_challenge, &client_blob);
+
+    // Compute LMv2 response
+    let lm_response = lmv2_response(&ntlmv2_h, server_challenge, &client_challenge);
+
+    // Convert domain and username to UTF-16LE
+    let domain_utf16: Vec<u8> = domain.to_uppercase()
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    
+    let username_utf16: Vec<u8> = username
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    
+    let workstation_utf16: Vec<u8> = "WORKSTATION"
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+
+    // Calculate offsets
+    let header_size = 64u32; // Base header
+    let domain_offset = header_size;
+    let username_offset = domain_offset + domain_utf16.len() as u32;
+    let workstation_offset = username_offset + username_utf16.len() as u32;
+    let lm_offset = workstation_offset + workstation_utf16.len() as u32;
+    let nt_offset = lm_offset + lm_response.len() as u32;
+
+    // Build message
+    // Signature
+    msg.extend_from_slice(NTLM_SIGNATURE);
+
+    // Message type (Type 3 = Authenticate)
+    msg.extend_from_slice(&3u32.to_le_bytes());
+
+    // LM response
+    msg.extend_from_slice(&(lm_response.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(lm_response.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&lm_offset.to_le_bytes());
+
+    // NT response
+    msg.extend_from_slice(&(nt_response.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(nt_response.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&nt_offset.to_le_bytes());
+
+    // Domain
+    msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&domain_offset.to_le_bytes());
+
+    // Username
+    msg.extend_from_slice(&(username_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(username_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&username_offset.to_le_bytes());
+
+    // Workstation
+    msg.extend_from_slice(&(workstation_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(workstation_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&workstation_offset.to_le_bytes());
+
+    // Session key (empty)
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    msg.extend_from_slice(&0u32.to_le_bytes());
+
+    // Flags
+    let flags: u32 = 0x00000202 | 0x00020000 | 0x00000010 | 0x00000200 | 0x00008000 | 0x00080000 | 0x00002000;
+    msg.extend_from_slice(&flags.to_le_bytes());
+
+    // Version
+    msg.extend_from_slice(&[0x06, 0x01, 0xB1, 0x1D, 0x00, 0x00, 0x00, 0x0F]);
+
+    // Payload
+    msg.extend_from_slice(&domain_utf16);
+    msg.extend_from_slice(&username_utf16);
+    msg.extend_from_slice(&workstation_utf16);
+    msg.extend_from_slice(&lm_response);
+    msg.extend_from_slice(&nt_response);
+
+    msg
+}
+
+// ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════
 

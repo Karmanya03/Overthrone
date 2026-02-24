@@ -6,11 +6,11 @@
 //! Uses the `ldap3` crate (v0.11) with async Tokio support.
 
 use crate::error::{OverthroneError, Result};
-use ldap3::{drive, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use std::time::Duration;
 use tracing::{debug, info, warn};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 
 // ═══════════════════════════════════════════════════════════
 //  Constants
@@ -98,12 +98,32 @@ const TRUST_ATTRS: &[&str] = &[
 //  Public Types
 // ═══════════════════════════════════════════════════════════
 
+/// Type of LDAP bind that was used to authenticate
+#[derive(Debug, Clone, PartialEq)]
+pub enum BindType {
+    /// Authenticated with provided credentials
+    Authenticated,
+    /// Anonymous simple bind (empty DN and password)
+    Anonymous,
+}
+
+impl std::fmt::Display for BindType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Authenticated => write!(f, "authenticated"),
+            Self::Anonymous => write!(f, "anonymous"),
+        }
+    }
+}
+
 /// Represents an authenticated LDAP session to a Domain Controller
 pub struct LdapSession {
     ldap: ldap3::Ldap,
     pub base_dn: String,
     pub domain: String,
     pub dc_ip: String,
+    /// How the session was authenticated
+    pub bind_type: BindType,
 }
 
 /// Parsed AD user object
@@ -267,8 +287,7 @@ impl LdapSession {
 
         info!("Connecting to LDAP: {url}");
 
-        let settings = LdapConnSettings::new()
-            .set_conn_timeout(Duration::from_secs(10));
+        let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(10));
 
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
             .await
@@ -288,37 +307,64 @@ impl LdapSession {
 
         info!("LDAP bind as: {bind_dn}");
 
-        let result = ldap
-            .simple_bind(&bind_dn, password)
-            .await
-            .map_err(|e| OverthroneError::Ldap {
-                target: dc_ip.to_string(),
-                reason: format!("Bind failed: {e}"),
-            })?;
+        let result =
+            ldap.simple_bind(&bind_dn, password)
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: dc_ip.to_string(),
+                    reason: format!("Bind failed: {e}"),
+                })?;
 
-        if result.rc != 0 {
-            return Err(OverthroneError::Ldap {
-                target: dc_ip.to_string(),
-                reason: format!(
-                    "Bind rejected (rc={}): {}",
-                    result.rc,
-                    ldap_rc_to_string(result.rc)
-                ),
-            });
-        }
+        let bind_type = if result.rc != 0 {
+            let auth_err = format!(
+                "Bind rejected (rc={}): {}",
+                result.rc,
+                ldap_rc_to_string(result.rc)
+            );
+            warn!("LDAP authenticated bind failed: {auth_err}");
+            warn!("Attempting anonymous bind fallback...");
+
+            // Try anonymous bind: empty DN and empty password
+            let anon_result =
+                ldap.simple_bind("", "")
+                    .await
+                    .map_err(|e| OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: format!("Anonymous bind failed: {e}"),
+                    })?;
+
+            if anon_result.rc != 0 {
+                // Both authenticated and anonymous binds failed
+                return Err(OverthroneError::Ldap {
+                    target: dc_ip.to_string(),
+                    reason: format!(
+                        "All bind attempts failed. Authenticated: {}. Anonymous: rc={} {}",
+                        auth_err,
+                        anon_result.rc,
+                        ldap_rc_to_string(anon_result.rc)
+                    ),
+                });
+            }
+
+            warn!("LDAP anonymous bind succeeded — results may be limited");
+            BindType::Anonymous
+        } else {
+            BindType::Authenticated
+        };
 
         let base_dn = domain_to_base_dn(domain);
-        info!("LDAP bind successful. Base DN: {base_dn}");
+        info!("LDAP bind successful ({}). Base DN: {base_dn}", bind_type);
 
         Ok(LdapSession {
             ldap,
             base_dn,
             domain: domain.to_string(),
             dc_ip: dc_ip.to_string(),
+            bind_type,
         })
     }
 
-/// Unbind and close the LDAP session
+    /// Unbind and close the LDAP session
     pub async fn disconnect(&mut self) -> Result<()> {
         self.ldap
             .unbind()
@@ -411,7 +457,10 @@ impl LdapSession {
     pub async fn modify_add(&mut self, dn: &str, attr: &str, values: &[String]) -> Result<()> {
         use ldap3::Mod;
         use std::collections::HashSet;
-        debug!("LDAP modify-add: dn={dn}, attr={attr}, {} values", values.len());
+        debug!(
+            "LDAP modify-add: dn={dn}, attr={attr}, {} values",
+            values.len()
+        );
 
         let value_set: HashSet<String> = values.iter().cloned().collect();
         let mods = vec![Mod::Add(attr.to_string(), value_set)];
@@ -442,10 +491,18 @@ impl LdapSession {
 
     /// Remove specific values from an attribute on a DN (raw LDAP modify-delete-values).
     /// Used by Shadow Credentials cleanup to remove specific key credentials.
-    pub async fn modify_delete_values(&mut self, dn: &str, attr: &str, values: &[String]) -> Result<()> {
+    pub async fn modify_delete_values(
+        &mut self,
+        dn: &str,
+        attr: &str,
+        values: &[String],
+    ) -> Result<()> {
         use ldap3::Mod;
         use std::collections::HashSet;
-        debug!("LDAP modify-delete-values: dn={dn}, attr={attr}, {} values", values.len());
+        debug!(
+            "LDAP modify-delete-values: dn={dn}, attr={attr}, {} values",
+            values.len()
+        );
 
         let value_set: HashSet<String> = values.iter().cloned().collect();
         let mods = vec![Mod::Delete(attr.to_string(), value_set)];
@@ -579,8 +636,7 @@ impl LdapSession {
     /// Find users trusted for constrained delegation
     pub async fn find_constrained_delegation_users(&mut self) -> Result<Vec<AdUser>> {
         info!("Searching for users with constrained delegation...");
-        let filter =
-            "(&(objectCategory=person)(objectClass=user)(msDS-AllowedToDelegateTo=*))";
+        let filter = "(&(objectCategory=person)(objectClass=user)(msDS-AllowedToDelegateTo=*))";
 
         let entries = self
             .search_entries(&self.base_dn.clone(), filter, USER_ATTRS)
@@ -640,9 +696,7 @@ impl LdapSession {
     }
 
     /// Find computers with constrained delegation
-    pub async fn find_constrained_delegation_computers(
-        &mut self,
-    ) -> Result<Vec<AdComputer>> {
+    pub async fn find_constrained_delegation_computers(&mut self) -> Result<Vec<AdComputer>> {
         info!("Searching for constrained delegation computers...");
         let filter = "(&(objectCategory=computer)(msDS-AllowedToDelegateTo=*))";
 
@@ -651,10 +705,7 @@ impl LdapSession {
             .await?;
         let computers: Vec<AdComputer> = entries.iter().map(parse_ad_computer).collect();
 
-        info!(
-            "Found {} constrained delegation computers",
-            computers.len()
-        );
+        info!("Found {} constrained delegation computers", computers.len());
         for c in &computers {
             info!(
                 "  → {} delegates to: {:?}",
@@ -705,10 +756,7 @@ impl LdapSession {
     }
 
     /// Recursively resolve all members of a group (follows nested groups)
-    pub async fn get_group_members_recursive(
-        &mut self,
-        group_dn: &str,
-    ) -> Result<Vec<String>> {
+    pub async fn get_group_members_recursive(&mut self, group_dn: &str) -> Result<Vec<String>> {
         info!("Recursive member resolution for: {group_dn}");
         // LDAP_MATCHING_RULE_IN_CHAIN (1.2.840.113556.1.4.1941)
         let filter = format!(
@@ -739,11 +787,7 @@ impl LdapSession {
 
         let filter = "(&(objectCategory=group)(sAMAccountName=Domain Admins))";
         let entries = self
-            .search_entries(
-                &self.base_dn.clone(),
-                filter,
-                &["distinguishedName"],
-            )
+            .search_entries(&self.base_dn.clone(), filter, &["distinguishedName"])
             .await?;
 
         if let Some(entry) = entries.first() {
@@ -826,10 +870,8 @@ impl LdapSession {
         let kerberoastable = self.find_kerberoastable().await?;
         let asrep_roastable = self.find_asrep_roastable().await?;
         let unconstrained_delegation = self.find_unconstrained_delegation().await?;
-        let constrained_delegation_users =
-            self.find_constrained_delegation_users().await?;
-        let constrained_delegation_computers =
-            self.find_constrained_delegation_computers().await?;
+        let constrained_delegation_users = self.find_constrained_delegation_users().await?;
+        let constrained_delegation_computers = self.find_constrained_delegation_computers().await?;
         let domain_admins = self.get_domain_admins().await?;
 
         let result = DomainEnumeration {
@@ -854,13 +896,100 @@ impl LdapSession {
         info!("  Trusts:                 {}", result.trusts.len());
         info!("  Kerberoastable:         {}", result.kerberoastable.len());
         info!("  AS-REP Roastable:       {}", result.asrep_roastable.len());
-        info!("  Unconstrained Deleg:    {}", result.unconstrained_delegation.len());
-        info!("  Constrained Deleg Users:{}", result.constrained_delegation_users.len());
-        info!("  Constrained Deleg PCs:  {}", result.constrained_delegation_computers.len());
+        info!(
+            "  Unconstrained Deleg:    {}",
+            result.unconstrained_delegation.len()
+        );
+        info!(
+            "  Constrained Deleg Users:{}",
+            result.constrained_delegation_users.len()
+        );
+        info!(
+            "  Constrained Deleg PCs:  {}",
+            result.constrained_delegation_computers.len()
+        );
         info!("  Domain Admins:          {}", result.domain_admins.len());
 
         Ok(result)
     }
+
+    // ═══════════════════════════════════════════════════════
+    //  LAPS Password Reading
+    // ═══════════════════════════════════════════════════════
+
+    /// Read LAPS (Local Administrator Password Solution) passwords from AD.
+    ///
+    /// Queries computer objects for:
+    /// - `ms-Mcs-AdmPwd` (LAPS v1)
+    /// - `ms-Mcs-AdmPwdExpirationTime` (LAPS v1 expiry)
+    /// - `msLAPS-Password` (Windows LAPS / LAPS v2)
+    ///
+    /// Returns only computers where the password is readable.
+    pub async fn read_laps_passwords(
+        &mut self,
+        computer_filter: Option<&str>,
+    ) -> Result<Vec<LapsResult>> {
+        info!("Querying LAPS passwords...");
+
+        let filter = match computer_filter {
+            Some(name) => format!(
+                "(&(objectClass=computer)(sAMAccountName={}$))",
+                name.trim_end_matches('$')
+            ),
+            None => "(objectClass=computer)".to_string(),
+        };
+
+        let attrs = &[
+            "sAMAccountName",
+            "dNSHostName",
+            "ms-Mcs-AdmPwd",
+            "ms-Mcs-AdmPwdExpirationTime",
+            "msLAPS-Password",
+        ];
+
+        let entries = self
+            .search_entries(&self.base_dn.clone(), &filter, attrs)
+            .await?;
+        let mut results = Vec::new();
+
+        for entry in &entries {
+            let computer_name = get_first_attr(entry, "sAMAccountName").unwrap_or_default();
+            let dns_name = get_first_attr(entry, "dNSHostName").unwrap_or_default();
+
+            // LAPS v1
+            let laps_v1 = get_first_attr(entry, "ms-Mcs-AdmPwd");
+            let laps_v1_expiry = get_first_attr(entry, "ms-Mcs-AdmPwdExpirationTime");
+
+            // Windows LAPS / LAPS v2
+            let laps_v2 = get_first_attr(entry, "msLAPS-Password");
+
+            if laps_v1.is_some() || laps_v2.is_some() {
+                results.push(LapsResult {
+                    computer_name,
+                    dns_name,
+                    password: laps_v1.clone(),
+                    expiration: laps_v1_expiry,
+                    laps_v2_password: laps_v2,
+                });
+            }
+        }
+
+        info!("LAPS: {} computers with readable passwords", results.len());
+        Ok(results)
+    }
+}
+
+/// LAPS password query result
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LapsResult {
+    pub computer_name: String,
+    pub dns_name: String,
+    /// LAPS v1 password (ms-Mcs-AdmPwd)
+    pub password: Option<String>,
+    /// LAPS v1 expiration time
+    pub expiration: Option<String>,
+    /// Windows LAPS / LAPS v2 password (JSON blob)
+    pub laps_v2_password: Option<String>,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -878,11 +1007,7 @@ fn domain_to_base_dn(domain: &str) -> String {
 
 /// Get the first value of a named attribute from a SearchEntry
 fn get_first_attr(entry: &SearchEntry, attr: &str) -> Option<String> {
-    entry
-        .attrs
-        .get(attr)
-        .and_then(|vals| vals.first())
-        .cloned()
+    entry.attrs.get(attr).and_then(|vals| vals.first()).cloned()
 }
 
 /// Get all values of a named attribute from a SearchEntry

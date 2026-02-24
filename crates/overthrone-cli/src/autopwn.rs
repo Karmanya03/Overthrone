@@ -7,7 +7,6 @@ use overthrone_pilot::executor::execute_step;
 use overthrone_pilot::goals::{AttackGoal, EngagementState};
 use overthrone_pilot::planner::Planner;
 use tracing::info;
-use std::time::Instant;
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum ExecMethod {
@@ -84,7 +83,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     println!();
 
     // Build ExecContext
-    let ctx = match config.creds.to_exec_context(&config.dchost, false, config.dryrun) {
+    let mut ctx = match config
+        .creds
+        .to_exec_context(&config.dchost, false, config.dryrun)
+    {
         Ok(c) => c,
         Err(e) => {
             banner::print_fail(&format!("Failed to build execution context: {}", e));
@@ -92,6 +94,32 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             return result;
         }
     };
+
+    // ── LDAP Pre-flight Check ──
+    if !config.dryrun {
+        let password = config.creds.password().unwrap_or("");
+        match overthrone_core::proto::ldap::LdapSession::connect(
+            &config.dchost,
+            &config.creds.domain,
+            &config.creds.username,
+            password,
+            false,
+        )
+        .await
+        {
+            Ok(mut session) => {
+                banner::print_info(&format!("LDAP pre-flight OK ({})", session.bind_type));
+                let _ = session.disconnect().await;
+            }
+            Err(e) => {
+                banner::print_warn(&format!(
+                    "LDAP pre-flight failed: {}. LDAP-dependent steps will be skipped.",
+                    e
+                ));
+                ctx.ldap_available = false;
+            }
+        }
+    }
 
     // Build initial EngagementState
     let mut state = EngagementState::default();
@@ -189,12 +217,17 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         }
 
-    // Check if goal achieved — has_domain_admin is a field, not a method
+        // Check if goal achieved — has_domain_admin is a field, not a method
         if state.has_domain_admin {
             result.domain_admin_achieved = true;
             // Find the DA user and host
             let da_user = state.da_user.as_deref().unwrap_or("unknown");
-            let da_host = state.admin_hosts.iter().next().map(|h| h.as_str()).unwrap_or("unknown");
+            let da_host = state
+                .admin_hosts
+                .iter()
+                .next()
+                .map(|h| h.as_str())
+                .unwrap_or("unknown");
             banner::print_da_achieved(da_user, da_host);
             break;
         }

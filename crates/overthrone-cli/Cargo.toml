@@ -25,7 +25,9 @@ overthrone-pilot = { path = "../overthrone-pilot" }
 overthrone-crawler = { path = "../overthrone-crawler" }
 overthrone-forge = { path = "../overthrone-forge" }
 overthrone-scribe = { path = "../overthrone-scribe" }
+overthrone-relay = { path = "../overthrone-relay" }
 clap.workspace = true
+
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -39,6 +41,12 @@ rpassword = "7.4.0"
 serde_json.workspace = true
 kerberos_asn1.workspace = true
 hex.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+rustyline = { version = "14.0", features = ["derive"] }
+rustyline-derive = "0.10"
+dirs = "5.0"
+
 
 [dev-dependencies]
 tokio-test.workspace = true

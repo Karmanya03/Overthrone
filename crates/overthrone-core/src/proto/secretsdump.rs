@@ -160,8 +160,8 @@ pub fn dump_dcc2(security_data: &[u8], system_data: &[u8]) -> Result<Vec<Dcc2Cre
     let cached_entries = enumerate_cached_logons(security_data)?;
 
     for (index, encrypted_entry) in cached_entries.iter().enumerate() {
-        if let Ok((username, dcc2_hash)) = decrypt_cached_entry(&nlkm_key, encrypted_entry) {
-            if !username.is_empty() {
+        if let Ok((username, dcc2_hash)) = decrypt_cached_entry(&nlkm_key, encrypted_entry)
+            && !username.is_empty() {
                 // Format as hashcat mode 2100: $DCC2$10240#username#hash
                 let hash_str = format!("$DCC2$10240#{}#{}", username, hex_encode(&dcc2_hash));
                 credentials.push(Dcc2Credential {
@@ -169,7 +169,6 @@ pub fn dump_dcc2(security_data: &[u8], system_data: &[u8]) -> Result<Vec<Dcc2Cre
                     nt_hash: Some(hash_str),
                 });
             }
-        }
     }
 
     Ok(credentials)
@@ -274,11 +273,10 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                 let child_rel = read_u32(data, entry_offset)?;
                 let child_offset = cell_offset(child_rel);
 
-                if let Ok(child_name) = read_nk_name(data, child_offset) {
-                    if child_name.to_lowercase() == name_lower {
+                if let Ok(child_name) = read_nk_name(data, child_offset)
+                    && child_name.to_lowercase() == name_lower {
                         return Ok(child_offset);
                     }
-                }
             }
         }
         // ri (index root) — each entry is 4 bytes: offset to sub-list
@@ -301,11 +299,10 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                         }
                         let child_rel = read_u32(data, sub_entry)?;
                         let child_offset = cell_offset(child_rel);
-                        if let Ok(child_name) = read_nk_name(data, child_offset) {
-                            if child_name.to_lowercase() == name_lower {
+                        if let Ok(child_name) = read_nk_name(data, child_offset)
+                            && child_name.to_lowercase() == name_lower {
                                 return Ok(child_offset);
                             }
-                        }
                     }
                 }
             }
@@ -319,11 +316,10 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                 }
                 let child_rel = read_u32(data, entry_offset)?;
                 let child_offset = cell_offset(child_rel);
-                if let Ok(child_name) = read_nk_name(data, child_offset) {
-                    if child_name.to_lowercase() == name_lower {
+                if let Ok(child_name) = read_nk_name(data, child_offset)
+                    && child_name.to_lowercase() == name_lower {
                         return Ok(child_offset);
                     }
-                }
             }
         }
         _ => {
@@ -602,7 +598,7 @@ fn read_nk_class(data: &[u8], nk_offset: usize) -> Result<Vec<u8>> {
 /// Convert a hex string to bytes
 fn hex_str_to_bytes(hex: &str) -> Result<Vec<u8>> {
     let hex = hex.trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(anyhow!("odd-length hex string"));
     }
     (0..hex.len())
@@ -786,20 +782,18 @@ fn derive_lsa_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> 
     let policy_key = navigate_path(security_data, &["Policy"])?;
 
     // Try Vista+ path first
-    if let Ok(eklist_key) = find_subkey(security_data, policy_key, "PolEKList") {
-        if let Ok(data) = read_value(security_data, eklist_key, "") {
+    if let Ok(eklist_key) = find_subkey(security_data, policy_key, "PolEKList")
+        && let Ok(data) = read_value(security_data, eklist_key, "") {
             // PolEKList value is encrypted with boot key using AES-256-CFB
             // Decrypt to get the LSA key
             return decrypt_pol_eklist(&data, boot_key);
         }
-    }
 
     // Fall back to pre-Vista path
-    if let Ok(polsec_key) = find_subkey(security_data, policy_key, "PolSecretEncryptionKey") {
-        if let Ok(data) = read_value(security_data, polsec_key, "") {
+    if let Ok(polsec_key) = find_subkey(security_data, policy_key, "PolSecretEncryptionKey")
+        && let Ok(data) = read_value(security_data, polsec_key, "") {
             return decrypt_pol_secret_key(&data, boot_key);
         }
-    }
 
     Err(anyhow!("could not derive LSA key"))
 }
@@ -842,11 +836,10 @@ fn enumerate_lsa_secrets(security_data: &[u8]) -> Result<Vec<(String, Vec<u8>)>>
 
     for (offset, name) in &subkeys {
         // Each secret has CurrVal and OldVal subkeys
-        if let Ok(currval_key) = find_subkey(security_data, *offset, "CurrVal") {
-            if let Ok(data) = read_value(security_data, currval_key, "") {
+        if let Ok(currval_key) = find_subkey(security_data, *offset, "CurrVal")
+            && let Ok(data) = read_value(security_data, currval_key, "") {
                 secrets.push((name.clone(), data));
             }
-        }
     }
 
     Ok(secrets)
@@ -884,11 +877,10 @@ fn derive_nlkm_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>>
 
     // NL$KM is stored as an LSA secret
     let secrets_key = navigate_path(security_data, &["Policy", "Secrets", "NL$KM"])?;
-    if let Ok(currval_key) = find_subkey(security_data, secrets_key, "CurrVal") {
-        if let Ok(data) = read_value(security_data, currval_key, "") {
+    if let Ok(currval_key) = find_subkey(security_data, secrets_key, "CurrVal")
+        && let Ok(data) = read_value(security_data, currval_key, "") {
             return decrypt_lsa_secret(&lsa_key, &data);
         }
-    }
 
     Err(anyhow!("NL$KM key not found"))
 }

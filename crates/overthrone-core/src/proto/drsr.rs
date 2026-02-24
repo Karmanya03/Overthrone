@@ -198,15 +198,14 @@ fn scan_for_replentinflist(
 
         if is_known_attid(maybe_attid) {
             // Found an attribute block — try to parse the surrounding object
-            if let Some(obj_start) = find_object_start(data, scan_pos) {
-                if let Ok((obj, next_pos)) = parse_replicated_object(data, obj_start, session_key) {
+            if let Some(obj_start) = find_object_start(data, scan_pos)
+                && let Ok((obj, next_pos)) = parse_replicated_object(data, obj_start, session_key) {
                     if !obj.sam_account_name.is_empty() || obj.nt_hash.is_some() {
                         objects.push(obj);
                     }
                     scan_pos = next_pos;
                     continue;
                 }
-            }
         }
 
         scan_pos += 4; // Advance by 4 bytes (u32 aligned)

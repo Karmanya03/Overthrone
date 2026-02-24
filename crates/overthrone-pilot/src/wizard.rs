@@ -454,7 +454,7 @@ impl WizardSession {
         if !available_creds.is_empty() && completed_stage == Stage::Attack {
             println!("🔑 {} new credential(s) available", available_creds.len().to_string().bold());
             if self.prompt_yes_no("Switch to a different credential?", false).await? {
-                return Ok(self.prompt_credential_selection(&available_creds).await?);
+                return self.prompt_credential_selection(&available_creds).await;
             }
         }
 

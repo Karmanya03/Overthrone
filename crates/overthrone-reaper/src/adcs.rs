@@ -168,8 +168,7 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
         // Enroll permissions from nTSecurityDescriptor are complex to parse fully;
         // we surface them as a raw list — vulnerability logic doesn't depend on them.
         let enroll_permissions: Vec<String> = entry.attrs
-            .get("nTSecurityDescriptor")
-            .map(|v| v.clone())
+            .get("nTSecurityDescriptor").cloned()
             .unwrap_or_default();
 
         let mut template = CertTemplate {

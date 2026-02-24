@@ -107,6 +107,7 @@ impl Credentials {
             jitter_ms: 0,
             dry_run,
             override_creds: None,
+            ldap_available: true,
         })
     }
 

@@ -16,7 +16,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 chrono.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 bytes.workspace = true
 byteorder.workspace = true
 futures.workspace = true
@@ -39,8 +39,8 @@ cbc.workspace = true
 hmac = "0.12"
 md-5 = "0.10"
 md4 = "0.10"
-sha2.workspace = true
-rand.workspace = true
+sha2 = { workspace = true, features = ["oid"] }
+rand = "0.8"
 base64.workspace = true
 hex.workspace = true
 digest.workspace = true
@@ -50,10 +50,24 @@ rasn.workspace = true
 kerberos_asn1.workspace = true
 kerberos_crypto.workspace = true
 
+# Certificate / ADCS
+yasna = "0.5"           # ASN.1 DER encoding for CSRs
+x509-parser = "0.15"    # X.509 certificate parsing
+rsa = "0.9"             # RSA key generation
+pkcs8 = "0.10"          # Private key encoding
+pkcs12 = "0.1"          # PFX generation
+sha1 = "0.10"           # SHA1 for certificate signatures
+
 # Networking
 hickory-resolver.workspace = true
+reqwest = { workspace = true }
 
 async-trait = "0.1"
+rcgen = "0.14.7"
+p12 = "0.6.3"
+foreign-types = "0.5.0"
+pfx = "0.4.1"
+p12-keystore = "0.2.0"
 
 # ── Windows-only dependencies ──────────────────────────────
 # The `smb` crate depends on sspi → windows-future which only
@@ -66,6 +80,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
 ]}
+wmi = "0.13"
 
 # ── Linux/macOS cross-platform dependencies ─────────────────
 # pavao: libsmbclient bindings for SMB file I/O + named pipes

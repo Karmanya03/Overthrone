@@ -9,6 +9,7 @@ members = [
     "crates/overthrone-forge",
     "crates/overthrone-scribe",
     "crates/overthrone-cli",
+    "crates/overthrone-relay",
 ]
 
 [workspace.package]
@@ -47,15 +48,6 @@ ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ri
 
 # Graph Engine
 petgraph = "0.8"
-
-# TUI
-ratatui = "0.30"
-crossterm = "0.29"
-
-# Report Generation
-genpdf = "0.2"
-pulldown-cmark = "0.13"
-printpdf = "0.9.0"
 
 # Date/Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -98,16 +90,12 @@ byteorder = "1.5"
 
 # Async Utilities
 futures = "0.3"
-tokio-util = { version = "0.7", features = ["full"] }
 
 # Parallel Processing
 rayon = "1.10"
 
 # Compression (for embedded wordlist)
 zstd = "0.13"
-
-# Regex
-regex = "1"
 
 # Config
 directories = "6.0"

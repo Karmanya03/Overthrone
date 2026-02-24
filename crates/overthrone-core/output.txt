@@ -1,0 +1,24 @@
+warning: C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\Cargo.toml: file `C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\src\main.rs` found to be present in multiple build targets:
+  * `bin` target `overthrone`
+  * `bin` target `ovt`
+    Checking overthrone-core v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-core)
+warning: variable does not need to be mutable
+ --> crates\overthrone-core\src\bin\test_pfx.rs:4:9
+  |
+4 |     let mut store = KeyStore::new();
+  |         ----^^^^^
+  |         |
+  |         help: remove this `mut`
+  |
+  = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `store`
+ --> crates\overthrone-core\src\bin\test_pfx.rs:4:9
+  |
+4 |     let mut store = KeyStore::new();
+  |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_store`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `overthrone-core` (bin "test_pfx") generated 2 warnings (run `cargo fix --bin "test_pfx" -p overthrone-core` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s

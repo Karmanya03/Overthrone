@@ -1,9 +1,10 @@
 //! Protocol implementations for AD enumeration
 
-pub mod ldap;
+pub mod drsr;
 pub mod kerberos;
-pub mod smb;
+pub mod ldap;
 pub mod ntlm;
 pub mod registry;
+pub mod rid;
 pub mod secretsdump;
-pub mod drsr; 
+pub mod smb;

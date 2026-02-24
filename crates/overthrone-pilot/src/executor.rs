@@ -43,6 +43,8 @@ pub struct ExecContext {
     pub dry_run: bool,
     /// Override credentials (e.g., use a newly compromised account)
     pub override_creds: Option<(String, String, bool)>,
+    /// Whether LDAP connectivity has been verified (set to false if pre-flight check fails)
+    pub ldap_available: bool,
 }
 
 impl ExecContext {
@@ -116,6 +118,27 @@ pub async fn execute_step(
         return StepResult {
             success: true,
             output: "dry run".to_string(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        };
+    }
+
+    // Check if step requires LDAP and LDAP is unavailable
+    let requires_ldap = matches!(
+        &step.action,
+        PlannedAction::EnumerateUsers
+            | PlannedAction::EnumerateComputers
+            | PlannedAction::EnumerateGroups
+            | PlannedAction::EnumerateTrusts
+            | PlannedAction::EnumerateGpos
+    );
+    if requires_ldap && !ctx.ldap_available {
+        let msg = format!("Skipped: LDAP authentication failed — {}", step.description);
+        warn!("{}", msg);
+        state.log_action(&step.stage.to_string(), &step.description, "", false, &msg);
+        return StepResult {
+            success: false,
+            output: msg,
             new_credentials: 0,
             new_admin_hosts: 0,
         };
@@ -2403,10 +2426,13 @@ async fn exec_crack_hashes(
         } else {
             cracked.username.clone()
         };
-        
+
         // Store in cracked map using password as value
-        state.cracked.insert(format!("{}:{}", cracked.hash_type, username), cracked.password.clone());
-        
+        state.cracked.insert(
+            format!("{}:{}", cracked.hash_type, username),
+            cracked.password.clone(),
+        );
+
         state.add_credential(CompromisedCred {
             username,
             secret: cracked.password.clone(),
@@ -2422,9 +2448,7 @@ async fn exec_crack_hashes(
     // Print summary
     let msg = format!(
         "Cracked {}/{} hashes ({}ms)",
-        cracked_count,
-        report.total_hashes,
-        report.time_ms
+        cracked_count, report.total_hashes, report.time_ms
     );
     info!("{} {}", "  ✓".green(), msg);
 

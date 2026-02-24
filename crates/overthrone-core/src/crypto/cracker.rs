@@ -579,7 +579,7 @@ impl HashCracker {
             .take(total_candidates)
             .find_map_any(|candidate| {
                 let count = counter.fetch_add(1, Ordering::Relaxed);
-                if count % 10_000 == 0 {
+                if count.is_multiple_of(10_000) {
                     debug!("Tried {} candidates...", count);
                 }
                 
