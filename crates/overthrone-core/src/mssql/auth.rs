@@ -184,17 +184,28 @@ impl NtlmAuthHandler {
 
 /// MSSQL password obfuscation (XOR with A5)
 /// Used for TDS login packet - NOT for security, just for legacy compatibility
+/// MSSQL TDS Login7 password obfuscation (MS-TDS 2.2.6.4)
+/// Algorithm: for each byte → swap high/low nibbles → XOR with 0xA5
 pub fn obfuscate_password(password: &str) -> Vec<u8> {
-    // SQL Server password obfuscation for login packet
-    // Password is UTF-16LE, XORed with 0x5A for each byte
     let utf16: Vec<u8> = password.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
-    
-    utf16.into_iter().map(|b| b ^ 0x5A).collect()
+    utf16
+        .into_iter()
+        .map(|b| {
+            let swapped = ((b & 0x0F) << 4) | ((b & 0xF0) >> 4);
+            swapped ^ 0xA5
+        })
+        .collect()
 }
 
-/// De-obfuscate password (reverse of obfuscate)
+/// Reverse TDS Login7 password obfuscation
 pub fn deobfuscate_password(data: &[u8]) -> String {
-    let decoded: Vec<u8> = data.iter().map(|b| b ^ 0x5A).collect();
+    let decoded: Vec<u8> = data
+        .iter()
+        .map(|b| {
+            let unxored = b ^ 0xA5;
+            ((unxored & 0x0F) << 4) | ((unxored & 0xF0) >> 4)
+        })
+        .collect();
     
     decoded
         .chunks(2)

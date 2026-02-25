@@ -71,8 +71,40 @@ pub enum OverthroneError {
     #[error("Execution failed on '{target}': {reason}")]
     Exec { target: String, reason: String },
 
+    /// Simple string-based exec error (used by auto_exec and exec modules)
+    #[error("Execution error: {0}")]
+    ExecSimple(String),
+
     #[error("Shell error: {0}")]
     Shell(String),
+
+    // ─── NEW: Plugin Errors ───────────────────────────────────
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
+    #[error("Plugin '{plugin_id}' command '{command}' failed: {reason}")]
+    PluginCommand {
+        plugin_id: String,
+        command: String,
+        reason: String,
+    },
+
+    #[error("Plugin loader error: {0}")]
+    PluginLoader(String),
+
+    // ─── NEW: C2 Integration Errors ──────────────────────────
+    #[error("C2 error: {0}")]
+    C2(String),
+
+    #[error("C2 connection to {framework} at {target} failed: {reason}")]
+    C2Connection {
+        framework: String,
+        target: String,
+        reason: String,
+    },
+
+    #[error("C2 session '{session_id}' error: {reason}")]
+    C2Session { session_id: String, reason: String },
 
     // Scan Errors
     #[error("Scan error: {0}")]
@@ -103,6 +135,9 @@ pub enum OverthroneError {
     Timeout(u64),
 
     // General
+    #[error("Internal error: {0}")]
+    Internal(String),
+
     #[error("Module '{module}' not yet implemented")]
     NotImplemented { module: String },
 
@@ -143,6 +178,29 @@ impl OverthroneError {
         Self::Custom(msg.to_string())
     }
 
+    /// Create a plugin error
+    pub fn plugin(msg: impl std::fmt::Display) -> Self {
+        Self::Plugin(msg.to_string())
+    }
+
+    /// Create a C2 error
+    pub fn c2(msg: impl std::fmt::Display) -> Self {
+        Self::C2(msg.to_string())
+    }
+
+    /// Create a C2 connection error with context
+    pub fn c2_connection(
+        framework: impl std::fmt::Display,
+        target: impl std::fmt::Display,
+        reason: impl std::fmt::Display,
+    ) -> Self {
+        Self::C2Connection {
+            framework: framework.to_string(),
+            target: target.to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
     /// Check if this error is an authentication failure
     pub fn is_auth_error(&self) -> bool {
         matches!(
@@ -157,6 +215,22 @@ impl OverthroneError {
     /// Check if this error is a network/connectivity issue
     pub fn is_network_error(&self) -> bool {
         matches!(self, Self::Network(_) | Self::Timeout(_) | Self::Dns { .. })
+    }
+
+    /// Check if this error is plugin-related
+    pub fn is_plugin_error(&self) -> bool {
+        matches!(
+            self,
+            Self::Plugin(_) | Self::PluginCommand { .. } | Self::PluginLoader(_)
+        )
+    }
+
+    /// Check if this error is C2-related
+    pub fn is_c2_error(&self) -> bool {
+        matches!(
+            self,
+            Self::C2(_) | Self::C2Connection { .. } | Self::C2Session { .. }
+        )
     }
 }
 

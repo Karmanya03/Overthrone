@@ -531,6 +531,57 @@ impl LdapSession {
         Ok(())
     }
 
+    /// Modify an LDAP attribute with typed operation and string values.
+    ///
+    /// Used by ADCS ESC4 and other modules that need proper LDAP writes
+    /// with multiple string values and a selectable operation type.
+    pub async fn modify_attribute(
+        &mut self,
+        dn: &str,
+        attribute: &str,
+        op: crate::adcs::esc4::ModifyOp,
+        values: &[&str],
+    ) -> Result<()> {
+        use ldap3::Mod;
+        use std::collections::HashSet;
+        debug!(
+            "LDAP modify-attribute: dn={dn}, attr={attribute}, op={:?}, {} values",
+            op,
+            values.len()
+        );
+
+        let value_set: HashSet<String> = values.iter().map(|v| v.to_string()).collect();
+
+        let mods = vec![match op {
+            crate::adcs::esc4::ModifyOp::Replace => Mod::Replace(attribute.to_string(), value_set),
+            crate::adcs::esc4::ModifyOp::Add => Mod::Add(attribute.to_string(), value_set),
+            crate::adcs::esc4::ModifyOp::Delete => Mod::Delete(attribute.to_string(), value_set),
+        }];
+
+        let result = self
+            .ldap
+            .modify(dn, mods)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("Modify-attribute failed: {e}"),
+            })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!(
+                    "Modify-attribute rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP modify-attribute successful on {dn}");
+        Ok(())
+    }
+
     // ═══════════════════════════════════════════════════════
     //  Raw Search Helper
     // ═══════════════════════════════════════════════════════

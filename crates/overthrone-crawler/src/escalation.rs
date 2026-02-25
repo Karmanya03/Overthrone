@@ -4,9 +4,9 @@
 //! concrete escalation paths across trust boundaries.
 
 use crate::foreign::ForeignMembership;
-use crate::trust_map::{TrustGraph, TrustKind, TrustDirection};
-use overthrone_reaper::runner::ReaperResult;
+use crate::trust_map::{TrustDirection, TrustGraph, TrustKind};
 use overthrone_reaper::delegations::DelegationType;
+use overthrone_reaper::runner::ReaperResult;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -44,9 +44,13 @@ pub struct EscalationPath {
 
 impl EscalationPath {
     pub fn difficulty(&self) -> &'static str {
-        if self.hops.len() == 1 && !self.requires_da { "EASY" }
-        else if self.requires_da { "HARD" }
-        else { "MEDIUM" }
+        if self.hops.len() == 1 && !self.requires_da {
+            "EASY"
+        } else if self.requires_da {
+            "HARD"
+        } else {
+            "MEDIUM"
+        }
     }
 }
 
@@ -125,7 +129,10 @@ pub fn find_escalation_paths(
                         principal: fm.foreign_principal.clone(),
                         group: fm.local_group.clone(),
                     },
-                    prerequisite: format!("Compromise '{}' in {}", fm.foreign_principal, fm.foreign_domain),
+                    prerequisite: format!(
+                        "Compromise '{}' in {}",
+                        fm.foreign_principal, fm.foreign_domain
+                    ),
                     risk_level: "HIGH".into(),
                 }],
                 total_hops: 1,
@@ -173,26 +180,29 @@ pub fn find_escalation_paths(
 
     // ── 5. Constrained delegation crossing trust boundaries ──
     for deleg in &reaper.delegations {
-        if !deleg.enabled { continue; }
+        if !deleg.enabled {
+            continue;
+        }
         for target_spn in &deleg.targets {
             // Check if the SPN target is in a different domain
             let target_host = spn_hostname(target_spn);
             // If the target hostname doesn't match our domain, it might cross a trust
-            if !target_host.to_uppercase().ends_with(&format!(".{}", reaper.domain.to_uppercase())) {
-                let target_domain = domain_from_hostname(&target_host)
-                    .unwrap_or_else(|| "UNKNOWN".to_string());
+            if !target_host
+                .to_uppercase()
+                .ends_with(&format!(".{}", reaper.domain.to_uppercase()))
+            {
+                let target_domain =
+                    domain_from_hostname(&target_host).unwrap_or_else(|| "UNKNOWN".to_string());
                 let technique = match deleg.delegation_type {
                     DelegationType::ResourceBased => {
                         EscalationTechnique::ResourceBasedConstrainedDelegation {
                             target_computer: target_host.clone(),
                         }
                     }
-                    _ => {
-                        EscalationTechnique::ConstrainedDelegation {
-                            source: deleg.principal.clone(),
-                            target_spn: target_spn.clone(),
-                        }
-                    }
+                    _ => EscalationTechnique::ConstrainedDelegation {
+                        source: deleg.principal.clone(),
+                        target_spn: target_spn.clone(),
+                    },
                 };
 
                 paths.push(EscalationPath {
@@ -219,29 +229,35 @@ pub fn find_escalation_paths(
     // ── 6. MSSQL service accounts crossing domains ──
     for instance in &reaper.mssql_instances {
         if let Some(ref hostname) = instance.hostname
-            && !hostname.to_uppercase().ends_with(&format!(".{}", reaper.domain.to_uppercase())) {
-                let target_domain = domain_from_hostname(hostname)
-                    .unwrap_or_else(|| "UNKNOWN".to_string());
-                paths.push(EscalationPath {
-                    source_domain: reaper.domain.to_uppercase(),
-                    target_domain: target_domain.to_uppercase(),
-                    hops: vec![EscalationHop {
-                        from_domain: reaper.domain.to_uppercase(),
-                        to_domain: target_domain.to_uppercase(),
-                        technique: EscalationTechnique::MssqlLinkChain {
-                            service_account: instance.service_account.clone(),
-                        },
-                        prerequisite: format!("Kerberoast/compromise '{}' + MSSQL access", instance.service_account),
-                        risk_level: "MEDIUM".into(),
-                    }],
-                    total_hops: 1,
-                    requires_da: false,
-                    description: format!(
-                        "MSSQL service account '{}' has SPN for cross-domain host {}",
-                        instance.service_account, hostname
+            && !hostname
+                .to_uppercase()
+                .ends_with(&format!(".{}", reaper.domain.to_uppercase()))
+        {
+            let target_domain =
+                domain_from_hostname(hostname).unwrap_or_else(|| "UNKNOWN".to_string());
+            paths.push(EscalationPath {
+                source_domain: reaper.domain.to_uppercase(),
+                target_domain: target_domain.to_uppercase(),
+                hops: vec![EscalationHop {
+                    from_domain: reaper.domain.to_uppercase(),
+                    to_domain: target_domain.to_uppercase(),
+                    technique: EscalationTechnique::MssqlLinkChain {
+                        service_account: instance.service_account.clone(),
+                    },
+                    prerequisite: format!(
+                        "Kerberoast/compromise '{}' + MSSQL access",
+                        instance.service_account
                     ),
-                });
-            }
+                    risk_level: "MEDIUM".into(),
+                }],
+                total_hops: 1,
+                requires_da: false,
+                description: format!(
+                    "MSSQL service account '{}' has SPN for cross-domain host {}",
+                    instance.service_account, hostname
+                ),
+            });
+        }
     }
 
     // ── 7. Vulnerable ADCS templates ──
@@ -259,8 +275,10 @@ pub fn find_escalation_paths(
                             technique: EscalationTechnique::CrossDomainAdcs {
                                 template: template.name.clone(),
                             },
-                            prerequisite: format!("User in {} with enrollment rights on template '{}'",
-                                trust.target_domain, template.name),
+                            prerequisite: format!(
+                                "User in {} with enrollment rights on template '{}'",
+                                trust.target_domain, template.name
+                            ),
                             risk_level: "CRITICAL".into(),
                         }],
                         total_hops: 1,
@@ -279,11 +297,13 @@ pub fn find_escalation_paths(
 
     // Sort by hop count, then by requires_da (easier first)
     paths.sort_by(|a, b| {
-        a.total_hops.cmp(&b.total_hops)
+        a.total_hops
+            .cmp(&b.total_hops)
             .then(a.requires_da.cmp(&b.requires_da))
     });
 
-    info!("[escalation] Found {} escalation paths ({} easy, {} hard)",
+    info!(
+        "[escalation] Found {} escalation paths ({} easy, {} hard)",
         paths.len(),
         paths.iter().filter(|p| p.difficulty() == "EASY").count(),
         paths.iter().filter(|p| p.difficulty() == "HARD").count(),
@@ -294,7 +314,8 @@ pub fn find_escalation_paths(
 
 /// Extract hostname from an SPN like "MSSQLSvc/host.domain.com:1433"
 fn spn_hostname(spn: &str) -> String {
-    spn.split_once('/').map(|x| x.1)
+    spn.split_once('/')
+        .map(|x| x.1)
         .unwrap_or(spn)
         .split(':')
         .next()

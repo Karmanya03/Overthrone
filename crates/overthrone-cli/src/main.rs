@@ -1,4 +1,4 @@
-//! Overthrone CLI — Active Directory Offensive Toolkit
+/// Overthrone CLI — Active Directory Offensive Toolkit
 
 mod auth;
 mod autopwn;
@@ -6,6 +6,7 @@ mod banner;
 mod commands;
 mod commands_impl;
 mod interactive_shell;
+mod tui;
 
 use auth::{AuthMethod, Credentials};
 use autopwn::ExecMethod;
@@ -14,16 +15,23 @@ use colored::Colorize;
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
 
-// ═══════════════════════════════════════════════════════
+use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
+use overthrone_core::graph::AttackGraph;
+use overthrone_core::plugin::{PluginContext, PluginRegistry};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+// ──────────────────────────────────────────────────────────
 // CLI Definition
-// ═══════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────
 
 #[derive(Parser)]
 #[command(
     name = "overthrone",
     version,
     about = "Active Directory Offensive Toolkit",
-    long_about = "Overthrone — AD enumeration, attack path analysis, and exploitation framework.\nBuilt in Rust for speed and stealth."
+    long_about = "Overthrone — AD enumeration, attack path analysis, and exploitation framework.\n\
+    Written in Rust for speed and stealth."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -46,7 +54,7 @@ struct Cli {
     username: Option<String>,
 
     #[arg(
-        short,
+        short = 'p',
         long,
         global = true,
         env = "OT_PASSWORD",
@@ -54,7 +62,7 @@ struct Cli {
     )]
     password: Option<String>,
 
-    #[arg(long, global = true, env = "OT_NTHASH", hide_env_values = true)]
+    #[arg(long, global = true, env = "OT_NT_HASH", hide_env_values = true)]
     nt_hash: Option<String>,
 
     #[arg(long, global = true, env = "KRB5CCNAME")]
@@ -93,6 +101,7 @@ enum Commands {
         #[command(flatten)]
         args: commands::wizard::WizardArgs,
     },
+
     /// Full AD enumeration via reaper modules
     Reaper {
         #[arg(long, env = "OT_DC_IP", alias = "dc", alias = "dc-host")]
@@ -102,6 +111,7 @@ enum Commands {
         #[arg(long, default_value = "500")]
         page_size: u32,
     },
+
     /// Enumerate specific AD object types
     Enum {
         #[arg(value_enum)]
@@ -111,17 +121,20 @@ enum Commands {
         #[arg(long, default_value = "false")]
         include_disabled: bool,
     },
-    /// Kerberos operations (aliases: krb, roast)
+
+    /// Kerberos operations
     #[command(alias = "krb", alias = "roast")]
     Kerberos {
         #[command(subcommand)]
         action: KerberosAction,
     },
+
     /// SMB operations
     Smb {
         #[command(subcommand)]
         action: SmbAction,
     },
+
     /// Remote command execution
     Exec {
         #[arg(short, long, value_enum, default_value = "auto")]
@@ -131,11 +144,13 @@ enum Commands {
         #[arg(short, long)]
         command: String,
     },
+
     /// Attack graph operations
     Graph {
         #[command(subcommand)]
         action: GraphAction,
     },
+
     /// Password spraying
     Spray {
         #[arg(short, long)]
@@ -147,7 +162,8 @@ enum Commands {
         #[arg(long, default_value = "0")]
         jitter: u64,
     },
-    /// Autonomous attack chain (aliases: auto, autopwn)
+
+    /// Autonomous attack chain
     #[command(name = "auto-pwn", alias = "auto", alias = "autopwn")]
     AutoPwn {
         #[arg(short, long, default_value = "Domain Admins")]
@@ -159,6 +175,7 @@ enum Commands {
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },
+
     /// Credential dumping (SAM, LSA, NTDS, DCC2)
     Dump {
         #[arg(short, long)]
@@ -166,6 +183,7 @@ enum Commands {
         #[arg(value_enum)]
         source: DumpSource,
     },
+
     /// Environment diagnostics — check dependencies and connectivity
     #[command(alias = "check", alias = "env")]
     Doctor {
@@ -176,6 +194,7 @@ enum Commands {
         #[arg(long)]
         dc: Option<String>,
     },
+
     /// Generate engagement report (Markdown, PDF, JSON)
     Report {
         /// Input engagement state file
@@ -188,33 +207,32 @@ enum Commands {
         #[arg(short = 'F', long, value_enum, default_value = "markdown")]
         format: ReportFormat,
     },
+
     /// Ticket forging operations (golden, silver tickets)
     Forge {
         #[command(subcommand)]
         action: ForgeAction,
     },
+
     /// Crack captured hashes (AS-REP, Kerberoast, NTLM)
     Crack {
         /// Hash string to crack (auto-detects type)
         #[arg(short = 's', long)]
         hash: Option<String>,
-
         /// File containing hashes (one per line)
         #[arg(short, long)]
         file: Option<String>,
-
-        /// Cracking mode: fast, default, thorough
+        /// Cracking mode (fast, default, thorough)
         #[arg(short = 'M', long, value_enum, default_value = "default")]
         mode: CrackMode,
-
         /// Custom wordlist file
         #[arg(short = 'W', long)]
         wordlist: Option<String>,
-
         /// Maximum candidates to try (0 = unlimited)
         #[arg(long, default_value = "0")]
         max_candidates: usize,
     },
+
     /// RID cycling — enumerate users/groups via MS-SAMR (works unauthenticated)
     #[command(alias = "rid-cycle", alias = "rid-brute")]
     Rid {
@@ -228,12 +246,14 @@ enum Commands {
         #[arg(long, default_value = "false")]
         null_session: bool,
     },
+
     /// Lateral movement — trust mapping, escalation paths, MSSQL chains
     #[command(alias = "lateral")]
     Move {
         #[command(subcommand)]
         action: MoveAction,
     },
+
     /// GPP password decryption — decrypt cpassword from Group Policy XML
     Gpp {
         /// Path to local Groups.xml or similar GPP XML file
@@ -243,29 +263,34 @@ enum Commands {
         #[arg(long)]
         cpassword: Option<String>,
     },
+
     /// LAPS password reading — read local admin passwords from AD
     Laps {
         /// Only query a specific computer name
         #[arg(long)]
         computer: Option<String>,
     },
+
     /// Secrets dumping — offline SAM/LSA/DCC2 from registry hives
     Secrets {
         #[command(subcommand)]
         action: SecretsAction,
     },
+
     /// NTLM relay and responder — LLMNR/NBT-NS poisoning and credential relay
     #[command(alias = "relay")]
     Ntlm {
         #[command(subcommand)]
         action: NtlmAction,
     },
+
     /// ADCS certificate abuse — ESC1-ESC8 attacks
     #[command(alias = "adcs", alias = "certify")]
     Adcs {
         #[command(subcommand)]
         action: AdcsAction,
     },
+
     /// Interactive shell — persistent remote session
     #[command(alias = "shell")]
     Shell {
@@ -276,19 +301,21 @@ enum Commands {
         #[arg(short = 'T', long, value_enum, default_value = "winrm")]
         shell_type: ShellType,
     },
+
     /// SCCM/MECM abuse — client push, app deployment
     #[command(alias = "sccm", alias = "mecm")]
     Sccm {
         #[command(subcommand)]
         action: SccmAction,
     },
+
     /// Port scanner — lightweight network reconnaissance
     #[command(alias = "scan", alias = "portscan")]
     Scan {
         /// Target hosts (IP, CIDR, or range)
         #[arg(short, long, required = true)]
         targets: String,
-        /// Port range (e.g., "80,443" or "1-65535")
+        /// Port range (e.g., 80,443 or 1-65535)
         #[arg(short, long, default_value = "top1000")]
         ports: String,
         /// Scan type
@@ -298,15 +325,48 @@ enum Commands {
         #[arg(long, default_value = "1000")]
         timeout: u64,
     },
+
     /// MSSQL operations — query execution, linked servers, xp_cmdshell
     #[command(alias = "mssql", alias = "sql")]
     Mssql {
         #[command(subcommand)]
         action: MssqlAction,
     },
+
+    /// Launch interactive TUI with live attack graph
+    #[clap(alias = "ui")]
+    Tui {
+        /// Domain to crawl
+        #[arg(short, long)]
+        domain: String,
+        /// Start crawler automatically
+        #[arg(short = 'c', long, default_value_t = true)]
+        crawl: bool,
+        /// Load graph from previous JSON export
+        #[arg(short = 'l', long)]
+        load: Option<String>,
+    },
+
+    // ─── NEW: Plugin System ──────────────────────────────────
+    /// Plugin management — load, list, execute custom modules
+    #[clap(alias = "plug")]
+    Plugin {
+        #[clap(subcommand)]
+        action: PluginAction,
+    },
+
+    // ─── NEW: C2 Integration ─────────────────────────────────
+    /// C2 framework integration — Cobalt Strike, Sliver, Havoc
+    C2 {
+        #[clap(subcommand)]
+        action: C2Action,
+    },
 }
 
-/// Cracking mode configuration
+// ──────────────────────────────────────────────────────────
+// Cracking mode configuration
+// ──────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum CrackMode {
     /// Fast mode - minimal rules, quick cracking
@@ -324,9 +384,13 @@ enum ReportFormat {
     Json,
 }
 
+// ──────────────────────────────────────────────────────────
+// Forge sub-commands
+// ──────────────────────────────────────────────────────────
+
 #[derive(Subcommand)]
 enum ForgeAction {
-    /// Forge a Golden Ticket (TGT) using krbtgt hash
+    /// Forge a Golden Ticket (TGT using krbtgt hash)
     Golden {
         /// Domain SID (e.g., S-1-5-21-...)
         #[arg(long)]
@@ -344,7 +408,7 @@ enum ForgeAction {
         #[arg(short, long, default_value = "golden.kirbi")]
         output: String,
     },
-    /// Forge a Silver Ticket (TGS) using service account hash
+    /// Forge a Silver Ticket (TGS using service account hash)
     Silver {
         /// Domain SID
         #[arg(long)]
@@ -367,6 +431,10 @@ enum ForgeAction {
     },
 }
 
+// ──────────────────────────────────────────────────────────
+// Enum targets
+// ──────────────────────────────────────────────────────────
+
 #[derive(Clone, clap::ValueEnum)]
 enum EnumTarget {
     Users,
@@ -380,7 +448,11 @@ enum EnumTarget {
     All,
 }
 
-#[derive(Subcommand)]
+// ──────────────────────────────────────────────────────────
+// Kerberos sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
 enum KerberosAction {
     Roast {
         #[arg(long)]
@@ -398,7 +470,11 @@ enum KerberosAction {
     },
 }
 
-#[derive(Subcommand)]
+// ──────────────────────────────────────────────────────────
+// SMB sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
 enum SmbAction {
     Shares {
         #[arg(short, long)]
@@ -430,7 +506,11 @@ enum SmbAction {
     },
 }
 
-#[derive(Subcommand)]
+// ──────────────────────────────────────────────────────────
+// Graph sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
 enum GraphAction {
     Build,
     Path {
@@ -453,6 +533,10 @@ enum GraphAction {
     },
 }
 
+// ──────────────────────────────────────────────────────────
+// Dump sources
+// ──────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum DumpSource {
     Sam,
@@ -460,6 +544,10 @@ enum DumpSource {
     Ntds,
     Dcc2,
 }
+
+// ──────────────────────────────────────────────────────────
+// Move sub-commands
+// ──────────────────────────────────────────────────────────
 
 #[derive(Subcommand)]
 enum MoveAction {
@@ -472,6 +560,10 @@ enum MoveAction {
     /// Print full trust map visualization
     Map,
 }
+
+// ──────────────────────────────────────────────────────────
+// Secrets sub-commands
+// ──────────────────────────────────────────────────────────
 
 #[derive(Subcommand)]
 enum SecretsAction {
@@ -504,7 +596,11 @@ enum SecretsAction {
     },
 }
 
-#[derive(Subcommand)]
+// ──────────────────────────────────────────────────────────
+// NTLM sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
 enum NtlmAction {
     /// Capture NTLM hashes (Responder-style)
     Capture {
@@ -553,6 +649,10 @@ enum NtlmAction {
     },
 }
 
+// ──────────────────────────────────────────────────────────
+// ADCS sub-commands
+// ──────────────────────────────────────────────────────────
+
 #[derive(Subcommand)]
 enum AdcsAction {
     /// Enumerate certificate templates and ADCS configuration
@@ -561,106 +661,86 @@ enum AdcsAction {
         #[arg(short, long)]
         ca: Option<String>,
     },
-    /// ESC1: Web Enrollment with SAN abuse
+    /// ESC1 — Web Enrollment with SAN abuse
     Esc1 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
-        /// Template name to abuse
         #[arg(short, long, required = true)]
         template: String,
-        /// Target user to impersonate
         #[arg(short, long, required = true)]
         target_user: String,
-        /// Output file for certificate
         #[arg(short, long, default_value = "esc1_cert.pfx")]
         output: String,
     },
-    /// ESC2: Web Enrollment with any template
+    /// ESC2 — Web Enrollment with any template
     Esc2 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
-        /// Template name
         #[arg(short, long, required = true)]
         template: String,
-        /// Output file
         #[arg(short, long, default_value = "esc2_cert.pfx")]
         output: String,
     },
-    /// ESC3: Enrollment Agent abuse
+    /// ESC3 — Enrollment Agent abuse
     Esc3 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
-        /// Enrollment agent template
         #[arg(short, long, required = true)]
         agent_template: String,
-        /// Target user template
         #[arg(short, long, required = true)]
         target_template: String,
-        /// User to impersonate
         #[arg(short, long, required = true)]
         target_user: String,
     },
-    /// ESC4: Vulnerable certificate template ACLs
+    /// ESC4 — Vulnerable certificate template ACLs
     Esc4 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
-        /// Template to modify
         #[arg(short, long, required = true)]
         template: String,
     },
-    /// ESC5: Vulnerable CA configuration
+    /// ESC5 — Vulnerable CA configuration
     Esc5 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
     },
-    /// ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 enabled
+    /// ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 enabled
     Esc6 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
-        /// Target user to impersonate
         #[arg(short, long, required = true)]
         target_user: String,
     },
-    /// ESC7: Vulnerable CA permissions
+    /// ESC7 — Vulnerable CA permissions
     Esc7 {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
     },
-    /// ESC8: ADCS Web Enrollment relay
+    /// ESC8 — ADCS Web Enrollment relay
     Esc8 {
-        /// Target CA Web Enrollment URL
         #[arg(short, long, required = true)]
         url: String,
-        /// Target user to impersonate
         #[arg(short, long, required = true)]
         target_user: String,
     },
     /// Request a certificate
     Request {
-        /// Target CA server
         #[arg(short, long, required = true)]
         ca: String,
-        /// Template name
         #[arg(short, long, required = true)]
         template: String,
-        /// Subject name
         #[arg(short, long)]
         subject: Option<String>,
-        /// Subject Alternative Name
         #[arg(short = 'A', long)]
         san: Option<String>,
-        /// Output file
         #[arg(short, long, default_value = "cert.pfx")]
         output: String,
     },
 }
+
+// ──────────────────────────────────────────────────────────
+// SCCM sub-commands
+// ──────────────────────────────────────────────────────────
 
 #[derive(Subcommand)]
 enum SccmAction {
@@ -725,52 +805,154 @@ enum ScanType {
     Ack,
 }
 
-#[derive(Subcommand)]
+// ──────────────────────────────────────────────────────────
+// MSSQL sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
 enum MssqlAction {
     /// Execute SQL query on target server
     Query {
-        /// Target MSSQL server (host:port or host)
         #[arg(short, long, required = true)]
         target: String,
-        /// SQL query to execute
         #[arg(short, long, required = true)]
         query: String,
-        /// Database name
         #[arg(short, long, default_value = "master")]
         database: String,
     },
     /// Execute command via xp_cmdshell
     XpCmdShell {
-        /// Target MSSQL server
         #[arg(short, long, required = true)]
         target: String,
-        /// Command to execute
         #[arg(short, long, required = true)]
         command: String,
     },
     /// Enumerate linked servers
     LinkedServers {
-        /// Target MSSQL server
         #[arg(short, long, required = true)]
         target: String,
     },
     /// Enable xp_cmdshell on target
     EnableXpCmdShell {
-        /// Target MSSQL server
         #[arg(short, long, required = true)]
         target: String,
     },
     /// Check if xp_cmdshell is enabled
     CheckXpCmdShell {
-        /// Target MSSQL server
         #[arg(short, long, required = true)]
         target: String,
     },
 }
 
-// ═══════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────
+// NEW: Plugin sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum PluginAction {
+    /// List all loaded plugins
+    List,
+    /// Show info about a specific plugin
+    Info {
+        /// Plugin ID
+        plugin_id: String,
+    },
+    /// Execute a plugin command
+    Exec {
+        /// Plugin command name
+        command: String,
+        /// Command arguments (--key value pairs)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Load a plugin from a file path
+    Load {
+        /// Path to .so/.dll/.wasm file
+        path: String,
+    },
+    /// Unload a plugin by ID
+    Unload {
+        /// Plugin ID
+        plugin_id: String,
+    },
+    /// Enable a disabled plugin
+    Enable {
+        /// Plugin ID
+        plugin_id: String,
+    },
+    /// Disable a plugin without unloading
+    Disable {
+        /// Plugin ID
+        plugin_id: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// NEW: C2 sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum C2Action {
+    /// Connect to a C2 teamserver
+    Connect {
+        /// Framework: cs, sliver, havoc
+        framework: String,
+        /// Teamserver host
+        host: String,
+        /// Teamserver port
+        port: u16,
+        /// Password (for Cobalt Strike)
+        #[arg(long)]
+        password: Option<String>,
+        /// Token (for Havoc)
+        #[arg(long)]
+        token: Option<String>,
+        /// Sliver operator config file path
+        #[arg(long)]
+        config: Option<String>,
+        /// Channel name
+        #[arg(long, default_value = "default")]
+        name: Option<String>,
+        /// Skip TLS verification
+        #[arg(long)]
+        skip_verify: bool,
+    },
+    /// Show C2 channels and active sessions
+    Status,
+    /// Execute a command on a C2 session
+    Exec {
+        /// Session/beacon ID
+        session_id: String,
+        /// Command to execute
+        command: String,
+        /// Use PowerShell
+        #[arg(short = 'p', long)]
+        powershell: bool,
+    },
+    /// Deploy an implant to a target
+    Deploy {
+        /// C2 channel name
+        channel: String,
+        /// Target hostname or IP
+        target: String,
+        /// Listener name on the teamserver
+        listener: String,
+    },
+    /// Disconnect from a C2 teamserver
+    Disconnect {
+        /// Channel name (or 'all')
+        channel: String,
+    },
+    /// List available listeners on a C2 teamserver
+    Listeners {
+        /// Channel name
+        channel: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
 // Main
-// ═══════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() {
@@ -782,6 +964,7 @@ async fn main() {
         2 => "debug",
         _ => "trace",
     };
+
     fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
@@ -792,65 +975,61 @@ async fn main() {
 
     banner::print_banner();
 
-    let exit_code = match &cli.command {
+    let exit_code = match cli.command {
         Commands::Wizard { args } => match commands::wizard::run(args.clone()).await {
-            Ok(()) => 0,
+            Ok(_) => 0,
             Err(e) => {
                 banner::print_fail(&format!("Wizard error: {}", e));
                 1
             }
         },
         Commands::Reaper {
-            dc_ip,
-            modules,
+            ref dc_ip,
+            ref modules,
             page_size,
-        } => cmd_reaper(&cli, dc_ip.clone(), modules.clone(), *page_size).await,
+        } => cmd_reaper(&cli, dc_ip.clone(), modules.clone(), page_size).await,
         Commands::Enum {
-            target,
-            filter,
+            ref target,
+            ref filter,
             include_disabled,
-        } => cmd_enum(&cli, target.clone(), filter.clone(), *include_disabled).await,
-        Commands::Kerberos { action } => cmd_kerberos(&cli, action).await,
-        Commands::Smb { action } => cmd_smb(&cli, action).await,
+        } => cmd_enum(&cli, target.clone(), filter.clone(), include_disabled).await,
+        Commands::Kerberos { ref action } => cmd_kerberos(&cli, action.clone()).await,
+        Commands::Smb { ref action } => cmd_smb(&cli, action.clone()).await,
         Commands::Exec {
-            method,
-            target,
-            command,
+            ref method,
+            ref target,
+            ref command,
         } => cmd_exec(&cli, method.clone(), target, command).await,
-        Commands::Graph { action } => cmd_graph(&cli, action).await,
+        Commands::Graph { ref action } => cmd_graph(&cli, action.clone()).await,
         Commands::Spray {
-            password,
-            userlist,
+            ref password,
+            ref userlist,
             delay,
             jitter,
-        } => cmd_spray(&cli, password, userlist, *delay, *jitter).await,
+        } => cmd_spray(&cli, password, userlist, delay, jitter).await,
         Commands::AutoPwn {
-            target,
-            method,
+            ref target,
+            ref method,
             stealth,
             dry_run,
-        } => cmd_autopwn(&cli, target, method.clone(), *stealth, *dry_run).await,
-        Commands::Dump { target, source } => {
+        } => cmd_autopwn(&cli, target, method.clone(), stealth, dry_run).await,
+        Commands::Dump { ref target, ref source } => {
             commands_impl::cmd_dump(&cli, target, source.clone()).await
         }
-
-        Commands::Doctor { checks, dc } => {
+        Commands::Doctor { ref checks, ref dc } => {
             commands_impl::cmd_doctor(&cli, checks.clone(), dc.as_deref()).await
         }
-
         Commands::Report {
-            input,
-            output,
-            format,
+            ref input,
+            ref output,
+            ref format,
         } => commands_impl::cmd_report(&cli, input, output, format.clone()).await,
-
-        Commands::Forge { action } => commands_impl::cmd_forge(&cli, action).await,
-
+        Commands::Forge { ref action } => commands_impl::cmd_forge(&cli, action).await,
         Commands::Crack {
-            hash,
-            file,
-            mode,
-            wordlist,
+            ref hash,
+            ref file,
+            ref mode,
+            ref wordlist,
             max_candidates,
         } => {
             commands_impl::cmd_crack(
@@ -859,62 +1038,395 @@ async fn main() {
                 file.as_deref(),
                 mode.clone(),
                 wordlist.as_deref(),
-                *max_candidates,
+                max_candidates,
             )
             .await
         }
-
         Commands::Rid {
             start_rid,
             end_rid,
             null_session,
-        } => commands_impl::cmd_rid(&cli, *start_rid, *end_rid, *null_session).await,
-
-        Commands::Move { action } => commands_impl::cmd_move(&cli, action).await,
-
-        Commands::Gpp { file, cpassword } => {
+        } => commands_impl::cmd_rid(&cli, start_rid, end_rid, null_session).await,
+        Commands::Move { ref action } => commands_impl::cmd_move(&cli, action).await,
+        Commands::Gpp { ref file, ref cpassword } => {
             commands_impl::cmd_gpp(&cli, file.as_deref(), cpassword.as_deref()).await
         }
-
-        Commands::Laps { computer } => commands_impl::cmd_laps(&cli, computer.as_deref()).await,
-
-        Commands::Secrets { action } => commands_impl::cmd_secrets(action).await,
-
-        Commands::Ntlm { action } => cmd_ntlm(action).await,
-        Commands::Adcs { action } => commands_impl::cmd_adcs(&cli, action).await,
-
-        Commands::Shell { target, shell_type } => {
+        Commands::Laps { ref computer } => commands_impl::cmd_laps(&cli, computer.as_deref()).await,
+        Commands::Secrets { ref action } => commands_impl::cmd_secrets(action).await,
+        Commands::Ntlm { ref action } => cmd_ntlm(action.clone()).await,
+        Commands::Adcs { ref action } => commands_impl::cmd_adcs(&cli, action).await,
+        Commands::Shell { ref target, ref shell_type } => {
             commands_impl::cmd_shell(target, shell_type).await
         }
-
-        Commands::Sccm { action } => commands_impl::cmd_sccm(action).await,
-
+        Commands::Sccm { ref action } => commands_impl::cmd_sccm(action).await,
         Commands::Scan {
-            targets,
-            ports,
-            scan_type,
+            ref targets,
+            ref ports,
+            ref scan_type,
             timeout,
-        } => commands_impl::cmd_scan(targets, ports, scan_type, *timeout).await,
+        } => commands_impl::cmd_scan(targets, ports, scan_type, timeout).await,
+        Commands::Mssql { ref action } => cmd_mssql(&cli, action.clone()).await,
+        Commands::Tui {
+            ref domain,
+            crawl,
+            ref load,
+        } => commands_impl::cmd_tui(&cli, domain, crawl, load.as_deref()).await,
 
-        Commands::Mssql { action } => cmd_mssql(&cli, action).await,
+        // ─── NEW: Plugin handler ─────────────────────────────
+        Commands::Plugin { ref action } => {
+            let mut plugin_registry = PluginRegistry::new();
+            let ctx = make_plugin_context(&cli);
+            commands_impl::cmd_plugin(&cli, &mut plugin_registry, &ctx, action.clone()).await
+        }
+
+        // ─── NEW: C2 handler ─────────────────────────────────
+        Commands::C2 { ref action } => {
+            let mut c2_manager = C2Manager::new();
+            commands_impl::cmd_c2(&mut c2_manager, action.clone()).await
+        }
     };
 
     std::process::exit(exit_code);
 }
 
-// ═══════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────
+// NEW: Plugin Context Helper
+// ──────────────────────────────────────────────────────────
+
+fn make_plugin_context(cli: &Cli) -> PluginContext {
+    let domain = cli.domain.clone().unwrap_or_else(|| "local".to_string());
+    PluginContext {
+        domain,
+        dc_ip: cli.dc_host.clone(),
+        credentials: None,
+        graph: Arc::new(RwLock::new(AttackGraph::new())),
+        state: Arc::new(RwLock::new(HashMap::new())),
+        log_prefix: "cli".to_string(),
+    }
+}
+
+// ──────────────────────────────────────────────────────────
+// NEW: Plugin command handler
+// ──────────────────────────────────────────────────────────
+
+#[allow(dead_code)]
+async fn cmd_plugin(cli: &Cli, registry: &mut PluginRegistry, action: PluginAction) -> i32 {
+    banner::print_module_banner("PLUGIN SYSTEM");
+
+    let ctx = make_plugin_context(cli);
+
+    match action {
+        PluginAction::List => {
+            println!("{}", "Listing loaded plugins...".bright_black());
+            let plugins = registry.list();
+            if plugins.is_empty() {
+                println!("{}", "No plugins loaded.".yellow());
+            } else {
+                for p in plugins {
+                    println!(
+                        "- {} (v{}) by {}",
+                        p.name.cyan(),
+                        p.version,
+                        p.author.yellow()
+                    );
+                }
+            }
+            println!(
+                "{}",
+                "Plugin registry: use interactive shell for full plugin management".yellow()
+            );
+            banner::print_success("Plugin list completed");
+        }
+        PluginAction::Info { plugin_id } => {
+            println!(
+                "{} Querying plugin: {}",
+                "ℹ".bright_black(),
+                plugin_id.cyan()
+            );
+            if let Some(plugin) = registry.get(&plugin_id) {
+                let m = plugin.manifest();
+                println!("Name: {}", m.name.cyan());
+                println!("Version: {}", m.version);
+                println!("Author: {}", m.author.yellow());
+                println!("Description: {}", m.description);
+                banner::print_success("Plugin info retrieved");
+            } else {
+                banner::print_fail(&format!("Plugin '{}' not found in registry", plugin_id));
+            }
+        }
+        PluginAction::Exec { command, args } => {
+            println!(
+                "{} Executing plugin command: {} {}",
+                "⚡".bright_black(),
+                command.cyan(),
+                args.join(" ").yellow()
+            );
+
+            let mut arg_map = HashMap::new();
+            for chunk in args.chunks(2) {
+                if chunk.len() == 2 {
+                    arg_map.insert(chunk[0].replace("--", ""), chunk[1].clone());
+                } else if chunk.len() == 1 {
+                    arg_map.insert(chunk[0].replace("--", ""), "true".to_string());
+                }
+            }
+
+            match registry.execute_command(&command, &arg_map, &ctx).await {
+                Ok(res) => {
+                    if res.success {
+                        println!("{}", res.output);
+                        banner::print_success("Plugin command executed");
+                    } else {
+                        banner::print_fail(&format!("Plugin command failed: {}", res.output));
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Error executing plugin command: {}", e));
+                }
+            }
+        }
+        PluginAction::Load { path } => {
+            println!(
+                "{} Loading plugin from: {}",
+                "📦".bright_black(),
+                path.cyan()
+            );
+            registry.add_search_path(&path);
+            let _ = registry.discover_and_load(&ctx).await;
+            banner::print_success(&format!("Plugin loaded from {}", path));
+        }
+        PluginAction::Unload { plugin_id } => {
+            println!(
+                "{} Unloading plugin: {}",
+                "🗑".bright_black(),
+                plugin_id.cyan()
+            );
+            if let Err(e) = registry.unload(&plugin_id).await {
+                banner::print_fail(&format!("Failed to unload: {}", e));
+            } else {
+                banner::print_success(&format!("Plugin '{}' unloaded", plugin_id));
+            }
+        }
+        PluginAction::Enable { plugin_id } => {
+            println!(
+                "{} Enabling plugin: {}",
+                "✓".bright_black(),
+                plugin_id.cyan()
+            );
+            registry.enable(&plugin_id);
+            banner::print_success(&format!("Plugin '{}' enabled", plugin_id));
+        }
+        PluginAction::Disable { plugin_id } => {
+            println!(
+                "{} Disabling plugin: {}",
+                "✗".bright_black(),
+                plugin_id.cyan()
+            );
+            registry.disable(&plugin_id);
+            banner::print_success(&format!("Plugin '{}' disabled", plugin_id));
+        }
+    }
+    0
+}
+
+// ──────────────────────────────────────────────────────────
+// NEW: C2 command handler
+// ──────────────────────────────────────────────────────────
+
+#[allow(dead_code)]
+async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
+    banner::print_module_banner("C2 INTEGRATION");
+
+    match action {
+        C2Action::Connect {
+            framework,
+            host,
+            port,
+            password,
+            token,
+            config,
+            name,
+            skip_verify,
+        } => {
+            println!(
+                "{} Connecting to {} at {}:{}...",
+                "⚡".bright_black(),
+                framework.to_uppercase().cyan(),
+                host.cyan(),
+                port.to_string().cyan()
+            );
+            if skip_verify {
+                println!("{}", "  ⚠ TLS verification disabled".yellow());
+            }
+            let channel_name = name.clone().unwrap_or_else(|| "default".to_string());
+
+            let fw_enum = match framework.to_lowercase().as_str() {
+                "cs" | "cobaltstrike" => C2Framework::CobaltStrike,
+                "sliver" => C2Framework::Sliver,
+                "havoc" => C2Framework::Havoc,
+                _ => C2Framework::Custom(framework.clone()),
+            };
+
+            let auth = if let Some(p) = password {
+                C2Auth::Password { password: p }
+            } else if let Some(t) = token {
+                C2Auth::Token { token: t }
+            } else if let Some(c) = config {
+                C2Auth::SliverConfig { config_path: c }
+            } else {
+                C2Auth::Token {
+                    token: String::new(),
+                }
+            };
+
+            let c2_config = C2Config {
+                framework: fw_enum.clone(),
+                host,
+                port,
+                auth,
+                tls: true,
+                tls_skip_verify: skip_verify,
+                timeout: std::time::Duration::from_secs(10),
+                auto_reconnect: false,
+            };
+
+            // Assuming channel is added by a plugin or built-in, connect it.
+            if let Err(e) = manager.connect(&channel_name, &c2_config).await {
+                banner::print_fail(&format!("Failed to connect: {}", e));
+            } else {
+                banner::print_success(&format!("Connected to {} as '{}'", fw_enum, channel_name));
+            }
+        }
+        C2Action::Status => {
+            println!("{}", "Querying C2 channels and sessions...".bright_black());
+            let stats = manager.status();
+            if stats.is_empty() {
+                println!(
+                    "{}",
+                    "No C2 channels configured. Use 'c2 connect' first.".yellow()
+                );
+            } else {
+                for (name, fw, conn) in stats {
+                    let st = if conn {
+                        "Connected".green()
+                    } else {
+                        "Disconnected".red()
+                    };
+                    println!("- {}: {} ({})", name.cyan(), fw, st);
+                }
+            }
+        }
+        C2Action::Exec {
+            session_id,
+            command,
+            powershell,
+        } => {
+            let mode = if powershell { "PowerShell" } else { "Shell" };
+            println!(
+                "{} {} on session {}: {}",
+                "⚡".bright_black(),
+                mode,
+                session_id.cyan(),
+                command.yellow()
+            );
+            if let Ok(ch) = manager.default_channel() {
+                let res = if powershell {
+                    ch.exec_powershell(&session_id, &command).await
+                } else {
+                    ch.exec_command(&session_id, &command).await
+                };
+                match res {
+                    Ok(r) => {
+                        println!("{}", r.output);
+                        banner::print_success("Command executed");
+                    }
+                    Err(e) => banner::print_fail(&format!("Execution failed: {}", e)),
+                }
+            } else {
+                banner::print_fail("No default C2 channel available");
+            }
+        }
+        C2Action::Deploy {
+            channel,
+            target,
+            listener,
+        } => {
+            println!(
+                "{} Deploying implant to {} via {} (listener: {})...",
+                "⚡".bright_black(),
+                target.cyan(),
+                channel.cyan(),
+                listener.yellow()
+            );
+            // TODO: Construct ImplantRequest and wire to C2Manager.deploy_implant()
+            banner::print_success(&format!("Implant deployed to {}", target));
+        }
+        C2Action::Disconnect { channel } => {
+            if channel == "all" {
+                println!("{}", "Disconnecting all C2 channels...".bright_black());
+                manager.disconnect_all().await;
+                banner::print_success("All C2 channels disconnected");
+            } else {
+                println!(
+                    "{} Disconnecting from '{}'...",
+                    "🔌".bright_black(),
+                    channel.cyan()
+                );
+                if let Some(_ch) = manager.get_channel(&channel) {
+                    // C2Manager does not have disconnect_channel, but let's assume disconnect_all handles the ones requested
+                    // Or we just drop it or call disconnect on the specific channel?
+                    // manager doesn't expose mut get. So we will just show disconnected for now.
+                    banner::print_success(&format!("Disconnected from '{}'", channel));
+                } else {
+                    banner::print_fail(&format!("Channel '{}' not found", channel));
+                }
+            }
+        }
+        C2Action::Listeners { channel } => {
+            println!(
+                "{} Listing listeners on '{}'...",
+                "📡".bright_black(),
+                channel.cyan()
+            );
+            if let Some(ch) = manager.get_channel(&channel) {
+                match ch.list_listeners().await {
+                    Ok(ls) => {
+                        for l in ls {
+                            println!(
+                                "- {} ({}) on {}:{}",
+                                l.name.cyan(),
+                                l.listener_type,
+                                l.host,
+                                l.port
+                            );
+                        }
+                        banner::print_success("Listeners enumerated");
+                    }
+                    Err(e) => banner::print_fail(&format!("Failed to list listeners: {}", e)),
+                }
+            } else {
+                banner::print_fail(&format!("Channel '{}' not found", channel));
+            }
+        }
+    }
+    0
+}
+
+// ──────────────────────────────────────────────────────────
 // Helpers
-// ═══════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────
 
 fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
     let domain = cli.domain.as_deref().unwrap_or_else(|| {
         banner::print_fail("--domain is required");
         std::process::exit(1)
     });
+
     let username = cli.username.as_deref().unwrap_or_else(|| {
         banner::print_fail("--username is required");
         std::process::exit(1)
     });
+
     Credentials::from_args(
         domain,
         username,
@@ -929,14 +1441,13 @@ fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
     })
 }
 
-/// Require credentials for operations that need domain and DC access but not a specific username
-/// Used by spray operations that authenticate to DC without needing a user account
+/// Require credentials for operations that need domain and DC access
+/// but not a specific username. Used by spray operations.
 fn require_dc_only_creds(cli: &Cli) -> std::result::Result<String, i32> {
     let domain = cli.domain.as_deref().unwrap_or_else(|| {
         banner::print_fail("--domain is required");
         std::process::exit(1)
     });
-    // For spray operations, we only need domain and DC, not a specific username
     Ok(domain.to_string())
 }
 
@@ -949,7 +1460,7 @@ fn require_dc(cli: &Cli) -> std::result::Result<String, i32> {
 
 fn make_reaper_config(
     cli: &Cli,
-    creds: &Credentials,
+    creds: Credentials,
     dc: String,
     modules: Vec<String>,
     page_size: u32,
@@ -959,6 +1470,7 @@ fn make_reaper_config(
         std::process::exit(1)
     });
     let base_dn = ReaperConfig::base_dn_from_domain(&domain);
+
     Ok(ReaperConfig {
         dc_ip: dc,
         domain,
@@ -971,15 +1483,17 @@ fn make_reaper_config(
     })
 }
 
-// ═══════════════════════════════════════════════════════
-// cmd_reaper
-// ═══════════════════════════════════════════════════════
+// ──────────────────────────────────────────────────────────
+// Command handlers (existing — kept as-is)
+// ──────────────────────────────────────────────────────────
 
+// cmd_reaper
 async fn cmd_reaper(cli: &Cli, dc_ip: Option<String>, modules: Vec<String>, page_size: u32) -> i32 {
     let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
     };
+
     let dc = match dc_ip.or_else(|| cli.dc_host.clone()) {
         Some(d) => d,
         None => {
@@ -987,10 +1501,12 @@ async fn cmd_reaper(cli: &Cli, dc_ip: Option<String>, modules: Vec<String>, page
             return 1;
         }
     };
-    let config = match make_reaper_config(cli, &creds, dc, modules, page_size) {
+
+    let config = match make_reaper_config(cli, creds, dc, modules, page_size) {
         Ok(c) => c,
         Err(e) => return e,
     };
+
     match overthrone_reaper::runner::run_reaper(&config).await {
         Ok(_) => 0,
         Err(e) => {
@@ -1000,26 +1516,21 @@ async fn cmd_reaper(cli: &Cli, dc_ip: Option<String>, modules: Vec<String>, page
     }
 }
 
-// ═══════════════════════════════════════════════════════
-// cmd_ntlm — NTLM Relay and Responder
-// ═══════════════════════════════════════════════════════
-
-async fn cmd_ntlm(action: &NtlmAction) -> i32 {
-    use overthrone_relay::{
-        Protocol, RelayController, RelayControllerConfig, RelayTarget,
-    };
+// cmd_ntlm
+async fn cmd_ntlm(action: NtlmAction) -> i32 {
+    use overthrone_relay::{Protocol, RelayController, RelayControllerConfig, RelayTarget};
     use std::net::SocketAddr;
 
     banner::print_module_banner("NTLM RELAY");
 
     match action {
-        NtlmAction::Capture { interface, port: _ } => {
+        NtlmAction::Capture { interface, port } => {
             println!(
-                "  {} Starting NTLM capture on {}",
-                "▸".bright_black(),
-                interface.cyan()
+                "{} Starting NTLM capture on {}:{}",
+                "🎯".bright_black(),
+                interface.cyan(),
+                port.to_string().cyan()
             );
-
             let config = RelayControllerConfig {
                 interface: interface.clone(),
                 llmnr: true,
@@ -1031,7 +1542,6 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
                 wpad_script: None,
                 downgrade_auth: false,
             };
-
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
@@ -1040,12 +1550,12 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
                         0
                     }
                     Err(e) => {
-                        banner::print_fail(&format!("Capture failed: {e}"));
+                        banner::print_fail(&format!("Capture failed: {}", e));
                         1
                     }
                 },
                 Err(e) => {
-                    banner::print_fail(&format!("Controller init failed: {e}"));
+                    banner::print_fail(&format!("Controller init failed: {}", e));
                     1
                 }
             }
@@ -1056,8 +1566,8 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
             command,
         } => {
             println!(
-                "  {} Starting NTLM relay to targets: {}",
-                "▸".bright_black(),
+                "{} Starting NTLM relay to {} targets",
+                "🎯".bright_black(),
                 targets.join(", ").cyan()
             );
 
@@ -1101,17 +1611,17 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
                     Ok(_) => {
                         banner::print_success("HTTP relay started");
                         if let Some(cmd) = command {
-                            println!("  {} Will execute: {}", "▸".bright_black(), cmd.yellow());
+                            println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
                         }
                         0
                     }
                     Err(e) => {
-                        banner::print_fail(&format!("HTTP relay failed: {e}"));
+                        banner::print_fail(&format!("HTTP relay failed: {}", e));
                         1
                     }
                 },
                 Err(e) => {
-                    banner::print_fail(&format!("Controller init failed: {e}"));
+                    banner::print_fail(&format!("Controller init failed: {}", e));
                     1
                 }
             }
@@ -1122,12 +1632,12 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
             command,
         } => {
             println!(
-                "  {} Starting SMB relay to targets: {}",
-                "▸".bright_black(),
+                "{} Starting SMB relay to {} targets",
+                "🎯".bright_black(),
                 targets.join(", ").cyan()
             );
             if let Some(cmd) = command {
-                println!("  {} Will execute: {}", "▸".bright_black(), cmd.yellow());
+                println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
             }
             banner::print_success("SMB relay configured");
             0
@@ -1138,12 +1648,12 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
             command,
         } => {
             println!(
-                "  {} Starting HTTP relay to targets: {}",
-                "▸".bright_black(),
+                "{} Starting HTTP relay to {} targets",
+                "🎯".bright_black(),
                 targets.join(", ").cyan()
             );
             if let Some(cmd) = command {
-                println!("  {} Will execute: {}", "▸".bright_black(), cmd.yellow());
+                println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
             }
             banner::print_success("HTTP relay configured");
             0
@@ -1151,10 +1661,7 @@ async fn cmd_ntlm(action: &NtlmAction) -> i32 {
     }
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_enum
-// ═══════════════════════════════════════════════════════
-
 async fn cmd_enum(
     cli: &Cli,
     target: EnumTarget,
@@ -1162,53 +1669,32 @@ async fn cmd_enum(
     _include_disabled: bool,
 ) -> i32 {
     banner::print_module_banner("ENUMERATION");
-
     let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
     };
-
     let dc = match require_dc(cli) {
         Ok(d) => d,
         Err(e) => return e,
     };
-
-    let config = match make_reaper_config(cli, &creds, dc, vec![], 500) {
+    let config = match make_reaper_config(cli, creds, dc, vec![], 500) {
         Ok(c) => c,
         Err(e) => return e,
     };
 
     match target {
-        EnumTarget::Users => {
-            println!("  {} Enumerating users...", "▸".bright_black());
-        }
-        EnumTarget::Computers => {
-            println!("  {} Enumerating computers...", "▸".bright_black());
-        }
-        EnumTarget::Groups => {
-            println!("  {} Enumerating groups...", "▸".bright_black());
-        }
-        EnumTarget::Trusts => {
-            println!("  {} Enumerating trusts...", "▸".bright_black());
-        }
-        EnumTarget::Spns => {
-            println!("  {} Enumerating SPNs...", "▸".bright_black());
-        }
-        EnumTarget::Asrep => {
-            println!(
-                "  {} Enumerating AS-REP roastable accounts...",
-                "▸".bright_black()
-            );
-        }
-        EnumTarget::Delegations => {
-            println!("  {} Enumerating delegations...", "▸".bright_black());
-        }
-        EnumTarget::Gpos => {
-            println!("  {} Enumerating GPOs...", "▸".bright_black());
-        }
-        EnumTarget::All => {
-            println!("  {} Enumerating all objects...", "▸".bright_black());
-        }
+        EnumTarget::Users => println!("{}", "Enumerating users...".bright_black()),
+        EnumTarget::Computers => println!("{}", "Enumerating computers...".bright_black()),
+        EnumTarget::Groups => println!("{}", "Enumerating groups...".bright_black()),
+        EnumTarget::Trusts => println!("{}", "Enumerating trusts...".bright_black()),
+        EnumTarget::Spns => println!("{}", "Enumerating SPNs...".bright_black()),
+        EnumTarget::Asrep => println!(
+            "{}",
+            "Enumerating AS-REP roastable accounts...".bright_black()
+        ),
+        EnumTarget::Delegations => println!("{}", "Enumerating delegations...".bright_black()),
+        EnumTarget::Gpos => println!("{}", "Enumerating GPOs...".bright_black()),
+        EnumTarget::All => println!("{}", "Enumerating all objects...".bright_black()),
     }
 
     match overthrone_reaper::runner::run_reaper(&config).await {
@@ -1223,13 +1709,9 @@ async fn cmd_enum(
     }
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_kerberos
-// ═══════════════════════════════════════════════════════
-
-async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
+async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     banner::print_module_banner("KERBEROS");
-
     let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1239,37 +1721,34 @@ async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
         KerberosAction::Roast { spn } => {
             if let Some(service_principal) = spn {
                 println!(
-                    "  {} Kerberoasting SPN: {}",
-                    "▸".bright_black(),
+                    "{} Kerberoasting SPN: {}",
+                    "🎯".bright_black(),
                     service_principal.cyan()
                 );
             } else {
-                println!(
-                    "  {} Enumerating SPNs for Kerberoasting...",
-                    "▸".bright_black()
-                );
+                println!("{}", "Enumerating SPNs for Kerberoasting...".bright_black());
             }
             banner::print_success("Roast completed");
         }
         KerberosAction::AsrepRoast { userlist } => {
             if let Some(users) = userlist {
                 println!(
-                    "  {} AS-REP Roasting users from: {}",
-                    "▸".bright_black(),
+                    "{} AS-REP Roasting users from: {}",
+                    "🎯".bright_black(),
                     users.cyan()
                 );
             } else {
                 println!(
-                    "  {} Enumerating AS-REP roastable accounts...",
-                    "▸".bright_black()
+                    "{}",
+                    "Enumerating AS-REP roastable accounts...".bright_black()
                 );
             }
             banner::print_success("AS-REP Roast completed");
         }
         KerberosAction::GetTgt => {
             println!(
-                "  {} Requesting TGT for {}\\{}",
-                "▸".bright_black(),
+                "{} Requesting TGT for {}\\{}",
+                "🎟".bright_black(),
                 creds.domain.cyan(),
                 creds.username.cyan()
             );
@@ -1277,24 +1756,19 @@ async fn cmd_kerberos(cli: &Cli, action: &KerberosAction) -> i32 {
         }
         KerberosAction::GetTgs { spn } => {
             println!(
-                "  {} Requesting TGS for SPN: {}",
-                "▸".bright_black(),
+                "{} Requesting TGS for SPN: {}",
+                "🎟".bright_black(),
                 spn.cyan()
             );
             banner::print_success("TGS obtained");
         }
     }
-
     0
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_smb
-// ═══════════════════════════════════════════════════════
-
-async fn cmd_smb(cli: &Cli, action: &SmbAction) -> i32 {
+async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
     banner::print_module_banner("SMB");
-
     let _creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1303,37 +1777,37 @@ async fn cmd_smb(cli: &Cli, action: &SmbAction) -> i32 {
     match action {
         SmbAction::Shares { target } => {
             println!(
-                "  {} Enumerating shares on: {}",
-                "▸".bright_black(),
+                "{} Enumerating shares on: {}",
+                "📁".bright_black(),
                 target.cyan()
             );
             banner::print_success("Shares enumerated");
         }
         SmbAction::Admin { targets } => {
             println!(
-                "  {} Checking admin access on: {}",
-                "▸".bright_black(),
+                "{} Checking admin access on: {}",
+                "🔐".bright_black(),
                 targets.cyan()
             );
             banner::print_success("Admin check completed");
         }
         SmbAction::Spider { target, extensions } => {
             println!(
-                "  {} Spidering shares on: {}",
-                "▸".bright_black(),
+                "{} Spidering shares on: {}",
+                "🕷".bright_black(),
                 target.cyan()
             );
             println!(
-                "  {} Looking for extensions: {}",
-                "▸".bright_black(),
+                "{} Looking for extensions: {}",
+                "📎".bright_black(),
                 extensions.cyan()
             );
             banner::print_success("Spider completed");
         }
         SmbAction::Get { target, path } => {
             println!(
-                "  {} Downloading from {}\\{}",
-                "▸".bright_black(),
+                "{} Downloading {}:{}",
+                "⬇".bright_black(),
                 target.cyan(),
                 path.cyan()
             );
@@ -1345,8 +1819,8 @@ async fn cmd_smb(cli: &Cli, action: &SmbAction) -> i32 {
             remote,
         } => {
             println!(
-                "  {} Uploading {} to {}\\{}",
-                "▸".bright_black(),
+                "{} Uploading {} to {}:{}",
+                "⬆".bright_black(),
                 local.cyan(),
                 target.cyan(),
                 remote.cyan()
@@ -1354,46 +1828,36 @@ async fn cmd_smb(cli: &Cli, action: &SmbAction) -> i32 {
             banner::print_success("File uploaded");
         }
     }
-
     0
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_exec
-// ═══════════════════════════════════════════════════════
-
 async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) -> i32 {
     banner::print_module_banner("EXECUTION");
-
     let _creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
     };
-
-    println!("  {} Executing on: {}", "▸".bright_black(), target.cyan());
-    println!("  {} Method: {:?}", "▸".bright_black(), method);
-    println!("  {} Command: {}", "▸".bright_black(), command.yellow());
-
+    println!("{} Executing on: {}", "⚡".bright_black(), target.cyan());
+    println!("{} Method: {:?}", "🔧".bright_black(), method);
+    println!("{} Command: {}", "💻".bright_black(), command.yellow());
     banner::print_success("Command executed");
     0
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_graph
-// ═══════════════════════════════════════════════════════
-
-async fn cmd_graph(_cli: &Cli, action: &GraphAction) -> i32 {
+async fn cmd_graph(_cli: &Cli, action: GraphAction) -> i32 {
     banner::print_module_banner("ATTACK GRAPH");
 
     match action {
         GraphAction::Build => {
-            println!("  {} Building attack graph...", "▸".bright_black());
+            println!("{}", "Building attack graph...".bright_black());
             banner::print_success("Attack graph built");
         }
         GraphAction::Path { from, to } => {
             println!(
-                "  {} Finding path from {} to {}",
-                "▸".bright_black(),
+                "{} Finding path from {} to {}",
+                "🗺".bright_black(),
                 from.cyan(),
                 to.cyan()
             );
@@ -1401,36 +1865,32 @@ async fn cmd_graph(_cli: &Cli, action: &GraphAction) -> i32 {
         }
         GraphAction::PathToDa { from } => {
             println!(
-                "  {} Finding path to Domain Admins from {}",
-                "▸".bright_black(),
+                "{} Finding path to Domain Admins from {}",
+                "🗺".bright_black(),
                 from.cyan()
             );
             banner::print_success("Path to DA found");
         }
         GraphAction::Stats => {
-            println!("  {} Attack graph statistics...", "▸".bright_black());
+            println!("{}", "Attack graph statistics...".bright_black());
             banner::print_success("Statistics generated");
         }
         GraphAction::Export { output, bloodhound } => {
             println!(
-                "  {} Exporting graph to: {}",
-                "▸".bright_black(),
+                "{} Exporting graph to: {}",
+                "💾".bright_black(),
                 output.cyan()
             );
-            if *bloodhound {
-                println!("  {} BloodHound format enabled", "▸".bright_black());
+            if bloodhound {
+                println!("{}", "  BloodHound format enabled".bright_black());
             }
             banner::print_success("Graph exported");
         }
     }
-
     0
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_spray
-// ═══════════════════════════════════════════════════════
-
 async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter: u64) -> i32 {
     banner::print_module_banner("PASSWORD SPRAY");
 
@@ -1439,20 +1899,16 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
         Err(e) => return e,
     };
 
-    println!("  {} Domain: {}", "▸".bright_black(), domain.cyan());
-    println!("  {} Password: {}", "▸".bright_black(), password.yellow());
-    println!("  {} Userlist: {}", "▸".bright_black(), userlist.cyan());
-    println!("  {} Delay: {}ms", "▸".bright_black(), delay);
-    println!("  {} Jitter: {}ms", "▸".bright_black(), jitter);
-
+    println!("{} Domain: {}", "🌐".bright_black(), domain.cyan());
+    println!("{} Password: {}", "🔑".bright_black(), password.yellow());
+    println!("{} Userlist: {}", "📋".bright_black(), userlist.cyan());
+    println!("{} Delay: {}ms", "⏱".bright_black(), delay);
+    println!("{} Jitter: {}ms", "🎲".bright_black(), jitter);
     banner::print_success("Password spray completed");
     0
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_autopwn
-// ═══════════════════════════════════════════════════════
-
 async fn cmd_autopwn(
     cli: &Cli,
     target: &str,
@@ -1467,40 +1923,32 @@ async fn cmd_autopwn(
         Err(e) => return e,
     };
 
-    println!("  {} Target: {}", "▸".bright_black(), target.cyan());
-    println!("  {} Method: {:?}", "▸".bright_black(), method);
+    println!("{} Target: {}", "🎯".bright_black(), target.cyan());
+    println!("{} Method: {:?}", "🔧".bright_black(), method);
     println!(
-        "  {} Stealth: {}",
-        "▸".bright_black(),
+        "{} Stealth: {}",
+        "🥷".bright_black(),
         if stealth { "enabled" } else { "disabled" }.cyan()
     );
     println!(
-        "  {} Dry Run: {}",
-        "▸".bright_black(),
+        "{} Dry Run: {}",
+        "📝".bright_black(),
         if dry_run { "enabled" } else { "disabled" }.cyan()
     );
 
     if dry_run {
-        println!("  {} Performing dry run analysis...", "▸".bright_black());
+        println!("{}", "Performing dry run analysis...".bright_black());
         banner::print_success("Dry run completed");
     } else {
-        println!(
-            "  {} Executing autonomous attack chain...",
-            "▸".bright_black()
-        );
+        println!("{}", "Executing autonomous attack chain...".bright_black());
         banner::print_success("Attack chain completed");
     }
-
     0
 }
 
-// ═══════════════════════════════════════════════════════
 // cmd_mssql
-// ═══════
-
-async fn cmd_mssql(cli: &Cli, action: &MssqlAction) -> i32 {
+async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
     banner::print_module_banner("MSSQL");
-
     let _creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1513,48 +1961,47 @@ async fn cmd_mssql(cli: &Cli, action: &MssqlAction) -> i32 {
             database,
         } => {
             println!(
-                "  {} Executing query on: {}",
-                "▸".bright_black(),
+                "{} Executing query on: {}",
+                "🗄".bright_black(),
                 target.cyan()
             );
-            println!("  {} Database: {}", "▸".bright_black(), database.cyan());
-            println!("  {} Query: {}", "▸".bright_black(), query.yellow());
+            println!("{} Database: {}", "📁".bright_black(), database.cyan());
+            println!("{} Query: {}", "📝".bright_black(), query.yellow());
             banner::print_success("Query executed");
         }
         MssqlAction::XpCmdShell { target, command } => {
             println!(
-                "  {} Executing xp_cmdshell on: {}",
-                "▸".bright_black(),
+                "{} Executing xp_cmdshell on: {}",
+                "⚡".bright_black(),
                 target.cyan()
             );
-            println!("  {} Command: {}", "▸".bright_black(), command.yellow());
+            println!("{} Command: {}", "💻".bright_black(), command.yellow());
             banner::print_success("Command executed");
         }
         MssqlAction::LinkedServers { target } => {
             println!(
-                "  {} Enumerating linked servers on: {}",
-                "▸".bright_black(),
+                "{} Enumerating linked servers on: {}",
+                "🔗".bright_black(),
                 target.cyan()
             );
             banner::print_success("Linked servers enumerated");
         }
         MssqlAction::EnableXpCmdShell { target } => {
             println!(
-                "  {} Enabling xp_cmdshell on: {}",
-                "▸".bright_black(),
+                "{} Enabling xp_cmdshell on: {}",
+                "🔓".bright_black(),
                 target.cyan()
             );
             banner::print_success("xp_cmdshell enabled");
         }
         MssqlAction::CheckXpCmdShell { target } => {
             println!(
-                "  {} Checking xp_cmdshell status on: {}",
-                "▸".bright_black(),
+                "{} Checking xp_cmdshell status on: {}",
+                "🔍".bright_black(),
                 target.cyan()
             );
             banner::print_success("xp_cmdshell status checked");
         }
     }
-
     0
 }

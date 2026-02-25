@@ -1,1 +1,147 @@
-﻿{}
+﻿{
+    "search_results": [
+        {
+            "dn": "CN=svc_sql,OU=Service Accounts,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "svc_sql"
+                ],
+                "servicePrincipalName": [
+                    "MSSQLSvc/SQL01.yourorg.local:1433",
+                    "MSSQLSvc/SQL01.yourorg.local"
+                ],
+                "memberOf": [],
+                "userAccountControl": [
+                    "66048"
+                ],
+                "pwdLastSet": [
+                    "132000000000000000"
+                ],
+                "lastLogon": [
+                    "133490000000000000"
+                ],
+                "adminCount": [
+                    "0"
+                ]
+            }
+        },
+        {
+            "dn": "CN=Administrator,CN=Users,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "administrator"
+                ],
+                "servicePrincipalName": [],
+                "memberOf": [
+                    "CN=Domain Admins,CN=Users,DC=yourorg,DC=local",
+                    "CN=Enterprise Admins,CN=Users,DC=yourorg,DC=local"
+                ],
+                "userAccountControl": [
+                    "66048"
+                ],
+                "pwdLastSet": [
+                    "133400000000000000"
+                ],
+                "lastLogon": [
+                    "133500000000000000"
+                ],
+                "adminCount": [
+                    "1"
+                ]
+            }
+        },
+        {
+            "dn": "CN=svc_backup,OU=Service Accounts,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "svc_backup"
+                ],
+                "servicePrincipalName": [],
+                "memberOf": [
+                    "CN=Backup Operators,CN=Builtin,DC=yourorg,DC=local"
+                ],
+                "userAccountControl": [
+                    "66048"
+                ],
+                "pwdLastSet": [
+                    "131000000000000000"
+                ],
+                "lastLogon": [
+                    "0"
+                ],
+                "adminCount": [
+                    "0"
+                ],
+                "description": [
+                    "Backup service - password: Winter2019! (legacy)"
+                ]
+            }
+        }
+    ],
+    "laps_results": [
+        {
+            "dn": "CN=WS01,OU=Workstations,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "WS01$"
+                ],
+                "distinguishedName": [
+                    "CN=WS01,OU=Workstations,DC=yourorg,DC=local"
+                ],
+                "ms-Mcs-AdmPwd": [
+                    "xK9mL2pQ7rW3"
+                ],
+                "ms-Mcs-AdmPwdExpirationTime": [
+                    "133600000000000000"
+                ]
+            }
+        },
+        {
+            "dn": "CN=SRV01,OU=Servers,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "SRV01$"
+                ],
+                "distinguishedName": [
+                    "CN=SRV01,OU=Servers,DC=yourorg,DC=local"
+                ],
+                "msLAPS-Password": [
+                    "{\"n\":\"Administrator\",\"t\":\"2025-06-01T00:00:00Z\",\"p\":\"R@nd0mP@ss99!\"}"
+                ],
+                "msLAPS-PasswordExpirationTime": [
+                    "133650000000000000"
+                ]
+            }
+        },
+        {
+            "dn": "CN=DC01,OU=Domain Controllers,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "DC01$"
+                ],
+                "distinguishedName": [
+                    "CN=DC01,OU=Domain Controllers,DC=yourorg,DC=local"
+                ],
+                "msLAPS-EncryptedPassword": [
+                    "AQAAAAAAAAABI0VniAAAAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+                ]
+            }
+        }
+    ],
+    "delegation_results": [
+        {
+            "dn": "CN=WS01,OU=Workstations,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "WS01$"
+                ],
+                "userAccountControl": [
+                    "528384"
+                ],
+                "msDS-AllowedToDelegateTo": [
+                    "cifs/DC01.yourorg.local"
+                ]
+            }
+        }
+    ]
+}

@@ -1,4 +1,9 @@
 ﻿//! ASCII art banner and version display for Overthrone.
+
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use colored::Colorize;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

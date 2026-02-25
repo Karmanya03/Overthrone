@@ -1,0 +1,1046 @@
+warning: C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\Cargo.toml: file `C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\src\main.rs` found to be present in multiple build targets:
+  * `bin` target `overthrone`
+  * `bin` target `ovt`
+warning: function `parse_ntlm_negotiate` is never used
+  --> crates\overthrone-relay\src\responder.rs:71:4
+   |
+71 | fn parse_ntlm_negotiate(data: &[u8]) -> Op...
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `overthrone-relay` (lib) generated 1 warning
+    Checking overthrone v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli)
+error[E0432]: unresolved import `overthrone_core::c2`
+  --> crates\overthrone-cli\src\commands_impl.rs:10:22
+   |
+10 | use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
+   |                      ^^ could not find `c2` in `overthrone_core`
+
+error[E0432]: unresolved import `overthrone_core::exec::shell`
+  --> crates\overthrone-cli\src\interactive_shell.rs:11:28
+   |
+11 | use overthrone_core::exec::shell::{InteractiveShell, ShellConfig, ShellType};
+   |                            ^^^^^ could not find `shell` in `exec`
+
+error[E0432]: unresolved imports `overthrone_core::graph::EdgeId`, `overthrone_core::graph::NodeId`
+ --> crates\overthrone-cli\src\tui\app.rs:1:43
+  |
+1 | use overthrone_core::graph::{AttackGraph, EdgeId, EdgeType, NodeId, NodeType};
+  |                                           ^^^^^^            ^^^^^^ no `NodeId` in `graph`
+  |                                           |
+  |                                           no `EdgeId` in `graph`
+
+error[E0432]: unresolved import `overthrone_core::c2`
+  --> crates\overthrone-cli\src\main.rs:18:22
+   |
+18 | use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
+   |                      ^^ could not find `c2` in `overthrone_core`
+
+error[E0433]: failed to resolve: could not find `runner` in `tui`
+    --> crates\overthrone-cli\src\commands_impl.rs:1671:37
+     |
+1671 |         if let Err(e) = crate::tui::runner::run_tui_with_crawler(graph, domain, &credentials).await
+     |                                     ^^^^^^ could not find `runner` in `tui`
+
+error[E0433]: failed to resolve: could not find `runner` in `tui`
+    --> crates\overthrone-cli\src\commands_impl.rs:1678:74
+     |
+1678 |         let tui_result = tokio::task::spawn_blocking(move || crate::tui::runner::run_tui(graph))
+     |                                                                          ^^^^^^ could not find `runner` in `tui`
+
+error[E0425]: cannot find function `require_dc_only_creds` in the crate root
+    --> crates\overthrone-cli\src\commands_impl.rs:205:31
+     |
+ 205 |     let domain = match crate::require_dc_only_creds(cli) {
+     |                               ^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates\overthrone-cli\src\main.rs:1444:1
+     |
+1444 | fn require_d_only_cred(cli: &Cli) -> std::result::Result<String, i32> {
+     | --------------------------------------------------------------------- similarly named function `require_d_only_cred` defined here
+     |
+help: a function with a similar name exists
+     |
+ 205 -     let domain = match crate::require_dc_only_creds(cli) {
+ 205 +     let domain = match crate::require_d_only_cred(cli) {
+     |
+
+error[E0433]: failed to resolve: unresolved import
+    --> crates\overthrone-cli\src\commands_impl.rs:1680:33
+     |
+1680 |             .map_err(|e| crate::error::OverthroneError::Internal(format!("TUI thread error: {e}")));
+     |                                 ^^^^^ unresolved import
+     |
+help: a similar path exists
+     |
+1680 |             .map_err(|e| crate::clap::error::OverthroneError::Internal(format!("TUI thread error: {e}")));
+     |                                 ++++++
+help: consider importing this enum
+     |
+   3 + use overthrone_core::OverthroneError;
+     |
+help: if you import `OverthroneError`, refer to it directly
+     |
+1680 -             .map_err(|e| crate::error::OverthroneError::Internal(format!("TUI thread error: {e}")));
+1680 +             .map_err(|e| OverthroneError::Internal(format!("TUI thread error: {e}")));
+     |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:84:13
+   |
+84 |             NodeType::User      => Color::Green,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:85:13
+   |
+85 |             NodeType::Computer  => Color::Blue,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:86:13
+   |
+86 |             NodeType::Group     => Color::Yellow,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:87:13
+   |
+87 |             NodeType::Domain    => Color::Magenta,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:88:13
+   |
+88 |             NodeType::Gpo       => Color::Cyan,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:89:13
+   |
+89 |             NodeType::Ou        => Color::Gray,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+  --> crates\overthrone-cli\src\tui\ui.rs:90:13
+   |
+90 |             NodeType::Trust     => Color::Red,
+   |             ^^^^^^^^ use of undeclared type `NodeType`
+   |
+help: consider importing this enum
+   |
+ 1 + use overthrone_core::graph::NodeType;
+   |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+   --> crates\overthrone-cli\src\tui\ui.rs:325:38
+    |
+325 |         if !matches!(node.node_type, NodeType::Trust) && !matches!(node.node_type, NodeType::Domain) {
+    |                                      ^^^^^^^^ use of undeclared type `NodeType`
+    |
+help: consider importing this enum
+    |
+  1 + use overthrone_core::graph::NodeType;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `NodeType`
+   --> crates\overthrone-cli\src\tui\ui.rs:325:84
+    |
+325 |         if !matches!(node.node_type, NodeType::Trust) && !matches!(node.node_type, NodeType::Domain) {
+    |                                                                                    ^^^^^^^^ use of undeclared type `NodeType`
+    |
+help: consider importing this enum
+    |
+  1 + use overthrone_core::graph::NodeType;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `EdgeType`
+   --> crates\overthrone-cli\src\tui\ui.rs:330:47
+    |
+330 |             .filter(|e| matches!(e.edge_type, EdgeType::TrustedBy))
+    |                                               ^^^^^^^^ use of undeclared type `EdgeType`
+    |
+help: consider importing this enum
+    |
+  1 + use overthrone_core::graph::EdgeType;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `EdgeType`
+   --> crates\overthrone-cli\src\tui\ui.rs:340:71
+    |
+340 |                 .any(|e| e.target == node.id && matches!(e.edge_type, EdgeType::TrustedBy))
+    |                                                                       ^^^^^^^^ use of undeclared type `EdgeType`
+    |
+help: consider importing this enum
+    |
+  1 + use overthrone_core::graph::EdgeType;
+    |
+
+warning: unused import: `NodeType`
+  --> crates\overthrone-cli\src\commands_impl.rs:12:43
+   |
+12 | use overthrone_core::graph::{AttackGraph, NodeType};
+   |                                           ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `EdgeType`
+ --> crates\overthrone-cli\src\tui\app.rs:1:51
+  |
+1 | use overthrone_core::graph::{AttackGraph, EdgeId, EdgeType, NodeId, NodeType};
+  |                                                   ^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates\overthrone-cli\src\tui\graph_view.rs:2:68
+  |
+2 | use ratatui::widgets::{Block, Borders, Paragraph, canvas::{Canvas, Context, Line as CanvasLine, Points}};
+  |                                                                    ^^^^^^^
+
+warning: unused imports: `ScrollbarOrientation`, `ScrollbarState`, and `Scrollbar`
+ --> crates\overthrone-cli\src\tui\ui.rs:2:75
+  |
+2 | use ratatui::widgets::{Block, Borders, Tabs, Paragraph, Row, Table, Cell, Scrollbar, ScrollbarOrientation, ScrollbarState};
+  |                                                                           ^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `app::App`
+  --> crates\overthrone-cli\src\tui\mod.rs:11:9
+   |
+11 | pub use app::App;
+   |         ^^^^^^^^
+
+warning: unused import: `event::EventLoop`
+  --> crates\overthrone-cli\src\tui\mod.rs:12:9
+   |
+12 | pub use event::EventLoop;
+   |         ^^^^^^^^^^^^^^^^
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\commands_impl.rs:205:9
+    |
+205 |     let domain = match crate::require_dc_only_creds(cli) {
+    |         ^^^^^^
+...
+219 |             println!("  {} Domain: {}", "▸".bright_black(), domain.cyan());
+    |                                                             ------ type must be known at this point
+    |
+help: consider giving `domain` an explicit type
+    |
+205 |     let domain: /* Type */ = match crate::require_dc_only_creds(cli) {
+    |               ++++++++++++
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\commands_impl.rs:1678:26
+     |
+1678 |           let tui_result = tokio::task::spawn_blocking(move || crate::tui::runner::run_tui(graph))
+     |  __________________________^
+1679 | |             .await
+     | |__________________^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\commands_impl.rs:1905:47
+     |
+1905 |                     println!("- {}: {} ({})", name.cyan(), fw, st);
+     |                                               ^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\commands_impl.rs:1924:21
+     |
+1924 |                     ch.exec_powershell(&session_id, &command).await
+     |                     ^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\commands_impl.rs:1978:23
+     |
+1978 |                 match ch.list_listeners().await {
+     |                       ^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\interactive_shell.rs:393:80
+    |
+393 |             println!("{} Auto-connecting to {} via {}...", "▸".bright_black(), target.cyan(), shell_type);
+    |                                                                                ^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\interactive_shell.rs:494:21
+    |
+494 |             let _ = shell.close().await;
+    |                     ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\interactive_shell.rs:642:34
+    |
+642 |                     let output = shell.execute(input).await?;
+    |                                  ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\interactive_shell.rs:822:24
+    |
+822 |             let info = shell.session_info();
+    |                        ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\interactive_shell.rs:915:13
+    |
+915 |             shell.close().await?;
+    |             ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1053:19
+     |
+1053 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1078:19
+     |
+1078 |             match shell.execute(&ps_cmd).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1119:35
+     |
+1119 | ...                   match shell.execute(&ps_cmd).await {
+     |                             ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1121:41
+     |
+1121 | ...                   if !output.is_empty() {
+     |                           ^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1181:27
+     |
+1181 |                     match shell.execute(&ps_cmd).await {
+     |                           ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1220:19
+     |
+1220 |             match shell.execute(&ps_cmd).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1222:35
+     |
+1222 |                     let encoded = output.trim();
+     |                                   ^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1263:26
+     |
+1263 |             let output = shell.execute(&command).await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1282:19
+     |
+1282 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1285:25
+     |
+1285 |                     if !output.is_empty() {
+     |                         ^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1309:19
+     |
+1309 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1333:19
+     |
+1333 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1358:19
+     |
+1358 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1383:19
+     |
+1383 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1518:26
+     |
+1518 |             let output = shell.execute("klist").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1538:19
+     |
+1538 |             match shell.execute(&cmd).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1557:19
+     |
+1557 |             match shell.execute("klist purge").await {
+     |                   ^^^^^ cannot infer type
+
+warning: unreachable pattern
+    --> crates\overthrone-cli\src\interactive_shell.rs:1640:28
+     |
+1640 |             "path_to_da" | "path_to_da" => {
+     |             ------------   ^^^^^^^^^^^^ no value can reach this
+     |             |
+     |             matches all the relevant values
+     |
+     = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1699:26
+     |
+1699 |             let output = shell.execute(&format!("spawn {}", shell_type)).await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1718:19
+     |
+1718 |             match shell.execute(&format!("migrate {}", pid)).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1748:19
+     |
+1748 |             match shell.execute(&format!("steal_token {}", pid)).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1768:19
+     |
+1768 |             match shell.execute("rev2self").await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1786:26
+     |
+1786 |             let output = shell.execute("whoami").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1786:17
+     |
+1786 |             let output = shell.execute("whoami").await?;
+     |                 ^^^^^^
+1787 |             println!("{} Current user: {}", "▸".bright_black(), output.trim().cyan());
+     |                                                                 ------ type must be known at this point
+     |
+help: consider giving `output` an explicit type
+     |
+1786 |             let output: /* Type */ = shell.execute("whoami").await?;
+     |                       ++++++++++++
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1796:26
+     |
+1796 |             let output = shell.execute("echo %PROCESS_ID%").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1796:17
+     |
+1796 |             let output = shell.execute("echo %PROCESS_ID%").await?;
+     |                 ^^^^^^
+1797 |             println!("{} Current PID: {}", "▸".bright_black(), output.trim().cyan());
+     |                                                                ------ type must be known at this point
+     |
+help: consider giving `output` an explicit type
+     |
+1796 |             let output: /* Type */ = shell.execute("echo %PROCESS_ID%").await?;
+     |                       ++++++++++++
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1815:26
+     |
+1815 |             let output = shell.execute("tasklist /v").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:1835:19
+     |
+1835 |             match shell.execute(&format!("taskkill /pid {} /f", pid)).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2142:19
+     |
+2142 |             match shell.execute(&net_cmd).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2155:26
+     |
+2155 |             let output = shell.execute("ipconfig /all").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2175:27
+     |
+2175 |                     match shell.execute("reg save HKLM\\SAM sam.bak && reg save HKLM\\SYSTEM system.bak").await {
+     |                           ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2210:26
+     |
+2210 |             let output = shell.execute("whoami").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2220:26
+     |
+2220 |             let output = shell.execute("hostname").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2230:26
+     |
+2230 |             let output = shell.execute("cd").await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2243:26
+     |
+2243 |             let output = shell.execute(&command).await?;
+     |                          ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2261:19
+     |
+2261 |             match shell.execute(&command).await {
+     |                   ^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\interactive_shell.rs:2263:25
+     |
+2263 |                     if !output.is_empty() {
+     |                         ^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\main.rs:1313:47
+     |
+1313 |                     println!("- {}: {} ({})", name.cyan(), fw, st);
+     |                                               ^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\main.rs:1332:21
+     |
+1332 |                     ch.exec_powershell(&session_id, &command).await
+     |                     ^^ cannot infer type
+
+error[E0282]: type annotations needed
+    --> crates\overthrone-cli\src\main.rs:1390:23
+     |
+1390 |                 match ch.list_listeners().await {
+     |                       ^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\interactive_shell.rs:505:32
+    |
+505 |             let session_info = shell.session_info();
+    |                                ^^^^^ cannot infer type
+
+error[E0599]: no method named `node_ids` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:113:40
+    |
+113 |         let nodes: Vec<NodeId> = graph.node_ids().collect();
+    |                                        ^^^^^^^^
+    |
+help: there is a method `nodes` with a similar name
+    |
+113 -         let nodes: Vec<NodeId> = graph.node_ids().collect();
+113 +         let nodes: Vec<NodeId> = graph.nodes().collect();
+    |
+
+error[E0599]: no method named `edges` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:157:31
+    |
+157 |             for edge in graph.edges() {
+    |                               ^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\tui\app.rs:163:32
+    |
+163 |                     let dist = (dx * dx + dy * dy).sqrt().max(0.1);
+    |                                ^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\tui\app.rs:182:31
+    |
+182 |                     let mag = (fx * fx + fy * fy).sqrt().max(0.01);
+    |                               ^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+error[E0599]: no method named `nodes_of_type` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:198:26
+    |
+198 |             users: graph.nodes_of_type(NodeType::User).count(),
+    |                          ^^^^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0599]: no method named `nodes_of_type` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:199:30
+    |
+199 |             computers: graph.nodes_of_type(NodeType::Computer).count(),
+    |                              ^^^^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0599]: no method named `nodes_of_type` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:200:27
+    |
+200 |             groups: graph.nodes_of_type(NodeType::Group).count(),
+    |                           ^^^^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0599]: no method named `attack_path_count` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:202:33
+    |
+202 |             attack_paths: graph.attack_path_count(),
+    |                                 ^^^^^^^^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0599]: no method named `domain_count` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:203:28
+    |
+203 |             domains: graph.domain_count(),
+    |                            ^^^^^^^^^^^^
+    |
+help: there is a method `node_count` with a similar name
+    |
+203 -             domains: graph.domain_count(),
+203 +             domains: graph.node_count(),
+    |
+
+error[E0599]: no method named `trust_count` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\app.rs:204:27
+    |
+204 |             trusts: graph.trust_count(),
+    |                           ^^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0599]: no method named `edges` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+  --> crates\overthrone-cli\src\tui\graph_view.rs:30:31
+   |
+30 |             for edge in graph.edges() {
+   |                               ^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\graph_view.rs:43:61
+   |
+43 |                 if let Some(&(x, y)) = app.layout.get(&node.id) {
+   |                                                             ^^ unknown field
+   |
+   = note: available fields are: `0`, `1`
+
+error[E0609]: no field `node_type` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\graph_view.rs:44:60
+   |
+44 |                     let (color, marker) = node_style(&node.node_type, app.selected_node == Some(node.id));
+   |                                                            ^^^^^^^^^ unknown field
+   |
+help: one of the expressions' fields has a field of the same name
+   |
+44 |                     let (color, marker) = node_style(&node.1.node_type, app.selected_node == Some(node.id));
+   |                                                            ++
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\graph_view.rs:44:102
+   |
+44 |                     let (color, marker) = node_style(&node.node_type, app.selected_node == Some(node.id));
+   |                                                                                                      ^^ unknown field
+   |
+   = note: available fields are: `0`, `1`
+
+error[E0609]: no field `name` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\graph_view.rs:52:54
+   |
+52 |                     let label = truncate_label(&node.name, 12);
+   |                                                      ^^^^ unknown field
+   |
+help: one of the expressions' fields has a field of the same name
+   |
+52 |                     let label = truncate_label(&node.1.name, 12);
+   |                                                      ++
+
+error[E0599]: no variant or associated item named `Trust` found for enum `NodeType` in the current scope
+  --> crates\overthrone-cli\src\tui\graph_view.rs:72:19
+   |
+72 |         NodeType::Trust      => (Color::Red,     "🌐"),
+   |                   ^^^^^ variant or associated item not found in `NodeType`
+
+error[E0599]: no variant or associated item named `Certificate` found for enum `NodeType` in the current scope
+  --> crates\overthrone-cli\src\tui\graph_view.rs:73:19
+   |
+73 |         NodeType::Certificate=> (Color::LightRed,"📜"),
+   |                   ^^^^^^^^^^^ variant or associated item not found in `NodeType`
+
+error[E0599]: no variant or associated item named `CanRdp` found for enum `EdgeType` in the current scope
+   --> crates\overthrone-cli\src\tui\graph_view.rs:92:19
+    |
+ 92 |         EdgeType::CanRdp        => Color::Cyan,
+    |                   ^^^^^^ variant or associated item not found in `EdgeType`
+    |
+help: there is a method `and` with a similar name
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-http-0.6.8\src\follow_redirect\policy\mod.rs:141:5
+    |
+141 | /     fn and<P, B, E>(self, other: P) -> And<Self, P>
+142 | |     where
+143 | |         Self: Policy<B, E> + Sized,
+144 | |         P: Policy<B, E>;
+    | |________________________^
+help: there is a variant with a similar name
+    |
+ 92 -         EdgeType::CanRdp        => Color::Cyan,
+ 92 +         EdgeType::CanRDP        => Color::Cyan,
+    |
+
+error[E0599]: no variant or associated item named `CanPsRemote` found for enum `EdgeType` in the current scope
+  --> crates\overthrone-cli\src\tui\graph_view.rs:93:19
+   |
+93 |         EdgeType::CanPsRemote   => Color::Blue,
+   |                   ^^^^^^^^^^^ variant or associated item not found in `EdgeType`
+   |
+help: there is a variant with a similar name (notice the capitalization)
+   |
+93 -         EdgeType::CanPsRemote   => Color::Blue,
+93 +         EdgeType::CanPSRemote   => Color::Blue,
+   |
+
+error[E0609]: no field `id` on type `&AdNode`
+   --> crates\overthrone-cli\src\tui\graph_view.rs:117:51
+    |
+117 |                 Line::from(format!("ID: {}", node.id.0)),
+    |                                                   ^^ unknown field
+    |
+    = note: available fields are: `name`, `node_type`, `domain`, `distinguished_name`, `enabled`, `properties`
+
+error[E0599]: no method named `edges_from` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\graph_view.rs:122:42
+    |
+122 |             let outbound: Vec<_> = graph.edges_from(node_id).collect();
+    |                                          ^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0599]: no method named `edges_to` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\graph_view.rs:138:41
+    |
+138 |             let inbound: Vec<_> = graph.edges_to(node_id).collect();
+    |                                         ^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0609]: no field `name` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\ui.rs:80:21
+   |
+80 |             || node.name.to_lowercase().contains(&app.filter_text.to_lowercase());
+   |                     ^^^^ unknown field
+   |
+help: one of the expressions' fields has a field of the same name
+   |
+80 |             || node.1.name.to_lowercase().contains(&app.filter_text.to_lowercase());
+   |                     ++
+
+error[E0609]: no field `node_type` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\ui.rs:83:37
+   |
+83 |         let type_color = match node.node_type {
+   |                                     ^^^^^^^^^ unknown field
+   |
+help: one of the expressions' fields has a field of the same name
+   |
+83 |         let type_color = match node.1.node_type {
+   |                                     ++
+
+error[E0599]: no method named `edges_from` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+  --> crates\overthrone-cli\src\tui\ui.rs:94:30
+   |
+94 |         let outbound = graph.edges_from(node.id).count();
+   |                              ^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\ui.rs:94:46
+   |
+94 |         let outbound = graph.edges_from(node.id).count();
+   |                                              ^^ unknown field
+   |
+   = note: available fields are: `0`, `1`
+
+error[E0599]: no method named `edges_to` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+  --> crates\overthrone-cli\src\tui\ui.rs:95:29
+   |
+95 |         let inbound = graph.edges_to(node.id).count();
+   |                             ^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\ui.rs:95:43
+   |
+95 |         let inbound = graph.edges_to(node.id).count();
+   |                                           ^^ unknown field
+   |
+   = note: available fields are: `0`, `1`
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+  --> crates\overthrone-cli\src\tui\ui.rs:98:43
+   |
+98 |             Cell::from(format!("{}", node.id.0)),
+   |                                           ^^ unknown field
+   |
+   = note: available fields are: `0`, `1`
+
+error[E0609]: no field `node_type` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:100:38
+    |
+100 |                 format!("{:?}", node.node_type),
+    |                                      ^^^^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+100 |                 format!("{:?}", node.1.node_type),
+    |                                      ++
+
+error[E0609]: no field `name` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:103:31
+    |
+103 |             Cell::from(&*node.name),
+    |                               ^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+103 |             Cell::from(&*node.1.name),
+    |                               ++
+
+error[E0609]: no field `domain` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:104:29
+    |
+104 |             Cell::from(node.domain.as_deref().unwrap_or("-")),
+    |                             ^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+104 |             Cell::from(node.1.domain.as_deref().unwrap_or("-")),
+    |                             ++
+
+error[E0609]: no field `compromised` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:112:32
+    |
+112 |             Cell::from(if node.compromised { "✓" } else { "" })
+    |                                ^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `0`, `1`
+
+error[E0609]: no field `high_value` on type `&(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:185:23
+    |
+185 |         .filter(|n| n.high_value)
+    |                       ^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `0`, `1`
+
+error[E0609]: no field `name` on type `&(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:191:41
+    |
+191 |                 format!("🎯 {} ", target.name),
+    |                                          ^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+191 |                 format!("🎯 {} ", target.1.name),
+    |                                          ++
+
+error[E0609]: no field `node_type` on type `&(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:195:42
+    |
+195 |                 format!("({:?})", target.node_type),
+    |                                          ^^^^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+195 |                 format!("({:?})", target.1.node_type),
+    |                                          ++
+
+error[E0599]: no method named `shortest_paths_to` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\ui.rs:201:27
+    |
+201 |         let paths = graph.shortest_paths_to(target.id, 5); // top 5 paths
+    |                           ^^^^^^^^^^^^^^^^^
+    |
+help: there is a method `shortest_path` with a similar name
+    |
+201 -         let paths = graph.shortest_paths_to(target.id, 5); // top 5 paths
+201 +         let paths = graph.shortest_path(target.id, 5); // top 5 paths
+    |
+
+error[E0609]: no field `id` on type `&(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:201:52
+    |
+201 |         let paths = graph.shortest_paths_to(target.id, 5); // top 5 paths
+    |                                                    ^^ unknown field
+    |
+    = note: available fields are: `0`, `1`
+
+error[E0599]: no method named `get_edge` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\ui.rs:209:40
+    |
+209 |                 .filter_map(|id| graph.get_edge(*id))
+    |                                        ^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\tui\ui.rs:228:34
+    |
+228 |                     Span::styled(hop.as_str(), Style::default().fg(Color::Green)),
+    |                                  ^^^ cannot infer type
+
+error[E0609]: no field `node_type` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:325:27
+    |
+325 |         if !matches!(node.node_type, NodeType::Trust) && !matches!(node.node_type, NodeType::Domain) {
+    |                           ^^^^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+325 |         if !matches!(node.1.node_type, NodeType::Trust) && !matches!(node.node_type, NodeType::Domain) {
+    |                           ++
+
+error[E0609]: no field `node_type` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:325:73
+    |
+325 |         if !matches!(node.node_type, NodeType::Trust) && !matches!(node.node_type, NodeType::Domain) {
+    |                                                                         ^^^^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+325 |         if !matches!(node.node_type, NodeType::Trust) && !matches!(node.1.node_type, NodeType::Domain) {
+    |                                                                         ++
+
+error[E0599]: no method named `edges_from` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\ui.rs:329:41
+    |
+329 |         let trust_edges: Vec<_> = graph.edges_from(node.id)
+    |                                         ^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:329:57
+    |
+329 |         let trust_edges: Vec<_> = graph.edges_from(node.id)
+    |                                                         ^^ unknown field
+    |
+    = note: available fields are: `0`, `1`
+
+error[E0599]: no method named `edges_from` found for struct `std::sync::MutexGuard<'_, AttackGraph>` in the current scope
+   --> crates\overthrone-cli\src\tui\ui.rs:339:42
+    |
+339 |             let direction_str = if graph.edges_from(edge.target)
+    |                                          ^^^^^^^^^^ method not found in `std::sync::MutexGuard<'_, AttackGraph>`
+
+error[E0609]: no field `id` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:340:43
+    |
+340 |                 .any(|e| e.target == node.id && matches!(e.edge_type, EdgeType::TrustedBy))
+    |                                           ^^ unknown field
+    |
+    = note: available fields are: `0`, `1`
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-cli\src\tui\ui.rs:353:23
+    |
+353 |                 .map(|s| s.as_str())
+    |                       ^  - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+353 |                 .map(|s: /* Type */| s.as_str())
+    |                        ++++++++++++
+
+error[E0609]: no field `name` on type `(petgraph::graph_impl::NodeIndex, &AdNode)`
+   --> crates\overthrone-cli\src\tui\ui.rs:359:35
+    |
+359 |                 Cell::from(&*node.name),
+    |                                   ^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+359 |                 Cell::from(&*node.1.name),
+    |                                   ++
+
+error[E0615]: attempted to take value of method `password` on type `auth::Credentials`
+    --> crates\overthrone-cli\src\main.rs:1477:25
+     |
+1477 |         password: creds.password.map(str::to_string),
+     |                         ^^^^^^^^ method, not a field
+     |
+help: use parentheses to call the method
+     |
+1477 |         password: creds.password().map(str::to_string),
+     |                                 ++
+
+error[E0609]: no field `nt_hash` on type `auth::Credentials`
+    --> crates\overthrone-cli\src\main.rs:1478:24
+     |
+1478 |         nt_hash: creds.nt_hash.map(str::to_string),
+     |                        ^^^^^^^ unknown field
+     |
+     = note: available fields are: `domain`, `username`, `auth`
+
+warning: unused variable: `cli`
+    --> crates\overthrone-cli\src\commands_impl.rs:1703:5
+     |
+1703 |     cli: &Cli,
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_cli`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `filter`
+    --> crates\overthrone-cli\src\main.rs:1666:5
+     |
+1666 |     filter: Option<String>,
+     |     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+
+warning: unused variable: `include_disabled`
+    --> crates\overthrone-cli\src\main.rs:1667:5
+     |
+1667 |     include_disabled: bool,
+     |     ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_include_disabled`
+
+warning: unused variable: `cli`
+    --> crates\overthrone-cli\src\main.rs:1847:20
+     |
+1847 | async fn cmd_graph(cli: &Cli, action: GraphAction) -> i32 {
+     |                    ^^^ help: if this is intentional, prefix it with an underscore: `_cli`
+
+Some errors have detailed explanations: E0282, E0425, E0432, E0433, E0599, E0609, E0615.
+For more information about an error, try `rustc --explain E0282`.
+warning: `overthrone` (bin "overthrone") generated 11 warnings (10 duplicates)
+error: could not compile `overthrone` (bin "overthrone") due to 119 previous errors; 11 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `overthrone` (bin "ovt") generated 11 warnings (1 duplicate)
+error: could not compile `overthrone` (bin "ovt") due to 119 previous errors; 11 warnings emitted

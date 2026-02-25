@@ -1,0 +1,85 @@
+{
+    "entries": [
+        {
+            "comment": "LAPS v1 — plaintext password readable",
+            "dn": "CN=WS01,OU=Workstations,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "WS01$"
+                ],
+                "distinguishedName": [
+                    "CN=WS01,OU=Workstations,DC=yourorg,DC=local"
+                ],
+                "ms-Mcs-AdmPwd": [
+                    "xK9mL2pQ7rW3"
+                ],
+                "ms-Mcs-AdmPwdExpirationTime": [
+                    "133600000000000000"
+                ]
+            }
+        },
+        {
+            "comment": "LAPS v2 — plaintext JSON",
+            "dn": "CN=SRV01,OU=Servers,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "SRV01$"
+                ],
+                "distinguishedName": [
+                    "CN=SRV01,OU=Servers,DC=yourorg,DC=local"
+                ],
+                "msLAPS-Password": [
+                    "{\"n\":\"Administrator\",\"t\":\"2025-06-01T00:00:00Z\",\"p\":\"R@nd0mP@ss99!\"}"
+                ],
+                "msLAPS-PasswordExpirationTime": [
+                    "133650000000000000"
+                ]
+            }
+        },
+        {
+            "comment": "LAPS v2 — encrypted (CNG-DPAPI blob)",
+            "dn": "CN=DC01,OU=Domain Controllers,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "DC01$"
+                ],
+                "distinguishedName": [
+                    "CN=DC01,OU=Domain Controllers,DC=yourorg,DC=local"
+                ],
+                "msLAPS-EncryptedPassword": [
+                    "AQAAAAAAAAABI0VniAAAA"
+                ]
+            }
+        },
+        {
+            "comment": "LAPS detected but not readable (no read perms)",
+            "dn": "CN=WS02,OU=Workstations,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "WS02$"
+                ],
+                "distinguishedName": [
+                    "CN=WS02,OU=Workstations,DC=yourorg,DC=local"
+                ]
+            }
+        },
+        {
+            "comment": "LAPS v2 — custom managed account name",
+            "dn": "CN=SRV02,OU=Servers,DC=yourorg,DC=local",
+            "attrs": {
+                "sAMAccountName": [
+                    "SRV02$"
+                ],
+                "distinguishedName": [
+                    "CN=SRV02,OU=Servers,DC=yourorg,DC=local"
+                ],
+                "msLAPS-Password": [
+                    "{\"n\":\"LocalMgmt\",\"t\":\"2025-09-15T12:00:00Z\",\"p\":\"Zx!9kW#mP2\"}"
+                ],
+                "msLAPS-PasswordExpirationTime": [
+                    "133700000000000000"
+                ]
+            }
+        }
+    ]
+}

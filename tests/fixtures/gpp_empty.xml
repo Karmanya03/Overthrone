@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Groups clsid="{3125E937-EB16-4b4c-9934-544FC6D24D26}">
+  <User clsid="{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}" name="ClearedUser" image="2" changed="2024-01-01 00:00:00" uid="{E4B7D1C5-AF60-7B8D-C29E-5D4F60718293}">
+    <Properties action="U" newName="" fullName="" description="Password was cleared" cpassword="" changeLogon="0" noChange="0" neverExpires="0" acctDisabled="0" userName="ClearedUser"/>
+  </User>
+</Groups>

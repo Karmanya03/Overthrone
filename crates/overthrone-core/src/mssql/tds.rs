@@ -49,8 +49,10 @@ pub enum TdsTokenType {
     DoneInProc = 0xAC,
     /// Done procedure (0xFE)
     DoneProc = 0xFE,
-    /// Environment change (0xAD)
-    EnvChange = 0xAD,
+    /// Environment change (0xE3)
+    EnvChange = 0xE3,
+    /// Login acknowledgement (0xAD)
+    LoginAck = 0xAD,
     /// Info message (0xAB)
     Info = 0xAB,
     /// Error message (0xAA)
@@ -156,9 +158,21 @@ impl TdsMessage {
 pub mod sql_types {
     /// SQL_NULL_TYPE
     pub const SQL_NULL: u8 = 0x1F;
-    /// INT
+    /// IMAGE
+    pub const IMAGE: u8 = 0x22;
+    /// TEXT
+    pub const TEXT: u8 = 0x24;
+    /// INT (INTN - nullable integer)
     pub const INT: u8 = 0x26;
-    /// INTN (nullable int)
+    /// DATETIME2
+    pub const DATETIME2: u8 = 0x27;
+    /// DATE
+    pub const DATE: u8 = 0x28;
+    /// DATETIMEOFFSET
+    pub const DATETIMEOFFSET: u8 = 0x29;
+    /// TIME
+    pub const TIME: u8 = 0x2A;
+    /// INTN (fixed int, tinyint-sized)
     pub const INTN: u8 = 0x30;
     /// BIT
     pub const BIT: u8 = 0x32;
@@ -166,52 +180,42 @@ pub mod sql_types {
     pub const SMALLINT: u8 = 0x34;
     /// TINYINT
     pub const TINYINT: u8 = 0x38;
-    /// BIGINT
-    pub const BIGINT: u8 = 0x3A;
+    /// SMALLDATETIME
+    pub const SMALLDATETIME: u8 = 0x3A;
     /// FLOAT
     pub const FLOAT: u8 = 0x3C;
     /// REAL
     pub const REAL: u8 = 0x3E;
+    /// MONEY
+    pub const MONEY: u8 = 0x3C;
     /// UNIQUEIDENTIFIER
     pub const UNIQUEIDENTIFIER: u8 = 0x68;
-    /// INTN
+    /// INTN_2 (nullable integer variant)
     pub const INTN_2: u8 = 0x6A;
     /// DECIMAL
     pub const DECIMAL: u8 = 0x6C;
     /// NUMERIC
     pub const NUMERIC: u8 = 0x6E;
-    /// MONEY
-    pub const MONEY: u8 = 0x7A;
+    /// BIGINT (BIGINTN)
+    pub const BIGINT: u8 = 0x7F;
     /// SMALLMONEY
-    pub const SMALLMONEY: u8 = 0x7E;
+    pub const SMALLMONEY: u8 = 0x7A;
+    /// CHAR
+    pub const CHAR: u8 = 0xA1;
     /// VARBINARY
     pub const VARBINARY: u8 = 0xA5;
     /// BINARY
-    pub const BINARY: u8 = 0xA7;
+    pub const BINARY: u8 = 0xAD;
     /// VARCHAR
-    pub const VARCHAR: u8 = 0xAF;
-    /// CHAR
-    pub const CHAR: u8 = 0xA1;
+    pub const VARCHAR: u8 = 0xA7;
     /// NVARCHAR
     pub const NVARCHAR: u8 = 0xE7;
     /// NCHAR
-    pub const NCHAR: u8 = 0xE1;
-    /// TEXT
-    pub const TEXT: u8 = 0x24;
+    pub const NCHAR: u8 = 0xEF;
     /// NTEXT
-    pub const NTEXT: u8 = 0xEF;
-    /// IMAGE
-    pub const IMAGE: u8 = 0x22;
-    /// DATETIME
-    pub const DATETIME: u8 = 0xF1;
-    /// DATETIME2
-    pub const DATETIME2: u8 = 0x27;
-    /// DATE
-    pub const DATE: u8 = 0x28;
-    /// TIME
-    pub const TIME: u8 = 0x2A;
-    /// DATETIMEOFFSET
-    pub const DATETIMEOFFSET: u8 = 0x29;
+    pub const NTEXT: u8 = 0x63;
+    /// XML
+    pub const XML: u8 = 0xF1;
     /// SQL_VARIANT
     pub const SQL_VARIANT: u8 = 0x98;
 }
@@ -222,17 +226,18 @@ pub fn sql_type_name(type_id: u8) -> &'static str {
     match type_id {
         SQL_NULL => "null",
         INT => "int",
-        INTN | INTN_2 => "intn",
+        INTN => "intn",
+        INTN_2 => "intn",
         BIT => "bit",
         SMALLINT => "smallint",
         TINYINT => "tinyint",
+        SMALLDATETIME => "smalldatetime",
         BIGINT => "bigint",
         FLOAT => "float",
         REAL => "real",
         UNIQUEIDENTIFIER => "uniqueidentifier",
         DECIMAL => "decimal",
         NUMERIC => "numeric",
-        MONEY => "money",
         SMALLMONEY => "smallmoney",
         VARBINARY => "varbinary",
         BINARY => "binary",
@@ -243,13 +248,36 @@ pub fn sql_type_name(type_id: u8) -> &'static str {
         TEXT => "text",
         NTEXT => "ntext",
         IMAGE => "image",
-        DATETIME => "datetime",
+        XML => "xml",
         DATETIME2 => "datetime2",
         DATE => "date",
         TIME => "time",
         DATETIMEOFFSET => "datetimeoffset",
         SQL_VARIANT => "sql_variant",
         _ => "unknown",
+    }
+}
+
+/// Check if a type uses variable-length u16 prefix
+pub fn is_u16_length_type(type_id: u8) -> bool {
+    use sql_types::*;
+    matches!(type_id, NVARCHAR | NCHAR | VARCHAR | CHAR | VARBINARY | BINARY)
+}
+
+/// Check if a type is a fixed-length type
+pub fn is_fixed_length_type(type_id: u8) -> bool {
+    use sql_types::*;
+    matches!(type_id, TINYINT | SMALLINT | BIT | SMALLDATETIME)
+}
+
+/// Get fixed length for fixed-length types
+pub fn fixed_type_length(type_id: u8) -> Option<usize> {
+    use sql_types::*;
+    match type_id {
+        TINYINT | BIT => Some(1),
+        SMALLINT => Some(2),
+        SMALLDATETIME => Some(4),
+        _ => None,
     }
 }
 
@@ -297,5 +325,19 @@ mod tests {
         assert_eq!(sql_type_name(sql_types::INT), "int");
         assert_eq!(sql_type_name(sql_types::NVARCHAR), "nvarchar");
         assert_eq!(sql_type_name(sql_types::DATETIME2), "datetime2");
+    }
+
+    #[test]
+    fn test_u16_length_types() {
+        assert!(is_u16_length_type(sql_types::NVARCHAR));
+        assert!(is_u16_length_type(sql_types::VARCHAR));
+        assert!(!is_u16_length_type(sql_types::TINYINT));
+    }
+
+    #[test]
+    fn test_fixed_length_types() {
+        assert_eq!(fixed_type_length(sql_types::TINYINT), Some(1));
+        assert_eq!(fixed_type_length(sql_types::SMALLINT), Some(2));
+        assert_eq!(fixed_type_length(sql_types::NVARCHAR), None);
     }
 }

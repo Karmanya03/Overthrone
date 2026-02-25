@@ -18,7 +18,6 @@
 //! - ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 enabled
 //! - ESC7: Vulnerable CA permissions
 //! - ESC8: ADCS Web Enrollment relay (NTLM relay to Web Enrollment)
-
 pub mod csr;
 pub mod esc4;
 pub mod esc5;
@@ -39,9 +38,9 @@ pub use csr::{
     create_client_auth_csr, create_esc1_csr,
 };
 pub use esc4::Esc4Target;
-pub use esc5::Esc5Target;
+pub use esc5::{Esc5AclResult, Esc5Target};
 pub use esc7::Esc7Target;
-pub use esc8::Esc8AttackConfig;
+pub use esc8::{Esc8AttackConfig, Esc8RelayTarget};
 pub use ldap_enumeration::{
     CaConfiguration, CaVulnerabilityInfo, EnrollmentService, LdapAdcsEnumerator,
     LdapCertificateTemplate, LdapCertificationAuthority,
@@ -608,43 +607,6 @@ impl Default for AdcsClient {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ESC8: NTLM Relay to Web Enrollment
-// ═══════════════════════════════════════════════════════════
-
-/// ESC8 Attack - Relay NTLM authentication to ADCS Web Enrollment
-///
-/// When a user authenticates via NTLM to an attacker-controlled endpoint,
-/// the attacker can relay that authentication to the CA's Web Enrollment
-/// interface to request certificates in the victim's name.
-pub struct Esc8RelayTarget {
-    pub ca_server: String,
-    pub template: String,
-    pub target_upn: Option<String>,
-}
-
-impl Esc8RelayTarget {
-    /// Create a new ESC8 target
-    pub fn new(ca_server: impl Into<String>, template: impl Into<String>) -> Self {
-        Self {
-            ca_server: ca_server.into(),
-            template: template.into(),
-            target_upn: None,
-        }
-    }
-
-    /// Set the target UPN for the certificate
-    pub fn with_target_upn(mut self, upn: impl Into<String>) -> Self {
-        self.target_upn = Some(upn.into());
-        self
-    }
-
-    /// Get the Web Enrollment URL for this target
-    pub fn web_enrollment_url(&self) -> String {
-        format!("https://{}/certsrv/certfnsh.asp", self.ca_server)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════
 // Helper Functions
 // ═══════════════════════════════════════════════════════════
 
@@ -778,12 +740,10 @@ mod tests {
 
     #[test]
     fn test_esc8_target() {
-        let target =
-            Esc8RelayTarget::new("ca.corp.local", "User").with_target_upn("admin@corp.local");
-
+        let target = Esc8RelayTarget::new("ca.corp.local", "User").with_upn("admin@corp.local");
         assert_eq!(
-            target.web_enrollment_url(),
-            "https://ca.corp.local/certsrv/certfnsh.asp"
+            target.enrollment_url(),
+            "http://ca.corp.local/certsrv/certfnsh.asp"
         );
         assert_eq!(target.target_upn, Some("admin@corp.local".to_string()));
     }

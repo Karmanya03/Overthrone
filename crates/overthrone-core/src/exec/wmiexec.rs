@@ -71,10 +71,7 @@ pub struct WmiExecResult {
 ///
 /// Uses `wmic.exe` process call or falls back to SCM-based execution
 /// with WMI-compatible command wrapping.
-pub async fn exec_command(
-    session: &SmbSession,
-    command: &str,
-) -> Result<WmiExecResult> {
+pub async fn exec_command(session: &SmbSession, command: &str) -> Result<WmiExecResult> {
     let config = WmiExecConfig::default();
     execute(session, command, &config).await
 }
@@ -145,10 +142,7 @@ pub async fn execute(
 ///
 /// This sends an IWbemServices::ExecMethod call for Win32_Process.Create
 /// through the IRemUnknown/IDispatch interfaces.
-async fn try_wmi_process_create(
-    session: &SmbSession,
-    command: &str,
-) -> Result<()> {
+async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<()> {
     // DCOM over SMB requires:
     // 1. Bind to \pipe\epmapper (endpoint mapper) to resolve IRemoteSCMActivator
     // 2. CoCreateInstance for WMI
@@ -172,10 +166,7 @@ async fn try_wmi_process_create(
 }
 
 /// Fallback: create a temporary service via SCM (like smbexec)
-async fn try_scm_execution(
-    session: &SmbSession,
-    command: &str,
-) -> Result<()> {
+async fn try_scm_execution(session: &SmbSession, command: &str) -> Result<()> {
     let config = super::psexec::PsExecConfig {
         service_name: format!("WmiEx{:04X}", rand::random::<u16>()),
         display_name: "Windows Management Instrumentation Helper".to_string(),
@@ -199,7 +190,10 @@ async fn wait_for_output(
     for attempt in 0..max_attempts {
         tokio::time::sleep(poll_interval).await;
 
-        match session.read_file(&config.output_share, output_filename).await {
+        match session
+            .read_file(&config.output_share, output_filename)
+            .await
+        {
             Ok(data) if !data.is_empty() => {
                 debug!(
                     "WMIExec: Output ready after {}ms ({} bytes)",
@@ -240,21 +234,21 @@ async fn wait_for_output(
 fn build_epm_bind() -> Vec<u8> {
     // EPM interface UUID: e1af8308-5d1f-11c9-91a4-08002b14a0fa v3.0
     let epm_uuid: [u8; 16] = [
-        0x08, 0x83, 0xAF, 0xE1, 0x1F, 0x5D, 0xC9, 0x11,
-        0x91, 0xA4, 0x08, 0x00, 0x2B, 0x14, 0xA0, 0xFA,
+        0x08, 0x83, 0xAF, 0xE1, 0x1F, 0x5D, 0xC9, 0x11, 0x91, 0xA4, 0x08, 0x00, 0x2B, 0x14, 0xA0,
+        0xFA,
     ];
 
     let ndr_uuid: [u8; 16] = [
-        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
-        0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11, 0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48,
+        0x60,
     ];
 
     let mut pkt = Vec::with_capacity(72);
 
     // DCE/RPC header
-    pkt.push(5);    // version
-    pkt.push(0);    // minor
-    pkt.push(11);   // bind
+    pkt.push(5); // version
+    pkt.push(0); // minor
+    pkt.push(11); // bind
     pkt.push(0x03); // first + last
     pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data repr
     pkt.extend_from_slice(&[0x00, 0x00]); // frag length placeholder
@@ -265,11 +259,11 @@ fn build_epm_bind() -> Vec<u8> {
     pkt.extend_from_slice(&4096u16.to_le_bytes()); // max xmit
     pkt.extend_from_slice(&4096u16.to_le_bytes()); // max recv
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // assoc group
-    pkt.extend_from_slice(&1u32.to_le_bytes());    // num ctx items
+    pkt.extend_from_slice(&1u32.to_le_bytes()); // num ctx items
 
     // Context item
-    pkt.extend_from_slice(&0u16.to_le_bytes());  // ctx id
-    pkt.extend_from_slice(&1u16.to_le_bytes());  // num transfer
+    pkt.extend_from_slice(&0u16.to_le_bytes()); // ctx id
+    pkt.extend_from_slice(&1u16.to_le_bytes()); // num transfer
 
     // Abstract: EPM
     pkt.extend_from_slice(&epm_uuid);
@@ -288,10 +282,7 @@ fn build_epm_bind() -> Vec<u8> {
 }
 
 /// Execute multiple commands and collect results
-pub async fn exec_commands(
-    session: &SmbSession,
-    commands: &[&str],
-) -> Vec<WmiExecResult> {
+pub async fn exec_commands(session: &SmbSession, commands: &[&str]) -> Vec<WmiExecResult> {
     let mut results = Vec::new();
 
     for cmd in commands {
@@ -346,5 +337,38 @@ impl<'a> WmiExecShell<'a> {
 
     pub fn history(&self) -> &[(String, String)] {
         &self.history
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Executor Implementation
+// ═══════════════════════════════════════════════════════════
+
+pub struct WmiExecutor {
+    creds: super::ExecCredentials,
+}
+
+impl WmiExecutor {
+    pub fn new(creds: super::ExecCredentials) -> Self {
+        Self { creds }
+    }
+}
+
+#[async_trait::async_trait]
+impl super::RemoteExecutor for WmiExecutor {
+    fn method(&self) -> super::ExecMethod {
+        super::ExecMethod::WmiExec
+    }
+
+    async fn execute(
+        &self,
+        target: &str,
+        command: &str,
+    ) -> crate::error::Result<super::ExecOutput> {
+        todo!("WmiExec implementation")
+    }
+
+    async fn check_available(&self, _target: &str) -> bool {
+        false
     }
 }

@@ -1,0 +1,1059 @@
+warning: C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\Cargo.toml: file `C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\src\main.rs` found to be present in multiple build targets:
+  * `bin` target `overthrone`
+  * `bin` target `ovt`
+    Checking overthrone-core v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-core)
+error[E0433]: failed to resolve: could not find `SmbExecutor` in `smbexec`
+   --> crates\overthrone-core\src\exec\mod.rs:187:27
+    |
+187 |         Box::new(smbexec::SmbExecutor::new(creds.clone())),
+    |                           ^^^^^^^^^^^ could not find `SmbExecutor` in `smbexec`
+
+error[E0433]: failed to resolve: could not find `PsExecutor` in `psexec`
+   --> crates\overthrone-core\src\exec\mod.rs:188:26
+    |
+188 |         Box::new(psexec::PsExecutor::new(creds.clone())),
+    |                          ^^^^^^^^^^ could not find `PsExecutor` in `psexec`
+
+error[E0433]: failed to resolve: could not find `WmiExecutor` in `wmiexec`
+   --> crates\overthrone-core\src\exec\mod.rs:189:27
+    |
+189 |         Box::new(wmiexec::WmiExecutor::new(creds.clone())),
+    |                           ^^^^^^^^^^^ could not find `WmiExecutor` in `wmiexec`
+
+warning: unnecessary `>= y + 1` or `x - 1 >=`
+    --> crates\overthrone-core\src\mssql\mod.rs:1219:24
+     |
+1219 |                     if pos + 1 <= data.len() {
+     |                        ^^^^^^^^^^^^^^^^^^^^^ help: change it to: `pos < data.len()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#int_plus_one
+     = note: `#[warn(clippy::int_plus_one)]` on by default
+
+warning: unnecessary `>= y + 1` or `x - 1 >=`
+    --> crates\overthrone-core\src\mssql\mod.rs:1228:24
+     |
+1228 |                     if pos + 1 <= data.len() {
+     |                        ^^^^^^^^^^^^^^^^^^^^^ help: change it to: `pos < data.len()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#int_plus_one
+
+error[E0599]: no method named `nodes` found for struct `std::sync::RwLockReadGuard<'_, graph::AttackGraph>` in the current scope
+   --> crates\overthrone-core\src\plugin\builtin.rs:193:23
+    |
+193 |                 graph.nodes()
+    |                       ^^^^^ method not found in `std::sync::RwLockReadGuard<'_, graph::AttackGraph>`
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:53:35
+    |
+ 53 |             if WSManInitialize(0, &mut api_handle) != 0 {
+    |                ---------------    ^^^^^^^^^^^^^^^ expected `*mut WSMAN_API_HANDLE`, found `&mut *mut _`
+    |                |
+    |                arguments to this function are incorrect
+    |
+    = note:    expected raw pointer `*mut windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE`
+            found mutable reference `&mut *mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:108:15
+    |
+108 | pub unsafe fn WSManInitialize(flags: u32, apihandle: *mut WSMAN_API_HANDLE) -> u32 {
+    |               ^^^^^^^^^^^^^^^
+help: consider removing the borrow
+    |
+ 53 -             if WSManInitialize(0, &mut api_handle) != 0 {
+ 53 +             if WSManInitialize(0, api_handle) != 0 {
+    |
+
+error[E0533]: expected value, found struct variant `OverthroneError::Exec`
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:54:28
+   |
+54 |                 return Err(OverthroneError::Exec("WSManInitialize failed".into()));
+   |                            ^^^^^^^^^^^^^^^^^^^^^ not a value
+   |
+help: you might have meant to create a new value of the struct
+   |
+54 -                 return Err(OverthroneError::Exec("WSManInitialize failed".into()));
+54 +                 return Err(OverthroneError::Exec { target: /* value */, reason: /* value */ });
+   |
+
+error[E0308]: mismatched types
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:67:42
+   |
+67 |                 authenticationMechanism: WSMAN_FLAG_AUTH_NEGOTIATE,
+   |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `WSManAuthenticationFlags`
+
+error[E0560]: struct `windows::Win32::System::RemoteManagement::WSMAN_AUTHENTICATION_CREDENTIALS` has no field named `userAccount`
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:68:17
+   |
+68 |                 userAccount: WSMAN_USERNAME_PASSWORD_CREDS {
+   |                 ^^^^^^^^^^^ `windows::Win32::System::RemoteManagement::WSMAN_AUTHENTICATION_CREDENTIALS` does not have this field
+   |
+   = note: available fields are: `Anonymous`
+
+error[E0308]: arguments to this function are incorrect
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:75:16
+   |
+75 |             if WSManCreateSession(
+   |                ^^^^^^^^^^^^^^^^^^
+76 |                 api_handle,
+   |                 ---------- argument #1 of type `windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE` is missing
+...
+80 |                 std::ptr::null_mut(),
+   |                 --------------------
+   |                 |
+   |                 unexpected argument #5 of type `*mut _`
+   |                 argument #5 of type `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_PROXY_INFO>` is missing
+81 |                 &mut session_handle,
+   |                 ------------------- unexpected argument #6 of type `&mut *mut _`
+   |
+note: function defined here
+  --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:47:15
+   |
+47 | pub unsafe fn WSManCreateSession<P1>(apihandle: WSMAN_API_HANDLE, connection: P1, flags: u32, serverauthenticationcredentials: Optio...
+   |               ^^^^^^^^^^^^^^^^^^
+help: did you mean
+   |
+75 ~             if WSManCreateSession(
+76 +                 /* windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE */,
+77 +                 PCWSTR(conn_wide.as_ptr()),
+78 +                 0,
+79 +                 Some(&mut auth_creds as *mut _ as *mut _),
+80 +                 /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_PROXY_INFO> */,
+81 +                 api_handle,
+82 ~             ) != 0
+   |
+
+error[E0308]: mismatched types
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:84:35
+   |
+84 |                 WSManDeinitialize(api_handle, 0);
+   |                 ----------------- ^^^^^^^^^^ expected `Option<WSMAN_API_HANDLE>`, found `*mut _`
+   |                 |
+   |                 arguments to this function are incorrect
+   |
+   = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE>`
+           found raw pointer `*mut _`
+note: function defined here
+  --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:80:15
+   |
+80 | pub unsafe fn WSManDeinitialize(apihandle: Option<WSMAN_API_HANDLE>, flags: u32) -> u32 {
+   |               ^^^^^^^^^^^^^^^^^
+
+error[E0533]: expected value, found struct variant `OverthroneError::Exec`
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:85:28
+   |
+85 |                 return Err(OverthroneError::Exec("WSManCreateSession failed".into()));
+   |                            ^^^^^^^^^^^^^^^^^^^^^ not a value
+   |
+help: you might have meant to create a new value of the struct
+   |
+85 -                 return Err(OverthroneError::Exec("WSManCreateSession failed".into()));
+85 +                 return Err(OverthroneError::Exec { target: /* value */, reason: /* value */ });
+   |
+
+error[E0061]: this function takes 7 arguments but 8 arguments were supplied
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:95:16
+    |
+ 95 |             if WSManCreateShell(
+    |                ^^^^^^^^^^^^^^^^
+...
+103 |                 &mut shell_handle,
+    |                 ----------------- unexpected argument #8 of type `&mut *mut _`
+    |
+note: expected `WSMAN_SESSION_HANDLE`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:96:17
+    |
+ 96 |                 session_handle,
+    |                 ^^^^^^^^^^^^^^
+    = note:   expected struct `windows::Win32::System::RemoteManagement::WSMAN_SESSION_HANDLE`
+            found raw pointer `*mut _`
+note: expected `Option<*const ...>`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:99:17
+    |
+ 99 |                 std::ptr::null_mut(),
+    |                 ^^^^^^^^^^^^^^^^^^^^
+    = note:     expected enum `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_SHELL_STARTUP_INFO_V11>`
+            found raw pointer `*mut _`
+note: expected `Option<*const WSMAN_OPTION_SET>`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:100:17
+    |
+100 |                 std::ptr::null_mut(),
+    |                 ^^^^^^^^^^^^^^^^^^^^
+    = note:     expected enum `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_OPTION_SET>`
+            found raw pointer `*mut _`
+note: expected `Option<*const WSMAN_DATA>`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:101:17
+    |
+101 |                 std::ptr::null_mut(),
+    |                 ^^^^^^^^^^^^^^^^^^^^
+    = note:     expected enum `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_DATA>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:55:15
+    |
+ 55 | pub unsafe fn WSManCreateShell<P2>(session: WSMAN_SESSION_HANDLE, flags: u32, resourceuri: P2, startupinfo: Option<*const WSMAN_SHE...
+    |               ^^^^^^^^^^^^^^^^
+help: try wrapping the expression in `Some`
+    |
+ 99 |                 Some(std::ptr::null_mut()),
+    |                 +++++                    +
+help: try wrapping the expression in `Some`
+    |
+100 |                 Some(std::ptr::null_mut()),
+    |                 +++++                    +
+help: try wrapping the expression in `Some`
+    |
+101 |                 Some(std::ptr::null_mut()),
+    |                 +++++                    +
+help: remove the extra argument
+    |
+ 96 ~                 /* windows::Win32::System::RemoteManagement::WSMAN_SESSION_HANDLE */,
+ 97 |                 0,
+ 98 |                 PCWSTR(shell_uri.as_ptr()),
+ 99 ~                 /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_SHELL_STARTUP_INFO_V11> */,
+100 ~                 /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_OPTION_SET> */,
+101 ~                 /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_DATA> */,
+102 ~                 &mut async_data,
+    |
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:104:18
+    |
+ 95 |               if WSManCreateShell(
+    |  ________________-
+ 96 | |                 session_handle,
+ 97 | |                 0,
+ 98 | |                 PCWSTR(shell_uri.as_ptr()),
+...   |
+103 | |                 &mut shell_handle,
+104 | |             ) != 0
+    | |             -    ^ expected `WSMAN_SHELL_HANDLE`, found integer
+    | |_____________|
+    |               expected because this is `windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE`
+    |
+help: try wrapping the expression in `windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE`
+    |
+104 |             ) != windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE(0)
+    |                  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ +
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:106:35
+    |
+106 |                 WSManCloseSession(session_handle, 0);
+    |                 ----------------- ^^^^^^^^^^^^^^ expected `Option<WSMAN_SESSION_HANDLE>`, found `*mut _`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_SESSION_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:12:15
+    |
+ 12 | pub unsafe fn WSManCloseSession(session: Option<WSMAN_SESSION_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:107:35
+    |
+107 |                 WSManDeinitialize(api_handle, 0);
+    |                 ----------------- ^^^^^^^^^^ expected `Option<WSMAN_API_HANDLE>`, found `*mut _`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:80:15
+    |
+ 80 | pub unsafe fn WSManDeinitialize(apihandle: Option<WSMAN_API_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0533]: expected value, found struct variant `OverthroneError::Exec`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:108:28
+    |
+108 |                 return Err(OverthroneError::Exec("WSManCreateShell failed".into()));
+    |                            ^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+108 -                 return Err(OverthroneError::Exec("WSManCreateShell failed".into()));
+108 +                 return Err(OverthroneError::Exec { target: /* value */, reason: /* value */ });
+    |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:118:16
+    |
+118 |             if WSManRunShellCommand(
+    |                ^^^^^^^^^^^^^^^^^^^^
+...
+125 |                 &mut command_handle,
+    |                 ------------------- unexpected argument #7 of type `&mut *mut _`
+    |
+note: expected `WSMAN_SHELL_HANDLE`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:119:17
+    |
+119 |                 shell_handle,
+    |                 ^^^^^^^^^^^^
+    = note:   expected struct `windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE`
+            found raw pointer `*mut _`
+note: expected `Option<*const WSMAN_OPTION_SET>`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:123:17
+    |
+123 |                 std::ptr::null_mut(),
+    |                 ^^^^^^^^^^^^^^^^^^^^
+    = note:     expected enum `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_OPTION_SET>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:198:15
+    |
+198 | pub unsafe fn WSManRunShellCommand<P2>(shell: WSMAN_SHELL_HANDLE, flags: u32, commandline: P2, args: Option<*const WSMAN_COMMAND_AR...
+    |               ^^^^^^^^^^^^^^^^^^^^
+help: try wrapping the expression in `Some`
+    |
+123 |                 Some(std::ptr::null_mut()),
+    |                 +++++                    +
+help: remove the extra argument
+    |
+119 ~                 /* windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE */,
+120 |                 0,
+121 |                 PCWSTR(command_wide.as_ptr()),
+122 |                 Some(&command_line as *const _ as *const _),
+123 ~                 /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_OPTION_SET> */,
+124 ~                 &mut async_data,
+    |
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:126:18
+    |
+118 |               if WSManRunShellCommand(
+    |  ________________-
+119 | |                 shell_handle,
+120 | |                 0,
+121 | |                 PCWSTR(command_wide.as_ptr()),
+...   |
+125 | |                 &mut command_handle,
+126 | |             ) != 0
+    | |             -    ^ expected `WSMAN_COMMAND_HANDLE`, found integer
+    | |_____________|
+    |               expected because this is `windows::Win32::System::RemoteManagement::WSMAN_COMMAND_HANDLE`
+    |
+help: try wrapping the expression in `windows::Win32::System::RemoteManagement::WSMAN_COMMAND_HANDLE`
+    |
+126 |             ) != windows::Win32::System::RemoteManagement::WSMAN_COMMAND_HANDLE(0)
+    |                  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ +
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:128:33
+    |
+128 |                 WSManCloseShell(shell_handle, 0, &mut async_data);
+    |                 --------------- ^^^^^^^^^^^^ expected `Option<WSMAN_SHELL_HANDLE>`, found `*mut _`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:17:15
+    |
+ 17 | pub unsafe fn WSManCloseShell(shellhandle: Option<WSMAN_SHELL_HANDLE>, flags: u32, r#async: *const WSMAN_SHELL_ASYNC) {
+    |               ^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:129:35
+    |
+129 |                 WSManCloseSession(session_handle, 0);
+    |                 ----------------- ^^^^^^^^^^^^^^ expected `Option<WSMAN_SESSION_HANDLE>`, found `*mut _`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_SESSION_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:12:15
+    |
+ 12 | pub unsafe fn WSManCloseSession(session: Option<WSMAN_SESSION_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:130:35
+    |
+130 |                 WSManDeinitialize(api_handle, 0);
+    |                 ----------------- ^^^^^^^^^^ expected `Option<WSMAN_API_HANDLE>`, found `*mut _`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:80:15
+    |
+ 80 | pub unsafe fn WSManDeinitialize(apihandle: Option<WSMAN_API_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0533]: expected value, found struct variant `OverthroneError::Exec`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:131:28
+    |
+131 |                 return Err(OverthroneError::Exec("WSManRunShellCommand failed".into()));
+    |                            ^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+131 -                 return Err(OverthroneError::Exec("WSManRunShellCommand failed".into()));
+131 +                 return Err(OverthroneError::Exec { target: /* value */, reason: /* value */ });
+    |
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:137:16
+    |
+137 |             if WSManReceiveShellOutput(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^
+...
+143 |                 &mut receive_data,
+    |                 ----------------- unexpected argument #6 of type `&mut *mut _`
+    |
+note: expected `WSMAN_SHELL_HANDLE`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:138:17
+    |
+138 |                 shell_handle,
+    |                 ^^^^^^^^^^^^
+    = note:   expected struct `windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE`
+            found raw pointer `*mut _`
+note: expected `Option<WSMAN_COMMAND_HANDLE>`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:139:17
+    |
+139 |                 command_handle,
+    |                 ^^^^^^^^^^^^^^
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_COMMAND_HANDLE>`
+            found raw pointer `*mut _`
+note: expected `Option<*const WSMAN_STREAM_ID_SET>`, found `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:141:17
+    |
+141 |                 std::ptr::null_mut(),
+    |                 ^^^^^^^^^^^^^^^^^^^^
+    = note:     expected enum `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_STREAM_ID_SET>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:179:15
+    |
+179 | pub unsafe fn WSManReceiveShellOutput(shell: WSMAN_SHELL_HANDLE, command: Option<WSMAN_COMMAND_HANDLE>, flags: u32, desiredstreamse...
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+help: try wrapping the expression in `Some`
+    |
+141 |                 Some(std::ptr::null_mut()),
+    |                 +++++                    +
+help: remove the extra argument
+    |
+138 ~                 /* windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE */,
+139 ~                 /* std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_COMMAND_HANDLE> */,
+140 |                 0,
+141 ~                 /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_STREAM_ID_SET> */,
+142 ~                 &mut async_data,
+    |
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:144:18
+    |
+137 |               if WSManReceiveShellOutput(
+    |  ________________-
+138 | |                 shell_handle,
+139 | |                 command_handle,
+140 | |                 0,
+...   |
+143 | |                 &mut receive_data,
+144 | |             ) == 0
+    | |             -    ^ expected `WSMAN_OPERATION_HANDLE`, found integer
+    | |_____________|
+    |               expected because this is `windows::Win32::System::RemoteManagement::WSMAN_OPERATION_HANDLE`
+    |
+help: try wrapping the expression in `windows::Win32::System::RemoteManagement::WSMAN_OPERATION_HANDLE`
+    |
+144 |             ) == windows::Win32::System::RemoteManagement::WSMAN_OPERATION_HANDLE(0)
+    |                  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ +
+
+error[E0282]: type annotations needed for `*mut _`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:136:17
+    |
+136 |             let mut receive_data = std::ptr::null_mut();
+    |                 ^^^^^^^^^^^^^^^^
+...
+145 |                 && !receive_data.is_null()
+    |                                  ------- cannot call a method on a raw pointer with an unknown pointee type
+    |
+help: consider giving `receive_data` an explicit type, where the placeholders `_` are specified
+    |
+136 |             let mut receive_data: *mut T = std::ptr::null_mut();
+    |                                 ++++++++
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:150:31
+    |
+150 |             WSManCloseCommand(command_handle, 0, &mut async_data);
+    |             ----------------- ^^^^^^^^^^^^^^ expected `Option<WSMAN_COMMAND_HANDLE>`, found `*mut _`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_COMMAND_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:2:15
+    |
+  2 | pub unsafe fn WSManCloseCommand(commandhandle: Option<WSMAN_COMMAND_HANDLE>, flags: u32, r#async: *const WSMAN_SHELL_ASYNC) {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:151:29
+    |
+151 |             WSManCloseShell(shell_handle, 0, &mut async_data);
+    |             --------------- ^^^^^^^^^^^^ expected `Option<WSMAN_SHELL_HANDLE>`, found `*mut _`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_SHELL_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:17:15
+    |
+ 17 | pub unsafe fn WSManCloseShell(shellhandle: Option<WSMAN_SHELL_HANDLE>, flags: u32, r#async: *const WSMAN_SHELL_ASYNC) {
+    |               ^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:152:31
+    |
+152 |             WSManCloseSession(session_handle, 0);
+    |             ----------------- ^^^^^^^^^^^^^^ expected `Option<WSMAN_SESSION_HANDLE>`, found `*mut _`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_SESSION_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:12:15
+    |
+ 12 | pub unsafe fn WSManCloseSession(session: Option<WSMAN_SESSION_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:153:31
+    |
+153 |             WSManDeinitialize(api_handle, 0);
+    |             ----------------- ^^^^^^^^^^ expected `Option<WSMAN_API_HANDLE>`, found `*mut _`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:80:15
+    |
+ 80 | pub unsafe fn WSManDeinitialize(apihandle: Option<WSMAN_API_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0533]: expected value, found struct variant `OverthroneError::Exec`
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:178:26
+    |
+178 |             .map_err(|e| OverthroneError::Exec(format!("WinRM task panic: {e}")))?
+    |                          ^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+178 -             .map_err(|e| OverthroneError::Exec(format!("WinRM task panic: {e}")))?
+178 +             .map_err(|e| OverthroneError::Exec { target: /* value */, reason: /* value */ })?
+    |
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:187:39
+    |
+187 |                 if WSManInitialize(0, &mut api_handle) != 0 {
+    |                    ---------------    ^^^^^^^^^^^^^^^ expected `*mut WSMAN_API_HANDLE`, found `&mut *mut _`
+    |                    |
+    |                    arguments to this function are incorrect
+    |
+    = note:    expected raw pointer `*mut windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE`
+            found mutable reference `&mut *mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:108:15
+    |
+108 | pub unsafe fn WSManInitialize(flags: u32, apihandle: *mut WSMAN_API_HANDLE) -> u32 {
+    |               ^^^^^^^^^^^^^^^
+help: consider removing the borrow
+    |
+187 -                 if WSManInitialize(0, &mut api_handle) != 0 {
+187 +                 if WSManInitialize(0, api_handle) != 0 {
+    |
+
+error[E0308]: arguments to this function are incorrect
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:193:30
+    |
+193 |                   let result = WSManCreateSession(
+    |                                ^^^^^^^^^^^^^^^^^^
+194 |                       api_handle,
+    |                       ---------- argument #1 of type `windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE` is missing
+...
+197 |                       std::ptr::null_mut(),
+    |                       --------------------
+    |                       |
+    |  _____________________unexpected argument #4 of type `*mut _`
+    | |
+198 | |                     std::ptr::null_mut(),
+    | |                     --------------------
+    | |_____________________|__________________|
+    |                       |                  two arguments of type `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_AUTHENTICATION_CREDENTIALS>` and `std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_PROXY_INFO>` are missing
+    |                       unexpected argument #5 of type `*mut _`
+199 |                       &mut session_handle,
+    |                       ------------------- unexpected argument #6 of type `&mut *mut _`
+    |
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:47:15
+    |
+ 47 | pub unsafe fn WSManCreateSession<P1>(apihandle: WSMAN_API_HANDLE, connection: P1, flags: u32, serverauthenticationcredentials: Opti...
+    |               ^^^^^^^^^^^^^^^^^^
+help: did you mean
+    |
+193 ~                 let result = WSManCreateSession(
+194 +                     /* windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE */,
+195 +                     PCWSTR(conn_wide.as_ptr()),
+196 +                     0,
+197 +                     /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_AUTHENTICATION_CREDENTIALS> */,
+198 +                     /* std::option::Option<*const windows::Win32::System::RemoteManagement::WSMAN_PROXY_INFO> */,
+199 +                     api_handle,
+200 ~                 );
+    |
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:202:39
+    |
+202 |                     WSManCloseSession(session_handle, 0);
+    |                     ----------------- ^^^^^^^^^^^^^^ expected `Option<WSMAN_SESSION_HANDLE>`, found `*mut _`
+    |                     |
+    |                     arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_SESSION_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:12:15
+    |
+ 12 | pub unsafe fn WSManCloseSession(session: Option<WSMAN_SESSION_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\overthrone-core\src\exec\winrm\windows.rs:204:35
+    |
+204 |                 WSManDeinitialize(api_handle, 0);
+    |                 ----------------- ^^^^^^^^^^ expected `Option<WSMAN_API_HANDLE>`, found `*mut _`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note:     expected enum `std::option::Option<windows::Win32::System::RemoteManagement::WSMAN_API_HANDLE>`
+            found raw pointer `*mut _`
+note: function defined here
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.62.2\src\Windows\Win32\System\RemoteManagement\mod.rs:80:15
+    |
+ 80 | pub unsafe fn WSManDeinitialize(apihandle: Option<WSMAN_API_HANDLE>, flags: u32) -> u32 {
+    |               ^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `petgraph::Graph<graph::AdNode, graph::EdgeType>: serde::Serialize` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:252:24
+     |
+ 252 | #[derive(Debug, Clone, Serialize, Deserialize)]
+     |                        ^^^^^^^^^ the trait `adcs::_::_serde::Serialize` is not implemented for `petgraph::Graph<graph::AdNode, graph::EdgeType>`
+ 253 | pub struct AttackGraph {
+ 254 |     graph: DiGraph<AdNode, EdgeType>,
+     |     -------------------------------- required by a bound introduced by this call
+     |
+     = note: for local types consider adding `#[derive(serde::Serialize)]` to your `petgraph::Graph<graph::AdNode, graph::EdgeType>` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+             and 459 others
+note: required by a bound in `adcs::_::_serde::ser::SerializeStruct::serialize_field`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\ser\mod.rs:1917:21
+     |
+1915 |     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+     |        --------------- required by a bound in this associated function
+1916 |     where
+1917 |         T: ?Sized + Serialize;
+     |                     ^^^^^^^^^ required by this bound in `SerializeStruct::serialize_field`
+     = note: this error originates in the derive macro `Serialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `petgraph::prelude::NodeIndex: serde::Serialize` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:252:24
+     |
+ 252 |   #[derive(Debug, Clone, Serialize, Deserialize)]
+     |                          ^^^^^^^^^ the trait `adcs::_::_serde::Serialize` is not implemented for `petgraph::prelude::NodeIndex`
+...
+ 255 | /     /// Maps "NAME@DOMAIN" (uppercase) → NodeIndex for fast lookup
+ 256 | |     node_index: HashMap<String, NodeIndex>,
+     | |__________________________________________- required by a bound introduced by this call
+     |
+     = note: for local types consider adding `#[derive(serde::Serialize)]` to your `petgraph::prelude::NodeIndex` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+             and 459 others
+     = note: required for `std::collections::HashMap<std::string::String, petgraph::prelude::NodeIndex>` to implement `adcs::_::_serde::Serialize`
+note: required by a bound in `adcs::_::_serde::ser::SerializeStruct::serialize_field`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\ser\mod.rs:1917:21
+     |
+1915 |     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+     |        --------------- required by a bound in this associated function
+1916 |     where
+1917 |         T: ?Sized + Serialize;
+     |                     ^^^^^^^^^ required by this bound in `SerializeStruct::serialize_field`
+     = note: this error originates in the derive macro `Serialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `petgraph::Graph<graph::AdNode, graph::EdgeType>: serde::Deserialize<'de>` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:254:12
+     |
+ 254 |     graph: DiGraph<AdNode, EdgeType>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::Graph<graph::AdNode, graph::EdgeType>`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::Graph<graph::AdNode, graph::EdgeType>` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+               `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+               `()` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+             and 468 others
+note: required by a bound in `adcs::_::_serde::de::SeqAccess::next_element`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\de\mod.rs:1771:12
+     |
+1769 |     fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+     |        ------------ required by a bound in this associated function
+1770 |     where
+1771 |         T: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `SeqAccess::next_element`
+     = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `petgraph::prelude::NodeIndex: serde::Deserialize<'de>` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:256:17
+     |
+ 256 |     node_index: HashMap<String, NodeIndex>,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::prelude::NodeIndex`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::prelude::NodeIndex` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+               `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+               `()` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+             and 468 others
+     = note: required for `std::collections::HashMap<std::string::String, petgraph::prelude::NodeIndex>` to implement `adcs::_::_serde::Deserialize<'_>`
+note: required by a bound in `adcs::_::_serde::de::SeqAccess::next_element`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\de\mod.rs:1771:12
+     |
+1769 |     fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+     |        ------------ required by a bound in this associated function
+1770 |     where
+1771 |         T: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `SeqAccess::next_element`
+     = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `petgraph::prelude::NodeIndex: serde::Deserialize<'de>` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:258:15
+     |
+ 258 |     dn_index: HashMap<String, NodeIndex>,
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::prelude::NodeIndex`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::prelude::NodeIndex` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+               `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+               `()` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+             and 468 others
+     = note: required for `std::collections::HashMap<std::string::String, petgraph::prelude::NodeIndex>` to implement `adcs::_::_serde::Deserialize<'_>`
+note: required by a bound in `adcs::_::_serde::de::SeqAccess::next_element`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\de\mod.rs:1771:12
+     |
+1769 |     fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+     |        ------------ required by a bound in this associated function
+1770 |     where
+1771 |         T: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `SeqAccess::next_element`
+     = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `petgraph::Graph<graph::AdNode, graph::EdgeType>: serde::Deserialize<'de>` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:254:12
+     |
+ 254 |     graph: DiGraph<AdNode, EdgeType>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::Graph<graph::AdNode, graph::EdgeType>`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::Graph<graph::AdNode, graph::EdgeType>` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+               `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+               `()` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+             and 468 others
+note: required by a bound in `adcs::_::_serde::de::MapAccess::next_value`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\de\mod.rs:1916:12
+     |
+1914 |     fn next_value<V>(&mut self) -> Result<V, Self::Error>
+     |        ---------- required by a bound in this associated function
+1915 |     where
+1916 |         V: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `MapAccess::next_value`
+     = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `petgraph::prelude::NodeIndex: serde::Deserialize<'de>` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:256:17
+     |
+ 256 |     node_index: HashMap<String, NodeIndex>,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::prelude::NodeIndex`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::prelude::NodeIndex` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+               `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+               `()` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+             and 468 others
+     = note: required for `std::collections::HashMap<std::string::String, petgraph::prelude::NodeIndex>` to implement `adcs::_::_serde::Deserialize<'_>`
+note: required by a bound in `adcs::_::_serde::de::MapAccess::next_value`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\de\mod.rs:1916:12
+     |
+1914 |     fn next_value<V>(&mut self) -> Result<V, Self::Error>
+     |        ---------- required by a bound in this associated function
+1915 |     where
+1916 |         V: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `MapAccess::next_value`
+     = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `petgraph::prelude::NodeIndex: serde::Deserialize<'de>` is not satisfied
+    --> crates\overthrone-core\src\graph\mod.rs:258:15
+     |
+ 258 |     dn_index: HashMap<String, NodeIndex>,
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::prelude::NodeIndex`
+     |
+     = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::prelude::NodeIndex` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+               `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+               `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+               `()` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+               `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+             and 468 others
+     = note: required for `std::collections::HashMap<std::string::String, petgraph::prelude::NodeIndex>` to implement `adcs::_::_serde::Deserialize<'_>`
+note: required by a bound in `adcs::_::_serde::de::MapAccess::next_value`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_core-1.0.228\src\de\mod.rs:1916:12
+     |
+1914 |     fn next_value<V>(&mut self) -> Result<V, Self::Error>
+     |        ---------- required by a bound in this associated function
+1915 |     where
+1916 |         V: Deserialize<'de>,
+     |            ^^^^^^^^^^^^^^^^ required by this bound in `MapAccess::next_value`
+     = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `petgraph::Graph<graph::AdNode, graph::EdgeType>: serde::Deserialize<'de>` is not satisfied
+   --> crates\overthrone-core\src\graph\mod.rs:252:35
+    |
+252 | #[derive(Debug, Clone, Serialize, Deserialize)]
+    |                                   ^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::Graph<graph::AdNode, graph::EdgeType>`
+    |
+    = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::Graph<graph::AdNode, graph::EdgeType>` type
+    = note: for types from other crates check whether the crate offers a `serde` feature flag
+    = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+              `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+              `()` implements `adcs::_::_serde::Deserialize<'de>`
+              `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+              `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+            and 468 others
+note: required by a bound in `adcs::_::_serde::__private228::de::missing_field`
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:26:8
+    |
+ 24 | pub fn missing_field<'de, V, E>(field: &'static str) -> Result<V, E>
+    |        ------------- required by a bound in this function
+ 25 | where
+ 26 |     V: Deserialize<'de>,
+    |        ^^^^^^^^^^^^^^^^ required by this bound in `missing_field`
+    = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the derive macro `Deserialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `petgraph::prelude::NodeIndex: serde::Deserialize<'de>` is not satisfied
+   --> crates\overthrone-core\src\graph\mod.rs:252:35
+    |
+252 | #[derive(Debug, Clone, Serialize, Deserialize)]
+    |                                   ^^^^^^^^^^^ the trait `adcs::_::_serde::Deserialize<'_>` is not implemented for `petgraph::prelude::NodeIndex`
+    |
+    = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `petgraph::prelude::NodeIndex` type
+    = note: for types from other crates check whether the crate offers a `serde` feature flag
+    = help: the following other types implement trait `adcs::_::_serde::Deserialize<'de>`:
+              `&'a [u8]` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a serde_bytes::bytearray::ByteArray<N>` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a serde_bytes::bytes::Bytes` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a std::path::Path` implements `adcs::_::_serde::Deserialize<'de>`
+              `&'a str` implements `adcs::_::_serde::Deserialize<'de>`
+              `()` implements `adcs::_::_serde::Deserialize<'de>`
+              `(T,)` implements `adcs::_::_serde::Deserialize<'de>`
+              `(T0, T1)` implements `adcs::_::_serde::Deserialize<'de>`
+            and 468 others
+    = note: required for `std::collections::HashMap<std::string::String, petgraph::prelude::NodeIndex>` to implement `adcs::_::_serde::Deserialize<'_>`
+note: required by a bound in `adcs::_::_serde::__private228::de::missing_field`
+   --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:26:8
+    |
+ 24 | pub fn missing_field<'de, V, E>(field: &'static str) -> Result<V, E>
+    |        ------------- required by a bound in this function
+ 25 | where
+ 26 |     V: Deserialize<'de>,
+    |        ^^^^^^^^^^^^^^^^ required by this bound in `missing_field`
+    = note: the full name for the type has been written to 'C:\Users\ACER\Documents\VSCFiles1\Overthrone\target\debug\deps\overthrone_core-e2ac29c92a6fba33.long-type-8603749948715531323.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the derive macro `Deserialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0282]: type annotations needed for `libloading::Symbol<'_, _>`
+   --> crates\overthrone-core\src\plugin\loader.rs:114:44
+    |
+113 |         let fn_on_event = library.get(b"overthrone_plugin_on_event").ok();
+    |                           ------------------------------------------ type must be known at this point
+114 |         let fn_on_event = fn_on_event.map(|s| std::mem::transmute(s));
+    |                                            ^
+    |
+help: consider giving this closure parameter an explicit type, where the type for type parameter `T` is specified
+    |
+114 |         let fn_on_event = fn_on_event.map(|s: libloading::Symbol<'_, T>| std::mem::transmute(s));
+    |                                             +++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `plugin::PluginEvent: serde::Serialize` is not satisfied
+    --> crates\overthrone-core\src\plugin\loader.rs:183:52
+     |
+ 183 |             let event_json = serde_json::to_string(event)
+     |                              --------------------- ^^^^^ unsatisfied trait bound
+     |                              |
+     |                              required by a bound introduced by this call
+     |
+help: the trait `adcs::_::_serde::Serialize` is not implemented for `plugin::PluginEvent`
+    --> crates\overthrone-core\src\plugin\mod.rs:172:1
+     |
+ 172 | pub enum PluginEvent {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: for local types consider adding `#[derive(serde::Serialize)]` to your `plugin::PluginEvent` type
+     = note: for types from other crates check whether the crate offers a `serde` feature flag
+     = help: the following other types implement trait `adcs::_::_serde::Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, T4)
+             and 459 others
+note: required by a bound in `serde_json::to_string`
+    --> C:\Users\ACER\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_json-1.0.149\src\ser.rs:2247:17
+     |
+2245 | pub fn to_string<T>(value: &T) -> Result<String>
+     |        --------- required by a bound in this function
+2246 | where
+2247 |     T: ?Sized + Serialize,
+     |                 ^^^^^^^^^ required by this bound in `to_string`
+
+error[E0599]: no method named `metadata` found for struct `std::sync::RwLockReadGuard<'_, graph::AttackGraph>` in the current scope
+   --> crates\overthrone-core\src\plugin\builtin.rs:114:42
+    |
+114 |             if let Some(lockout) = graph.metadata().get("lockout_threshold") {
+    |                                          ^^^^^^^^ method not found in `std::sync::RwLockReadGuard<'_, graph::AttackGraph>`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `metadata`, perhaps you need to implement one of them:
+            candidate #1: `powerfmt::smart_display::SmartDisplay`
+            candidate #2: `tracing::Callsite`
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-core\src\plugin\builtin.rs:115:34
+    |
+115 |                 if let Ok(val) = lockout.parse::<u32>() {
+    |                                  ^^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+   --> crates\overthrone-core\src\plugin\builtin.rs:116:46
+    |
+116 |                     self.lockout_threshold = val.saturating_sub(1); // Stay 1 below
+    |                                              ^^^ cannot infer type
+
+warning[E0133]: call to unsafe function `std::ffi::CStr::from_ptr` is unsafe and requires unsafe block
+   --> crates\overthrone-core\src\plugin\loader.rs:293:8
+    |
+293 |     Ok(CStr::from_ptr(ptr).to_string_lossy().to_string())
+    |        ^^^^^^^^^^^^^^^^^^^ call to unsafe function
+    |
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+    = note: consult the function's documentation for information on how to avoid undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+   --> crates\overthrone-core\src\plugin\loader.rs:289:1
+    |
+289 | unsafe fn cstr_to_string(ptr: *const std::ffi::c_char) -> Result<String> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning[E0133]: call to unsafe function `plugin::loader::free` is unsafe and requires unsafe block
+   --> crates\overthrone-core\src\plugin\loader.rs:324:5
+    |
+324 |     free(ptr);
+    |     ^^^^^^^^^ call to unsafe function
+    |
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+    = note: consult the function's documentation for information on how to avoid undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+   --> crates\overthrone-core\src\plugin\loader.rs:323:1
+    |
+323 | unsafe fn libc_free(ptr: *mut std::ffi::c_void) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0061, E0133, E0277, E0282, E0308, E0433, E0533, E0560, E0599.
+For more information about an error, try `rustc --explain E0061`.
+warning: `overthrone-core` (lib) generated 4 warnings
+error: could not compile `overthrone-core` (lib) due to 49 previous errors; 4 warnings emitted

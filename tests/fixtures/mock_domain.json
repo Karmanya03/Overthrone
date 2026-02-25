@@ -1,1 +1,143 @@
-﻿{}
+﻿{
+  "domain": "YOURORG.LOCAL",
+  "domain_sid": "S-1-5-21-3623811015-3361044348-30300820",
+  "forest": "YOURORG.LOCAL",
+  "domain_functional_level": "2016",
+  "forest_functional_level": "2016",
+  "domain_controllers": [
+    {
+      "hostname": "DC01.yourorg.local",
+      "ip": "10.10.10.1",
+      "os": "Windows Server 2022",
+      "roles": ["PdcEmulator", "RidMaster", "SchemaMaster", "DomainNamingMaster", "InfrastructureMaster"]
+    },
+    {
+      "hostname": "DC02.yourorg.local",
+      "ip": "10.10.10.2",
+      "os": "Windows Server 2019",
+      "roles": []
+    }
+  ],
+  "users": [
+    {
+      "sam_account_name": "administrator",
+      "distinguished_name": "CN=Administrator,CN=Users,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-500",
+      "member_of": ["CN=Domain Admins,CN=Users,DC=yourorg,DC=local", "CN=Enterprise Admins,CN=Users,DC=yourorg,DC=local"],
+      "admin_count": 1,
+      "enabled": true,
+      "last_logon": "133500000000000000",
+      "pwd_last_set": "133400000000000000",
+      "spn": [],
+      "description": "Built-in account for administering the computer/domain"
+    },
+    {
+      "sam_account_name": "svc_sql",
+      "distinguished_name": "CN=svc_sql,OU=Service Accounts,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-1105",
+      "member_of": [],
+      "admin_count": 0,
+      "enabled": true,
+      "last_logon": "133490000000000000",
+      "pwd_last_set": "132000000000000000",
+      "spn": ["MSSQLSvc/SQL01.yourorg.local:1433", "MSSQLSvc/SQL01.yourorg.local"],
+      "description": "SQL Service Account"
+    },
+    {
+      "sam_account_name": "svc_backup",
+      "distinguished_name": "CN=svc_backup,OU=Service Accounts,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-1106",
+      "member_of": ["CN=Backup Operators,CN=Builtin,DC=yourorg,DC=local"],
+      "admin_count": 0,
+      "enabled": true,
+      "last_logon": "0",
+      "pwd_last_set": "131000000000000000",
+      "spn": [],
+      "description": "Backup service - password: Winter2019! (legacy)"
+    },
+    {
+      "sam_account_name": "jdoe",
+      "distinguished_name": "CN=John Doe,OU=IT,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-1110",
+      "member_of": ["CN=IT Admins,OU=Groups,DC=yourorg,DC=local"],
+      "admin_count": 0,
+      "enabled": true,
+      "last_logon": "133500100000000000",
+      "pwd_last_set": "133300000000000000",
+      "spn": [],
+      "description": ""
+    },
+    {
+      "sam_account_name": "old_admin",
+      "distinguished_name": "CN=Old Admin,OU=Disabled,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-1120",
+      "member_of": ["CN=Domain Admins,CN=Users,DC=yourorg,DC=local"],
+      "admin_count": 1,
+      "enabled": false,
+      "last_logon": "132000000000000000",
+      "pwd_last_set": "131000000000000000",
+      "spn": [],
+      "description": "Disabled but still in DA group"
+    }
+  ],
+  "computers": [
+    {
+      "sam_account_name": "DC01$",
+      "distinguished_name": "CN=DC01,OU=Domain Controllers,DC=yourorg,DC=local",
+      "os": "Windows Server 2022 Standard",
+      "os_version": "10.0 (20348)",
+      "laps_v1": null,
+      "laps_v2_password": null,
+      "laps_v2_encrypted": true
+    },
+    {
+      "sam_account_name": "WS01$",
+      "distinguished_name": "CN=WS01,OU=Workstations,DC=yourorg,DC=local",
+      "os": "Windows 11 Enterprise",
+      "os_version": "10.0 (22631)",
+      "laps_v1": "xK9mL2pQ7rW3",
+      "laps_v2_password": null,
+      "laps_v2_encrypted": false
+    },
+    {
+      "sam_account_name": "SRV01$",
+      "distinguished_name": "CN=SRV01,OU=Servers,DC=yourorg,DC=local",
+      "os": "Windows Server 2019 Standard",
+      "os_version": "10.0 (17763)",
+      "laps_v1": null,
+      "laps_v2_password": "{\"n\":\"Administrator\",\"t\":\"2025-06-01T00:00:00Z\",\"p\":\"R@nd0mP@ss99!\"}",
+      "laps_v2_encrypted": false
+    }
+  ],
+  "groups": [
+    {
+      "sam_account_name": "Domain Admins",
+      "distinguished_name": "CN=Domain Admins,CN=Users,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-512",
+      "members": ["CN=Administrator,CN=Users,DC=yourorg,DC=local", "CN=Old Admin,OU=Disabled,DC=yourorg,DC=local"]
+    },
+    {
+      "sam_account_name": "IT Admins",
+      "distinguished_name": "CN=IT Admins,OU=Groups,DC=yourorg,DC=local",
+      "sid": "S-1-5-21-3623811015-3361044348-30300820-1200",
+      "members": ["CN=John Doe,OU=IT,DC=yourorg,DC=local"]
+    }
+  ],
+  "gpos": [
+    {
+      "display_name": "Default Domain Policy",
+      "guid": "{31B2F340-016D-11D2-945F-00C04FB984F9}",
+      "path": "\\\\yourorg.local\\sysvol\\yourorg.local\\Policies\\{31B2F340-016D-11D2-945F-00C04FB984F9}"
+    },
+    {
+      "display_name": "Server Hardening",
+      "guid": "{6AC1786C-016F-11D2-945F-00C04FB984F9}",
+      "path": "\\\\yourorg.local\\sysvol\\yourorg.local\\Policies\\{6AC1786C-016F-11D2-945F-00C04FB984F9}"
+    },
+    {
+      "display_name": "Legacy App Deploy",
+      "guid": "{AABBCCDD-1234-5678-9ABC-DEF012345678}",
+      "path": "\\\\yourorg.local\\sysvol\\yourorg.local\\Policies\\{AABBCCDD-1234-5678-9ABC-DEF012345678}"
+    }
+  ]
+}

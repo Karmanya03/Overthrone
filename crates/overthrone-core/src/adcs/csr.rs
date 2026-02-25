@@ -5,7 +5,6 @@
 
 use crate::error::{OverthroneError, Result};
 use base64::Engine;
-use rand::rngs::OsRng;
 use rsa::{
     pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
     Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey,
@@ -28,11 +27,11 @@ pub struct RsaKeyPair {
 impl RsaKeyPair {
     /// Generate a new RSA key pair
     pub fn generate(key_size: usize) -> Result<Self> {
-        let mut rng = OsRng;
-        
+        let mut rng = rsa::rand_core::OsRng;
+
         let private_key = RsaPrivateKey::new(&mut rng, key_size)
             .map_err(|e| OverthroneError::Encryption(format!("RSA key generation failed: {}", e)))?;
-        
+
         let public_key = private_key.to_public_key();
 
         Ok(Self {
@@ -186,7 +185,7 @@ impl CertificateSigningRequest {
     /// Create a new CSR with default settings
     pub fn new(subject: CsrSubject) -> Result<Self> {
         let key_pair = RsaKeyPair::generate(2048)?;
-        
+
         Ok(Self {
             subject,
             key_pair,
@@ -215,22 +214,22 @@ impl CertificateSigningRequest {
     pub fn to_der(&self) -> Result<Vec<u8>> {
         // Build CertificationRequestInfo
         let cri = self.build_cri();
-        
+
         // Sign the CRI
         let signature = self.sign_data(&cri)?;
-        
+
         // Build final CSR
         let csr = yasna::construct_der(|writer| {
             writer.write_sequence(|writer| {
                 // CertificationRequestInfo
                 writer.next().write_der(&cri);
-                
+
                 // SignatureAlgorithm
                 writer.next().write_sequence(|writer| {
                     writer.next().write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 1, 11])); // sha256WithRSA
                     writer.next().write_null();
                 });
-                
+
                 // Signature
                 writer.next().write_bitvec_bytes(&signature, signature.len() * 8);
             });
@@ -245,7 +244,7 @@ impl CertificateSigningRequest {
             writer.write_sequence(|writer| {
                 // version
                 writer.next().write_u8(0);
-                
+
                 // subject
                 writer.next().write_sequence(|writer| {
                     if let Some(ref cn) = self.subject.common_name {
@@ -257,7 +256,7 @@ impl CertificateSigningRequest {
                         });
                     }
                 });
-                
+
                 // subjectPKInfo
                 writer.next().write_sequence(|writer| {
                     writer.next().write_sequence(|writer| {
@@ -267,7 +266,7 @@ impl CertificateSigningRequest {
                     let pk_der = self.key_pair.public_key_der().unwrap_or_default();
                     writer.next().write_bitvec_bytes(&pk_der, pk_der.len() * 8);
                 });
-                
+
                 // attributes [0]
                 writer.next().write_tagged(Tag::context(0), |writer| {
                     writer.write_set(|writer| {
@@ -283,7 +282,7 @@ impl CertificateSigningRequest {
                                 });
                             });
                         }
-                        
+
                         // Template attribute
                         if let Some(ref template) = self.template {
                             writer.next().write_sequence(|writer| {
@@ -312,7 +311,7 @@ impl CertificateSigningRequest {
                         writer.next().write_bytes(&san_der);
                     });
                 }
-                
+
                 // EKU extension
                 if let Some(ref eku) = self.eku {
                     writer.next().write_sequence(|writer| {
@@ -369,12 +368,12 @@ impl CertificateSigningRequest {
         let mut hasher = Sha256::new();
         hasher.update(data);
         let hash = hasher.finalize();
-        
+
         // Sign with PKCS#1 v1.5 using unprefixed hash
         let signature = self.key_pair.private_key
             .sign(Pkcs1v15Sign::new_unprefixed(), &hash)
             .map_err(|e| OverthroneError::Encryption(format!("Signing failed: {}", e)))?;
-        
+
         Ok(signature)
     }
 
@@ -382,12 +381,12 @@ impl CertificateSigningRequest {
     pub fn to_pem(&self) -> Result<String> {
         let der = self.to_der()?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&der);
-        
+
         let lines: Vec<&str> = b64.as_bytes()
             .chunks(64)
             .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
             .collect();
-        
+
         Ok(format!(
             "-----BEGIN CERTIFICATE REQUEST-----\n{}\n-----END CERTIFICATE REQUEST-----\n",
             lines.join("\n")
@@ -411,21 +410,21 @@ pub fn create_esc1_csr(
     template: &str,
 ) -> Result<(Vec<u8>, String)> {
     let mut csr = CertificateSigningRequest::new(CsrSubject::new(subject_cn))?;
-    
+
     // Add UPN in SAN for PKINIT authentication
     let mut san = SubjectAltName::default();
     san.add_upn(target_upn);
     csr.set_san(san);
-    
+
     // Set EKU for client authentication
     csr.set_eku(ExtendedKeyUsage::pkinit_client());
-    
+
     // Set template
     csr.set_template(template);
-    
+
     let der = csr.to_der()?;
     let private_key = csr.private_key_pem()?;
-    
+
     Ok((der, private_key))
 }
 
@@ -436,23 +435,23 @@ pub fn create_client_auth_csr(
     san_dns: Option<&str>,
 ) -> Result<(Vec<u8>, String)> {
     let mut csr = CertificateSigningRequest::new(CsrSubject::new(subject_cn))?;
-    
+
     // Optional SAN
     if let Some(dns) = san_dns {
         let mut san = SubjectAltName::default();
         san.add_dns(dns);
         csr.set_san(san);
     }
-    
+
     // Set EKU
     csr.set_eku(ExtendedKeyUsage::client_auth());
-    
+
     // Set template
     csr.set_template(template);
-    
+
     let der = csr.to_der()?;
     let private_key = csr.private_key_pem()?;
-    
+
     Ok((der, private_key))
 }
 
@@ -487,10 +486,10 @@ mod tests {
     #[test]
     fn test_csr_creation() {
         let csr = CertificateSigningRequest::new(CsrSubject::new("test")).unwrap();
-        
+
         let der = csr.to_der();
         assert!(der.is_ok());
-        
+
         let pem = csr.to_pem();
         assert!(pem.is_ok());
         let pem = pem.unwrap();
@@ -504,7 +503,7 @@ mod tests {
             "administrator@corp.local",
             "User",
         );
-        
+
         assert!(result.is_ok());
         let (der, private_key) = result.unwrap();
         assert!(!der.is_empty());

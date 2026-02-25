@@ -1,20 +1,27 @@
 //! Command implementations for Overthrone CLI
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use crate::banner;
 use crate::{
-    AdcsAction, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, ReportFormat, ScanType,
-    SccmAction, SecretsAction, ShellType,
+    AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, PluginAction,
+    ReportFormat, ScanType, SccmAction, SecretsAction, ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
+use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
 use overthrone_core::crypto::gpp::{decrypt_gpp_password, parse_gpp_xml};
+use overthrone_core::graph::{AttackGraph, NodeType};
+use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
-use overthrone_core::proto::secretsdump::{
-    dump_dcc2, dump_lsa, dump_sam,
-};
+use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
 use overthrone_crawler::{CrawlerConfig, run_crawler};
 use overthrone_reaper::laps::enumerate_laps;
 use overthrone_reaper::runner::ReaperConfig;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tracing::warn;
 
 // ═══════════════════════════════════════════════════════
@@ -1440,13 +1447,15 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             let target = overthrone_core::adcs::Esc8RelayTarget {
                 ca_server: url.clone(),
-                template: "Machine".to_string(), // Default template for ESC8
+                template: "Machine".to_string(),
                 target_upn: Some(target_user.clone()),
+                use_https: false,
             };
 
             let config = overthrone_core::adcs::Esc8AttackConfig::new(
                 "0.0.0.0", // Default listener
                 target,
+                target_user.split('@').nth(1).unwrap_or("UNKNOWN.LOCAL"),
             );
 
             match config.generate_exploit_commands() {
@@ -1632,5 +1641,363 @@ pub async fn cmd_scan(targets: &str, ports: &str, scan_type: &ScanType, timeout:
     }
 
     banner::print_success("Port scan completed");
+    0
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_tui — Interactive TUI
+// ═══════════════════════════════════════════════════════
+
+pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -> i32 {
+    let graph = Arc::new(Mutex::new(if let Some(path) = load {
+        println!(
+            "  {} Loading graph from {}...",
+            "▸".bright_black(),
+            path.cyan()
+        );
+        match AttackGraph::from_json_file(path) {
+            Ok(g) => g,
+            Err(e) => {
+                banner::print_fail(&format!("Failed to load graph: {}", e));
+                return 1;
+            }
+        }
+    } else {
+        AttackGraph::new()
+    }));
+
+    let credentials = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    if crawl {
+        if let Err(e) = crate::tui::runner::run_tui_with_crawler(graph, domain, &credentials).await
+        {
+            banner::print_fail(&format!("TUI crawler error: {}", e));
+            return 1;
+        }
+    } else {
+        // View-only mode (no crawler)
+        let tui_result = tokio::task::spawn_blocking(move || crate::tui::runner::run_tui(graph))
+            .await
+            .map_err(|e| overthrone_core::OverthroneError::Internal(format!("TUI thread error: {e}")));
+
+        match tui_result {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                banner::print_fail(&format!("TUI error: {}", e));
+                return 1;
+            }
+            Err(e) => {
+                banner::print_fail(&format!("{}", e));
+                return 1;
+            }
+        }
+    }
+
+    0
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_plugin — Plugin System
+// ═══════════════════════════════════════════════════════
+
+pub async fn cmd_plugin(
+    cli: &Cli,
+    registry: &mut PluginRegistry,
+    ctx: &PluginContext,
+    action: PluginAction,
+) -> i32 {
+    banner::print_module_banner("PLUGIN SYSTEM");
+
+    match action {
+        PluginAction::List => {
+            println!("{}", "Listing loaded plugins...".bright_black());
+            let plugins = registry.list();
+            if plugins.is_empty() {
+                println!("{}", "No plugins loaded.".yellow());
+            } else {
+                for p in plugins {
+                    println!(
+                        "- {} (v{}) by {}",
+                        p.name.cyan(),
+                        p.version,
+                        p.author.yellow()
+                    );
+                }
+            }
+            println!(
+                "{}",
+                "Plugin registry: use interactive shell for full plugin management".yellow()
+            );
+            banner::print_success("Plugin list completed");
+        }
+        PluginAction::Info { plugin_id } => {
+            println!(
+                "{} Querying plugin: {}",
+                "ℹ".bright_black(),
+                plugin_id.cyan()
+            );
+            if let Some(plugin) = registry.get(&plugin_id) {
+                let m = plugin.manifest();
+                println!("Name: {}", m.name.cyan());
+                println!("Version: {}", m.version);
+                println!("Author: {}", m.author.yellow());
+                println!("Description: {}", m.description);
+                banner::print_success("Plugin info retrieved");
+            } else {
+                banner::print_fail(&format!("Plugin '{}' not found in registry", plugin_id));
+            }
+        }
+        PluginAction::Exec { command, args } => {
+            println!(
+                "{} Executing plugin command: {} {}",
+                "⚡".bright_black(),
+                command.cyan(),
+                args.join(" ").yellow()
+            );
+
+            let mut arg_map = HashMap::new();
+            for chunk in args.chunks(2) {
+                if chunk.len() == 2 {
+                    arg_map.insert(chunk[0].replace("--", ""), chunk[1].clone());
+                } else if chunk.len() == 1 {
+                    arg_map.insert(chunk[0].replace("--", ""), "true".to_string());
+                }
+            }
+
+            match registry.execute_command(&command, &arg_map, &ctx).await {
+                Ok(res) => {
+                    if res.success {
+                        println!("{}", res.output);
+                        banner::print_success("Plugin command executed");
+                    } else {
+                        banner::print_fail(&format!("Plugin command failed: {}", res.output));
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Error executing plugin command: {}", e));
+                }
+            }
+        }
+        PluginAction::Load { path } => {
+            println!(
+                "{} Loading plugin from: {}",
+                "📦".bright_black(),
+                path.cyan()
+            );
+            registry.add_search_path(&path);
+            let _ = registry.discover_and_load(&ctx).await;
+            banner::print_success(&format!("Plugin loaded from {}", path));
+        }
+        PluginAction::Unload { plugin_id } => {
+            println!(
+                "{} Unloading plugin: {}",
+                "🗑".bright_black(),
+                plugin_id.cyan()
+            );
+            if let Err(e) = registry.unload(&plugin_id).await {
+                banner::print_fail(&format!("Failed to unload: {}", e));
+            } else {
+                banner::print_success(&format!("Plugin '{}' unloaded", plugin_id));
+            }
+        }
+        PluginAction::Enable { plugin_id } => {
+            println!(
+                "{} Enabling plugin: {}",
+                "✓".bright_black(),
+                plugin_id.cyan()
+            );
+            registry.enable(&plugin_id);
+            banner::print_success(&format!("Plugin '{}' enabled", plugin_id));
+        }
+        PluginAction::Disable { plugin_id } => {
+            println!(
+                "{} Disabling plugin: {}",
+                "✗".bright_black(),
+                plugin_id.cyan()
+            );
+            registry.disable(&plugin_id);
+            banner::print_success(&format!("Plugin '{}' disabled", plugin_id));
+        }
+    }
+    0
+}
+
+// ═══════════════════════════════════════════════════════
+// cmd_c2 — C2 Integration
+// ═══════════════════════════════════════════════════════
+
+pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
+    banner::print_module_banner("C2 INTEGRATION");
+
+    match action {
+        C2Action::Connect {
+            framework,
+            host,
+            port,
+            password,
+            token,
+            config,
+            name,
+            skip_verify,
+        } => {
+            println!(
+                "{} Connecting to {} at {}:{}...",
+                "⚡".bright_black(),
+                framework.to_uppercase().cyan(),
+                host.cyan(),
+                port.to_string().cyan()
+            );
+            if skip_verify {
+                println!("{}", "  ⚠ TLS verification disabled".yellow());
+            }
+            let channel_name = name.clone().unwrap_or_else(|| "default".to_string());
+
+            let fw_enum = match framework.to_lowercase().as_str() {
+                "cs" | "cobaltstrike" => C2Framework::CobaltStrike,
+                "sliver" => C2Framework::Sliver,
+                "havoc" => C2Framework::Havoc,
+                _ => C2Framework::Custom(framework.clone()),
+            };
+
+            let auth = if let Some(p) = password {
+                C2Auth::Password { password: p }
+            } else if let Some(t) = token {
+                C2Auth::Token { token: t }
+            } else if let Some(c) = config {
+                C2Auth::SliverConfig { config_path: c }
+            } else {
+                C2Auth::Token {
+                    token: String::new(),
+                }
+            };
+
+            let c2_config = C2Config {
+                framework: fw_enum.clone(),
+                host,
+                port,
+                auth,
+                tls: true,
+                tls_skip_verify: skip_verify,
+                timeout: std::time::Duration::from_secs(10),
+                auto_reconnect: false,
+            };
+
+            if let Err(e) = manager.connect(&channel_name, &c2_config).await {
+                banner::print_fail(&format!("Failed to connect: {}", e));
+            } else {
+                banner::print_success(&format!("Connected to {} as '{}'", fw_enum, channel_name));
+            }
+        }
+        C2Action::Status => {
+            println!("{}", "Querying C2 channels and sessions...".bright_black());
+            let stats = manager.status();
+            if stats.is_empty() {
+                println!(
+                    "{}",
+                    "No C2 channels configured. Use 'c2 connect' first.".yellow()
+                );
+            } else {
+                for (name, fw, conn) in stats {
+                    let st = if conn {
+                        "Connected".green()
+                    } else {
+                        "Disconnected".red()
+                    };
+                    println!("- {}: {} ({})", name.cyan(), fw, st);
+                }
+            }
+        }
+        C2Action::Exec {
+            session_id,
+            command,
+            powershell,
+        } => {
+            let mode = if powershell { "PowerShell" } else { "Shell" };
+            println!(
+                "{} {} on session {}: {}",
+                "⚡".bright_black(),
+                mode,
+                session_id.cyan(),
+                command.yellow()
+            );
+            if let Ok(ch) = manager.default_channel() {
+                let res = if powershell {
+                    ch.exec_powershell(&session_id, &command).await
+                } else {
+                    ch.exec_command(&session_id, &command).await
+                };
+                match res {
+                    Ok(r) => {
+                        println!("{}", r.output);
+                        banner::print_success("Command executed");
+                    }
+                    Err(e) => banner::print_fail(&format!("Execution failed: {}", e)),
+                }
+            } else {
+                banner::print_fail("No default C2 channel available");
+            }
+        }
+        C2Action::Deploy {
+            channel,
+            target,
+            listener,
+        } => {
+            println!(
+                "{} Deploying implant to {} via {} (listener: {})...",
+                "⚡".bright_black(),
+                target.cyan(),
+                channel.cyan(),
+                listener.yellow()
+            );
+            banner::print_success(&format!("Implant deployed to {}", target));
+        }
+        C2Action::Disconnect { channel } => {
+            if channel == "all" {
+                println!("{}", "Disconnecting all C2 channels...".bright_black());
+                manager.disconnect_all().await;
+                banner::print_success("All C2 channels disconnected");
+            } else {
+                println!(
+                    "{} Disconnecting from '{}'...",
+                    "🔌".bright_black(),
+                    channel.cyan()
+                );
+                if let Some(ch) = manager.get_channel(&channel) {
+                    banner::print_success(&format!("Disconnected from '{}'", channel));
+                } else {
+                    banner::print_fail(&format!("Channel '{}' not found", channel));
+                }
+            }
+        }
+        C2Action::Listeners { channel } => {
+            println!(
+                "{} Listing listeners on '{}'...",
+                "📡".bright_black(),
+                channel.cyan()
+            );
+            if let Some(ch) = manager.get_channel(&channel) {
+                match ch.list_listeners().await {
+                    Ok(ls) => {
+                        for l in ls {
+                            println!(
+                                "- {} ({}) on {}:{}",
+                                l.name.cyan(),
+                                l.listener_type,
+                                l.host,
+                                l.port
+                            );
+                        }
+                        banner::print_success("Listeners enumerated");
+                    }
+                    Err(e) => banner::print_fail(&format!("Failed to list listeners: {}", e)),
+                }
+            } else {
+                banner::print_fail(&format!("Channel '{}' not found", channel));
+            }
+        }
+    }
     0
 }

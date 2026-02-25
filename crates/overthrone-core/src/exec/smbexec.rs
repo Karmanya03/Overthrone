@@ -57,10 +57,7 @@ pub struct SmbExecResult {
 /// This creates a temporary Windows service whose binary path is
 /// `%COMSPEC% /Q /c <command> > \\127.0.0.1\C$\<output_path> 2>&1`,
 /// starts it, reads the output file, then cleans up.
-pub async fn exec_command(
-    session: &SmbSession,
-    command: &str,
-) -> Result<SmbExecResult> {
+pub async fn exec_command(session: &SmbSession, command: &str) -> Result<SmbExecResult> {
     let config = SmbExecConfig::default();
     execute(session, command, &config).await
 }
@@ -124,11 +121,11 @@ pub async fn execute(
 }
 
 /// Read the output file and optionally delete it
-async fn read_and_cleanup_output(
-    session: &SmbSession,
-    config: &SmbExecConfig,
-) -> String {
-    match session.read_file(&config.output_share, &config.output_path).await {
+async fn read_and_cleanup_output(session: &SmbSession, config: &SmbExecConfig) -> String {
+    match session
+        .read_file(&config.output_share, &config.output_path)
+        .await
+    {
         Ok(data) => {
             let output = String::from_utf8_lossy(&data).to_string();
             debug!("SMBExec: Read {} bytes of output", data.len());
@@ -152,10 +149,7 @@ async fn read_and_cleanup_output(
 }
 
 /// Execute a series of commands and collect all outputs
-pub async fn exec_commands(
-    session: &SmbSession,
-    commands: &[&str],
-) -> Vec<SmbExecResult> {
+pub async fn exec_commands(session: &SmbSession, commands: &[&str]) -> Vec<SmbExecResult> {
     let mut results = Vec::new();
 
     for cmd in commands {
@@ -208,5 +202,38 @@ impl<'a> SmbExecShell<'a> {
     /// Get command history
     pub fn history(&self) -> &[(String, String)] {
         &self.history
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Executor Implementation
+// ═══════════════════════════════════════════════════════════
+
+pub struct SmbExecutor {
+    creds: super::ExecCredentials,
+}
+
+impl SmbExecutor {
+    pub fn new(creds: super::ExecCredentials) -> Self {
+        Self { creds }
+    }
+}
+
+#[async_trait::async_trait]
+impl super::RemoteExecutor for SmbExecutor {
+    fn method(&self) -> super::ExecMethod {
+        super::ExecMethod::SmbExec
+    }
+
+    async fn execute(
+        &self,
+        target: &str,
+        command: &str,
+    ) -> crate::error::Result<super::ExecOutput> {
+        todo!("SmbExec implementation")
+    }
+
+    async fn check_available(&self, _target: &str) -> bool {
+        false
     }
 }

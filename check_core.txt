@@ -1,0 +1,95 @@
+warning: C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\Cargo.toml: file `C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\src\main.rs` found to be present in multiple build targets:
+  * `bin` target `overthrone`
+  * `bin` target `ovt`
+    Checking overthrone-core v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-core)
+error[E0282]: type annotations needed for `Vec<_>`
+   --> crates\overthrone-core\src\plugin\builtin.rs:241:13
+    |
+241 |         let mut found = Vec::new();
+    |             ^^^^^^^^^   ---------- type must be known at this point
+    |
+help: consider giving `found` an explicit type, where the type for type parameter `T` is specified
+    |
+241 |         let mut found: Vec<T> = Vec::new();
+    |                      ++++++++
+
+error[E0615]: attempted to take value of method `metadata` on type `&AttackGraph`
+    --> crates\overthrone-core\src\graph\mod.rs:1228:15
+     |
+1228 |         &self.metadata
+     |               ^^^^^^^^ method, not a field
+     |
+help: use parentheses to call the method
+     |
+1228 |         &self.metadata()
+     |                       ++
+
+error[E0282]: type annotations needed for `libloading::Symbol<'_, _>`
+   --> crates\overthrone-core\src\plugin\loader.rs:114:44
+    |
+113 |         let fn_on_event = library.get(b"overthrone_plugin_on_event").ok();
+    |                           ------------------------------------------ type must be known at this point
+114 |         let fn_on_event = fn_on_event.map(|s| std::mem::transmute(s));
+    |                                            ^
+    |
+help: consider giving this closure parameter an explicit type, where the type for type parameter `T` is specified
+    |
+114 |         let fn_on_event = fn_on_event.map(|s: libloading::Symbol<'_, T>| std::mem::transmute(s));
+    |                                             +++++++++++++++++++++++++++
+
+error[E0382]: borrow of moved value: `target`
+  --> crates\overthrone-core\src\exec\winrm\windows.rs:53:18
+   |
+44 |         let target = target.to_string();
+   |             ------ move occurs because `target` has type `std::string::String`, which does not implement the `Copy` trait
+...
+49 |         let result = tokio::task::spawn_blocking(move || unsafe {
+   |                                                  ------- value moved into closure here
+50 |             execute_winrm_sync(&target, &command, &creds)
+   |                                 ------ variable moved due to use in closure
+...
+53 |         .map_err(|e| exec_err(&target, &format!("WinRM task panic: {e}")))?;
+   |                  ^^^           ------ borrow occurs due to use in closure
+   |                  |
+   |                  value borrowed here after move
+   |
+help: consider cloning the value before moving it into the closure
+   |
+49 ~         let value = target.clone();
+50 ~         let result = tokio::task::spawn_blocking(move || unsafe {
+51 ~             execute_winrm_sync(&value, &command, &creds)
+   |
+
+warning[E0133]: call to unsafe function `std::ffi::CStr::from_ptr` is unsafe and requires unsafe block
+   --> crates\overthrone-core\src\plugin\loader.rs:293:8
+    |
+293 |     Ok(CStr::from_ptr(ptr).to_string_lossy().to_string())
+    |        ^^^^^^^^^^^^^^^^^^^ call to unsafe function
+    |
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+    = note: consult the function's documentation for information on how to avoid undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+   --> crates\overthrone-core\src\plugin\loader.rs:289:1
+    |
+289 | unsafe fn cstr_to_string(ptr: *const std::ffi::c_char) -> Result<String> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning[E0133]: call to unsafe function `plugin::loader::free` is unsafe and requires unsafe block
+   --> crates\overthrone-core\src\plugin\loader.rs:324:5
+    |
+324 |     free(ptr);
+    |     ^^^^^^^^^ call to unsafe function
+    |
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+    = note: consult the function's documentation for information on how to avoid undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+   --> crates\overthrone-core\src\plugin\loader.rs:323:1
+    |
+323 | unsafe fn libc_free(ptr: *mut std::ffi::c_void) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0133, E0282, E0382, E0615.
+For more information about an error, try `rustc --explain E0133`.
+warning: `overthrone-core` (lib) generated 2 warnings
+error: could not compile `overthrone-core` (lib) due to 4 previous errors; 2 warnings emitted

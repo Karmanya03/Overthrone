@@ -31,15 +31,13 @@ const OP_OPEN_SERVICE_W: u16 = 16;
 
 /// SVCCTL interface UUID: 367ABB81-9844-35F1-AD32-98F038001003
 const SVCCTL_UUID: [u8; 16] = [
-    0x81, 0xBB, 0x7A, 0x36, 0x44, 0x98, 0xF1, 0x35,
-    0xAD, 0x32, 0x98, 0xF0, 0x38, 0x00, 0x10, 0x03,
+    0x81, 0xBB, 0x7A, 0x36, 0x44, 0x98, 0xF1, 0x35, 0xAD, 0x32, 0x98, 0xF0, 0x38, 0x00, 0x10, 0x03,
 ];
 const SVCCTL_VERSION: [u8; 4] = [0x02, 0x00, 0x00, 0x00]; // v2.0
 
 /// NDR transfer syntax UUID
 const NDR_UUID: [u8; 16] = [
-    0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
-    0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+    0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11, 0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
 ];
 const NDR_VERSION: [u8; 4] = [0x02, 0x00, 0x00, 0x00];
 
@@ -100,10 +98,10 @@ fn build_bind_packet() -> Vec<u8> {
     let mut pkt = Vec::with_capacity(72);
 
     // Header
-    pkt.push(DCERPC_VERSION);           // version
-    pkt.push(DCERPC_VERSION_MINOR);     // minor version
-    pkt.push(DCERPC_BIND);              // packet type
-    pkt.push(0x03);                     // flags: first + last frag
+    pkt.push(DCERPC_VERSION); // version
+    pkt.push(DCERPC_VERSION_MINOR); // minor version
+    pkt.push(DCERPC_BIND); // packet type
+    pkt.push(0x03); // flags: first + last frag
     pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data representation (LE)
     // frag_length placeholder (offset 8-9) - fill later
     pkt.extend_from_slice(&[0x00, 0x00]); // frag length placeholder
@@ -317,10 +315,7 @@ fn extract_handle(response: &[u8]) -> Result<[u8; 20]> {
 /// Execute a command on a remote host using PSExec-style SCM service creation.
 ///
 /// Requires local admin access (C$ or ADMIN$ share writable).
-pub async fn execute(
-    session: &SmbSession,
-    config: &PsExecConfig,
-) -> Result<PsExecResult> {
+pub async fn execute(session: &SmbSession, config: &PsExecConfig) -> Result<PsExecResult> {
     info!(
         "PSExec: Executing on {} as service '{}'",
         session.target, config.service_name
@@ -395,7 +390,10 @@ async fn execute_inner(
     };
 
     if started {
-        info!("PSExec: Service '{}' started successfully", config.service_name);
+        info!(
+            "PSExec: Service '{}' started successfully",
+            config.service_name
+        );
     } else {
         warn!("PSExec: Service start may have failed");
     }
@@ -467,10 +465,7 @@ async fn cleanup(
 }
 
 /// Convenience: execute a single command via PSExec
-pub async fn exec_command(
-    session: &SmbSession,
-    command: &str,
-) -> Result<PsExecResult> {
+pub async fn exec_command(session: &SmbSession, command: &str) -> Result<PsExecResult> {
     let mut config = PsExecConfig::default();
     // Wrap command so output is captured to a file
     config.command = format!(
@@ -478,4 +473,37 @@ pub async fn exec_command(
         command, config.service_name
     );
     execute(session, &config).await
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Executor Implementation
+// ═══════════════════════════════════════════════════════════
+
+pub struct PsExecutor {
+    creds: super::ExecCredentials,
+}
+
+impl PsExecutor {
+    pub fn new(creds: super::ExecCredentials) -> Self {
+        Self { creds }
+    }
+}
+
+#[async_trait::async_trait]
+impl super::RemoteExecutor for PsExecutor {
+    fn method(&self) -> super::ExecMethod {
+        super::ExecMethod::PsExec
+    }
+
+    async fn execute(
+        &self,
+        target: &str,
+        command: &str,
+    ) -> crate::error::Result<super::ExecOutput> {
+        todo!("PsExec implementation")
+    }
+
+    async fn check_available(&self, _target: &str) -> bool {
+        false
+    }
 }

@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "overthrone-reaper"
 version.workspace = true
 edition.workspace = true
@@ -17,6 +17,9 @@ chrono.workspace = true
 indicatif.workspace = true
 colored.workspace = true
 uuid.workspace = true
+base64.workspace = true
+hex.workspace = true
+log = "0.4.29"
 
 [dev-dependencies]
 tokio-test.workspace = true

@@ -4,6 +4,10 @@
 //! with command parsing, tab completion, history, and module integration.
 //! Inspired by evil-winrm and other penetration testing shells.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unreachable_patterns)]
 use crate::banner;
 use crate::ShellType as CliShellType;
 use colored::Colorize;

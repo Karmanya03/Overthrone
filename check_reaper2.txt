@@ -1,0 +1,72 @@
+warning: C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\Cargo.toml: file `C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\src\main.rs` found to be present in multiple build targets:
+  * `bin` target `overthrone`
+  * `bin` target `ovt`
+warning: function cannot return without recursing
+    --> crates\overthrone-core\src\graph\mod.rs:1227:5
+     |
+1227 |     pub fn metadata(&self) -> &HashMap<String, String> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot return without recursing
+1228 |         &self.metadata()
+     |          --------------- recursive call site
+     |
+     = help: a `loop` may express intention better if this is on purpose
+     = note: `#[warn(unconditional_recursion)]` on by default
+
+warning: `overthrone-core` (lib) generated 1 warning
+    Checking overthrone-reaper v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-reaper)
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `base64`
+   --> crates\overthrone-reaper\src\laps.rs:339:26
+    |
+339 |     if let Ok(decoded) = base64::Engine::decode(
+    |                          ^^^^^^ use of unresolved module or unlinked crate `base64`
+    |
+    = help: if you wanted to use a crate named `base64`, use `cargo add base64` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `base64`
+   --> crates\overthrone-reaper\src\laps.rs:340:10
+    |
+340 |         &base64::engine::general_purpose::STANDARD,
+    |          ^^^^^^ use of unresolved module or unlinked crate `base64`
+    |
+    = help: if you wanted to use a crate named `base64`, use `cargo add base64` to add it to your `Cargo.toml`
+
+error[E0599]: no variant or associated item named `Parse` found for enum `OverthroneError` in the current scope
+   --> crates\overthrone-reaper\src\laps.rs:325:26
+    |
+325 |         OverthroneError::Parse(format!("LAPS v2 JSON parse error: {e}"))
+    |                          ^^^^^ variant or associated item not found in `OverthroneError`
+    |
+note: if you're trying to build a new `OverthroneError` consider using one of the following associated functions:
+      OverthroneError::ldap
+      OverthroneError::ldap_with_target
+      OverthroneError::kerberos
+      OverthroneError::custom
+      and 3 others
+   --> crates\overthrone-core\src\error.rs:153:5
+    |
+153 |       pub fn ldap(msg: impl std::fmt::Display) -> Self {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+161 | /     pub fn ldap_with_target(
+162 | |         target: impl std::fmt::Display,
+163 | |         reason: impl std::fmt::Display,
+164 | |     ) -> Self {
+    | |_____________^
+...
+172 |       pub fn kerberos(msg: impl std::fmt::Display) -> Self {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+177 |       pub fn custom(msg: impl std::fmt::Display) -> Self {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `hex`
+   --> crates\overthrone-reaper\src\laps.rs:348:30
+    |
+348 |         if let Ok(decoded) = hex::decode(raw) {
+    |                              ^^^ use of unresolved module or unlinked crate `hex`
+    |
+    = help: if you wanted to use a crate named `hex`, use `cargo add hex` to add it to your `Cargo.toml`
+
+Some errors have detailed explanations: E0433, E0599.
+For more information about an error, try `rustc --explain E0433`.
+error: could not compile `overthrone-reaper` (lib) due to 4 previous errors

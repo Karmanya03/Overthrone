@@ -4,6 +4,9 @@
 //! and platform-specific features. Because knowing is half the battle.
 //! (The other half is actually hacking things, but we can't help you there.)
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
 use crate::banner;
 use colored::Colorize;
 use std::process::Command;

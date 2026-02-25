@@ -281,9 +281,7 @@ pub enum TrustDirection {
 impl Trust {
     /// Check if trust can be abused for lateral movement
     pub fn is_exploitable(&self) -> bool {
-        !self.sid_filtering
-            || self.trust_type == TrustType::ParentChild
-            || self.tgt_delegation
+        !self.sid_filtering || self.trust_type == TrustType::ParentChild || self.tgt_delegation
     }
 }
 
@@ -440,16 +438,36 @@ pub mod uac {
     /// Parse UAC flags into a human-readable list
     pub fn parse_flags(uac: u32) -> Vec<&'static str> {
         let mut flags = Vec::new();
-        if uac & ACCOUNT_DISABLED != 0 { flags.push("DISABLED"); }
-        if uac & PASSWD_NOTREQD != 0 { flags.push("PASSWD_NOTREQD"); }
-        if uac & NORMAL_ACCOUNT != 0 { flags.push("NORMAL_ACCOUNT"); }
-        if uac & DONT_EXPIRE_PASSWORD != 0 { flags.push("DONT_EXPIRE_PASSWORD"); }
-        if uac & TRUSTED_FOR_DELEGATION != 0 { flags.push("TRUSTED_FOR_DELEGATION"); }
-        if uac & NOT_DELEGATED != 0 { flags.push("NOT_DELEGATED"); }
-        if uac & DONT_REQ_PREAUTH != 0 { flags.push("DONT_REQ_PREAUTH"); }
-        if uac & TRUSTED_TO_AUTH_FOR_DELEGATION != 0 { flags.push("TRUSTED_TO_AUTH_FOR_DELEGATION"); }
-        if uac & SERVER_TRUST_ACCOUNT != 0 { flags.push("SERVER_TRUST_ACCOUNT"); }
-        if uac & WORKSTATION_TRUST_ACCOUNT != 0 { flags.push("WORKSTATION_TRUST_ACCOUNT"); }
+        if uac & ACCOUNT_DISABLED != 0 {
+            flags.push("DISABLED");
+        }
+        if uac & PASSWD_NOTREQD != 0 {
+            flags.push("PASSWD_NOTREQD");
+        }
+        if uac & NORMAL_ACCOUNT != 0 {
+            flags.push("NORMAL_ACCOUNT");
+        }
+        if uac & DONT_EXPIRE_PASSWORD != 0 {
+            flags.push("DONT_EXPIRE_PASSWORD");
+        }
+        if uac & TRUSTED_FOR_DELEGATION != 0 {
+            flags.push("TRUSTED_FOR_DELEGATION");
+        }
+        if uac & NOT_DELEGATED != 0 {
+            flags.push("NOT_DELEGATED");
+        }
+        if uac & DONT_REQ_PREAUTH != 0 {
+            flags.push("DONT_REQ_PREAUTH");
+        }
+        if uac & TRUSTED_TO_AUTH_FOR_DELEGATION != 0 {
+            flags.push("TRUSTED_TO_AUTH_FOR_DELEGATION");
+        }
+        if uac & SERVER_TRUST_ACCOUNT != 0 {
+            flags.push("SERVER_TRUST_ACCOUNT");
+        }
+        if uac & WORKSTATION_TRUST_ACCOUNT != 0 {
+            flags.push("WORKSTATION_TRUST_ACCOUNT");
+        }
         flags
     }
 
@@ -507,8 +525,123 @@ impl EnumerationData {
         map.insert("ous", self.ous.len());
         map.insert("acls", self.acls.len());
         map.insert("cert_templates", self.cert_templates.len());
-        map.insert("kerberoastable", self.users.iter().filter(|u| u.is_kerberoastable()).count());
-        map.insert("asrep_roastable", self.users.iter().filter(|u| u.is_asrep_roastable()).count());
+        map.insert(
+            "kerberoastable",
+            self.users.iter().filter(|u| u.is_kerberoastable()).count(),
+        );
+        map.insert(
+            "asrep_roastable",
+            self.users.iter().filter(|u| u.is_asrep_roastable()).count(),
+        );
         map
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Sid
+// ═══════════════════════════════════════════════════════════
+
+/// Windows Security Identifier (SID).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Sid {
+    pub revision: u8,
+    pub authority: [u8; 6],
+    pub sub_authorities: Vec<u32>,
+}
+
+impl Sid {
+    pub fn from_string(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() < 4 || parts[0] != "S" {
+            return None;
+        }
+        let revision: u8 = parts[1].parse().ok()?;
+        let auth_val: u64 = parts[2].parse().ok()?;
+        let mut authority = [0u8; 6];
+        authority[0] = ((auth_val >> 40) & 0xFF) as u8;
+        authority[1] = ((auth_val >> 32) & 0xFF) as u8;
+        authority[2] = ((auth_val >> 24) & 0xFF) as u8;
+        authority[3] = ((auth_val >> 16) & 0xFF) as u8;
+        authority[4] = ((auth_val >> 8) & 0xFF) as u8;
+        authority[5] = (auth_val & 0xFF) as u8;
+        let sub_authorities: Option<Vec<u32>> = parts[3..].iter().map(|p| p.parse().ok()).collect();
+        Some(Self {
+            revision,
+            authority,
+            sub_authorities: sub_authorities?,
+        })
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 8 {
+            return None;
+        }
+        let revision = bytes[0];
+        let count = bytes[1] as usize;
+        let mut authority = [0u8; 6];
+        authority.copy_from_slice(&bytes[2..8]);
+        if bytes.len() < 8 + count * 4 {
+            return None;
+        }
+        let mut sub_authorities = Vec::with_capacity(count);
+        for i in 0..count {
+            let o = 8 + i * 4;
+            sub_authorities.push(u32::from_le_bytes([
+                bytes[o],
+                bytes[o + 1],
+                bytes[o + 2],
+                bytes[o + 3],
+            ]));
+        }
+        Some(Self {
+            revision,
+            authority,
+            sub_authorities,
+        })
+    }
+
+    pub fn rid(&self) -> Option<u32> {
+        self.sub_authorities.last().copied()
+    }
+
+    pub fn domain_sid(&self) -> Self {
+        let mut sub = self.sub_authorities.clone();
+        sub.pop();
+        Self {
+            revision: self.revision,
+            authority: self.authority,
+            sub_authorities: sub,
+        }
+    }
+
+    pub fn is_well_known(&self) -> bool {
+        self.rid().map(|r| r < 1000).unwrap_or(false)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(8 + self.sub_authorities.len() * 4);
+        buf.push(self.revision);
+        buf.push(self.sub_authorities.len() as u8);
+        buf.extend_from_slice(&self.authority);
+        for sa in &self.sub_authorities {
+            buf.extend_from_slice(&sa.to_le_bytes());
+        }
+        buf
+    }
+}
+
+impl std::fmt::Display for Sid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let auth_val: u64 = ((self.authority[0] as u64) << 40)
+            | ((self.authority[1] as u64) << 32)
+            | ((self.authority[2] as u64) << 24)
+            | ((self.authority[3] as u64) << 16)
+            | ((self.authority[4] as u64) << 8)
+            | (self.authority[5] as u64);
+        write!(f, "S-{}-{}", self.revision, auth_val)?;
+        for sa in &self.sub_authorities {
+            write!(f, "-{}", sa)?;
+        }
+        Ok(())
     }
 }

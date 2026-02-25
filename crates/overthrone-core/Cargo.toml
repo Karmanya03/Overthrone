@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Core library: protocols, crypto, types, graph engine"
-# v2 - cache bust
+# v3 - plugin + c2
 
 [dependencies]
 # Async & Core
@@ -24,6 +24,7 @@ colored.workspace = true
 des.workspace = true
 rc4.workspace = true
 pbkdf2.workspace = true
+log = "0.4"
 
 # Parallel Processing & Compression
 rayon.workspace = true
@@ -31,7 +32,7 @@ zstd.workspace = true
 
 # Protocols
 ldap3.workspace = true
-petgraph.workspace = true
+petgraph = { version = "0.7", features = ["serde-1"] }
 
 # Crypto (use workspace versions)
 aes.workspace = true
@@ -69,6 +70,14 @@ foreign-types = "0.5.0"
 pfx = "0.4.1"
 p12-keystore = "0.2.0"
 
+# ─── Plugin System ─────────────────────────────────────────
+libloading = "0.8"       # Dynamic .dll/.so loading for native plugins
+shellexpand = "3.1"      # Tilde expansion for plugin paths (~/.overthrone)
+
+# ─── C2 Integration ────────────────────────────────────────
+tonic = { version = "0.12", optional = true }   # gRPC client for Sliver
+prost = { version = "0.13", optional = true }   # protobuf for Sliver gRPC
+
 # ── Windows-only dependencies ──────────────────────────────
 # The `smb` crate depends on sspi → windows-future which only
 # compiles on Windows. The `windows` crate provides Win32 APIs
@@ -93,6 +102,11 @@ ntlmclient = "0.2"
 quick-xml = { version = "0.39", features = ["serialize"] }
 reqwest = { workspace = true }
 uuid = { workspace = true }
+
+[features]
+default = []
+sliver-grpc = ["tonic", "prost"]      # Enable Sliver gRPC (requires protobuf compiler)
+full-c2 = ["sliver-grpc"]             # All C2 integrations
 
 [dev-dependencies]
 tokio-test.workspace = true

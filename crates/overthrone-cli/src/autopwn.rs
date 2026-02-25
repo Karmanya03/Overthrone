@@ -1,5 +1,9 @@
 ﻿//! Automated attack chain — wired to overthrone-pilot's Planner + Executor.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use crate::auth::Credentials;
 use crate::banner;
 use colored::Colorize;

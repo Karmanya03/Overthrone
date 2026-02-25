@@ -159,7 +159,7 @@ impl InteractiveShell {
         // 1. Establish WinRM connection via WS-Management
         // 2. Create shell resource
         // 3. Return session ID
-        
+
         debug!("Connecting to WinRM endpoint on {}", config.target);
 
         // Simulate connection delay
@@ -181,7 +181,7 @@ impl InteractiveShell {
 
         // Try to connect to WinRM port
         let addr = format!("{}:{}", config.target, winrm_port);
-        
+
         match tokio::net::TcpStream::connect(&addr).await {
             Ok(_) => {
                 debug!("WinRM HTTP port (5985) is accessible");
@@ -226,13 +226,13 @@ impl InteractiveShell {
 
     async fn close_winrm(&self) -> Result<()> {
         debug!("Closing WinRM session {}", self.session_id);
-        
+
         // In a real implementation, this would:
         // 1. Send Delete Shell request via WS-Management
         // 2. Clean up resources
-        
+
         tokio::time::sleep(Duration::from_millis(50)).await;
-        
+
         Ok(())
     }
 
@@ -275,13 +275,13 @@ impl InteractiveShell {
 
     async fn close_smb(&self) -> Result<()> {
         debug!("Closing SMB session {}", self.session_id);
-        
+
         // In a real implementation, this would:
         // 1. Stop and delete the service
         // 2. Clean up named pipes
-        
+
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         Ok(())
     }
 
@@ -324,11 +324,11 @@ impl InteractiveShell {
 
     async fn close_wmi(&self) -> Result<()> {
         debug!("Closing WMI session {}", self.session_id);
-        
+
         // WMI doesn't require explicit cleanup for process creation
-        
+
         tokio::time::sleep(Duration::from_millis(50)).await;
-        
+
         Ok(())
     }
 
@@ -341,28 +341,39 @@ impl InteractiveShell {
         let cmd_lower = command.to_lowercase();
 
         if cmd_lower.starts_with("whoami") {
-            format!("{}\\administrator", self.config.target.split('.').next().unwrap_or("CORP"))
+            format!(
+                "{}\\administrator",
+                self.config.target.split('.').next().unwrap_or("CORP")
+            )
         } else if cmd_lower.starts_with("hostname") {
-            self.config.target.split('.').next().unwrap_or("DC01").to_string()
+            self.config
+                .target
+                .split('.')
+                .next()
+                .unwrap_or("DC01")
+                .to_string()
         } else if cmd_lower.starts_with("ipconfig") {
             "Windows IP Configuration\n\n\
              Ethernet adapter Ethernet0:\n\n\
                Connection-specific DNS Suffix  . : corp.local\n\
                IPv4 Address. . . . . . . . . . . : 192.168.1.100\n\
                Subnet Mask . . . . . . . . . . . : 255.255.255.0\n\
-               Default Gateway . . . . . . . . . : 192.168.1.1".to_string()
+               Default Gateway . . . . . . . . . : 192.168.1.1"
+                .to_string()
         } else if cmd_lower.starts_with("net user") {
             "User accounts for \\\\DC01\n\n\
              Administrator            Guest                      krbtgt\n\
              john.doe                 jane.smith                 svc_sql\n\
-             The command completed successfully.".to_string()
+             The command completed successfully."
+                .to_string()
         } else if cmd_lower.starts_with("net group") {
             "Group Accounts for \\\\DC01\n\n\
              *Domain Admins\n\
              *Domain Users\n\
              *Domain Computers\n\
              *Enterprise Admins\n\
-             The command completed successfully.".to_string()
+             The command completed successfully."
+                .to_string()
         } else if cmd_lower.starts_with("systeminfo") {
             format!(
                 "Host Name:                 {}\n\
@@ -384,7 +395,8 @@ impl InteractiveShell {
              01/15/2024  10:30 AM    <DIR>          Documents\n\
              01/15/2024  10:30 AM    <DIR>          Downloads\n\
                         0 File(s)              0 bytes\n\
-                        5 Dir(s)  100,000,000,000 bytes free".to_string()
+                        5 Dir(s)  100,000,000,000 bytes free"
+                .to_string()
         } else {
             format!("Command executed successfully: {}\n[No output]", command)
         }
@@ -448,10 +460,7 @@ impl ShellPool {
 
     /// List all active sessions
     pub fn list_sessions(&self) -> Vec<ShellSessionInfo> {
-        self.sessions
-            .values()
-            .map(|s| s.session_info())
-            .collect()
+        self.sessions.values().map(|s| s.session_info()).collect()
     }
 
     /// Close all sessions

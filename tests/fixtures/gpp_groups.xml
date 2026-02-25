@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Groups clsid="{3125E937-EB16-4b4c-9934-544FC6D24D26}">
+  <User clsid="{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}" name="LocalAdmin" image="2" changed="2024-03-15 09:30:00" uid="{B1E4A8F2-7C3D-4E5A-9F6B-2A1C3D4E5F6A}">
+    <Properties action="U" newName="" fullName="" description="GPP Deployed Admin" cpassword="edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ" changeLogon="0" noChange="1" neverExpires="1" acctDisabled="0" userName="LocalAdmin"/>
+  </User>
+  <User clsid="{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}" name="svc_deploy" image="2" changed="2023-11-01 14:00:00" uid="{C2F5B9A3-8D4E-5F6B-A07C-3B2D4E5F6071}">
+    <Properties action="U" newName="" fullName="" description="Deployment Service" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changeLogon="0" noChange="0" neverExpires="1" acctDisabled="0" userName="svc_deploy"/>
+  </User>
+</Groups>

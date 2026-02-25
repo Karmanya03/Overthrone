@@ -15,7 +15,7 @@ path = "src/main.rs"
 # Cargo warns about this but it compiles and works correctly.
 [[bin]]
 name = "ovt"
-path = "src/main.rs"
+path = "src/ovt_main.rs"
 
 [dependencies]
 overthrone-core = { path = "../overthrone-core" }
@@ -27,6 +27,9 @@ overthrone-forge = { path = "../overthrone-forge" }
 overthrone-scribe = { path = "../overthrone-scribe" }
 overthrone-relay = { path = "../overthrone-relay" }
 clap.workspace = true
+ratatui = "0.29"
+crossterm = "0.28"
+tui-widget-list = "0.13"
 
 tokio.workspace = true
 tracing.workspace = true

@@ -35,20 +35,18 @@ pnet_datalink = "0.35.0"
 pnet_packet = "0.35.0"
 pnet_transport = "0.35.0"
 
-# NTLM handling
-ntlmclient = "0.2"
-
 # Core dependencies
 overthrone-core = { path = "../overthrone-core" }
 async-trait = "0.1"
 
-# Additional crypto dependencies for NTLM calculations
-md4 = "0.10"
-hmac = "0.12"
-sha2 = "0.10"
+# Crypto — use workspace versions
+md4.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+md-5.workspace = true
 
-# Random number generation
-rand = "0.8"
+# Random number generation — must match workspace
+rand.workspace = true
 
 # Base64 encoding
-base64 = "0.22"
+base64.workspace = true
