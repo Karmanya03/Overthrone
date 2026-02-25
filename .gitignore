@@ -115,3 +115,7 @@ docker-compose.override.yml
 !.codebuddy/rules/
 !.codebuddy/prompts/
 !.codebuddy/config.json
+
+# Agent config directories
+.agent/
+.agents/
