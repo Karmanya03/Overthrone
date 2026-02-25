@@ -1,7 +1,0 @@
-warning: C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\Cargo.toml: file `C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli\src\main.rs` found to be present in multiple build targets:
-  * `bin` target `overthrone`
-  * `bin` target `ovt`
-    Checking overthrone-core v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-core)
-    Checking overthrone-reaper v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-reaper)
-    Checking overthrone-crawler v0.1.1 (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-crawler)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.37s
