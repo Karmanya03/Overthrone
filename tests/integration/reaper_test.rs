@@ -317,3 +317,271 @@ fn test_ldap_response_delegation() {
         "Expected constrained delegation to cifs SPN"
     );
 }
+
+// ═══════════════════════════════════════════════════════════
+//  ADCS Certificate Template ESC Checks (offline)
+// ═══════════════════════════════════════════════════════════
+
+use overthrone_reaper::adcs::CertTemplate;
+
+fn make_cert_template(
+    name: &str,
+    enrollee_supplies_subject: bool,
+    requires_approval: bool,
+    ra_sigs: u32,
+    ekus: &[&str],
+    permissions: &[&str],
+) -> CertTemplate {
+    CertTemplate {
+        name: name.to_string(),
+        display_name: Some(name.to_string()),
+        distinguished_name: format!("CN={},CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=yourorg,DC=local", name),
+        schema_version: 2,
+        oid: Some("1.3.6.1.4.1.311.21.8.0".to_string()),
+        enroll_permissions: permissions.iter().map(|s| s.to_string()).collect(),
+        enrollee_supplies_subject,
+        extended_key_usage: ekus.iter().map(|s| s.to_string()).collect(),
+        requires_manager_approval: requires_approval,
+        authorized_signatures_required: ra_sigs,
+        vulnerabilities: Vec::new(),
+    }
+}
+
+#[test]
+fn test_adcs_esc1_vulnerable_template() {
+    let mut t = make_cert_template(
+        "WebServer-ESC1",
+        true,   // enrollee supplies subject
+        false,  // no manager approval
+        0,      // no signatures required
+        &["1.3.6.1.5.5.7.3.2"], // Client Authentication
+        &[],
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC1")),
+        "Should be flagged ESC1: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc1_safe_with_approval() {
+    let mut t = make_cert_template(
+        "ManagedUser",
+        true,
+        true,   // requires manager approval → blocks ESC1
+        0,
+        &["1.3.6.1.5.5.7.3.2"],
+        &[],
+    );
+    t.analyze();
+    assert!(!t.vulnerabilities.iter().any(|v| v.contains("ESC1")),
+        "Should NOT be ESC1 when approval required: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc2_any_purpose() {
+    let mut t = make_cert_template(
+        "AnyPurpose",
+        false,
+        false,
+        0,
+        &["2.5.29.37.0"], // Any Purpose EKU
+        &[],
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC2")),
+        "Should be flagged ESC2: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc2_no_eku() {
+    let mut t = make_cert_template("NoEKU", false, false, 0, &[], &[]);
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC2")),
+        "Empty EKU = any purpose → ESC2: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc3_enrollment_agent() {
+    let mut t = make_cert_template(
+        "EnrollmentAgent",
+        false,
+        false,
+        0,
+        &["1.3.6.1.4.1.311.20.2.1"], // Certificate Request Agent
+        &[],
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC3")),
+        "Should be flagged ESC3: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc3_safe_requires_signatures() {
+    let mut t = make_cert_template(
+        "EnrollmentAgent-Safe",
+        false,
+        false,
+        1,    // requires 1 authorized signature
+        &["1.3.6.1.4.1.311.20.2.1"],
+        &[],
+    );
+    t.analyze();
+    assert!(!t.vulnerabilities.iter().any(|v| v.contains("ESC3")),
+        "Should NOT be ESC3 when signatures required: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc4_writable_by_auth_users() {
+    let mut t = make_cert_template(
+        "Writable-ESC4",
+        false,
+        false,
+        0,
+        &["1.3.6.1.5.5.7.3.2"],
+        &["O:SYG:SYD:(A;;RPWP;;;AU)(A;;GA;;;SY)"], // AU = Authenticated Users with WriteProperty
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC4")),
+        "Should be ESC4 when AU has WriteProperty: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc4_safe_admin_only() {
+    let mut t = make_cert_template(
+        "AdminOnly-ESC4",
+        false,
+        false,
+        0,
+        &["1.3.6.1.5.5.7.3.2"],
+        &["O:SYG:SYD:(A;;GA;;;DA)(A;;RPRC;;;AU)"], // DA has GenericAll, AU has ReadProp+ReadControl
+    );
+    t.analyze();
+    assert!(!t.vulnerabilities.iter().any(|v| v.contains("ESC4")),
+        "Should NOT be ESC4 when only DA has GenericAll: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc5_generic_all_everyone() {
+    let mut t = make_cert_template(
+        "OpenACL-ESC5",
+        false,
+        false,
+        0,
+        &[],
+        &["O:SYG:SYD:(A;;GA;;;WD)"], // WD = Everyone with GenericAll
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC5")),
+        "Should be ESC5 with Everyone:GenericAll: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc6_indicator() {
+    // Template that would be vulnerable if CA has EDITF_ATTRIBUTESUBJECTALTNAME2
+    let mut t = make_cert_template(
+        "StandardUser-ESC6",
+        false,  // enrollee does NOT supply subject (that would be ESC1)
+        false,
+        0,
+        &["1.3.6.1.5.5.7.3.2"], // Client Authentication
+        &[],
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC6")),
+        "Should be potential ESC6 indicator: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc7_subca_template() {
+    let mut t = make_cert_template(
+        "SubCA-ESC7",
+        false,
+        false,
+        0,
+        &[],  // empty EKU = SubCA-capable
+        &["O:SYG:SYD:(A;;GA;;;AU)"], // low-priv can enroll
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC7")),
+        "Should be ESC7 SubCA enrollable by low-priv: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc8_http_enrollment() {
+    let mut t = make_cert_template(
+        "HttpEnroll-ESC8",
+        false,
+        false,
+        0,
+        &["1.3.6.1.5.5.7.3.2"], // Client Authentication
+        &[],
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC8")),
+        "Should be potential ESC8: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_esc8_safe_with_approval() {
+    let mut t = make_cert_template(
+        "ApprovalRequired",
+        false,
+        true,  // requires approval
+        0,
+        &["1.3.6.1.5.5.7.3.2"],
+        &[],
+    );
+    t.analyze();
+    assert!(!t.vulnerabilities.iter().any(|v| v.contains("ESC8")),
+        "Should NOT be ESC8 with approval: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_mega_vulnerable_template() {
+    let mut t = make_cert_template(
+        "MegaVulnerable",
+        true,   // supplies subject
+        false,  // no approval
+        0,      // no sigs
+        &["2.5.29.37.0"], // Any Purpose
+        &["O:SYG:SYD:(A;;GA;;;AU)"], // AU has GenericAll
+    );
+    t.analyze();
+    // Should have at minimum: ESC1, ESC2, ESC4, ESC5, ESC7
+    assert!(t.vulnerabilities.len() >= 5,
+        "MegaVulnerable should trigger many ESC checks, got {}: {:?}",
+        t.vulnerabilities.len(), t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_hardened_template_no_vulns() {
+    let mut t = make_cert_template(
+        "Hardened-Server-Auth",
+        false,  // CA builds subject from AD
+        true,   // requires manager approval
+        1,      // requires authorized signature
+        &["1.3.6.1.5.5.7.3.1"], // Server Authentication only (not client auth)
+        &["O:SYG:SYD:(A;;GA;;;DA)(A;;RPRC;;;AU)"], // Only DA has write
+    );
+    t.analyze();
+    assert!(t.vulnerabilities.is_empty(),
+        "Hardened template should have zero vulns: {:?}", t.vulnerabilities);
+}
+
+#[test]
+fn test_adcs_sddl_parsing_multiple_aces() {
+    let mut t = make_cert_template(
+        "MultiACE",
+        false, false, 0,
+        &["1.3.6.1.5.5.7.3.2"],
+        &["O:SYG:SYD:(A;;RPRC;;;AU)(A;;RPWP;;;DU)(A;;GA;;;BA)(D;;WD;;;WD)"],
+        // AU: ReadProp+ReadControl (safe)
+        // DU: ReadProp+WriteProp (dangerous for Domain Users → ESC4)
+        // BA: GenericAll (admin, safe)
+        // WD: Everyone denied WriteDacl (deny ACE, but our parser doesn't distinguish)
+    );
+    t.analyze();
+    // Domain Users with WriteProperty → ESC4
+    assert!(t.vulnerabilities.iter().any(|v| v.contains("ESC4")),
+        "DU with WP should trigger ESC4: {:?}", t.vulnerabilities);
+}

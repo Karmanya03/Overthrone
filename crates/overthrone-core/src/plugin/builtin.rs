@@ -125,7 +125,7 @@ impl Plugin for SmartSprayPlugin {
     }
 
     async fn execute_command(
-        &self,
+        &mut self,
         command: &str,
         args: &HashMap<String, String>,
         ctx: &PluginContext,

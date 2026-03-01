@@ -1,5 +1,6 @@
 //! Protocol implementations for AD enumeration
 
+pub mod dns;
 pub mod drsr;
 pub mod kerberos;
 pub mod ldap;

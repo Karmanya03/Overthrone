@@ -238,7 +238,7 @@ pub trait Plugin: Send + Sync {
 
     /// Execute a named command registered by this plugin
     async fn execute_command(
-        &self,
+        &mut self,
         command: &str,
         args: &HashMap<String, String>,
         ctx: &PluginContext,
@@ -388,7 +388,7 @@ impl PluginRegistry {
 
     /// Execute a plugin command by name
     pub async fn execute_command(
-        &self,
+        &mut self,
         command: &str,
         args: &HashMap<String, String>,
         ctx: &PluginContext,
@@ -408,10 +408,11 @@ impl PluginRegistry {
             )));
         }
 
+        let plugin_id_owned = plugin_id.clone();
         let plugin = self
             .plugins
-            .get(plugin_id)
-            .ok_or_else(|| OverthroneError::Plugin(format!("Plugin '{}' not loaded", plugin_id)))?;
+            .get_mut(&plugin_id_owned)
+            .ok_or_else(|| OverthroneError::Plugin(format!("Plugin '{}' not loaded", plugin_id_owned)))?;
 
         plugin.execute_command(command, args, ctx).await
     }
