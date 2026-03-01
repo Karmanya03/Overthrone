@@ -29,6 +29,7 @@ pub mod cleanup;
 pub mod dcsync_user;
 pub mod diamond;
 pub mod dsrm;
+pub mod exec_util;
 pub mod golden;
 pub mod runner;
 pub mod shadow_credentials;

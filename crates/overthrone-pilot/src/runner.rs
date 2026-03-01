@@ -243,6 +243,7 @@ impl AutoPwnConfig {
             dry_run: self.dry_run,
             override_creds: None,
             ldap_available: true,
+            preferred_method: format!("{:?}", self.exec_method).to_lowercase(),
         }
     }
 
@@ -480,7 +481,22 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                         StepModification::ReduceNoise => {
                             ctx.jitter_ms = (ctx.jitter_ms + 1000).min(10_000);
                         }
-                        StepModification::AlternateMethod => {}
+                        StepModification::AlternateMethod => {
+                            // Rotate to next execution method
+                            let next = match ctx.preferred_method.as_str() {
+                                "smbexec" => "wmiexec",
+                                "wmiexec" => "winrmexec",
+                                "winrmexec" => "psexec",
+                                _ => "smbexec",
+                            };
+                            info!(
+                                "  {} Switching exec method: {} → {}",
+                                "🔄".cyan(),
+                                ctx.preferred_method.bold(),
+                                next.bold()
+                            );
+                            ctx.preferred_method = next.to_string();
+                        }
                     }
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;

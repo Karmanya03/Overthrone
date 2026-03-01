@@ -44,6 +44,7 @@ rpassword = "7.4.0"
 serde_json.workspace = true
 kerberos_asn1.workspace = true
 hex.workspace = true
+base64.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 rustyline = { version = "14.0", features = ["derive"] }

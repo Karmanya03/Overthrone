@@ -735,41 +735,43 @@ fn decrypt_sam_hash(boot_key: &[u8; 16], rid: u32, v_data: &[u8]) -> Result<(Vec
 
 /// Decrypt a SAM hash using RC4 + DES (pre-Vista method)
 fn decrypt_sam_hash_rc4(
-    _boot_key: &[u8; 16],
+    boot_key: &[u8; 16],
     rid: u32,
     encrypted: &[u8],
-    _is_lm: bool,
+    is_lm: bool,
 ) -> Result<Vec<u8>> {
-    // Simplified: In production, this uses:
-    // 1. MD5(boot_key + RID_bytes + AQWLHK constant) to derive RC4 key
+    // Pre-Vista SAM hash decryption per MS-SAMR / Impacket:
+    // 1. Derive RC4 key = MD5(hashed_boot_key || RID_le || constant)
     // 2. RC4 decrypt the 16-byte encrypted hash
-    // 3. DES decrypt with two 7-byte keys derived from RID
-    //
-    // For now, return the encrypted data (actual crypto requires RC4+DES impl)
-    if encrypted.len() >= 16 {
-        Ok(encrypted[..16].to_vec())
-    } else {
-        Ok(vec![0u8; 16])
-    }
+    // 3. DES two-block decrypt with RID-derived keys
+    use crate::crypto::rc4_util;
+    let result = rc4_util::decrypt_sam_hash_rc4(
+        rid,
+        boot_key,
+        encrypted,
+        !is_lm, // is_nt = !is_lm
+    )?;
+    Ok(result.to_vec())
 }
 
 /// Decrypt a SAM hash using AES-128-CBC (Vista+ method)
 fn decrypt_sam_hash_aes(
-    _boot_key: &[u8; 16],
-    _rid: u32,
-    _iv: &[u8],
+    boot_key: &[u8; 16],
+    rid: u32,
+    iv: &[u8],
     encrypted: &[u8],
 ) -> Result<Vec<u8>> {
-    // Simplified: In production, this uses:
-    // 1. AES-128-CBC with boot_key as the key and the IV from the hash structure
-    // 2. DES decrypt with two 7-byte keys derived from RID
-    //
-    // For now, return the encrypted data
-    if encrypted.len() >= 16 {
-        Ok(encrypted[..16].to_vec())
-    } else {
-        Ok(vec![0u8; 16])
-    }
+    // Vista+ SAM hash decryption:
+    // 1. AES-128-CBC decrypt with boot_key as key and IV from hash structure
+    // 2. DES two-block decrypt with RID-derived keys
+    use crate::crypto::aes_cts;
+    let result = aes_cts::decrypt_sam_hash_aes(
+        rid,
+        boot_key,
+        encrypted,
+        iv,
+    )?;
+    Ok(result.to_vec())
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -800,18 +802,14 @@ fn derive_lsa_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> 
 
 /// Decrypt PolEKList (Vista+) using boot key
 fn decrypt_pol_eklist(data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> {
-    // The encrypted blob uses AES-256-CFB with SHA256(boot_key) as the key
+    // Vista+ PolEKList uses AES-256-CBC with SHA256(boot_key) as the key.
     // Structure: version(4) + key_id(16) + enc_type(4) + enc_data(...)
+    // The IV is embedded in the blob at bytes 16..32
+    use crate::crypto::aes_cts;
     if data.len() < 32 {
         return Err(anyhow!("PolEKList data too short"));
     }
-    // Simplified: return a derived key (actual impl needs AES-256-CFB)
-    let mut key = [0u8; 32];
-    for (i, &b) in boot_key.iter().enumerate() {
-        key[i] = b;
-        key[i + 16] = b.wrapping_mul(0x5A);
-    }
-    Ok(key.to_vec())
+    aes_cts::decrypt_lsa_key_vista(boot_key, data)
 }
 
 /// Decrypt PolSecretEncryptionKey (pre-Vista) using boot key
@@ -819,12 +817,10 @@ fn decrypt_pol_secret_key(data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> {
     if data.len() < 16 {
         return Err(anyhow!("PolSecretEncryptionKey too short"));
     }
-    // Pre-Vista uses MD5(boot_key + constant) as RC4 key
-    let mut key = vec![0u8; 16];
-    for (i, &b) in boot_key.iter().enumerate() {
-        key[i] = b;
-    }
-    Ok(key)
+    // Pre-Vista: iterated MD5 key derivation + RC4 decrypt
+    use crate::crypto::rc4_util;
+    rc4_util::decrypt_lsa_key_pre_vista(boot_key, data)
+        .map_err(|e| anyhow!("LSA key decryption failed: {e}"))
 }
 
 /// Enumerate LSA secrets from the SECURITY hive
@@ -855,12 +851,21 @@ fn decrypt_lsa_secret(lsa_key: &[u8], encrypted: &[u8]) -> Result<Vec<u8>> {
     if encrypted.len() >= 28 {
         let version = read_u32(encrypted, 0)?;
         if version == 1 {
-            // Pre-Vista: DES-ECB with derived key
+            // Pre-Vista: RC4-based decryption with derived key
+            use crate::crypto::rc4_util;
+            if encrypted.len() > 12 {
+                let decrypted = rc4_util::rc4_crypt(lsa_key, &encrypted[12..]);
+                return Ok(decrypted);
+            }
             return Ok(encrypted[12..].to_vec());
         }
-        // Vista+: AES-256-CFB with LSA key
+        // Vista+: AES-256-CBC with LSA key, IV prepended to enc_data
+        use crate::crypto::aes_cts;
         let enc_data = &encrypted[28..];
-        // Simplified decryption (actual needs AES-256-CFB)
+        if enc_data.len() >= 32 {
+            return aes_cts::decrypt_lsa_secret_vista(lsa_key, enc_data)
+                .map_err(|e| anyhow!("LSA secret AES decryption: {e}"));
+        }
         return Ok(enc_data.to_vec());
     }
 
@@ -941,8 +946,14 @@ fn decrypt_cached_entry(nlkm_key: &[u8], entry: &[u8]) -> Result<(String, Vec<u8
     }
 
     // Decrypt using AES-128-CBC with NL$KM key and IV
-    // Simplified: read the data as-is (actual needs AES-128-CBC)
-    let dec_data = &entry[enc_offset..];
+    use crate::crypto::aes_cts;
+    let dec_data = match aes_cts::decrypt_cached_credential(nlkm_key, &entry[enc_offset..]) {
+        Ok(d) => d,
+        Err(_) => {
+            // Fallback: read raw data if decryption fails (may be unencrypted)
+            entry[enc_offset..].to_vec()
+        }
+    };
 
     // Extract username (UTF-16LE)
     let username = if username_len <= dec_data.len() {
@@ -968,83 +979,7 @@ fn decrypt_cached_entry(nlkm_key: &[u8], entry: &[u8]) -> Result<(String, Vec<u8
 
 /// Compute NTLM hash (MD4 of UTF-16LE password)
 fn compute_nt_hash(password_bytes: &[u8]) -> Vec<u8> {
-    // MD4 implementation (simplified — in production use a crypto crate)
-    md4_hash(password_bytes)
-}
-
-/// Minimal MD4 implementation for NTLM hash computation
-fn md4_hash(input: &[u8]) -> Vec<u8> {
-    // MD4 constants
-    let mut a: u32 = 0x67452301;
-    let mut b: u32 = 0xefcdab89;
-    let mut c: u32 = 0x98badcfe;
-    let mut d: u32 = 0x10325476;
-
-    // Padding
-    let bit_len = (input.len() as u64) * 8;
-    let mut msg = input.to_vec();
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
-    }
-    msg.extend_from_slice(&bit_len.to_le_bytes());
-
-    // Process each 64-byte block
-    for block in msg.chunks(64) {
-        let mut x = [0u32; 16];
-        for (i, chunk) in block.chunks(4).enumerate() {
-            if i < 16 && chunk.len() == 4 {
-                x[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            }
-        }
-
-        let (aa, bb, cc, dd) = (a, b, c, d);
-
-        // Round 1
-        macro_rules! ff {
-            ($a:expr, $b:expr, $c:expr, $d:expr, $k:expr, $s:expr) => {
-                $a = ($a.wrapping_add(($b & $c) | (!$b & $d)).wrapping_add(x[$k])).rotate_left($s);
-            };
-        }
-        ff!(a, b, c, d, 0, 3);  ff!(d, a, b, c, 1, 7);  ff!(c, d, a, b, 2, 11); ff!(b, c, d, a, 3, 19);
-        ff!(a, b, c, d, 4, 3);  ff!(d, a, b, c, 5, 7);  ff!(c, d, a, b, 6, 11); ff!(b, c, d, a, 7, 19);
-        ff!(a, b, c, d, 8, 3);  ff!(d, a, b, c, 9, 7);  ff!(c, d, a, b, 10, 11); ff!(b, c, d, a, 11, 19);
-        ff!(a, b, c, d, 12, 3); ff!(d, a, b, c, 13, 7); ff!(c, d, a, b, 14, 11); ff!(b, c, d, a, 15, 19);
-
-        // Round 2
-        macro_rules! gg {
-            ($a:expr, $b:expr, $c:expr, $d:expr, $k:expr, $s:expr) => {
-                $a = ($a.wrapping_add(($b & $c) | ($b & $d) | ($c & $d)).wrapping_add(x[$k]).wrapping_add(0x5A827999)).rotate_left($s);
-            };
-        }
-        gg!(a, b, c, d, 0, 3);  gg!(d, a, b, c, 4, 5);  gg!(c, d, a, b, 8, 9);  gg!(b, c, d, a, 12, 13);
-        gg!(a, b, c, d, 1, 3);  gg!(d, a, b, c, 5, 5);  gg!(c, d, a, b, 9, 9);  gg!(b, c, d, a, 13, 13);
-        gg!(a, b, c, d, 2, 3);  gg!(d, a, b, c, 6, 5);  gg!(c, d, a, b, 10, 9); gg!(b, c, d, a, 14, 13);
-        gg!(a, b, c, d, 3, 3);  gg!(d, a, b, c, 7, 5);  gg!(c, d, a, b, 11, 9); gg!(b, c, d, a, 15, 13);
-
-        // Round 3
-        macro_rules! hh {
-            ($a:expr, $b:expr, $c:expr, $d:expr, $k:expr, $s:expr) => {
-                $a = ($a.wrapping_add($b ^ $c ^ $d).wrapping_add(x[$k]).wrapping_add(0x6ED9EBA1)).rotate_left($s);
-            };
-        }
-        hh!(a, b, c, d, 0, 3);  hh!(d, a, b, c, 8, 9);  hh!(c, d, a, b, 4, 11); hh!(b, c, d, a, 12, 15);
-        hh!(a, b, c, d, 2, 3);  hh!(d, a, b, c, 10, 9); hh!(c, d, a, b, 6, 11); hh!(b, c, d, a, 14, 15);
-        hh!(a, b, c, d, 1, 3);  hh!(d, a, b, c, 9, 9);  hh!(c, d, a, b, 5, 11); hh!(b, c, d, a, 13, 15);
-        hh!(a, b, c, d, 3, 3);  hh!(d, a, b, c, 11, 9); hh!(c, d, a, b, 7, 11); hh!(b, c, d, a, 15, 15);
-
-        a = a.wrapping_add(aa);
-        b = b.wrapping_add(bb);
-        c = c.wrapping_add(cc);
-        d = d.wrapping_add(dd);
-    }
-
-    let mut result = Vec::with_capacity(16);
-    result.extend_from_slice(&a.to_le_bytes());
-    result.extend_from_slice(&b.to_le_bytes());
-    result.extend_from_slice(&c.to_le_bytes());
-    result.extend_from_slice(&d.to_le_bytes());
-    result
+    crate::crypto::md4::ntlm_hash_from_bytes(password_bytes).to_vec()
 }
 
 /// Decode UTF-16LE bytes to a String
@@ -1340,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_md4_empty() {
-        let hash = md4_hash(b"");
+        let hash = crate::crypto::md4::ntlm_hash_from_bytes(b"");
         assert_eq!(hex_encode(&hash), "31d6cfe0d16ae931b73c59d7e0c089c0");
     }
 

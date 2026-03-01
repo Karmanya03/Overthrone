@@ -67,6 +67,8 @@ pub struct ForgeConfig {
     pub lifetime_hours: u32,
     /// Output path for .kirbi / .ccache file
     pub output_path: Option<String>,
+    /// Path to local payload binary (e.g. mimikatz.exe for skeleton key)
+    pub payload_path: Option<String>,
 }
 
 impl ForgeConfig {

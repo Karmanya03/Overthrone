@@ -25,6 +25,9 @@ hmac.workspace = true
 md-5.workspace = true
 md4.workspace = true
 digest.workspace = true
+rsa = "0.9"
+rcgen = "0.14"
+base64.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true

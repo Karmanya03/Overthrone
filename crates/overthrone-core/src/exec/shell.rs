@@ -2,11 +2,16 @@
 //!
 //! Provides persistent shell sessions via WinRM, SMB, and WMI.
 //! Similar to evil-winrm but integrated into Overthrone.
+//!
+//! Each shell type delegates to its real executor:
+//! - **WinRM**: `WinRmExecutor::execute()` (SOAP/WSMan on Linux, Win32 API on Windows)
+//! - **SMB**: `smbexec::exec_command()` via a persistent `SmbSession`
+//! - **WMI**: `wmiexec::exec_command()` via SCM fallback over SMB
 
 use crate::error::{OverthroneError, Result};
+use crate::exec::{ExecCredentials, ExecMethod};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -40,6 +45,24 @@ pub struct ShellConfig {
     pub target: String,
     pub shell_type: ShellType,
     pub timeout: Duration,
+    /// Credentials for authentication (required for real connections)
+    pub credentials: Option<ExecCredentials>,
+}
+
+/// Backend state held once connected
+enum ShellBackend {
+    /// WinRM — stores credentials; each `execute` call delegates to `WinRmExecutor`
+    Winrm {
+        creds: ExecCredentials,
+    },
+    /// SMB — keeps a persistent `SmbSession` for command-per-service execution
+    Smb {
+        session: crate::proto::smb::SmbSession,
+    },
+    /// WMI — keeps a persistent `SmbSession` for SCM-fallback execution
+    Wmi {
+        session: crate::proto::smb::SmbSession,
+    },
 }
 
 /// Interactive shell session
@@ -48,6 +71,7 @@ pub struct InteractiveShell {
     session_id: String,
     last_output: String,
     command_count: u32,
+    backend: Option<ShellBackend>,
 }
 
 /// Shell command result
@@ -80,7 +104,7 @@ impl InteractiveShell {
         }
 
         // Attempt connection based on shell type
-        let session_id = match config.shell_type {
+        let (session_id, backend) = match config.shell_type {
             ShellType::Winrm => Self::connect_winrm(&config).await?,
             ShellType::Smb => Self::connect_smb(&config).await?,
             ShellType::Wmi => Self::connect_wmi(&config).await?,
@@ -93,6 +117,7 @@ impl InteractiveShell {
             session_id,
             last_output: String::new(),
             command_count: 0,
+            backend: Some(backend),
         })
     }
 
@@ -108,10 +133,14 @@ impl InteractiveShell {
 
         let start = std::time::Instant::now();
 
-        let result = match self.config.shell_type {
-            ShellType::Winrm => self.execute_winrm(command).await,
-            ShellType::Smb => self.execute_smb(command).await,
-            ShellType::Wmi => self.execute_wmi(command).await,
+        let result = match self.backend.as_ref() {
+            Some(ShellBackend::Winrm { .. }) => self.execute_winrm(command).await,
+            Some(ShellBackend::Smb { .. }) => self.execute_smb(command).await,
+            Some(ShellBackend::Wmi { .. }) => self.execute_wmi(command).await,
+            None => Err(OverthroneError::Exec {
+                target: self.config.target.clone(),
+                reason: "No backend connected".to_string(),
+            }),
         };
 
         let elapsed = start.elapsed().as_millis() as u64;
@@ -151,255 +180,192 @@ impl InteractiveShell {
     }
 
     // ═══════════════════════════════════════════════════════
-    // WinRM Implementation
+    // Credential helper
     // ═══════════════════════════════════════════════════════
 
-    async fn connect_winrm(config: &ShellConfig) -> Result<String> {
-        // In a real implementation, this would:
-        // 1. Establish WinRM connection via WS-Management
-        // 2. Create shell resource
-        // 3. Return session ID
+    fn require_creds(config: &ShellConfig) -> Result<&ExecCredentials> {
+        config.credentials.as_ref().ok_or_else(|| OverthroneError::Exec {
+            target: config.target.clone(),
+            reason: "Credentials required for connection".to_string(),
+        })
+    }
 
+    // ═══════════════════════════════════════════════════════
+    // WinRM Implementation — delegates to WinRmExecutor
+    // ═══════════════════════════════════════════════════════
+
+    async fn connect_winrm(config: &ShellConfig) -> Result<(String, ShellBackend)> {
         debug!("Connecting to WinRM endpoint on {}", config.target);
 
-        // Simulate connection delay
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let creds = Self::require_creds(config)?.clone();
 
-        // Generate session ID
-        let session_id = format!("winrm-{:08x}", rand::random::<u32>());
-
-        // Verify WinRM is accessible
+        // Verify WinRM is accessible (port check)
         Self::check_winrm_access(config).await?;
 
-        Ok(session_id)
+        // Probe with a lightweight command to confirm auth works
+        let executor = crate::exec::winrm::WinRmExecutor::new(creds.clone());
+        let probe = <crate::exec::winrm::WinRmExecutor as crate::exec::RemoteExecutor>::execute(
+            &executor,
+            &config.target,
+            "hostname",
+        )
+        .await;
+
+        match probe {
+            Ok(out) => debug!("WinRM probe OK: {}", out.stdout.trim()),
+            Err(e) => {
+                warn!("WinRM probe failed ({}), continuing anyway", e);
+            }
+        }
+
+        let session_id = format!("winrm-{:08x}", rand::random::<u32>());
+        Ok((session_id, ShellBackend::Winrm { creds }))
     }
 
     async fn check_winrm_access(config: &ShellConfig) -> Result<()> {
-        // Check if WinRM port is open
-        let winrm_port = 5985; // HTTP
-        let winrm_ssl_port = 5986; // HTTPS
+        let winrm_port = 5985;
+        let winrm_ssl_port = 5986;
+        let timeout = Duration::from_secs(5);
 
-        // Try to connect to WinRM port
         let addr = format!("{}:{}", config.target, winrm_port);
-
-        match tokio::net::TcpStream::connect(&addr).await {
-            Ok(_) => {
+        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+            Ok(Ok(_)) => {
                 debug!("WinRM HTTP port (5985) is accessible");
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        let addr_ssl = format!("{}:{}", config.target, winrm_ssl_port);
+        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr_ssl)).await {
+            Ok(Ok(_)) => {
+                debug!("WinRM HTTPS port (5986) is accessible");
                 Ok(())
             }
-            Err(e) => {
-                // Try HTTPS port
-                let addr_ssl = format!("{}:{}", config.target, winrm_ssl_port);
-                match tokio::net::TcpStream::connect(&addr_ssl).await {
-                    Ok(_) => {
-                        debug!("WinRM HTTPS port (5986) is accessible");
-                        Ok(())
-                    }
-                    Err(_) => {
-                        warn!("WinRM ports not accessible: {}", e);
-                        Err(OverthroneError::Exec {
-                            target: config.target.clone(),
-                            reason: format!("WinRM not accessible: {}", e),
-                        })
-                    }
-                }
-            }
+            _ => Err(OverthroneError::Exec {
+                target: config.target.clone(),
+                reason: "WinRM ports (5985/5986) not accessible".to_string(),
+            }),
         }
     }
 
     async fn execute_winrm(&self, command: &str) -> Result<String> {
-        // In a real implementation, this would:
-        // 1. Send command via WS-Management SOAP request
-        // 2. Receive output via WS-Management
-        // 3. Return formatted output
+        let creds = match &self.backend {
+            Some(ShellBackend::Winrm { creds }) => creds.clone(),
+            _ => unreachable!(),
+        };
 
         debug!("Executing via WinRM: {}", command);
 
-        // Simulate command execution
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let executor = crate::exec::winrm::WinRmExecutor::new(creds);
+        let output = <crate::exec::winrm::WinRmExecutor as crate::exec::RemoteExecutor>::execute(
+            &executor,
+            &self.config.target,
+            command,
+        )
+        .await?;
 
-        // Generate mock output based on command
-        let output = self.generate_mock_output(command);
-
-        Ok(output)
+        let mut result = output.stdout;
+        if !output.stderr.is_empty() {
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&output.stderr);
+        }
+        Ok(result)
     }
 
     async fn close_winrm(&self) -> Result<()> {
         debug!("Closing WinRM session {}", self.session_id);
-
-        // In a real implementation, this would:
-        // 1. Send Delete Shell request via WS-Management
-        // 2. Clean up resources
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
+        // WinRM is stateless per-command; nothing to tear down
         Ok(())
     }
 
     // ═══════════════════════════════════════════════════════
-    // SMB Implementation (PsExec-style)
+    // SMB Implementation — persistent SmbSession + smbexec
     // ═══════════════════════════════════════════════════════
 
-    async fn connect_smb(config: &ShellConfig) -> Result<String> {
-        // In a real implementation, this would:
-        // 1. Connect to IPC$ share
-        // 2. Open SVCCTL pipe
-        // 3. Create and start service
-        // 4. Return session ID
-
+    async fn connect_smb(config: &ShellConfig) -> Result<(String, ShellBackend)> {
         debug!("Connecting via SMB to {}", config.target);
 
-        // Simulate connection
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let creds = Self::require_creds(config)?;
+
+        let session = crate::proto::smb::SmbSession::connect(
+            &config.target,
+            &creds.domain,
+            &creds.username,
+            &creds.password,
+        )
+        .await?;
+
+        // Verify admin share access
+        if !session.check_share_read("C$").await && !session.check_share_read("ADMIN$").await {
+            warn!("SMB: Connected but no admin share access — commands may fail");
+        }
 
         let session_id = format!("smb-{:08x}", rand::random::<u32>());
-
-        Ok(session_id)
+        Ok((session_id, ShellBackend::Smb { session }))
     }
 
     async fn execute_smb(&self, command: &str) -> Result<String> {
-        // In a real implementation, this would:
-        // 1. Write command to service stdin via named pipe
-        // 2. Read output from named pipe
-        // 3. Return formatted output
+        let session = match &self.backend {
+            Some(ShellBackend::Smb { session }) => session,
+            _ => unreachable!(),
+        };
 
         debug!("Executing via SMB: {}", command);
 
-        // Simulate command execution
-        tokio::time::sleep(Duration::from_millis(150)).await;
-
-        let output = self.generate_mock_output(command);
-
-        Ok(output)
+        let result = crate::exec::smbexec::exec_command(session, command).await?;
+        Ok(result.output)
     }
 
     async fn close_smb(&self) -> Result<()> {
         debug!("Closing SMB session {}", self.session_id);
-
-        // In a real implementation, this would:
-        // 1. Stop and delete the service
-        // 2. Clean up named pipes
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
+        // SmbSession is dropped when InteractiveShell is dropped.
+        // Any cleanup on the service side was already done per-command in smbexec.
         Ok(())
     }
 
     // ═══════════════════════════════════════════════════════
-    // WMI Implementation
+    // WMI Implementation — persistent SmbSession + wmiexec
     // ═══════════════════════════════════════════════════════
 
-    async fn connect_wmi(config: &ShellConfig) -> Result<String> {
-        // In a real implementation, this would:
-        // 1. Connect to WMI namespace (root\cimv2)
-        // 2. Create process via Win32_Process
-        // 3. Return session ID
-
+    async fn connect_wmi(config: &ShellConfig) -> Result<(String, ShellBackend)> {
         debug!("Connecting via WMI to {}", config.target);
 
-        // Simulate connection
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        let creds = Self::require_creds(config)?;
+
+        let session = crate::proto::smb::SmbSession::connect(
+            &config.target,
+            &creds.domain,
+            &creds.username,
+            &creds.password,
+        )
+        .await?;
+
+        if !session.check_share_read("C$").await && !session.check_share_read("ADMIN$").await {
+            warn!("WMI: Connected but no admin share access — commands may fail");
+        }
 
         let session_id = format!("wmi-{:08x}", rand::random::<u32>());
-
-        Ok(session_id)
+        Ok((session_id, ShellBackend::Wmi { session }))
     }
 
     async fn execute_wmi(&self, command: &str) -> Result<String> {
-        // In a real implementation, this would:
-        // 1. Create process via Win32_Process.Create
-        // 2. Monitor process for completion
-        // 3. Read output (if redirected to file)
-        // 4. Return formatted output
+        let session = match &self.backend {
+            Some(ShellBackend::Wmi { session }) => session,
+            _ => unreachable!(),
+        };
 
         debug!("Executing via WMI: {}", command);
 
-        // Simulate command execution
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        let output = self.generate_mock_output(command);
-
-        Ok(output)
+        let result = crate::exec::wmiexec::exec_command(session, command).await?;
+        Ok(result.output)
     }
 
     async fn close_wmi(&self) -> Result<()> {
         debug!("Closing WMI session {}", self.session_id);
-
-        // WMI doesn't require explicit cleanup for process creation
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
         Ok(())
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // Helper methods
-    // ═══════════════════════════════════════════════════════
-
-    fn generate_mock_output(&self, command: &str) -> String {
-        // Generate realistic-looking output for common commands
-        let cmd_lower = command.to_lowercase();
-
-        if cmd_lower.starts_with("whoami") {
-            format!(
-                "{}\\administrator",
-                self.config.target.split('.').next().unwrap_or("CORP")
-            )
-        } else if cmd_lower.starts_with("hostname") {
-            self.config
-                .target
-                .split('.')
-                .next()
-                .unwrap_or("DC01")
-                .to_string()
-        } else if cmd_lower.starts_with("ipconfig") {
-            "Windows IP Configuration\n\n\
-             Ethernet adapter Ethernet0:\n\n\
-               Connection-specific DNS Suffix  . : corp.local\n\
-               IPv4 Address. . . . . . . . . . . : 192.168.1.100\n\
-               Subnet Mask . . . . . . . . . . . : 255.255.255.0\n\
-               Default Gateway . . . . . . . . . : 192.168.1.1"
-                .to_string()
-        } else if cmd_lower.starts_with("net user") {
-            "User accounts for \\\\DC01\n\n\
-             Administrator            Guest                      krbtgt\n\
-             john.doe                 jane.smith                 svc_sql\n\
-             The command completed successfully."
-                .to_string()
-        } else if cmd_lower.starts_with("net group") {
-            "Group Accounts for \\\\DC01\n\n\
-             *Domain Admins\n\
-             *Domain Users\n\
-             *Domain Computers\n\
-             *Enterprise Admins\n\
-             The command completed successfully."
-                .to_string()
-        } else if cmd_lower.starts_with("systeminfo") {
-            format!(
-                "Host Name:                 {}\n\
-                 OS Name:                   Microsoft Windows Server 2019 Standard\n\
-                 OS Version:                10.0.17763 N/A Build 17763\n\
-                 OS Manufacturer:           Microsoft Corporation\n\
-                 System Type:               x64-based PC\n\
-                 Total Physical Memory:   16,384 MB",
-                self.config.target.split('.').next().unwrap_or("DC01")
-            )
-        } else if cmd_lower.starts_with("pwd") || cmd_lower.starts_with("cd") {
-            "C:\\Users\\Administrator".to_string()
-        } else if cmd_lower.starts_with("ls") || cmd_lower.starts_with("dir") {
-            " Volume in drive C is Windows\n\
-             Directory of C:\\Users\\Administrator\n\n\
-             01/15/2024  10:30 AM    <DIR>          .\n\
-             01/15/2024  10:30 AM    <DIR>          ..\n\
-             01/15/2024  10:30 AM    <DIR>          Desktop\n\
-             01/15/2024  10:30 AM    <DIR>          Documents\n\
-             01/15/2024  10:30 AM    <DIR>          Downloads\n\
-                        0 File(s)              0 bytes\n\
-                        5 Dir(s)  100,000,000,000 bytes free"
-                .to_string()
-        } else {
-            format!("Command executed successfully: {}\n[No output]", command)
-        }
     }
 }
 
@@ -489,6 +455,7 @@ mod tests {
             target: "dc01.corp.local".to_string(),
             shell_type: ShellType::Winrm,
             timeout: Duration::from_secs(30),
+            credentials: None,
         };
 
         assert_eq!(config.target, "dc01.corp.local");
@@ -507,16 +474,18 @@ mod tests {
         let mut pool = ShellPool::new(5);
         assert!(pool.sessions.is_empty());
 
-        // Create a mock shell
+        // Create a shell (no backend — unit-test only)
         let shell = InteractiveShell {
             config: ShellConfig {
                 target: "test".to_string(),
                 shell_type: ShellType::Winrm,
                 timeout: Duration::from_secs(30),
+                credentials: None,
             },
             session_id: "test-123".to_string(),
             last_output: String::new(),
             command_count: 0,
+            backend: None,
         };
 
         let id = pool.add_session(shell).await.unwrap();

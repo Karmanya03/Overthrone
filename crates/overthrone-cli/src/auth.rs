@@ -108,6 +108,7 @@ impl Credentials {
             dry_run,
             override_creds: None,
             ldap_available: true,
+            preferred_method: "smbexec".to_string(),
         })
     }
 

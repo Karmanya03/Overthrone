@@ -182,6 +182,8 @@ pub struct EngagementState {
 
     /// Kerberoastable accounts (SPN users)
     pub kerberoastable: Vec<String>,
+    /// SPN map: sam_account_name → list of SPNs (for kerberoast)
+    pub spn_map: HashMap<String, Vec<String>>,
     /// AS-REP roastable accounts
     pub asrep_roastable: Vec<String>,
     /// Cracked hashes (username → plaintext)
