@@ -119,3 +119,17 @@ docker-compose.override.yml
 # Agent config directories
 .agent/
 .agents/
+
+# ═══════════════════════════════════════════════════════════
+# Kiro IDE / Spec Files (Local Development)
+# ═══════════════════════════════════════════════════════════
+.kiro/
+
+# ═══════════════════════════════════════════════════════════
+# Temporary Build Check Files
+# ═══════════════════════════════════════════════════════════
+cargo_check_output.txt
+check_*.txt
+build_errors*.txt
+clippy_output.txt
+*_output.txt

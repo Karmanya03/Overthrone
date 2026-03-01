@@ -36,6 +36,7 @@ petgraph = { version = "0.7", features = ["serde-1"] }
 
 # Crypto (use workspace versions)
 aes.workspace = true
+aes-gcm = "0.10"        # AES-256-GCM for LAPS v2 decryption
 cbc.workspace = true
 hmac = "0.12"
 md-5 = "0.10"
@@ -58,6 +59,7 @@ rsa = "0.9"             # RSA key generation
 pkcs8 = "0.10"          # Private key encoding
 pkcs12 = "0.1"          # PFX generation
 sha1 = "0.10"           # SHA1 for certificate signatures
+pem = "3.0"             # PEM encoding/decoding for certificates and keys
 
 # Networking
 hickory-resolver.workspace = true
@@ -73,6 +75,7 @@ p12-keystore = "0.2.0"
 # ─── Plugin System ─────────────────────────────────────────
 libloading = "0.8"       # Dynamic .dll/.so loading for native plugins
 shellexpand = "3.1"      # Tilde expansion for plugin paths (~/.overthrone)
+wasmtime = "28.0"        # WASM runtime for sandboxed plugins
 
 # ─── C2 Integration ────────────────────────────────────────
 tonic = { version = "0.12", optional = true }   # gRPC client for Sliver
@@ -111,3 +114,4 @@ full-c2 = ["sliver-grpc"]             # All C2 integrations
 [dev-dependencies]
 tokio-test.workspace = true
 pretty_assertions.workspace = true
+proptest = "1.4"        # Property-based testing

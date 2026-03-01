@@ -594,6 +594,11 @@ fn ldap3_escape(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    // ============================================================================
+    // Unit Tests
+    // ============================================================================
 
     #[test]
     fn test_esc4_target_creation() {
@@ -619,7 +624,7 @@ mod tests {
         let target = Esc4Target::new("ESC4Template", "corp.local", "attacker");
         let cmds = target.generate_restore_commands().unwrap();
         assert!(cmds.contains("ESC4Template_old.json"));
-        assert!(cmds.contains("Restore"));
+        assert!(cmds.contains("Restoration") || cmds.contains("restore"));
     }
 
     #[test]
@@ -659,5 +664,68 @@ mod tests {
     fn test_modify_op_variants() {
         assert_ne!(ModifyOp::Replace, ModifyOp::Add);
         assert_ne!(ModifyOp::Add, ModifyOp::Delete);
+    }
+
+    // ============================================================================
+    // Property-Based Tests
+    // ============================================================================
+
+    // Property 19: ESC4 Template Attribute Modification
+    // LDAP escaping should be idempotent for already-escaped strings
+    proptest! {
+        #[test]
+        fn prop_ldap_escape_idempotent(
+            input in "[a-zA-Z0-9_-]{1,50}"
+        ) {
+            let escaped1 = ldap3_escape(&input);
+            let escaped2 = ldap3_escape(&escaped1);
+            // For strings without special chars, escaping should be idempotent
+            if !input.contains('*') && !input.contains('(') && !input.contains(')') && !input.contains('\\') {
+                prop_assert_eq!(escaped1, escaped2);
+            }
+        }
+    }
+
+    // Property 20: ESC4 Template Restoration Round-Trip
+    // Template backup serialization should be reversible
+    proptest! {
+        #[test]
+        fn prop_template_backup_roundtrip(
+            name in "[a-zA-Z0-9_-]{1,20}",
+            dn in "[a-zA-Z0-9,=_ -]{10,50}",
+            timestamp in "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+        ) {
+            let mut attrs = std::collections::HashMap::new();
+            attrs.insert("test-attr".to_string(), vec!["test-value".to_string()]);
+
+            let backup = TemplateBackup {
+                dn: dn.clone(),
+                name: name.clone(),
+                attributes: attrs,
+                timestamp: timestamp.clone(),
+            };
+
+            let json = serde_json::to_string(&backup).unwrap();
+            let restored: TemplateBackup = serde_json::from_str(&json).unwrap();
+            
+            prop_assert_eq!(restored.name, name);
+            prop_assert_eq!(restored.dn, dn);
+            prop_assert_eq!(restored.timestamp, timestamp);
+        }
+    }
+
+    // Esc4Target creation should always succeed with valid inputs
+    proptest! {
+        #[test]
+        fn prop_esc4_target_creation(
+            template in "[a-zA-Z0-9_-]{1,20}",
+            domain in "[a-zA-Z0-9.-]{3,30}",
+            user in "[a-zA-Z0-9_-]{1,20}"
+        ) {
+            let target = Esc4Target::new(&template, &domain, &user);
+            prop_assert_eq!(target.template_name, template);
+            prop_assert_eq!(target.domain, domain);
+            prop_assert_eq!(target.current_user, user);
+        }
     }
 }

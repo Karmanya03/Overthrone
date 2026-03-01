@@ -209,100 +209,272 @@ pub fn analyze_foreign_memberships(
 /// Queries the trustedDomain objects in AD and parses trustAttributes
 /// to determine SID filtering status, TGT delegation, and other
 /// attack-relevant configuration.
-pub async fn enumerate_trusts(domain: &str, _dc_ip: &str) -> Result<Vec<TrustRelationship>> {
-    // TODO: implement live LDAP query once overthrone_core::proto::ldap is ready.
-    //
-    // The implementation should:
-    //   1. Connect to DC via LDAP
-    //   2. Search base_dn for (objectClass=trustedDomain)
-    //   3. Parse trustAttributes bitmask to determine:
-    //      - SID filtering (QUARANTINED_DOMAIN / absence of TREAT_AS_EXTERNAL on forest trust)
-    //      - TGT delegation (absence of CROSS_ORG_NO_TGT_DELEG)
-    //      - Forest transitivity (FOREST_TRANSITIVE flag)
-    //   4. Build TrustRelationship with attack_notes
+pub async fn enumerate_trusts(domain: &str, dc_ip: &str) -> Result<Vec<TrustRelationship>> {
+    use overthrone_core::proto::ldap::LdapSession;
 
-    let base_dn = domain_to_dn(domain);
-    warn!(
-        "[foreign] enumerate_trusts: LDAP not yet implemented, returning empty (base_dn={})",
-        base_dn
-    );
-    Ok(Vec::new())
+    info!("[foreign] Enumerating trusts from {} ({})", domain, dc_ip);
+
+    // Connect to LDAP (anonymous bind for trust enumeration)
+    let mut conn = LdapSession::connect(dc_ip, domain, "", "", false).await?;
+
+    // Enumerate trusts using the built-in method
+    let ad_trusts = conn.enumerate_trusts().await?;
+    
+    let _ = conn.disconnect().await;
+
+    let mut results = Vec::new();
+    for trust in ad_trusts {
+        let attrs = trust.trust_attributes;
+        
+        // Determine SID filtering status
+        let sid_filtering = if attrs & trust_attrs::QUARANTINED_DOMAIN != 0 {
+            true // Explicitly quarantined
+        } else if attrs & trust_attrs::FOREST_TRANSITIVE != 0 {
+            // Forest trust - SID filtering depends on TREAT_AS_EXTERNAL
+            attrs & trust_attrs::TREAT_AS_EXTERNAL != 0
+        } else {
+            // External trust - SID filtering is on by default
+            true
+        };
+
+        // Check TGT delegation
+        let tgt_delegation = attrs & trust_attrs::CROSS_ORG_NO_TGT_DELEG == 0;
+
+        // Check selective authentication
+        let selective_auth = attrs & trust_attrs::CROSS_ORGANIZATION != 0;
+
+        // Check forest transitivity
+        let forest_transitive = attrs & trust_attrs::FOREST_TRANSITIVE != 0;
+
+        // Build attack notes
+        let mut attack_notes = Vec::new();
+        
+        if !sid_filtering {
+            attack_notes.push("⚠️ SID filtering is DISABLED - full domain compromise possible".to_string());
+        }
+        
+        if tgt_delegation && sid_filtering {
+            attack_notes.push("⚠️ TGT delegation enabled with SID filtering - potential bypass via delegation".to_string());
+        }
+        
+        if trust.trust_direction.to_string().contains("Bidirectional") {
+            attack_notes.push("ℹ️ Bidirectional trust - compromise in either direction affects both domains".to_string());
+        }
+        
+        if forest_transitive {
+            attack_notes.push("ℹ️ Forest-transitive trust - access may extend to entire forest".to_string());
+        }
+
+        let trust_name = trust.flat_name.clone().unwrap_or_else(|| trust.trust_partner.clone());
+
+        results.push(TrustRelationship {
+            name: trust_name.clone(),
+            fqdn: trust.trust_partner.clone(),
+            domain_sid: String::new(), // SID not available in AdTrust
+            direction: trust.trust_direction.to_string(),
+            trust_type: trust.trust_type.to_string(),
+            trust_attributes: attrs,
+            sid_filtering,
+            selective_auth,
+            forest_transitive,
+            tgt_delegation,
+            tdo_dn: format!("CN={},CN=System,{}", trust_name, domain_to_dn(domain)),
+            attack_notes,
+        });
+    }
+
+    info!("[foreign] Found {} trust relationships", results.len());
+    Ok(results)
 }
 
 /// Enumerate all Foreign Security Principals and their local group memberships (LIVE LDAP).
 pub async fn enumerate_foreign_principals(
     domain: &str,
-    _dc_ip: &str,
+    dc_ip: &str,
 ) -> Result<Vec<ForeignSecurityPrincipal>> {
-    // TODO: implement live LDAP query once overthrone_core::proto::ldap is ready.
-    //
-    // The implementation should:
-    //   1. Search CN=ForeignSecurityPrincipals,<base_dn> for (objectClass=foreignSecurityPrincipal)
-    //   2. Read objectSid, distinguishedName, memberOf
-    //   3. Filter out well-known SIDs (S-1-1-0, S-1-5-11, etc.)
-    //   4. Build ForeignSecurityPrincipal entries
+    use overthrone_core::proto::ldap::LdapSession;
+
+    info!("[foreign] Enumerating Foreign Security Principals from {}", domain);
+
+    let mut conn = LdapSession::connect(dc_ip, domain, "", "", false).await?;
 
     let base_dn = format!("CN=ForeignSecurityPrincipals,{}", domain_to_dn(domain));
-    warn!(
-        "[foreign] enumerate_foreign_principals: LDAP not yet implemented (base_dn={})",
-        base_dn
-    );
-    Ok(Vec::new())
+    let filter = "(objectClass=foreignSecurityPrincipal)";
+    let attrs = vec!["objectSid", "distinguishedName", "memberOf"];
+
+    let entries = conn.custom_search_with_base(&base_dn, filter, &attrs).await?;
+    
+    let _ = conn.disconnect().await;
+
+    let mut results = Vec::new();
+    for entry in entries {
+        // Extract SID from attributes
+        let sid_str = entry.attrs.get("objectSid")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+
+        // Skip well-known SIDs
+        if is_well_known_sid_str(&sid_str) {
+            continue;
+        }
+
+        let dn = entry.attrs.get("distinguishedName")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+
+        let member_of = entry.attrs.get("memberOf")
+            .cloned()
+            .unwrap_or_default();
+
+        results.push(ForeignSecurityPrincipal {
+            sid: sid_str,
+            dn,
+            member_of,
+            resolved_name: None,
+            source_domain: None,
+        });
+    }
+
+    info!("[foreign] Found {} Foreign Security Principals", results.len());
+    Ok(results)
 }
 
 /// Try to resolve foreign SIDs to names by querying the foreign domain (LIVE LDAP).
 pub async fn resolve_foreign_sids(
     principals: &mut [ForeignSecurityPrincipal],
-    _foreign_domains: &HashMap<String, String>,
+    foreign_domains: &HashMap<String, String>,
 ) -> Result<usize> {
-    // TODO: implement once live LDAP cross-domain queries work.
-    //
-    // For each principal:
-    //   1. Extract domain SID (strip RID)
-    //   2. Look up domain FQDN from foreign_domains map
-    //   3. LDAP search that domain for (objectSid=<hex_encoded_sid>)
-    //   4. Set resolved_name and source_domain on match
+    use overthrone_core::proto::ldap::LdapSession;
 
-    warn!(
-        "[foreign] resolve_foreign_sids: LDAP not yet implemented, skipping {} principals",
-        principals.len()
-    );
-    Ok(0)
+    let mut resolved_count = 0;
+
+    for principal in principals.iter_mut() {
+        // Extract domain SID (strip RID)
+        let domain_sid = extract_domain_sid(&principal.sid);
+        
+        // Look up domain FQDN from foreign_domains map
+        if let Some(domain_fqdn) = foreign_domains.get(&domain_sid) {
+            // Try to resolve the SID in that domain
+            match resolve_sid_in_foreign_domain(&principal.sid, domain_fqdn).await {
+                Ok(name) => {
+                    principal.resolved_name = Some(name);
+                    principal.source_domain = Some(domain_fqdn.clone());
+                    resolved_count += 1;
+                    debug!("[foreign] Resolved {} → {}", principal.sid, principal.resolved_name.as_ref().unwrap());
+                }
+                Err(e) => {
+                    debug!("[foreign] Failed to resolve {}: {}", principal.sid, e);
+                }
+            }
+        }
+    }
+
+    info!("[foreign] Resolved {}/{} foreign SIDs", resolved_count, principals.len());
+    Ok(resolved_count)
+}
+
+/// Resolve a single SID in a foreign domain
+async fn resolve_sid_in_foreign_domain(sid_str: &str, domain: &str) -> Result<String> {
+    use overthrone_core::proto::ldap::LdapSession;
+
+    // Try anonymous bind first
+    let mut conn = LdapSession::connect("", domain, "", "", false).await?;
+
+    let base_dn = domain_to_dn(domain);
+    let filter = format!("(objectSid={})", sid_str);
+    let attrs = vec!["sAMAccountName", "name"];
+
+    let entries = conn.custom_search_with_base(&base_dn, &filter, &attrs).await?;
+    
+    let _ = conn.disconnect().await;
+
+    if let Some(entry) = entries.first() {
+        let name = entry.attrs.get("sAMAccountName")
+            .or_else(|| entry.attrs.get("name"))
+            .and_then(|v| v.first())
+            .cloned()
+            .ok_or_else(|| OverthroneError::custom("No name found for SID"))?;
+        
+        Ok(name)
+    } else {
+        Err(OverthroneError::custom(format!("SID {} not found in domain {}", sid_str, domain)))
+    }
 }
 
 /// Enumerate cross-forest group memberships for a specific foreign domain (LIVE LDAP).
 pub async fn enumerate_cross_forest_memberships(
-    _local_domain: &str,
-    _foreign_domain_sid: &str,
+    local_domain: &str,
+    foreign_domain_sid: &str,
 ) -> Result<Vec<CrossForestMembership>> {
-    // TODO: implement once live LDAP search works.
-    //
-    // The implementation should:
-    //   1. Search for groups whose member attribute contains FSPs from the foreign domain
-    //   2. Extract foreign SIDs from member DNs
-    //   3. Check if the group is privileged
+    use overthrone_core::proto::ldap::LdapSession;
 
-    warn!("[foreign] enumerate_cross_forest_memberships: LDAP not yet implemented");
-    Ok(Vec::new())
-}
+    info!("[foreign] Enumerating cross-forest memberships for domain SID {}", foreign_domain_sid);
 
-/// Resolve a single SID to a name by querying the foreign domain's LDAP.
-async fn _resolve_sid_in_domain(sid: &Sid, domain: &str) -> Result<String> {
-    let base_dn = domain_to_dn(domain);
-    let sid_bytes_hex = sid
-        .to_bytes()
-        .iter()
-        .map(|b| format!("\\{:02x}", b))
-        .collect::<String>();
-    let filter = format!("(objectSid={})", sid_bytes_hex);
+    let mut conn = LdapSession::connect("", local_domain, "", "", false).await?;
 
-    // TODO: ldap::search(base_dn, Subtree, filter, &["sAMAccountName"]).await?
-    //       then extract sAMAccountName from first entry
+    // Search for groups with foreign members
+    let base_dn = domain_to_dn(local_domain);
+    let filter = "(objectClass=group)";
+    let attrs = vec!["sAMAccountName", "distinguishedName", "member", "groupType", "adminCount"];
 
-    Err(OverthroneError::custom(format!(
-        "SID {} resolution not yet implemented (would query {} with {})",
-        sid, base_dn, filter
-    )))
+    let entries = conn.custom_search_with_base(&base_dn, filter, &attrs).await?;
+    
+    let _ = conn.disconnect().await;
+
+    let mut results = Vec::new();
+    
+    for entry in entries {
+        let members = entry.attrs.get("member").cloned().unwrap_or_default();
+        
+        // Filter members that are FSPs from the target foreign domain
+        let foreign_sids: Vec<String> = members.iter()
+            .filter_map(|member_dn| {
+                if member_dn.contains("CN=ForeignSecurityPrincipals") {
+                    extract_sid_from_fsp_dn_str(member_dn)
+                } else {
+                    None
+                }
+            })
+            .filter(|sid| sid.starts_with(foreign_domain_sid))
+            .collect();
+
+        if !foreign_sids.is_empty() {
+            let group_name = entry.attrs.get("sAMAccountName")
+                .and_then(|v| v.first())
+                .cloned()
+                .unwrap_or_default();
+
+            let group_dn = entry.attrs.get("distinguishedName")
+                .and_then(|v| v.first())
+                .cloned()
+                .unwrap_or_default();
+
+            let group_type = entry.attrs.get("groupType")
+                .and_then(|v| v.first())
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+
+            let admin_count = entry.attrs.get("adminCount")
+                .and_then(|v| v.first())
+                .map(|v| v == "1")
+                .unwrap_or(false);
+
+            let is_privileged = is_privileged_group_name(&group_name) || admin_count;
+
+            results.push(CrossForestMembership {
+                local_group_name: group_name,
+                local_group_dn: group_dn,
+                group_type,
+                foreign_member_sids: foreign_sids,
+                is_privileged,
+            });
+        }
+    }
+
+    info!("[foreign] Found {} groups with cross-forest memberships", results.len());
+    Ok(results)
 }
 
 // ═══════════════════════════════════════════════════
@@ -347,14 +519,32 @@ fn cn_from_dn(dn: &str) -> String {
 /// Check if a SID is a well-known boring SID.
 fn _is_well_known_sid(sid: &Sid) -> bool {
     let s = sid.to_string();
+    is_well_known_sid_str(&s)
+}
+
+/// Check if a SID string is a well-known boring SID.
+fn is_well_known_sid_str(sid: &str) -> bool {
     matches!(
-        s.as_str(),
+        sid,
         "S-1-1-0"   // Everyone
         | "S-1-5-11"  // Authenticated Users
         | "S-1-5-7"   // Anonymous Logon
         | "S-1-5-14"  // Remote Interactive Logon
-        | "S-1-5-18" // SYSTEM
+        | "S-1-5-18"  // SYSTEM
+        | "S-1-5-32-544" // Administrators (built-in)
+        | "S-1-5-32-545" // Users (built-in)
     )
+}
+
+/// Extract domain SID portion from a full SID string (strip last RID).
+fn extract_domain_sid(sid: &str) -> String {
+    // SID format: S-1-5-21-XXXXXXXXXX-YYYYYYYYYY-ZZZZZZZZZZ-RID
+    // Domain SID: S-1-5-21-XXXXXXXXXX-YYYYYYYYYY-ZZZZZZZZZZ
+    if let Some(last_dash) = sid.rfind('-') {
+        sid[..last_dash].to_string()
+    } else {
+        sid.to_string()
+    }
 }
 
 /// Extract domain SID portion from a full SID (strip last RID).
@@ -372,6 +562,14 @@ fn _extract_sid_from_fsp_dn(dn: &str) -> Option<Sid> {
         .next()
         .and_then(|cn| cn.strip_prefix("CN="))
         .and_then(|s| Sid::from_string(s))
+}
+
+/// Extract a SID string from a Foreign Security Principal DN.
+fn extract_sid_from_fsp_dn_str(dn: &str) -> Option<String> {
+    dn.split(',')
+        .next()
+        .and_then(|cn| cn.strip_prefix("CN="))
+        .map(|s| s.to_string())
 }
 
 /// Check if a group name is in the privileged set.
@@ -459,6 +657,8 @@ mod tests {
 
     #[test]
     fn test_foreign_membership_detection() {
+        use overthrone_reaper::groups::GroupKind;
+        
         let groups = vec![GroupEntry {
             sam_account_name: "Domain Admins".to_string(),
             distinguished_name: "CN=Domain Admins,CN=Users,DC=parent,DC=corp,DC=local".to_string(),
@@ -466,10 +666,11 @@ mod tests {
                 "CN=childadmin,OU=Users,DC=child,DC=corp,DC=local".to_string(),
                 "CN=localuser,OU=Users,DC=parent,DC=corp,DC=local".to_string(),
             ],
+            member_of: vec![],
             admin_count: true,
-            description: String::new(),
-            object_sid: String::new(),
-            group_type: 0,
+            description: Some("Domain Admins".to_string()),
+            sid: Some("S-1-5-21-123456-789012-345678-512".to_string()),
+            group_type: GroupKind::Global,
         }];
 
         let results = analyze_foreign_memberships("parent.corp.local", &groups);

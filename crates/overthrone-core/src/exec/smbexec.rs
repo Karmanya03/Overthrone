@@ -230,10 +230,43 @@ impl super::RemoteExecutor for SmbExecutor {
         target: &str,
         command: &str,
     ) -> crate::error::Result<super::ExecOutput> {
-        todo!("SmbExec implementation")
+        info!("SmbExecutor: Executing command on {}", target);
+
+        // Create SMB session
+        let session = SmbSession::connect(
+            target,
+            &self.creds.username,
+            &self.creds.password,
+            &self.creds.domain,
+        )
+        .await?;
+
+        // Execute via SMBExec
+        let result = exec_command(&session, command).await?;
+
+        Ok(super::ExecOutput {
+            stdout: result.output,
+            stderr: String::new(),
+            exit_code: Some(if result.success { 0 } else { 1 }),
+            method: super::ExecMethod::SmbExec,
+        })
     }
 
-    async fn check_available(&self, _target: &str) -> bool {
-        false
+    async fn check_available(&self, target: &str) -> bool {
+        // Check if we can connect to SMB and access admin shares
+        match SmbSession::connect(
+            target,
+            &self.creds.username,
+            &self.creds.password,
+            &self.creds.domain,
+        )
+        .await
+        {
+            Ok(session) => {
+                // Try to access C$ or ADMIN$ share
+                session.check_share_read("C$").await || session.check_share_read("ADMIN$").await
+            }
+            Err(_) => false,
+        }
     }
 }

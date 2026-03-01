@@ -235,14 +235,23 @@ impl Plugin for NativePlugin {
 }
 
 // ──────────────────────────────────────────────────────────
-// WASM plugin loader (placeholder — wasmtime integration)
+// WASM plugin loader (wasmtime integration)
 // ──────────────────────────────────────────────────────────
+
+use wasmtime::*;
 
 /// A sandboxed WASM plugin
 pub struct WasmPlugin {
     manifest: PluginManifest,
-    #[allow(dead_code)]
-    wasm_bytes: Vec<u8>,
+    engine: Engine,
+    module: Module,
+    store: Option<Store<WasmPluginState>>,
+}
+
+/// State accessible to WASM plugin via host functions
+struct WasmPluginState {
+    log_buffer: Vec<String>,
+    graph_operations: Vec<String>,
 }
 
 pub fn load_wasm_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
@@ -250,6 +259,13 @@ pub fn load_wasm_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
 
     let wasm_bytes = std::fs::read(path)
         .map_err(|e| OverthroneError::Plugin(format!("Cannot read WASM file {:?}: {}", path, e)))?;
+
+    // Create wasmtime engine with default configuration
+    let engine = Engine::default();
+
+    // Compile the WASM module
+    let module = Module::new(&engine, &wasm_bytes)
+        .map_err(|e| OverthroneError::Plugin(format!("Failed to compile WASM module: {}", e)))?;
 
     // Parse custom section for manifest
     let manifest = extract_wasm_manifest(&wasm_bytes).unwrap_or_else(|| {
@@ -274,7 +290,9 @@ pub fn load_wasm_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
 
     Ok(Box::new(WasmPlugin {
         manifest,
-        wasm_bytes,
+        engine,
+        module,
+        store: None,
     }))
 }
 
@@ -286,12 +304,122 @@ impl Plugin for WasmPlugin {
 
     async fn init(&mut self, ctx: &PluginContext) -> Result<()> {
         ctx.log_info(&format!(
-            "WASM plugin '{}' initialized ({} bytes)",
-            self.manifest.name,
-            self.wasm_bytes.len()
+            "WASM plugin '{}' initializing",
+            self.manifest.name
         ));
-        // TODO: Initialize wasmtime::Engine, Module, Store, Instance
-        // Expose host functions: log, graph_add_node, graph_add_edge, etc.
+
+        // Create a new store with plugin state
+        let state = WasmPluginState {
+            log_buffer: Vec::new(),
+            graph_operations: Vec::new(),
+        };
+        let mut store = Store::new(&self.engine, state);
+
+        // Create a linker to define host functions
+        let mut linker = Linker::new(&self.engine);
+
+        // Define host function: log(ptr: i32, len: i32)
+        linker
+            .func_wrap("env", "log", |mut caller: Caller<'_, WasmPluginState>, ptr: i32, len: i32| -> anyhow::Result<()> {
+                let mem = match caller.get_export("memory") {
+                    Some(Extern::Memory(mem)) => mem,
+                    _ => anyhow::bail!("failed to find memory export"),
+                };
+
+                let data = mem.data(&caller);
+                let start = ptr as usize;
+                let end = start + len as usize;
+
+                if end > data.len() {
+                    anyhow::bail!("memory access out of bounds");
+                }
+
+                let message = String::from_utf8_lossy(&data[start..end]).to_string();
+                caller.data_mut().log_buffer.push(message.clone());
+                log::info!("[plugin:wasm] {}", message);
+                Ok(())
+            })
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to define log function: {}", e)))?;
+
+        // Define host function: graph_add_node(name_ptr: i32, name_len: i32, node_type_ptr: i32, node_type_len: i32) -> i64
+        linker
+            .func_wrap(
+                "env",
+                "graph_add_node",
+                |mut caller: Caller<'_, WasmPluginState>, name_ptr: i32, name_len: i32, type_ptr: i32, type_len: i32| -> i64 {
+                    let mem = match caller.get_export("memory") {
+                        Some(Extern::Memory(mem)) => mem,
+                        _ => return -1,
+                    };
+
+                    let data = mem.data(&caller);
+                    
+                    let name_start = name_ptr as usize;
+                    let name_end = name_start + name_len as usize;
+                    let type_start = type_ptr as usize;
+                    let type_end = type_start + type_len as usize;
+
+                    if name_end > data.len() || type_end > data.len() {
+                        return -1;
+                    }
+
+                    let name = String::from_utf8_lossy(&data[name_start..name_end]).to_string();
+                    let node_type = String::from_utf8_lossy(&data[type_start..type_end]).to_string();
+
+                    let op = format!("add_node({}, {})", name, node_type);
+                    caller.data_mut().graph_operations.push(op);
+                    
+                    // Return a dummy node ID
+                    1000
+                },
+            )
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to define graph_add_node: {}", e)))?;
+
+        // Define host function: graph_add_edge(from: i64, to: i64, edge_type_ptr: i32, edge_type_len: i32)
+        linker
+            .func_wrap(
+                "env",
+                "graph_add_edge",
+                |mut caller: Caller<'_, WasmPluginState>, from: i64, to: i64, type_ptr: i32, type_len: i32| {
+                    let mem = match caller.get_export("memory") {
+                        Some(Extern::Memory(mem)) => mem,
+                        _ => return,
+                    };
+
+                    let data = mem.data(&caller);
+                    let type_start = type_ptr as usize;
+                    let type_end = type_start + type_len as usize;
+
+                    if type_end > data.len() {
+                        return;
+                    }
+
+                    let edge_type = String::from_utf8_lossy(&data[type_start..type_end]).to_string();
+                    let op = format!("add_edge({}, {}, {})", from, to, edge_type);
+                    caller.data_mut().graph_operations.push(op);
+                },
+            )
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to define graph_add_edge: {}", e)))?;
+
+        // Instantiate the module with the linker
+        let instance = linker
+            .instantiate(&mut store, &self.module)
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to instantiate WASM module: {}", e)))?;
+
+        // Call the plugin's init function if it exists
+        if let Ok(init_func) = instance.get_typed_func::<(), ()>(&mut store, "plugin_init") {
+            init_func
+                .call(&mut store, ())
+                .map_err(|e| OverthroneError::Plugin(format!("WASM plugin_init failed: {}", e)))?;
+        }
+
+        // Store the initialized store
+        self.store = Some(store);
+
+        ctx.log_info(&format!(
+            "WASM plugin '{}' initialized successfully",
+            self.manifest.name
+        ));
         Ok(())
     }
 
@@ -299,14 +427,114 @@ impl Plugin for WasmPlugin {
         &self,
         command: &str,
         args: &HashMap<String, String>,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
     ) -> Result<PluginResult> {
-        // TODO: Call WASM exported function via wasmtime
-        // For now, return a stub
-        Err(OverthroneError::Plugin(format!(
-            "WASM execution not yet implemented for command '{}'",
-            command
-        )))
+        let store = self.store.as_ref().ok_or_else(|| {
+            OverthroneError::Plugin("WASM plugin not initialized".to_string())
+        })?;
+
+        // Get a mutable reference to the store
+        // Note: This is a simplified implementation. In a real scenario, we'd need to handle
+        // the store mutability more carefully, possibly using RefCell or similar
+        let mut store_clone = Store::new(&self.engine, WasmPluginState {
+            log_buffer: Vec::new(),
+            graph_operations: Vec::new(),
+        });
+
+        // Re-instantiate for this execution
+        let mut linker = Linker::new(&self.engine);
+        
+        // Re-define host functions (same as in init)
+        linker
+            .func_wrap("env", "log", |mut caller: Caller<'_, WasmPluginState>, ptr: i32, len: i32| -> anyhow::Result<()> {
+                let mem = match caller.get_export("memory") {
+                    Some(Extern::Memory(mem)) => mem,
+                    _ => anyhow::bail!("failed to find memory export"),
+                };
+
+                let data = mem.data(&caller);
+                let start = ptr as usize;
+                let end = start + len as usize;
+
+                if end > data.len() {
+                    anyhow::bail!("memory access out of bounds");
+                }
+
+                let message = String::from_utf8_lossy(&data[start..end]).to_string();
+                caller.data_mut().log_buffer.push(message.clone());
+                log::info!("[plugin:wasm] {}", message);
+                Ok(())
+            })
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to define log function: {}", e)))?;
+
+        let instance = linker
+            .instantiate(&mut store_clone, &self.module)
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to instantiate WASM module: {}", e)))?;
+
+        // Serialize args to JSON
+        let args_json = serde_json::to_string(args)
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to serialize args: {}", e)))?;
+
+        // Get memory export
+        let memory = instance
+            .get_memory(&mut store_clone, "memory")
+            .ok_or_else(|| OverthroneError::Plugin("WASM module missing memory export".to_string()))?;
+
+        // Allocate memory for command and args
+        // For simplicity, we'll use a fixed offset. A real implementation would call an allocator function
+        let command_offset = 1024;
+        let args_offset = command_offset + command.len() + 1;
+
+        // Write command to memory
+        memory.write(&mut store_clone, command_offset, command.as_bytes())
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to write command to WASM memory: {}", e)))?;
+
+        // Write args to memory
+        memory.write(&mut store_clone, args_offset, args_json.as_bytes())
+            .map_err(|e| OverthroneError::Plugin(format!("Failed to write args to WASM memory: {}", e)))?;
+
+        // Call the plugin's execute function
+        // Expected signature: execute(command_ptr: i32, command_len: i32, args_ptr: i32, args_len: i32) -> i32
+        if let Ok(execute_func) = instance.get_typed_func::<(i32, i32, i32, i32), i32>(&mut store_clone, "plugin_execute") {
+            let result_code = execute_func
+                .call(
+                    &mut store_clone,
+                    (
+                        command_offset as i32,
+                        command.len() as i32,
+                        args_offset as i32,
+                        args_json.len() as i32,
+                    ),
+                )
+                .map_err(|e| OverthroneError::Plugin(format!("WASM plugin_execute failed: {}", e)))?;
+
+            // Collect logs from the execution
+            let logs = store_clone.data().log_buffer.join("\n");
+
+            Ok(PluginResult {
+                success: result_code == 0,
+                output: logs,
+                data: HashMap::new(),
+                artifacts: Vec::new(),
+            })
+        } else {
+            Err(OverthroneError::Plugin(format!(
+                "WASM module missing plugin_execute function for command '{}'",
+                command
+            )))
+        }
+    }
+
+    async fn on_event(&self, event: &PluginEvent, _ctx: &PluginContext) -> Result<()> {
+        // WASM event handling would follow a similar pattern to execute_command
+        // For now, we'll just log it
+        log::debug!("[plugin:wasm] Event received: {:?}", event);
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        log::info!("[plugin:wasm] Shutting down WASM plugin '{}'", self.manifest.name);
+        Ok(())
     }
 }
 

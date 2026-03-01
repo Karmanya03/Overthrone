@@ -16,7 +16,7 @@ use ratatui::prelude::*;
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::app::App;
 use super::event::EventLoop;
@@ -95,15 +95,78 @@ pub async fn run_tui_with_crawler(
     credentials: &crate::auth::Credentials,
 ) -> Result<()> {
     let graph_clone = Arc::clone(&graph);
-    let domain = domain.to_string();
-    let _creds = credentials.clone();
+    let domain_str = domain.to_string();
+    let creds = credentials.clone();
 
-    // Spawn crawler in background (simplified - actual crawler integration would go here)
-    let _crawler_handle = tokio::spawn(async move {
-        info!("[tui] Starting crawler for {} in background", domain);
-        // TODO: Integrate actual crawler when available
-        // let mut crawler = overthrone_crawler::CrawlerRunner::new(&domain, &creds, graph_clone);
-        // crawler.run_full().await
+    // Spawn crawler in background
+    let crawler_handle = tokio::spawn(async move {
+        info!("[tui] Starting crawler for {} in background", domain_str);
+        
+        // Build crawler config from credentials
+        let crawler_config = overthrone_crawler::runner::CrawlerConfig {
+            dc_ip: "".to_string(), // Would need to be passed in or resolved
+            domain: domain_str.clone(),
+            base_dn: format!("DC={}", domain_str.replace('.', ",DC=")),
+            username: creds.username.clone(),
+            password: match &creds.auth {
+                crate::auth::AuthData::Password(p) => Some(p.clone()),
+                _ => None,
+            },
+            nt_hash: match &creds.auth {
+                crate::auth::AuthData::NtlmHash(h) => Some(h.clone()),
+                _ => None,
+            },
+            trusted_dc_ips: Vec::new(),
+            modules: Vec::new(),
+            max_depth: 5,
+            auto_pivot: false,
+        };
+
+        // Note: Full integration requires running reaper first to get ReaperResult
+        // For now, we create a minimal ReaperResult for demonstration
+        let reaper_data = overthrone_reaper::runner::ReaperResult {
+            domain: domain_str.clone(),
+            base_dn: crawler_config.base_dn.clone(),
+            users: Vec::new(),
+            groups: Vec::new(),
+            computers: Vec::new(),
+            ous: Vec::new(),
+            gpos: Vec::new(),
+            trusts: Vec::new(),
+            spn_accounts: Vec::new(),
+            delegations: Vec::new(),
+            acl_findings: Vec::new(),
+            laps_entries: Vec::new(),
+            mssql_instances: Vec::new(),
+            adcs_templates: Vec::new(),
+        };
+
+        // Run crawler analysis
+        match overthrone_crawler::runner::run_crawler(&crawler_config, &reaper_data).await {
+            Ok(crawler_result) => {
+                info!("[tui] Crawler completed: {} findings", 
+                    crawler_result.foreign_memberships.len() + 
+                    crawler_result.escalation_paths.len() +
+                    crawler_result.sid_filter_findings.len() +
+                    crawler_result.mssql_chains.len() +
+                    crawler_result.pam_findings.len()
+                );
+                
+                // Update graph with crawler findings
+                // This would integrate the crawler results into the attack graph
+                let graph_lock = graph_clone.lock().unwrap();
+                for path in &crawler_result.escalation_paths {
+                    info!("[tui] Found escalation path: {:?}", path);
+                    // Add nodes and edges to graph based on escalation paths
+                    // graph_lock.add_node(...);
+                    // graph_lock.add_edge(...);
+                }
+            }
+            Err(e) => {
+                warn!("[tui] Crawler error: {}", e);
+            }
+        }
+        
         Ok::<(), OverthroneError>(())
     });
 
@@ -113,7 +176,7 @@ pub async fn run_tui_with_crawler(
         .map_err(|e| OverthroneError::Internal(format!("TUI thread error: {e}")))??;
 
     // Wait for crawler to finish (or it gets cancelled when TUI exits)
-    // crawler_handle.abort();
+    crawler_handle.abort();
 
     Ok(())
 }

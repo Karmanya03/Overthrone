@@ -385,8 +385,8 @@ pub fn parse_laps_v2_encrypted_header(blob: &[u8]) -> Option<LapsV2EncryptedHead
 
 /// Attempt to decrypt a LAPS v2 encrypted blob using a DPAPI backup key.
 ///
-/// This is a placeholder for when the DPAPI module (`overthrone-core/src/crypto/dpapi.rs`)
-/// is implemented. After DCSync or LSA secrets extraction, the DPAPI domain backup key
+/// Uses the DPAPI module from overthrone-core to decrypt LAPS v2 encrypted passwords.
+/// After DCSync or LSA secrets extraction, the DPAPI domain backup key
 /// can be used to decrypt these blobs.
 ///
 /// The inner CNG-DPAPI structure contains:
@@ -395,30 +395,38 @@ pub fn parse_laps_v2_encrypted_header(blob: &[u8]) -> Option<LapsV2EncryptedHead
 /// 3. AES-256-GCM encrypted payload
 ///
 /// The decrypted payload is a JSON string: `{"n":"Admin","t":"...","p":"password"}`
-pub fn decrypt_laps_v2_blob(blob: &[u8], _dpapi_backup_key: &[u8]) -> Result<LapsV2Json> {
+pub fn decrypt_laps_v2_blob(blob: &[u8], dpapi_backup_key: &[u8]) -> Result<LapsV2Json> {
+    use overthrone_core::crypto::{DpapiBackupKey, LapsDecryptor};
+
     let header = parse_laps_v2_encrypted_header(blob).ok_or_else(|| {
         OverthroneError::Decryption("LAPS v2 encrypted blob too short for header".into())
     })?;
 
-    let _payload = &blob[12..];
+    // The LAPS v2 blob format:
+    // - Bytes 0-11: LAPS header (version, timestamp, flags, size)
+    // - Bytes 12+: CNG-DPAPI encrypted blob
+    let dpapi_blob_data = &blob[12..];
 
-    // ──────────────────────────────────────────────────────
-    // TODO: Implement once overthrone-core has a DPAPI module.
-    //
-    // Steps:
-    //   1. Parse CNG-DPAPI outer envelope from `payload`
-    //   2. Extract the master key GUID
-    //   3. Derive decryption key: HMAC-SHA512(backup_key, master_key_guid)
-    //   4. AES-256-GCM decrypt the inner ciphertext
-    //   5. serde_json::from_slice::<LapsV2Json>(&plaintext)
-    //
-    // Reference: MS-LAPS spec + impacket's dpapi.py
-    // ──────────────────────────────────────────────────────
+    // Parse the DPAPI encrypted blob
+    let encrypted_blob = LapsDecryptor::parse_encrypted_blob(dpapi_blob_data)?;
 
-    Err(OverthroneError::Decryption(format!(
-        "LAPS v2 CNG-DPAPI decryption not yet implemented (blob: {} bytes, flags: {:#x})",
-        header.payload_size, header.flags
-    )))
+    // Create DPAPI backup key structure
+    // Note: The GUID is extracted from the blob itself during decryption
+    let backup_key = DpapiBackupKey {
+        guid: [0u8; 16], // Will be extracted from blob
+        key_material: dpapi_backup_key.to_vec(),
+    };
+
+    // Decrypt using the DPAPI module
+    let credentials = LapsDecryptor::decrypt(&encrypted_blob, &backup_key)?;
+
+    // Convert to LapsV2Json format
+    // Note: The timestamp from DPAPI is u64, but LapsV2Json expects a string
+    Ok(LapsV2Json {
+        account_name: credentials.account_name,
+        password: credentials.password,
+        timestamp: credentials.update_timestamp.to_string(),
+    })
 }
 
 // ═══════════════════════════════════════════════════════════

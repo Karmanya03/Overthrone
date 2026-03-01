@@ -148,6 +148,54 @@ impl WebEnrollmentClient {
         self.submit_request(csr_der, template, Some(&attributes)).await
     }
 
+    /// Submit a certificate request with enrollment agent certificate (for ESC3)
+    pub async fn submit_request_with_agent(
+        &self,
+        csr_der: &[u8],
+        template: &str,
+        agent_cert_der: &[u8],
+    ) -> Result<CertificateResponse> {
+        info!("Submitting agent-signed certificate request for template {}", template);
+
+        // Encode CSR and agent certificate to base64
+        let csr_b64 = base64::engine::general_purpose::STANDARD.encode(csr_der);
+        let agent_b64 = base64::engine::general_purpose::STANDARD.encode(agent_cert_der);
+
+        // Build form data with agent certificate
+        let form_data = vec![
+            ("Mode", "newreq".to_string()),
+            ("CertRequest", csr_b64),
+            ("CertAttrib", format!("CertificateTemplate:{}", template)),
+            ("TargetStoreFlags", "0".to_string()),
+            ("SaveCert", "yes".to_string()),
+            ("AgentCertificate", agent_b64), // Include agent certificate
+        ];
+
+        // Submit to certfnsh.asp
+        let url = format!("{}/certfnsh.asp", self.base_url());
+
+        debug!("Submitting agent-signed request to: {}", url);
+
+        let response = self.http_client
+            .post(&url)
+            .form(&form_data)
+            .send()
+            .await
+            .map_err(|e| OverthroneError::Connection {
+                target: url.clone(),
+                reason: format!("Agent request failed: {}", e),
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        debug!("Agent request response status: {}", status);
+
+        // Parse the response
+        self.parse_response(&body, status)
+    }
+
+
     /// Retrieve a pending certificate by request ID
     pub async fn retrieve_certificate(&self, request_id: u32) -> Result<Vec<u8>> {
         let url = format!(
