@@ -133,3 +133,29 @@ check_*.txt
 build_errors*.txt
 clippy_output.txt
 *_output.txt
+
+# ═══════════════════════════════════════════════════════════
+# Stale / Duplicate Directories
+# ═══════════════════════════════════════════════════════════
+# Root-level overthrone-cli/ is a stale duplicate — the real
+# CLI crate lives at crates/overthrone-cli/
+/overthrone-cli/
+
+# ═══════════════════════════════════════════════════════════
+# Internal Planning Docs (not shipped)
+# ═══════════════════════════════════════════════════════════
+implementation_plan.md
+PLAN-*.md
+Overthrone Deep Implementation Plan.md
+docs/PLAN-*.md
+
+# ═══════════════════════════════════════════════════════════
+# Dev-only / Scaffolding Scripts & Test Binaries
+# ═══════════════════════════════════════════════════════════
+setup.ps1
+crates/overthrone-core/src/bin/test_pfx.rs
+
+# ═══════════════════════════════════════════════════════════
+# Redundant Assets (only .zst compressed version is used)
+# ═══════════════════════════════════════════════════════════
+assets/wordlist_top10k.txt

@@ -164,7 +164,7 @@ fn extract_ticket_info(ticket: &Ticket) -> TicketInfo {
         encryption_type: etype_name.to_string(),
         etype_id,
         ticket_size: ticket.build().len(),
-        kvno: ticket.enc_part.kvno.map(|v| v),
+        kvno: ticket.enc_part.kvno,
     }
 }
 

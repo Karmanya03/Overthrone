@@ -55,6 +55,12 @@ pub struct HavocChannel {
     server_info: HashMap<String, String>,
 }
 
+impl Default for HavocChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HavocChannel {
     pub fn new() -> Self {
         Self {
@@ -149,11 +155,10 @@ impl HavocChannel {
             .await
             .map_err(|e| OverthroneError::C2(format!("Parse command response: {e}")))?;
 
-        if let Some(err) = &cmd_resp.error {
-            if !err.is_empty() {
+        if let Some(err) = &cmd_resp.error
+            && !err.is_empty() {
                 return Err(OverthroneError::C2(format!("Havoc error: {err}")));
             }
-        }
 
         let task_id = cmd_resp
             .task_id
@@ -174,8 +179,8 @@ impl HavocChannel {
             }
 
             let poll_url = format!("/demons/{agent_id}/tasks/{task_id}");
-            if let Ok(resp) = self.api_get(&poll_url).await {
-                if let Ok(task) = resp.json::<HavocTaskResultResp>().await {
+            if let Ok(resp) = self.api_get(&poll_url).await
+                && let Ok(task) = resp.json::<HavocTaskResultResp>().await {
                     if task.status == "completed" || task.status == "done" {
                         return Ok(C2TaskResult {
                             task_id: task.task_id,
@@ -199,7 +204,6 @@ impl HavocChannel {
                         });
                     }
                 }
-            }
 
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -261,8 +265,8 @@ impl C2Channel for HavocChannel {
         };
 
         // Fetch server info
-        if let Ok(resp) = self.api_get("/server/info").await {
-            if let Ok(info) = resp.json::<HavocServerInfoResp>().await {
+        if let Ok(resp) = self.api_get("/server/info").await
+            && let Ok(info) = resp.json::<HavocServerInfoResp>().await {
                 if let Some(ver) = info.version {
                     self.server_info.insert("version".into(), ver);
                 }
@@ -275,7 +279,6 @@ impl C2Channel for HavocChannel {
                         .insert("demons_count".into(), dc.to_string());
                 }
             }
-        }
 
         self.connected = true;
         log::info!("[c2:havoc] Connected to Havoc at {}", self.base_url);
@@ -513,8 +516,8 @@ impl C2Channel for HavocChannel {
         // Refresh from API
         let mut info = self.server_info.clone();
 
-        if let Ok(resp) = self.api_get("/server/info").await {
-            if let Ok(si) = resp.json::<HavocServerInfoResp>().await {
+        if let Ok(resp) = self.api_get("/server/info").await
+            && let Ok(si) = resp.json::<HavocServerInfoResp>().await {
                 if let Some(v) = si.version {
                     info.insert("version".into(), v);
                 }
@@ -525,7 +528,6 @@ impl C2Channel for HavocChannel {
                     info.insert("demons_count".into(), dc.to_string());
                 }
             }
-        }
 
         Ok(info)
     }

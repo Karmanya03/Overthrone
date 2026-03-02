@@ -311,10 +311,7 @@ pub async fn execute(
     debug!("AtExec: Command: {}", command);
 
     let server = format!("\\\\{}", session.target);
-    let output_unc = format!(
-        "C:\\{}",
-        config.output_path.replace('\\', "\\")
-    );
+    let output_unc = format!("C:\\{}", &config.output_path);
 
     // Step 1: Bind to ATSVC
     info!("AtExec: Binding to atsvc pipe");

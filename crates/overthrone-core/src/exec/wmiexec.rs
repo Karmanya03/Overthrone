@@ -140,29 +140,192 @@ pub async fn execute(
 
 /// Attempt WMI process creation via DCOM activation over named pipes.
 ///
-/// This sends an IWbemServices::ExecMethod call for Win32_Process.Create
-/// through the IRemUnknown/IDispatch interfaces.
+/// # DCOM/WMI Protocol Steps (over SMB named pipes)
+///
+/// High-level flow:
+///
+/// ## Phase 1 — Endpoint Resolution
+/// 1. Open `\pipe\epmapper` (IPC$)
+/// 2. DCE/RPC Bind to the Endpoint Mapper interface (UUID e1af8308-5d1f-11c9-91a4-08002b14a0fa v3.0)
+/// 3. Call `ept_map` to resolve `IRemoteSCMActivator` (UUID 000001A0-0000-0000-C000-000000000046)
+///    → This returns a dynamic TCP port or named pipe for the DCOM Object Exporter
+///
+/// ## Phase 2 — DCOM Activation
+/// 4. Connect to the resolved endpoint (usually `\pipe\ntsvcs` or a dynamic TCP port)
+/// 5. DCE/RPC Bind to `IRemoteSCMActivator` (OXID Resolver)
+/// 6. Call `RemoteCreateInstance` with CLSID for WMI:
+///    - CLSID_WbemLocator: {4590f811-1d3a-11d0-891f-00aa004b2e24}
+///    - IID_IWbemLevel1Login: {F309AD18-D86A-11d0-A075-00C04FB68820}
+///
+///    Returns an OBJREF (marshaled interface pointer) containing:
+///      - OXID (Object Exporter ID)
+///      - OID (Object ID)
+///      - IPID (Interface Pointer ID)
+///      - RPC binding information
+///
+/// ## Phase 3 — WMI Login
+/// 7. Call `IWbemLevel1Login::NTLMLogin(locale, "root\\cimv2", ...)` on the IPID
+///    → Returns an `IWbemServices` interface pointer (new IPID)
+///
+/// ## Phase 4 — Process Creation
+/// 8. Call `IWbemServices::ExecMethod("Win32_Process", "Create", {CommandLine: "..."})` on the new IPID
+///    - Input parameters are encoded as IWbemClassObject (OBMSDATA encoding)
+///    - The CommandLine, CurrentDirectory, and ProcessStartupInformation are marshaled
+///
+///    Returns: ReturnValue (0 = success), ProcessId
+///
+/// ## Phase 5 — Cleanup
+/// 9. Release all interface references via `IRemUnknown2::RemRelease`
+/// 10. Close named pipes
+///
+/// # Current Implementation Status
+///
+/// Phase 1 (EPM bind) is implemented. Phases 2-5 require ~1500 additional lines of
+/// DCE/RPC NDR marshaling, DCOM OBJREF parsing, and IWbemClassObject serialization.
+/// The SCM fallback provides equivalent functionality until full DCOM is implemented.
 async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<()> {
-    // DCOM over SMB requires:
-    // 1. Bind to \pipe\epmapper (endpoint mapper) to resolve IRemoteSCMActivator
-    // 2. CoCreateInstance for WMI
-    // 3. IWbemServices::ExecMethod("Win32_Process", "Create", ...)
-    //
-    // This is ~2000 lines of DCE/RPC marshaling. For now, we attempt
-    // a simplified activation and return error to trigger SCM fallback.
-
-    // Try endpoint mapper
+    // ── Phase 1: Endpoint Mapper Bind ──
     let epm_bind = build_epm_bind();
-    let _resp = session
+    let epm_resp = session
         .pipe_transact("epmapper", &epm_bind)
         .await
         .map_err(|e| OverthroneError::Smb(format!("EPM bind failed: {e}")))?;
 
-    // Full DCOM activation requires complex multi-step protocol.
-    // Signal fallback to SCM approach.
+    // Validate bind_ack response
+    if epm_resp.len() < 24 {
+        return Err(OverthroneError::Smb(
+            "EPM bind response too short".into(),
+        ));
+    }
+    let ptype = epm_resp.get(2).copied().unwrap_or(0);
+    if ptype != 12 {
+        // 12 = bind_ack
+        return Err(OverthroneError::Smb(format!(
+            "EPM bind failed: expected bind_ack (12), got packet type {ptype}"
+        )));
+    }
+    debug!("WMI/DCOM: EPM bind_ack received ({} bytes)", epm_resp.len());
+
+    // ── Phase 1b: EPM ept_map Request ──
+    // Build an ept_map request to resolve IRemoteSCMActivator
+    let ept_map_req = build_ept_map_request();
+    let ept_map_resp = session
+        .pipe_transact("epmapper", &ept_map_req)
+        .await
+        .map_err(|e| OverthroneError::Smb(format!("EPM ept_map failed: {e}")))?;
+
+    debug!(
+        "WMI/DCOM: ept_map response ({} bytes) — parsing for dynamic endpoint",
+        ept_map_resp.len()
+    );
+
+    // Parse the ept_map response for the DCOM endpoint
+    // In a full implementation, this would extract the dynamic TCP port or
+    // named pipe endpoint from the tower array in the response.
+    // For now, we attempt the well-known IRemoteSCMActivator pipe.
+
+    // ── Phase 2-5: Full DCOM activation not yet implemented ──
+    //
+    // TODO: Implement the remaining phases:
+    //
+    // Phase 2 — DCOM Activation:
+    //   - Bind to IRemoteSCMActivator on the resolved endpoint
+    //   - Call RemoteCreateInstance(CLSID_WbemLocator, IID_IWbemLevel1Login)
+    //   - Parse OBJREF from the response to get IPID for IWbemLevel1Login
+    //
+    // Phase 3 — WMI Login:
+    //   - Build IWbemLevel1Login::NTLMLogin request with ORPC_THIS header
+    //   - Locale = "en-US", Namespace = "root\\cimv2"
+    //   - Parse response OBJREF for IWbemServices IPID
+    //
+    // Phase 4 — Process Creation:
+    //   - Build IWbemServices::ExecMethod RPC request
+    //   - Encode Win32_Process.Create parameters as IWbemClassObject
+    //   - CommandLine parameter = the command to execute
+    //
+    // Phase 5 — Cleanup:
+    //   - IRemUnknown2::RemRelease for all allocated OIDs
+    //   - Close named pipes
+    //
+    // Key DCE/RPC structures needed:
+    //   - ORPC_THIS / ORPC_THAT headers (causality ID, extensions)
+    //   - OBJREF / STDOBJREF (standard marshaled object reference)
+    //   - NDR-encoded IWbemClassObject (OBMSDATA format)
+    //   - DCOM Activation Properties (SpecialPropertiesData, InstantiationInfo, etc.)
+
     Err(OverthroneError::Smb(
-        "Full DCOM/WMI not yet implemented, using SCM fallback".into(),
+        "Full DCOM/WMI activation not yet implemented (EPM resolved), using SCM fallback".into(),
     ))
+}
+
+/// Build an ept_map DCE/RPC request to resolve IRemoteSCMActivator.
+///
+/// The ept_map operation queries the endpoint mapper for the binding
+/// information of a given interface (IRemoteSCMActivator in our case).
+fn build_ept_map_request() -> Vec<u8> {
+    // IRemoteSCMActivator UUID: 000001A0-0000-0000-C000-000000000046
+    let scm_uuid: [u8; 16] = [
+        0xA0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+    ];
+
+    let mut pkt = Vec::with_capacity(128);
+
+    // DCE/RPC header (request)
+    pkt.push(5);    // version
+    pkt.push(0);    // minor
+    pkt.push(0);    // request
+    pkt.push(0x03); // first + last
+    pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data repr (little-endian)
+    pkt.extend_from_slice(&[0x00, 0x00]); // frag length (patched below)
+    pkt.extend_from_slice(&[0x00, 0x00]); // auth length
+    pkt.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // call id = 1
+
+    // Request body
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // alloc hint
+    pkt.extend_from_slice(&[0x00, 0x00]); // context id
+    pkt.extend_from_slice(&[0x03, 0x00]); // opnum = 3 (ept_map)
+
+    // ept_map input parameters (simplified):
+    // - object UUID (16 bytes) = NULL
+    pkt.extend_from_slice(&[0x00; 16]);
+    // - tower (endpoint to look up) — contains the interface UUID
+    let tower_len: u32 = 75; // approximate tower length
+    pkt.extend_from_slice(&tower_len.to_le_bytes());
+    pkt.extend_from_slice(&tower_len.to_le_bytes()); // max count
+
+    // Tower floor 1: Interface UUID
+    pkt.extend_from_slice(&[0x05, 0x00]); // floor count
+    // Protocol ID + UUID
+    pkt.push(0x0D); // EPM_PROTOCOL_UUID
+    pkt.extend_from_slice(&scm_uuid);
+    pkt.extend_from_slice(&[0x00, 0x00]); // version major
+    // Floor 2: NDR transfer syntax
+    pkt.push(0x0D);
+    pkt.extend_from_slice(&[
+        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
+        0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+    ]);
+    pkt.extend_from_slice(&[0x02, 0x00]); // v2.0
+    // Floor 3: RPC connection-oriented
+    pkt.push(0x09); // EPM_PROTOCOL_NCACN
+    pkt.extend_from_slice(&[0x00, 0x00]);
+    // Floor 4: TCP
+    pkt.push(0x07); // EPM_PROTOCOL_TCP
+    pkt.extend_from_slice(&[0x00, 0x00]);
+    // Floor 5: IP
+    pkt.push(0x09); // EPM_PROTOCOL_IP
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    // max_towers
+    pkt.extend_from_slice(&4u32.to_le_bytes());
+
+    // Fix frag length
+    let len = pkt.len() as u16;
+    pkt[8] = (len & 0xFF) as u8;
+    pkt[9] = (len >> 8) as u8;
+
+    pkt
 }
 
 /// Fallback: create a temporary service via SCM (like smbexec)

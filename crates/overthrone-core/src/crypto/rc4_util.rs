@@ -152,7 +152,7 @@ pub fn decrypt_sam_hash_rc4(
     // Step 1: Derive RC4 key = MD5(hashed_boot_key || RID_le || constant)
     let mut md5 = Md5::new();
     md5.update(hashed_boot_key);
-    md5.update(&rid.to_le_bytes());
+    md5.update(rid.to_le_bytes());
     md5.update(constant);
     let rc4_key = md5.finalize();
 

@@ -2,9 +2,11 @@
 //!
 //! ESC5 targets **weak ACLs on PKI objects** in AD (not templates — that's ESC4).
 //! Specifically, if an attacker has WriteDacl/WriteOwner on:
+//!
 //!   - CA object in CN=Enrollment Services
 //!   - NTAuthCertificates object
 //!   - PKI container itself
+//!
 //! they can escalate by modifying CA security descriptors, adding rogue CAs,
 //! or enabling vulnerable configurations.
 //!

@@ -363,8 +363,7 @@ impl WebEnrollmentClient {
                 && trimmed
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
-            {
-                if let Ok(decoded) =
+                && let Ok(decoded) =
                     base64::engine::general_purpose::STANDARD.decode(trimmed)
                 {
                     // Check if it looks like a certificate (starts with SEQUENCE tag)
@@ -372,7 +371,6 @@ impl WebEnrollmentClient {
                         return Ok(decoded);
                     }
                 }
-            }
         }
 
         Err(OverthroneError::Adcs("Could not extract certificate from response".to_string()))
@@ -508,8 +506,8 @@ impl WebEnrollmentClient {
         
         // Look for template dropdown options
         for line in body.lines() {
-            if line.contains("<option") && line.contains("value=") {
-                if let Some(start_pos) = line.find("value=\"") {
+            if line.contains("<option") && line.contains("value=")
+                && let Some(start_pos) = line.find("value=\"") {
                     let start = start_pos + 7;
                     if let Some(end) = line[start..].find('"') {
                         let template = &line[start..start + end];
@@ -518,7 +516,6 @@ impl WebEnrollmentClient {
                         }
                     }
                 }
-            }
         }
 
         // Add common templates if none found

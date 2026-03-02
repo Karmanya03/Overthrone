@@ -4,8 +4,6 @@
 //! and Win32 Events for synchronization.  Full output collection via
 //! `WSManReceiveShellOutput` loop.
 
-#![cfg(windows)]
-
 use crate::error::{OverthroneError, Result};
 use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
 use async_trait::async_trait;
@@ -369,7 +367,7 @@ unsafe fn execute_wsm(
             WSManReceiveShellOutput(shell, Some(cmd_h), 0, Some(&stream_set), &async_op);
         }
 
-        if let Err(_) = unsafe { wait_or_err(event, target, "ReceiveShellOutput") } {
+        if unsafe { wait_or_err(event, target, "ReceiveShellOutput") }.is_err() {
             warn!("[winrm/native] ReceiveShellOutput timed out — breaking");
             break;
         }

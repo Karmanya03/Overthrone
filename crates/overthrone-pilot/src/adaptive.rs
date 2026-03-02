@@ -221,6 +221,11 @@ impl AdaptiveEngine {
         self.consecutive_failures = 0;
     }
 
+    /// Get the current consecutive failure count (used by Q-learner).
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+
     /// Get list of failed/blacklisted action identifiers
     pub fn failed_actions(&self) -> &[String] {
         &self.blacklisted_actions
@@ -492,6 +497,16 @@ impl AdaptiveEngine {
     // ═══════════════════════════════════════════════════════
     // Alternative Finders
     // ═══════════════════════════════════════════════════════
+
+    /// Find a lower-privilege alternative for an action (public wrapper for Q-learner).
+    pub fn find_lower_priv_alternative_pub(&self, action: &PlannedAction) -> Option<PlannedAction> {
+        self.find_lower_priv_alternative(action)
+    }
+
+    /// Find a stealthier alternative for an action (public wrapper for Q-learner).
+    pub fn find_stealthier_alternative_pub(&self, action: &PlannedAction) -> Option<PlannedAction> {
+        self.find_stealthier_alternative(action)
+    }
 
     /// Find a lower-privilege alternative for an action
     fn find_lower_priv_alternative(&self, action: &PlannedAction) -> Option<PlannedAction> {

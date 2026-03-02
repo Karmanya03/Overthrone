@@ -67,15 +67,14 @@ pub struct UnconstrainedHost {
 /// Check if a host is reachable on SMB port
 async fn check_host_reachable(hostname: &str) -> bool {
     let addr = format!("{hostname}:445");
-    match tokio::time::timeout(
-        tokio::time::Duration::from_secs(3),
-        tokio::net::TcpStream::connect(&addr),
+    matches!(
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(3),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await,
+        Ok(Ok(_))
     )
-    .await
-    {
-        Ok(Ok(_)) => true,
-        _ => false,
-    }
 }
 
 // ═══════════════════════════════════════════════════════════

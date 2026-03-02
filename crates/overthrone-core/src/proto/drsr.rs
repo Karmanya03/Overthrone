@@ -354,18 +354,16 @@ fn process_attribute(
             }
         }
         ATTID_NT_PWD_HISTORY => {
-            if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key) {
-                if decrypted.len() >= 16 && obj.nt_hash.is_none() {
+            if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key)
+                && decrypted.len() >= 16 && obj.nt_hash.is_none() {
                     obj.nt_hash = Some(decrypted[..16].to_vec());
                 }
-            }
         }
         ATTID_LM_PWD_HISTORY => {
-            if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key) {
-                if decrypted.len() >= 16 {
+            if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key)
+                && decrypted.len() >= 16 {
                     obj.lm_hash = Some(decrypted[..16].to_vec());
                 }
-            }
         }
         ATTID_SUPPLEMENTAL_CREDENTIALS => {
             if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key) {

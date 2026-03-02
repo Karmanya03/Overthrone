@@ -710,9 +710,7 @@ impl AttackGraph {
                     &target_key,
                     domain,
                     EdgeType::AllowedToDelegate,
-                ) {
-                    edge_count += 1;
-                } else if self.add_edge_by_name(
+                ) || self.add_edge_by_name(
                     &user.sam_account_name,
                     domain,
                     &target_host,
@@ -1280,7 +1278,7 @@ impl AttackGraph {
                 // High-value targets: Domain Admins, Enterprise Admins, etc.
                 node.name.to_lowercase().contains("admin") ||
                 node.name.to_lowercase().contains("domain") ||
-                node.properties.get("high_value").map_or(false, |v| v == "true")
+                node.properties.get("high_value").is_some_and(|v| v == "true")
             })
             .count()
     }

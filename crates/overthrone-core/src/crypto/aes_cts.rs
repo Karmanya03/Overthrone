@@ -75,7 +75,7 @@ pub fn aes256_cts_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         return Ok(Vec::new());
     }
     let original_len = plaintext.len();
-    let padded_len = ((original_len + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
+    let padded_len = original_len.div_ceil(AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
     let mut padded = vec![0u8; padded_len];
     padded[..original_len].copy_from_slice(plaintext);
     let iv = [0u8; AES_BLOCK_SIZE];
@@ -85,6 +85,11 @@ pub fn aes256_cts_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Decrypt with AES-256-CTS (CipherText Stealing).
+///
+/// Handles three cases:
+/// - Single block (≤16 bytes): ECB decrypt
+/// - Block-aligned (multiple of 16): swap last two blocks, CBC decrypt
+/// - Non-aligned: recover stolen ciphertext bytes via ECB, then CBC decrypt
 pub fn aes256_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != 32 {
         bail!("AES-256 key must be 32 bytes, got {}", key.len());
@@ -92,14 +97,11 @@ pub fn aes256_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.is_empty() {
         return Ok(Vec::new());
     }
-    let original_len = ciphertext.len();
-    let mut padded = cts_unswap(ciphertext);
-    let iv = [0u8; AES_BLOCK_SIZE];
-    let dec = Aes256CbcDec::new(key.into(), &iv.into());
-    let pt = dec
-        .decrypt_padded_vec_mut::<NoPadding>(&padded)
-        .map_err(|e| anyhow::anyhow!("AES-256-CTS decrypt error: {e}"))?;
-    Ok(pt[..original_len].to_vec())
+    cts_decrypt_impl(ciphertext, |k, iv, data| {
+        let dec = Aes256CbcDec::new(k.into(), iv.into());
+        dec.decrypt_padded_vec_mut::<NoPadding>(data)
+            .map_err(|e| anyhow::anyhow!("AES-256-CTS decrypt: {e}"))
+    }, key)
 }
 
 /// Encrypt with AES-128-CTS (CipherText Stealing).
@@ -111,7 +113,7 @@ pub fn aes128_cts_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         return Ok(Vec::new());
     }
     let original_len = plaintext.len();
-    let padded_len = ((original_len + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
+    let padded_len = original_len.div_ceil(AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
     let mut padded = vec![0u8; padded_len];
     padded[..original_len].copy_from_slice(plaintext);
     let iv = [0u8; AES_BLOCK_SIZE];
@@ -121,6 +123,8 @@ pub fn aes128_cts_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Decrypt with AES-128-CTS (CipherText Stealing).
+///
+/// Same algorithm as AES-256-CTS but with 128-bit key.
 pub fn aes128_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != 16 {
         bail!("AES-128 key must be 16 bytes, got {}", key.len());
@@ -128,14 +132,11 @@ pub fn aes128_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.is_empty() {
         return Ok(Vec::new());
     }
-    let original_len = ciphertext.len();
-    let mut padded = cts_unswap(ciphertext);
-    let iv = [0u8; AES_BLOCK_SIZE];
-    let dec = Aes128CbcDec::new(key.into(), &iv.into());
-    let pt = dec
-        .decrypt_padded_vec_mut::<NoPadding>(&padded)
-        .map_err(|e| anyhow::anyhow!("AES-128-CTS decrypt error: {e}"))?;
-    Ok(pt[..original_len].to_vec())
+    cts_decrypt_impl(ciphertext, |k, iv, data| {
+        let dec = Aes128CbcDec::new(k.into(), iv.into());
+        dec.decrypt_padded_vec_mut::<NoPadding>(data)
+            .map_err(|e| anyhow::anyhow!("AES-128-CTS decrypt: {e}"))
+    }, key)
 }
 
 /// After CBC encryption, swap the last two ciphertext blocks and truncate.
@@ -155,9 +156,105 @@ fn cts_swap_and_truncate(mut ct: Vec<u8>, original_len: usize) -> Vec<u8> {
     ct
 }
 
+/// Core CTS decryption implementation using a provided CBC decrypt closure.
+///
+/// The CTS encrypt format for non-block-aligned data is:
+///   `C_1 .. C_{n-2}, C_n (full), C_{n-1}[0..remainder]`
+///
+/// Decryption recovers the stolen bytes by ECB-decrypting the last full block
+/// (using CBC with IV=0 on a single block, which is equivalent to ECB), then
+/// reconstructing the full penultimate block from the partial ciphertext bytes
+/// plus the stolen intermediate bytes.
+fn cts_decrypt_impl<F>(ciphertext: &[u8], cbc_decrypt: F, key: &[u8]) -> Result<Vec<u8>>
+where
+    F: Fn(&[u8], &[u8; AES_BLOCK_SIZE], &[u8]) -> Result<Vec<u8>>,
+{
+    let ct_len = ciphertext.len();
+    let iv = [0u8; AES_BLOCK_SIZE];
+
+    // Single block (≤16 bytes): ECB = CBC with IV=0 on one padded block
+    if ct_len <= AES_BLOCK_SIZE {
+        let mut padded = [0u8; AES_BLOCK_SIZE];
+        padded[..ct_len].copy_from_slice(ciphertext);
+        let pt = cbc_decrypt(key, &iv, &padded)?;
+        return Ok(pt[..ct_len].to_vec());
+    }
+
+    let remainder = ct_len % AES_BLOCK_SIZE;
+
+    if remainder == 0 {
+        // Block-aligned: swap last two blocks back, then CBC decrypt
+        let mut data = ciphertext.to_vec();
+        let n = data.len() / AES_BLOCK_SIZE;
+        if n >= 2 {
+            let swap_start = (n - 2) * AES_BLOCK_SIZE;
+            let mid = swap_start + AES_BLOCK_SIZE;
+            let (left, right) = data.split_at_mut(mid);
+            let penultimate = &mut left[swap_start..];
+            let mut temp = [0u8; AES_BLOCK_SIZE];
+            temp.copy_from_slice(penultimate);
+            penultimate.copy_from_slice(&right[..AES_BLOCK_SIZE]);
+            right[..AES_BLOCK_SIZE].copy_from_slice(&temp);
+        }
+        return cbc_decrypt(key, &iv, &data);
+    }
+
+    // ── Non-block-aligned CTS decryption ──
+    //
+    // Input layout: [C_1..C_{n-2}] [C_n (16 bytes)] [C_{n-1} partial (remainder bytes)]
+    //
+    // Step 1: ECB-decrypt C_n to get intermediate I
+    //         I = D_K(C_n) = (P_n || 0^pad) XOR C_{n-1}
+    //
+    // Step 2: Recover full C_{n-1}:
+    //         C_{n-1}[0..r]  = partial (from input)
+    //         C_{n-1}[r..16] = I[r..16]  (the "stolen" bytes)
+    //
+    // Step 3: P_n = I[0..r] XOR C_{n-1}[0..r]
+    //
+    // Step 4: CBC decrypt [C_1..C_{n-2}, C_{n-1}] → P_1..P_{n-1}
+    //
+    // Step 5: Result = P_1..P_{n-1} || P_n
+
+    let n_full = ct_len / AES_BLOCK_SIZE;
+    let last_full_start = (n_full - 1) * AES_BLOCK_SIZE;
+    let last_full_block = &ciphertext[last_full_start..last_full_start + AES_BLOCK_SIZE];
+    let partial_block = &ciphertext[last_full_start + AES_BLOCK_SIZE..];
+
+    // Step 1: ECB decrypt = CBC with IV=0 on a single block
+    let intermediate = cbc_decrypt(key, &iv, last_full_block)?;
+
+    // Step 2: Reconstruct full penultimate block
+    let mut c_penultimate = vec![0u8; AES_BLOCK_SIZE];
+    c_penultimate[..remainder].copy_from_slice(partial_block);
+    c_penultimate[remainder..].copy_from_slice(&intermediate[remainder..]);
+
+    // Step 3: Recover partial last plaintext block
+    let mut p_last = vec![0u8; remainder];
+    for i in 0..remainder {
+        p_last[i] = intermediate[i] ^ c_penultimate[i];
+    }
+
+    // Step 4: CBC decrypt leading blocks + reconstructed penultimate block
+    let mut cbc_data = Vec::with_capacity(n_full * AES_BLOCK_SIZE);
+    if last_full_start > 0 {
+        cbc_data.extend_from_slice(&ciphertext[..last_full_start]);
+    }
+    cbc_data.extend_from_slice(&c_penultimate);
+
+    let leading_pt = cbc_decrypt(key, &iv, &cbc_data)?;
+
+    // Step 5: Combine
+    let mut result = leading_pt;
+    result.extend_from_slice(&p_last);
+    Ok(result)
+}
+
 /// Pad ciphertext to block boundary and un-swap the last two blocks for CTS decryption.
+/// Only used internally for block-aligned data now; non-aligned uses cts_decrypt_generic.
+#[allow(dead_code)]
 fn cts_unswap(ciphertext: &[u8]) -> Vec<u8> {
-    let padded_len = ((ciphertext.len() + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
+    let padded_len = ciphertext.len().div_ceil(AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
     let mut padded = vec![0u8; padded_len];
     padded[..ciphertext.len()].copy_from_slice(ciphertext);
     let num_blocks = padded.len() / AES_BLOCK_SIZE;
@@ -259,7 +356,7 @@ pub fn decrypt_sam_hash_aes(
     // Pad ciphertext to block size if needed
     let mut ct = encrypted_hash.to_vec();
     if ct.len() % AES_BLOCK_SIZE != 0 {
-        ct.resize(((ct.len() + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE, 0);
+        ct.resize(ct.len().div_ceil(AES_BLOCK_SIZE) * AES_BLOCK_SIZE, 0);
     }
     let decrypted = aes128_cbc_decrypt(&hashed_boot_key[..16], iv, &ct)?;
 
@@ -373,7 +470,7 @@ pub fn decrypt_cached_credential(
     // Pad to block boundary
     let mut ct = encrypted_entry.to_vec();
     if ct.len() % 16 != 0 {
-        ct.resize(((ct.len() + 15) / 16) * 16, 0);
+        ct.resize(ct.len().div_ceil(16) * 16, 0);
     }
 
     aes128_cbc_decrypt(key, &iv, &ct)

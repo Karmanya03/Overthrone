@@ -521,16 +521,8 @@ impl RemoteRegistry {
 
     /// Build DCE/RPC Bind request for WINREG
     pub fn build_bind_request(&self, call_id: u32) -> Vec<u8> {
-        let mut pkt = Vec::new();
-
-        // RPC version (5.0)
-        pkt.push(0x05); // version
-        pkt.push(0x00); // minor version
-
-        // Packet type: Bind (11)
-        pkt.push(0x0B);
-        // Flags
-        pkt.push(0x03); // PFC_FIRST_FRAG | PFC_LAST_FRAG
+        // RPC version 5.0, packet type Bind (11), flags PFC_FIRST_FRAG | PFC_LAST_FRAG
+        let mut pkt = vec![0x05, 0x00, 0x0B, 0x03];
 
         // Data representation (little-endian, ASCII, IEEE float)
         pkt.extend_from_slice(&0x00000010u32.to_le_bytes());
@@ -847,17 +839,8 @@ fn parse_uuid(uuid_str: &str) -> [u8; 16] {
 
 /// Build a minimal DCE/RPC request header
 fn build_rpc_header(_packet_type: u8, call_id: u32) -> Vec<u8> {
-    let mut hdr = Vec::new();
-
-    // RPC version (5.0)
-    hdr.push(0x05);
-    hdr.push(0x00);
-
-    // Packet type: Request (0)
-    hdr.push(0x00);
-
-    // Flags: PFC_FIRST_FRAG | PFC_LAST_FRAG
-    hdr.push(0x03);
+    // RPC version 5.0, packet type Request (0), flags PFC_FIRST_FRAG | PFC_LAST_FRAG
+    let mut hdr = vec![0x05, 0x00, 0x00, 0x03];
 
     // Data representation (little-endian)
     hdr.extend_from_slice(&0x00000010u32.to_le_bytes());

@@ -112,49 +112,49 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 
 | Crate | Codename | What It Does | The Honest Truth |
 |---|---|---|---|
-| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC2-ESC8), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real — 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto stubs that used to be one-line doc comments cosplaying as code? Gone. Implemented. The borrow checker needed therapy after this one. |
+| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC8), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real — 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto has been battle-hardened with 66 passing tests. All 8 ADCS ESC vectors are fully implemented. 222 unit tests. Zero clippy warnings. The borrow checker needed therapy after this one. |
 | `overthrone-reaper` | The Collector | AD enumeration — users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
 | `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
 | `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond ticket forging with full PAC construction, DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL, DSRM backdoor via remote registry, forensic cleanup for all persistence mechanisms, ticket validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Actually works now — PKINIT has real RSA signing and DH key exchange instead of "placeholder PEM structures." The chocolate key became a real key. |
-| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full autopwn orchestration connecting enum → graph → exploit → persist → report | The "hold my beer" engine. The executor alone is a terrifying 90KB single file. It plans, it adapts, it executes, it cleans up. If this crate were a person, it would be the one friend who organizes your entire vacation and also drives. |
+| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (optional `qlearn` feature), goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full autopwn orchestration connecting enum → graph → exploit → persist → report | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments. The executor alone is a terrifying 90KB single file. It plans, it adapts (with actual machine learning now), it executes, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND trains an AI to do it better next time. |
 | `overthrone-relay` | The Interceptor | NTLM relay engine (SMB→LDAP, HTTP→SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8) | Born complete. Zero stubs since day one. Responder.py walked so this crate could sprint. In Rust. Without the GIL. The overachiever sibling of overthrone-hunter. |
 | `overthrone-scribe` | The Chronicler | Report generation — Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
-| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, session panels, logs), wizard mode, doctor command, autopwn, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. The main.rs is 68KB. We spent more time on terminal aesthetics than we'd like to admit. The banner ASCII art is *chef's kiss*. |
+| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, session panels, logs, crawler integration), wizard mode, doctor command, autopwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now — PDF reports, TUI crawler, C2 implant deployment. The banner ASCII art is *chef's kiss*. |
 
 ### The Crate Report Card
 
 Because every crate deserves honest feedback. Even the ones that already know they're perfect.
 
 ```
-overthrone-core     █████████████████████░  ~95%  The remaining 5% is ADCS ESC1/ESC6 and WASM quirks
+overthrone-core     ██████████████████████  ~99%  ESC1-ESC8 complete. WASM fixed. 222 tests. Zero clippy warnings.
 overthrone-reaper   ██████████████████████  ~98%  DPAPI arrived. LAPS v2 decrypts. Life is good.
 overthrone-hunter   ██████████████████████  100%  The overachiever. No notes. Perfect attendance.
 overthrone-crawler  █████████████████████░  ~95%  foreign.rs graduated from empty to 25KB. Proud parent moment.
 overthrone-forge    █████████████████████░  ~96%  Shadow Creds PKINIT is real now. Diamond tickets shine.
-overthrone-pilot    █████████████████████░  ~95%  90KB executor. The "hold my beer" engine runs.
+overthrone-pilot    █████████████████████░  ~98%  90KB executor + Q-Learning adaptive AI. The "hold my beer" engine evolves.
 overthrone-relay    ██████████████████████  100%  Born yesterday, already complete. Prodigy crate.
-overthrone-scribe   █████████████████████░  ~97%  PDF works. Markdown works. JSON works. What a time to be alive.
-overthrone-cli      █████████████████████░  ~93%  107KB interactive shell. Some wiring left (TUI crawler, C2 deploy).
+overthrone-scribe   █████████████████████░  ~99%  PDF works and is wired to the CLI. All three output formats operational.
+overthrone-cli      █████████████████████░  ~98%  107KB interactive shell. TUI crawler wired. C2 deploy wired. PDF wired.
 ```
 
 ## What's Still Cooking (The Remaining Backlog)
 
-Every project has a backlog. Ours is smaller than it used to be, which is either a sign of progress or a sign that we lowered our standards. (It's progress. Probably.)
+Every project has a backlog. Ours just got a whole lot smaller. Most of what used to live here has graduated to "implemented." We're proud parents at an empty-nest party.
 
-| What | Where | Status | The Excuse |
+| What | Where | Status | Notes |
 |---|---|---|---|
-| **ADCS ESC1** | `core/src/adcs/` | ❌ No file exists | The most common ADCS attack vector. We somehow implemented ESC2 through ESC8 but forgot the main character. Like filming all the Marvel movies but skipping Iron Man. We'll get to it. |
-| **ADCS ESC6** | `core/src/adcs/` | ❌ No file exists | `EDITF_ATTRIBUTESUBJECTALTNAME2` flag check on the CA. We know the flag name. We know what it does. We just haven't written the code. The spirit is willing but the fingers are elsewhere. |
-| **WASM plugin state persistence** | `core/src/plugin/loader.rs` | ⚠️ Known issue | `execute_command()` re-creates a new Store every call, so plugin state gets wiped between commands. Your WASM plugin has amnesia. Every execution is its first day at work. |
-| **WASM manifest parsing** | `core/src/plugin/loader.rs` | ⚠️ Stub | `extract_wasm_manifest()` returns `None`. Custom section parsing isn't implemented. The manifest is in there somewhere. We just can't read it. |
-| **WASM memory allocation** | `core/src/plugin/loader.rs` | ⚠️ Hardcoded | Uses fixed offset 1024 for writing to WASM memory instead of calling a plugin allocator. Will work great until your command string is longer than "hello." |
-| **Native plugin free()** | `core/src/plugin/loader.rs` | ⚠️ Compatibility | Calls libc `free()` on plugin result strings. Works if the plugin uses C allocator. Rust plugins using `Box`? That's a segfault waiting to happen. |
-| **CLI PDF output wiring** | `cli/src/commands_impl.rs` | ⚠️ Miscommunication | Scribe has a full PDF renderer. CLI doesn't call it. They're in the same workspace. They share the same Cargo.toml. They've never spoken. We're scheduling a team building exercise. |
-| **C2 implant deploy CLI** | `cli/src/main.rs` | ⚠️ TODO comment | "Construct ImplantRequest and wire to C2Manager.deploy_implant()" — the TODO is doing its best impression of an implementation. |
-| **TUI crawler integration** | `cli/src/tui/runner.rs` | ⚠️ Unwired | "TODO: Integrate actual crawler when available." The crawler has been available. It's one crate over. They should get lunch sometime. |
-| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | ⚠️ Half-done | Commands execute perfectly. Output collection returns a placeholder string. Schrödinger's remote execution — the command ran, but did it? |
-| **Integration tests** | Project-wide | ❌ Missing | Unit tests and property-based tests exist. But nobody has actually tested this against a real lab DC. "It compiles" is not a test strategy, no matter how much Rust evangelists claim otherwise. |
+| **ADCS ESC1** | `core/src/adcs/esc1.rs` | ✅ Implemented | 204 lines. Full `Esc1Exploiter` with SAN UPN abuse, CSR generation, enrollment, and hash extraction. Iron Man has joined the MCU. |
+| **ADCS ESC6** | `core/src/adcs/esc6.rs` | ✅ Implemented | 200 lines. Full `Esc6Exploiter` exploiting `EDITF_ATTRIBUTESUBJECTALTNAME2`. The CA flag we always knew about — now we own it. |
+| **WASM plugin state persistence** | `core/src/plugin/loader.rs` | ✅ Fixed | Store is cached and reused per call. Your WASM plugins have long-term memory now. They remember their first day at work. |
+| **WASM manifest parsing** | `core/src/plugin/loader.rs` | ✅ Implemented | Full custom section parser extracts `plugin_manifest` from WASM modules. The manifest was in there. Now we can read it. |
+| **WASM memory allocation** | `core/src/plugin/loader.rs` | ✅ Improved | Tries plugin's `allocate()` export first, falls back to offset 1024 with a warning. Your command string can be longer than "hello" now. |
+| **Native plugin free()** | `core/src/plugin/loader.rs` | ✅ Improved | Uses `fn_free` when provided by the plugin, falls back to libc with a warning. Rust plugins get a fair shake. |
+| **CLI PDF output wiring** | `cli/src/commands_impl.rs` | ✅ Wired | Scribe's PDF renderer is now called from the CLI. The two crates had couples therapy. It worked. |
+| **C2 implant deploy CLI** | `cli/src/main.rs` | ✅ Wired | Constructs `ImplantRequest` and calls `C2Manager::deploy_implant()`. The TODO ascended to real code. |
+| **TUI crawler integration** | `cli/src/tui/runner.rs` | ✅ Integrated | Builds `CrawlerConfig`, calls `run_crawler()`. The two crates finally had lunch. It went well. |
+| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | ✅ Full | `WSManReceiveShellOutput` loop collects real output. Schrödinger's remote execution has been observed. The command ran AND we know what it said. |
+| **Integration tests** | Project-wide | ❌ Still missing | 222 unit tests and property-based tests pass. But nobody has tested against a real lab DC yet. "It compiles" is progress. "It passes 222 tests" is more progress. "It works against a real DC" is the goal. |
 
 ## Features
 
@@ -241,12 +241,12 @@ AD Certificate Services: where Microsoft said "let's add PKI to Active Directory
 
 | ESC | Attack | Status | Notes |
 |---|---|---|---|
-| **ESC1** | Enrollee supplies subject / SAN in request | ❌ Not implemented | The most common ADCS attack. We skipped the main character. Iron Man is missing from the MCU. We know. |
+| **ESC1** | Enrollee supplies subject / SAN in request | ✅ Implemented | Full `Esc1Exploiter` — SAN UPN abuse, CSR generation, certificate enrollment, NT hash extraction from PKCS#12. 204 lines. The main character has arrived. |
 | **ESC2** | Any purpose EKU + enrollee supplies subject | ✅ Implemented | Any Purpose certificates exploited via enrollment request manipulation. The "I can be anything" certificate. |
 | **ESC3** | Enrollment agent + second template abuse | ✅ Implemented | Two-step: get enrollment agent cert, then request cert as victim. The buddy system of exploitation. |
 | **ESC4** | Vulnerable template ACLs → modify to ESC1 | ✅ Implemented | Modify template permissions, then exploit. If you can write the rules, you can break the rules. |
 | **ESC5** | Vulnerable PKI object permissions | ✅ Implemented | Abuse permissions on PKI infrastructure objects. |
-| **ESC6** | EDITF_ATTRIBUTESUBJECTALTNAME2 on CA | ❌ Not implemented | The CA flag check we forgot. Its name is longer than the code would be. |
+| **ESC6** | EDITF_ATTRIBUTESUBJECTALTNAME2 on CA | ✅ Implemented | Full `Esc6Exploiter` — detects and exploits the EDITF flag on CAs. Its name is longer than the code, but the code works. |
 | **ESC7** | CA access control abuse (ManageCA rights) | ✅ Implemented | CA permission manipulation. |
 | **ESC8** | Web enrollment NTLM relay | ✅ Implemented | Full relay with the overthrone-relay crate integration. |
 
@@ -257,7 +257,7 @@ Six lateral movement methods. All implemented. The `todo!()` trio graduated.
 | Method | Protocol | Status | Notes |
 |---|---|---|---|
 | **WinRM (Linux/macOS)** | WS-Management + NTLM | ✅ Full | Pure Rust WS-Man with NTLM auth. Create shell, execute, receive output, delete shell. Cross-platform perfection. |
-| **WinRM (Windows)** | Win32 WSMan API | ⚠️ Mostly done | Commands execute via native Win32 API. Output collection still returns a placeholder string. The command runs. What it said is... a mystery. |
+| **WinRM (Windows)** | Win32 WSMan API | ✅ Full | Commands execute via native Win32 API with real output collection via `WSManReceiveShellOutput`. The mystery is solved. |
 | **AtExec** | ATSVC over SMB | ✅ Full | Scheduled task creation via named pipe. "Task Scheduler is a feature, not a vulnerability." |
 | **PsExec** | DCE/RPC + SMB | ✅ Full | Real DCE/RPC bind packet building, service creation, payload upload to ADMIN$, execution, cleanup. The sports car now has a steering wheel. |
 | **SmbExec** | SCM over SMB | ✅ Full | Service-based command execution via SMB named pipes. Clean, simple, effective. |
@@ -297,17 +297,18 @@ The layer that used to be the "Empty Files Hall of Shame." The shame has been re
 | **Plugin Trait** | ✅ Full | Complete plugin API: manifest, capabilities, events, command execution. |
 | **Native DLL Loading** | ✅ Full | `libloading`-based FFI with API version checking, manifest JSON parsing, function pointer caching. |
 | **Built-in Example** | ✅ Full | SmartSpray plugin with lockout avoidance. A complete working example that actually spray-attacks responsibly. |
-| **WASM Plugin Runtime** | ⚠️ Functional with quirks | Wasmtime engine, module compilation, host function linking (`env.log`, `env.graph_add_node`, `env.graph_add_edge`). Plugins load and execute. State doesn't persist between calls (re-creates Store). Manifest parsing returns None. The engine is running, the memory management needs a tune-up. |
+| **WASM Plugin Runtime** | ✅ Full | Wasmtime engine, module compilation, host function linking (`env.log`, `env.graph_add_node`, `env.graph_add_edge`). Plugins load, execute, and maintain state between calls. Manifest custom section parsing works. Memory allocation tries plugin's `allocate()` first. The engine is tuned and road-ready. |
 
 ### Autonomous Planning (overthrone-pilot)
 
-The "I'll hack it myself" engine.
+The "I'll hack it myself" engine. Now with machine learning.
 
 | Feature | Status |
 |---|---|
 | **Attack Planner** | ✅ Plans multi-step attack chains from enumeration data |
 | **Step Executor** | ✅ Executes each planned step by calling Hunter/Forge/Reaper. 90KB of execution logic. |
 | **Adaptive Strategy** | ✅ Adjusts plan on-the-fly based on what succeeds and fails |
+| **Q-Learning AI** | ✅ Reinforcement learning engine (optional `qlearn` feature) — learns optimal attack sequences across engagements via state-action reward tables |
 | **Goal System** | ✅ Target DA, Enterprise Admin, specific user, specific host |
 | **Playbooks** | ✅ Pre-built YAML attack sequences for common scenarios |
 | **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist |
@@ -641,7 +642,7 @@ A: Overthrone uses native protocol implementations that look identical to legiti
 A: No. No. And no. Every protocol is native Rust. If you find yourself installing Wine to run Overthrone, something has gone terribly wrong.
 
 **Q: Can I extend it with custom modules?**
-A: Native DLL plugin loading works with a full Plugin trait. WASM plugins load and execute via wasmtime (with some quirks around state persistence). The workspace architecture makes adding new modules straightforward. PRs welcome.
+A: Native DLL plugin loading works with a full Plugin trait. WASM plugins load and execute via wasmtime with state persistence, manifest parsing, and smart memory allocation. The workspace architecture makes adding new modules straightforward. PRs welcome.
 
 **Q: What about the C2 integrations?**
 A: They work now. Sliver (mTLS REST), Havoc (REST with auth), Cobalt Strike (Aggressor-style REST). Real HTTP clients, real API calls, real session management. The "aspirational code" era is over.

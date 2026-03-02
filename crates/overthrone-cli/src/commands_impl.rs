@@ -186,12 +186,36 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
             }
         }
         ReportFormat::Pdf => {
+            println!("  {} Generating PDF report...", "▸".bright_black());
+
+            // Load engagement session from input file
+            if !std::path::Path::new(input).exists() {
+                banner::print_fail(&format!("Input session file not found: {}", input));
+                return 1;
+            }
+
+            let session = match overthrone_scribe::load_session(std::path::Path::new(input)).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!(
+                        "Could not parse input as engagement session: {e}"
+                    ));
+                    return 1;
+                }
+            };
+
+            let pdf_bytes = overthrone_scribe::pdf::render(&session);
+
+            if let Err(e) = tokio::fs::write(output, &pdf_bytes).await {
+                banner::print_fail(&format!("Failed to write PDF report: {}", e));
+                return 1;
+            }
+
             println!(
-                "  {} PDF generation requires additional dependencies",
-                "▸".bright_black()
+                "  {} PDF generated ({:.1} KB)",
+                "✓".green(),
+                pdf_bytes.len() as f64 / 1024.0
             );
-            banner::print_warn("PDF output not yet implemented, use Markdown or JSON");
-            return 1;
         }
     }
 
@@ -1086,37 +1110,35 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
                         println!("    Password: {}", "Not readable".red());
                     }
                 }
+            } else if entries.is_empty() {
+                println!("  {} No LAPS-enabled computers found", "!".yellow());
             } else {
-                if entries.is_empty() {
-                    println!("  {} No LAPS-enabled computers found", "!".yellow());
-                } else {
+                println!(
+                    "  {} Found {} LAPS-enabled computers ({} readable)",
+                    "✓".green(),
+                    total,
+                    readable.len()
+                );
+
+                for entry in &entries {
+                    let status = if entry.password.is_some() {
+                        "✓".green()
+                    } else {
+                        "✗".red()
+                    };
                     println!(
-                        "  {} Found {} LAPS-enabled computers ({} readable)",
-                        "✓".green(),
-                        total,
-                        readable.len()
+                        "  {} {} ({})",
+                        status,
+                        entry.computer_name.cyan(),
+                        if entry.is_laps_v2 {
+                            "v2".dimmed()
+                        } else {
+                            "v1".dimmed()
+                        }
                     );
 
-                    for entry in &entries {
-                        let status = if entry.password.is_some() {
-                            "✓".green()
-                        } else {
-                            "✗".red()
-                        };
-                        println!(
-                            "  {} {} ({})",
-                            status,
-                            entry.computer_name.cyan(),
-                            if entry.is_laps_v2 {
-                                "v2".dimmed()
-                            } else {
-                                "v1".dimmed()
-                            }
-                        );
-
-                        if let Some(ref pwd) = entry.password {
-                            println!("      Password: {}", pwd.yellow());
-                        }
+                    if let Some(ref pwd) = entry.password {
+                        println!("      Password: {}", pwd.yellow());
                     }
                 }
             }
@@ -1767,7 +1789,7 @@ pub async fn cmd_plugin(
                 }
             }
 
-            match registry.execute_command(&command, &arg_map, &ctx).await {
+            match registry.execute_command(&command, &arg_map, ctx).await {
                 Ok(res) => {
                     if res.success {
                         println!("{}", res.output);
@@ -1788,7 +1810,7 @@ pub async fn cmd_plugin(
                 path.cyan()
             );
             registry.add_search_path(&path);
-            let _ = registry.discover_and_load(&ctx).await;
+            let _ = registry.discover_and_load(ctx).await;
             banner::print_success(&format!("Plugin loaded from {}", path));
         }
         PluginAction::Unload { plugin_id } => {

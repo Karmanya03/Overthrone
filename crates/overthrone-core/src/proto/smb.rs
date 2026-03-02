@@ -708,14 +708,14 @@ impl SmbSession {
 
         // Lookup Kerberos authentication package
         let pkg_name_bytes = b"Kerberos\0";
-        let mut pkg_name = windows::Win32::Security::Authentication::Identity::LSA_STRING {
+        let pkg_name = windows::Win32::Security::Authentication::Identity::LSA_STRING {
             Length: 8,
             MaximumLength: 9,
             Buffer: windows::core::PSTR(pkg_name_bytes.as_ptr() as *mut u8),
         };
         let mut auth_package: u32 = 0;
         let status =
-            unsafe { LsaLookupAuthenticationPackage(lsa_handle, &mut pkg_name, &mut auth_package) };
+            unsafe { LsaLookupAuthenticationPackage(lsa_handle, &pkg_name, &mut auth_package) };
         if status.0 != 0 {
             let _ = unsafe { LsaDeregisterLogonProcess(lsa_handle) };
             return Err(OverthroneError::Smb(format!(
@@ -970,11 +970,8 @@ fn build_samr_close_handle(handle: &[u8]) -> Vec<u8> {
 
 /// Build generic RPC request PDU
 fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
-    let mut pdu = Vec::new();
-    pdu.push(5); // version major
-    pdu.push(0); // version minor
-    pdu.push(0); // packet type: request
-    pdu.push(0x03); // flags: first+last
+    // RPC version 5.0, packet type Request(0), flags first+last
+    let mut pdu = vec![5, 0, 0, 0x03];
     pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
     let frag_len = (24 + stub_data.len()) as u16;
     pdu.extend_from_slice(&frag_len.to_le_bytes());

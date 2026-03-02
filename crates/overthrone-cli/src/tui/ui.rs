@@ -189,7 +189,7 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
             // Check if node is high-value based on name or properties
             n.name.to_lowercase().contains("admin") ||
             n.name.to_lowercase().contains("domain") ||
-            n.properties.get("high_value").map_or(false, |v| v == "true")
+            n.properties.get("high_value").is_some_and(|v| v == "true")
         })
         .collect();
 

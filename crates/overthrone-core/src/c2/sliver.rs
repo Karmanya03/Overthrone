@@ -145,6 +145,12 @@ pub struct SliverChannel {
     server_info: HashMap<String, String>,
 }
 
+impl Default for SliverChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SliverChannel {
     pub fn new() -> Self {
         Self {
@@ -262,9 +268,9 @@ impl SliverChannel {
             }
 
             let path = format!("beacons/{beacon_id}/tasks/{task_id}");
-            if let Ok(resp) = self.api_get(&path).await {
-                if let Ok(task) = resp.json::<SliverTaskResp>().await {
-                    if task.state == "completed" {
+            if let Ok(resp) = self.api_get(&path).await
+                && let Ok(task) = resp.json::<SliverTaskResp>().await
+                    && task.state == "completed" {
                         return Ok(C2TaskResult {
                             task_id: task.task_id,
                             success: task.error.as_deref().unwrap_or("").is_empty(),
@@ -274,8 +280,6 @@ impl SliverChannel {
                             duration: start.elapsed(),
                         });
                     }
-                }
-            }
 
             tokio::time::sleep(Duration::from_secs(3)).await;
         }

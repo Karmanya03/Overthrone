@@ -131,11 +131,8 @@ fn build_svcctl_bind() -> Vec<u8> {
 }
 
 fn build_rpc_request(opnum: u16, stub: &[u8]) -> Vec<u8> {
-    let mut pdu = Vec::new();
-    pdu.push(5);
-    pdu.push(0);
-    pdu.push(0); // request
-    pdu.push(0x03); // first+last
+    // RPC version 5.0, packet type Request(0), flags first+last
+    let mut pdu = vec![5, 0, 0, 0x03];
     pdu.extend_from_slice(&[0x10, 0, 0, 0]);
     let frag_len = (24 + stub.len()) as u16;
     pdu.extend_from_slice(&frag_len.to_le_bytes());

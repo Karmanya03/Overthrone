@@ -24,6 +24,11 @@ comfy-table = "7"
 md4 = "0.10"
 md-5 = "0.10"
 hmac = "0.12"
+rurel = { version = "0.5", optional = true }
+
+[features]
+default = []
+qlearn = ["rurel"]
 
 [dev-dependencies]
 tokio-test.workspace = true

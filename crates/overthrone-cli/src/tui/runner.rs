@@ -171,7 +171,7 @@ pub async fn run_tui_with_crawler(
     });
 
     // Run TUI on main thread (blocking)
-    let _tui_result = tokio::task::spawn_blocking(move || run_tui(graph))
+    tokio::task::spawn_blocking(move || run_tui(graph))
         .await
         .map_err(|e| OverthroneError::Internal(format!("TUI thread error: {e}")))??;
 

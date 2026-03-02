@@ -3970,6 +3970,7 @@ dependencies = [
  "overthrone-hunter",
  "pretty_assertions",
  "rand 0.10.0",
+ "rurel",
  "serde",
  "serde_json",
  "tokio",
@@ -5561,6 +5562,15 @@ checksum = "a7cc970b249fbe527d6e02e0a227762c9108b2f49d81094fe357ffc6d14d7f6f"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rurel"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d5264de594e938fda2f202d7402f6b9bacc3740bbd7b42e40ecf8fd2eecd69c"
+dependencies = [
+ "rand 0.8.5",
 ]
 
 [[package]]

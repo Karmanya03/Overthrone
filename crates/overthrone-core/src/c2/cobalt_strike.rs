@@ -55,6 +55,12 @@ struct CsBeacon {
     listener: String,
 }
 
+impl Default for CobaltStrikeChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CobaltStrikeChannel {
     pub fn new() -> Self {
         Self {

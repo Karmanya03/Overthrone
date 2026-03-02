@@ -130,14 +130,13 @@ async fn read_and_cleanup_output(session: &SmbSession, config: &SmbExecConfig) -
             let output = String::from_utf8_lossy(&data).to_string();
             debug!("SMBExec: Read {} bytes of output", data.len());
 
-            if config.cleanup {
-                if let Err(e) = session
+            if config.cleanup
+                && let Err(e) = session
                     .delete_file(&config.output_share, &config.output_path)
                     .await
                 {
                     warn!("SMBExec: Failed to cleanup output file: {e}");
                 }
-            }
 
             output
         }

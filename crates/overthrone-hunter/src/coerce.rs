@@ -118,13 +118,9 @@ pub struct CoercionAttempt {
 /// Build a minimal DCE/RPC Bind request for an interface UUID
 fn build_rpc_bind(interface_uuid: &str, version_major: u16) -> Vec<u8> {
     let uuid_bytes = parse_uuid_to_ndr(interface_uuid);
-    let mut pdu = Vec::new();
 
-    // RPC header
-    pdu.push(5);    // version major
-    pdu.push(0);    // version minor
-    pdu.push(11);   // packet type: bind
-    pdu.push(0x03); // flags: first+last
+    // RPC header: version 5.0, packet type bind(11), flags first+last
+    let mut pdu = vec![5, 0, 11, 0x03];
     // NDR representation
     pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
 
@@ -247,12 +243,8 @@ fn build_dfsnm_request(listener_path: &str) -> Vec<u8> {
 
 /// Build a generic DCE/RPC Request PDU wrapper
 fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
-    let mut pdu = Vec::new();
-
-    pdu.push(5);    // version major
-    pdu.push(0);    // version minor
-    pdu.push(0);    // packet type: request
-    pdu.push(0x03); // flags: first+last
+    // RPC version 5.0, packet type Request(0), flags first+last
+    let mut pdu = vec![5, 0, 0, 0x03];
     pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
 
     let frag_len = (24 + stub_data.len()) as u16;

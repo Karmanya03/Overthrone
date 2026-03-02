@@ -19,6 +19,12 @@ pub struct SmartSprayPlugin {
     spray_delay_ms: u64,
 }
 
+impl Default for SmartSprayPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SmartSprayPlugin {
     pub fn new() -> Self {
         let manifest = PluginManifest {
@@ -110,15 +116,14 @@ impl Plugin for SmartSprayPlugin {
         // Try to read fine-grained password policy from graph
         if let Ok(graph) = ctx.graph.read() {
             // Look for password policy info in graph metadata
-            if let Some(lockout) = graph.metadata().get("lockout_threshold") {
-                if let Ok(val) = lockout.parse::<u32>() {
+            if let Some(lockout) = graph.metadata().get("lockout_threshold")
+                && let Ok(val) = lockout.parse::<u32>() {
                     self.lockout_threshold = val.saturating_sub(1); // Stay 1 below
                     ctx.log_info(&format!(
                         "Detected lockout threshold: {} (will stop at {})",
                         val, self.lockout_threshold
                     ));
                 }
-            }
         }
 
         Ok(())
@@ -141,19 +146,16 @@ impl Plugin for SmartSprayPlugin {
     }
 
     async fn on_event(&self, event: &PluginEvent, ctx: &PluginContext) -> Result<()> {
-        match event {
-            PluginEvent::CredentialFound {
+        if let PluginEvent::CredentialFound {
                 username,
                 credential_type,
                 domain,
-            } => {
-                ctx.log_info(&format!(
-                    "Credential found for {}@{} ({}), adjusting spray targets",
-                    username, domain, credential_type
-                ));
-                // In a real impl, remove this user from spray list
-            }
-            _ => {}
+            } = event {
+            ctx.log_info(&format!(
+                "Credential found for {}@{} ({}), adjusting spray targets",
+                username, domain, credential_type
+            ));
+            // In a real impl, remove this user from spray list
         }
         Ok(())
     }

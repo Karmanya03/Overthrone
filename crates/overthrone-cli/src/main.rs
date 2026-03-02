@@ -1,4 +1,4 @@
-/// Overthrone CLI — Active Directory Offensive Toolkit
+// Overthrone CLI — Active Directory Offensive Toolkit
 
 mod auth;
 mod autopwn;

@@ -26,6 +26,9 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::{error, info, warn};
 
+#[cfg(feature = "qlearn")]
+use crate::qlearner::{AdaptiveMode, AdaptiveQLearner, EngagementStateKey, decision_to_action};
+
 // ═══════════════════════════════════════════════════════════
 // Credentials
 // ═══════════════════════════════════════════════════════════
@@ -195,6 +198,12 @@ pub struct AutoPwnConfig {
     pub use_ldaps: bool,
     /// Operation timeout per step (seconds)
     pub timeout: u64,
+    /// Adaptive engine mode (only used with `qlearn` feature)
+    #[cfg(feature = "qlearn")]
+    pub adaptive_mode: AdaptiveMode,
+    /// Path for Q-table persistence (only used with `qlearn` feature)
+    #[cfg(feature = "qlearn")]
+    pub q_table_path: std::path::PathBuf,
 }
 
 impl AutoPwnConfig {
@@ -276,6 +285,10 @@ impl AutoPwnConfig {
             jitter_ms: snap.jitter_ms,
             use_ldaps: snap.use_ldaps,
             timeout: snap.timeout,
+            #[cfg(feature = "qlearn")]
+            adaptive_mode: AdaptiveMode::default(),
+            #[cfg(feature = "qlearn")]
+            q_table_path: std::path::PathBuf::from("q_table.json"),
         }
     }
 }
@@ -355,6 +368,23 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let planner = Planner::new(config.stealth);
     let mut adaptive = AdaptiveEngine::new(config.stealth);
     let mut ctx = config.exec_context();
+
+    // ── Q-Learning Engine (optional) ──
+    #[cfg(feature = "qlearn")]
+    let mut qlearner: Option<AdaptiveQLearner> = match config.adaptive_mode {
+        AdaptiveMode::QLearning | AdaptiveMode::Hybrid => {
+            let ql = AdaptiveQLearner::load(config.stealth, config.q_table_path.clone());
+            info!(
+                "{} Q-learner loaded (mode={:?}, states={}, ε={:.3})",
+                "QL".bold().magenta(),
+                config.adaptive_mode,
+                ql.q_table_size(),
+                ql.epsilon()
+            );
+            Some(ql)
+        }
+        AdaptiveMode::Heuristic => None,
+    };
 
     // ── LDAP Pre-flight Check ──
     // Try LDAP bind to verify connectivity before starting the attack chain.
@@ -442,7 +472,45 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             steps_failed += 1;
         }
 
+        // ── Encode state for Q-learning (before decision) ──
+        #[cfg(feature = "qlearn")]
+        let pre_state_key = qlearner.as_ref().map(|_| {
+            EngagementStateKey::encode(
+                &state,
+                &plan.steps[step_idx],
+                &result,
+                config.stealth,
+                adaptive.consecutive_failures(),
+            )
+        });
+
+        // ── Decide next action ──
+        #[cfg(feature = "qlearn")]
+        let decision = if let Some(ref mut ql) = qlearner {
+            ql.evaluate(&plan.steps[step_idx], &result, &state, &goal)
+        } else {
+            adaptive.evaluate(&plan.steps[step_idx], &result, &state, &goal)
+        };
+        #[cfg(not(feature = "qlearn"))]
         let decision = adaptive.evaluate(&plan.steps[step_idx], &result, &state, &goal);
+
+        // ── Record Q-learning outcome ──
+        #[cfg(feature = "qlearn")]
+        if let (Some(ql), Some(pre_key)) = (&mut qlearner, &pre_state_key) {
+            let goal_achieved = state.evaluate_goal(&goal).is_success();
+            let reward = AdaptiveQLearner::compute_reward(&result, goal_achieved, &decision);
+            let action = decision_to_action(&decision);
+
+            // Post-decision state key (same step, result already applied)
+            let post_key = EngagementStateKey::encode(
+                &state,
+                &plan.steps[step_idx],
+                &result,
+                config.stealth,
+                adaptive.consecutive_failures(),
+            );
+            ql.record_outcome(pre_key, &action, reward, &post_key);
+        }
 
         match decision {
             AdaptiveDecision::Continue => {
@@ -569,6 +637,16 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     // ── Final Report ──
     let finished_at = Utc::now();
     let duration_secs = wall_start.elapsed().as_secs();
+
+    // ── Q-Learning: end episode & persist ──
+    #[cfg(feature = "qlearn")]
+    if let Some(ref mut ql) = qlearner {
+        ql.end_episode();
+        if let Err(e) = ql.save() {
+            warn!("Q-learner: Failed to save Q-table: {e}");
+        }
+    }
+
     let final_status = state.evaluate_goal(&goal);
     let da_achieved = final_status.is_success()
         || state.has_domain_admin

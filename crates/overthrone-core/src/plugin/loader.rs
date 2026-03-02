@@ -125,7 +125,14 @@ pub fn load_native_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
                 path, e
             ))
         })?;
-        let fn_execute = std::mem::transmute(fn_execute);
+        let fn_execute: libloading::Symbol<
+            'static,
+            unsafe extern "C" fn(
+                *const std::ffi::c_char,
+                *const std::ffi::c_char,
+                *const std::ffi::c_char,
+            ) -> *mut std::ffi::c_char,
+        > = std::mem::transmute(fn_execute);
 
         let fn_on_event = library
             .get::<unsafe extern "C" fn(*const std::ffi::c_char) -> i32>(

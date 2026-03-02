@@ -33,7 +33,7 @@ impl MitreMapping {
             technique_name: technique_name.to_string(),
             tactic: tactic.to_string(),
             sub_technique_id: sub_id.map(String::from),
-            url: format!("https://attack.mitre.org/techniques/{}/", full_id.replace('/', "/")),
+            url: format!("https://attack.mitre.org/techniques/{}/", full_id),
         }
     }
 }

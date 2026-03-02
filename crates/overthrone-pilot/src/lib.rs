@@ -20,6 +20,8 @@ pub mod executor;
 pub mod goals;
 pub mod planner;
 pub mod playbook;
+#[cfg(feature = "qlearn")]
+pub mod qlearner;
 pub mod runner;
 pub mod wizard;
 

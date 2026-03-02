@@ -228,12 +228,9 @@ impl InteractiveShell {
         let timeout = Duration::from_secs(5);
 
         let addr = format!("{}:{}", config.target, winrm_port);
-        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
-            Ok(Ok(_)) => {
-                debug!("WinRM HTTP port (5985) is accessible");
-                return Ok(());
-            }
-            _ => {}
+        if let Ok(Ok(_)) = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+            debug!("WinRM HTTP port (5985) is accessible");
+            return Ok(());
         }
 
         let addr_ssl = format!("{}:{}", config.target, winrm_ssl_port);

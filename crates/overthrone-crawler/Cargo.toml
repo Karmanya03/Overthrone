@@ -22,6 +22,14 @@ log = "0.4.29"
 
 [features]
 default = []
+# TODO: The `interrealm` feature enables cross-realm/forest attack modules
+# (ExtraSIDs, SID filtering bypass, inter-realm TGT forging, etc.).
+# To enable it, the following Kerberos APIs must be implemented first in overthrone-core:
+#   1. Cross-realm TGT request (KRB_TGS_REQ with sname = krbtgt/TARGET_REALM)
+#   2. Inter-realm referral handling (KRB_TGS_REP with server-referral)
+#   3. PAC manipulation for ExtraSIDs injection (MS-PAC §2.6.1)
+#   4. SID filtering detection (trust attributes / netlogon trust info)
+# See also: crates/overthrone-core/src/proto/kerberos.rs
 interrealm = []
 
 [dev-dependencies]

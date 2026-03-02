@@ -1089,7 +1089,7 @@ impl MssqlClient {
                 0x28 => {}
 
                 // time, datetime2, datetimeoffset: 1-byte scale
-                0x29 | 0x2A | 0x2B => {
+                0x29..=0x2B => {
                     if pos < data.len() {
                         pos += 1;
                     }
@@ -1122,11 +1122,10 @@ impl MssqlClient {
                         pos += 4;
                     } // text_ptr_len
                     // Skip collation for text/ntext
-                    if type_id == 0x23 || type_id == 0x63 {
-                        if pos + 5 <= data.len() {
+                    if (type_id == 0x23 || type_id == 0x63)
+                        && pos + 5 <= data.len() {
                             pos += 5;
                         }
-                    }
                     // Table name: numParts(1) then for each: len(2) + UTF16
                     if pos < data.len() {
                         let num_parts = data[pos] as usize;
@@ -1476,7 +1475,7 @@ impl MssqlClient {
                 }
 
                 // ── TIME / DATETIME2 / DATETIMEOFFSET: byte-length prefix ──
-                0x29 | 0x2A | 0x2B => {
+                0x29..=0x2B => {
                     if pos >= data.len() {
                         row.push(None);
                         continue;
@@ -1537,7 +1536,7 @@ impl MssqlClient {
         let mut pos = 0;
 
         // Null bitmap: ceil(col_count / 8) bytes
-        let bitmap_bytes = (*col_count + 7) / 8;
+        let bitmap_bytes = (*col_count).div_ceil(8);
         if pos + bitmap_bytes > data.len() {
             return Ok((pos, vec![None; *col_count]));
         }
@@ -1677,11 +1676,10 @@ impl MssqlClient {
             .query("SELECT value_in_use FROM sys.configurations WHERE name = 'xp_cmdshell';")
             .await?;
 
-        if let Some(row) = result.rows.first() {
-            if let Some(Some(value)) = row.first() {
+        if let Some(row) = result.rows.first()
+            && let Some(Some(value)) = row.first() {
                 return Ok(value == "1");
             }
-        }
         Ok(false)
     }
 
@@ -1689,8 +1687,8 @@ impl MssqlClient {
     pub async fn get_version(&mut self) -> Result<SqlServerVersion> {
         let result = self.query("SELECT @@VERSION;").await?;
 
-        if let Some(row) = result.rows.first() {
-            if let Some(Some(version_str)) = row.first() {
+        if let Some(row) = result.rows.first()
+            && let Some(Some(version_str)) = row.first() {
                 return Ok(SqlServerVersion {
                     major: 0,
                     minor: 0,
@@ -1700,7 +1698,6 @@ impl MssqlClient {
                     server_name: self.config.server.clone(),
                 });
             }
-        }
 
         Err(OverthroneError::Protocol {
             protocol: "TDS".to_string(),
@@ -1782,10 +1779,7 @@ fn str_to_utf16le(s: &str) -> Vec<u8> {
 fn utf16le_to_string(data: &[u8]) -> String {
     data.chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect::<Vec<u16>>()
-        .iter()
-        .copied()
-        .collect::<Vec<u16>>()
+        .collect::<Vec<u16>>().to_vec()
         .as_slice()
         .iter()
         .map(|&c| char::from_u32(c as u32).unwrap_or('\u{FFFD}'))

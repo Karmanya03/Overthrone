@@ -303,6 +303,12 @@ pub struct C2Manager {
     default_channel: Option<String>,
 }
 
+impl Default for C2Manager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl C2Manager {
     pub fn new() -> Self {
         Self {
@@ -398,11 +404,10 @@ impl C2Manager {
     /// Disconnect all channels
     pub async fn disconnect_all(&mut self) {
         for (name, channel) in &mut self.channels {
-            if channel.is_connected() {
-                if let Err(e) = channel.disconnect().await {
+            if channel.is_connected()
+                && let Err(e) = channel.disconnect().await {
                     log::warn!("[c2] Error disconnecting '{}': {}", name, e);
                 }
-            }
         }
     }
 }

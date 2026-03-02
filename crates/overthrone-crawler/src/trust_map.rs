@@ -113,10 +113,8 @@ impl TrustEdge {
     pub fn risk_level(&self) -> &'static str {
         if self.is_pam_trust {
             "CRITICAL"
-        } else if !self.sid_filtering && self.direction.allows_outbound() && !self.is_within_forest {
-            "CRITICAL"
         } else if !self.sid_filtering && self.direction.allows_outbound() {
-            "HIGH"
+            if !self.is_within_forest { "CRITICAL" } else { "HIGH" }
         } else if self.direction.allows_outbound() && self.transitive {
             "MEDIUM"
         } else {

@@ -207,7 +207,7 @@ fn render_finding(md: &mut String, finding: &Finding, num: usize) {
     if !finding.evidence.is_empty() {
         md.push_str("#### Evidence\n\n");
         for ev in &finding.evidence {
-            md.push_str(&format!("**{}** ({})\n\n", ev.label, format!("{:?}", ev.content_type)));
+            md.push_str(&format!("**{}** ({:?})\n\n", ev.label, ev.content_type));
             // Redact actual credential values
             let display = if ev.content_type == EvidenceType::Credential {
                 "[REDACTED — see secure appendix]".to_string()

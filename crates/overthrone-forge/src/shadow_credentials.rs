@@ -390,10 +390,10 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
 
     // Set validity period
     let now = chrono::Utc::now();
-    params.not_before = rcgen::date_time_ymd(now.year() as i32, now.month() as u8, now.day() as u8);
+    params.not_before = rcgen::date_time_ymd(now.year(), now.month() as u8, now.day() as u8);
     let expiry = now + chrono::Duration::days(365);
     params.not_after = rcgen::date_time_ymd(
-        expiry.year() as i32,
+        expiry.year(),
         expiry.month() as u8,
         expiry.day() as u8,
     );

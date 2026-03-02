@@ -494,8 +494,7 @@ impl Responder {
         if let Some(auth_line) = request_str
             .lines()
             .find(|l| l.starts_with("Authorization:"))
-        {
-            if let Some(ntlm_data) =
+            && let Some(ntlm_data) =
                 parse_http_auth_header(auth_line.trim_start_matches("Authorization:"))
             {
                 match parse_ntlm_type(&ntlm_data) {
@@ -547,7 +546,6 @@ impl Responder {
                     _ => {}
                 }
             }
-        }
 
         // Request authentication
         let response = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -650,8 +648,8 @@ impl Responder {
             .map_err(|e| RelayError::Network(format!("SMB read error: {}", e)))?;
 
         // Extract NTLM authenticate from SMB message
-        if let Some(ntlm_data) = Self::extract_ntlm_from_smb(&buf[..len]) {
-            if let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
+        if let Some(ntlm_data) = Self::extract_ntlm_from_smb(&buf[..len])
+            && let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
                 let cred = CapturedCredential {
                     client_ip,
                     username: auth.username,
@@ -670,7 +668,6 @@ impl Responder {
 
                 captured.lock().unwrap().push(cred);
             }
-        }
         Ok(())
     }
 
@@ -719,14 +716,13 @@ impl Responder {
         for i in 0..data.len().saturating_sub(8) {
             if &data[i..i + 8] == NTLM_SIGNATURE {
                 // Found NTLM message, try to determine length
-                if let Some(msg_type) = parse_ntlm_type(&data[i..]) {
-                    if msg_type == NtlmMessageType::Authenticate {
+                if let Some(msg_type) = parse_ntlm_type(&data[i..])
+                    && msg_type == NtlmMessageType::Authenticate {
                         // The authenticate message should be followed by data
                         // We need to read until we have the full message
                         // For simplicity, just return what we have
                         return Some(data[i..].to_vec());
                     }
-                }
             }
         }
         None

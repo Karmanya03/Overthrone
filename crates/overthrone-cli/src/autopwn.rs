@@ -126,8 +126,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     }
 
     // Build initial EngagementState
-    let mut state = EngagementState::default();
-    state.dc_ip = Some(config.dchost.clone());
+    let mut state = EngagementState {
+        dc_ip: Some(config.dchost.clone()),
+        ..Default::default()
+    };
 
     // Determine goal
     let goal = match config.target.to_lowercase().as_str() {

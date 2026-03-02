@@ -286,6 +286,12 @@ pub struct PluginRegistry {
     search_paths: Vec<String>,
 }
 
+impl Default for PluginRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {
@@ -320,8 +326,8 @@ impl PluginRegistry {
         }
 
         // Check version compatibility
-        if let Some(ref min_ver) = manifest.min_overthrone_version {
-            if !is_version_compatible(min_ver) {
+        if let Some(ref min_ver) = manifest.min_overthrone_version
+            && !is_version_compatible(min_ver) {
                 return Err(OverthroneError::Plugin(format!(
                     "Plugin '{}' requires Overthrone >= {}, current is {}",
                     id,
@@ -329,7 +335,6 @@ impl PluginRegistry {
                     env!("CARGO_PKG_VERSION")
                 )));
             }
-        }
 
         // Initialize
         log::info!(
@@ -428,11 +433,9 @@ impl PluginRegistry {
             if manifest
                 .capabilities
                 .contains(&PluginCapability::EventHandler)
-            {
-                if let Err(e) = plugin.on_event(event, ctx).await {
+                && let Err(e) = plugin.on_event(event, ctx).await {
                     log::warn!("[plugin] Event handler error in '{}': {}", manifest.name, e);
                 }
-            }
         }
     }
 
@@ -471,11 +474,10 @@ impl PluginRegistry {
     /// Shutdown all plugins in reverse load order
     pub async fn shutdown_all(&mut self) {
         for id in self.load_order.iter().rev() {
-            if let Some(plugin) = self.plugins.get(id) {
-                if let Err(e) = plugin.shutdown().await {
+            if let Some(plugin) = self.plugins.get(id)
+                && let Err(e) = plugin.shutdown().await {
                     log::warn!("[plugin] Shutdown error for '{}': {}", id, e);
                 }
-            }
         }
         self.plugins.clear();
         self.command_map.clear();
@@ -511,7 +513,7 @@ impl PluginRegistry {
 
                 let plugin = if file_path
                     .extension()
-                    .map_or(false, |e| e == "so" || e == "dll" || e == "dylib")
+                    .is_some_and(|e| e == "so" || e == "dll" || e == "dylib")
                 {
                     // Native plugin
                     match loader::load_native_plugin(&file_path) {
@@ -521,7 +523,7 @@ impl PluginRegistry {
                             None
                         }
                     }
-                } else if file_path.extension().map_or(false, |e| e == "wasm") {
+                } else if file_path.extension().is_some_and(|e| e == "wasm") {
                     // WASM plugin
                     match loader::load_wasm_plugin(&file_path) {
                         Ok(p) => Some(p),

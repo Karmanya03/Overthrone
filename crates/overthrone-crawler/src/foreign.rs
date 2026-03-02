@@ -561,7 +561,7 @@ fn _extract_sid_from_fsp_dn(dn: &str) -> Option<Sid> {
     dn.split(',')
         .next()
         .and_then(|cn| cn.strip_prefix("CN="))
-        .and_then(|s| Sid::from_string(s))
+        .and_then(Sid::from_string)
 }
 
 /// Extract a SID string from a Foreign Security Principal DN.
