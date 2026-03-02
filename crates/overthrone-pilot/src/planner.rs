@@ -91,6 +91,12 @@ pub enum PlannedAction {
     // ── Coercion ──
     Coerce { target: String, listener: String },
 
+    // ── ADCS ──
+    AdcsEnumerate,
+    AdcsEsc1 { template: String, ca: String, target_upn: String },
+    AdcsEsc4 { template: String },
+    AdcsEsc6 { template: String, ca: String, target_upn: String },
+
     // ── Persistence ──
     ForgeGoldenTicket { krbtgt_hash: String },
     ForgeSilverTicket { service_hash: String, spn: String },
@@ -147,6 +153,8 @@ impl std::fmt::Display for NoiseLevel {
 pub struct Planner {
     stealth: bool,
     max_noise: NoiseLevel,
+    /// Maximum total steps before bail-out
+    max_steps: usize,
 }
 
 impl Planner {
@@ -158,6 +166,7 @@ impl Planner {
             } else {
                 NoiseLevel::Critical
             },
+            max_steps: 60,
         }
     }
 
@@ -284,6 +293,95 @@ impl Planner {
             });
         }
 
+        // ── Phase 2.5: ADCS Certificate Abuse ──
+        if !failed_actions.contains(&"adcs_enum".to_string()) {
+            let adcs_enum_id = next_id();
+            steps.push(PlanStep {
+                id: adcs_enum_id.clone(),
+                description: "ADCS — enumerate certificate templates & CAs".to_string(),
+                stage: Stage::Attack,
+                action: PlannedAction::AdcsEnumerate,
+                priority: 87,
+                noise: NoiseLevel::Silent,
+                depends_on: if recon_dep.is_empty() {
+                    vec![]
+                } else {
+                    vec![recon_dep.clone()]
+                },
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+
+            // ESC1 — enrollee supplies SAN (most common ADCS vuln)
+            if !failed_actions.contains(&"adcs_esc1".to_string()) {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description:
+                        "ADCS ESC1 — request cert with arbitrary SAN for impersonation"
+                            .to_string(),
+                    stage: Stage::Attack,
+                    action: PlannedAction::AdcsEsc1 {
+                        template: String::new(),
+                        ca: String::new(),
+                        target_upn: String::new(),
+                    },
+                    priority: 86,
+                    noise: NoiseLevel::Low,
+                    depends_on: vec![adcs_enum_id.clone()],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+
+            // ESC4 — writable template → make it ESC1-vulnerable
+            if !failed_actions.contains(&"adcs_esc4".to_string()) {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description:
+                        "ADCS ESC4 — modify writable template then exploit as ESC1"
+                            .to_string(),
+                    stage: Stage::Attack,
+                    action: PlannedAction::AdcsEsc4 {
+                        template: String::new(),
+                    },
+                    priority: 84,
+                    noise: NoiseLevel::Medium,
+                    depends_on: vec![adcs_enum_id.clone()],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+
+            // ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 on CA
+            if !failed_actions.contains(&"adcs_esc6".to_string()) {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description:
+                        "ADCS ESC6 — abuse EDITF_ATTRIBUTESUBJECTALTNAME2 for SAN injection"
+                            .to_string(),
+                    stage: Stage::Attack,
+                    action: PlannedAction::AdcsEsc6 {
+                        template: String::new(),
+                        ca: String::new(),
+                        target_upn: String::new(),
+                    },
+                    priority: 83,
+                    noise: NoiseLevel::Low,
+                    depends_on: vec![adcs_enum_id],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+        }
+
         // ── Phase 3: Delegation Abuse ──
         if !failed_actions.contains(&"constrained_delegation".to_string()) {
             steps.push(PlanStep {
@@ -330,6 +428,39 @@ impl Planner {
                     retries: 0,
                     max_retries: 1,
                 });
+            }
+        }
+
+        // ── Phase 4.5: RBCD Attack (if we have a controlled computer & write access) ──
+        if !state.rbcd_targets.is_empty()
+            && !failed_actions.contains(&"rbcd".to_string())
+        {
+            for target in &state.rbcd_targets {
+                // Use the first discovered computer we control (or our own machine account)
+                let controlled = state
+                    .credentials
+                    .values()
+                    .find(|c| c.username.ends_with('$'))
+                    .map(|c| c.username.clone())
+                    .unwrap_or_default();
+                if !controlled.is_empty() {
+                    steps.push(PlanStep {
+                        id: next_id(),
+                        description: format!("RBCD: {} → {}", controlled, target),
+                        stage: Stage::Attack,
+                        action: PlannedAction::RbcdAttack {
+                            controlled: controlled.clone(),
+                            target: target.clone(),
+                        },
+                        priority: 78,
+                        noise: NoiseLevel::Medium,
+                        depends_on: vec![],
+                        executed: false,
+                        result: None,
+                        retries: 0,
+                        max_retries: 1,
+                    });
+                }
             }
         }
 
@@ -384,6 +515,55 @@ impl Planner {
                         max_retries: 1,
                     });
                 }
+                if !failed_actions.contains(&format!("dump_sam_{}", host)) {
+                    steps.push(PlanStep {
+                        id: next_id(),
+                        description: format!("Dump SAM from {}", host),
+                        stage: Stage::Escalate,
+                        action: PlannedAction::DumpSam {
+                            target: host.clone(),
+                        },
+                        priority: 69,
+                        noise: NoiseLevel::High,
+                        depends_on: vec![],
+                        executed: false,
+                        result: None,
+                        retries: 0,
+                        max_retries: 1,
+                    });
+                }
+            }
+        }
+
+        // ── Phase 6.5: Credential Reuse — re-check admin with new creds ──
+        // If we obtained credentials from dumps/cracking, try them against
+        // all known computers to expand access before going for DCSync.
+        if !state.credentials.is_empty() && !state.has_domain_admin {
+            let unchecked: Vec<String> = state
+                .computers
+                .iter()
+                .filter_map(|c| c.dns_hostname.clone())
+                .filter(|h| !state.admin_hosts.contains(h))
+                .collect();
+            if !unchecked.is_empty() && unchecked.len() <= 50 {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: format!(
+                        "Credential reuse — re-check {} hosts with dumped creds",
+                        unchecked.len()
+                    ),
+                    stage: Stage::Lateral,
+                    action: PlannedAction::CheckAdminAccess {
+                        targets: unchecked,
+                    },
+                    priority: 65,
+                    noise: NoiseLevel::Medium,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
             }
         }
 
@@ -442,7 +622,7 @@ impl Planner {
         self.finalize_plan(goal, steps)
     }
 
-    /// Sort steps by priority, filter by noise, and return the plan
+    /// Sort steps by priority, filter by noise, enforce step cap, and return the plan
     fn finalize_plan(&self, goal: &AttackGoal, mut steps: Vec<PlanStep>) -> AttackPlan {
         // Filter out steps above noise threshold
         if self.stealth {
@@ -458,6 +638,16 @@ impl Planner {
                 stage_cmp
             }
         });
+
+        // Enforce maximum step cap to prevent runaway plans
+        if steps.len() > self.max_steps {
+            warn!(
+                "Plan has {} steps, truncating to {} (bail-out)",
+                steps.len(),
+                self.max_steps
+            );
+            steps.truncate(self.max_steps);
+        }
 
         let max_noise = steps
             .iter()

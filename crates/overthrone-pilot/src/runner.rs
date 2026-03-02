@@ -16,7 +16,7 @@
 use crate::adaptive::{AdaptiveDecision, AdaptiveEngine, AdaptiveSummary, StepModification};
 use crate::executor::{self, ExecContext};
 use crate::goals::{AttackGoal, EngagementState, GoalStatus};
-use crate::planner::{AttackPlan, PlanStep, Planner};
+use crate::planner::{AttackPlan, PlanStep, PlannedAction, Planner};
 use crate::playbook::{Playbook, PlaybookId};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
@@ -629,7 +629,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
 
         // Auto-save state every 10 steps for recovery
-        if steps_executed.is_multiple_of(10) {
+        if steps_executed > 0 && steps_executed % 10 == 0 {
             state.auto_save();
         }
     }
@@ -757,6 +757,127 @@ fn print_stage_banner(stage: Stage) {
     println!("\n{}", color_fn(banner).bold());
 }
 
+/// Resolve empty parameters in playbook steps using the current engagement state.
+/// Playbooks define actions with `String::new()` for targets; this function fills
+/// them in from what we've learned so far.
+fn resolve_playbook_step(
+    step: &PlanStep,
+    state: &EngagementState,
+    ctx: &executor::ExecContext,
+) -> PlanStep {
+    let mut resolved = step.clone();
+
+    resolved.action = match &step.action {
+        // Fill in targets for CheckAdminAccess
+        PlannedAction::CheckAdminAccess { targets } if targets.is_empty() => {
+            let hosts: Vec<String> = state
+                .computers
+                .iter()
+                .filter_map(|c| c.dns_hostname.clone())
+                .filter(|h| !state.admin_hosts.contains(h))
+                .take(50)
+                .collect();
+            PlannedAction::CheckAdminAccess { targets: hosts }
+        }
+        // Fill in RBCD params from state
+        PlannedAction::RbcdAttack { controlled, target }
+            if controlled.is_empty() || target.is_empty() =>
+        {
+            let ctrl = if controlled.is_empty() {
+                state
+                    .credentials
+                    .values()
+                    .find(|c| c.username.ends_with('$'))
+                    .map(|c| c.username.clone())
+                    .unwrap_or_default()
+            } else {
+                controlled.clone()
+            };
+            let tgt = if target.is_empty() {
+                state
+                    .rbcd_targets
+                    .first()
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                target.clone()
+            };
+            PlannedAction::RbcdAttack {
+                controlled: ctrl,
+                target: tgt,
+            }
+        }
+        // Fill in constrained delegation from discovered data
+        PlannedAction::ConstrainedDelegation {
+            account,
+            target_spn: _,
+            impersonate,
+        } if account.is_empty() => {
+            if let Some(deleg) = state.constrained_delegation.first() {
+                PlannedAction::ConstrainedDelegation {
+                    account: deleg.account.clone(),
+                    target_spn: deleg.targets.first().cloned().unwrap_or_default(),
+                    impersonate: impersonate.clone(),
+                }
+            } else {
+                step.action.clone()
+            }
+        }
+        // Fill in exec targets
+        PlannedAction::SmbExec { target, command } if target.is_empty() => {
+            let host = state
+                .admin_hosts
+                .iter()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| ctx.dc_ip.clone());
+            PlannedAction::SmbExec {
+                target: host,
+                command: command.clone(),
+            }
+        }
+        // Fill in dump targets
+        PlannedAction::DumpLsa { target } if target.is_empty() => {
+            let host = state
+                .admin_hosts
+                .iter()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| ctx.dc_ip.clone());
+            PlannedAction::DumpLsa { target: host }
+        }
+        PlannedAction::DumpSam { target } if target.is_empty() => {
+            let host = state
+                .admin_hosts
+                .iter()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| ctx.dc_ip.clone());
+            PlannedAction::DumpSam { target: host }
+        }
+        // Fill in coerce targets
+        PlannedAction::Coerce { target, listener } if target.is_empty() => {
+            let dc = state
+                .dc_ip
+                .clone()
+                .unwrap_or_else(|| ctx.dc_ip.clone());
+            let unconstrained = state
+                .unconstrained_delegation
+                .first()
+                .cloned()
+                .unwrap_or_default();
+            PlannedAction::Coerce {
+                target: if target.is_empty() { dc } else { target.clone() },
+                listener: if listener.is_empty() { unconstrained } else { listener.clone() },
+            }
+        }
+        // Everything else passes through unchanged
+        other => other.clone(),
+    };
+
+    resolved
+}
+
 /// Execute a named playbook directly (bypasses goal-driven planning)
 pub async fn run_playbook(playbook_id: PlaybookId, config: &AutoPwnConfig) -> AutoPwnResult {
     let started_at = Utc::now();
@@ -789,7 +910,9 @@ pub async fn run_playbook(playbook_id: PlaybookId, config: &AutoPwnConfig) -> Au
 
     for step in &playbook.steps {
         pb.set_message(step.description.clone());
-        let result = executor::execute_step(step, &ctx, &mut state).await;
+        // Resolve empty playbook parameters from the current engagement state
+        let resolved = resolve_playbook_step(step, &state, &ctx);
+        let result = executor::execute_step(&resolved, &ctx, &mut state).await;
         steps_executed += 1;
         if result.success {
             steps_succeeded += 1;

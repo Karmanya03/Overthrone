@@ -9,6 +9,8 @@ use crate::error::{OverthroneError, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+use ldap3::controls::RawControl;
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -92,6 +94,34 @@ const TRUST_ATTRS: &[&str] = &[
     "trustAttributes",
     "flatName",
     "securityIdentifier",
+];
+
+/// OID for Simple Paged Results Control (RFC 2696)
+const PAGED_RESULTS_OID: &str = "1.2.840.113556.1.4.319";
+
+/// OID for SD_FLAGS control (request specific security descriptor parts)
+const SD_FLAGS_OID: &str = "1.2.840.113556.1.4.801";
+
+/// SD_FLAGS value to request the DACL (4) + Owner (1) = 5
+const SD_FLAGS_DACL_OWNER: u32 = 0x05;
+
+/// GPO attributes for Group Policy enumeration
+const GPO_ATTRS: &[&str] = &[
+    "displayName",
+    "cn",
+    "gPCFileSysPath",
+    "distinguishedName",
+    "whenChanged",
+    "flags",
+    "gPCFunctionalityVersion",
+];
+
+/// Security descriptor attributes for ACL enumeration
+const ACL_ATTRS: &[&str] = &[
+    "distinguishedName",
+    "sAMAccountName",
+    "nTSecurityDescriptor",
+    "objectClass",
 ];
 
 // ═══════════════════════════════════════════════════════════
@@ -265,6 +295,180 @@ pub struct DomainEnumeration {
     pub constrained_delegation_users: Vec<AdUser>,
     pub constrained_delegation_computers: Vec<AdComputer>,
     pub domain_admins: Vec<String>,
+    pub spn_map: HashMap<String, Vec<String>>,
+    pub gpos: Vec<GpoInfo>,
+    pub acl_entries: Vec<DaclInfo>,
+}
+
+// ─────────────────────────────────────────────────────
+//  ACL / DACL Types
+// ─────────────────────────────────────────────────────
+
+/// ACE type from an Active Directory DACL
+#[derive(Debug, Clone, PartialEq)]
+pub enum AceType {
+    AccessAllowed,
+    AccessDenied,
+    AccessAllowedObject,
+    AccessDeniedObject,
+    Unknown(u8),
+}
+
+impl AceType {
+    fn from_raw(val: u8) -> Self {
+        match val {
+            0x00 => Self::AccessAllowed,
+            0x01 => Self::AccessDenied,
+            0x05 => Self::AccessAllowedObject,
+            0x06 => Self::AccessDeniedObject,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+impl std::fmt::Display for AceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AccessAllowed => write!(f, "ACCESS_ALLOWED"),
+            Self::AccessDenied => write!(f, "ACCESS_DENIED"),
+            Self::AccessAllowedObject => write!(f, "ACCESS_ALLOWED_OBJECT"),
+            Self::AccessDeniedObject => write!(f, "ACCESS_DENIED_OBJECT"),
+            Self::Unknown(v) => write!(f, "UNKNOWN(0x{v:02x})"),
+        }
+    }
+}
+
+/// A parsed Access Control Entry from an AD object's DACL
+#[derive(Debug, Clone)]
+pub struct AceEntry {
+    pub ace_type: AceType,
+    pub ace_flags: u8,
+    pub access_mask: u32,
+    pub trustee_sid: String,
+    /// Object type GUID (for object-specific ACEs)
+    pub object_type: Option<String>,
+    /// Inherited object type GUID
+    pub inherited_object_type: Option<String>,
+}
+
+impl AceEntry {
+    /// Check if this ACE grants GenericAll
+    pub fn is_generic_all(&self) -> bool {
+        self.access_mask & 0x10000000 != 0 || self.access_mask == 0x000F01FF
+    }
+
+    /// Check if this ACE grants WriteDacl
+    pub fn is_write_dacl(&self) -> bool {
+        self.access_mask & 0x00040000 != 0
+    }
+
+    /// Check if this ACE grants WriteOwner
+    pub fn is_write_owner(&self) -> bool {
+        self.access_mask & 0x00080000 != 0
+    }
+
+    /// Check if this ACE grants GenericWrite
+    pub fn is_generic_write(&self) -> bool {
+        self.access_mask & 0x40000000 != 0
+    }
+
+    /// Check if this ACE grants extended right (DS-Control-Access)
+    pub fn is_extended_right(&self) -> bool {
+        self.access_mask & 0x00000100 != 0
+    }
+
+    /// Check if this ACE grants WriteProperty
+    pub fn is_write_prop(&self) -> bool {
+        self.access_mask & 0x00000020 != 0
+    }
+}
+
+/// DACL information for an AD object
+#[derive(Debug, Clone)]
+pub struct DaclInfo {
+    pub object_dn: String,
+    pub owner_sid: String,
+    pub aces: Vec<AceEntry>,
+}
+
+/// Group Policy Object information
+#[derive(Debug, Clone)]
+pub struct GpoInfo {
+    pub display_name: String,
+    pub cn: String,
+    pub gpc_file_sys_path: String,
+    pub distinguished_name: String,
+    pub when_changed: Option<String>,
+    pub flags: u32,
+}
+
+/// Well-known AD control access right GUIDs
+pub mod ad_rights {
+    /// User-Force-Change-Password
+    pub const FORCE_CHANGE_PASSWORD: &str = "00299570-246d-11d0-a768-00aa006e0529";
+    /// DS-Replication-Get-Changes
+    pub const REPL_GET_CHANGES: &str = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";
+    /// DS-Replication-Get-Changes-All
+    pub const REPL_GET_CHANGES_ALL: &str = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
+    /// DS-Replication-Get-Changes-In-Filtered-Set
+    pub const REPL_GET_CHANGES_FILTERED: &str = "89e95b76-444d-4c62-991a-0facbeda640c";
+    /// Write-Member (add/remove group members)
+    pub const WRITE_MEMBER: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
+    /// Self-Membership (add self to group)
+    pub const SELF_MEMBERSHIP: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
+}
+
+/// Trust attribute flags (MS-ADTS section 6.1.6.7.9)
+pub mod trust_flags {
+    pub const NON_TRANSITIVE: u32 = 0x00000001;
+    pub const UPLEVEL_ONLY: u32 = 0x00000002;
+    pub const QUARANTINED_DOMAIN: u32 = 0x00000004;
+    pub const FOREST_TRANSITIVE: u32 = 0x00000008;
+    pub const CROSS_ORGANIZATION: u32 = 0x00000010;
+    pub const WITHIN_FOREST: u32 = 0x00000020;
+    pub const TREAT_AS_EXTERNAL: u32 = 0x00000040;
+    pub const USES_RC4_ENCRYPTION: u32 = 0x00000080;
+    pub const USES_AES_KEYS: u32 = 0x00000100;
+    pub const PIM_TRUST: u32 = 0x00000400;
+
+    /// Parse trust attributes into human-readable flags
+    pub fn describe(attrs: u32) -> Vec<&'static str> {
+        let mut flags = Vec::new();
+        if attrs & NON_TRANSITIVE != 0 {
+            flags.push("NON_TRANSITIVE");
+        }
+        if attrs & UPLEVEL_ONLY != 0 {
+            flags.push("UPLEVEL_ONLY");
+        }
+        if attrs & QUARANTINED_DOMAIN != 0 {
+            flags.push("QUARANTINED");
+        }
+        if attrs & FOREST_TRANSITIVE != 0 {
+            flags.push("FOREST_TRANSITIVE");
+        }
+        if attrs & CROSS_ORGANIZATION != 0 {
+            flags.push("CROSS_ORG");
+        }
+        if attrs & WITHIN_FOREST != 0 {
+            flags.push("WITHIN_FOREST");
+        }
+        if attrs & TREAT_AS_EXTERNAL != 0 {
+            flags.push("TREAT_AS_EXTERNAL");
+        }
+        if attrs & USES_RC4_ENCRYPTION != 0 {
+            flags.push("RC4");
+        }
+        if attrs & USES_AES_KEYS != 0 {
+            flags.push("AES");
+        }
+        if attrs & PIM_TRUST != 0 {
+            flags.push("PIM");
+        }
+        if flags.is_empty() {
+            flags.push("NONE");
+        }
+        flags
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -586,7 +790,10 @@ impl LdapSession {
     //  Raw Search Helper
     // ═══════════════════════════════════════════════════════
 
-    /// Perform an LDAP search and return parsed SearchEntry results
+    /// Perform an LDAP search with automatic paging (RFC 2696).
+    ///
+    /// Uses the Simple Paged Results Control to iterate through all results
+    /// in chunks of 1000, avoiding the server's default size limit.
     async fn search_entries(
         &mut self,
         base: &str,
@@ -595,24 +802,46 @@ impl LdapSession {
     ) -> Result<Vec<SearchEntry>> {
         debug!("LDAP search: base={base}, filter={filter}");
 
-        let (rs, _res) = self
-            .ldap
-            .search(base, Scope::Subtree, filter, attrs)
-            .await
-            .map_err(|e| OverthroneError::Ldap {
-                target: base.to_string(),
-                reason: format!("Search failed: {e}"),
-            })?
-            .success()
-            .map_err(|e| OverthroneError::Ldap {
-                target: base.to_string(),
-                reason: format!("Search error: {e}"),
-            })?;
+        const PAGE_SIZE: i32 = 1000;
+        let mut all_entries = Vec::new();
+        let mut cookie: Vec<u8> = Vec::new();
 
-        let entries: Vec<SearchEntry> = rs.into_iter().map(SearchEntry::construct).collect();
+        loop {
+            let ctrl = build_paged_results_control(PAGE_SIZE, &cookie);
 
-        debug!("LDAP search returned {} entries", entries.len());
-        Ok(entries)
+            let (rs, res) = self
+                .ldap
+                .with_controls(vec![ctrl])
+                .search(base, Scope::Subtree, filter, attrs)
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.to_string(),
+                    reason: format!("Search failed: {e}"),
+                })?
+                .success()
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.to_string(),
+                    reason: format!("Search error: {e}"),
+                })?;
+
+            let page_count = rs.len();
+            all_entries.extend(rs.into_iter().map(SearchEntry::construct));
+
+            // Extract paged results cookie from response controls
+            cookie = extract_paged_cookie(&res.ctrls);
+
+            if cookie.is_empty() || page_count == 0 {
+                break;
+            }
+
+            debug!(
+                "LDAP paged search: {} entries so far, continuing...",
+                all_entries.len()
+            );
+        }
+
+        debug!("LDAP search returned {} entries", all_entries.len());
+        Ok(all_entries)
     }
 
     // ═══════════════════════════════════════════════════════
@@ -859,7 +1088,7 @@ impl LdapSession {
     //  Trust Enumeration
     // ═══════════════════════════════════════════════════════
 
-    /// Enumerate domain trusts
+    /// Enumerate domain trusts with detailed attribute parsing
     pub async fn enumerate_trusts(&mut self) -> Result<Vec<AdTrust>> {
         info!("Enumerating domain trusts...");
         let filter = "(objectClass=trustedDomain)";
@@ -873,12 +1102,247 @@ impl LdapSession {
 
         info!("Found {} domain trusts", trusts.len());
         for t in &trusts {
+            let attr_flags = trust_flags::describe(t.trust_attributes);
             info!(
-                "  → {} ({}, {})",
-                t.trust_partner, t.trust_direction, t.trust_type
+                "  → {} ({}, {}, attrs=[{}])",
+                t.trust_partner,
+                t.trust_direction,
+                t.trust_type,
+                attr_flags.join(", ")
             );
         }
         Ok(trusts)
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  SPN Map Builder
+    // ═══════════════════════════════════════════════════════
+
+    /// Build a map of SPN → account(s) for all users and computers with SPNs.
+    ///
+    /// Returns `HashMap<String, Vec<String>>` where key is the SPN
+    /// (e.g., "MSSQLSvc/db01.corp.local:1433") and value is the list
+    /// of accounts that have that SPN registered.
+    pub async fn build_spn_map(&mut self) -> Result<HashMap<String, Vec<String>>> {
+        info!("Building SPN map...");
+        let mut spn_map: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Users with SPNs
+        let user_filter =
+            "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*))";
+        let user_entries = self
+            .search_entries(
+                &self.base_dn.clone(),
+                user_filter,
+                &["sAMAccountName", "servicePrincipalName"],
+            )
+            .await?;
+
+        for entry in &user_entries {
+            let account = get_first_attr(entry, "sAMAccountName").unwrap_or_default();
+            for spn in get_attr_values(entry, "servicePrincipalName") {
+                spn_map
+                    .entry(spn)
+                    .or_default()
+                    .push(account.clone());
+            }
+        }
+
+        // Computers with SPNs
+        let comp_filter = "(&(objectCategory=computer)(servicePrincipalName=*))";
+        let comp_entries = self
+            .search_entries(
+                &self.base_dn.clone(),
+                comp_filter,
+                &["sAMAccountName", "servicePrincipalName"],
+            )
+            .await?;
+
+        for entry in &comp_entries {
+            let account = get_first_attr(entry, "sAMAccountName").unwrap_or_default();
+            for spn in get_attr_values(entry, "servicePrincipalName") {
+                spn_map
+                    .entry(spn)
+                    .or_default()
+                    .push(account.clone());
+            }
+        }
+
+        info!(
+            "SPN map: {} unique SPNs across {} user + {} computer accounts",
+            spn_map.len(),
+            user_entries.len(),
+            comp_entries.len()
+        );
+        Ok(spn_map)
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  GPO Enumeration
+    // ═══════════════════════════════════════════════════════
+
+    /// Enumerate all Group Policy Objects in the domain.
+    ///
+    /// Returns GPO display names, CNs (GUIDs), SYSVOL paths, and flags.
+    pub async fn enumerate_gpos(&mut self) -> Result<Vec<GpoInfo>> {
+        info!("Enumerating Group Policy Objects...");
+        let filter = "(objectClass=groupPolicyContainer)";
+
+        let entries = self
+            .search_entries(&self.base_dn.clone(), filter, GPO_ATTRS)
+            .await?;
+
+        let mut gpos = Vec::new();
+        for entry in &entries {
+            let display_name =
+                get_first_attr(entry, "displayName").unwrap_or_else(|| "(unnamed)".to_string());
+            let cn = get_first_attr(entry, "cn").unwrap_or_default();
+            let gpc_path =
+                get_first_attr(entry, "gPCFileSysPath").unwrap_or_default();
+            let when_changed = get_first_attr(entry, "whenChanged");
+            let flags = get_attr_u32(entry, "flags");
+
+            info!(
+                "  → {} [{}] → {}",
+                display_name, cn, gpc_path
+            );
+
+            gpos.push(GpoInfo {
+                display_name,
+                cn,
+                gpc_file_sys_path: gpc_path,
+                distinguished_name: entry.dn.clone(),
+                when_changed,
+                flags,
+            });
+        }
+
+        info!("Found {} GPOs", gpos.len());
+        Ok(gpos)
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  ACL / DACL Enumeration
+    // ═══════════════════════════════════════════════════════
+
+    /// Enumerate DACLs for high-value objects (users, groups, computers, OUs).
+    ///
+    /// Uses the SD_FLAGS control to request only DACL + Owner from the
+    /// `nTSecurityDescriptor` attribute, then parses the binary
+    /// NT Security Descriptor into structured ACE entries.
+    pub async fn enumerate_acls(
+        &mut self,
+        filter: &str,
+    ) -> Result<Vec<DaclInfo>> {
+        info!("Enumerating ACLs with filter: {filter}");
+
+        // Build SD_FLAGS control to request DACL + Owner
+        let sd_ctrl = build_sd_flags_control(SD_FLAGS_DACL_OWNER);
+
+        let (rs, _res) = self
+            .ldap
+            .with_controls(vec![sd_ctrl])
+            .search(
+                &self.base_dn.clone(),
+                Scope::Subtree,
+                filter,
+                ACL_ATTRS,
+            )
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: self.base_dn.clone(),
+                reason: format!("ACL search failed: {e}"),
+            })?
+            .success()
+            .map_err(|e| OverthroneError::Ldap {
+                target: self.base_dn.clone(),
+                reason: format!("ACL search error: {e}"),
+            })?;
+
+        let entries: Vec<SearchEntry> =
+            rs.into_iter().map(SearchEntry::construct).collect();
+
+        let mut results = Vec::new();
+        for entry in &entries {
+            // nTSecurityDescriptor is a binary attribute
+            if let Some(sd_bytes) = entry
+                .bin_attrs
+                .get("nTSecurityDescriptor")
+                .and_then(|v| v.first())
+            {
+                match parse_security_descriptor(sd_bytes) {
+                    Ok(dacl) => {
+                        results.push(DaclInfo {
+                            object_dn: entry.dn.clone(),
+                            owner_sid: dacl.0,
+                            aces: dacl.1,
+                        });
+                    }
+                    Err(e) => {
+                        debug!(
+                            "Failed to parse SD for {}: {e}",
+                            entry.dn
+                        );
+                    }
+                }
+            }
+        }
+
+        info!(
+            "Parsed DACLs for {} objects ({} total ACEs)",
+            results.len(),
+            results.iter().map(|d| d.aces.len()).sum::<usize>()
+        );
+        Ok(results)
+    }
+
+    /// Find objects where a specific SID has dangerous permissions.
+    ///
+    /// Searches for DACLs containing ACEs that grant the given SID
+    /// GenericAll, WriteDacl, WriteOwner, GenericWrite, or DCSync rights.
+    pub async fn find_abusable_acls(
+        &mut self,
+        trustee_sid: &str,
+    ) -> Result<Vec<DaclInfo>> {
+        let all_acls = self
+            .enumerate_acls(
+                "(|(objectClass=user)(objectClass=group)(objectClass=computer)(objectClass=organizationalUnit)(objectClass=domain))"
+            )
+            .await?;
+
+        let mut abusable = Vec::new();
+        for dacl in all_acls {
+            let dangerous_aces: Vec<AceEntry> = dacl
+                .aces
+                .iter()
+                .filter(|ace| {
+                    ace.trustee_sid == trustee_sid
+                        && matches!(ace.ace_type, AceType::AccessAllowed | AceType::AccessAllowedObject)
+                        && (ace.is_generic_all()
+                            || ace.is_write_dacl()
+                            || ace.is_write_owner()
+                            || ace.is_generic_write()
+                            || ace.is_extended_right()
+                            || ace.is_write_prop())
+                })
+                .cloned()
+                .collect();
+
+            if !dangerous_aces.is_empty() {
+                abusable.push(DaclInfo {
+                    object_dn: dacl.object_dn,
+                    owner_sid: dacl.owner_sid,
+                    aces: dangerous_aces,
+                });
+            }
+        }
+
+        info!(
+            "Found {} objects with abusable ACLs for SID {}",
+            abusable.len(),
+            trustee_sid
+        );
+        Ok(abusable)
     }
 
     // ═══════════════════════════════════════════════════════
@@ -924,6 +1388,13 @@ impl LdapSession {
         let constrained_delegation_users = self.find_constrained_delegation_users().await?;
         let constrained_delegation_computers = self.find_constrained_delegation_computers().await?;
         let domain_admins = self.get_domain_admins().await?;
+        let spn_map = self.build_spn_map().await.unwrap_or_default();
+        let gpos = self.enumerate_gpos().await.unwrap_or_default();
+        // ACL enumeration is expensive; best-effort for high-value objects
+        let acl_entries = self
+            .enumerate_acls("(|(adminCount=1)(objectClass=domain))")
+            .await
+            .unwrap_or_default();
 
         let result = DomainEnumeration {
             domain: self.domain.clone(),
@@ -938,6 +1409,9 @@ impl LdapSession {
             constrained_delegation_users,
             constrained_delegation_computers,
             domain_admins,
+            spn_map,
+            gpos,
+            acl_entries,
         };
 
         info!("═══ Domain enumeration complete ═══");
@@ -960,6 +1434,9 @@ impl LdapSession {
             result.constrained_delegation_computers.len()
         );
         info!("  Domain Admins:          {}", result.domain_admins.len());
+        info!("  SPN entries:            {}", result.spn_map.len());
+        info!("  GPOs:                   {}", result.gpos.len());
+        info!("  ACL objects:            {}", result.acl_entries.len());
 
         Ok(result)
     }
@@ -1170,4 +1647,354 @@ fn ldap_rc_to_string(rc: u32) -> &'static str {
         68 => "Entry already exists",
         _ => "Unknown error",
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Paged Results Control (RFC 2696) — BER encoding/decoding
+// ═══════════════════════════════════════════════════════════
+
+/// Build a BER-encoded Simple Paged Results Control for LDAP requests.
+///
+/// The control value is a BER `SEQUENCE { INTEGER size, OCTET STRING cookie }`.
+fn build_paged_results_control(page_size: i32, cookie: &[u8]) -> RawControl {
+    let mut inner = Vec::new();
+    ber_write_integer(&mut inner, page_size as i64);
+    ber_write_octet_string(&mut inner, cookie);
+
+    let mut val = Vec::new();
+    val.push(0x30); // SEQUENCE tag
+    ber_write_length(&mut val, inner.len());
+    val.extend(inner);
+
+    RawControl {
+        ctype: PAGED_RESULTS_OID.to_string(),
+        crit: true,
+        val: Some(val),
+    }
+}
+
+/// Build SD_FLAGS control to specify which SD parts to return.
+fn build_sd_flags_control(flags: u32) -> RawControl {
+    // Value is a BER SEQUENCE { INTEGER flags }
+    let mut inner = Vec::new();
+    ber_write_integer(&mut inner, flags as i64);
+
+    let mut val = Vec::new();
+    val.push(0x30);
+    ber_write_length(&mut val, inner.len());
+    val.extend(inner);
+
+    RawControl {
+        ctype: SD_FLAGS_OID.to_string(),
+        crit: true,
+        val: Some(val),
+    }
+}
+
+/// Extract the paged results cookie from LDAP response controls.
+///
+/// Iterates through response controls looking for the Paged Results OID,
+/// then parses the BER-encoded value to extract the cookie.
+fn extract_paged_cookie(ctrls: &[ldap3::controls::Control]) -> Vec<u8> {
+    for ctrl in ctrls {
+        // Control is a tuple struct wrapping Option<ControlType>
+        // Check if it's a PagedResults variant (typed parse may lack cookie access)
+        if let Some(ldap3::controls::ControlType::PagedResults) = ctrl.0 {
+            // The parsed control identifies the type but doesn't expose the
+            // cookie struct directly. Fall through to raw parsing below.
+        }
+    }
+
+    // Fallback: parse from raw bytes if available
+    // ldap3 Control also preserves the raw form
+    // Attempt to reconstruct cookie from the control's BER data
+    for ctrl in ctrls {
+        // ldap3 0.12 Control may have a raw() method or we can try downcast
+        // Since we cannot easily extract the cookie via the typed API,
+        // we use the raw control approach
+        let raw_bytes = extract_raw_paged_control_bytes(ctrl);
+        if !raw_bytes.is_empty() {
+            return raw_bytes;
+        }
+    }
+
+    Vec::new()
+}
+
+/// Try to extract paged results cookie bytes from a Control.
+///
+/// The ldap3 Control struct wraps ControlType. For PagedResults, we
+/// need the cookie that the server returned. ldap3 0.12 parses it
+/// into ControlType::PagedResults but accessing the inner PagedResults
+/// struct requires matching the variant.
+fn extract_raw_paged_control_bytes(ctrl: &ldap3::controls::Control) -> Vec<u8> {
+    // In ldap3 0.12, Control(pub Option<ControlType>) where
+    // ControlType::PagedResults wraps the PagedResults struct.
+    // Try the typed API first.
+    if let Some(ref ct) = ctrl.0 {
+        // ControlType might have a method or we can match exhaustively
+        // Using debug format to extract cookie when typed matching is complex
+        let debug_str = format!("{ct:?}");
+        if debug_str.contains("PagedResults") {
+            // Parse cookie from debug representation as fallback
+            // Format: PagedResults(PagedResults { size: N, cookie: [...] })
+            if let Some(start) = debug_str.find("cookie: [") {
+                let remaining = &debug_str[start + 9..];
+                if let Some(end) = remaining.find(']') {
+                    let byte_str = &remaining[..end];
+                    if byte_str.is_empty() {
+                        return Vec::new();
+                    }
+                    let bytes: Vec<u8> = byte_str
+                        .split(", ")
+                        .filter_map(|s| s.trim().parse::<u8>().ok())
+                        .collect();
+                    return bytes;
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// BER-encode an INTEGER value and append to buf
+fn ber_write_integer(buf: &mut Vec<u8>, val: i64) {
+    buf.push(0x02); // INTEGER tag
+
+    let mut content = Vec::new();
+    if val == 0 {
+        content.push(0);
+    } else if val > 0 {
+        let mut v = val;
+        while v > 0 {
+            content.push((v & 0xFF) as u8);
+            v >>= 8;
+        }
+        // Add leading zero if high bit is set (two's complement positive)
+        if content.last().unwrap_or(&0) & 0x80 != 0 {
+            content.push(0);
+        }
+        content.reverse();
+    } else {
+        // Negative (shouldn't occur for page sizes)
+        content.push(0);
+    }
+
+    ber_write_length(buf, content.len());
+    buf.extend(content);
+}
+
+/// BER-encode an OCTET STRING and append to buf
+fn ber_write_octet_string(buf: &mut Vec<u8>, data: &[u8]) {
+    buf.push(0x04); // OCTET STRING tag
+    ber_write_length(buf, data.len());
+    buf.extend(data);
+}
+
+/// BER-encode a length value and append to buf
+fn ber_write_length(buf: &mut Vec<u8>, len: usize) {
+    if len < 128 {
+        buf.push(len as u8);
+    } else if len < 256 {
+        buf.push(0x81);
+        buf.push(len as u8);
+    } else {
+        buf.push(0x82);
+        buf.push((len >> 8) as u8);
+        buf.push((len & 0xFF) as u8);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  NT Security Descriptor Parsing
+// ═══════════════════════════════════════════════════════════
+
+/// Parse a binary NT Security Descriptor (SECURITY_DESCRIPTOR_RELATIVE format).
+///
+/// Returns `(owner_sid, Vec<AceEntry>)` containing the DACL entries.
+fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<AceEntry>), String> {
+    // SECURITY_DESCRIPTOR_RELATIVE layout:
+    //   0: Revision (u8) — must be 1
+    //   1: Sbz1 (u8)
+    //   2-3: Control (u16 LE) — SE_DACL_PRESENT = 0x0004
+    //   4-7: OffsetOwner (u32 LE)
+    //   8-11: OffsetGroup (u32 LE)
+    //  12-15: OffsetSacl (u32 LE)
+    //  16-19: OffsetDacl (u32 LE)
+    if data.len() < 20 {
+        return Err("SD too short".to_string());
+    }
+
+    let _revision = data[0];
+    let control = u16::from_le_bytes([data[2], data[3]]);
+    let offset_owner = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+    let offset_dacl = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
+
+    // Parse owner SID
+    let owner_sid = if offset_owner > 0 && offset_owner < data.len() {
+        parse_sid(&data[offset_owner..])
+    } else {
+        "S-1-0-0".to_string()
+    };
+
+    // Check SE_DACL_PRESENT
+    if control & 0x0004 == 0 || offset_dacl == 0 || offset_dacl >= data.len() {
+        return Ok((owner_sid, Vec::new()));
+    }
+
+    // Parse ACL header
+    let acl = &data[offset_dacl..];
+    if acl.len() < 8 {
+        return Err("ACL too short".to_string());
+    }
+
+    let _acl_revision = acl[0];
+    let _acl_size = u16::from_le_bytes([acl[2], acl[3]]);
+    let ace_count = u16::from_le_bytes([acl[4], acl[5]]) as usize;
+
+    let mut aces = Vec::new();
+    let mut offset = 8; // Start after ACL header
+
+    for _ in 0..ace_count {
+        if offset + 4 > acl.len() {
+            break;
+        }
+
+        let ace_type_raw = acl[offset];
+        let ace_flags = acl[offset + 1];
+        let ace_size = u16::from_le_bytes([acl[offset + 2], acl[offset + 3]]) as usize;
+
+        if ace_size < 4 || offset + ace_size > acl.len() {
+            break;
+        }
+
+        let ace_data = &acl[offset..offset + ace_size];
+        let ace_type = AceType::from_raw(ace_type_raw);
+
+        match ace_type_raw {
+            // ACCESS_ALLOWED_ACE (0x00) / ACCESS_DENIED_ACE (0x01)
+            0x00 | 0x01 => {
+                if ace_data.len() >= 8 {
+                    let mask = u32::from_le_bytes([
+                        ace_data[4],
+                        ace_data[5],
+                        ace_data[6],
+                        ace_data[7],
+                    ]);
+                    let sid = if ace_data.len() > 8 {
+                        parse_sid(&ace_data[8..])
+                    } else {
+                        "S-1-0-0".to_string()
+                    };
+
+                    aces.push(AceEntry {
+                        ace_type,
+                        ace_flags,
+                        access_mask: mask,
+                        trustee_sid: sid,
+                        object_type: None,
+                        inherited_object_type: None,
+                    });
+                }
+            }
+            // ACCESS_ALLOWED_OBJECT_ACE (0x05) / ACCESS_DENIED_OBJECT_ACE (0x06)
+            0x05 | 0x06 => {
+                if ace_data.len() >= 12 {
+                    let mask = u32::from_le_bytes([
+                        ace_data[4],
+                        ace_data[5],
+                        ace_data[6],
+                        ace_data[7],
+                    ]);
+                    let obj_flags = u32::from_le_bytes([
+                        ace_data[8],
+                        ace_data[9],
+                        ace_data[10],
+                        ace_data[11],
+                    ]);
+
+                    let mut pos = 12;
+                    let object_type = if obj_flags & 0x01 != 0 && pos + 16 <= ace_data.len() {
+                        let guid = format_guid(&ace_data[pos..pos + 16]);
+                        pos += 16;
+                        Some(guid)
+                    } else {
+                        None
+                    };
+
+                    let inherited = if obj_flags & 0x02 != 0 && pos + 16 <= ace_data.len() {
+                        let guid = format_guid(&ace_data[pos..pos + 16]);
+                        pos += 16;
+                        Some(guid)
+                    } else {
+                        None
+                    };
+
+                    let sid = if pos < ace_data.len() {
+                        parse_sid(&ace_data[pos..])
+                    } else {
+                        "S-1-0-0".to_string()
+                    };
+
+                    aces.push(AceEntry {
+                        ace_type,
+                        ace_flags,
+                        access_mask: mask,
+                        trustee_sid: sid,
+                        object_type,
+                        inherited_object_type: inherited,
+                    });
+                }
+            }
+            _ => {
+                // Skip unrecognized ACE types
+            }
+        }
+
+        offset += ace_size;
+    }
+
+    Ok((owner_sid, aces))
+}
+
+/// Parse a SID from raw bytes to string format (S-1-5-21-...)
+fn parse_sid(data: &[u8]) -> String {
+    if data.len() < 8 {
+        return "S-1-0-0".to_string();
+    }
+    let revision = data[0];
+    let sub_count = data[1] as usize;
+    let authority = u64::from_be_bytes([0, 0, data[2], data[3], data[4], data[5], data[6], data[7]]);
+    let mut sid = format!("S-{revision}-{authority}");
+    for i in 0..sub_count {
+        let off = 8 + (i * 4);
+        if off + 4 > data.len() {
+            break;
+        }
+        let sub = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        sid.push_str(&format!("-{sub}"));
+    }
+    sid
+}
+
+/// Format a 16-byte GUID as a string (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+///
+/// Uses the mixed-endian format that Windows GUIDs use:
+/// - bytes 0-3: little-endian u32
+/// - bytes 4-5: little-endian u16
+/// - bytes 6-7: little-endian u16
+/// - bytes 8-15: big-endian (raw order)
+fn format_guid(data: &[u8]) -> String {
+    if data.len() < 16 {
+        return "00000000-0000-0000-0000-000000000000".to_string();
+    }
+    let d1 = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let d2 = u16::from_le_bytes([data[4], data[5]]);
+    let d3 = u16::from_le_bytes([data[6], data[7]]);
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        d1, d2, d3,
+        data[8], data[9], data[10], data[11],
+        data[12], data[13], data[14], data[15]
+    )
 }

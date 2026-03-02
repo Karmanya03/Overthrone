@@ -73,6 +73,9 @@ pub fn build_from_reaper(
         constrained_delegation_users,
         constrained_delegation_computers,
         domain_admins: Vec::new(), // Populated during ingest via group resolution
+        spn_map: std::collections::HashMap::new(),
+        gpos: Vec::new(),
+        acl_entries: Vec::new(),
     };
 
     let mut graph = AttackGraph::new();

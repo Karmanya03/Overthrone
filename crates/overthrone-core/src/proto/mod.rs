@@ -10,5 +10,6 @@ pub mod registry;
 pub mod rid;
 pub mod secretsdump;
 pub mod smb;
+pub mod smb2;
 
 pub use pkinit::{CertificateGenerator, PkinitAuthenticator, PkinitConfig, PkinitResult};

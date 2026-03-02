@@ -66,6 +66,8 @@ pub const REWARD_DETECTED: f64 = -15.0;
 pub const REWARD_UNNECESSARY_REPLAN: f64 = -5.0;
 /// Penalty for aborting
 pub const REWARD_ABORT: f64 = -20.0;
+/// Bonus for obtaining DA-equivalent access (cert, golden ticket, etc.)
+pub const REWARD_DA_EQUIVALENT: f64 = 50.0;
 
 // ═══════════════════════════════════════════════════════════
 // Adaptive Mode
@@ -718,6 +720,12 @@ impl AdaptiveQLearner {
             reward += REWARD_SUCCESS;
             reward += result.new_credentials as f64 * REWARD_NEW_CRED;
             reward += result.new_admin_hosts as f64 * REWARD_NEW_ADMIN_HOST;
+
+            // Bonus for high-value steps that yield both creds and admin
+            // (e.g., ADCS cert for administrator, golden ticket)
+            if result.new_credentials > 0 && result.new_admin_hosts > 0 {
+                reward += REWARD_DA_EQUIVALENT;
+            }
         } else {
             let failure_class = FailureClass::classify(&result.output);
             if failure_class == FailureClass::Detected {

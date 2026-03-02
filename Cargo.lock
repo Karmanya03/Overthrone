@@ -3842,7 +3842,6 @@ dependencies = [
  "ntlmclient",
  "p12",
  "p12-keystore",
- "pavao",
  "pbkdf2 0.12.2",
  "pem",
  "petgraph",
@@ -4194,30 +4193,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf9027960355bf3afff9841918474a81a5f972ac6d226d518060bba758b5ad57"
 dependencies = [
  "rustc_version",
-]
-
-[[package]]
-name = "pavao"
-version = "0.2.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cca8302d5f1b5dc7a8dfb04e5ea7185b43571db5811e084746bf0aeb0d7b18f1"
-dependencies = [
- "cfg_aliases 0.2.1",
- "lazy_static",
- "libc",
- "log",
- "pavao-sys",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "pavao-sys"
-version = "0.2.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07b390d8c7372e94c7e0f7d92e36c98404634c554a52b1cb9ae030b4e7888cde"
-dependencies = [
- "libc",
- "pkg-config",
 ]
 
 [[package]]

