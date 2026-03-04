@@ -9,7 +9,7 @@ pub mod ticket;
 
 // Re-export key types for convenience
 pub use cracker::{
-    CrackResult, CrackerConfig, HashCracker, HashType, Rule, expand_wordlist,
+    CrackResult, CrackerConfig, HashCracker, HashType, MaskPattern, Rule, expand_wordlist,
     get_embedded_wordlist, is_hashcat_available, password_to_nt_hash,
 };
 

@@ -1,4 +1,4 @@
-//! Inline Hash Cracking — RC4-HMAC (Kerberos) and NTLM hash cracking.
+//! Inline Hash Cracking — RC4-HMAC, AES (Kerberos) and NTLM hash cracking.
 //!
 //! Provides offline cracking capabilities for:
 //! - AS-REP Roasting hashes (hashcat mode 18200)
@@ -9,6 +9,8 @@
 //! - Embedded top-10K wordlist (compressed with zstd)
 //! - Rayon parallel cracking (~500K candidates/sec on CPU)
 //! - Rule engine for password variations (append digits, capitalize, l33t)
+//! - Mask attack engine (?l = lower, ?u = upper, ?d = digit, ?s = symbol, ?a = all)
+//! - AES128/AES256 Kerberos key derivation via PBKDF2-HMAC-SHA1 (etype 17/18)
 //! - Hashcat subprocess fallback for GPU acceleration
 
 use crate::error::{OverthroneError, Result};
@@ -205,6 +207,150 @@ pub fn expand_wordlist(base: &[String], rules: &[Rule]) -> Vec<String> {
     expanded.sort();
     expanded.dedup();
     expanded
+}
+
+// ═══════════════════════════════════════════════════════════
+// Mask Attack Engine
+// ═══════════════════════════════════════════════════════════
+
+/// Mask-based candidate generator (hashcat-style masks).
+///
+/// Charset tokens:
+/// - `?l` = lowercase a-z
+/// - `?u` = uppercase A-Z
+/// - `?d` = digit 0-9
+/// - `?s` = symbols `!@#$%^&*()-_=+`
+/// - `?a` = all printable (`?l + ?u + ?d + ?s`)
+///
+/// Literal characters are used as-is.
+///
+/// # Example
+/// ```ignore
+/// let mask = MaskPattern::parse("?u?l?l?l?d?d?d?d")?; // e.g. Pass1234
+/// let candidates = mask.generate();
+/// ```
+#[derive(Debug, Clone)]
+pub struct MaskPattern {
+    positions: Vec<MaskPosition>,
+}
+
+#[derive(Debug, Clone)]
+enum MaskPosition {
+    Literal(char),
+    Charset(Vec<char>),
+}
+
+const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
+const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const DIGIT: &str = "0123456789";
+const SYMBOL: &str = "!@#$%^&*()-_=+";
+
+impl MaskPattern {
+    /// Parse a mask string like `?u?l?l?l?d?d?d?d`
+    pub fn parse(mask: &str) -> Result<Self> {
+        let mut positions = Vec::new();
+        let mut chars = mask.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '?' {
+                match chars.next() {
+                    Some('l') => positions.push(MaskPosition::Charset(LOWER.chars().collect())),
+                    Some('u') => positions.push(MaskPosition::Charset(UPPER.chars().collect())),
+                    Some('d') => positions.push(MaskPosition::Charset(DIGIT.chars().collect())),
+                    Some('s') => positions.push(MaskPosition::Charset(SYMBOL.chars().collect())),
+                    Some('a') => {
+                        let mut all: Vec<char> = Vec::with_capacity(76);
+                        all.extend(LOWER.chars());
+                        all.extend(UPPER.chars());
+                        all.extend(DIGIT.chars());
+                        all.extend(SYMBOL.chars());
+                        positions.push(MaskPosition::Charset(all));
+                    }
+                    Some(other) => {
+                        return Err(OverthroneError::custom(format!(
+                            "Unknown mask token: ?{}",
+                            other
+                        )));
+                    }
+                    None => {
+                        return Err(OverthroneError::custom(
+                            "Incomplete mask token: trailing '?'",
+                        ));
+                    }
+                }
+            } else {
+                positions.push(MaskPosition::Literal(c));
+            }
+        }
+
+        if positions.is_empty() {
+            return Err(OverthroneError::custom("Empty mask pattern"));
+        }
+
+        Ok(MaskPattern { positions })
+    }
+
+    /// Total keyspace size for this mask
+    pub fn keyspace(&self) -> u64 {
+        self.positions
+            .iter()
+            .map(|p| match p {
+                MaskPosition::Literal(_) => 1u64,
+                MaskPosition::Charset(cs) => cs.len() as u64,
+            })
+            .product()
+    }
+
+    /// Generate all candidates from this mask.
+    /// WARNING: can be extremely large — use `generate_limited` for safety.
+    pub fn generate(&self) -> Vec<String> {
+        self.generate_limited(u64::MAX)
+    }
+
+    /// Generate candidates up to `limit` count.
+    pub fn generate_limited(&self, limit: u64) -> Vec<String> {
+        let keyspace = self.keyspace();
+        let actual_limit = keyspace.min(limit) as usize;
+
+        let mut results = Vec::with_capacity(actual_limit.min(10_000_000));
+        let mut indices = vec![0usize; self.positions.len()];
+        let mut buf = String::with_capacity(self.positions.len());
+
+        for _ in 0..actual_limit {
+            buf.clear();
+            for (i, pos) in self.positions.iter().enumerate() {
+                match pos {
+                    MaskPosition::Literal(c) => buf.push(*c),
+                    MaskPosition::Charset(cs) => buf.push(cs[indices[i]]),
+                }
+            }
+            results.push(buf.clone());
+
+            // Increment odometer (rightmost first)
+            let mut carry = true;
+            for i in (0..self.positions.len()).rev() {
+                if !carry {
+                    break;
+                }
+                match &self.positions[i] {
+                    MaskPosition::Literal(_) => { /* skip literals */ }
+                    MaskPosition::Charset(cs) => {
+                        indices[i] += 1;
+                        if indices[i] >= cs.len() {
+                            indices[i] = 0;
+                        } else {
+                            carry = false;
+                        }
+                    }
+                }
+            }
+            if carry {
+                break; // Full cycle completed
+            }
+        }
+
+        results
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -408,6 +554,39 @@ fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Kerberos Crypto — AES Key Derivation (etype 17/18)
+// ═══════════════════════════════════════════════════════════
+
+/// Build the Kerberos salt for AES key derivation.
+/// Convention: `REALM` + principal (e.g. `CORP.LOCALjdoe` for user, 
+/// `CORP.LOCALhostdc01.corp.local` for computer).
+fn kerberos_aes_salt(realm: &str, principal: &str) -> String {
+    format!("{}{}", realm.to_uppercase(), principal)
+}
+
+/// Verify AES Kerberoast/AS-REP by using kerberos_crypto to decrypt + check.
+/// Returns `true` if the password produces a key that decrypts the cipher correctly.
+fn verify_aes_candidate(password: &str, salt: &str, etype: i32, cipher: &[u8]) -> bool {
+    // Use kerberos_crypto's cipher abstraction 
+    let kc = match kerberos_crypto::new_kerberos_cipher(etype) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Derive key from password + salt using RFC 3961 string-to-key
+    let key = kc.generate_key_from_string(password, salt.as_bytes());
+
+    // etype 17/18 cipher structure: confounder + encrypted data + HMAC
+    if cipher.len() < 24 {
+        return false;
+    }
+
+    // Try decryption — key_usage 2 for TGS-REP (Kerberoast), 3 for AS-REP
+    // Try both usages since we don't always know context
+    kc.decrypt(&key, 2, cipher).is_ok() || kc.decrypt(&key, 3, cipher).is_ok()
+}
+
+// ═══════════════════════════════════════════════════════════
 // Crackers — Parallel Implementation
 // ═══════════════════════════════════════════════════════════
 
@@ -437,6 +616,10 @@ pub struct CrackerConfig {
     pub prefer_hashcat: bool,
     /// Number of threads (0 = auto)
     pub threads: usize,
+    /// Mask patterns (hashcat-style, e.g. "?u?l?l?l?d?d?d?d")
+    pub masks: Vec<String>,
+    /// Enable hybrid mode (wordlist + mask suffix)
+    pub hybrid_masks: Vec<String>,
 }
 
 impl Default for CrackerConfig {
@@ -455,6 +638,8 @@ impl Default for CrackerConfig {
             max_candidates: 0,
             prefer_hashcat: false,
             threads: 0,
+            masks: Vec::new(),
+            hybrid_masks: Vec::new(),
         }
     }
 }
@@ -469,10 +654,12 @@ impl CrackerConfig {
             max_candidates: 100_000,
             prefer_hashcat: false,
             threads: 0,
+            masks: Vec::new(),
+            hybrid_masks: Vec::new(),
         }
     }
     
-    /// Thorough mode — all rules, expanded candidates
+    /// Thorough mode — all rules, expanded candidates, common masks
     pub fn thorough() -> Self {
         Self {
             use_embedded: true,
@@ -494,6 +681,18 @@ impl CrackerConfig {
             max_candidates: 0,
             prefer_hashcat: false,
             threads: 0,
+            // Common AD password masks
+            masks: vec![
+                "?u?l?l?l?l?l?d?d".into(),       // Passwo12
+                "?u?l?l?l?l?l?l?d?d".into(),     // Passwor12
+                "?u?l?l?l?l?l?l?l?d?d".into(),   // Password12
+                "?u?l?l?l?l?l?d?d?d?d".into(),   // Passwo1234
+            ],
+            hybrid_masks: vec![
+                "?d?d?d?d".into(),     // word + 4 digits
+                "?d?d?d?d?s".into(),   // word + 4 digits + symbol
+                "?s?d?d".into(),       // word + symbol + 2 digits
+            ],
         }
     }
 }
@@ -557,7 +756,7 @@ impl HashCracker {
             }
         }
         
-        // Expand wordlist with rules
+        // Phase 1: Dictionary + rules
         let candidates = expand_wordlist(&self.wordlist, &self.config.rules);
         let total_candidates = if self.config.max_candidates > 0 {
             self.config.max_candidates.min(candidates.len())
@@ -566,13 +765,12 @@ impl HashCracker {
         };
         
         info!(
-            "Cracking {} with {} candidates ({} rules applied)",
-            hash_type_str,
+            "Phase 1: Dictionary+rules — {} candidates ({} rules)",
             total_candidates,
             self.config.rules.len()
         );
         
-        // Parallel cracking
+        // Parallel cracking — Phase 1: Dictionary
         let counter = AtomicUsize::new(0);
         let password = candidates
             .par_iter()
@@ -590,29 +788,135 @@ impl HashCracker {
                 }
             });
         
-        let tried = counter.load(Ordering::Relaxed);
-        let elapsed = start.elapsed().as_millis() as u64;
-        
         if let Some(pwd) = password {
-            info!("✓ Password found: {} ({} candidates, {}ms)", pwd, tried, elapsed);
-            CrackResult {
+            let tried = counter.load(Ordering::Relaxed);
+            let elapsed = start.elapsed().as_millis() as u64;
+            info!("✓ Password found (dictionary): {} ({} candidates, {}ms)", pwd, tried, elapsed);
+            return CrackResult {
                 hash_type: hash_type_str,
                 username: hash.username().map(|s| s.to_string()),
                 cracked: true,
                 password: Some(pwd),
                 candidates_tried: tried,
                 time_ms: elapsed,
+            };
+        }
+
+        let dict_tried = counter.load(Ordering::Relaxed);
+
+        // Phase 2: Mask attacks
+        if !self.config.masks.is_empty() {
+            info!("Phase 2: Mask attack — {} masks", self.config.masks.len());
+            for mask_str in &self.config.masks {
+                match MaskPattern::parse(mask_str) {
+                    Ok(mask) => {
+                        let ks = mask.keyspace();
+                        let limit = if self.config.max_candidates > 0 {
+                            (self.config.max_candidates as u64).saturating_sub(dict_tried as u64)
+                        } else {
+                            ks.min(50_000_000) // 50M cap per mask
+                        };
+                        info!("  Mask '{}' — keyspace {} (limit {})", mask_str, ks, limit);
+                        let mask_candidates = mask.generate_limited(limit);
+                        let mask_counter = AtomicUsize::new(0);
+                        let found = mask_candidates
+                            .par_iter()
+                            .find_map_any(|candidate| {
+                                mask_counter.fetch_add(1, Ordering::Relaxed);
+                                if verify_candidate(hash, candidate) {
+                                    Some(candidate.clone())
+                                } else {
+                                    None
+                                }
+                            });
+
+                        let mask_tried = mask_counter.load(Ordering::Relaxed);
+                        counter.fetch_add(mask_tried, Ordering::Relaxed);
+
+                        if let Some(pwd) = found {
+                            let total_tried = counter.load(Ordering::Relaxed);
+                            let elapsed = start.elapsed().as_millis() as u64;
+                            info!("✓ Password found (mask): {} ({} total candidates, {}ms)", pwd, total_tried, elapsed);
+                            return CrackResult {
+                                hash_type: hash_type_str,
+                                username: hash.username().map(|s| s.to_string()),
+                                cracked: true,
+                                password: Some(pwd),
+                                candidates_tried: total_tried,
+                                time_ms: elapsed,
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Invalid mask '{}': {}", mask_str, e);
+                    }
+                }
             }
-        } else {
-            info!("✗ Password not found after {} candidates ({}ms)", tried, elapsed);
-            CrackResult {
-                hash_type: hash_type_str,
-                username: hash.username().map(|s| s.to_string()),
-                cracked: false,
-                password: None,
-                candidates_tried: tried,
-                time_ms: elapsed,
+        }
+
+        // Phase 3: Hybrid (wordlist base + mask suffix)
+        if !self.config.hybrid_masks.is_empty() {
+            info!("Phase 3: Hybrid attack — {} masks × {} words", self.config.hybrid_masks.len(), self.wordlist.len());
+            for mask_str in &self.config.hybrid_masks {
+                match MaskPattern::parse(mask_str) {
+                    Ok(mask) => {
+                        let suffixes = mask.generate_limited(10_000); // cap suffix space
+                        let hybrid_counter = AtomicUsize::new(0);
+
+                        // Build capitalized base words (most common in AD)
+                        let bases: Vec<String> = self.wordlist.iter().map(|w| {
+                            let mut chars: Vec<char> = w.chars().collect();
+                            if let Some(first) = chars.first_mut() {
+                                *first = first.to_uppercase().next().unwrap_or(*first);
+                            }
+                            chars.into_iter().collect()
+                        }).collect();
+
+                        let found = bases.par_iter().find_map_any(|base| {
+                            for suffix in &suffixes {
+                                hybrid_counter.fetch_add(1, Ordering::Relaxed);
+                                let candidate = format!("{}{}", base, suffix);
+                                if verify_candidate(hash, &candidate) {
+                                    return Some(candidate);
+                                }
+                            }
+                            None
+                        });
+
+                        let hybrid_tried = hybrid_counter.load(Ordering::Relaxed);
+                        counter.fetch_add(hybrid_tried, Ordering::Relaxed);
+
+                        if let Some(pwd) = found {
+                            let total_tried = counter.load(Ordering::Relaxed);
+                            let elapsed = start.elapsed().as_millis() as u64;
+                            info!("✓ Password found (hybrid): {} ({} total, {}ms)", pwd, total_tried, elapsed);
+                            return CrackResult {
+                                hash_type: hash_type_str,
+                                username: hash.username().map(|s| s.to_string()),
+                                cracked: true,
+                                password: Some(pwd),
+                                candidates_tried: total_tried,
+                                time_ms: elapsed,
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Invalid hybrid mask '{}': {}", mask_str, e);
+                    }
+                }
             }
+        }
+        
+        let tried = counter.load(Ordering::Relaxed);
+        let elapsed = start.elapsed().as_millis() as u64;
+        info!("✗ Password not found after {} candidates ({}ms)", tried, elapsed);
+        CrackResult {
+            hash_type: hash_type_str,
+            username: hash.username().map(|s| s.to_string()),
+            cracked: false,
+            password: None,
+            candidates_tried: tried,
+            time_ms: elapsed,
         }
     }
     
@@ -637,50 +941,64 @@ fn load_wordlist_from_file(path: &str) -> Result<Vec<String>> {
 
 /// Verify if a password candidate matches the hash
 fn verify_candidate(hash: &HashType, password: &str) -> bool {
-    let nt_hash = password_to_nt_hash(password);
-    
     match hash {
-        HashType::AsRep { cipher, etype, .. } => {
-            // AS-REP RC4-HMAC verification
-            if *etype != 23 {
-                // Only RC4 supported for now
-                return false;
+        HashType::AsRep { cipher, etype, username, domain, .. } => {
+            match *etype {
+                23 => {
+                    // RC4-HMAC verification
+                    let nt_hash = password_to_nt_hash(password);
+                    if cipher.len() < 32 {
+                        return false;
+                    }
+                    let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
+                    decrypted.len() >= 32 && 
+                        (decrypted[0] == 0x30 || decrypted[0] == 0x7A)
+                }
+                17 | 18 => {
+                    // AES verification — salt is REALM + username
+                    let salt = kerberos_aes_salt(domain, username);
+                    verify_aes_candidate(password, &salt, *etype, cipher)
+                }
+                _ => false,
             }
-            
-            // The cipher contains: HMAC-MD5 checksum (16 bytes) + encrypted data
-            if cipher.len() < 32 {
-                return false;
-            }
-            
-            // Simplified verification - decrypt and check structure
-            let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
-            
-            // Check if decrypted data looks like valid AS-REP enc-part
-            // It should contain recognizable ASN.1 structures
-            decrypted.len() >= 32 && 
-                (decrypted[0] == 0x30 || decrypted[0] == 0x7A) // SEQUENCE or APPLICATION 26
         }
         
-        HashType::Kerberoast { cipher, etype, .. } => {
-            // Kerberoast RC4-HMAC verification
-            if *etype != 23 {
-                // Only RC4 supported for now
-                return false;
+        HashType::Kerberoast { cipher, etype, domain, spn, .. } => {
+            match *etype {
+                23 => {
+                    // RC4-HMAC — service account's NT hash
+                    let nt_hash = password_to_nt_hash(password);
+                    if cipher.len() < 32 {
+                        return false;
+                    }
+                    let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
+                    decrypted.len() >= 32 && decrypted[0] == 0x63
+                }
+                17 | 18 => {
+                    // AES — salt is REALM + service principal (from SPN)
+                    // For service accounts, salt = REALM + principal (e.g. "CORP.LOCALsqlsvc")
+                    // Try multiple salt formats since SPN parsing varies
+                    let service_name = spn.split('/').next().unwrap_or(spn);
+                    let salts = [
+                        kerberos_aes_salt(domain, service_name),
+                        kerberos_aes_salt(domain, spn),
+                        // Some services use the full SPN as salt suffix
+                        format!("{}{}", domain.to_uppercase(), spn),
+                    ];
+                    for salt in &salts {
+                        if verify_aes_candidate(password, salt, *etype, cipher) {
+                            return true;
+                        }
+                    }
+                    false
+                }
+                _ => false,
             }
-            
-            if cipher.len() < 32 {
-                return false;
-            }
-            
-            // Decrypt and check for valid EncTicketPart structure
-            let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
-            
-            // EncTicketPart starts with APPLICATION 3 (0x63)
-            decrypted.len() >= 32 && decrypted[0] == 0x63
         }
         
         HashType::Ntlm { hash } => {
             // Simple NTLM comparison
+            let nt_hash = password_to_nt_hash(password);
             nt_hash == *hash
         }
     }
@@ -875,5 +1193,55 @@ mod tests {
         
         assert!(expanded.contains(&"password".to_string()));
         assert!(expanded.contains(&"Password".to_string()));
+    }
+
+    #[test]
+    fn test_mask_pattern_digits() {
+        let mask = MaskPattern::parse("?d?d?d?d").unwrap();
+        assert_eq!(mask.keyspace(), 10_000);
+        let candidates = mask.generate();
+        assert_eq!(candidates.len(), 10_000);
+        assert!(candidates.contains(&"0000".to_string()));
+        assert!(candidates.contains(&"9999".to_string()));
+        assert!(candidates.contains(&"1234".to_string()));
+    }
+
+    #[test]
+    fn test_mask_pattern_literal() {
+        let mask = MaskPattern::parse("Pass?d?d?d?d").unwrap();
+        assert_eq!(mask.keyspace(), 10_000);
+        let candidates = mask.generate();
+        assert!(candidates.contains(&"Pass0000".to_string()));
+        assert!(candidates.contains(&"Pass1234".to_string()));
+    }
+
+    #[test]
+    fn test_mask_pattern_upper_lower() {
+        let mask = MaskPattern::parse("?u?l").unwrap();
+        assert_eq!(mask.keyspace(), 26 * 26);
+        let candidates = mask.generate();
+        assert!(candidates.contains(&"Aa".to_string()));
+        assert!(candidates.contains(&"Zz".to_string()));
+    }
+
+    #[test]
+    fn test_mask_pattern_limited() {
+        let mask = MaskPattern::parse("?a?a?a?a?a?a").unwrap();
+        // Full keyspace would be 76^6 ≈ 192 billion
+        let candidates = mask.generate_limited(100);
+        assert_eq!(candidates.len(), 100);
+    }
+
+    #[test]
+    fn test_mask_pattern_invalid() {
+        assert!(MaskPattern::parse("?z").is_err());
+        assert!(MaskPattern::parse("").is_err());
+        assert!(MaskPattern::parse("hello?").is_err());
+    }
+
+    #[test]
+    fn test_aes_salt_generation() {
+        let salt = kerberos_aes_salt("corp.local", "jdoe");
+        assert_eq!(salt, "CORP.LOCALjdoe");
     }
 }

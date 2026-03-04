@@ -239,6 +239,66 @@ impl Planner {
             });
         }
 
+        // ── Phase 1b: Extended Recon (trusts, GPOs, shares) ──
+        // These give the planner and Q-learner richer state for decision-making.
+
+        if state.trusts.is_empty()
+            && !failed_actions.contains(&"enumerate_trusts".to_string())
+        {
+            steps.push(PlanStep {
+                id: next_id(),
+                description: "Enumerate domain trusts & trust relationships".to_string(),
+                stage: Stage::Enumerate,
+                action: PlannedAction::EnumerateTrusts,
+                priority: 97,
+                noise: NoiseLevel::Silent,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
+
+        if state.gpos.is_empty()
+            && !failed_actions.contains(&"enumerate_gpos".to_string())
+        {
+            steps.push(PlanStep {
+                id: next_id(),
+                description: "Enumerate GPOs & linked policies".to_string(),
+                stage: Stage::Enumerate,
+                action: PlannedAction::EnumerateGpos,
+                priority: 96,
+                noise: NoiseLevel::Silent,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
+
+        // Enumerate shares on the DC for GPP passwords, SYSVOL scripts, etc.
+        if let Some(ref dc_ip) = state.dc_ip {
+            if !failed_actions.contains(&"enumerate_shares".to_string()) {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: format!("Enumerate SMB shares on DC ({})", dc_ip),
+                    stage: Stage::Enumerate,
+                    action: PlannedAction::EnumerateShares {
+                        target: dc_ip.clone(),
+                    },
+                    priority: 95,
+                    noise: NoiseLevel::Low,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+        }
+
         // If goal is recon-only, stop here
         if matches!(goal, AttackGoal::ReconOnly) {
             return self.finalize_plan(goal, steps);
@@ -291,6 +351,62 @@ impl Planner {
                 retries: 0,
                 max_retries: 1,
             });
+        }
+
+        // ── Phase 2.1: Inline Hash Cracking (if we have captured roast hashes) ──
+        if !state.roast_hashes.is_empty()
+            && !failed_actions.contains(&"crack_hashes".to_string())
+        {
+            let hashes: Vec<String> = state.roast_hashes.clone();
+            steps.push(PlanStep {
+                id: next_id(),
+                description: format!("Crack {} captured hashes (inline wordlist + rules)", hashes.len()),
+                stage: Stage::Attack,
+                action: PlannedAction::CrackHashes { hashes },
+                priority: 89,
+                noise: NoiseLevel::Silent,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
+
+        // ── Phase 2.2: Password Spray (if we have a user list but few creds) ──
+        if !state.users.is_empty()
+            && state.credentials.len() <= 1
+            && !failed_actions.contains(&"password_spray".to_string())
+            && !self.stealth  // spraying is noisy, skip in stealth mode
+        {
+            let users: Vec<String> = state
+                .users
+                .iter()
+                .filter(|u| u.enabled)
+                .map(|u| u.sam_account_name.clone())
+                .collect();
+            if !users.is_empty() {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: format!("Password spray {} users (seasonal/common passwords)", users.len()),
+                    stage: Stage::Attack,
+                    action: PlannedAction::PasswordSpray {
+                        users,
+                        password: String::new(), // executor will pick seasonal passwords
+                    },
+                    priority: 82,
+                    noise: NoiseLevel::High,
+                    depends_on: if recon_dep.is_empty() {
+                        vec![]
+                    } else {
+                        vec![recon_dep.clone()]
+                    },
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
         }
 
         // ── Phase 2.5: ADCS Certificate Abuse ──

@@ -24,8 +24,7 @@ All cross-platform work is **complete**. The following have been implemented:
 
 | Feature | Windows | Linux | macOS |
 |---------|---------|-------|-------|
-| LDAP enumeration | Native | Native | Native |
-| Kerberos auth | SSPI | Pure Rust | Pure Rust |
+| LDAP enumeration | Native | Kerberos auth | SSPI | Pure Rust | Pure Rust |
 | Kerberoasting | Yes | Yes | Yes |
 | AS-REP roasting | Yes | Yes | Yes |
 | SMB file operations | Native (smb) | pavao | pavao |

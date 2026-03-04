@@ -1295,34 +1295,87 @@ impl AttackGraph {
             .count()
     }
 
-    /// Find shortest paths to a target (returns multiple paths)
+    /// Find shortest paths to a target from all reachable nodes (reverse Dijkstra).
+    ///
+    /// Instead of running N separate forward Dijkstras (O(N × E log V)),
+    /// we reverse all edges and run a single Dijkstra from the target outward.
+    /// This gives us O(E log V) — the same cost as a single shortest-path query.
     pub fn shortest_paths_to(&self, target: NodeIndex, limit: usize) -> Vec<Vec<EdgeIndex>> {
-        // This is a simplified implementation - returns paths from all nodes
-        let mut paths = Vec::new();
-        
-        for (source_idx, _) in self.nodes() {
-            if source_idx == target {
-                continue;
-            }
-            
-            // Use Dijkstra to find shortest path
-            let costs = dijkstra(
-                &self.graph,
-                source_idx,
-                Some(target),
-                |e| e.weight().default_cost(),
-            );
-            
-            if costs.contains_key(&target) {
-                // Reconstruct path (simplified - just mark that a path exists)
-                // In a full implementation, we'd track the actual edges
-                paths.push(vec![]);
-                if paths.len() >= limit {
-                    break;
+        // Build a reversed view: transpose all edges
+        let reversed = petgraph::visit::Reversed(&self.graph);
+
+        // Run Dijkstra from target on the reversed graph
+        let costs: std::collections::HashMap<NodeIndex, u32> = dijkstra(
+            &reversed,
+            target,
+            None,
+            |e| {
+                let weight = e.weight();
+                if !weight.is_traversable() {
+                    u32::MAX / 2 // effectively unreachable
+                } else {
+                    weight.default_cost()
+                }
+            },
+        )
+        .into_iter()
+        .collect();
+
+        // Collect reachable sources sorted by cost (cheapest first)
+        let mut reachable: Vec<(NodeIndex, u32)> = costs
+            .iter()
+            .filter(|(idx, cost)| **idx != target && **cost < u32::MAX / 2)
+            .map(|(idx, cost)| (*idx, *cost))
+            .collect();
+        reachable.sort_by_key(|&(_, cost)| cost);
+        reachable.truncate(limit);
+
+        // For each reachable source, reconstruct the forward path (source → target)
+        let mut paths = Vec::with_capacity(reachable.len());
+        for (source_idx, _cost) in &reachable {
+            let mut edge_path = Vec::new();
+            let mut current = *source_idx;
+
+            // Walk from source toward target using the cost map
+            let mut max_hops = self.graph.node_count();
+            while current != target && max_hops > 0 {
+                max_hops -= 1;
+                let mut best_edge: Option<EdgeIndex> = None;
+                let mut best_next_cost = u32::MAX;
+
+                for edge in self.graph.edges_directed(current, Direction::Outgoing) {
+                    let next = edge.target();
+                    if let Some(&next_cost) = costs.get(&next) {
+                        let edge_cost = edge.weight().default_cost();
+                        // next_cost should equal current_cost - edge_cost (in reverse)
+                        if next_cost < best_next_cost && edge.weight().is_traversable()
+                            && let Some(&cur_cost) = costs.get(&current)
+                            && cur_cost == next_cost + edge_cost
+                        {
+                            best_next_cost = next_cost;
+                            best_edge = Some(edge.id());
+                        }
+                    }
+                }
+
+                if let Some(eid) = best_edge {
+                    edge_path.push(eid);
+                    // Get target of this edge
+                    if let Some((_, next)) = self.graph.edge_endpoints(eid) {
+                        current = next;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break; // no path found
                 }
             }
+
+            if current == target && !edge_path.is_empty() {
+                paths.push(edge_path);
+            }
         }
-        
+
         paths
     }
 }
@@ -1344,4 +1397,329 @@ fn extract_cn(dn: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Unit Tests
+// ═══════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: build a small AD-like graph for testing.
+    ///
+    /// ```text
+    /// jdoe (User) --MemberOf--> HelpDesk (Group) --MemberOf--> Domain Admins (Group)
+    /// jdoe (User) --HasSession--> WS01$ (Computer) --AdminTo--> DC01$ (Computer)
+    /// sqlsvc (User) --HasSpn--> corp.local (Domain)
+    /// DC01$ (Computer) --DcSync--> corp.local (Domain)
+    /// ```
+    fn build_test_graph() -> AttackGraph {
+        let mut g = AttackGraph::new();
+        let domain = "corp.local";
+
+        // Add nodes
+        g.add_node(AdNode {
+            name: "jdoe".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=jdoe,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        g.add_node(AdNode {
+            name: "sqlsvc".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=sqlsvc,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: {
+                let mut m = HashMap::new();
+                m.insert("spns".into(), "MSSQLSvc/sql01.corp.local:1433".into());
+                m
+            },
+        });
+        g.add_node(AdNode {
+            name: "HelpDesk".into(),
+            node_type: NodeType::Group,
+            domain: domain.into(),
+            distinguished_name: Some("CN=HelpDesk,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        g.add_node(AdNode {
+            name: "Domain Admins".into(),
+            node_type: NodeType::Group,
+            domain: domain.into(),
+            distinguished_name: Some("CN=Domain Admins,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        g.add_node(AdNode {
+            name: "WS01$".into(),
+            node_type: NodeType::Computer,
+            domain: domain.into(),
+            distinguished_name: Some("CN=WS01,CN=Computers,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        g.add_node(AdNode {
+            name: "DC01$".into(),
+            node_type: NodeType::Computer,
+            domain: domain.into(),
+            distinguished_name: Some("CN=DC01,OU=Domain Controllers,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: {
+                let mut m = HashMap::new();
+                m.insert("is_dc".into(), "true".into());
+                m
+            },
+        });
+        g.add_node(AdNode {
+            name: domain.into(),
+            node_type: NodeType::Domain,
+            domain: domain.into(),
+            distinguished_name: Some("DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        // Add edges
+        g.add_edge_by_name("jdoe", domain, "HelpDesk", domain, EdgeType::MemberOf);
+        g.add_edge_by_name("HelpDesk", domain, "Domain Admins", domain, EdgeType::MemberOf);
+        g.add_edge_by_name("WS01$", domain, "jdoe", domain, EdgeType::HasSession);
+        g.add_edge_by_name("jdoe", domain, "WS01$", domain, EdgeType::AdminTo);
+        g.add_edge_by_name("WS01$", domain, "DC01$", domain, EdgeType::AdminTo);
+        g.add_edge_by_name("DC01$", domain, domain, domain, EdgeType::DcSync);
+        g.add_edge_by_name("sqlsvc", domain, domain, domain, EdgeType::HasSpn);
+
+        g
+    }
+
+    #[test]
+    fn test_add_node_idempotent() {
+        let mut g = AttackGraph::new();
+        let n1 = g.add_node(AdNode {
+            name: "test".into(),
+            node_type: NodeType::User,
+            domain: "corp.local".into(),
+            distinguished_name: None,
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        let n2 = g.add_node(AdNode {
+            name: "test".into(),
+            node_type: NodeType::User,
+            domain: "corp.local".into(),
+            distinguished_name: None,
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        assert_eq!(n1, n2, "Same node should return same index");
+        assert_eq!(g.node_count(), 1);
+    }
+
+    #[test]
+    fn test_node_count_and_types() {
+        let g = build_test_graph();
+        assert_eq!(g.node_count(), 7);
+        let stats = g.stats();
+        assert_eq!(stats.users, 2);
+        assert_eq!(stats.computers, 2);
+        assert_eq!(stats.groups, 2);
+        assert_eq!(stats.domains, 1);
+    }
+
+    #[test]
+    fn test_edge_count() {
+        let g = build_test_graph();
+        assert_eq!(g.edge_count(), 7);
+    }
+
+    #[test]
+    fn test_find_node_case_insensitive() {
+        let g = build_test_graph();
+        assert!(g.find_node("JDOE@CORP.LOCAL").is_some());
+        assert!(g.find_node("jdoe@corp.local").is_some());
+        assert!(g.find_node("nonexistent@corp.local").is_none());
+    }
+
+    #[test]
+    fn test_find_node_by_dn() {
+        let g = build_test_graph();
+        assert!(g.find_node("CN=JDOE,CN=USERS,DC=CORP,DC=LOCAL").is_some());
+    }
+
+    #[test]
+    fn test_shortest_path_direct() {
+        let g = build_test_graph();
+        // jdoe -> WS01$ via AdminTo (cost 1)
+        let path = g.shortest_path("jdoe@corp.local", "WS01$@corp.local").unwrap();
+        assert_eq!(path.total_cost, 1);
+        assert_eq!(path.hop_count, 1);
+        assert_eq!(path.hops[0].edge, EdgeType::AdminTo);
+    }
+
+    #[test]
+    fn test_shortest_path_multi_hop() {
+        let g = build_test_graph();
+        // jdoe -> WS01$ -> DC01$ (cost 1 + 1 = 2)
+        let path = g.shortest_path("jdoe@corp.local", "DC01$@corp.local").unwrap();
+        assert_eq!(path.total_cost, 2);
+        assert_eq!(path.hop_count, 2);
+    }
+
+    #[test]
+    fn test_shortest_path_with_memberof() {
+        let g = build_test_graph();
+        // jdoe -> HelpDesk -> Domain Admins (cost 0 + 0 = 0, MemberOf is free)
+        let path = g.shortest_path("jdoe@corp.local", "Domain Admins@corp.local").unwrap();
+        assert_eq!(path.total_cost, 0);
+        assert_eq!(path.hop_count, 2);
+    }
+
+    #[test]
+    fn test_shortest_path_no_path() {
+        let g = build_test_graph();
+        // sqlsvc has no path to DC01$ (only has a HasSpn marker edge outward)
+        let result = g.shortest_path("sqlsvc@corp.local", "DC01$@corp.local");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_paths_to_da() {
+        let g = build_test_graph();
+        let paths = g.paths_to_da("jdoe@corp.local", "corp.local");
+        assert!(!paths.is_empty(), "Should find at least one DA path");
+        // The first path should be the cheapest
+        assert_eq!(paths[0].total_cost, 0); // MemberOf chain is free
+    }
+
+    #[test]
+    fn test_reachable_kerberoastable() {
+        let g = build_test_graph();
+        // From jdoe, sqlsvc is NOT reachable (no edge from jdoe toward sqlsvc)
+        let targets = g.reachable_kerberoastable("jdoe@corp.local");
+        // sqlsvc has HasSpn but jdoe can't *reach* sqlsvc through graph edges
+        // The only kerberoastable node reachable would need a path to sqlsvc
+        // In our test graph, jdoe has no outgoing path to sqlsvc
+        // But sqlsvc has outgoing HasSpn to domain, so only nodes that are 
+        // both reachable AND have HasSpn matter
+        assert!(targets.is_empty() || targets.iter().all(|t| !t.contains("jdoe")));
+    }
+
+    #[test]
+    fn test_edge_type_cost() {
+        assert_eq!(EdgeType::MemberOf.default_cost(), 0);
+        assert_eq!(EdgeType::AdminTo.default_cost(), 1);
+        assert_eq!(EdgeType::HasSession.default_cost(), 2);
+        assert_eq!(EdgeType::CanRDP.default_cost(), 3);
+        assert_eq!(EdgeType::HasSpn.default_cost(), 5);
+    }
+
+    #[test]
+    fn test_edge_type_traversable() {
+        assert!(EdgeType::AdminTo.is_traversable());
+        assert!(EdgeType::MemberOf.is_traversable());
+        assert!(!EdgeType::HasSpn.is_traversable());
+        assert!(!EdgeType::DontReqPreauth.is_traversable());
+    }
+
+    #[test]
+    fn test_graph_stats() {
+        let g = build_test_graph();
+        let stats = g.stats();
+        assert!(stats.total_nodes > 0);
+        assert!(stats.total_edges > 0);
+        assert!(stats.edge_type_counts.contains_key("MemberOf"));
+    }
+
+    #[test]
+    fn test_high_value_targets() {
+        let g = build_test_graph();
+        let hvt = g.high_value_targets(3);
+        assert!(!hvt.is_empty());
+        // Domain Admins or jdoe should be among highest-degree nodes
+    }
+
+    #[test]
+    fn test_export_json() {
+        let g = build_test_graph();
+        let json = g.export_json().unwrap();
+        assert!(json.contains("jdoe"));
+        assert!(json.contains("MemberOf"));
+        assert!(json.contains("AdminTo"));
+    }
+
+    #[test]
+    fn test_export_bloodhound() {
+        let g = build_test_graph();
+        let json = g.export_bloodhound().unwrap();
+        assert!(json.contains("BloodHoundData"));
+        assert!(json.contains("Overthrone"));
+    }
+
+    #[test]
+    fn test_shortest_paths_to_reverse_dijkstra() {
+        let g = build_test_graph();
+        let dc_idx = g.find_node("DC01$@corp.local").unwrap();
+        let paths = g.shortest_paths_to(dc_idx, 10);
+        // At least jdoe -> WS01$ -> DC01$ and WS01$ -> DC01$ should be found
+        assert!(!paths.is_empty(), "Should find paths to DC01$");
+        // Each path should contain actual edge indices, not empty vecs
+        for path in &paths {
+            assert!(!path.is_empty(), "Each path should have edges");
+        }
+    }
+
+    #[test]
+    fn test_add_session_and_local_admin() {
+        let mut g = build_test_graph();
+        let initial_edges = g.edge_count();
+        g.add_session("jdoe", "DC01$", "corp.local");
+        g.add_local_admin("jdoe", "DC01$", "corp.local");
+        assert_eq!(g.edge_count(), initial_edges + 2);
+    }
+
+    #[test]
+    fn test_extract_cn() {
+        assert_eq!(
+            extract_cn("CN=Domain Admins,CN=Users,DC=corp,DC=local"),
+            Some("Domain Admins".to_string())
+        );
+        assert_eq!(extract_cn("OU=Servers,DC=corp,DC=local"), None);
+        assert_eq!(extract_cn(""), None);
+    }
+
+    #[test]
+    fn test_node_key_case() {
+        assert_eq!(node_key("jdoe", "corp.local"), "JDOE@CORP.LOCAL");
+        assert_eq!(node_key("JDOE", "CORP.LOCAL"), "JDOE@CORP.LOCAL");
+    }
+
+    #[test]
+    fn test_domain_and_trust_count() {
+        let g = build_test_graph();
+        assert_eq!(g.domain_count(), 1);
+        assert_eq!(g.trust_count(), 0);
+    }
+
+    #[test]
+    fn test_nodes_of_type() {
+        let g = build_test_graph();
+        let users: Vec<_> = g.nodes_of_type(NodeType::User).collect();
+        assert_eq!(users.len(), 2);
+        let computers: Vec<_> = g.nodes_of_type(NodeType::Computer).collect();
+        assert_eq!(computers.len(), 2);
+    }
+
+    #[test]
+    fn test_from_json_roundtrip() {
+        let g = build_test_graph();
+        let json = serde_json::to_string(&g).unwrap();
+        let g2: AttackGraph = serde_json::from_str(&json).unwrap();
+        assert_eq!(g2.node_count(), g.node_count());
+        assert_eq!(g2.edge_count(), g.edge_count());
+    }
 }

@@ -11,6 +11,7 @@ pub mod mssql;
 pub mod output;
 pub mod plugin; // ← NEW: wire in the plugin module
 pub mod proto;
+pub mod proxy; // ← NEW: SOCKS5 proxy & port forwarding
 pub mod scan;
 pub mod sccm;
 pub mod types;

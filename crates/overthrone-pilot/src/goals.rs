@@ -175,19 +175,26 @@ pub struct EngagementState {
     /// Discovered groups and memberships
     pub groups: HashMap<String, Vec<String>>,
 
-    /// Compromised credentials (username → secret)
+    /// Compromised credentials (username -> secret)
     pub credentials: HashMap<String, CompromisedCred>,
     /// Hosts with confirmed admin access
     pub admin_hosts: HashSet<String>,
 
     /// Kerberoastable accounts (SPN users)
     pub kerberoastable: Vec<String>,
-    /// SPN map: sam_account_name → list of SPNs (for kerberoast)
+    /// SPN map: sam_account_name -> list of SPNs (for kerberoast)
     pub spn_map: HashMap<String, Vec<String>>,
     /// AS-REP roastable accounts
     pub asrep_roastable: Vec<String>,
-    /// Cracked hashes (username → plaintext)
+    /// Cracked hashes (username -> plaintext)
     pub cracked: HashMap<String, String>,
+    /// Captured but not-yet-cracked hashes (hashcat-format strings)
+    pub roast_hashes: Vec<String>,
+
+    /// Domain trusts
+    pub trusts: Vec<String>,
+    /// Discovered GPOs
+    pub gpos: Vec<String>,
 
     /// Delegation findings
     pub constrained_delegation: Vec<DelegationInfo>,

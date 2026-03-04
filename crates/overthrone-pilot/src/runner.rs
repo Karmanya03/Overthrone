@@ -395,13 +395,24 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             "{} Pre-flight LDAP connectivity check...",
             "PRE".bold().cyan()
         );
-        let (_, _, use_hash) = (ctx.username.as_str(), ctx.secret.as_str(), ctx.use_hash);
-        let password = if use_hash { "" } else { &ctx.secret };
+        // In PtH mode, LDAP simple bind cannot use an NT hash directly.
+        // Attempt with password auth only; the executor's ldap_connect() will
+        // later handle PtH by looking up cracked cleartext credentials.
+        if ctx.use_hash {
+            warn!(
+                "  {} LDAP pre-flight skipped (pass-the-hash mode). \
+                 LDAP-dependent steps will try Kerberos-first auth or wait \
+                 for a cracked cleartext credential.",
+                "!".yellow().bold()
+            );
+            // Don't mark ldap_available = false yet — the executor's ldap_connect()
+            // can still succeed once credentials are cracked during the engagement.
+        } else {
         match overthrone_core::proto::ldap::LdapSession::connect(
             &ctx.dc_ip,
             &ctx.domain,
             &ctx.username,
-            password,
+            &ctx.secret,
             ctx.use_ldaps,
         )
         .await
@@ -424,6 +435,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 ctx.ldap_available = false;
             }
         }
+        } // end else (non-PtH LDAP pre-flight)
     }
 
     let mut steps_executed = 0usize;

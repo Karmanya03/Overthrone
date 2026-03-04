@@ -133,6 +133,7 @@ check_*.txt
 build_errors*.txt
 clippy_output.txt
 *_output.txt
+**/output.txt
 
 # ═══════════════════════════════════════════════════════════
 # Stale / Duplicate Directories
@@ -145,6 +146,8 @@ clippy_output.txt
 # Internal Planning Docs (not shipped)
 # ═══════════════════════════════════════════════════════════
 implementation_plan.md
+IMPLEMENTATION_STATUS.md
+TODO.md
 PLAN-*.md
 Overthrone Deep Implementation Plan.md
 docs/PLAN-*.md
