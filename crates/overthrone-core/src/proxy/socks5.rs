@@ -35,8 +35,8 @@ const AUTH_NO_ACCEPTABLE: u8 = 0xFF;
 
 // Commands
 const CMD_CONNECT: u8 = 0x01;
-// const CMD_BIND: u8 = 0x02;        // not implemented
-// const CMD_UDP_ASSOCIATE: u8 = 0x03; // not implemented
+const CMD_BIND: u8 = 0x02;
+const CMD_UDP_ASSOCIATE: u8 = 0x03;
 
 // Address types
 const ATYP_IPV4: u8 = 0x01;
@@ -259,20 +259,40 @@ async fn handle_client(
     // buf[2] is reserved
     let atyp = buf[3];
 
-    if cmd != CMD_CONNECT {
-        send_reply(&mut client, REP_CMD_NOT_SUPPORTED, &[0; 4], 0).await?;
-        return Err(OverthroneError::custom(format!("SOCKS5: Unsupported command: {:#x}", cmd)));
+    // Parse target address (needed by all commands)
+    let (target_addr, target_port) = parse_target_address(&buf, n, atyp)?;
+    if target_addr.is_empty() && cmd != CMD_UDP_ASSOCIATE {
+        send_reply(&mut client, REP_ATYP_NOT_SUPPORTED, &[0; 4], 0).await?;
+        return Err(OverthroneError::custom(format!("SOCKS5: Unsupported address type: {:#x}", atyp)));
     }
 
-    // Parse target address
-    let (target_addr, target_port) = match atyp {
+    match cmd {
+        CMD_CONNECT => {
+            handle_connect(client, peer, &target_addr, target_port, connect_timeout_secs).await
+        }
+        CMD_BIND => {
+            handle_bind(client, peer, connect_timeout_secs).await
+        }
+        CMD_UDP_ASSOCIATE => {
+            handle_udp_associate(client, peer).await
+        }
+        _ => {
+            send_reply(&mut client, REP_CMD_NOT_SUPPORTED, &[0; 4], 0).await?;
+            Err(OverthroneError::custom(format!("SOCKS5: Unsupported command: {:#x}", cmd)))
+        }
+    }
+}
+
+/// Parse the target address from a SOCKS5 request buffer.
+fn parse_target_address(buf: &[u8], n: usize, atyp: u8) -> Result<(String, u16)> {
+    match atyp {
         ATYP_IPV4 => {
             if n < 10 {
                 return Err(OverthroneError::custom("SOCKS5: Truncated IPv4 request"));
             }
             let ip = std::net::Ipv4Addr::new(buf[4], buf[5], buf[6], buf[7]);
             let port = u16::from_be_bytes([buf[8], buf[9]]);
-            (ip.to_string(), port)
+            Ok((ip.to_string(), port))
         }
         ATYP_DOMAIN => {
             let dlen = buf[4] as usize;
@@ -281,7 +301,7 @@ async fn handle_client(
             }
             let domain = String::from_utf8_lossy(&buf[5..5 + dlen]).to_string();
             let port = u16::from_be_bytes([buf[5 + dlen], buf[6 + dlen]]);
-            (domain, port)
+            Ok((domain, port))
         }
         ATYP_IPV6 => {
             if n < 22 {
@@ -291,17 +311,22 @@ async fn handle_client(
             octets.copy_from_slice(&buf[4..20]);
             let ip = std::net::Ipv6Addr::from(octets);
             let port = u16::from_be_bytes([buf[20], buf[21]]);
-            (ip.to_string(), port)
+            Ok((ip.to_string(), port))
         }
-        _ => {
-            send_reply(&mut client, REP_ATYP_NOT_SUPPORTED, &[0; 4], 0).await?;
-            return Err(OverthroneError::custom(format!("SOCKS5: Unsupported address type: {:#x}", atyp)));
-        }
-    };
+        _ => Ok((String::new(), 0)),
+    }
+}
 
+/// Handle SOCKS5 CONNECT command — connect to a remote host and relay bidirectionally.
+async fn handle_connect(
+    mut client: TcpStream,
+    peer: SocketAddr,
+    target_addr: &str,
+    target_port: u16,
+    connect_timeout_secs: u64,
+) -> Result<()> {
     debug!("SOCKS5: CONNECT {}:{}", target_addr, target_port);
 
-    // ── Step 4: Connect to target ──
     let target = format!("{}:{}", target_addr, target_port);
     let remote = match tokio::time::timeout(
         std::time::Duration::from_secs(connect_timeout_secs),
@@ -355,6 +380,211 @@ async fn handle_client(
     }
 
     debug!("SOCKS5: Connection {} closed", peer);
+    Ok(())
+}
+
+/// Handle SOCKS5 BIND command (RFC 1928 §4).
+///
+/// Opens a listening TCP socket or uses an ephemeral port. Sends
+/// two replies to the client: the first with the listening address/port, and
+/// the second when an inbound connection arrives.  Then relays data
+/// bidirectionally between the client and the accepted connection.
+async fn handle_bind(
+    mut client: TcpStream,
+    peer: SocketAddr,
+    connect_timeout_secs: u64,
+) -> Result<()> {
+    debug!("SOCKS5: BIND requested from {}", peer);
+
+    // Bind an ephemeral port on all interfaces
+    let listener = TcpListener::bind("0.0.0.0:0").await.map_err(|e| {
+        OverthroneError::custom(format!("SOCKS5 BIND: failed to bind listener: {}", e))
+    })?;
+    let listen_addr = listener.local_addr().map_err(sock_err)?;
+    let bind_ip = match listen_addr {
+        SocketAddr::V4(a) => a.ip().octets().to_vec(),
+        SocketAddr::V6(a) => a.ip().octets().to_vec(),
+    };
+
+    // First reply: tell the client where we're listening
+    send_reply(&mut client, REP_SUCCESS, &bind_ip, listen_addr.port()).await?;
+    info!("SOCKS5: BIND listening on {} for {}", listen_addr, peer);
+
+    // Wait for an incoming connection (with timeout)
+    let incoming = match tokio::time::timeout(
+        std::time::Duration::from_secs(connect_timeout_secs),
+        listener.accept(),
+    )
+    .await
+    {
+        Ok(Ok((stream, remote_peer))) => {
+            debug!("SOCKS5: BIND accepted connection from {}", remote_peer);
+            let remote_ip = match remote_peer {
+                SocketAddr::V4(a) => a.ip().octets().to_vec(),
+                SocketAddr::V6(a) => a.ip().octets().to_vec(),
+            };
+            // Second reply: tell the client who connected
+            send_reply(&mut client, REP_SUCCESS, &remote_ip, remote_peer.port()).await?;
+            stream
+        }
+        Ok(Err(e)) => {
+            send_reply(&mut client, REP_GENERAL_FAILURE, &[0; 4], 0).await?;
+            return Err(OverthroneError::custom(format!("SOCKS5 BIND: accept failed: {}", e)));
+        }
+        Err(_) => {
+            send_reply(&mut client, REP_GENERAL_FAILURE, &[0; 4], 0).await?;
+            return Err(OverthroneError::custom("SOCKS5 BIND: accept timed out"));
+        }
+    };
+
+    // Bidirectional relay
+    let (mut client_r, mut client_w) = client.into_split();
+    let (mut remote_r, mut remote_w) = incoming.into_split();
+
+    let c2r = tokio::io::copy(&mut client_r, &mut remote_w);
+    let r2c = tokio::io::copy(&mut remote_r, &mut client_w);
+
+    tokio::select! {
+        result = c2r => {
+            if let Err(e) = result { debug!("SOCKS5 BIND: client->remote ended: {}", e); }
+        }
+        result = r2c => {
+            if let Err(e) = result { debug!("SOCKS5 BIND: remote->client ended: {}", e); }
+        }
+    }
+
+    debug!("SOCKS5: BIND connection {} closed", peer);
+    Ok(())
+}
+
+/// Handle SOCKS5 UDP ASSOCIATE command (RFC 1928 §7).
+///
+/// Opens a UDP socket and replies with its address.  Then relays
+/// SOCKS5-encapsulated UDP datagrams between the client and
+/// the destination indicated in each datagram header.  The
+/// association is terminated when the TCP control connection closes.
+async fn handle_udp_associate(
+    mut client: TcpStream,
+    peer: SocketAddr,
+) -> Result<()> {
+    debug!("SOCKS5: UDP_ASSOCIATE requested from {}", peer);
+
+    // Bind an ephemeral UDP socket
+    let udp_sock = tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
+        OverthroneError::custom(format!("SOCKS5 UDP: failed to bind socket: {}", e))
+    })?;
+    let udp_addr = udp_sock.local_addr().map_err(sock_err)?;
+    let bind_ip = match udp_addr {
+        SocketAddr::V4(a) => a.ip().octets().to_vec(),
+        SocketAddr::V6(a) => a.ip().octets().to_vec(),
+    };
+
+    // Reply with the UDP relay address
+    send_reply(&mut client, REP_SUCCESS, &bind_ip, udp_addr.port()).await?;
+    info!("SOCKS5: UDP relay on {} for {}", udp_addr, peer);
+
+    let udp_sock = std::sync::Arc::new(udp_sock);
+    let sock_relay = udp_sock.clone();
+
+    // UDP relay loop: read SOCKS5-encapsulated datagrams, forward, and relay back.
+    // The association ends when the TCP control connection drops.
+    let relay_task = tokio::spawn(async move {
+        let mut buf = vec![0u8; 65535];
+        let mut client_addr: Option<SocketAddr> = None;
+
+        loop {
+            let (n, src) = match sock_relay.recv_from(&mut buf).await {
+                Ok(v) => v,
+                Err(e) => {
+                    debug!("SOCKS5 UDP: recv error: {}", e);
+                    break;
+                }
+            };
+
+            if n < 4 {
+                continue;
+            }
+
+            // Check RSV and FRAG fields (RFC 1928 §7)
+            // [RSV:u16=0x0000] [FRAG:u8] [ATYP:u8] [DST.ADDR] [DST.PORT] [DATA]
+            // We don't support fragmentation (FRAG != 0 → drop)
+            if buf[2] != 0x00 {
+                debug!("SOCKS5 UDP: dropping fragmented datagram (frag={})", buf[2]);
+                continue;
+            }
+
+            let atyp = buf[3];
+            let (dest_addr, dest_port, data_offset) = match atyp {
+                ATYP_IPV4 => {
+                    if n < 10 { continue; }
+                    let ip = std::net::Ipv4Addr::new(buf[4], buf[5], buf[6], buf[7]);
+                    let port = u16::from_be_bytes([buf[8], buf[9]]);
+                    (std::net::IpAddr::V4(ip), port, 10)
+                }
+                ATYP_IPV6 => {
+                    if n < 22 { continue; }
+                    let mut octets = [0u8; 16];
+                    octets.copy_from_slice(&buf[4..20]);
+                    let ip = std::net::Ipv6Addr::from(octets);
+                    let port = u16::from_be_bytes([buf[20], buf[21]]);
+                    (std::net::IpAddr::V6(ip), port, 22)
+                }
+                ATYP_DOMAIN => {
+                    let dlen = buf[4] as usize;
+                    if n < 5 + dlen + 2 { continue; }
+                    let domain = String::from_utf8_lossy(&buf[5..5 + dlen]);
+                    let port = u16::from_be_bytes([buf[5 + dlen], buf[6 + dlen]]);
+                    // Resolve domain
+                    let resolved = match tokio::net::lookup_host(format!("{}:{}", domain, port)).await {
+                        Ok(mut addrs) => match addrs.next() {
+                            Some(a) => a.ip(),
+                            None => continue,
+                        },
+                        Err(_) => continue,
+                    };
+                    (resolved, port, 7 + dlen)
+                }
+                _ => continue,
+            };
+
+            let dest = SocketAddr::new(dest_addr, dest_port);
+
+            // If datagram came from the client, forward the payload to the destination.
+            // Otherwise it's a response from a remote host — wrap and send back to the client.
+            if client_addr.is_none() || client_addr == Some(src) {
+                client_addr = Some(src);
+                let _ = sock_relay.send_to(&buf[data_offset..n], dest).await;
+            } else if let Some(ca) = client_addr {
+                // Build SOCKS5 UDP header for the reply
+                let mut reply = vec![0x00, 0x00, 0x00]; // RSV + FRAG
+                match src.ip() {
+                    std::net::IpAddr::V4(ip) => {
+                        reply.push(ATYP_IPV4);
+                        reply.extend_from_slice(&ip.octets());
+                    }
+                    std::net::IpAddr::V6(ip) => {
+                        reply.push(ATYP_IPV6);
+                        reply.extend_from_slice(&ip.octets());
+                    }
+                }
+                reply.extend_from_slice(&src.port().to_be_bytes());
+                reply.extend_from_slice(&buf[..n]);
+                let _ = sock_relay.send_to(&reply, ca).await;
+            }
+        }
+    });
+
+    // Wait for the TCP control connection to close (client reads 0 bytes)
+    let mut tcp_buf = [0u8; 1];
+    loop {
+        match client.read(&mut tcp_buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {} // discard any TCP data
+        }
+    }
+
+    relay_task.abort();
+    debug!("SOCKS5: UDP association {} ended", peer);
     Ok(())
 }
 

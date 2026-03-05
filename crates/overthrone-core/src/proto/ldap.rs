@@ -32,16 +32,12 @@ pub const UAC_TRUSTED_FOR_DELEGATION: u32 = 0x80000;
 /// UserAccountControl flag: trusted to auth for delegation (constrained)
 pub const UAC_TRUSTED_TO_AUTH_FOR_DELEGATION: u32 = 0x1000000;
 /// UserAccountControl flag: password never expires
-#[allow(dead_code)]
 pub const UAC_DONT_EXPIRE_PASSWORD: u32 = 0x10000;
 /// UserAccountControl flag: normal user account
-#[allow(dead_code)]
 pub const UAC_NORMAL_ACCOUNT: u32 = 0x0200;
 /// UserAccountControl flag: workstation trust account (computer)
-#[allow(dead_code)]
 pub const UAC_WORKSTATION_TRUST: u32 = 0x1000;
 /// UserAccountControl flag: server trust account (DC)
-#[allow(dead_code)]
 pub const UAC_SERVER_TRUST: u32 = 0x2000;
 
 /// Common user attributes for enumeration

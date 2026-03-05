@@ -341,37 +341,47 @@ fn try_rpcclient(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Windows fallback: use `net rpc` for basic RPC operations
+/// Windows fallback: use `net rpc` / PowerShell for basic RPC operations
 #[cfg(windows)]
 fn try_net_rpc(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
-    // Map rpcclient commands to net rpc equivalents
     let server_arg = format!("/S:{}", config.target);
-    let (net_cmd, net_args): (&str, Vec<&str>) = if rpc_cmd == "lsaquery" {
+
+    if rpc_cmd == "lsaquery" {
         // net rpc info gives domain SID
-        ("net", vec!["rpc", "info", &server_arg])
-    } else {
-        return Err(OverthroneError::Rpc {
+        let mut cmd = Command::new("net");
+        cmd.args(["rpc", "info", &server_arg]);
+        if !config.null_session && !config.username.is_empty() {
+            cmd.arg(format!("/U:{}\\{}", config.domain, config.username));
+            cmd.arg(format!("/P:{}", config.password));
+        }
+        let output = cmd.output().map_err(|e| OverthroneError::Rpc {
             target: config.target.clone(),
-            reason: format!("net rpc fallback not implemented for: {rpc_cmd}"),
-        });
-    };
-
-    let mut cmd = Command::new(net_cmd);
-    for arg in &net_args {
-        cmd.arg(arg);
+            reason: format!("net rpc exec failed: {e}"),
+        })?;
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
     }
 
-    if !config.null_session && !config.username.is_empty() {
-        cmd.arg(format!("/U:{}\\{}", config.domain, config.username));
-        cmd.arg(format!("/P:{}", config.password));
+    if let Some(sid) = rpc_cmd.strip_prefix("lookupsids ") {
+        // Use PowerShell SID-to-name translation and format like rpcclient output
+        let ps_script = format!(
+            "try {{ $s=[System.Security.Principal.SecurityIdentifier]::new('{}'); \
+             $n=$s.Translate([System.Security.Principal.NTAccount]).Value; \
+             Write-Output \"$s $n (1)\" }} catch {{ Write-Output '{} *unknown* (8)' }}",
+            sid, sid
+        );
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
+        let output = cmd.output().map_err(|e| OverthroneError::Rpc {
+            target: config.target.clone(),
+            reason: format!("PowerShell SID lookup failed: {e}"),
+        })?;
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
     }
 
-    let output = cmd.output().map_err(|e| OverthroneError::Rpc {
+    Err(OverthroneError::Rpc {
         target: config.target.clone(),
-        reason: format!("net rpc exec failed: {e}"),
-    })?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        reason: format!("net rpc fallback not implemented for: {rpc_cmd}"),
+    })
 }
 
 // ═══════════════════════════════════════════════════════════

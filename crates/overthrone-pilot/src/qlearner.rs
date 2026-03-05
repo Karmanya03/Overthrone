@@ -451,6 +451,8 @@ pub struct AdaptiveQLearner {
     stealth: bool,
     /// The rurel-compatible agent (for trait compatibility)
     _agent: AdaptiveAgent,
+    /// Last decision metadata for display (action, q_value, was_exploring)
+    last_decision_meta: Option<(AdaptiveAction, f64, bool)>,
 }
 
 impl AdaptiveQLearner {
@@ -478,6 +480,7 @@ impl AdaptiveQLearner {
             q_table_path,
             stealth,
             _agent: AdaptiveAgent::new(initial_state),
+            last_decision_meta: None,
         }
     }
 
@@ -580,7 +583,9 @@ impl AdaptiveQLearner {
         // Always delegate to heuristic on success (no learning needed for Continue)
         if result.success {
             self.heuristic_fallback.reset_failure_streak();
-            return self.heuristic_fallback.evaluate(step, result, state, goal);
+            let decision = self.heuristic_fallback.evaluate(step, result, state, goal);
+            self.last_decision_meta = Some((decision_to_action(&decision), 0.0, true));
+            return decision;
         }
 
         // ε-greedy: explore with probability ε, or if state is unseen
@@ -593,7 +598,11 @@ impl AdaptiveQLearner {
                 self.epsilon,
                 self.q_table.has_state(&state_key)
             );
-            return self.heuristic_fallback.evaluate(step, result, state, goal);
+            let decision = self.heuristic_fallback.evaluate(step, result, state, goal);
+            let action = decision_to_action(&decision);
+            let q = self.q_table.get(&state_key, &action);
+            self.last_decision_meta = Some((action, q, true));
+            return decision;
         }
 
         // Exploit: find the best Q-value action
@@ -601,7 +610,10 @@ impl AdaptiveQLearner {
             Some(pair) => pair,
             None => {
                 // No Q-values recorded — fall back to heuristic
-                return self.heuristic_fallback.evaluate(step, result, state, goal);
+                let decision = self.heuristic_fallback.evaluate(step, result, state, goal);
+                let action = decision_to_action(&decision);
+                self.last_decision_meta = Some((action, 0.0, true));
+                return decision;
             }
         };
 
@@ -609,6 +621,8 @@ impl AdaptiveQLearner {
             "Q-learner: Exploiting — best action {:?} (Q={:.2})",
             best_action, best_q
         );
+
+        self.last_decision_meta = Some((best_action.clone(), best_q, false));
 
         // Convert AdaptiveAction → AdaptiveDecision
         self.action_to_decision(&best_action, step)
@@ -794,6 +808,11 @@ impl AdaptiveQLearner {
         self.epsilon
     }
 
+    /// Last decision metadata: (action, q_value, was_exploring).
+    pub fn last_decision_meta(&self) -> Option<&(AdaptiveAction, f64, bool)> {
+        self.last_decision_meta.as_ref()
+    }
+
     /// Number of episodes completed.
     pub fn episode_count(&self) -> u64 {
         self.episode_count
@@ -802,6 +821,88 @@ impl AdaptiveQLearner {
     /// Number of unique states in the Q-table.
     pub fn q_table_size(&self) -> usize {
         self.q_table.len()
+    }
+
+    /// Get the Q-value for a specific (state, action) pair.
+    pub fn q_value(&self, state_key: &EngagementStateKey, action: &AdaptiveAction) -> f64 {
+        self.q_table.get(state_key, action)
+    }
+
+    /// Get the consecutive failure count from the underlying heuristic engine.
+    pub fn consecutive_failures(&self) -> u32 {
+        self.heuristic_fallback.consecutive_failures()
+    }
+
+    /// Format a state key as a compact human-readable snapshot for terminal display.
+    pub fn format_state_snapshot(key: &EngagementStateKey, epsilon: f64) -> String {
+        let stage_name = match key.current_stage {
+            0 => "ENUM",
+            1 => "ATTACK",
+            2 => "ESCALATE",
+            3 => "LATERAL",
+            4 => "LOOT",
+            5 => "CLEANUP",
+            _ => "?",
+        };
+        let failure_name = match key.last_failure {
+            0 => "auth",
+            1 => "net",
+            2 => "denied",
+            3 => "notfound",
+            4 => "detected",
+            5 => "timeout",
+            _ => "none",
+        };
+        format!(
+            "stage={} creds={} da={} admins={} kerb={} asrep={} users={} fail={}/{} stealth={} ε={:.3}",
+            stage_name,
+            key.cred_bucket,
+            if key.has_domain_admin { "Y" } else { "N" },
+            key.admin_hosts_bucket,
+            key.kerberoastable_bucket,
+            key.asrep_bucket,
+            key.users_bucket,
+            key.consec_failures,
+            failure_name,
+            if key.stealth { "Y" } else { "N" },
+            epsilon,
+        )
+    }
+
+    /// Format a Q-learner decision for terminal display.
+    pub fn format_decision(action: &AdaptiveAction, q_value: f64, exploring: bool) -> String {
+        let mode = if exploring { "exploring" } else { "exploiting" };
+        format!(
+            "{:?}  Q={:+.2}  ({})",
+            action, q_value, mode
+        )
+    }
+
+    /// Build a Q-learner session summary string for the final report.
+    pub fn session_summary(&self) -> String {
+        let most_used = self.most_used_action();
+        format!(
+            "Episode: {} | ε: {:.3} | States: {} | Most-used action: {:?}",
+            self.episode_count,
+            self.epsilon,
+            self.q_table.len(),
+            most_used,
+        )
+    }
+
+    /// Find the action with the most Q-table entries across all states.
+    fn most_used_action(&self) -> AdaptiveAction {
+        let mut counts: HashMap<AdaptiveAction, usize> = HashMap::new();
+        for actions in self.q_table.values.values() {
+            for action in actions.keys() {
+                *counts.entry(action.clone()).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .max_by_key(|(_, c)| *c)
+            .map(|(a, _)| a)
+            .unwrap_or(AdaptiveAction::Continue)
     }
 }
 

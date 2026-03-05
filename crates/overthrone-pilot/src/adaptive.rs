@@ -684,12 +684,19 @@ pub struct AdaptiveSummary {
 
 impl std::fmt::Display for AdaptiveSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", "═══ ADAPTIVE SUMMARY ═══".bold().blue())?;
         writeln!(f, "  Re-plans:   {}", self.total_replans)?;
-        writeln!(f, "  Dead hosts: {:?}", self.dead_hosts)?;
-        writeln!(f, "  Blocked:    {:?}", self.blocked_methods)?;
-        writeln!(f, "  Blacklist:  {:?}", self.blacklisted_actions)?;
-        writeln!(f, "{}", "═════════════════════════".blue())
+        if !self.dead_hosts.is_empty() {
+            writeln!(f, "  Dead hosts: {}", self.dead_hosts.join(", "))?;
+        }
+        if !self.blocked_methods.is_empty() {
+            for (method, reason) in &self.blocked_methods {
+                writeln!(f, "  Blocked:    {} ({})", method, reason)?;
+            }
+        }
+        if !self.blacklisted_actions.is_empty() {
+            writeln!(f, "  Blacklist:  {}", self.blacklisted_actions.join(", "))?;
+        }
+        Ok(())
     }
 }
 

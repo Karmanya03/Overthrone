@@ -250,27 +250,6 @@ where
     Ok(result)
 }
 
-/// Pad ciphertext to block boundary and un-swap the last two blocks for CTS decryption.
-/// Only used internally for block-aligned data now; non-aligned uses cts_decrypt_generic.
-#[allow(dead_code)]
-fn cts_unswap(ciphertext: &[u8]) -> Vec<u8> {
-    let padded_len = ciphertext.len().div_ceil(AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
-    let mut padded = vec![0u8; padded_len];
-    padded[..ciphertext.len()].copy_from_slice(ciphertext);
-    let num_blocks = padded.len() / AES_BLOCK_SIZE;
-    if num_blocks >= 2 {
-        let swap_start = (num_blocks - 2) * AES_BLOCK_SIZE;
-        let mid = swap_start + AES_BLOCK_SIZE;
-        let (first_part, second_part) = padded.split_at_mut(mid);
-        let penultimate = &mut first_part[swap_start..];
-        let mut temp = [0u8; AES_BLOCK_SIZE];
-        temp.copy_from_slice(penultimate);
-        penultimate.copy_from_slice(&second_part[..AES_BLOCK_SIZE]);
-        second_part[..AES_BLOCK_SIZE].copy_from_slice(&temp);
-    }
-    padded
-}
-
 // ═══════════════════════════════════════════════════════════
 // Standard AES-CBC (for SAM/LSA decryption)
 // ═══════════════════════════════════════════════════════════

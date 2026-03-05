@@ -21,7 +21,7 @@ path = "src/ovt_main.rs"
 overthrone-core = { path = "../overthrone-core" }
 overthrone-reaper = { path = "../overthrone-reaper" }
 overthrone-hunter = { path = "../overthrone-hunter" }
-overthrone-pilot = { path = "../overthrone-pilot" }
+overthrone-pilot = { path = "../overthrone-pilot", features = ["qlearn"] }
 overthrone-crawler = { path = "../overthrone-crawler" }
 overthrone-forge = { path = "../overthrone-forge" }
 overthrone-scribe = { path = "../overthrone-scribe" }
@@ -57,7 +57,8 @@ tokio-test.workspace = true
 pretty_assertions.workspace = true
 
 [features]
-default = []
+default = ["qlearn"]
+qlearn = []
 vendored-openssl = ["openssl/vendored"]
 
 [target.'cfg(any(target_env = "musl"))'.dependencies]

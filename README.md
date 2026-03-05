@@ -130,7 +130,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 | `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
 | `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond ticket forging with full PAC construction, DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL, DSRM backdoor via remote registry, forensic cleanup for all persistence mechanisms, ticket validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Actually works now - PKINIT has real RSA signing and DH key exchange instead of "placeholder PEM structures." The chocolate key became a real key. |
-| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (optional `qlearn` feature), goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full autopwn orchestration connecting enum → graph → exploit → persist → report | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments. The executor alone is a terrifying 90KB single file. It plans, it adapts (with actual machine learning now), it executes, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND trains an AI to do it better next time. |
+| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (compiled by default), goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full autopwn orchestration connecting enum → graph → exploit → persist → report, **live kill-chain pipeline visualization**, per-step Q-state/decision/reward readout, 9-section final report with credential tables and loot summaries | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments, and actually tells you what it's doing instead of running in mysterious silence. Every step prints its stage, noise level, priority, and result. The Q-learner shows its state, which action it picked, whether it's exploring or exploiting, and the reward it got. The final report has a kill-chain completion visual, per-stage stats, credential tables, admin host lists, loot summaries, and a full audit trail. It plans, it adapts, it executes, it explains itself, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND writes a detailed trip report with expense breakdowns. |
 | `overthrone-relay` | The Interceptor | NTLM relay engine (SMB→LDAP, HTTP→SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8) | Born complete. Zero stubs since day one. Responder.py walked so this crate could sprint. In Rust. Without the GIL. The overachiever sibling of overthrone-hunter. |
 | `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
 | `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, session panels, logs, crawler integration), wizard mode, doctor command, autopwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now - PDF reports, TUI crawler, C2 implant deployment. The banner ASCII art is *chef's kiss*. |
@@ -160,8 +160,10 @@ overthrone-forge    ████████████████████
                                                    work. Golden/Silver/DCSync all solid.
 
 overthrone-pilot    █████████████████████░  ~98%  8 unit tests + live DC integration suite (349 lines, gated behind
-                                                   OT_DC_HOST). 3,078-line executor. 1,051-line Q-learner. It plans,
-                                                   adapts, and now has integration tests to prove it. One file.
+                                                   OT_DC_HOST). 3,078-line executor. 1,051-line Q-learner. Q-learning
+                                                   compiles by default now - no more feature flag roulette. Live
+                                                   kill-chain pipeline, per-step QL readout, 9-section final report.
+                                                   The autopwn actually tells you what it's doing. Revolutionary.
 
 overthrone-relay    ██████████████████████  100%  34 unit tests. relay.rs (1,557 lines), responder.rs (836 lines),
                                                    poisoner.rs (766 lines), ADCS relay (359 lines). Born complete.
@@ -222,7 +224,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **Hash cracking** | ✅ | ✅ | ✅ | ✅ | Offline cracking engine built in. Embedded 10K wordlist + mask attacks (`?u?l?l?d?d?d?d`) + hybrid mode + rayon parallelism. No hashcat required. |
 | **SOCKS5 proxy / pivoting** | ✅ | ✅ | ✅ | ✅ | Full RFC 1928 SOCKS5 server on the compromised box. IPv4/IPv6/domain. Nothing extra needed on target. Pivot deeper into the network. |
 | **Forge + C2 + ADCS + MSSQL** | ✅ | ✅ | ✅ | ✅ | Diamond tickets, Shadow Creds, Cobalt Strike/Sliver/Havoc integration, MSSQL `xp_cmdshell`, SCCM abuse. It's all in there. |
-| **auto-pwn (full kill chain)** | ✅ | ✅ | ⚠️ | ✅ | Enum → graph → roast → crack → escalate → persist → report. One command. Use `--stealth` on WS 2025 for the noisier phases. |
+| **auto-pwn (full kill chain)** | ✅ | ✅ | ⚠️ | ✅ | Enum → graph → roast → crack → escalate → persist → report. One command. Live per-step output with Q-learning decisions. Ends with a kill-chain completion report, credential tables, and loot summary. Use `--stealth` on WS 2025 for the noisier phases. |
 
 > ⚠️ = works, but some WS 2025 security defaults (EPA, SMB signing, PKINIT armor) may need a workaround. `ovt doctor` will tell you exactly what to do before you start.
 
@@ -323,7 +325,7 @@ Aliases: `autopwn`, `auto`
 | `--stealth` | off | Low-noise, extra jitter, skips loud attacks |
 | `--dry-run` | off | Print the plan, don't execute it |
 | `--max-stage` | `loot` | `enumerate` `attack` `escalate` `lateral` `loot` `cleanup` |
-| `--adaptive` | `hybrid` | `heuristic` `qlearning` `hybrid` |
+| `--adaptive` | `hybrid` | AI engine: `heuristic` (rule-based), `qlearning` (pure RL), `hybrid` (best of both - recommended). Q-learning is compiled by default now. |
 | `--q-table` | `q_table.json` | Q-learning brain file - persists across runs |
 | `--jitter-ms` | `1000` | Random delay between steps (ms) |
 | `--ldaps` | off | Use LDAP over SSL (port 636) |
@@ -877,11 +879,11 @@ The "I'll hack it myself" engine. Now with machine learning.
 | **Attack Planner** | ✅ Plans multi-step attack chains from enumeration data |
 | **Step Executor** | ✅ Executes each planned step by calling Hunter/Forge/Reaper. 90KB of execution logic. |
 | **Adaptive Strategy** | ✅ Adjusts plan on-the-fly based on what succeeds and fails |
-| **Q-Learning AI** | ✅ Reinforcement learning engine (optional `qlearn` feature) - learns optimal attack sequences across engagements via state-action reward tables |
+| **Q-Learning AI** | ✅ Reinforcement learning engine (compiled by default) - ε-greedy policy with decay (0.3→0.05), learns optimal attack sequences across engagements via state-action reward tables. Shows state, decision, Q-value, and reward at every step. |
 | **Goal System** | ✅ Target DA, Enterprise Admin, specific user, specific host |
 | **Playbooks** | ✅ Pre-built YAML attack sequences for common scenarios |
 | **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist |
-| **AutoPwn Runner** | ✅ Full engagement orchestrator: enum → graph → exploit → persist → report |
+| **AutoPwn Runner** | ✅ Full engagement orchestrator: enum → graph → exploit → persist → report. Live kill-chain pipeline shows stage completion. Per-step output with noise level, priority, credential/host gains. 9-section final report: kill-chain visual, per-stage stats, goal status, credential table, admin hosts, loot summary, Q-learner session stats, adaptive summary, audit trail. |
 
 ### Reporting (overthrone-scribe)
 
@@ -1065,7 +1067,7 @@ ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
 ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --dry-run
 ```
 
-That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The Q-Learning engine remembers what worked and optimizes future runs. Go get coffee. Come back to a report that explains how you own the entire forest.
+That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
 
 ### Manual Mode
 
@@ -1128,7 +1130,7 @@ Every command below works with both `overthrone` and `ovt`. We will use `ovt` be
 
 #### `ovt auto-pwn` - The "Hold My Beer" Button
 
-The full autonomous killchain. Goes from "I have creds" to "I own everything" while you get coffee. Now with **Q-Learning AI** that gets smarter every engagement.
+The full autonomous killchain. Goes from "I have creds" to "I own everything" while you watch it happen in real time. Now with **Q-Learning AI** that gets smarter every engagement and actually shows its work - every step prints the stage, noise level, Q-state, action decision (explore vs exploit), Q-value, and reward. The final report has a kill-chain completion graphic, credential tables, loot summaries, and an audit trail. No more staring at a blank terminal hoping something is happening.
 
 ```bash
 # Basic - let the AI figure it out
@@ -1183,7 +1185,7 @@ ovt auto-pwn -H 10.10.10.1 -d corp.local -u admin --nt-hash aad3b435b51404ee:884
   Shares
 ```
 
-The Q-Learner tracks which attacks work best in which situations and optimizes future runs. It's like Netflix recommendations, but for privilege escalation.
+The Q-Learner tracks which attacks work best in which situations and optimizes future runs. It's like Netflix recommendations, but for privilege escalation. Now it also tells you what it's thinking - every step shows the encoded state (stage/creds/DA/admins/stealth/ε), the action it chose, the Q-value backing that decision, whether it's exploring (trying new things) or exploiting (doing what worked before), and the reward it got. The final report includes a kill-chain pipeline showing which stages completed (✓) and which failed (✗), a per-stage stats table, a credential table with source and admin status, a loot summary, and the full audit trail. You can finally watch the AI work instead of trusting the vibes.
 
 ---
 

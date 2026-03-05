@@ -57,7 +57,6 @@ pub const PA_ENC_TIMESTAMP: i32 = 2;
 pub const PA_TGS_REQ: i32 = 1;
 pub const PA_PAC_REQUEST: i32 = 128;
 pub const PA_FOR_USER: i32 = 129;
-#[allow(dead_code)]
 pub const PA_PAC_OPTIONS: i32 = 167;
 
 // KDC option flag values (big-endian bit positions)

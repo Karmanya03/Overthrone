@@ -3,10 +3,11 @@ use rsa::{RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs1v15::SigningKey;
 use rsa::signature::{RandomizedSigner, SignatureEncoding};
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
-use sha2::Sha256;
+use sha2::{Sha256, Digest};
 use x509_parser::prelude::*;
 use rand::rngs::OsRng;
 use base64::Engine;
+use yasna::models::ObjectIdentifier;
 
 /// PKINIT authentication configuration
 #[derive(Debug, Clone)]
@@ -223,7 +224,7 @@ impl PkinitAuthenticator {
         Ok(())
     }
 
-    /// Build AS-REQ with PA-PK-AS-REQ preauthentication
+    /// Build AS-REQ with PA-PK-AS-REQ preauthentication (RFC 4556)
     fn build_pkinit_as_req(&self) -> Result<Vec<u8>> {
         use kerberos_asn1::{AsReq, Asn1Object, KdcReqBody, KerberosFlags, KerberosTime, PaData, PrincipalName};
         use chrono::{Duration, Utc};
@@ -231,6 +232,7 @@ impl PkinitAuthenticator {
         // Build the request body
         let now = Utc::now();
         let till = now + Duration::days(1);
+        let nonce: u32 = rand::random();
 
         let cname = PrincipalName {
             name_type: 1, // NT_PRINCIPAL
@@ -250,19 +252,19 @@ impl PkinitAuthenticator {
             from: None,
             till: KerberosTime::from(till),
             rtime: None,
-            nonce: rand::random::<u32>(),
-            etypes: vec![18, 17], // AES256, AES128 (fixed field name)
+            nonce,
+            etypes: vec![18, 17], // AES256, AES128
             addresses: None,
             enc_authorization_data: None,
             additional_tickets: None,
         };
 
-        // Build PA-PK-AS-REQ padata
-        // Note: This is a simplified implementation
-        // Full PKINIT requires building AuthPack with PKAuthenticator and signing it
+        // Build the full PA-PK-AS-REQ per RFC 4556
+        let pa_pk_as_req_der = self.build_pa_pk_as_req(nonce)?;
+
         let pa_pk_as_req = PaData {
             padata_type: 16, // PA-PK-AS-REQ
-            padata_value: vec![], // Simplified - would contain signed AuthPack
+            padata_value: pa_pk_as_req_der,
         };
 
         let as_req = AsReq {
@@ -273,6 +275,237 @@ impl PkinitAuthenticator {
         };
 
         Ok(as_req.build())
+    }
+
+    /// Build the PA-PK-AS-REQ value containing a CMS SignedData
+    /// wrapping the AuthPack, per RFC 4556 §3.2.1.
+    fn build_pa_pk_as_req(&self, nonce: u32) -> Result<Vec<u8>> {
+        // ── Step 1: Build PKAuthenticator ──
+        // PKAuthenticator ::= SEQUENCE {
+        //   cusec   [0] INTEGER,
+        //   ctime   [1] KerberosTime,
+        //   nonce   [2] INTEGER,
+        //   paChecksum [3] OCTET STRING OPTIONAL
+        // }
+        let now = chrono::Utc::now();
+        let cusec = now.timestamp_subsec_micros() as i64;
+        let ctime = now.format("%Y%m%d%H%M%SZ").to_string();
+
+        let pk_authenticator_der = yasna::construct_der(|writer| {
+            writer.write_sequence(|writer| {
+                // cusec [0] INTEGER
+                writer.next().write_tagged(yasna::Tag::context(0), |w| {
+                    w.write_i64(cusec);
+                });
+                // ctime [1] GeneralizedTime — encode as raw DER bytes
+                // GeneralizedTime is tag 0x18, value is ASCII "YYYYMMDDHHmmSSZ"
+                writer.next().write_tagged(yasna::Tag::context(1), |w| {
+                    let time_bytes = ctime.as_bytes();
+                    // Write raw GeneralizedTime: tag 0x18, length, value
+                    let mut gt_der = vec![0x18, time_bytes.len() as u8];
+                    gt_der.extend_from_slice(time_bytes);
+                    w.write_der(&gt_der);
+                });
+                // nonce [2] INTEGER — must match the nonce in KDC-REQ-BODY
+                writer.next().write_tagged(yasna::Tag::context(2), |w| {
+                    w.write_u32(nonce);
+                });
+            });
+        });
+
+        // ── Step 2: Build AuthPack ──
+        // AuthPack ::= SEQUENCE {
+        //   pkAuthenticator     [0] PKAuthenticator,
+        //   clientPublicValue   [1] SubjectPublicKeyInfo OPTIONAL,
+        //   supportedCMSTypes   [2] SEQUENCE OF AlgorithmIdentifier OPTIONAL
+        // }
+        let auth_pack_der = yasna::construct_der(|writer| {
+            writer.write_sequence(|writer| {
+                // pkAuthenticator [0] EXPLICIT
+                writer.next().write_tagged(yasna::Tag::context(0), |w| {
+                    w.write_der(&pk_authenticator_der);
+                });
+                // supportedCMSTypes [2] EXPLICIT — sha256WithRSAEncryption
+                writer.next().write_tagged(yasna::Tag::context(2), |w| {
+                    w.write_sequence(|writer| {
+                        writer.next().write_sequence(|writer| {
+                            // sha256WithRSAEncryption OID: 1.2.840.113549.1.1.11
+                            writer.next().write_oid(&ObjectIdentifier::from_slice(
+                                &[1, 2, 840, 113549, 1, 1, 11],
+                            ));
+                            writer.next().write_null();
+                        });
+                    });
+                });
+            });
+        });
+
+        // ── Step 3: Build CMS SignedData (RFC 5652) ──
+        let signed_data_der = self.build_cms_signed_data(&auth_pack_der)?;
+
+        // ── Step 4: Wrap in ContentInfo ──
+        // ContentInfo ::= SEQUENCE {
+        //   contentType    OBJECT IDENTIFIER (signedData: 1.2.840.113549.1.7.2),
+        //   content  [0]  EXPLICIT ANY
+        // }
+        let content_info_der = yasna::construct_der(|writer| {
+            writer.write_sequence(|writer| {
+                // id-signedData: 1.2.840.113549.1.7.2
+                writer.next().write_oid(&ObjectIdentifier::from_slice(
+                    &[1, 2, 840, 113549, 1, 7, 2],
+                ));
+                // content [0] EXPLICIT
+                writer.next().write_tagged(yasna::Tag::context(0), |w| {
+                    w.write_der(&signed_data_der);
+                });
+            });
+        });
+
+        // ── Step 5: Build PA-PK-AS-REQ ──
+        // PA-PK-AS-REQ ::= SEQUENCE {
+        //   signedAuthPack [0] IMPLICIT OCTET STRING
+        // }
+        let pa_pk_as_req_der = yasna::construct_der(|writer| {
+            writer.write_sequence(|writer| {
+                // signedAuthPack [0] IMPLICIT — the ContentInfo DER
+                writer.next().write_tagged_implicit(yasna::Tag::context(0), |w| {
+                    w.write_bytes(&content_info_der);
+                });
+            });
+        });
+
+        Ok(pa_pk_as_req_der)
+    }
+
+    /// Build CMS SignedData (RFC 5652) wrapping the AuthPack.
+    fn build_cms_signed_data(&self, auth_pack_der: &[u8]) -> Result<Vec<u8>> {
+        // Compute SHA-256 digest of the AuthPack content (eContent)
+        let content_digest = {
+            let mut hasher = Sha256::new();
+            hasher.update(auth_pack_der);
+            hasher.finalize().to_vec()
+        };
+
+        // Parse the client certificate to extract issuer and serial number
+        let (_, cert) = X509Certificate::from_der(&self.config.certificate)
+            .map_err(|e| OverthroneError::Encryption(format!(
+                "Failed to parse certificate for SignerInfo: {}", e
+            )))?;
+        let issuer_der = cert.issuer().as_raw().to_vec();
+        let serial_bytes = cert.raw_serial();
+
+        // Build SignerInfo.signedAttrs (authenticated attributes)
+        //   1. contentType (OID for id-pkinit-authData: 1.3.6.1.5.2.3.1)
+        //   2. messageDigest (SHA-256 hash of eContent)
+        let signed_attrs_inner = yasna::construct_der(|writer| {
+            writer.write_set(|writer| {
+                // Attribute: contentType
+                writer.next().write_sequence(|writer| {
+                    // id-contentType: 1.2.840.113549.1.9.3
+                    writer.next().write_oid(&ObjectIdentifier::from_slice(
+                        &[1, 2, 840, 113549, 1, 9, 3],
+                    ));
+                    writer.next().write_set(|writer| {
+                        // id-pkinit-authData: 1.3.6.1.5.2.3.1
+                        writer.next().write_oid(&ObjectIdentifier::from_slice(
+                            &[1, 3, 6, 1, 5, 2, 3, 1],
+                        ));
+                    });
+                });
+                // Attribute: messageDigest
+                writer.next().write_sequence(|writer| {
+                    // id-messageDigest: 1.2.840.113549.1.9.4
+                    writer.next().write_oid(&ObjectIdentifier::from_slice(
+                        &[1, 2, 840, 113549, 1, 9, 4],
+                    ));
+                    writer.next().write_set(|writer| {
+                        writer.next().write_bytes(&content_digest);
+                    });
+                });
+            });
+        });
+
+        // For signing, the DER-encoded SET of attributes is signed (re-encoded as SET)
+        let signature = self.sign_request(&signed_attrs_inner)?;
+
+        // Build the full SignedData
+        let signed_data = yasna::construct_der(|writer| {
+            writer.write_sequence(|writer| {
+                // version: 3 (required when SignerIdentifier is IssuerAndSerialNumber)
+                writer.next().write_u8(3);
+
+                // digestAlgorithms: SET OF AlgorithmIdentifier
+                writer.next().write_set(|writer| {
+                    writer.next().write_sequence(|writer| {
+                        // id-sha256: 2.16.840.1.101.3.4.2.1
+                        writer.next().write_oid(&ObjectIdentifier::from_slice(
+                            &[2, 16, 840, 1, 101, 3, 4, 2, 1],
+                        ));
+                        writer.next().write_null();
+                    });
+                });
+
+                // encapContentInfo: EncapsulatedContentInfo
+                writer.next().write_sequence(|writer| {
+                    // eContentType: id-pkinit-authData (1.3.6.1.5.2.3.1)
+                    writer.next().write_oid(&ObjectIdentifier::from_slice(
+                        &[1, 3, 6, 1, 5, 2, 3, 1],
+                    ));
+                    // eContent [0] EXPLICIT OCTET STRING
+                    writer.next().write_tagged(yasna::Tag::context(0), |w| {
+                        w.write_bytes(auth_pack_der);
+                    });
+                });
+
+                // certificates [0] IMPLICIT SET OF Certificate
+                writer.next().write_tagged_implicit(yasna::Tag::context(0), |w| {
+                    // Include the client certificate (raw DER)
+                    w.write_der(&self.config.certificate);
+                });
+
+                // signerInfos: SET OF SignerInfo
+                writer.next().write_set(|writer| {
+                    writer.next().write_sequence(|writer| {
+                        // version: 1
+                        writer.next().write_u8(1);
+
+                        // sid: IssuerAndSerialNumber
+                        writer.next().write_sequence(|writer| {
+                            // issuer (raw DER from certificate)
+                            writer.next().write_der(&issuer_der);
+                            // serialNumber
+                            writer.next().write_bigint_bytes(serial_bytes, true);
+                        });
+
+                        // digestAlgorithm: sha256
+                        writer.next().write_sequence(|writer| {
+                            writer.next().write_oid(&ObjectIdentifier::from_slice(
+                                &[2, 16, 840, 1, 101, 3, 4, 2, 1],
+                            ));
+                            writer.next().write_null();
+                        });
+
+                        // signedAttrs [0] IMPLICIT SET OF Attribute
+                        writer.next().write_tagged_implicit(yasna::Tag::context(0), |w| {
+                            w.write_der(&signed_attrs_inner);
+                        });
+
+                        // signatureAlgorithm: sha256WithRSAEncryption
+                        writer.next().write_sequence(|writer| {
+                            writer.next().write_oid(&ObjectIdentifier::from_slice(
+                                &[1, 2, 840, 113549, 1, 1, 11],
+                            ));
+                            writer.next().write_null();
+                        });
+
+                        // signature: OCTET STRING
+                        writer.next().write_bytes(&signature);
+                    });
+                });
+            });
+        });
+
+        Ok(signed_data)
     }
 
     /// Sign AS-REQ using private key

@@ -36,7 +36,6 @@ const VALUE_COMP_NAME: u16 = 0x0001;
 const DATA_IN_OFFSET: u32 = 0x80000000;
 
 /// Registry value types
-#[allow(dead_code)]
 pub const REG_NONE: u32 = 0;
 pub const REG_SZ: u32 = 1;
 pub const REG_EXPAND_SZ: u32 = 2;
@@ -424,7 +423,6 @@ pub const WINREG_UUID: &str = "338cd001-2244-31f1-aaaa-900038001003";
 pub const WINREG_VERSION: u16 = 1;
 
 /// WINREG opnums
-#[allow(dead_code)]
 pub mod winreg_opnum {
     pub const OPEN_LOCAL_MACHINE: u16 = 0;
     pub const OPEN_CLASSES_ROOT: u16 = 1;
@@ -870,41 +868,105 @@ fn build_rpc_header(_packet_type: u8, call_id: u32) -> Vec<u8> {
 // High-Level Remote Registry Operations
 // ═══════════════════════════════════════════════════════════
 
-/// Read a remote registry value
+/// Read a remote registry value via WINREG DCE/RPC over SMB named pipe.
 ///
-/// This is a high-level function that orchestrates the WINREG RPC calls
-/// to read a value from a remote registry. Requires an SMB session with
-/// access to IPC$.
+/// Orchestrates the full WINREG RPC conversation: Bind → OpenHive → OpenKey
+/// (for each path segment) → QueryValue → CloseKey (all handles).
 ///
 /// # Arguments
-/// * `smb_session` - Active SMB session
+/// * `smb_session` - Active SMB session with IPC$ access
 /// * `hive` - Predefined hive (HKLM, HKCU, etc.)
 /// * `path` - Registry path (e.g., "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
 /// * `value_name` - Value to read (empty string for default value)
-///
-/// # Returns
-/// The registry value data, or an error.
-#[allow(dead_code)]
 pub async fn read_remote_registry_value(
-    _smb_session: &mut crate::proto::smb::SmbSession,
-    _hive: PredefinedHive,
-    _path: &str,
-    _value_name: &str,
+    smb_session: &mut crate::proto::smb::SmbSession,
+    hive: PredefinedHive,
+    path: &str,
+    value_name: &str,
 ) -> Result<RemoteRegValue> {
-    // Implementation would:
-    // 1. Open SMB pipe \pipe\winreg
-    // 2. DCE/RPC Bind to WINREG interface
-    // 3. Open the predefined hive
-    // 4. Open each path component
-    // 5. Query the value
-    // 6. Close all handles
-    // 7. Return the value
-    
-    // This requires SMB named pipe support which is in the SMB module
-    // For now, return an informative error
-    Err(OverthroneError::custom(
-        "Remote registry requires SMB named pipe support - use SmbSession::open_pipe() then call WINREG RPC methods directly"
-    ))
+    let mut reg = RemoteRegistry::new();
+    let pipe = "winreg";
+    let mut call_id = 1u32;
+
+    // 1. DCE/RPC Bind to WINREG interface
+    let bind_req = reg.build_bind_request(call_id);
+    call_id += 1;
+    let bind_resp = smb_session.pipe_transact(pipe, &bind_req).await
+        .map_err(|e| OverthroneError::custom(format!("WINREG bind transport failed: {e}")))?;
+    if bind_resp.len() < 4 || bind_resp[2] != 12 {
+        return Err(OverthroneError::custom("WINREG RPC bind rejected by server"));
+    }
+    info!("RemoteRegistry: RPC bind to WINREG accepted");
+
+    // 2. Open the predefined hive
+    let open_hive_req = reg.build_open_hive_request(hive, call_id);
+    call_id += 1;
+    let open_hive_resp = smb_session.pipe_transact(pipe, &open_hive_req).await
+        .map_err(|e| OverthroneError::custom(format!("OpenHive failed: {e}")))?;
+    let hive_handle = reg.parse_open_hive_response(&open_hive_resp)?;
+
+    // Track all opened handles for cleanup (in order opened)
+    let mut opened_handles: Vec<[u8; 20]> = vec![hive_handle];
+    let mut current_handle = hive_handle;
+
+    // 3. Walk the registry path, opening each subkey
+    let parts: Vec<&str> = path.split('\\').filter(|s| !s.is_empty()).collect();
+    for part in &parts {
+        let open_key_req = reg.build_open_key_request(&current_handle, part, call_id);
+        call_id += 1;
+        let open_key_resp = match smb_session.pipe_transact(pipe, &open_key_req).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // Clean up all opened handles before returning
+                for h in opened_handles.iter().rev() {
+                    let close_req = reg.build_close_key_request(h, call_id);
+                    call_id += 1;
+                    let _ = smb_session.pipe_transact(pipe, &close_req).await;
+                }
+                return Err(OverthroneError::custom(format!(
+                    "Failed to open registry key '{}': {}", part, e
+                )));
+            }
+        };
+
+        if open_key_resp.len() < 48 {
+            for h in opened_handles.iter().rev() {
+                let close_req = reg.build_close_key_request(h, call_id);
+                call_id += 1;
+                let _ = smb_session.pipe_transact(pipe, &close_req).await;
+            }
+            return Err(OverthroneError::custom(format!(
+                "OpenKey response too short for '{}'", part
+            )));
+        }
+
+        let mut key_handle = [0u8; 20];
+        key_handle.copy_from_slice(&open_key_resp[24..44]);
+        opened_handles.push(key_handle);
+        current_handle = key_handle;
+    }
+
+    // 4. Query the value
+    let query_req = reg.build_query_value_request(&current_handle, value_name, call_id);
+    call_id += 1;
+    let query_resp = smb_session.pipe_transact(pipe, &query_req).await;
+
+    // 5. Close all handles in reverse order (best-effort)
+    for h in opened_handles.iter().rev() {
+        let close_req = reg.build_close_key_request(h, call_id);
+        call_id += 1;
+        let _ = smb_session.pipe_transact(pipe, &close_req).await;
+    }
+
+    // 6. Parse and return the result (after cleanup)
+    let query_resp = query_resp
+        .map_err(|e| OverthroneError::custom(format!("QueryValue failed: {e}")))?;
+    let mut value = reg.parse_query_value_response(&query_resp)?;
+    value.name = value_name.to_string();
+
+    info!("RemoteRegistry: Read value '{}' (type={}, {} bytes)",
+        value_name, value.data_type, value.data.len());
+    Ok(value)
 }
 
 /// Common remote registry paths for security assessments

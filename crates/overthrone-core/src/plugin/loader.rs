@@ -17,8 +17,8 @@ use std::path::Path;
 /// A native plugin loaded from a shared library
 pub struct NativePlugin {
     manifest: PluginManifest,
-    #[allow(dead_code)]
-    library: libloading::Library,
+    /// Held for RAII: dropping unloads the shared library
+    _library: libloading::Library,
     // Function pointers cached from the loaded library
     fn_execute: libloading::Symbol<
         'static,
@@ -174,7 +174,7 @@ pub fn load_native_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
 
         Ok(Box::new(NativePlugin {
             manifest,
-            library,
+            _library: library,
             fn_execute,
             fn_on_event,
             fn_shutdown,

