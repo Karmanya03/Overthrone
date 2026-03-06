@@ -8,8 +8,12 @@
 //! the operator to run on a Windows pivot.
 
 use super::SccmSite;
-use crate::error::{OverthroneError, Result};
+use crate::error::Result;
+#[cfg(windows)]
+use crate::error::OverthroneError;
 use tracing::info;
+#[cfg(not(windows))]
+use tracing::warn;
 
 #[cfg(windows)]
 use {
