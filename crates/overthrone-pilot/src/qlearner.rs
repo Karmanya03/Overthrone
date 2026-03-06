@@ -73,20 +73,15 @@ pub const REWARD_DA_EQUIVALENT: f64 = 50.0;
 // ═══════════════════════════════════════════════════════════
 
 /// Selects which adaptive strategy the runner uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AdaptiveMode {
     /// Pure heuristic (original `AdaptiveEngine`)
     Heuristic,
     /// Pure Q-learning (falls back to heuristic for unknown states)
     QLearning,
     /// Hybrid — Q-learner with ε-greedy exploration via heuristic fallback
+    #[default]
     Hybrid,
-}
-
-impl Default for AdaptiveMode {
-    fn default() -> Self {
-        Self::Hybrid
-    }
 }
 
 // ═══════════════════════════════════════════════════════════
