@@ -301,10 +301,8 @@ impl WinRmExecutor {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                     let name_bytes = e.name().as_ref().to_vec();
-                    let is_stream =
-                        name_bytes == b"rsp:Stream" || name_bytes == b"Stream";
-                    let is_exit =
-                        name_bytes == b"rsp:ExitCode" || name_bytes == b"ExitCode";
+                    let is_stream = name_bytes == b"rsp:Stream" || name_bytes == b"Stream";
+                    let is_exit = name_bytes == b"rsp:ExitCode" || name_bytes == b"ExitCode";
                     let has_matching_attr = is_stream
                         && e.attributes().any(|a| {
                             a.is_ok_and(|attr| {
@@ -317,16 +315,12 @@ impl WinRmExecutor {
                         if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
                             let unescaped = String::from_utf8_lossy(t.as_ref());
                             if let Ok(decoded) = BASE64.decode(unescaped.trim()) {
-                                stdout.push_str(
-                                    &String::from_utf8_lossy(&decoded).to_string(),
-                                );
+                                stdout.push_str(&String::from_utf8_lossy(&decoded).to_string());
                             }
                         }
                     } else if is_exit {
                         if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                            if let Ok(n) = String::from_utf8_lossy(t.as_ref())
-                                .trim()
-                                .parse::<i32>()
+                            if let Ok(n) = String::from_utf8_lossy(t.as_ref()).trim().parse::<i32>()
                             {
                                 exit_code = Some(n);
                             }
