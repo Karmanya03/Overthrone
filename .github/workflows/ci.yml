@@ -35,15 +35,9 @@ jobs:
           brew install samba pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix samba)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
-      - name: Cargo cache
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          shared-key: "test-${{ matrix.os }}"
 
       - name: Generate lockfile
         run: cargo generate-lockfile
@@ -67,15 +61,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Cargo cache
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: clippy-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: clippy-
+          shared-key: "clippy"
 
       - name: Generate lockfile
         run: cargo generate-lockfile
@@ -106,8 +94,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache cargo-audit binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-v0.21
+
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Generate lockfile
         run: cargo generate-lockfile
@@ -129,21 +123,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Cargo cache
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "coverage"
+
+      - name: Cache cargo-tarpaulin binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: coverage-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: coverage-
+          path: ~/.cargo/bin/cargo-tarpaulin
+          key: cargo-tarpaulin-${{ runner.os }}-v0.31
 
       - name: Generate lockfile
         run: cargo generate-lockfile
 
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
 
       - name: Run coverage
         run: cargo tarpaulin --workspace --out Html --output-dir coverage/
