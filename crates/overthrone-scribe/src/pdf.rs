@@ -330,12 +330,18 @@ fn load_builtin_font_mono() -> ParsedFont {
         "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
         "/usr/share/fonts/TTF/LiberationMono-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
+        "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
         "/System/Library/Fonts/Courier.dfont",
         "/Library/Fonts/Courier New.ttf",
+        "/System/Library/Fonts/Supplemental/Courier New.ttf",
         "C:\\Windows\\Fonts\\cour.ttf",
         "C:\\Windows\\Fonts\\consola.ttf",
     ];
-    load_font_from_paths(&candidates).expect("Could not find any monospace font on this system")
+    // Fall back to the regular sans-serif font if no mono font is found — better
+    // than panicking in CI environments without mono fonts installed.
+    load_font_from_paths(&candidates).unwrap_or_else(|| load_builtin_font_regular())
 }
 
 fn load_font_from_paths(paths: &[&str]) -> Option<ParsedFont> {
