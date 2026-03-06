@@ -297,33 +297,36 @@ impl WinRmExecutor {
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
-        let stream_attr = format!("rsp:{}", stream);
-        let stream_bytes = stream_attr.as_bytes();
-
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                    let name = e.name().as_ref();
-                    if name == b"rsp:Stream" || name == b"Stream" {
-                        for a in e.attributes() {
-                            if let Ok(attr) = a {
-                                let key = attr.key.as_ref();
-                                let val = attr.value.as_ref();
-                                if key == b"Name" && val == stream.as_bytes() {
-                                    if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                                        let unescaped = String::from_utf8_lossy(t.as_ref());
-                                        if let Ok(decoded) = BASE64.decode(unescaped.trim()) {
-                                            stdout.push_str(
-                                                &String::from_utf8_lossy(&decoded).to_string(),
-                                            );
-                                        }
-                                    }
-                                }
+                Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                    let name_bytes = e.name().as_ref().to_vec();
+                    let is_stream =
+                        name_bytes == b"rsp:Stream" || name_bytes == b"Stream";
+                    let is_exit =
+                        name_bytes == b"rsp:ExitCode" || name_bytes == b"ExitCode";
+                    let has_matching_attr = is_stream
+                        && e.attributes().any(|a| {
+                            a.is_ok_and(|attr| {
+                                attr.key.as_ref() == b"Name"
+                                    && attr.value.as_ref() == stream.as_bytes()
+                            })
+                        });
+
+                    if has_matching_attr {
+                        if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
+                            let unescaped = String::from_utf8_lossy(t.as_ref());
+                            if let Ok(decoded) = BASE64.decode(unescaped.trim()) {
+                                stdout.push_str(
+                                    &String::from_utf8_lossy(&decoded).to_string(),
+                                );
                             }
                         }
-                    } else if name == b"rsp:ExitCode" || name == b"ExitCode" {
+                    } else if is_exit {
                         if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                            if let Ok(n) = String::from_utf8_lossy(t.as_ref()).trim().parse::<i32>()
+                            if let Ok(n) = String::from_utf8_lossy(t.as_ref())
+                                .trim()
+                                .parse::<i32>()
                             {
                                 exit_code = Some(n);
                             }
