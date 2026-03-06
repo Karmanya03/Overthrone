@@ -1955,7 +1955,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     buf.extend_from_slice(&utf16);
     // Pad to 4-byte boundary
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
     buf
@@ -2717,7 +2717,7 @@ fn build_dsname(dn: &str) -> Vec<u8> {
     buf.extend_from_slice(&char_count.to_le_bytes()); // NameLen (wchar count, incl NUL)
     buf.extend_from_slice(&name_bytes); // Name[] UTF-16LE
     // Pad to 4-byte boundary
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
     buf

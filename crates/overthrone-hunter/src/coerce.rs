@@ -177,7 +177,7 @@ fn build_efsr_request(listener_path: &str) -> Vec<u8> {
     stub.extend_from_slice(&path_len.to_le_bytes()); // actual count
     stub.extend_from_slice(&path_utf16);
     // Pad to 4-byte boundary
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
     stub.extend_from_slice(&0u32.to_le_bytes()); // Flags = 0
@@ -200,7 +200,7 @@ fn build_rprn_request(listener_path: &str) -> Vec<u8> {
     stub.extend_from_slice(&0u32.to_le_bytes());
     stub.extend_from_slice(&server_len.to_le_bytes());
     stub.extend_from_slice(&server_utf16);
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
 
@@ -222,7 +222,7 @@ fn build_dfsnm_request(listener_path: &str) -> Vec<u8> {
     stub.extend_from_slice(&0u32.to_le_bytes());
     stub.extend_from_slice(&server_len.to_le_bytes());
     stub.extend_from_slice(&server_utf16);
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
     // RootShare
@@ -235,7 +235,7 @@ fn build_dfsnm_request(listener_path: &str) -> Vec<u8> {
     stub.extend_from_slice(&0u32.to_le_bytes());
     stub.extend_from_slice(&root_len.to_le_bytes());
     stub.extend_from_slice(&root);
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
     stub.extend_from_slice(&0u32.to_le_bytes()); // ApiFlags

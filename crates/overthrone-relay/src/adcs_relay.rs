@@ -145,10 +145,10 @@ fn handle_client(
                 target_upn,
             )?;
         }
-    } else {
+    } else if let Some(h) = auth_header {
         process_ntlm_relay(
             &mut client_stream,
-            auth_header.unwrap().trim(),
+            h.trim(),
             target_host,
             template,
             target_upn,

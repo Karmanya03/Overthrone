@@ -646,7 +646,7 @@ impl RemoteRegistry {
         pkt.extend_from_slice(&name_utf16);
 
         // Pad to 4-byte alignment
-        while pkt.len() % 4 != 0 {
+        while !pkt.len().is_multiple_of(4) {
             pkt.push(0);
         }
 
@@ -684,7 +684,7 @@ impl RemoteRegistry {
         pkt.extend_from_slice(&name_utf16);
 
         // Pad to 4-byte alignment
-        while pkt.len() % 4 != 0 {
+        while !pkt.len().is_multiple_of(4) {
             pkt.push(0);
         }
 
@@ -730,7 +730,7 @@ impl RemoteRegistry {
         pkt.extend_from_slice(&name_utf16);
 
         // Pad to 4-byte alignment
-        while pkt.len() % 4 != 0 {
+        while !pkt.len().is_multiple_of(4) {
             pkt.push(0);
         }
 
@@ -744,7 +744,7 @@ impl RemoteRegistry {
         pkt.extend_from_slice(data);
 
         // Pad to 4-byte alignment
-        while pkt.len() % 4 != 0 {
+        while !pkt.len().is_multiple_of(4) {
             pkt.push(0);
         }
 
