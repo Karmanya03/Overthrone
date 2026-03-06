@@ -7,7 +7,6 @@
 use crate::planner::{NoiseLevel, PlanStep, PlannedAction};
 use crate::runner::Stage;
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
 // ═══════════════════════════════════════════════════════════
 // Playbook Identifiers

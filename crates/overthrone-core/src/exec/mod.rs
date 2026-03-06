@@ -97,10 +97,10 @@ pub trait RemoteExecutor: Send + Sync {
     }
 
     /// Check if this execution method is available against the target
-    async fn check_available(&self, target: &str) -> bool;
+    async fn check_available(&self, _target: &str) -> bool;
 
     /// Clean up any artifacts left on the target
-    async fn cleanup(&self, target: &str) -> Result<()> {
+    async fn cleanup(&self, _target: &str) -> Result<()> {
         Ok(()) // default: no cleanup needed
     }
 }
@@ -143,15 +143,15 @@ impl RemoteExecutor for C2Executor {
         }
     }
 
-    async fn execute(&self, target: &str, command: &str) -> Result<ExecOutput> {
+    async fn execute(&self, _target: &str, _command: &str) -> Result<ExecOutput> {
         // This is a stub — the real implementation must go through C2Manager
         // because the C2Channel trait requires &self on the manager.
         // In practice, commands_impl.rs calls c2_manager.exec_command() directly
         // and wraps the result into ExecOutput.
         Err(crate::error::OverthroneError::ExecSimple(format!(
             "C2Executor::execute called directly — use C2Manager.exec_command() instead \
-             (target={}, session={}, framework={})",
-            target, self.session_id, self.framework_name
+             (session={}, framework={})",
+            self.session_id, self.framework_name
         )))
     }
 

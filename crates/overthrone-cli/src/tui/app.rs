@@ -1,8 +1,4 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
-use overthrone_core::graph::{AttackGraph, EdgeId, EdgeRef, EdgeType, NodeId, NodeType};
+use overthrone_core::graph::{AttackGraph, EdgeId, EdgeRef, NodeId, NodeType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -71,6 +67,7 @@ pub struct LogEntry {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // TUI log severity levels
 pub enum LogLevel {
     Info,
     Warn,
@@ -80,6 +77,7 @@ pub enum LogLevel {
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // Populated from graph analysis
 pub struct GraphStats {
     pub total_nodes: usize,
     pub users: usize,

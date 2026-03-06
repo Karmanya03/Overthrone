@@ -5,7 +5,7 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{
-    EncType, ETYPE_AES256_CTS, ETYPE_RC4_HMAC, NT_PRINCIPAL, NT_SRV_INST,
+    ETYPE_AES256_CTS, ETYPE_RC4_HMAC, NT_PRINCIPAL, NT_SRV_INST,
 };
 use chrono::{Duration, Utc};
 use kerberos_asn1::{
@@ -13,9 +13,8 @@ use kerberos_asn1::{
     PrincipalName, Ticket, TransitedEncoding,
 };
 use kerberos_crypto::{new_kerberos_cipher, checksum_sha_aes, AesSizes};
-use serde::Serialize;
-use tracing::{debug, info, warn};
-use hmac::{Hmac, Mac};
+use tracing::{info, warn};
+
 use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
 use crate::validate;
 
@@ -339,6 +338,7 @@ pub(crate) fn generate_session_key(etype: i32) -> Vec<u8> {
 /// Build PAC (Privilege Attribute Certificate) bytes.
 /// This is a simplified PAC — real PAC has KERB_VALIDATION_INFO, PAC_CLIENT_INFO,
 /// server checksum, KDC checksum. We construct the minimal structure.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pac(
     username: &str,
     domain: &str,
@@ -698,7 +698,7 @@ fn align_to_8(offset: usize) -> usize {
 }
 
 pub(crate) fn base64_encode(data: &[u8]) -> String {
-    use std::fmt::Write;
+    
     let mut out = String::new();
     // Simple base64 encoding without external dependency
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

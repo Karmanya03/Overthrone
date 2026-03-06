@@ -228,6 +228,7 @@ pub fn read_kirbi_file(path: &std::path::Path) -> Result<Vec<u8>> {
 /// Encode raw ticket data into a `.ccache` (MIT Kerberos credential cache) format.
 ///
 /// This is a simplified ccache builder for a single ticket.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ccache(
     client_principal: &str,
     server_principal: &str,

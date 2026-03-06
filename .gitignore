@@ -134,6 +134,7 @@ build_errors*.txt
 clippy_output.txt
 *_output.txt
 **/output.txt
+warnings*.txt
 
 # ═══════════════════════════════════════════════════════════
 # Stale / Duplicate Directories

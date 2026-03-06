@@ -1,9 +1,5 @@
 ﻿//! ASCII art banner and version display for Overthrone.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use colored::Colorize;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -56,6 +52,7 @@ pub fn print_warn(msg: &str) {
 // ═══════════════════════════════════════════════════════
 
 /// Print a detailed error with context and remediation hint
+#[allow(dead_code)] // Available for future CLI error reporting
 pub fn print_fail_detail(context: &str, error: &str, hint: &str) {
     println!();
     println!("  {} {}", "✗ ERROR:".red().bold(), context.red());
@@ -65,6 +62,7 @@ pub fn print_fail_detail(context: &str, error: &str, hint: &str) {
 }
 
 /// Print a critical finding (high-value target, DA access, etc.)
+#[allow(dead_code)]
 pub fn print_critical(title: &str, details: &str) {
     println!();
     println!("  {} {}", "⭐ CRITICAL:".red().bold().blink(), title.red().bold());
@@ -73,11 +71,13 @@ pub fn print_critical(title: &str, details: &str) {
 }
 
 /// Print a high-value finding
+#[allow(dead_code)]
 pub fn print_high_value(title: &str, details: &str) {
     println!("  {} {}: {}", "💎".cyan(), title.white().bold(), details.cyan());
 }
 
 /// Print an attack path discovery
+#[allow(dead_code)]
 pub fn print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
     println!();
     println!("  {} ATTACK PATH FOUND", "🎯".green().bold());
@@ -87,6 +87,7 @@ pub fn print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
 }
 
 /// Print credential capture
+#[allow(dead_code)]
 pub fn print_credential(username: &str, cred_type: &str, source: &str) {
     println!(
         "  {} {}: {} ({})",
@@ -98,6 +99,7 @@ pub fn print_credential(username: &str, cred_type: &str, source: &str) {
 }
 
 /// Print hash capture for cracking
+#[allow(dead_code)]
 pub fn print_hash_capture(hash_type: &str, username: &str, hash_preview: &str) {
     println!(
         "  {} {} hash: {} → {}",
@@ -121,6 +123,7 @@ pub fn print_da_achieved(username: &str, host: &str) {
 }
 
 /// Print stage completion summary
+#[allow(dead_code)]
 pub fn print_stage_summary(stage: &str, succeeded: usize, failed: usize) {
     let status = if failed == 0 {
         "✓".green()

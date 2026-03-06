@@ -15,7 +15,7 @@
 //! Reference: SpecterOps "Certified Pre-Owned" — ESC8
 
 use crate::error::{OverthroneError, Result};
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // ═══════════════════════════════════════════════════════════
 // ESC8 Relay Target

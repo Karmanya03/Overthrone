@@ -1,9 +1,5 @@
 //! TUI runner — initializes terminal, spawns crawler, runs render loop
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -154,7 +150,7 @@ pub async fn run_tui_with_crawler(
                 
                 // Update graph with crawler findings
                 // This would integrate the crawler results into the attack graph
-                let graph_lock = graph_clone.lock().unwrap();
+                let _graph_lock = graph_clone.lock().unwrap();
                 for path in &crawler_result.escalation_paths {
                     info!("[tui] Found escalation path: {:?}", path);
                     // Add nodes and edges to graph based on escalation paths

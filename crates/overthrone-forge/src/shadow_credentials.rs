@@ -459,7 +459,7 @@ mod tests {
         let public_key = b"test_public_key";
         let cred = build_key_credential(&key_id, public_key, false);
         
-        assert!(cred.len() > 0);
+        assert!(!cred.is_empty());
         assert_eq!(cred[0], 0x01); // Version
         assert_eq!(cred[1], 0x00); // Flags (user)
     }

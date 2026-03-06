@@ -1,7 +1,7 @@
 //! Built-in plugin example — serves as a template for writing Overthrone plugins
 
 use super::{
-    ArtifactType, Plugin, PluginArgDef, PluginArgType, PluginArtifact, PluginCapability,
+    Plugin, PluginArgDef, PluginArgType, PluginCapability,
     PluginCommand, PluginContext, PluginEvent, PluginManifest, PluginResult, PluginType,
 };
 use crate::error::Result;
@@ -248,8 +248,6 @@ impl SmartSprayPlugin {
 
         let mut found: Vec<String> = Vec::new();
         let mut blocked = 0u32;
-        let mut expired = 0u32;
-        let mut disabled = 0u32;
 
         for password in &passwords {
             for user in &users {
@@ -282,13 +280,11 @@ impl SmartSprayPlugin {
                             || err_str.contains("CLIENT_REVOKED")
                         {
                             // Account disabled or locked out
-                            disabled += 1;
                             ctx.log_warn(&format!("LOCKED/DISABLED: {}", user));
                         } else if err_str.contains("KRB_ERROR 23")
                             || err_str.contains("KEY_EXPIRED")
                         {
                             // Password expired but IS valid
-                            expired += 1;
                             found.push(format!("{}:{} (EXPIRED)", user, password));
                             ctx.log_attack(&format!(
                                 "VALID (expired): {}:{}",
@@ -338,7 +334,7 @@ impl SmartSprayPlugin {
     async fn cmd_spray_status(
         &self,
         _args: &HashMap<String, String>,
-        ctx: &PluginContext,
+        _ctx: &PluginContext,
     ) -> Result<PluginResult> {
         let tracked = self.attempt_tracker.len();
         let at_risk: usize = self

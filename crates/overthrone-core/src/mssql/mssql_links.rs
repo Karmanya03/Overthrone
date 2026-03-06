@@ -10,7 +10,7 @@
 //! paths to high-value targets with elevated privileges.
 
 use crate::error::{OverthroneError, Result};
-use crate::mssql::{LinkedServer, MssqlClient, MssqlQueryResult};
+use crate::mssql::{LinkedServer, MssqlClient};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, info, warn};

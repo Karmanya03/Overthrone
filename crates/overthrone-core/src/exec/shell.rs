@@ -9,7 +9,7 @@
 //! - **WMI**: `wmiexec::exec_command()` via SCM fallback over SMB
 
 use crate::error::{OverthroneError, Result};
-use crate::exec::{ExecCredentials, ExecMethod};
+use crate::exec::ExecCredentials;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};

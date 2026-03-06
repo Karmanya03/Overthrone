@@ -238,17 +238,17 @@ pub trait C2Channel: Send + Sync {
     /// Execute assembly in-memory (Cobalt Strike execute-assembly, Sliver execute-assembly)
     async fn execute_assembly(
         &self,
-        session_id: &str,
+        _session_id: &str,
         assembly_data: &[u8],
-        args: &str,
+        _args: &str,
     ) -> Result<C2TaskResult>;
 
     /// Run a BOF (Beacon Object File) — CS-specific but Sliver also supports via COFF loader
     async fn execute_bof(
         &self,
-        session_id: &str,
-        bof_data: &[u8],
-        args: &[u8],
+        _session_id: &str,
+        _bof_data: &[u8],
+        _args: &[u8],
     ) -> Result<C2TaskResult> {
         Err(OverthroneError::C2(format!(
             "{} does not support BOF execution",
@@ -259,9 +259,9 @@ pub trait C2Channel: Send + Sync {
     /// Inject shellcode into a target process
     async fn shellcode_inject(
         &self,
-        session_id: &str,
-        shellcode: &[u8],
-        target_pid: u32,
+        _session_id: &str,
+        _shellcode: &[u8],
+        _target_pid: u32,
     ) -> Result<C2TaskResult> {
         Err(OverthroneError::C2(format!(
             "{} does not support shellcode injection via operator API",
@@ -270,7 +270,7 @@ pub trait C2Channel: Send + Sync {
     }
 
     /// Deploy an implant on a new target (lateral movement via C2)
-    async fn deploy_implant(&self, request: &ImplantRequest) -> Result<C2TaskResult> {
+    async fn deploy_implant(&self, _request: &ImplantRequest) -> Result<C2TaskResult> {
         Err(OverthroneError::C2(format!(
             "{} does not support remote implant deployment",
             self.framework()

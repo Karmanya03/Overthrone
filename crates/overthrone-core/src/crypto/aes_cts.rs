@@ -371,7 +371,6 @@ pub fn decrypt_lsa_secret_vista(
     let data = &encrypted_data[16..];
 
     // Decrypt in 16-byte blocks, each with the same IV (per MS implementation)
-    let mut result = Vec::with_capacity(data.len());
     let key = if encryption_key.len() >= 32 {
         &encryption_key[..32]
     } else {
@@ -381,7 +380,7 @@ pub fn decrypt_lsa_secret_vista(
         return decrypt_lsa_blocks(&padded, iv, data);
     };
 
-    result = decrypt_lsa_blocks(key, iv, data)?;
+    let result = decrypt_lsa_blocks(key, iv, data)?;
     Ok(result)
 }
 

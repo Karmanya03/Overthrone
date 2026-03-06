@@ -7,7 +7,6 @@
 
 use crate::error::{OverthroneError, Result};
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use ldap3::controls::RawControl;
 use std::collections::HashMap;

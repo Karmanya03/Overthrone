@@ -5,7 +5,7 @@
 
 use overthrone_reaper::mssql::MssqlInstance;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlLink {
@@ -86,7 +86,7 @@ pub fn build_mssql_chains(
     }
 
     // For each service account with multiple instances, build potential chains
-    for (account, account_instances) in &by_account {
+    for account_instances in by_account.values() {
         if account_instances.len() < 2 {
             // Single instance — check if it's cross-domain
             let inst = account_instances[0];

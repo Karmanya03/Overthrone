@@ -22,8 +22,6 @@
 //! - **Cleanup** (`cleanup`): Remove artifacts and backdoors
 //! - **Validate** (`validate`): Verify ticket validity
 
-#![allow(dead_code, unused_imports)]
-
 pub mod acl_backdoor;
 pub mod cleanup;
 pub mod dcsync_user;

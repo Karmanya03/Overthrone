@@ -1,13 +1,11 @@
 ﻿//! Top-level orchestrator for the forge pipeline.
 //! Takes a ForgeConfig and dispatches to the appropriate forging module.
 
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use colored::Colorize;
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 
-use crate::{golden, silver, diamond, skeleton, dsrm, dcsync_user, acl_backdoor, validate};
+use crate::{golden, silver, diamond, skeleton, dsrm, dcsync_user, acl_backdoor};
 
 /// What kind of ticket/persistence to forge
 #[derive(Debug, Clone, Serialize, Deserialize)]

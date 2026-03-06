@@ -1,5 +1,4 @@
-﻿#![allow(dead_code)]
-//! Credential management and authentication helpers for the CLI.
+﻿//! Credential management and authentication helpers for the CLI.
 use clap::ValueEnum;
 use std::io::{self, Write};
 
@@ -31,7 +30,7 @@ pub struct Credentials {
 pub enum AuthData {
     Password(String),
     NtlmHash(String),
-    KerberosTicket(String),
+    KerberosTicket(#[allow(dead_code)] String),
 }
 
 impl Credentials {
@@ -89,6 +88,7 @@ impl Credentials {
     }
 
     /// Build an ExecContext for overthrone-pilot
+    #[allow(dead_code)] // Used by interactive shell
     pub fn to_exec_context(
         &self,
         dc_host: &str,
@@ -126,6 +126,7 @@ impl Credentials {
         }
     }
 
+    #[allow(dead_code)]
     pub fn ticket_path(&self) -> Option<&str> {
         match &self.auth {
             AuthData::KerberosTicket(p) => Some(p),
@@ -133,6 +134,7 @@ impl Credentials {
         }
     }
 
+    #[allow(dead_code)]
     pub fn display_summary(&self) -> String {
         let method = match &self.auth {
             AuthData::Password(_) => "password",
@@ -161,6 +163,7 @@ fn validate_nthash(hash: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)] // Used in interactive shell for DOMAIN\user parsing
 pub fn parse_user_string(input: &str) -> (String, String) {
     if let Some((domain, user)) = input.split_once('\\') {
         (domain.to_string(), user.to_string())

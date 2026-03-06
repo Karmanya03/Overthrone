@@ -2,7 +2,7 @@
 
 use crate::runner::ReaperConfig;
 use crate::users::{UAC_DISABLED, UAC_TRUSTED_FOR_DELEGATION, UAC_TRUSTED_TO_AUTH_FOR_DELEGATION};
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;

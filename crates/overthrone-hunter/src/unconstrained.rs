@@ -6,20 +6,23 @@
 
 use crate::runner::HuntConfig;
 use colored::Colorize;
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // ═══════════════════════════════════════════════════════════
 // UAC flag for unconstrained delegation
 // ═══════════════════════════════════════════════════════════
 
 /// TRUSTED_FOR_DELEGATION — unconstrained delegation (stores TGTs)
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_TRUSTED_FOR_DELEGATION: u32 = 0x00080000;
 /// Account is disabled
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
 /// Server trust account (domain controller)
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_SERVER_TRUST_ACCOUNT: u32 = 0x00002000;
 
 // ═══════════════════════════════════════════════════════════

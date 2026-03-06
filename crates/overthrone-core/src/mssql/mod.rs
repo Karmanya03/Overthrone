@@ -180,10 +180,12 @@ pub struct MssqlClient {
     config: MssqlConfig,
     connected: bool,
     logged_in: bool,
+    #[allow(dead_code)] // Populated during login, used in future operations
     server_version: Option<SqlServerVersion>,
     /// Packet ID for TDS messages (increments with each packet)
     packet_id: u8,
     /// SPID (Session Process ID) assigned by server
+    #[allow(dead_code)] // Populated from login response
     spid: u16,
     /// Column metadata cached from last COLMETADATA token
     current_col_types: Vec<u8>,
@@ -622,7 +624,6 @@ impl MssqlClient {
                     };
 
                     warn!("SQL Server ERROR: {}", err_msg);
-                    pos += 2 + len;
                     return Err(OverthroneError::Auth(err_msg));
                 }
 
@@ -988,6 +989,7 @@ impl MssqlClient {
     /// Parse COLMETADATA token (MS-TDS 2.2.7.4)
     ///
     /// Returns (bytes_consumed, column_names, type_names, type_ids)
+    #[allow(clippy::type_complexity)]
     fn parse_colmetadata(&self, data: &[u8]) -> Result<(usize, Vec<String>, Vec<String>, Vec<u8>)> {
         if data.len() < 2 {
             return Ok((0, Vec::new(), Vec::new(), Vec::new()));

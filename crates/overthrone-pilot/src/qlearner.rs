@@ -28,8 +28,7 @@ use crate::adaptive::{
     AdaptiveDecision, AdaptiveEngine, AdaptiveSummary, FailureClass, StepModification,
 };
 use crate::goals::{AttackGoal, EngagementState};
-use crate::planner::{AttackPlan, PlanStep, PlannedAction, StepResult};
-use crate::runner::Stage;
+use crate::planner::{AttackPlan, PlanStep, StepResult};
 
 // ═══════════════════════════════════════════════════════════
 // Constants
@@ -952,6 +951,8 @@ pub fn decision_to_action(decision: &AdaptiveDecision) -> AdaptiveAction {
 mod tests {
     use super::*;
     use crate::planner::NoiseLevel;
+    use crate::runner::Stage;
+    use crate::planner::PlannedAction;
 
     fn dummy_state() -> EngagementState {
         EngagementState::new()

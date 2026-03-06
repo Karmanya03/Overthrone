@@ -41,6 +41,7 @@ struct PdfContext {
     /// Font ID for bold text
     font_bold_id: FontId,
     /// Font ID for monospace text
+    #[allow(dead_code)] // Kept for write_mono method
     font_mono_id: FontId,
 }
 
@@ -130,6 +131,7 @@ impl PdfContext {
         self.current_y -= LINE_HEIGHT;
     }
 
+    #[allow(dead_code)] // PDF mono text writer kept for report formatting
     fn write_mono(&mut self, text: &str) {
         self.check_page_break();
         let y = self.current_y;

@@ -10,7 +10,7 @@
 use crate::adcs::{IssuedCertificate, create_client_auth_csr, create_esc1_csr};
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::error::{OverthroneError, Result};
-use tracing::{info, warn};
+use tracing::info;
 
 /// ESC3 exploiter for enrollment agent templates
 pub struct Esc3Exploiter {

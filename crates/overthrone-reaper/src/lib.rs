@@ -4,8 +4,6 @@
 //! ACLs, SPNs, delegations, trusts, LAPS, and MSSQL SPNs.
 //! Feeds results into overthrone-core's AttackGraph.
 
-#![allow(dead_code, unused_imports, unused_variables)]
-
 pub mod acls;
 pub mod adcs;
 pub mod computers;

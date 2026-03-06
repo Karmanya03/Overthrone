@@ -13,8 +13,6 @@
 //! - `runner`   — Top-level orchestrator tying everything together
 //! - `wizard`   — Interactive wizard: stage-by-stage with user prompts
 
-#![allow(dead_code, unused_imports)]
-
 pub mod adaptive;
 pub mod executor;
 pub mod goals;

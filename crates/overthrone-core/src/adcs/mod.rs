@@ -33,8 +33,7 @@ pub mod web_enrollment;
 
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 // Re-export key types
 pub use csr::{
@@ -310,7 +309,7 @@ impl AdcsClient {
             .ok_or_else(|| OverthroneError::Adcs("No certificate in response".to_string()))?;
 
         // Create PFX
-        let pfx_data = create_pfx(&cert_data, &private_key, None)?;
+        let _pfx_data = create_pfx(&cert_data, &private_key, None)?;
 
         Ok(IssuedCertificate {
             pfx_data: cert_data.clone(),

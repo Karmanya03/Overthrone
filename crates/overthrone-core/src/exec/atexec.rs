@@ -39,12 +39,16 @@ const DCERPC_REQUEST: u8 = 0;
 /// See: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-tsch/
 const OP_NETR_JOB_ADD: u16 = 0;
 const OP_NETR_JOB_DEL: u16 = 2;
+#[allow(dead_code)] // Protocol reference opcode
 const OP_NETR_JOB_ENUM: u16 = 1;
+#[allow(dead_code)] // Protocol reference opcode
 const OP_NETR_JOB_GET_INFO: u16 = 3;
 
 /// Task trigger type: On demand (manual)
+#[allow(dead_code)] // Kept for protocol completeness
 const TASK_TRIGGER_ON_DEMAND: u16 = 7;
 /// Task action type: Command line
+#[allow(dead_code)] // Kept for protocol completeness
 const TASK_ACTION_EXEC: u16 = 0;
 
 // ═══════════════════════════════════════════════════════════
@@ -165,6 +169,7 @@ fn build_request_packet(opnum: u16, stub: &[u8], call_id: u32) -> Vec<u8> {
 }
 
 /// Encode a UTF-16LE string with NDR conformant/varying array header
+#[allow(dead_code)] // Protocol helper for NDR encoding
 fn ndr_string(s: &str) -> Vec<u8> {
     let wide: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
     let len = wide.len() as u32;
@@ -458,7 +463,6 @@ impl<'a> AtExecShell<'a> {
 //  RemoteExecutor Trait Implementation
 // ═══════════════════════════════════════════════════════════
 
-use async_trait::async_trait;
 use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
 
 /// AtExec executor that implements RemoteExecutor trait

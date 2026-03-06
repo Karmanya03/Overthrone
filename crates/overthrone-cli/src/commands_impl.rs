@@ -1,9 +1,5 @@
 //! Command implementations for Overthrone CLI
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use crate::banner;
 use crate::{
     AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, PluginAction,
@@ -13,7 +9,7 @@ use colored::Colorize;
 use kerberos_asn1::Asn1Object;
 use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
 use overthrone_core::crypto::gpp::{decrypt_gpp_password, parse_gpp_xml};
-use overthrone_core::graph::{AttackGraph, NodeType};
+use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
 use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
@@ -1726,7 +1722,7 @@ pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -
 // ═══════════════════════════════════════════════════════
 
 pub async fn cmd_plugin(
-    cli: &Cli,
+    _cli: &Cli,
     registry: &mut PluginRegistry,
     ctx: &PluginContext,
     action: PluginAction,
@@ -1987,7 +1983,7 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
                     "🔌".bright_black(),
                     channel.cyan()
                 );
-                if let Some(ch) = manager.get_channel(&channel) {
+                if let Some(_ch) = manager.get_channel(&channel) {
                     banner::print_success(&format!("Disconnected from '{}'", channel));
                 } else {
                     banner::print_fail(&format!("Channel '{}' not found", channel));

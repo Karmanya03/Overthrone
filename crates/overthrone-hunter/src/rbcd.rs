@@ -11,10 +11,10 @@
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::kerberos::{self, TicketGrantingData};
+use overthrone_core::proto::kerberos::{self};
 use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Configuration

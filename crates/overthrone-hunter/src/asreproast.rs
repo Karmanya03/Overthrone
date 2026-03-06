@@ -9,20 +9,22 @@
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use overthrone_core::proto::kerberos::{self, CrackableHash};
 use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // UserAccountControl flag for DONT_REQUIRE_PREAUTH
 // ═══════════════════════════════════════════════════════════
 
 /// UAC bit: account does not require Kerberos pre-authentication
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_DONT_REQ_PREAUTH: u32 = 0x00400000;
 /// UAC bit: account is disabled
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
 
 // ═══════════════════════════════════════════════════════════

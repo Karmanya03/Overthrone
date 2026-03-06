@@ -9,7 +9,7 @@ use colored::Colorize;
 use overthrone_pilot::runner::AutoPwnResult;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::{info, warn, error};
+use tracing::info;
 
 // ═══════════════════════════════════════════════════════════
 // Report Configuration

@@ -37,7 +37,7 @@ impl Esc2Exploiter {
         &self,
         template: &str,
         subject_cn: &str,
-        custom_eku: Option<Vec<String>>,
+        _custom_eku: Option<Vec<String>>,
     ) -> Result<IssuedCertificate> {
         info!(
             "Executing ESC2 attack: template={}, subject={}",

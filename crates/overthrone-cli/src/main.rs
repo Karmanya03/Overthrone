@@ -35,7 +35,7 @@ use std::sync::{Arc, RwLock};
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Box<Commands>,
 
     #[arg(
         short = 'H',
@@ -313,14 +313,13 @@ enum Commands {
     },
 
     /// ADCS certificate abuse — ESC1-ESC8 attacks
-    #[command(alias = "adcs", alias = "certify")]
+    #[command(alias = "certify")]
     Adcs {
         #[command(subcommand)]
         action: AdcsAction,
     },
 
     /// Interactive shell — persistent remote session
-    #[command(alias = "shell")]
     Shell {
         /// Target host
         #[arg(short, long)]
@@ -331,20 +330,20 @@ enum Commands {
     },
 
     /// SCCM/MECM abuse — client push, app deployment
-    #[command(alias = "sccm", alias = "mecm")]
+    #[command(alias = "mecm")]
     Sccm {
         #[command(subcommand)]
         action: SccmAction,
     },
 
     /// Port scanner — lightweight network reconnaissance
-    #[command(alias = "scan", alias = "portscan")]
+    #[command(alias = "portscan")]
     Scan {
         /// Target hosts (IP, CIDR, or range)
         #[arg(short, long, required = true)]
         targets: String,
         /// Port range (e.g., 80,443 or 1-65535)
-        #[arg(short, long, default_value = "top1000")]
+        #[arg(short = 'P', long, default_value = "top1000")]
         ports: String,
         /// Scan type
         #[arg(short = 'T', long, value_enum, default_value = "connect")]
@@ -355,7 +354,7 @@ enum Commands {
     },
 
     /// MSSQL operations — query execution, linked servers, xp_cmdshell
-    #[command(alias = "mssql", alias = "sql")]
+    #[command(alias = "sql")]
     Mssql {
         #[command(subcommand)]
         action: MssqlAction,
@@ -1024,8 +1023,23 @@ enum C2Action {
 // Main
 // ──────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Spawn on a thread with 8 MB stack — the CLI parser with 28 subcommands
+    // and nested enums can exceed the default 1 MB stack in debug builds.
+    let thread = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime")
+                .block_on(async_main());
+        })
+        .expect("Failed to spawn main thread");
+    thread.join().unwrap();
+}
+
+async fn async_main() {
     let cli = Cli::parse();
 
     let filter = match cli.verbose {
@@ -1045,7 +1059,7 @@ async fn main() {
 
     banner::print_banner();
 
-    let exit_code = match cli.command {
+    let exit_code = match *cli.command {
         Commands::Wizard { args } => match commands::wizard::run(args.clone()).await {
             Ok(_) => 0,
             Err(e) => {
@@ -1089,7 +1103,19 @@ async fn main() {
             ldaps,
             timeout,
             playbook,
-        } => cmd_autopwn(&cli, target, method.clone(), stealth, dry_run, max_stage, adaptive, q_table, jitter_ms, ldaps, timeout, playbook).await,
+        } => cmd_autopwn(&cli, AutoPwnArgs {
+            target: target.clone(),
+            method: method.clone(),
+            stealth,
+            dry_run,
+            max_stage,
+            adaptive,
+            q_table: q_table.clone(),
+            jitter_ms,
+            ldaps,
+            timeout,
+            playbook,
+        }).await,
         Commands::Dump { ref target, ref source } => {
             commands_impl::cmd_dump(&cli, target, source.clone()).await
         }
@@ -2016,8 +2042,7 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
     use overthrone_core::exec::{psexec, smbexec, wmiexec};
     let exec_result: Result<(bool, String), overthrone_core::OverthroneError> = match method {
         ExecMethod::PsExec => {
-            let mut cfg = psexec::PsExecConfig::default();
-            cfg.command = command.to_string();
+            let cfg = psexec::PsExecConfig { command: command.to_string(), ..Default::default() };
             psexec::execute(&smb, &cfg).await.map(|r| (r.success, r.output.unwrap_or_default()))
         }
         ExecMethod::SmbExec => {
@@ -2035,8 +2060,7 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
             match smbexec::exec_command(&smb, command).await {
                 Ok(r) => Ok((r.success, r.output)),
                 Err(_) => {
-                    let mut cfg = psexec::PsExecConfig::default();
-                    cfg.command = command.to_string();
+                    let cfg = psexec::PsExecConfig { command: command.to_string(), ..Default::default() };
                     psexec::execute(&smb, &cfg).await.map(|r| (r.success, r.output.unwrap_or_default()))
                 }
             }
@@ -2404,21 +2428,23 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
     0
 }
 
-// cmd_autopwn — wired to overthrone-pilot runner with Q-learning
-async fn cmd_autopwn(
-    cli: &Cli,
-    target: &str,
+struct AutoPwnArgs {
+    target: String,
     method: ExecMethod,
     stealth: bool,
     dry_run: bool,
     max_stage: MaxStageArg,
     adaptive: AdaptiveModeArg,
-    q_table: &str,
+    q_table: String,
     jitter_ms: u64,
     ldaps: bool,
     timeout: u64,
     playbook: Option<PlaybookArg>,
-) -> i32 {
+}
+
+// cmd_autopwn — wired to overthrone-pilot runner with Q-learning
+async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
+    let AutoPwnArgs { ref target, method, stealth, dry_run, max_stage, adaptive, ref q_table, jitter_ms, ldaps, timeout, playbook } = args;
     banner::print_module_banner("AUTONOMOUS ATTACK");
 
     let creds_cli = match require_creds(cli) {

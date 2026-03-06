@@ -4,9 +4,9 @@
 //! Supports CIDR notation, ranges, and hostname targets.
 
 use crate::error::{OverthroneError, Result};
-use futures::stream::{StreamExt, iter};
+use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

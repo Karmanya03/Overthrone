@@ -4,9 +4,8 @@
 //! and platform-specific features. Because knowing is half the battle.
 //! (The other half is actually hacking things, but we can't help you there.)
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
+#![allow(dead_code)] // Doctor module is WIP — functions not yet wired into dispatch
+
 use crate::banner;
 use colored::Colorize;
 use std::process::Command;

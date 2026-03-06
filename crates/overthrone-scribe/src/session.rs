@@ -5,9 +5,7 @@
 use crate::mapper::MitreMapping;
 use crate::mitigations::Mitigation;
 use chrono::{DateTime, Utc};
-use overthrone_pilot::goals::{
-    ActionLogEntry, CompromisedCred, DiscoveredComputer, DiscoveredUser, EngagementState, LootItem,
-};
+use overthrone_pilot::goals::EngagementState;
 use overthrone_pilot::runner::AutoPwnResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

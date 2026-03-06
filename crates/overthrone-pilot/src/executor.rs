@@ -11,20 +11,15 @@ use crate::goals::{
 use crate::planner::{PlanStep, PlannedAction, StepResult};
 use chrono::Utc;
 use colored::Colorize;
-use hmac::{Hmac, Mac};
-use md4::{Digest as Md4Digest, Md4};
-use md5::Md5;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::{kerberos, ldap, smb::SmbSession};
-use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod, CoerceResult};
-use overthrone_hunter::constrained::{ConstrainedConfig, ConstrainedResult};
-use overthrone_hunter::rbcd::{RbcdConfig, RbcdResult};
-use overthrone_hunter::unconstrained::{UnconstrainedConfig, UnconstrainedResult};
-use overthrone_hunter::{HuntConfig, TicketOps};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
+use overthrone_hunter::constrained::ConstrainedConfig;
+use overthrone_hunter::rbcd::RbcdConfig;
+use overthrone_hunter::unconstrained::UnconstrainedConfig;
+use overthrone_hunter::HuntConfig;
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 // ═══════════════════════════════════════════════════════════
 // Execution Context — holds auth and connection info
 // ═══════════════════════════════════════════════════════════

@@ -9,14 +9,14 @@
 //! - Inspect ticket metadata (principal, etype, expiry)
 
 use crate::runner::HuntConfig;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::Utc;
 use colored::Colorize;
 use kerberos_asn1::{Asn1Object, Ticket};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{self, TicketGrantingData};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // ═══════════════════════════════════════════════════════════
 // Ticket Formats

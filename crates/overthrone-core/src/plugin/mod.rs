@@ -16,12 +16,10 @@ pub mod builtin;
 pub mod loader;
 
 use crate::error::{OverthroneError, Result};
-use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
+use crate::exec::{ExecCredentials, RemoteExecutor};
 use crate::graph::AttackGraph;
-use crate::types::Sid;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 

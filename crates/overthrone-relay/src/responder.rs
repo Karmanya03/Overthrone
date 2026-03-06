@@ -4,9 +4,6 @@
 //! (SMB, HTTP, LDAP, FTP, etc.) by listening for NTLM
 //! authentication attempts and extracting credentials.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
 use crate::{RelayError, Result};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -71,6 +68,7 @@ pub struct NtlmAuthenticate {
 }
 
 /// Parse NTLM Negotiate message
+#[allow(dead_code)] // NTLM parser kept for relay implementation
 fn parse_ntlm_negotiate(data: &[u8]) -> Option<NtlmNegotiate> {
     if data.len() < 16 {
         return None;

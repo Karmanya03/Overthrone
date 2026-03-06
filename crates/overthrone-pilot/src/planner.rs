@@ -4,12 +4,12 @@
 //! The planner evaluates what's known, what's been tried, and what
 //! attack paths remain viable — then produces an ordered plan.
 
-use crate::goals::{AttackGoal, EngagementState, GoalStatus};
+use crate::goals::{AttackGoal, EngagementState};
 use crate::playbook::PlaybookId;
 use crate::runner::Stage;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Plan Types
@@ -279,8 +279,9 @@ impl Planner {
         }
 
         // Enumerate shares on the DC for GPP passwords, SYSVOL scripts, etc.
-        if let Some(ref dc_ip) = state.dc_ip {
-            if !failed_actions.contains(&"enumerate_shares".to_string()) {
+        if let Some(ref dc_ip) = state.dc_ip
+            && !failed_actions.contains(&"enumerate_shares".to_string())
+        {
                 steps.push(PlanStep {
                     id: next_id(),
                     description: format!("Enumerate SMB shares on DC ({})", dc_ip),
@@ -296,7 +297,6 @@ impl Planner {
                     retries: 0,
                     max_retries: 1,
                 });
-            }
         }
 
         // If goal is recon-only, stop here

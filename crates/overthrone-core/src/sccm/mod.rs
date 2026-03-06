@@ -6,7 +6,7 @@ use crate::error::{OverthroneError, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as b64};
 use rsa::{
     RsaPrivateKey,
-    pkcs1v15::{Pkcs1v15Encrypt, Pkcs1v15Sign},
+    pkcs1v15::Pkcs1v15Encrypt,
     pkcs8::EncodePublicKey,
 };
 use sha2::{Digest, Sha256};
@@ -47,6 +47,7 @@ pub struct NaaCredential {
 
 pub struct SccmScanner {
     config: SccmScannerConfig,
+    #[allow(dead_code)] // Created during initialization, used in future scan operations
     http_client: reqwest::Client,
 }
 

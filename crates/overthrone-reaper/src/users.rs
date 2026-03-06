@@ -1,7 +1,7 @@
 ﻿//! Domain user enumeration via LDAP.
 
 use crate::runner::ReaperConfig;
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;

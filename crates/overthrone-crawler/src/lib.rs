@@ -4,8 +4,6 @@
 //! detect cross-domain attack paths, SID filtering gaps, foreign
 //! group memberships, MSSQL link chains, and PAM trust abuse.
 
-#![allow(dead_code, unused_imports, unused_variables)]
-
 pub mod escalation;
 pub mod foreign;
 pub mod mssql_links;

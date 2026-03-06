@@ -4,10 +4,6 @@
 //! with command parsing, tab completion, history, and module integration.
 //! Inspired by evil-winrm and other penetration testing shells.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(unreachable_patterns)]
 use crate::banner;
 use crate::ShellType as CliShellType;
 use colored::Colorize;
@@ -36,6 +32,7 @@ use tokio::sync::Mutex;
 
 const MAX_HISTORY: usize = 1000;
 const PROMPT_COLOR: &str = "cyan";
+#[allow(dead_code)]
 const WARNING_COLOR: &str = "yellow";
 
 // ═══════════════════════════════════════════════════════
@@ -85,6 +82,7 @@ const SETTABLE_VARS: &[&str] = &["timeout", "debug", "color", "prompt", "auto_up
 #[derive(Helper)]
 struct OverthroneCompleter {
     file_completer: FilenameCompleter,
+    #[allow(dead_code)] // Used for session-aware tab completion
     sessions: Arc<Mutex<Vec<SessionInfo>>>,
 }
 
@@ -236,6 +234,7 @@ pub struct SessionInfo {
     pub username: Option<String>,
     pub domain: Option<String>,
     pub created: chrono::DateTime<chrono::Local>,
+    #[allow(dead_code)] // Tracked for session info display
     pub last_command: Option<String>,
     pub command_count: u32,
 }
@@ -325,6 +324,7 @@ pub struct InteractiveSession {
 
 impl InteractiveSession {
     /// Create a new interactive session
+    #[allow(dead_code)] // Entry point for interactive mode
     pub fn new() -> Self {
         Self {
             shell: None,
@@ -359,6 +359,7 @@ impl InteractiveSession {
     }
 
     /// Set credentials for the session
+    #[allow(dead_code)] // Used when starting shell with pre-configured creds
     pub fn with_credentials(mut self, domain: String, username: String, password: Option<String>) -> Self {
         self.credentials = Some((domain, username, password));
         self
@@ -1797,7 +1798,7 @@ impl InteractiveSession {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 println!("{} Path found: {} -> {} -> {}", "✓".green(), from.cyan(), "User".cyan(), to.cyan());
             }
-            "path_to_da" | "path_to_da" => {
+            "path_to_da" => {
                 if args.len() < 2 {
                     println!("{} Usage: graph path_to_da <from>", "Error:".red());
                     return Ok(());
@@ -2523,6 +2524,7 @@ fn shell_words(s: &str) -> Vec<String> {
 // ═══════════════════════════════════════════════════════
 
 /// Start the interactive shell (no pre-configured target)
+#[allow(dead_code)] // Entry point for interactive mode
 pub async fn start_interactive_shell() -> Result<()> {
     let mut session = InteractiveSession::new();
     session.start().await

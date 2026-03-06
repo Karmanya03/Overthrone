@@ -4,11 +4,11 @@
 //! concrete escalation paths across trust boundaries.
 
 use crate::foreign::ForeignMembership;
-use crate::trust_map::{TrustDirection, TrustGraph, TrustKind};
+use crate::trust_map::{TrustGraph, TrustKind};
 use overthrone_reaper::delegations::DelegationType;
 use overthrone_reaper::runner::ReaperResult;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EscalationTechnique {

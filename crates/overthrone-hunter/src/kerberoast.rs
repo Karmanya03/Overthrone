@@ -10,18 +10,20 @@
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
-use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::kerberos::{self, CrackableHash, TicketGrantingData};
+use overthrone_core::error::Result;
+use overthrone_core::proto::kerberos::{self};
 use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // UAC constants
 // ═══════════════════════════════════════════════════════════
 
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_NORMAL_ACCOUNT: u32 = 0x00000200;
 
 // ═══════════════════════════════════════════════════════════
@@ -181,6 +183,7 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
     };
 
     // Step 2: Enumerate SPN accounts (or use provided list)
+    #[allow(clippy::type_complexity)]
     let spn_targets: Vec<(String, String, Option<String>, bool, Option<String>)> =
         if kc.target_spns.is_empty() {
             let accounts = enumerate_spn_accounts(config, kc).await?;

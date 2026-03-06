@@ -1,6 +1,4 @@
-﻿#![allow(unused, dead_code)] // Suppress warnings during development
-
-pub mod adcs;
+﻿pub mod adcs;
 pub mod c2; // ← Export C2 module
 pub mod config;
 pub mod crypto;

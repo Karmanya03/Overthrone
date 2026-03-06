@@ -3,10 +3,9 @@
 
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use overthrone_reaper::runner::ReaperResult;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 
 use crate::{escalation, foreign, mssql_links, pam, sid_filter, trust_map};
 

@@ -7,9 +7,8 @@
 //! 3. Updates priority scores for remaining steps
 //! 4. Optionally triggers new enumeration to find new paths
 
-use crate::goals::{AttackGoal, EngagementState, GoalStatus};
-use crate::planner::{AttackPlan, NoiseLevel, PlanStep, PlannedAction, Planner, StepResult};
-use crate::runner::Stage;
+use crate::goals::{AttackGoal, EngagementState};
+use crate::planner::{AttackPlan, PlanStep, PlannedAction, StepResult};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -182,6 +181,7 @@ pub enum StepModification {
 /// The adaptive engine evaluates outcomes and adjusts the plan
 pub struct AdaptiveEngine {
     /// Maximum retries per step before giving up
+    #[allow(dead_code)] // Configuration field used in future retry logic
     max_retries: u32,
     /// Maximum total re-plans before aborting
     max_replans: u32,

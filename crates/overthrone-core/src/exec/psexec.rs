@@ -27,6 +27,7 @@ const OP_CREATE_SERVICE_W: u16 = 12;
 const OP_START_SERVICE_W: u16 = 19;
 const OP_DELETE_SERVICE: u16 = 2;
 const OP_CLOSE_SERVICE_HANDLE: u16 = 0;
+#[allow(dead_code)] // SVCCTL opcode kept for protocol completeness
 const OP_OPEN_SERVICE_W: u16 = 16;
 
 /// SVCCTL interface UUID: 367ABB81-9844-35F1-AD32-98F038001003

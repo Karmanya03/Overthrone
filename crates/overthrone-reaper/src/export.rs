@@ -1,7 +1,7 @@
 ﻿//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
 
 use crate::runner::ReaperResult;
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::path::Path;

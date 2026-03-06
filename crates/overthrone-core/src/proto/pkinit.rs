@@ -2,7 +2,7 @@ use crate::error::{OverthroneError, Result};
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs1v15::SigningKey;
 use rsa::signature::{RandomizedSigner, SignatureEncoding};
-use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use sha2::{Sha256, Digest};
 use x509_parser::prelude::*;
 use rand::rngs::OsRng;
@@ -112,7 +112,7 @@ impl CertificateGenerator {
     /// # Returns
     /// * `Ok(cert_der)` - Certificate in DER format
     fn create_x509_cert(
-        public_key_der: &[u8],
+        _public_key_der: &[u8],
         private_key_der: &[u8],
         subject_cn: &str,
     ) -> Result<Vec<u8>> {
@@ -754,7 +754,7 @@ mod tests {
             prop_assert!(!private_key.is_empty());
             
             // Verify keys can be parsed
-            let private_key_parsed = RsaPrivateKey::from_pkcs8_der(&private_key);
+            let private_key_parsed = <RsaPrivateKey as rsa::pkcs8::DecodePrivateKey>::from_pkcs8_der(&private_key);
             prop_assert!(private_key_parsed.is_ok());
         }
     }

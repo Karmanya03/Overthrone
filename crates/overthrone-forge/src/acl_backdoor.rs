@@ -4,13 +4,14 @@
 //! or other dangerous permissions on AD objects for persistent access.
 
 use overthrone_core::error::{OverthroneError, Result};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::runner::{ForgeConfig, ForgeResult, PersistenceResult};
 
 /// Well-known Extended Right GUIDs
 const GUID_DS_REPLICATION_GET_CHANGES: &str = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_DS_REPLICATION_GET_CHANGES_ALL: &str = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
+#[allow(dead_code)] // DCSync GUID kept for future use
 const GUID_DS_REPLICATION_GET_CHANGES_FILTER: &str = "89e95b76-444d-4c62-991a-0facbeda640c";
 
 /// Well-known GenericAll / WriteDACL / WriteOwner masks

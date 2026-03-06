@@ -3,10 +3,10 @@
 //! On Windows: full implementation using the `smb` crate (NTLM via sspi).
 //! On Linux/macOS: stub implementation -- types are available but all operations
 //! return errors. This allows the rest of the codebase to compile cross-platform.
-use hmac::{Hmac, Mac};
-use md4::{Digest as Md4Digest, Md4};
+use hmac::Hmac;
 use md5::Md5;
 
+#[allow(dead_code)] // Used in NTLM operations
 type HmacMd5 = Hmac<Md5>;
 use crate::error::{OverthroneError, Result};
 use tracing::{debug, info, warn};
@@ -38,6 +38,7 @@ pub struct SmbSession {
     pub username: String,
     pub domain: String,
     /// Kerberos ticket for authentication (TGT or TGS)
+    #[allow(dead_code)] // Set during ticket-based auth
     ticket: Option<KerberosTicket>,
     /// NTLM or Kerberos session key for cryptographic operations
     session_key: Option<Vec<u8>>,
@@ -195,7 +196,7 @@ impl SmbSession {
                     let result = Self::connect(target, domain, username, "").await;
                     // Revert impersonation & close token regardless of connect result
                     unsafe {
-                        RevertToSelf();
+                        let _ = RevertToSelf();
                         let _ = CloseHandle(token);
                     }
                     return result;
@@ -690,7 +691,7 @@ impl SmbSession {
     #[cfg(windows)]
     fn inject_ticket_windows(ticket: &KerberosTicket) -> Result<()> {
         use std::ffi::c_void;
-        use std::mem::size_of;
+        
         use windows::Win32::Security::Authentication::Identity::{
             LsaCallAuthenticationPackage, LsaConnectUntrusted, LsaDeregisterLogonProcess,
             LsaLookupAuthenticationPackage,

@@ -52,6 +52,7 @@ struct SliverSessionResp {
     pid: u32,
     filename: String,
     active_c2: String,
+    #[allow(dead_code)] // Deserialized from API response
     reconnect_interval: Option<u64>,
 }
 
@@ -95,6 +96,7 @@ struct SliverUploadResp {
 struct SliverDownloadResp {
     data: String, // base64-encoded
     exists: bool,
+    #[allow(dead_code)] // Deserialized from API response
     encoder: String,
 }
 

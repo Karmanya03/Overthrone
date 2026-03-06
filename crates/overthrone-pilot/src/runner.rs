@@ -16,16 +16,15 @@
 use crate::adaptive::{AdaptiveDecision, AdaptiveEngine, AdaptiveSummary, StepModification};
 use crate::executor::{self, ExecContext};
 use crate::goals::{AttackGoal, EngagementState, GoalStatus};
-use crate::planner::{AttackPlan, PlanStep, PlannedAction, Planner};
+use crate::planner::{PlanStep, PlannedAction, Planner};
 use crate::playbook::{Playbook, PlaybookId};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
-use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 #[cfg(feature = "qlearn")]
 use crate::qlearner::{AdaptiveMode, AdaptiveQLearner, EngagementStateKey, decision_to_action};
@@ -590,15 +589,15 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
         // ── Q-learner decision display ──
         #[cfg(feature = "qlearn")]
-        if let Some(ref ql) = qlearner {
-            if let Some((action, q_val, exploring)) = ql.last_decision_meta() {
-                println!(
-                    "  {}  {} → {}",
-                    "│".dimmed(),
-                    "[QL]".magenta().bold(),
-                    AdaptiveQLearner::format_decision(action, *q_val, *exploring).cyan(),
-                );
-            }
+        if let Some(ref ql) = qlearner
+            && let Some((action, q_val, exploring)) = ql.last_decision_meta()
+        {
+            println!(
+                "  {}  {} → {}",
+                "│".dimmed(),
+                "[QL]".magenta().bold(),
+                AdaptiveQLearner::format_decision(action, *q_val, *exploring).cyan(),
+            );
         }
 
         // ── Record Q-learning outcome + display reward ──
@@ -632,8 +631,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 let status = state.evaluate_goal(&goal);
                 if status.is_success() {
                     println!(
-                        "\n  {} {} {}",
-                        "🎯",
+                        "\n  🎯 {} {}",
                         "GOAL ACHIEVED:".green().bold(),
                         goal.describe().bold()
                     );
@@ -662,7 +660,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                             if let Some((u, s, h)) =
                                 crate::adaptive::rotate_credential(&state, &ctx.username)
                             {
-                                println!("     {} Swapping to: {}", "🔑", u.bold());
+                                println!("     🔑 Swapping to: {}", u.bold());
                                 ctx.override_creds = Some((u, s, h));
                             }
                         }
@@ -680,8 +678,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                                 _ => "smbexec",
                             };
                             println!(
-                                "     {} Switching exec method: {} → {}",
-                                "🔄",
+                                "     🔄 Switching exec method: {} → {}",
                                 ctx.preferred_method.bold(),
                                 next.bold()
                             );

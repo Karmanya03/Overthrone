@@ -11,8 +11,7 @@ use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Named pipe / RPC constants
@@ -285,6 +284,7 @@ async fn try_coerce(
     method: CoerceMethod,
     listener_path: &str,
 ) -> CoercionAttempt {
+    #[allow(clippy::type_complexity)]
     let (pipe, uuid, version, request_builder): (
         &str,
         &str,
@@ -499,6 +499,7 @@ fn build_listener_path(listener: &str, custom_path: Option<&str>) -> String {
 }
 
 /// Build WebDAV-style path for HTTP-based capture
+#[allow(dead_code)] // WebDAV path builder kept for future HTTP relay support
 fn build_webdav_listener_path(listener: &str, port: u16) -> String {
     if port == 80 {
         format!("\\\\{}@80\\webdav\\coerce.txt", listener)

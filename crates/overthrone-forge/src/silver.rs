@@ -11,7 +11,7 @@ use kerberos_asn1::{
     PrincipalName, Ticket, TransitedEncoding,
 };
 use kerberos_crypto::new_kerberos_cipher;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::golden::{self};
 use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};

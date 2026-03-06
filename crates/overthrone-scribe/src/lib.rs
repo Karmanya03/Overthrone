@@ -13,8 +13,6 @@
 //! - `pdf`         — PDF report renderer (via printpdf)
 //! - `runner`      — Top-level report generation orchestrator
 
-#![allow(dead_code, unused_imports)]
-
 pub mod mapper;
 pub mod markdown;
 pub mod mitigations;

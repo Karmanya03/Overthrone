@@ -210,7 +210,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
     );
 
     // Parse OBJREF from response to get IWbemLevel1Login IPID
-    let (login_ipid, login_oxid, login_oid) =
+    let (login_ipid, _login_oxid, login_oid) =
         parse_objref(&create_resp).map_err(|e| {
             OverthroneError::Smb(format!("OBJREF parse failed: {e}"))
         })?;
@@ -292,6 +292,7 @@ const SCM_ACTIVATOR_UUID: [u8; 16] = [
 ];
 
 /// IRemUnknown2 UUID: 00000143-0000-0000-C000-000000000046
+#[allow(dead_code)] // DCOM interface UUID
 const IREMUNKNOWN2_UUID: [u8; 16] = [
     0x43, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
@@ -310,6 +311,7 @@ const IID_IWBEM_LEVEL1_LOGIN: [u8; 16] = [
 ];
 
 /// IID_IWbemServices: {9556DC99-828C-11CF-A37E-00AA003240C7}
+#[allow(dead_code)] // DCOM interface UUID
 const IID_IWBEM_SERVICES: [u8; 16] = [
     0x99, 0xDC, 0x56, 0x95, 0x8C, 0x82, 0xCF, 0x11,
     0xA3, 0x7E, 0x00, 0xAA, 0x00, 0x32, 0x40, 0xC7,
@@ -648,7 +650,7 @@ fn build_rem_release(ipid: &[u8; 16], oids: &[u64]) -> Vec<u8> {
     stub.extend_from_slice(&[0u8; 2]);
 
     // InterfaceRefs array
-    for oid in oids {
+    for _oid in oids {
         // IPID (use the provided IPID for the first, zeros for others)
         stub.extend_from_slice(ipid);
         // cPublicRefs

@@ -5,7 +5,7 @@
 
 use crate::trust_map::{TrustGraph, TrustKind};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowPrincipal {

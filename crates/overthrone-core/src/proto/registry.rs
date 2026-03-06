@@ -24,6 +24,7 @@ use tracing::{debug, info, warn};
 // ═══════════════════════════════════════════════════════════
 
 const REGF_MAGIC: &[u8; 4] = b"regf";
+#[allow(dead_code)] // Registry hive magic kept for protocol completeness
 const HBIN_MAGIC: &[u8; 4] = b"hbin";
 const NK_SIGNATURE: u16 = 0x6B6E; // "nk"
 const VK_SIGNATURE: u16 = 0x6B76; // "vk"
@@ -473,8 +474,10 @@ impl PredefinedHive {
 /// Remote registry session via WINREG RPC over SMB
 pub struct RemoteRegistry {
     /// SMB tree connect to \\host\IPC$
+    #[allow(dead_code)] // Populated during session setup
     tree_id: u16,
     /// WINREG RPC handle (opened via Bind)
+    #[allow(dead_code)] // Populated during session setup
     bind_handle: Option<[u8; 20]>,
     /// Current open key handle
     key_handles: HashMap<u32, [u8; 20]>,

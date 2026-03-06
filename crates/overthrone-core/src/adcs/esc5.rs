@@ -16,10 +16,9 @@
 //!
 //! Reference: SpecterOps "Certified Pre-Owned" — ESC5, ESC6
 
-use crate::adcs::esc4::ModifyOp;
 use crate::error::{OverthroneError, Result};
 use crate::proto::ldap::LdapSession;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // ═══════════════════════════════════════════════════════════
 // Constants

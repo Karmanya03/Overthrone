@@ -6,7 +6,7 @@ use crate::coerce::{CoerceConfig, CoerceResult};
 use crate::constrained::{ConstrainedConfig, ConstrainedResult};
 use crate::kerberoast::{KerberoastConfig, KerberoastResult};
 use crate::rbcd::{RbcdConfig, RbcdResult};
-use crate::tickets::{TicketOps, TicketRequest};
+use crate::tickets::TicketRequest;
 use crate::unconstrained::{UnconstrainedConfig, UnconstrainedResult};
 use chrono::{DateTime, Utc};
 use colored::Colorize;

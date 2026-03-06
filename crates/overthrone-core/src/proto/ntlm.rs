@@ -427,7 +427,7 @@ pub fn build_authenticate_message(
     nt_hash: &[u8],
     server_challenge: &[u8; 8],
     target_info: Option<&[u8]>,
-    password: Option<&str>,
+    _password: Option<&str>,
 ) -> Vec<u8> {
     let mut msg = Vec::new();
 

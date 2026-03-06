@@ -30,6 +30,7 @@ pub fn delegation_filter() -> String {
 // UAC bits
 const UAC_TRUSTED_FOR_DELEGATION: u32   = 0x00080000; // unconstrained
 const UAC_TRUSTED_TO_AUTH: u32          = 0x01000000; // constrained w/ T2A4D
+#[allow(dead_code)] // Protocol reference UAC flag
 const UAC_NOT_DELEGATED: u32            = 0x00100000;
 const UAC_DISABLED: u32                 = 0x00000002;
 

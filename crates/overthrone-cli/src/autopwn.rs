@@ -1,9 +1,5 @@
 ﻿//! Automated attack chain — wired to overthrone-pilot's Planner + Executor.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use crate::auth::Credentials;
 use crate::banner;
 use colored::Colorize;
@@ -33,6 +29,7 @@ impl std::fmt::Display for ExecMethod {
     }
 }
 
+#[allow(dead_code)] // AutoPwn module planned for future implementation
 pub struct AutoPwnConfig {
     pub dchost: String,
     pub creds: Credentials,
@@ -42,6 +39,7 @@ pub struct AutoPwnConfig {
     pub exec_method: ExecMethod,
 }
 
+#[allow(dead_code)]
 pub struct AutoPwnResult {
     pub stages_completed: usize,
     pub domain_admin_achieved: bool,
@@ -50,6 +48,7 @@ pub struct AutoPwnResult {
     pub errors: Vec<String>,
 }
 
+#[allow(dead_code)]
 pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     banner::print_module_banner("AUTOPWN");
 

@@ -9,7 +9,7 @@ use crate::error::{OverthroneError, Result};
 use base64::Engine;
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ═══════════════════════════════════════════════════════════
 // Web Enrollment Client
@@ -330,8 +330,8 @@ impl WebEnrollmentClient {
     /// Extract certificate data from response
     fn extract_certificate(&self, body: &str) -> Result<Vec<u8>> {
         // Look for base64 certificate data between PEM markers
-        let in_cert = false;
         let mut cert_lines: Vec<String> = Vec::new();
+        #[allow(unused_assignments)] // Set inside PEM parsing loop
         let mut in_block = false;
 
         for line in body.lines() {
@@ -340,7 +340,6 @@ impl WebEnrollmentClient {
                 continue;
             }
             if line.contains("-----END CERTIFICATE-----") {
-                in_block = false;
                 break;
             }
             if in_block {

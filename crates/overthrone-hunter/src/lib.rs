@@ -11,8 +11,6 @@
 //! - `crack`         — Inline hash cracking for AS-REP/Kerberoast/NTLM hashes
 //! - `runner`        — Top-level orchestrator dispatching all hunt actions
 
-#![allow(dead_code, unused_imports)]
-
 pub mod asreproast;
 pub mod coerce;
 pub mod constrained;

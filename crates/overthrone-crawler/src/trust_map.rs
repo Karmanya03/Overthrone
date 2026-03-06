@@ -311,7 +311,7 @@ pub fn build_trust_graph(source_domain: &str, trust_entries: &[TrustEntry]) -> T
     }
 
     // Detect if source domain is NOT root (if it has a parent-child trust where it's the child)
-    let has_parent = graph.trusts.iter().any(|t| {
+    let _has_parent = graph.trusts.iter().any(|t| {
         t.source_domain == source_domain.to_uppercase()
             && t.trust_type == TrustKind::ParentChild
             && t.direction.allows_outbound()

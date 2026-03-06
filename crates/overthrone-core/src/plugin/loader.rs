@@ -139,7 +139,7 @@ pub fn load_native_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
                 b"overthrone_plugin_on_event",
             )
             .ok();
-        let fn_on_event = fn_on_event.map(|s| unsafe {
+        let fn_on_event = fn_on_event.map(|s| {
             std::mem::transmute::<
                 _,
                 libloading::Symbol<'static, unsafe extern "C" fn(*const std::ffi::c_char) -> i32>,
@@ -149,7 +149,7 @@ pub fn load_native_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
         let fn_shutdown = library
             .get::<unsafe extern "C" fn() -> i32>(b"overthrone_plugin_shutdown")
             .ok();
-        let fn_shutdown = fn_shutdown.map(|s| unsafe {
+        let fn_shutdown = fn_shutdown.map(|s| {
             std::mem::transmute::<_, libloading::Symbol<'static, unsafe extern "C" fn() -> i32>>(s)
         });
 
@@ -157,7 +157,7 @@ pub fn load_native_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
         let fn_free = library
             .get::<unsafe extern "C" fn(*mut std::ffi::c_char)>(b"overthrone_plugin_free")
             .ok();
-        let fn_free = fn_free.map(|s| unsafe {
+        let fn_free = fn_free.map(|s| {
             std::mem::transmute::<
                 _,
                 libloading::Symbol<'static, unsafe extern "C" fn(*mut std::ffi::c_char)>,
@@ -292,6 +292,7 @@ pub struct WasmPlugin {
     instance: Option<Instance>,
     linker: Option<Linker<WasmPluginState>>,
     /// Monotonically increasing node ID counter for graph operations
+    #[allow(dead_code)]
     next_node_id: std::sync::atomic::AtomicI64,
 }
 
@@ -529,7 +530,7 @@ impl Plugin for WasmPlugin {
         // ── Allocate guest memory ──────────────────────────────
         // Try the plugin's exported `allocate(size) → ptr` function first.
         // Fall back to a fixed offset (1024) if the plugin doesn't export one.
-        let total_bytes = command.len() + args_json.len() + 2; // +2 for safety
+        let _total_bytes = command.len() + args_json.len() + 2; // +2 for safety
 
         let (command_offset, args_offset) = if let Ok(alloc_fn) =
             instance.get_typed_func::<i32, i32>(store.as_context_mut(), "allocate")

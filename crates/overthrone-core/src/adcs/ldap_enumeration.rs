@@ -3,11 +3,11 @@
 //! Queries Active Directory for certificate templates and CA configurations
 //! to identify ESC vulnerabilities.
 
-use crate::error::{OverthroneError, Result};
+use crate::error::Result;
 use crate::proto::ldap::LdapSession;
 use ldap3::SearchEntry;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // LDAP OIDs and Attribute Names

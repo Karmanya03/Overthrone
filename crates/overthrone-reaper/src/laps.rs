@@ -5,11 +5,6 @@
 //! - LAPS v2 unencrypted: `msLAPS-Password` (JSON blob with account name + password)
 //! - LAPS v2 encrypted: `msLAPS-EncryptedPassword` (CNG-DPAPI blob, stored for later decryption)
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(private_interfaces)]
-
 use crate::runner::ReaperConfig;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::ldap::LdapSession;
@@ -70,12 +65,13 @@ impl std::fmt::Display for LapsSource {
 /// {"n":"Administrator","t":"2024-01-15T12:00:00.0000000Z","p":"RandomP@ss!"}
 /// ```
 #[derive(Debug, Clone, Deserialize)]
-struct LapsV2Json {
+pub struct LapsV2Json {
     /// Account name managed by LAPS (usually "Administrator").
     #[serde(rename = "n")]
     account_name: String,
     /// Timestamp when the password was set (ISO 8601).
     #[serde(rename = "t")]
+    #[allow(dead_code)] // deserialized but not yet consumed
     timestamp: String,
     /// The actual plaintext password.
     #[serde(rename = "p")]
@@ -396,7 +392,7 @@ pub fn parse_laps_v2_encrypted_header(blob: &[u8]) -> Option<LapsV2EncryptedHead
 pub fn decrypt_laps_v2_blob(blob: &[u8], dpapi_backup_key: &[u8]) -> Result<LapsV2Json> {
     use overthrone_core::crypto::{DpapiBackupKey, LapsDecryptor};
 
-    let header = parse_laps_v2_encrypted_header(blob).ok_or_else(|| {
+    let _header = parse_laps_v2_encrypted_header(blob).ok_or_else(|| {
         OverthroneError::Decryption("LAPS v2 encrypted blob too short for header".into())
     })?;
 

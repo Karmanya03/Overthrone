@@ -4,7 +4,7 @@
 //! Instead, it creates a service whose binary path is `cmd.exe /C <command>`,
 //! redirecting output to a file on the admin share, then reads it back.
 
-use crate::error::{OverthroneError, Result};
+use crate::error::Result;
 use crate::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 

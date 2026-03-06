@@ -5,7 +5,7 @@
 //! Free functions are provided as thin wrappers for backward compatibility.
 
 use crate::error::{OverthroneError, Result};
-use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::xfer::Protocol;
 use hickory_resolver::Resolver;
@@ -308,6 +308,7 @@ impl DnsResolver {
 // ═══════════════════════════════════════════════════════════
 
 /// Build a resolver using default system config (legacy helper).
+#[allow(dead_code)] // Legacy helper kept for backward compat
 fn build_resolver() -> Result<TokioResolver> {
     let resolver = Resolver::builder_with_config(
         ResolverConfig::default(),

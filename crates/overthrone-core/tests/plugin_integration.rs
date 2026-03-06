@@ -101,7 +101,7 @@ fn plugin_type_variants() {
 
 #[test]
 fn plugin_capability_variants_exist() {
-    let caps = vec![
+    let caps = [
         PluginCapability::Execution,
         PluginCapability::Enumeration,
         PluginCapability::Attack,

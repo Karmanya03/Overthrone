@@ -5,7 +5,7 @@
 //! ManageCertificates rights, enables the SubCA template, and requests a
 //! certificate to perform a full domain takeover.
 
-use crate::error::{OverthroneError, Result};
+use crate::error::Result;
 use tracing::info;
 
 /// Target for ESC7 CA modification

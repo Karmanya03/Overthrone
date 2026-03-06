@@ -16,9 +16,8 @@
 
 use crate::error::{OverthroneError, Result};
 use std::net::SocketAddr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 // ═══════════════════════════════════════════════════════════
 //  Configuration
@@ -200,6 +199,7 @@ async fn relay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn test_default_config() {

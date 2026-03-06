@@ -2,7 +2,6 @@
 //! executive summaries, and attack chain descriptions.
 
 use crate::session::{EngagementSession, Finding, Severity};
-use chrono::{DateTime, Utc};
 
 /// Generate an executive summary paragraph for the engagement
 pub fn executive_summary(session: &EngagementSession) -> String {

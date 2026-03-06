@@ -1,9 +1,5 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Tabs, Paragraph, Row, Table, Cell, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Block, Borders, Tabs, Paragraph, Row, Table, Cell};
 use ratatui::style::{Color, Style, Modifier};
 use crate::tui::app::{App, Tab, LogLevel};
 use crate::tui::graph_view;
@@ -207,7 +203,7 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
 
         // Find shortest paths to this target from compromised nodes
         let paths = graph.shortest_paths_to(*target_id, 5); // top 5 paths
-        for (i, path) in paths.iter().enumerate() {
+        for (i, _path) in paths.iter().enumerate() {
             // Simplified path rendering since we don't have full path reconstruction yet
             path_lines.push(Line::from(vec![
                 Span::styled(

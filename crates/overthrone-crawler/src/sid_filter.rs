@@ -36,7 +36,7 @@ impl SidFilterFinding {
 
 /// Analyze SID filtering status on every trust in the graph.
 pub fn analyze_sid_filtering(
-    source_domain: &str,
+    _source_domain: &str,
     graph: &TrustGraph,
 ) -> Vec<SidFilterFinding> {
     let mut findings = Vec::new();
@@ -50,7 +50,7 @@ pub fn analyze_sid_filtering(
             TrustKind::Forest => "Forest",
             TrustKind::CrossLink => "Cross-Link",
             TrustKind::Mit => "MIT/Kerberos",
-            TrustKind::Unknown(v) => "Unknown",
+            TrustKind::Unknown(_v) => "Unknown",
         };
 
         let direction_str = match &trust.direction {

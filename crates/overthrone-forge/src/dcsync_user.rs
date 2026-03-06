@@ -6,7 +6,7 @@
 //! Flow: SMB Auth → IPC$ → \drsuapi pipe → RPC Bind → DRSBind → DRSGetNCChanges → Parse
 
 use colored::Colorize;
-use hmac::{Hmac, Mac};
+use hmac::Hmac;
 use md4::{Digest as Md4Digest, Md4};
 use md5::Md5;
 use overthrone_core::error::{OverthroneError, Result};
@@ -17,6 +17,7 @@ use tracing::{debug, info, warn};
 
 use crate::runner::{ForgeConfig, ForgeResult, PersistenceResult};
 
+#[allow(dead_code)] // Used in future DCSync implementation
 type HmacMd5 = Hmac<Md5>;
 
 // ═══════════════════════════════════════════════════════════

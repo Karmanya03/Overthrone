@@ -15,7 +15,7 @@ use kerberos_crypto::new_kerberos_cipher;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ═══════════════════════════════════════════════════════════
 //  Constants
@@ -1135,6 +1135,7 @@ fn generate_session_key(etype: i32) -> Vec<u8> {
 ///     caddr           [9] HostAddresses OPTIONAL,
 ///     authorization-data [10] AuthorizationData OPTIONAL
 /// }
+#[allow(clippy::too_many_arguments)]
 fn build_enc_ticket_part(
     username: &str,
     realm: &str,
@@ -1624,6 +1625,7 @@ fn format_kerberos_time(dt: &chrono::DateTime<Utc>) -> String {
 }
 
 /// Hex encode bytes to lowercase hex string
+#[allow(dead_code)] // Utility helper for protocol debugging
 fn hex_encode(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02x}", b)).collect()
 }

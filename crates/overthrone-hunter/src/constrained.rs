@@ -11,11 +11,11 @@
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use overthrone_core::proto::kerberos::{self, TicketGrantingData};
 use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // UAC constants for delegation

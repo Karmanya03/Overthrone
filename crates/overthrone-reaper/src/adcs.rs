@@ -259,6 +259,7 @@ impl CertTemplate {
 #[derive(Debug, Clone)]
 struct SddlAce {
     /// ACE type: "A" (Allow), "D" (Deny), "OA" (Object Allow), etc.
+    #[allow(dead_code)] // Part of parsed ACE structure
     ace_type: String,
     /// Rights abbreviations: "GA", "WP", "WD", "WO", etc.
     rights: Vec<String>,

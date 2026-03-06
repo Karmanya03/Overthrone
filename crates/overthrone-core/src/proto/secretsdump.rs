@@ -159,7 +159,7 @@ pub fn dump_dcc2(security_data: &[u8], system_data: &[u8]) -> Result<Vec<Dcc2Cre
     let mut credentials = Vec::new();
     let cached_entries = enumerate_cached_logons(security_data)?;
 
-    for (index, encrypted_entry) in cached_entries.iter().enumerate() {
+    for encrypted_entry in &cached_entries {
         if let Ok((username, dcc2_hash)) = decrypt_cached_entry(&nlkm_key, encrypted_entry)
             && !username.is_empty() {
                 // Format as hashcat mode 2100: $DCC2$10240#username#hash
@@ -933,7 +933,7 @@ fn decrypt_cached_entry(nlkm_key: &[u8], entry: &[u8]) -> Result<(String, Vec<u8
     }
 
     // The IV is at offset 0x40 (16 bytes)
-    let iv = if entry.len() >= 0x50 {
+    let _iv = if entry.len() >= 0x50 {
         &entry[0x40..0x50]
     } else {
         return Err(anyhow!("entry too short for IV"));

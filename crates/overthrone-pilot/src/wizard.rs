@@ -17,16 +17,15 @@
 
 use crate::adaptive::{AdaptiveDecision, AdaptiveEngine};
 use crate::executor::{self, ExecContext};
-use crate::goals::{AttackGoal, CompromisedCred, EngagementState, GoalStatus, SecretType};
-use crate::planner::{AttackPlan, PlanStep, Planner};
-use crate::runner::{AutoPwnConfig, AutoPwnConfigSnapshot, AutoPwnResult, Credentials, ExecMethod, Stage};
+use crate::goals::{AttackGoal, CompromisedCred, EngagementState, SecretType};
+use crate::planner::{PlanStep, Planner};
+use crate::runner::{AutoPwnConfig, AutoPwnConfigSnapshot, AutoPwnResult, Stage};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use comfy_table::{Table, Cell, presets::UTF8_FULL, Attribute, Color as TableColor};
-use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
+use indicatif::{ProgressBar, ProgressStyle};
 use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Instant;

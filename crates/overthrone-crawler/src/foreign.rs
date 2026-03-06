@@ -5,11 +5,11 @@
 //! resolves foreign group memberships that enable lateral movement.
 
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::types::{Sid, TrustDirection, TrustType};
+use overthrone_core::types::Sid;
 use overthrone_reaper::groups::GroupEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ─────────────────────────────────────────────────
 // Trust relationship model
@@ -346,7 +346,7 @@ pub async fn resolve_foreign_sids(
     principals: &mut [ForeignSecurityPrincipal],
     foreign_domains: &HashMap<String, String>,
 ) -> Result<usize> {
-    use overthrone_core::proto::ldap::LdapSession;
+    
 
     let mut resolved_count = 0;
 

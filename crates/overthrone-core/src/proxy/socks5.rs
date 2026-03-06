@@ -46,6 +46,7 @@ const ATYP_IPV6: u8 = 0x04;
 // Reply codes
 const REP_SUCCESS: u8 = 0x00;
 const REP_GENERAL_FAILURE: u8 = 0x01;
+#[allow(dead_code)] // SOCKS5 reply codes kept for protocol completeness
 const REP_NOT_ALLOWED: u8 = 0x02;
 const REP_HOST_UNREACHABLE: u8 = 0x04;
 const REP_CMD_NOT_SUPPORTED: u8 = 0x07;

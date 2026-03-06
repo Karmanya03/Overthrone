@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 
 type HmacMd5 = Hmac<Md5>;
 
@@ -51,6 +51,7 @@ const SMB2_DIALECT_300: u16 = 0x0300; // SMB 3.0
 const SMB2_DIALECT_302: u16 = 0x0302; // SMB 3.0.2
 
 // SMB2 Flags
+#[allow(dead_code)] // Protocol reference constants
 const SMB2_FLAGS_SERVER_TO_REDIR: u32 = 0x0000_0001;
 
 // NTLMSSP
@@ -72,13 +73,17 @@ const NTLMSSP_REQUEST_TARGET: u32 = 0x0000_0004;
 const NTLMSSP_NEGOTIATE_UNICODE: u32 = 0x0000_0001;
 
 // File access masks
+#[allow(dead_code)] // Protocol reference constants kept for completeness
 const FILE_READ_DATA: u32 = 0x0000_0001;
+#[allow(dead_code)]
 const FILE_WRITE_DATA: u32 = 0x0000_0002;
+#[allow(dead_code)]
 const FILE_READ_EA: u32 = 0x0000_0008;
 const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
 const SYNCHRONIZE: u32 = 0x0010_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
+#[allow(dead_code)]
 const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
 const DELETE_ACCESS: u32 = 0x0001_0000;
 
@@ -92,8 +97,10 @@ const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 // Create dispositions
 const FILE_OPEN: u32 = 0x0000_0001;
+#[allow(dead_code)]
 const FILE_CREATE: u32 = 0x0000_0002;
 const FILE_OVERWRITE_IF: u32 = 0x0000_0005;
+#[allow(dead_code)]
 const FILE_SUPERSEDE: u32 = 0x0000_0000;
 
 // IOCTL
@@ -101,6 +108,7 @@ const FSCTL_PIPE_TRANSCEIVE: u32 = 0x0011_C017;
 
 // Query directory
 const FILE_DIRECTORY_INFORMATION: u8 = 1;
+#[allow(dead_code)]
 const FILE_ID_BOTH_DIR_INFORMATION: u8 = 37;
 
 // SPNEGO OIDs
@@ -127,6 +135,7 @@ pub struct Smb2Connection {
     /// NTLMSSP session base key (16 bytes) — needed for DCSync and signing
     session_key: Mutex<Option<Vec<u8>>>,
     /// Negotiated max transaction size
+    #[allow(dead_code)] // Populated during SMB2 negotiation
     max_transact_size: u32,
     /// Negotiated max read size
     max_read_size: u32,

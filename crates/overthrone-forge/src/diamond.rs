@@ -7,12 +7,12 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{
-    self, EncType, TicketGrantingData, ETYPE_AES256_CTS, ETYPE_RC4_HMAC,
+    self, ETYPE_AES256_CTS, ETYPE_RC4_HMAC,
 };
 use kerberos_asn1::{Asn1Object, EncTicketPart, EncryptedData, Ticket};
 use kerberos_crypto::new_kerberos_cipher;
 use chrono::{Duration, Utc};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::golden;
 use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
