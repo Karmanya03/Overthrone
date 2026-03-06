@@ -1,12 +1,12 @@
 use crate::error::{OverthroneError, Result};
-use rsa::{RsaPrivateKey, RsaPublicKey};
-use rsa::pkcs1v15::SigningKey;
-use rsa::signature::{RandomizedSigner, SignatureEncoding};
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
-use sha2::{Sha256, Digest};
-use x509_parser::prelude::*;
-use rand::rngs::OsRng;
 use base64::Engine;
+use rand::rngs::OsRng;
+use rsa::pkcs1v15::SigningKey;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+use rsa::signature::{RandomizedSigner, SignatureEncoding};
+use rsa::{RsaPrivateKey, RsaPublicKey};
+use sha2::{Digest, Sha256};
+use x509_parser::prelude::*;
 use yasna::models::ObjectIdentifier;
 
 /// PKINIT authentication configuration
@@ -40,18 +40,15 @@ pub struct CertificateGenerator;
 
 impl CertificateGenerator {
     /// Generate X.509 certificate for PKINIT
-    /// 
+    ///
     /// # Arguments
     /// * `subject_cn` - Common Name for certificate subject
     /// * `key_size` - RSA key size in bits (2048, 3072, or 4096)
-    /// 
+    ///
     /// # Returns
     /// * `Ok((cert_der, private_key_der))` - Certificate and private key in DER format
     /// * `Err(OverthroneError)` - If generation fails
-    pub fn generate_certificate(
-        subject_cn: &str,
-        key_size: u32,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    pub fn generate_certificate(subject_cn: &str, key_size: u32) -> Result<(Vec<u8>, Vec<u8>)> {
         // Validate key size
         if ![2048, 3072, 4096].contains(&key_size) {
             return Err(OverthroneError::Encryption(format!(
@@ -70,18 +67,19 @@ impl CertificateGenerator {
     }
 
     /// Generate RSA key pair
-    /// 
+    ///
     /// # Arguments
     /// * `bits` - Key size in bits
-    /// 
+    ///
     /// # Returns
     /// * `Ok((public_key_der, private_key_der))` - Public and private keys in DER format
     fn generate_rsa_keypair(bits: u32) -> Result<(Vec<u8>, Vec<u8>)> {
         let mut rng = OsRng;
 
         // Generate RSA private key
-        let private_key = RsaPrivateKey::new(&mut rng, bits as usize)
-            .map_err(|e| OverthroneError::Encryption(format!("RSA key generation failed: {}", e)))?;
+        let private_key = RsaPrivateKey::new(&mut rng, bits as usize).map_err(|e| {
+            OverthroneError::Encryption(format!("RSA key generation failed: {}", e))
+        })?;
 
         // Extract public key
         let public_key = RsaPublicKey::from(&private_key);
@@ -89,7 +87,9 @@ impl CertificateGenerator {
         // Encode to DER format
         let private_key_der = private_key
             .to_pkcs8_der()
-            .map_err(|e| OverthroneError::Encryption(format!("Private key encoding failed: {}", e)))?
+            .map_err(|e| {
+                OverthroneError::Encryption(format!("Private key encoding failed: {}", e))
+            })?
             .as_bytes()
             .to_vec();
 
@@ -103,12 +103,12 @@ impl CertificateGenerator {
     }
 
     /// Create X.509 certificate with PKINIT extensions
-    /// 
+    ///
     /// # Arguments
     /// * `public_key_der` - Public key in DER format
     /// * `private_key_der` - Private key in DER format (for self-signing)
     /// * `subject_cn` - Common Name for certificate subject
-    /// 
+    ///
     /// # Returns
     /// * `Ok(cert_der)` - Certificate in DER format
     fn create_x509_cert(
@@ -119,11 +119,14 @@ impl CertificateGenerator {
         use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
 
         // Create certificate parameters
-        let mut params = CertificateParams::new(vec![subject_cn.to_string()])
-            .map_err(|e| OverthroneError::Encryption(format!("Certificate params creation failed: {}", e)))?;
+        let mut params = CertificateParams::new(vec![subject_cn.to_string()]).map_err(|e| {
+            OverthroneError::Encryption(format!("Certificate params creation failed: {}", e))
+        })?;
 
         // Set subject Distinguished Name
-        params.distinguished_name.push(DnType::CommonName, subject_cn);
+        params
+            .distinguished_name
+            .push(DnType::CommonName, subject_cn);
 
         // Add Extended Key Usage: Client Authentication (1.3.6.1.5.5.7.3.2)
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
@@ -133,13 +136,14 @@ impl CertificateGenerator {
             "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
             base64::engine::general_purpose::STANDARD.encode(private_key_der)
         );
-        
+
         let key_pair = KeyPair::from_pem(&private_key_pem)
             .map_err(|e| OverthroneError::Encryption(format!("Key pair creation failed: {}", e)))?;
 
         // Generate self-signed certificate
-        let cert = params.self_signed(&key_pair)
-            .map_err(|e| OverthroneError::Encryption(format!("Certificate generation failed: {}", e)))?;
+        let cert = params.self_signed(&key_pair).map_err(|e| {
+            OverthroneError::Encryption(format!("Certificate generation failed: {}", e))
+        })?;
 
         // Serialize to DER
         let cert_der = cert.der().to_vec();
@@ -160,7 +164,7 @@ impl PkinitAuthenticator {
     }
 
     /// Authenticate via PKINIT and obtain TGT
-    /// 
+    ///
     /// # Returns
     /// * `Ok(PkinitResult)` - TGT and session key
     /// * `Err(OverthroneError)` - If authentication fails
@@ -180,8 +184,9 @@ impl PkinitAuthenticator {
 
     /// Validate certificate expiration and extensions
     fn validate_certificate(&self) -> Result<()> {
-        let (_, cert) = X509Certificate::from_der(&self.config.certificate)
-            .map_err(|e| OverthroneError::Encryption(format!("Certificate parsing failed: {}", e)))?;
+        let (_, cert) = X509Certificate::from_der(&self.config.certificate).map_err(|e| {
+            OverthroneError::Encryption(format!("Certificate parsing failed: {}", e))
+        })?;
 
         // Check expiration
         let now = std::time::SystemTime::now()
@@ -226,8 +231,10 @@ impl PkinitAuthenticator {
 
     /// Build AS-REQ with PA-PK-AS-REQ preauthentication (RFC 4556)
     fn build_pkinit_as_req(&self) -> Result<Vec<u8>> {
-        use kerberos_asn1::{AsReq, Asn1Object, KdcReqBody, KerberosFlags, KerberosTime, PaData, PrincipalName};
         use chrono::{Duration, Utc};
+        use kerberos_asn1::{
+            AsReq, Asn1Object, KdcReqBody, KerberosFlags, KerberosTime, PaData, PrincipalName,
+        };
 
         // Build the request body
         let now = Utc::now();
@@ -330,9 +337,9 @@ impl PkinitAuthenticator {
                     w.write_sequence(|writer| {
                         writer.next().write_sequence(|writer| {
                             // sha256WithRSAEncryption OID: 1.2.840.113549.1.1.11
-                            writer.next().write_oid(&ObjectIdentifier::from_slice(
-                                &[1, 2, 840, 113549, 1, 1, 11],
-                            ));
+                            writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                1, 2, 840, 113549, 1, 1, 11,
+                            ]));
                             writer.next().write_null();
                         });
                     });
@@ -351,9 +358,9 @@ impl PkinitAuthenticator {
         let content_info_der = yasna::construct_der(|writer| {
             writer.write_sequence(|writer| {
                 // id-signedData: 1.2.840.113549.1.7.2
-                writer.next().write_oid(&ObjectIdentifier::from_slice(
-                    &[1, 2, 840, 113549, 1, 7, 2],
-                ));
+                writer
+                    .next()
+                    .write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 7, 2]));
                 // content [0] EXPLICIT
                 writer.next().write_tagged(yasna::Tag::context(0), |w| {
                     w.write_der(&signed_data_der);
@@ -368,9 +375,11 @@ impl PkinitAuthenticator {
         let pa_pk_as_req_der = yasna::construct_der(|writer| {
             writer.write_sequence(|writer| {
                 // signedAuthPack [0] IMPLICIT — the ContentInfo DER
-                writer.next().write_tagged_implicit(yasna::Tag::context(0), |w| {
-                    w.write_bytes(&content_info_der);
-                });
+                writer
+                    .next()
+                    .write_tagged_implicit(yasna::Tag::context(0), |w| {
+                        w.write_bytes(&content_info_der);
+                    });
             });
         });
 
@@ -387,10 +396,12 @@ impl PkinitAuthenticator {
         };
 
         // Parse the client certificate to extract issuer and serial number
-        let (_, cert) = X509Certificate::from_der(&self.config.certificate)
-            .map_err(|e| OverthroneError::Encryption(format!(
-                "Failed to parse certificate for SignerInfo: {}", e
-            )))?;
+        let (_, cert) = X509Certificate::from_der(&self.config.certificate).map_err(|e| {
+            OverthroneError::Encryption(format!(
+                "Failed to parse certificate for SignerInfo: {}",
+                e
+            ))
+        })?;
         let issuer_der = cert.issuer().as_raw().to_vec();
         let serial_bytes = cert.raw_serial();
 
@@ -402,22 +413,22 @@ impl PkinitAuthenticator {
                 // Attribute: contentType
                 writer.next().write_sequence(|writer| {
                     // id-contentType: 1.2.840.113549.1.9.3
-                    writer.next().write_oid(&ObjectIdentifier::from_slice(
-                        &[1, 2, 840, 113549, 1, 9, 3],
-                    ));
+                    writer
+                        .next()
+                        .write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 9, 3]));
                     writer.next().write_set(|writer| {
                         // id-pkinit-authData: 1.3.6.1.5.2.3.1
-                        writer.next().write_oid(&ObjectIdentifier::from_slice(
-                            &[1, 3, 6, 1, 5, 2, 3, 1],
-                        ));
+                        writer
+                            .next()
+                            .write_oid(&ObjectIdentifier::from_slice(&[1, 3, 6, 1, 5, 2, 3, 1]));
                     });
                 });
                 // Attribute: messageDigest
                 writer.next().write_sequence(|writer| {
                     // id-messageDigest: 1.2.840.113549.1.9.4
-                    writer.next().write_oid(&ObjectIdentifier::from_slice(
-                        &[1, 2, 840, 113549, 1, 9, 4],
-                    ));
+                    writer
+                        .next()
+                        .write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 9, 4]));
                     writer.next().write_set(|writer| {
                         writer.next().write_bytes(&content_digest);
                     });
@@ -438,9 +449,9 @@ impl PkinitAuthenticator {
                 writer.next().write_set(|writer| {
                     writer.next().write_sequence(|writer| {
                         // id-sha256: 2.16.840.1.101.3.4.2.1
-                        writer.next().write_oid(&ObjectIdentifier::from_slice(
-                            &[2, 16, 840, 1, 101, 3, 4, 2, 1],
-                        ));
+                        writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                            2, 16, 840, 1, 101, 3, 4, 2, 1,
+                        ]));
                         writer.next().write_null();
                     });
                 });
@@ -448,9 +459,9 @@ impl PkinitAuthenticator {
                 // encapContentInfo: EncapsulatedContentInfo
                 writer.next().write_sequence(|writer| {
                     // eContentType: id-pkinit-authData (1.3.6.1.5.2.3.1)
-                    writer.next().write_oid(&ObjectIdentifier::from_slice(
-                        &[1, 3, 6, 1, 5, 2, 3, 1],
-                    ));
+                    writer
+                        .next()
+                        .write_oid(&ObjectIdentifier::from_slice(&[1, 3, 6, 1, 5, 2, 3, 1]));
                     // eContent [0] EXPLICIT OCTET STRING
                     writer.next().write_tagged(yasna::Tag::context(0), |w| {
                         w.write_bytes(auth_pack_der);
@@ -458,10 +469,12 @@ impl PkinitAuthenticator {
                 });
 
                 // certificates [0] IMPLICIT SET OF Certificate
-                writer.next().write_tagged_implicit(yasna::Tag::context(0), |w| {
-                    // Include the client certificate (raw DER)
-                    w.write_der(&self.config.certificate);
-                });
+                writer
+                    .next()
+                    .write_tagged_implicit(yasna::Tag::context(0), |w| {
+                        // Include the client certificate (raw DER)
+                        w.write_der(&self.config.certificate);
+                    });
 
                 // signerInfos: SET OF SignerInfo
                 writer.next().write_set(|writer| {
@@ -479,22 +492,24 @@ impl PkinitAuthenticator {
 
                         // digestAlgorithm: sha256
                         writer.next().write_sequence(|writer| {
-                            writer.next().write_oid(&ObjectIdentifier::from_slice(
-                                &[2, 16, 840, 1, 101, 3, 4, 2, 1],
-                            ));
+                            writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                2, 16, 840, 1, 101, 3, 4, 2, 1,
+                            ]));
                             writer.next().write_null();
                         });
 
                         // signedAttrs [0] IMPLICIT SET OF Attribute
-                        writer.next().write_tagged_implicit(yasna::Tag::context(0), |w| {
-                            w.write_der(&signed_attrs_inner);
-                        });
+                        writer
+                            .next()
+                            .write_tagged_implicit(yasna::Tag::context(0), |w| {
+                                w.write_der(&signed_attrs_inner);
+                            });
 
                         // signatureAlgorithm: sha256WithRSAEncryption
                         writer.next().write_sequence(|writer| {
-                            writer.next().write_oid(&ObjectIdentifier::from_slice(
-                                &[1, 2, 840, 113549, 1, 1, 11],
-                            ));
+                            writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                1, 2, 840, 113549, 1, 1, 11,
+                            ]));
                             writer.next().write_null();
                         });
 
@@ -513,8 +528,9 @@ impl PkinitAuthenticator {
         use rsa::pkcs8::DecodePrivateKey;
 
         // Parse private key
-        let private_key = RsaPrivateKey::from_pkcs8_der(&self.config.private_key)
-            .map_err(|e| OverthroneError::Encryption(format!("Private key parsing failed: {}", e)))?;
+        let private_key = RsaPrivateKey::from_pkcs8_der(&self.config.private_key).map_err(|e| {
+            OverthroneError::Encryption(format!("Private key parsing failed: {}", e))
+        })?;
 
         // Create signing key
         let signing_key = SigningKey::<Sha256>::new(private_key);
@@ -567,14 +583,16 @@ impl PkinitAuthenticator {
 
         // Extract encrypted part from AS-REP
         let enc_part = &as_rep_parsed.enc_part;
-        
+
         // Parse private key for decryption
-        let private_key = RsaPrivateKey::from_pkcs8_der(&self.config.private_key)
-            .map_err(|e| OverthroneError::Encryption(format!("Private key parsing failed: {}", e)))?;
+        let private_key = RsaPrivateKey::from_pkcs8_der(&self.config.private_key).map_err(|e| {
+            OverthroneError::Encryption(format!("Private key parsing failed: {}", e))
+        })?;
 
         // Decrypt the encrypted part using RSA PKCS#1 v1.5
         // PKINIT typically uses PKCS#1 v1.5 padding
-        let decrypted = private_key.decrypt(Pkcs1v15Encrypt, &enc_part.cipher)
+        let decrypted = private_key
+            .decrypt(Pkcs1v15Encrypt, &enc_part.cipher)
             .map_err(|e| OverthroneError::Encryption(format!("AS-REP decryption failed: {}", e)))?;
 
         // Parse the decrypted EncAsRepPart to extract session key
@@ -641,17 +659,22 @@ mod tests {
         assert!(result.is_ok());
 
         let (cert_der, _) = result.unwrap();
-        
+
         // Parse certificate and verify EKU
         let (_, cert) = X509Certificate::from_der(&cert_der).unwrap();
-        
+
         // Check Extended Key Usage
         if let Ok(Some(eku)) = cert.extended_key_usage() {
             let has_client_auth = eku.value.client_auth
-                || eku.value.other.iter().any(|oid| {
-                    oid.to_string() == "1.3.6.1.5.5.7.3.2"
-                });
-            assert!(has_client_auth, "Certificate should have Client Authentication EKU");
+                || eku
+                    .value
+                    .other
+                    .iter()
+                    .any(|oid| oid.to_string() == "1.3.6.1.5.5.7.3.2");
+            assert!(
+                has_client_auth,
+                "Certificate should have Client Authentication EKU"
+            );
         } else {
             panic!("Certificate should have Extended Key Usage extension");
         }
@@ -665,7 +688,7 @@ mod tests {
 
         let (cert_der, _) = result.unwrap();
         let (_, cert) = X509Certificate::from_der(&cert_der).unwrap();
-        
+
         // Verify subject CN
         let subject = cert.subject();
         let cn = subject.iter_common_name().next();
@@ -680,7 +703,7 @@ mod tests {
 
         let (cert_der, _) = result.unwrap();
         let (_, cert) = X509Certificate::from_der(&cert_der).unwrap();
-        
+
         // Verify certificate is currently valid
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -694,8 +717,9 @@ mod tests {
     #[test]
     fn test_sign_request() {
         // Generate a certificate and private key
-        let (cert_der, private_key_der) = CertificateGenerator::generate_certificate("test-sign", 2048).unwrap();
-        
+        let (cert_der, private_key_der) =
+            CertificateGenerator::generate_certificate("test-sign", 2048).unwrap();
+
         let config = PkinitConfig {
             certificate: cert_der,
             private_key: private_key_der,
@@ -705,12 +729,12 @@ mod tests {
         };
 
         let authenticator = PkinitAuthenticator::new(config);
-        
+
         // Test signing a dummy request
         let dummy_request = b"test request data";
         let result = authenticator.sign_request(dummy_request);
         assert!(result.is_ok());
-        
+
         let signature = result.unwrap();
         assert!(!signature.is_empty());
         assert_eq!(signature.len(), 256); // RSA-2048 signature is 256 bytes
@@ -720,8 +744,9 @@ mod tests {
     fn test_validate_certificate_expired() {
         // This test would require creating an expired certificate
         // For now, we test the validation logic with a valid certificate
-        let (cert_der, private_key_der) = CertificateGenerator::generate_certificate("test-expired", 2048).unwrap();
-        
+        let (cert_der, private_key_der) =
+            CertificateGenerator::generate_certificate("test-expired", 2048).unwrap();
+
         let config = PkinitConfig {
             certificate: cert_der,
             private_key: private_key_der,
@@ -748,11 +773,11 @@ mod tests {
         ) {
             let result = CertificateGenerator::generate_rsa_keypair(key_size);
             prop_assert!(result.is_ok());
-            
+
             let (public_key, private_key) = result.unwrap();
             prop_assert!(!public_key.is_empty());
             prop_assert!(!private_key.is_empty());
-            
+
             // Verify keys can be parsed
             let private_key_parsed = <RsaPrivateKey as rsa::pkcs8::DecodePrivateKey>::from_pkcs8_der(&private_key);
             prop_assert!(private_key_parsed.is_ok());
@@ -772,7 +797,7 @@ mod tests {
 
             let (cert_der, _) = result.unwrap();
             let (_, cert) = X509Certificate::from_der(&cert_der).unwrap();
-            
+
             // Verify Extended Key Usage
             if let Ok(Some(eku)) = cert.extended_key_usage() {
                 let has_client_auth = eku.value.client_auth
@@ -783,7 +808,7 @@ mod tests {
             } else {
                 return Err(TestCaseError::fail("Certificate should have Extended Key Usage extension"));
             }
-            
+
             // Verify subject CN
             let subject = cert.subject();
             let cn = subject.iter_common_name().next();
@@ -801,7 +826,7 @@ mod tests {
         ) {
             // Generate certificate and key
             let (cert_der, private_key_der) = CertificateGenerator::generate_certificate("test-sig", 2048).unwrap();
-            
+
             let config = PkinitConfig {
                 certificate: cert_der,
                 private_key: private_key_der.clone(),
@@ -811,11 +836,11 @@ mod tests {
             };
 
             let authenticator = PkinitAuthenticator::new(config);
-            
+
             // Sign the request
             let result = authenticator.sign_request(&request_data);
             prop_assert!(result.is_ok());
-            
+
             let signature = result.unwrap();
             prop_assert!(!signature.is_empty());
             prop_assert_eq!(signature.len(), 256); // RSA-2048 signature
@@ -830,7 +855,7 @@ mod tests {
             subject_cn in "[a-zA-Z0-9_-]{1,20}"
         ) {
             let (cert_der, private_key_der) = CertificateGenerator::generate_certificate(&subject_cn, 2048).unwrap();
-            
+
             let config = PkinitConfig {
                 certificate: cert_der,
                 private_key: private_key_der,
@@ -840,7 +865,7 @@ mod tests {
             };
 
             let authenticator = PkinitAuthenticator::new(config);
-            
+
             // Validate certificate (should pass for freshly generated cert)
             let result = authenticator.validate_certificate();
             prop_assert!(result.is_ok());

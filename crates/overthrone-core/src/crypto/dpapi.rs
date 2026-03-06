@@ -2,7 +2,7 @@ use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 
 /// LAPS v2 encrypted blob structure
-/// 
+///
 /// Format:
 /// - Offset 0x00 (4 bytes): Version (0x00000001)
 /// - Offset 0x04 (4 bytes): Flags
@@ -41,10 +41,10 @@ pub struct LapsDecryptor;
 
 impl LapsDecryptor {
     /// Parse LAPS v2 encrypted blob from bytes
-    /// 
+    ///
     /// # Arguments
     /// * `data` - Raw encrypted blob bytes
-    /// 
+    ///
     /// # Returns
     /// * `Ok(LapsEncryptedBlob)` - Parsed blob structure
     /// * `Err(OverthroneError)` - If blob is malformed or too short
@@ -84,11 +84,11 @@ impl LapsDecryptor {
     }
 
     /// Decrypt LAPS v2 encrypted blob using DPAPI backup key
-    /// 
+    ///
     /// # Arguments
     /// * `blob` - Parsed encrypted blob
     /// * `backup_key` - DPAPI backup key
-    /// 
+    ///
     /// # Returns
     /// * `Ok(LapsCredentials)` - Decrypted credentials
     /// * `Err(OverthroneError)` - If decryption fails
@@ -100,7 +100,8 @@ impl LapsDecryptor {
         let master_key_guid = Self::extract_master_key_guid(&blob.dpapi_blob)?;
 
         // Derive decryption key from backup key and master key GUID
-        let decryption_key = Self::derive_decryption_key(&backup_key.key_material, &master_key_guid)?;
+        let decryption_key =
+            Self::derive_decryption_key(&backup_key.key_material, &master_key_guid)?;
 
         // Decrypt the payload using AES-256-GCM
         let decrypted_data = Self::decrypt_payload(&blob.dpapi_blob, &decryption_key)?;
@@ -110,7 +111,7 @@ impl LapsDecryptor {
     }
 
     /// Extract master key GUID from DPAPI blob
-    /// 
+    ///
     /// DPAPI blob structure:
     /// - Offset 0x00 (4 bytes): Version
     /// - Offset 0x04 (16 bytes): Master Key GUID
@@ -133,7 +134,7 @@ impl LapsDecryptor {
     }
 
     /// Derive decryption key from backup key and master key GUID
-    /// 
+    ///
     /// Uses HMAC-SHA512(backup_key, master_key_guid) to derive the key
     fn derive_decryption_key(backup_key: &[u8], master_key_guid: &[u8; 16]) -> Result<Vec<u8>> {
         use hmac::{Hmac, Mac};
@@ -141,8 +142,9 @@ impl LapsDecryptor {
 
         type HmacSha512 = Hmac<Sha512>;
 
-        let mut mac = HmacSha512::new_from_slice(backup_key)
-            .map_err(|e| OverthroneError::Encryption(format!("HMAC initialization failed: {}", e)))?;
+        let mut mac = HmacSha512::new_from_slice(backup_key).map_err(|e| {
+            OverthroneError::Encryption(format!("HMAC initialization failed: {}", e))
+        })?;
 
         mac.update(master_key_guid);
 
@@ -154,19 +156,19 @@ impl LapsDecryptor {
     }
 
     /// Decrypt payload using AES-256-GCM
-    /// 
+    ///
     /// Extracts nonce and encrypted data from DPAPI blob, then decrypts
     fn decrypt_payload(dpapi_blob: &[u8], key: &[u8]) -> Result<Vec<u8>> {
         use aes_gcm::{
-            aead::{Aead, KeyInit},
             Aes256Gcm, Nonce,
+            aead::{Aead, KeyInit},
         };
 
         // DPAPI blob structure for CNG-DPAPI:
         // - Header (20 bytes): version + guid + algorithm
         // - Nonce (12 bytes): GCM nonce
         // - Encrypted data + tag (N bytes)
-        
+
         if dpapi_blob.len() < 32 {
             return Err(OverthroneError::Decryption(
                 "DPAPI blob too short for CNG-DPAPI format".to_string(),
@@ -181,19 +183,20 @@ impl LapsDecryptor {
         let encrypted_data = &dpapi_blob[32..];
 
         // Create cipher
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| OverthroneError::Decryption(format!("AES-GCM initialization failed: {}", e)))?;
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
+            OverthroneError::Decryption(format!("AES-GCM initialization failed: {}", e))
+        })?;
 
         // Decrypt
-        let plaintext = cipher
-            .decrypt(nonce, encrypted_data)
-            .map_err(|e| OverthroneError::Decryption(format!("AES-GCM decryption failed: {}", e)))?;
+        let plaintext = cipher.decrypt(nonce, encrypted_data).map_err(|e| {
+            OverthroneError::Decryption(format!("AES-GCM decryption failed: {}", e))
+        })?;
 
         Ok(plaintext)
     }
 
     /// Parse decrypted JSON payload
-    /// 
+    ///
     /// Expected JSON format:
     /// ```json
     /// {
@@ -223,7 +226,10 @@ mod tests {
         let short_blob = vec![0x01, 0x00, 0x00]; // Only 3 bytes
         let result = LapsDecryptor::parse_encrypted_blob(&short_blob);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), OverthroneError::Decryption(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OverthroneError::Decryption(_)
+        ));
     }
 
     #[test]
@@ -259,8 +265,8 @@ mod tests {
         let mut blob = vec![0u8; 20];
         // Set a known GUID at offset 4
         let test_guid = [
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+            0x0F, 0x10,
         ];
         blob[4..20].copy_from_slice(&test_guid);
 

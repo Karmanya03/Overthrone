@@ -261,7 +261,10 @@ pub fn sql_type_name(type_id: u8) -> &'static str {
 /// Check if a type uses variable-length u16 prefix
 pub fn is_u16_length_type(type_id: u8) -> bool {
     use sql_types::*;
-    matches!(type_id, NVARCHAR | NCHAR | VARCHAR | CHAR | VARBINARY | BINARY)
+    matches!(
+        type_id,
+        NVARCHAR | NCHAR | VARCHAR | CHAR | VARBINARY | BINARY
+    )
 }
 
 /// Check if a type is a fixed-length type

@@ -1124,10 +1124,9 @@ impl MssqlClient {
                         pos += 4;
                     } // text_ptr_len
                     // Skip collation for text/ntext
-                    if (type_id == 0x23 || type_id == 0x63)
-                        && pos + 5 <= data.len() {
-                            pos += 5;
-                        }
+                    if (type_id == 0x23 || type_id == 0x63) && pos + 5 <= data.len() {
+                        pos += 5;
+                    }
                     // Table name: numParts(1) then for each: len(2) + UTF16
                     if pos < data.len() {
                         let num_parts = data[pos] as usize;
@@ -1679,9 +1678,10 @@ impl MssqlClient {
             .await?;
 
         if let Some(row) = result.rows.first()
-            && let Some(Some(value)) = row.first() {
-                return Ok(value == "1");
-            }
+            && let Some(Some(value)) = row.first()
+        {
+            return Ok(value == "1");
+        }
         Ok(false)
     }
 
@@ -1690,16 +1690,17 @@ impl MssqlClient {
         let result = self.query("SELECT @@VERSION;").await?;
 
         if let Some(row) = result.rows.first()
-            && let Some(Some(version_str)) = row.first() {
-                return Ok(SqlServerVersion {
-                    major: 0,
-                    minor: 0,
-                    build: 0,
-                    version_string: version_str.clone(),
-                    edition: "Unknown".to_string(),
-                    server_name: self.config.server.clone(),
-                });
-            }
+            && let Some(Some(version_str)) = row.first()
+        {
+            return Ok(SqlServerVersion {
+                major: 0,
+                minor: 0,
+                build: 0,
+                version_string: version_str.clone(),
+                edition: "Unknown".to_string(),
+                server_name: self.config.server.clone(),
+            });
+        }
 
         Err(OverthroneError::Protocol {
             protocol: "TDS".to_string(),
@@ -1781,7 +1782,8 @@ fn str_to_utf16le(s: &str) -> Vec<u8> {
 fn utf16le_to_string(data: &[u8]) -> String {
     data.chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect::<Vec<u16>>().to_vec()
+        .collect::<Vec<u16>>()
+        .to_vec()
         .as_slice()
         .iter()
         .map(|&c| char::from_u32(c as u32).unwrap_or('\u{FFFD}'))

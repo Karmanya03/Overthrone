@@ -1,4 +1,4 @@
-﻿//! DCSync a single user's secrets via MS-DRSR (DRS replication).
+//! DCSync a single user's secrets via MS-DRSR (DRS replication).
 //!
 //! Replicates a specific user's password hashes from a DC using the
 //! Directory Replication Service Remote Protocol.
@@ -607,13 +607,14 @@ fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) ->
     // (Pass-the-Hash scenario)
     // SessionBaseKey = MD4(NT_Hash) per MS-NLMP simplified
     if let Some(hash) = nt_hash
-        && hash.len() >= 16 {
-            info!("[dcsync] Deriving session key from NT hash (PtH fallback)");
-            let mut md4 = Md4::new();
-            md4.update(hash);
-            let derived = md4.finalize().to_vec();
-            return Ok(derived);
-        }
+        && hash.len() >= 16
+    {
+        info!("[dcsync] Deriving session key from NT hash (PtH fallback)");
+        let mut md4 = Md4::new();
+        md4.update(hash);
+        let derived = md4.finalize().to_vec();
+        return Ok(derived);
+    }
 
     Err(OverthroneError::custom(
         "No session key available — provide password or NT hash for DCSync",

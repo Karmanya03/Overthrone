@@ -10,8 +10,8 @@
 //! REST API docs: <https://sliver.sh/docs?name=Multi-player+Mode>
 
 use super::{
-    C2Auth, C2Channel, C2Config, C2Framework, C2Listener, C2Session, C2TaskResult,
-    DeliveryMethod, ImplantRequest, SessionType,
+    C2Auth, C2Channel, C2Config, C2Framework, C2Listener, C2Session, C2TaskResult, DeliveryMethod,
+    ImplantRequest, SessionType,
 };
 use crate::error::{OverthroneError, Result};
 use async_trait::async_trait;
@@ -167,9 +167,8 @@ impl SliverChannel {
 
     /// Parse a Sliver operator config file (`.cfg`)
     fn parse_operator_config(path: &str) -> Result<SliverOperatorConfig> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            OverthroneError::C2(format!("Cannot read Sliver config {path}: {e}"))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| OverthroneError::C2(format!("Cannot read Sliver config {path}: {e}")))?;
         serde_json::from_str(&content)
             .map_err(|e| OverthroneError::C2(format!("Invalid Sliver config: {e}")))
     }
@@ -242,9 +241,7 @@ impl SliverChannel {
         let status = resp.status();
         if status.is_client_error() || status.is_server_error() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(OverthroneError::C2(format!(
-                "HTTP {status}: {body}"
-            )));
+            return Err(OverthroneError::C2(format!("HTTP {status}: {body}")));
         }
         Ok(resp)
     }
@@ -272,16 +269,17 @@ impl SliverChannel {
             let path = format!("beacons/{beacon_id}/tasks/{task_id}");
             if let Ok(resp) = self.api_get(&path).await
                 && let Ok(task) = resp.json::<SliverTaskResp>().await
-                    && task.state == "completed" {
-                        return Ok(C2TaskResult {
-                            task_id: task.task_id,
-                            success: task.error.as_deref().unwrap_or("").is_empty(),
-                            output: task.output.unwrap_or_default(),
-                            error: task.error.unwrap_or_default(),
-                            raw_data: None,
-                            duration: start.elapsed(),
-                        });
-                    }
+                && task.state == "completed"
+            {
+                return Ok(C2TaskResult {
+                    task_id: task.task_id,
+                    success: task.error.as_deref().unwrap_or("").is_empty(),
+                    output: task.output.unwrap_or_default(),
+                    error: task.error.unwrap_or_default(),
+                    raw_data: None,
+                    duration: start.elapsed(),
+                });
+            }
 
             tokio::time::sleep(Duration::from_secs(3)).await;
         }
@@ -290,11 +288,7 @@ impl SliverChannel {
     /// Determine whether `id` is a session or beacon by attempting both
     /// endpoints, and return a tag.
     async fn resolve_session_type(&self, id: &str) -> SessionKind {
-        if self
-            .api_get(&format!("sessions/{id}"))
-            .await
-            .is_ok()
-        {
+        if self.api_get(&format!("sessions/{id}")).await.is_ok() {
             return SessionKind::Interactive;
         }
         SessionKind::Beacon
@@ -369,10 +363,7 @@ impl C2Channel for SliverChannel {
             .insert("operator".into(), self.operator_name.clone());
 
         self.connected = true;
-        log::info!(
-            "[c2:sliver] Connected as operator '{}'",
-            self.operator_name
-        );
+        log::info!("[c2:sliver] Connected as operator '{}'", self.operator_name);
         Ok(())
     }
 
@@ -404,10 +395,7 @@ impl C2Channel for SliverChannel {
                     pid: s.pid,
                     arch: s.arch.clone(),
                     os: s.os.clone(),
-                    elevated: s
-                        .username
-                        .to_lowercase()
-                        .contains("system")
+                    elevated: s.username.to_lowercase().contains("system")
                         || s.username.to_lowercase().contains("administrator"),
                     session_type: SessionType::Session,
                     last_seen: "active".into(),
@@ -459,9 +447,7 @@ impl C2Channel for SliverChannel {
             .await?
             .into_iter()
             .find(|s| s.id == session_id)
-            .ok_or_else(|| {
-                OverthroneError::C2(format!("Session/beacon {session_id} not found"))
-            })
+            .ok_or_else(|| OverthroneError::C2(format!("Session/beacon {session_id} not found")))
     }
 
     async fn exec_command(&self, session_id: &str, command: &str) -> Result<C2TaskResult> {
@@ -526,7 +512,10 @@ impl C2Channel for SliverChannel {
             "powershell.exe -NoP -NonI -Enc {}",
             base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
-                script.encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>()
+                script
+                    .encode_utf16()
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect::<Vec<_>>()
             )
         );
         self.exec_command(session_id, &ps_cmd).await
@@ -541,10 +530,8 @@ impl C2Channel for SliverChannel {
         let start = std::time::Instant::now();
         let kind = self.resolve_session_type(session_id).await;
 
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            local_data,
-        );
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, local_data);
 
         let body = serde_json::json!({
             "Path": remote_path,
@@ -568,11 +555,7 @@ impl C2Channel for SliverChannel {
                 Ok(C2TaskResult {
                     task_id: format!("sliver-up-{}", uuid::Uuid::new_v4().as_simple()),
                     success: true,
-                    output: format!(
-                        "Uploaded {} bytes to {}",
-                        local_data.len(),
-                        upload.path
-                    ),
+                    output: format!("Uploaded {} bytes to {}", local_data.len(), upload.path),
                     error: String::new(),
                     raw_data: None,
                     duration: start.elapsed(),
@@ -589,11 +572,7 @@ impl C2Channel for SliverChannel {
         }
     }
 
-    async fn download_file(
-        &self,
-        session_id: &str,
-        remote_path: &str,
-    ) -> Result<C2TaskResult> {
+    async fn download_file(&self, session_id: &str, remote_path: &str) -> Result<C2TaskResult> {
         let start = std::time::Instant::now();
         let kind = self.resolve_session_type(session_id).await;
 
@@ -619,11 +598,9 @@ impl C2Channel for SliverChannel {
                     )));
                 }
 
-                let raw = base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &dl.data,
-                )
-                .map_err(|e| OverthroneError::C2(format!("base64 decode: {e}")))?;
+                let raw =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &dl.data)
+                        .map_err(|e| OverthroneError::C2(format!("base64 decode: {e}")))?;
 
                 Ok(C2TaskResult {
                     task_id: format!("sliver-dl-{}", uuid::Uuid::new_v4().as_simple()),
@@ -654,10 +631,8 @@ impl C2Channel for SliverChannel {
         let start = std::time::Instant::now();
         let kind = self.resolve_session_type(session_id).await;
 
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            assembly_data,
-        );
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, assembly_data);
 
         let body = serde_json::json!({
             "Assembly": encoded,
@@ -679,10 +654,9 @@ impl C2Channel for SliverChannel {
 
         match kind {
             SessionKind::Interactive => {
-                let exec: SliverExecResp = resp
-                    .json()
-                    .await
-                    .map_err(|e| OverthroneError::C2(format!("Parse exec-assembly response: {e}")))?;
+                let exec: SliverExecResp = resp.json().await.map_err(|e| {
+                    OverthroneError::C2(format!("Parse exec-assembly response: {e}"))
+                })?;
                 Ok(C2TaskResult {
                     task_id: format!("sliver-asm-{}", uuid::Uuid::new_v4().as_simple()),
                     success: exec.status == 0,
@@ -730,9 +704,10 @@ impl C2Channel for SliverChannel {
         });
 
         let resp = self.api_post("generate", &body).await?;
-        let raw = resp.bytes().await.map_err(|e| {
-            OverthroneError::C2(format!("Failed to read implant data: {e}"))
-        })?;
+        let raw = resp
+            .bytes()
+            .await
+            .map_err(|e| OverthroneError::C2(format!("Failed to read implant data: {e}")))?;
 
         Ok(C2TaskResult {
             task_id: format!("sliver-deploy-{}", uuid::Uuid::new_v4().as_simple()),

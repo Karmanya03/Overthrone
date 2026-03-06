@@ -220,17 +220,17 @@ fn bucket_failures(n: u32) -> u8 {
 /// Each maps back to an `AdaptiveDecision` variant when executed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AdaptiveAction {
-    Continue,            // 0
-    RetryPlain,          // 1
-    RetrySwapCreds,      // 2
-    RetryExtendTimeout,  // 3
-    RetryReduceNoise,    // 4
-    RetryAltMethod,      // 5
-    Skip,                // 6
-    SubstituteLowerPriv, // 7
-    SubstituteStealthier,// 8
-    Replan,              // 9
-    Abort,               // 10
+    Continue,             // 0
+    RetryPlain,           // 1
+    RetrySwapCreds,       // 2
+    RetryExtendTimeout,   // 3
+    RetryReduceNoise,     // 4
+    RetryAltMethod,       // 5
+    Skip,                 // 6
+    SubstituteLowerPriv,  // 7
+    SubstituteStealthier, // 8
+    Replan,               // 9
+    Abort,                // 10
 }
 
 impl AdaptiveAction {
@@ -326,7 +326,10 @@ struct QTableEntry {
 }
 
 impl Serialize for QTable {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         let entries: Vec<QTableEntry> = self
             .values
             .iter()
@@ -340,7 +343,9 @@ impl Serialize for QTable {
 }
 
 impl<'de> Deserialize<'de> for QTable {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let entries: Vec<QTableEntry> = Vec::deserialize(deserializer)?;
         let mut values = HashMap::new();
         for entry in entries {
@@ -512,16 +517,25 @@ impl AdaptiveQLearner {
                             learner.episode_count = saved.episode_count;
                         }
                         Err(e) => {
-                            warn!("Q-learner: Failed to parse Q-table from {}: {e}", path.display());
+                            warn!(
+                                "Q-learner: Failed to parse Q-table from {}: {e}",
+                                path.display()
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    warn!("Q-learner: Failed to read Q-table from {}: {e}", path.display());
+                    warn!(
+                        "Q-learner: Failed to read Q-table from {}: {e}",
+                        path.display()
+                    );
                 }
             }
         } else {
-            debug!("Q-learner: No existing Q-table at {}, starting fresh", path.display());
+            debug!(
+                "Q-learner: No existing Q-table at {}, starting fresh",
+                path.display()
+            );
         }
 
         learner
@@ -588,8 +602,7 @@ impl AdaptiveQLearner {
         }
 
         // ε-greedy: explore with probability ε, or if state is unseen
-        let explore = !self.q_table.has_state(&state_key)
-            || rand::random::<f64>() < self.epsilon;
+        let explore = !self.q_table.has_state(&state_key) || rand::random::<f64>() < self.epsilon;
 
         if explore {
             debug!(
@@ -663,7 +676,10 @@ impl AdaptiveQLearner {
             },
 
             AdaptiveAction::SubstituteLowerPriv => {
-                match self.heuristic_fallback.find_lower_priv_alternative_pub(&step.action) {
+                match self
+                    .heuristic_fallback
+                    .find_lower_priv_alternative_pub(&step.action)
+                {
                     Some(alt) => AdaptiveDecision::Substitute { replacement: alt },
                     None => AdaptiveDecision::Skip {
                         reason: "Q-learner: no lower-priv alternative available".to_string(),
@@ -672,7 +688,10 @@ impl AdaptiveQLearner {
             }
 
             AdaptiveAction::SubstituteStealthier => {
-                match self.heuristic_fallback.find_stealthier_alternative_pub(&step.action) {
+                match self
+                    .heuristic_fallback
+                    .find_stealthier_alternative_pub(&step.action)
+                {
                     Some(alt) => AdaptiveDecision::Substitute { replacement: alt },
                     None => AdaptiveDecision::Skip {
                         reason: "Q-learner: no stealthier alternative available".to_string(),
@@ -700,7 +719,8 @@ impl AdaptiveQLearner {
         reward: f64,
         next_state_key: &EngagementStateKey,
     ) {
-        self.q_table.update(state_key, action, reward, next_state_key);
+        self.q_table
+            .update(state_key, action, reward, next_state_key);
         debug!(
             "Q-learner: Updated Q({:?}, {:?}) — reward={:.1}",
             state_key.current_stage, action, reward
@@ -871,10 +891,7 @@ impl AdaptiveQLearner {
     /// Format a Q-learner decision for terminal display.
     pub fn format_decision(action: &AdaptiveAction, q_value: f64, exploring: bool) -> String {
         let mode = if exploring { "exploring" } else { "exploiting" };
-        format!(
-            "{:?}  Q={:+.2}  ({})",
-            action, q_value, mode
-        )
+        format!("{:?}  Q={:+.2}  ({})", action, q_value, mode)
     }
 
     /// Build a Q-learner session summary string for the final report.
@@ -951,8 +968,8 @@ pub fn decision_to_action(decision: &AdaptiveDecision) -> AdaptiveAction {
 mod tests {
     use super::*;
     use crate::planner::NoiseLevel;
-    use crate::runner::Stage;
     use crate::planner::PlannedAction;
+    use crate::runner::Stage;
 
     fn dummy_state() -> EngagementState {
         EngagementState::new()

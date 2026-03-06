@@ -1,4 +1,4 @@
-﻿//! Top-level orchestrator — dispatches all Kerberos attack actions and
+//! Top-level orchestrator — dispatches all Kerberos attack actions and
 //! collects results into a unified HuntReport.
 
 use crate::asreproast::{AsRepRoastConfig, AsRepRoastResult};
@@ -145,9 +145,10 @@ impl HuntReport {
             count += r.vulnerable_hosts.len();
         }
         if let Some(ref r) = self.rbcd
-            && r.success {
-                count += 1;
-            }
+            && r.success
+        {
+            count += 1;
+        }
         if let Some(ref r) = self.coerce {
             count += r.successful_coercions.len();
         }
@@ -159,7 +160,10 @@ impl HuntReport {
         println!("\n{}", "═══ HUNT REPORT ═══".bold().cyan());
         println!("  Domain:  {}", self.domain.bold());
         println!("  DC:      {}", self.dc_ip);
-        println!("  Started: {}", self.started_at.format("%Y-%m-%d %H:%M:%S UTC"));
+        println!(
+            "  Started: {}",
+            self.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+        );
         if let Some(completed) = self.completed_at {
             let duration = completed - self.started_at;
             println!("  Duration: {}s", duration.num_seconds());
@@ -169,7 +173,11 @@ impl HuntReport {
         if let Some(ref r) = self.asreproast {
             println!(
                 "  {} AS-REP Roast: {} hashes from {} targets",
-                if r.hashes.is_empty() { "✗".red() } else { "✓".green() },
+                if r.hashes.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.hashes.len().to_string().bold(),
                 r.users_checked,
             );
@@ -177,7 +185,11 @@ impl HuntReport {
         if let Some(ref r) = self.kerberoast {
             println!(
                 "  {} Kerberoast:   {} hashes from {} SPNs",
-                if r.hashes.is_empty() { "✗".red() } else { "✓".green() },
+                if r.hashes.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.hashes.len().to_string().bold(),
                 r.spns_checked,
             );
@@ -185,28 +197,48 @@ impl HuntReport {
         if let Some(ref r) = self.constrained {
             println!(
                 "  {} Constrained:  {} delegatable accounts",
-                if r.delegatable_accounts.is_empty() { "✗".red() } else { "✓".green() },
+                if r.delegatable_accounts.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.delegatable_accounts.len().to_string().bold(),
             );
         }
         if let Some(ref r) = self.unconstrained {
             println!(
                 "  {} Unconstrained: {} vulnerable hosts",
-                if r.vulnerable_hosts.is_empty() { "✗".red() } else { "✓".green() },
+                if r.vulnerable_hosts.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.vulnerable_hosts.len().to_string().bold(),
             );
         }
         if let Some(ref r) = self.rbcd {
             println!(
                 "  {} RBCD: {}",
-                if r.success { "✓".green() } else { "✗".red() },
-                if r.success { "delegation configured" } else { "not performed" },
+                if r.success {
+                    "✓".green()
+                } else {
+                    "✗".red()
+                },
+                if r.success {
+                    "delegation configured"
+                } else {
+                    "not performed"
+                },
             );
         }
         if let Some(ref r) = self.coerce {
             println!(
                 "  {} Coerce: {}/{} methods succeeded",
-                if r.successful_coercions.is_empty() { "✗".red() } else { "✓".green() },
+                if r.successful_coercions.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.successful_coercions.len(),
                 r.methods_attempted,
             );
@@ -248,31 +280,24 @@ impl HuntReport {
 /// Run one or more hunt actions and produce a unified report.
 pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<HuntReport> {
     let mut report = HuntReport::new(config);
-    info!(
-        "Starting hunt against {} ({})",
-        config.domain, config.dc_ip
-    );
+    info!("Starting hunt against {} ({})", config.domain, config.dc_ip);
 
     for action in actions {
         match action {
-            HuntAction::AsRepRoast(ac) => {
-                match crate::asreproast::run(config, ac).await {
-                    Ok(result) => report.asreproast = Some(result),
-                    Err(e) => {
-                        error!("AS-REP Roast failed: {e}");
-                        report.errors.push(format!("asreproast: {e}"));
-                    }
+            HuntAction::AsRepRoast(ac) => match crate::asreproast::run(config, ac).await {
+                Ok(result) => report.asreproast = Some(result),
+                Err(e) => {
+                    error!("AS-REP Roast failed: {e}");
+                    report.errors.push(format!("asreproast: {e}"));
                 }
-            }
-            HuntAction::Kerberoast(kc) => {
-                match crate::kerberoast::run(config, kc).await {
-                    Ok(result) => report.kerberoast = Some(result),
-                    Err(e) => {
-                        error!("Kerberoast failed: {e}");
-                        report.errors.push(format!("kerberoast: {e}"));
-                    }
+            },
+            HuntAction::Kerberoast(kc) => match crate::kerberoast::run(config, kc).await {
+                Ok(result) => report.kerberoast = Some(result),
+                Err(e) => {
+                    error!("Kerberoast failed: {e}");
+                    report.errors.push(format!("kerberoast: {e}"));
                 }
-            }
+            },
             HuntAction::ConstrainedDelegation(cc) => {
                 match crate::constrained::run(config, cc).await {
                     Ok(result) => report.constrained = Some(result),
@@ -291,33 +316,27 @@ pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<Hun
                     }
                 }
             }
-            HuntAction::Rbcd(rc) => {
-                match crate::rbcd::run(config, rc).await {
-                    Ok(result) => report.rbcd = Some(result),
-                    Err(e) => {
-                        error!("RBCD attack failed: {e}");
-                        report.errors.push(format!("rbcd: {e}"));
-                    }
+            HuntAction::Rbcd(rc) => match crate::rbcd::run(config, rc).await {
+                Ok(result) => report.rbcd = Some(result),
+                Err(e) => {
+                    error!("RBCD attack failed: {e}");
+                    report.errors.push(format!("rbcd: {e}"));
                 }
-            }
-            HuntAction::Coerce(cc) => {
-                match crate::coerce::run(config, cc).await {
-                    Ok(result) => report.coerce = Some(result),
-                    Err(e) => {
-                        error!("Coercion failed: {e}");
-                        report.errors.push(format!("coerce: {e}"));
-                    }
+            },
+            HuntAction::Coerce(cc) => match crate::coerce::run(config, cc).await {
+                Ok(result) => report.coerce = Some(result),
+                Err(e) => {
+                    error!("Coercion failed: {e}");
+                    report.errors.push(format!("coerce: {e}"));
                 }
-            }
-            HuntAction::Ticket(tr) => {
-                match crate::tickets::handle_request(config, tr).await {
-                    Ok(_) => info!("Ticket operation completed"),
-                    Err(e) => {
-                        error!("Ticket operation failed: {e}");
-                        report.errors.push(format!("ticket: {e}"));
-                    }
+            },
+            HuntAction::Ticket(tr) => match crate::tickets::handle_request(config, tr).await {
+                Ok(_) => info!("Ticket operation completed"),
+                Err(e) => {
+                    error!("Ticket operation failed: {e}");
+                    report.errors.push(format!("ticket: {e}"));
                 }
-            }
+            },
             HuntAction::FullScan => {
                 info!("Running full enumeration scan...");
                 // AS-REP Roast — auto-enumerate

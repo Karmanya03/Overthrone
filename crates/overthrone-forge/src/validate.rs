@@ -1,4 +1,4 @@
-﻿//! Input validation helpers for the forge pipeline.
+//! Input validation helpers for the forge pipeline.
 //!
 //! Validates SIDs, hashes, SPNs, domain names, and other inputs
 //! before they reach the crypto/ASN.1 layer to give clear errors.
@@ -10,7 +10,8 @@ use tracing::debug;
 pub fn validate_sid_format(sid: &str) -> Result<()> {
     if !sid.starts_with("S-") && !sid.starts_with("s-") {
         return Err(OverthroneError::TicketForge(format!(
-            "Invalid SID '{}': must start with 'S-'", sid
+            "Invalid SID '{}': must start with 'S-'",
+            sid
         )));
     }
 
@@ -32,7 +33,8 @@ pub fn validate_sid_format(sid: &str) -> Result<()> {
     })?;
     if revision != 1 {
         return Err(OverthroneError::TicketForge(format!(
-            "Unusual SID revision {}: expected 1", revision
+            "Unusual SID revision {}: expected 1",
+            revision
         )));
     }
 
@@ -72,14 +74,16 @@ pub fn validate_hash_format(hash: &str, label: &str) -> Result<()> {
 
     if clean.is_empty() {
         return Err(OverthroneError::TicketForge(format!(
-            "{} hash cannot be empty", label
+            "{} hash cannot be empty",
+            label
         )));
     }
 
     // Must be valid hex
     if !clean.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(OverthroneError::TicketForge(format!(
-            "Invalid {} hash: contains non-hex characters", label
+            "Invalid {} hash: contains non-hex characters",
+            label
         )));
     }
 
@@ -102,15 +106,14 @@ pub fn validate_hash_format(hash: &str, label: &str) -> Result<()> {
 /// Validate an SPN format: "service/host" or "service/host.domain.com".
 pub fn validate_spn_format(spn: &str) -> Result<()> {
     if spn.is_empty() {
-        return Err(OverthroneError::TicketForge(
-            "SPN cannot be empty".into()
-        ));
+        return Err(OverthroneError::TicketForge("SPN cannot be empty".into()));
     }
 
     let parts: Vec<&str> = spn.splitn(2, '/').collect();
     if parts.len() != 2 {
         return Err(OverthroneError::TicketForge(format!(
-            "Invalid SPN '{}': expected 'service/host' format", spn
+            "Invalid SPN '{}': expected 'service/host' format",
+            spn
         )));
     }
 
@@ -119,26 +122,52 @@ pub fn validate_spn_format(spn: &str) -> Result<()> {
 
     if service.is_empty() {
         return Err(OverthroneError::TicketForge(format!(
-            "Invalid SPN '{}': service class cannot be empty", spn
+            "Invalid SPN '{}': service class cannot be empty",
+            spn
         )));
     }
 
     if host.is_empty() {
         return Err(OverthroneError::TicketForge(format!(
-            "Invalid SPN '{}': hostname cannot be empty", spn
+            "Invalid SPN '{}': hostname cannot be empty",
+            spn
         )));
     }
 
     // Common service classes
     let known_services = [
-        "HTTP", "CIFS", "HOST", "LDAP", "MSSQLSvc", "DNS", "TERMSRV",
-        "WSMAN", "exchangeMDB", "exchangeRFR", "exchangeAB", "FTP",
-        "RestrictedKrbHost", "GC", "IMAP", "POP", "SMTP", "MAPI",
-        "http", "cifs", "host", "ldap", "mssqlsvc", "dns", "termsrv",
+        "HTTP",
+        "CIFS",
+        "HOST",
+        "LDAP",
+        "MSSQLSvc",
+        "DNS",
+        "TERMSRV",
+        "WSMAN",
+        "exchangeMDB",
+        "exchangeRFR",
+        "exchangeAB",
+        "FTP",
+        "RestrictedKrbHost",
+        "GC",
+        "IMAP",
+        "POP",
+        "SMTP",
+        "MAPI",
+        "http",
+        "cifs",
+        "host",
+        "ldap",
+        "mssqlsvc",
+        "dns",
+        "termsrv",
         "wsman",
     ];
 
-    if !known_services.iter().any(|&s| service.eq_ignore_ascii_case(s)) {
+    if !known_services
+        .iter()
+        .any(|&s| service.eq_ignore_ascii_case(s))
+    {
         debug!(
             "SPN service class '{}' is not in the common set — may be custom",
             service
@@ -152,13 +181,14 @@ pub fn validate_spn_format(spn: &str) -> Result<()> {
 pub fn validate_domain(domain: &str) -> Result<()> {
     if domain.is_empty() {
         return Err(OverthroneError::TicketForge(
-            "Domain name cannot be empty".into()
+            "Domain name cannot be empty".into(),
         ));
     }
 
     if domain.len() > 255 {
         return Err(OverthroneError::TicketForge(format!(
-            "Domain name too long: {} chars (max 255)", domain.len()
+            "Domain name too long: {} chars (max 255)",
+            domain.len()
         )));
     }
 
@@ -167,7 +197,8 @@ pub fn validate_domain(domain: &str) -> Result<()> {
     for ch in invalid_chars {
         if domain.contains(ch) {
             return Err(OverthroneError::TicketForge(format!(
-                "Domain name '{}' contains invalid character '{}'", domain, ch
+                "Domain name '{}' contains invalid character '{}'",
+                domain, ch
             )));
         }
     }
@@ -181,32 +212,35 @@ pub fn validate_rid(rid: u32) -> Result<()> {
     // 500 = Administrator, 501 = Guest, 502 = krbtgt, 512+ = groups
     // Custom users start at 1000+
     if rid == 0 {
-        return Err(OverthroneError::TicketForge(
-            "User RID cannot be 0".into()
-        ));
+        return Err(OverthroneError::TicketForge("User RID cannot be 0".into()));
     }
 
     if rid > 0x3FFFFFFF {
         return Err(OverthroneError::TicketForge(format!(
-            "User RID {} exceeds maximum (0x3FFFFFFF)", rid
+            "User RID {} exceeds maximum (0x3FFFFFFF)",
+            rid
         )));
     }
 
-    debug!("RID {}: {}", rid, match rid {
-        500 => "Administrator (built-in)",
-        501 => "Guest",
-        502 => "krbtgt",
-        512 => "Domain Admins (group)",
-        513 => "Domain Users (group)",
-        514 => "Domain Guests (group)",
-        515 => "Domain Computers (group)",
-        516 => "Domain Controllers (group)",
-        518 => "Schema Admins (group)",
-        519 => "Enterprise Admins (group)",
-        520 => "Group Policy Creator Owners (group)",
-        1000.. => "Custom account",
-        _ => "Well-known RID",
-    });
+    debug!(
+        "RID {}: {}",
+        rid,
+        match rid {
+            500 => "Administrator (built-in)",
+            501 => "Guest",
+            502 => "krbtgt",
+            512 => "Domain Admins (group)",
+            513 => "Domain Users (group)",
+            514 => "Domain Guests (group)",
+            515 => "Domain Computers (group)",
+            516 => "Domain Controllers (group)",
+            518 => "Schema Admins (group)",
+            519 => "Enterprise Admins (group)",
+            520 => "Group Policy Creator Owners (group)",
+            1000.. => "Custom account",
+            _ => "Well-known RID",
+        }
+    );
 
     Ok(())
 }
@@ -269,12 +303,12 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
         | crate::runner::ForgeAction::InterRealmTgt { .. } => {
             if config.krbtgt_hash.is_none() && config.krbtgt_aes256.is_none() {
                 return Err(OverthroneError::TicketForge(
-                    "krbtgt hash or AES key required for this action".into()
+                    "krbtgt hash or AES key required for this action".into(),
                 ));
             }
             if config.domain_sid.is_none() {
                 return Err(OverthroneError::TicketForge(
-                    "Domain SID required for this action".into()
+                    "Domain SID required for this action".into(),
                 ));
             }
         }
@@ -282,39 +316,38 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
             validate_spn_format(target_spn)?;
             if config.service_hash.is_none() {
                 return Err(OverthroneError::TicketForge(
-                    "Service account hash required for Silver Ticket".into()
+                    "Service account hash required for Silver Ticket".into(),
                 ));
             }
             if config.domain_sid.is_none() {
                 return Err(OverthroneError::TicketForge(
-                    "Domain SID required for Silver Ticket".into()
+                    "Domain SID required for Silver Ticket".into(),
                 ));
             }
         }
-        crate::runner::ForgeAction::SkeletonKey
-        | crate::runner::ForgeAction::DsrmBackdoor => {
+        crate::runner::ForgeAction::SkeletonKey | crate::runner::ForgeAction::DsrmBackdoor => {
             if config.password.is_none() && config.nt_hash.is_none() {
                 return Err(OverthroneError::TicketForge(
-                    "Credentials required for persistence attacks".into()
+                    "Credentials required for persistence attacks".into(),
                 ));
             }
         }
         crate::runner::ForgeAction::DcSyncUser { .. } => {
             if config.password.is_none() && config.nt_hash.is_none() {
                 return Err(OverthroneError::TicketForge(
-                    "Credentials required for DCSync".into()
+                    "Credentials required for DCSync".into(),
                 ));
             }
         }
         crate::runner::ForgeAction::AclBackdoor { target_dn, trustee } => {
             if target_dn.is_empty() {
                 return Err(OverthroneError::TicketForge(
-                    "Target DN cannot be empty for ACL backdoor".into()
+                    "Target DN cannot be empty for ACL backdoor".into(),
                 ));
             }
             if trustee.is_empty() {
                 return Err(OverthroneError::TicketForge(
-                    "Trustee cannot be empty for ACL backdoor".into()
+                    "Trustee cannot be empty for ACL backdoor".into(),
                 ));
             }
         }
@@ -339,7 +372,7 @@ mod tests {
         assert!(validate_sid_format("").is_err());
         assert!(validate_sid_format("not-a-sid").is_err());
         assert!(validate_sid_format("S-2-5-21-123").is_err()); // bad revision
-        assert!(validate_sid_format("S-1-5").is_err());         // too short
+        assert!(validate_sid_format("S-1-5").is_err()); // too short
     }
 
     #[test]
@@ -347,9 +380,7 @@ mod tests {
         // RC4 (32 hex = 16 bytes)
         assert!(validate_hash_format("aad3b435b51404eeaad3b435b51404ee", "test").is_ok());
         // AES256 (64 hex = 32 bytes)
-        assert!(validate_hash_format(
-            &"ab".repeat(32), "test"
-        ).is_ok());
+        assert!(validate_hash_format(&"ab".repeat(32), "test").is_ok());
     }
 
     #[test]

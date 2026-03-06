@@ -1,8 +1,8 @@
 //! MSSQL instance enumeration via SPN scanning.
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -26,7 +26,11 @@ impl MssqlInstance {
             let target = parts[1];
             if let Some((host, rest)) = target.split_once(':') {
                 let port = rest.parse::<u16>().ok();
-                let instance = if port.is_none() { Some(rest.to_string()) } else { None };
+                let instance = if port.is_none() {
+                    Some(rest.to_string())
+                } else {
+                    None
+                };
                 (Some(host.to_string()), instance, port)
             } else {
                 (Some(target.to_string()), None, None)
@@ -52,7 +56,10 @@ pub fn mssql_filter() -> String {
 }
 
 pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>> {
-    info!("[mssql] Querying {} for MSSQL service accounts", config.dc_ip);
+    info!(
+        "[mssql] Querying {} for MSSQL service accounts",
+        config.dc_ip
+    );
 
     let mut conn = LdapSession::connect(
         &config.dc_ip,
@@ -60,7 +67,8 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     let filter = mssql_filter();
     let attrs = &[
@@ -84,13 +92,15 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
     let mut results = Vec::new();
 
     for entry in &entries {
-        let account = entry.attrs
+        let account = entry
+            .attrs
             .get("sAMAccountName")
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| entry.dn.clone());
 
-        let uac: u32 = entry.attrs
+        let uac: u32 = entry
+            .attrs
             .get("userAccountControl")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
@@ -98,7 +108,8 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
 
         let enabled = uac & 0x0002 == 0; // bit 1 = ACCOUNTDISABLE
 
-        let spns: Vec<String> = entry.attrs
+        let spns: Vec<String> = entry
+            .attrs
             .get("servicePrincipalName")
             .cloned()
             .unwrap_or_default();
@@ -111,11 +122,13 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
 
             let instance = MssqlInstance::from_spn(spn, &account, &entry.dn, enabled);
 
-            info!("[mssql]  {} → {} (host: {}, port: {:?})",
+            info!(
+                "[mssql]  {} → {} (host: {}, port: {:?})",
                 account,
                 spn,
                 instance.hostname.as_deref().unwrap_or("?"),
-                instance.port);
+                instance.port
+            );
 
             results.push(instance);
         }
@@ -123,7 +136,10 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
 
     let _ = conn.disconnect().await;
 
-    info!("[mssql] Found {} MSSQL instances across {} accounts",
-        results.len(), entries.len());
+    info!(
+        "[mssql] Found {} MSSQL instances across {} accounts",
+        results.len(),
+        entries.len()
+    );
     Ok(results)
 }

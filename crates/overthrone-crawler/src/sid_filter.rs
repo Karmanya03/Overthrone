@@ -1,9 +1,9 @@
-﻿//! SID filtering analysis across trust boundaries.
+//! SID filtering analysis across trust boundaries.
 //!
 //! Checks each trust for SID filtering status and generates
 //! findings with risk assessments and remediation guidance.
 
-use crate::trust_map::{TrustGraph, TrustKind, TrustDirection};
+use crate::trust_map::{TrustDirection, TrustGraph, TrustKind};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -35,13 +35,13 @@ impl SidFilterFinding {
 }
 
 /// Analyze SID filtering status on every trust in the graph.
-pub fn analyze_sid_filtering(
-    _source_domain: &str,
-    graph: &TrustGraph,
-) -> Vec<SidFilterFinding> {
+pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<SidFilterFinding> {
     let mut findings = Vec::new();
 
-    info!("[sid_filter] Analyzing SID filtering on {} trusts", graph.trusts.len());
+    info!(
+        "[sid_filter] Analyzing SID filtering on {} trusts",
+        graph.trusts.len()
+    );
 
     for trust in &graph.trusts {
         let trust_type_str = match &trust.trust_type {
@@ -180,22 +180,24 @@ pub fn analyze_sid_filtering(
             }
         };
 
-        debug!("[sid_filter] {} → {} : {} ({})",
-            finding.source_domain, finding.target_domain,
-            finding.risk_level, trust_type_str
+        debug!(
+            "[sid_filter] {} → {} : {} ({})",
+            finding.source_domain, finding.target_domain, finding.risk_level, trust_type_str
         );
 
         findings.push(finding);
     }
 
     // Sort: CRITICAL first
-    findings.sort_by(|a, b| {
-        risk_priority(&a.risk_level).cmp(&risk_priority(&b.risk_level))
-    });
+    findings.sort_by(|a, b| risk_priority(&a.risk_level).cmp(&risk_priority(&b.risk_level)));
 
-    info!("[sid_filter] {} findings ({} critical, {} ok)",
+    info!(
+        "[sid_filter] {} findings ({} critical, {} ok)",
         findings.len(),
-        findings.iter().filter(|f| f.risk_level == "CRITICAL").count(),
+        findings
+            .iter()
+            .filter(|f| f.risk_level == "CRITICAL")
+            .count(),
         findings.iter().filter(|f| f.risk_level == "OK").count(),
     );
 

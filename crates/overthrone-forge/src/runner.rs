@@ -1,11 +1,11 @@
-﻿//! Top-level orchestrator for the forge pipeline.
+//! Top-level orchestrator for the forge pipeline.
 //! Takes a ForgeConfig and dispatches to the appropriate forging module.
 
-use overthrone_core::error::Result;
 use colored::Colorize;
+use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{golden, silver, diamond, skeleton, dsrm, dcsync_user, acl_backdoor};
+use crate::{acl_backdoor, dcsync_user, diamond, dsrm, golden, silver, skeleton};
 
 /// What kind of ticket/persistence to forge
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +26,9 @@ impl std::fmt::Display for ForgeAction {
             Self::GoldenTicket => write!(f, "Golden Ticket"),
             Self::SilverTicket { target_spn } => write!(f, "Silver Ticket ({})", target_spn),
             Self::DiamondTicket => write!(f, "Diamond Ticket"),
-            Self::InterRealmTgt { target_domain } => write!(f, "Inter-Realm TGT → {}", target_domain),
+            Self::InterRealmTgt { target_domain } => {
+                write!(f, "Inter-Realm TGT → {}", target_domain)
+            }
             Self::SkeletonKey => write!(f, "Skeleton Key"),
             Self::DsrmBackdoor => write!(f, "DSRM Backdoor"),
             Self::DcSyncUser { target_user } => write!(f, "DCSync ({})", target_user),
@@ -85,7 +87,11 @@ impl ForgeConfig {
     }
 
     pub fn effective_lifetime(&self) -> u32 {
-        if self.lifetime_hours == 0 { 10 } else { self.lifetime_hours }
+        if self.lifetime_hours == 0 {
+            10
+        } else {
+            self.lifetime_hours
+        }
     }
 }
 
@@ -131,7 +137,8 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
     let sep = "═══════════════════════════════════════════════";
 
     println!("\n{}", sep.bright_magenta());
-    println!("{} {} ({})",
+    println!(
+        "{} {} ({})",
         "🔨 FORGE".bright_magenta().bold(),
         config.action.to_string().as_str().bright_white().bold(),
         config.domain.as_str().dimmed()
@@ -139,24 +146,16 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
     println!("{}\n", sep.bright_magenta());
 
     let result = match &config.action {
-        ForgeAction::GoldenTicket => {
-            golden::forge_golden_ticket(config).await?
-        }
+        ForgeAction::GoldenTicket => golden::forge_golden_ticket(config).await?,
         ForgeAction::SilverTicket { target_spn } => {
             silver::forge_silver_ticket(config, target_spn).await?
         }
-        ForgeAction::DiamondTicket => {
-            diamond::forge_diamond_ticket(config).await?
-        }
+        ForgeAction::DiamondTicket => diamond::forge_diamond_ticket(config).await?,
         ForgeAction::InterRealmTgt { target_domain } => {
             golden::forge_interrealm_tgt(config, target_domain).await?
         }
-        ForgeAction::SkeletonKey => {
-            skeleton::inject_skeleton_key(config).await?
-        }
-        ForgeAction::DsrmBackdoor => {
-            dsrm::enable_dsrm_backdoor(config).await?
-        }
+        ForgeAction::SkeletonKey => skeleton::inject_skeleton_key(config).await?,
+        ForgeAction::DsrmBackdoor => dsrm::enable_dsrm_backdoor(config).await?,
         ForgeAction::DcSyncUser { target_user } => {
             dcsync_user::dcsync_single_user(config, target_user).await?
         }
@@ -174,21 +173,20 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
     println!("\n{} {}", status, result.message.as_str().bright_white());
 
     if let Some(ref ticket) = result.ticket_data {
-        println!("  {} {} as {}",
+        println!(
+            "  {} {} as {}",
             "Ticket:".dimmed(),
             ticket.ticket_type.as_str().bright_cyan(),
             ticket.impersonated_user.as_str().bright_yellow()
         );
-        println!("  {} {} → {}",
+        println!(
+            "  {} {} → {}",
             "Valid:".dimmed(),
             ticket.valid_from.as_str().bright_green(),
             ticket.valid_until.as_str().bright_green()
         );
         if let Some(ref path) = ticket.kirbi_path {
-            println!("  {} {}",
-                "Saved:".dimmed(),
-                path.as_str().bright_white()
-            );
+            println!("  {} {}", "Saved:".dimmed(), path.as_str().bright_white());
         }
     }
 

@@ -1,4 +1,4 @@
-﻿//! Ticket forging: Golden, Silver, Diamond — shared crypto helpers.
+//! Ticket forging: Golden, Silver, Diamond — shared crypto helpers.
 //!
 //! Provides centralised routines for:
 //! - PAC checksum computation (HMAC-MD5 for RC4, HMAC-SHA1-96 for AES)
@@ -42,11 +42,7 @@ pub const CHECKSUM_HMAC_SHA1_96_AES256: i32 = 16;
 /// - etype 23 (RC4-HMAC): `HMAC-MD5(key, data)` → 16-byte checksum, type -138.
 /// - etype 17 (AES-128):  `HMAC-SHA1-96(key, data)` → 12-byte checksum, type 15.
 /// - etype 18 (AES-256):  `HMAC-SHA1-96(key, data)` → 12-byte checksum, type 16.
-pub fn compute_pac_checksum(
-    etype: i32,
-    key: &[u8],
-    data: &[u8],
-) -> Result<Vec<u8>> {
+pub fn compute_pac_checksum(etype: i32, key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let mut result = Vec::new();
 
     match etype {
@@ -77,9 +73,7 @@ pub fn compute_pac_checksum(
 pub fn compute_pac_checksum_raw(etype: i32, key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     match etype {
         ETYPE_RC4_HMAC => Ok(hmac_util::hmac_md5(key, data).to_vec()),
-        ETYPE_AES128_CTS | ETYPE_AES256_CTS => {
-            Ok(hmac_util::hmac_sha1_96_aes(key, data).to_vec())
-        }
+        ETYPE_AES128_CTS | ETYPE_AES256_CTS => Ok(hmac_util::hmac_sha1_96_aes(key, data).to_vec()),
         _ => bail!("Unsupported etype: {etype}"),
     }
 }
@@ -111,15 +105,9 @@ pub fn encrypt_ticket_part(
     key_usage: i32,
 ) -> Result<Vec<u8>> {
     match etype {
-        ETYPE_RC4_HMAC => {
-            Ok(rc4_util::rc4_hmac_encrypt(key, plaintext, key_usage))
-        }
-        ETYPE_AES128_CTS => {
-            aes_cts::aes128_cts_encrypt(key, plaintext)
-        }
-        ETYPE_AES256_CTS => {
-            aes_cts::aes256_cts_encrypt(key, plaintext)
-        }
+        ETYPE_RC4_HMAC => Ok(rc4_util::rc4_hmac_encrypt(key, plaintext, key_usage)),
+        ETYPE_AES128_CTS => aes_cts::aes128_cts_encrypt(key, plaintext),
+        ETYPE_AES256_CTS => aes_cts::aes256_cts_encrypt(key, plaintext),
         _ => bail!("Unsupported etype for ticket encryption: {etype}"),
     }
 }
@@ -132,15 +120,9 @@ pub fn decrypt_ticket_part(
     key_usage: i32,
 ) -> Result<Vec<u8>> {
     match etype {
-        ETYPE_RC4_HMAC => {
-            rc4_util::rc4_hmac_decrypt(key, ciphertext, key_usage)
-        }
-        ETYPE_AES128_CTS => {
-            aes_cts::aes128_cts_decrypt(key, ciphertext)
-        }
-        ETYPE_AES256_CTS => {
-            aes_cts::aes256_cts_decrypt(key, ciphertext)
-        }
+        ETYPE_RC4_HMAC => rc4_util::rc4_hmac_decrypt(key, ciphertext, key_usage),
+        ETYPE_AES128_CTS => aes_cts::aes128_cts_decrypt(key, ciphertext),
+        ETYPE_AES256_CTS => aes_cts::aes256_cts_decrypt(key, ciphertext),
         _ => bail!("Unsupported etype for ticket decryption: {etype}"),
     }
 }
@@ -166,7 +148,12 @@ pub fn detect_etype_from_key(key: &[u8]) -> Result<i32> {
 pub fn validate_key_for_etype(key: &[u8], etype: i32) -> Result<()> {
     let expected = expected_key_length(etype)?;
     if key.len() != expected {
-        bail!("Key length {} does not match etype {} (expected {})", key.len(), etype, expected);
+        bail!(
+            "Key length {} does not match etype {} (expected {})",
+            key.len(),
+            etype,
+            expected
+        );
     }
     Ok(())
 }

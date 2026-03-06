@@ -1,14 +1,14 @@
-﻿//! DNS operations for AD reconnaissance: SRV lookups, reverse DNS, DC discovery.
+//! DNS operations for AD reconnaissance: SRV lookups, reverse DNS, DC discovery.
 //!
 //! Provides a [`DnsResolver`] struct that caches the underlying resolver instance
 //! and supports using a custom nameserver (useful for targeting internal AD DNS).
 //! Free functions are provided as thin wrappers for backward compatibility.
 
 use crate::error::{OverthroneError, Result};
+use hickory_resolver::Resolver;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::xfer::Protocol;
-use hickory_resolver::Resolver;
 use std::net::{IpAddr, SocketAddr};
 use tracing::{debug, info, warn};
 
@@ -149,28 +149,19 @@ impl DnsResolver {
     }
 
     /// Discover Kerberos KDCs via `_kerberos._tcp.<domain>`.
-    pub async fn discover_kerberos_servers(
-        &self,
-        domain: &str,
-    ) -> Result<Vec<SrvRecord>> {
+    pub async fn discover_kerberos_servers(&self, domain: &str) -> Result<Vec<SrvRecord>> {
         let query = format!("{SRV_KERBEROS}.{domain}");
         self.lookup_srv(&query).await
     }
 
     /// Discover Global Catalog servers via `_gc._tcp.<domain>`.
-    pub async fn discover_global_catalogs(
-        &self,
-        domain: &str,
-    ) -> Result<Vec<SrvRecord>> {
+    pub async fn discover_global_catalogs(&self, domain: &str) -> Result<Vec<SrvRecord>> {
         let query = format!("{SRV_GC}.{domain}");
         self.lookup_srv(&query).await
     }
 
     /// Discover Kerberos password-change servers via `_kpasswd._tcp.<domain>`.
-    pub async fn discover_kpasswd_servers(
-        &self,
-        domain: &str,
-    ) -> Result<Vec<SrvRecord>> {
+    pub async fn discover_kpasswd_servers(&self, domain: &str) -> Result<Vec<SrvRecord>> {
         let query = format!("{SRV_KPASSWD}.{domain}");
         self.lookup_srv(&query).await
     }
@@ -271,9 +262,33 @@ impl DnsResolver {
 
         // Try to enumerate common hostnames / subdomains
         let common_prefixes = [
-            "dc", "dc01", "dc02", "dc1", "dc2", "ad", "ad01", "mail", "exchange", "owa",
-            "autodiscover", "vpn", "rdp", "citrix", "adfs", "sso", "ca", "pki", "sccm",
-            "wsus", "sql", "sql01", "db", "web", "www", "ftp", "dns",
+            "dc",
+            "dc01",
+            "dc02",
+            "dc1",
+            "dc2",
+            "ad",
+            "ad01",
+            "mail",
+            "exchange",
+            "owa",
+            "autodiscover",
+            "vpn",
+            "rdp",
+            "citrix",
+            "adfs",
+            "sso",
+            "ca",
+            "pki",
+            "sccm",
+            "wsus",
+            "sql",
+            "sql01",
+            "db",
+            "web",
+            "www",
+            "ftp",
+            "dns",
         ];
 
         for prefix in common_prefixes {

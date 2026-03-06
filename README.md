@@ -496,21 +496,21 @@ Grab the latest from [**Releases**](https://github.com/Karmanya03/Overthrone/rel
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-linux-x86_64) | x86_64 (musl, static) |
-| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.2/overthrone-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.2/overthrone-linux-x86_64) | x86_64 (musl, static) |
+| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.2/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick manual install:**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.2/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.2/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # Kali (you're probably already here)
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.1/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.2/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
 ```
 
 ### Build from source

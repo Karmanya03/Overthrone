@@ -12,10 +12,7 @@ use tracing::debug;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MssqlAuth {
     /// SQL Server authentication (username/password)
-    Sql {
-        username: String,
-        password: String,
-    },
+    Sql { username: String, password: String },
     /// Windows/NTLM authentication
     Ntlm {
         domain: String,
@@ -29,9 +26,7 @@ pub enum MssqlAuth {
         nt_hash: Vec<u8>,
     },
     /// Access token (Azure AD, etc.)
-    Token {
-        token: String,
-    },
+    Token { token: String },
     /// Trusted/Integrated (use current Windows credentials)
     Trusted,
 }
@@ -165,7 +160,9 @@ impl NtlmAuthHandler {
         } else if let Some(ref password) = self.password {
             ntlm::ntowfv1(password)
         } else {
-            return Err(crate::error::OverthroneError::Auth("No password or NT hash provided".to_string()));
+            return Err(crate::error::OverthroneError::Auth(
+                "No password or NT hash provided".to_string(),
+            ));
         };
 
         // Build the authenticate message
@@ -187,7 +184,10 @@ impl NtlmAuthHandler {
 /// MSSQL TDS Login7 password obfuscation (MS-TDS 2.2.6.4)
 /// Algorithm: for each byte → swap high/low nibbles → XOR with 0xA5
 pub fn obfuscate_password(password: &str) -> Vec<u8> {
-    let utf16: Vec<u8> = password.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let utf16: Vec<u8> = password
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
     utf16
         .into_iter()
         .map(|b| {
@@ -206,7 +206,7 @@ pub fn deobfuscate_password(data: &[u8]) -> String {
             ((unxored & 0x0F) << 4) | ((unxored & 0xF0) >> 4)
         })
         .collect();
-    
+
     decoded
         .chunks(2)
         .filter_map(|c| {
@@ -252,10 +252,13 @@ mod tests {
     fn test_ntlm_auth_handler() {
         let mut handler = NtlmAuthHandler::new("DOMAIN", "user", "password");
         let negotiate = handler.build_negotiate().unwrap();
-        
+
         // Check NTLM signature
         assert_eq!(&negotiate[0..8], b"NTLMSSP\x00");
         // Type 1 message
-        assert_eq!(u32::from_le_bytes([negotiate[8], negotiate[9], negotiate[10], negotiate[11]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([negotiate[8], negotiate[9], negotiate[10], negotiate[11]]),
+            1
+        );
     }
 }

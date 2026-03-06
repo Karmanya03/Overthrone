@@ -37,9 +37,7 @@ pub struct NativePlugin {
     fn_shutdown: Option<libloading::Symbol<'static, unsafe extern "C" fn() -> i32>>,
     /// Plugin-exported free function. When present, used instead of libc free()
     /// to deallocate strings returned by fn_execute, ensuring allocator compat.
-    fn_free: Option<
-        libloading::Symbol<'static, unsafe extern "C" fn(ptr: *mut std::ffi::c_char)>,
-    >,
+    fn_free: Option<libloading::Symbol<'static, unsafe extern "C" fn(ptr: *mut std::ffi::c_char)>>,
 }
 
 // Safety: The library handle and symbols are Send+Sync because we control
@@ -404,8 +402,7 @@ fn define_wasm_host_functions(linker: &mut Linker<WasmPluginState>) -> Result<()
                 }
 
                 let name = String::from_utf8_lossy(&data[name_start..name_end]).to_string();
-                let node_type =
-                    String::from_utf8_lossy(&data[type_start..type_end]).to_string();
+                let node_type = String::from_utf8_lossy(&data[type_start..type_end]).to_string();
 
                 let op = format!("add_node({}, {})", name, node_type);
                 let state = caller.data_mut();
@@ -416,9 +413,7 @@ fn define_wasm_host_functions(linker: &mut Linker<WasmPluginState>) -> Result<()
                 state.graph_operations.len() as i64
             },
         )
-        .map_err(|e| {
-            OverthroneError::Plugin(format!("Failed to define graph_add_node: {}", e))
-        })?;
+        .map_err(|e| OverthroneError::Plugin(format!("Failed to define graph_add_node: {}", e)))?;
 
     // graph_add_edge(from: i64, to: i64, type_ptr: i32, type_len: i32)
     linker
@@ -443,15 +438,12 @@ fn define_wasm_host_functions(linker: &mut Linker<WasmPluginState>) -> Result<()
                     return;
                 }
 
-                let edge_type =
-                    String::from_utf8_lossy(&data[type_start..type_end]).to_string();
+                let edge_type = String::from_utf8_lossy(&data[type_start..type_end]).to_string();
                 let op = format!("add_edge({}, {}, {})", from, to, edge_type);
                 caller.data_mut().graph_operations.push(op);
             },
         )
-        .map_err(|e| {
-            OverthroneError::Plugin(format!("Failed to define graph_add_edge: {}", e))
-        })?;
+        .map_err(|e| OverthroneError::Plugin(format!("Failed to define graph_add_edge: {}", e)))?;
 
     Ok(())
 }
@@ -509,9 +501,10 @@ impl Plugin for WasmPlugin {
         args: &HashMap<String, String>,
         _ctx: &PluginContext,
     ) -> Result<PluginResult> {
-        let store = self.store.as_mut().ok_or_else(|| {
-            OverthroneError::Plugin("WASM plugin not initialized".to_string())
-        })?;
+        let store = self
+            .store
+            .as_mut()
+            .ok_or_else(|| OverthroneError::Plugin("WASM plugin not initialized".to_string()))?;
         let instance = self.instance.as_ref().ok_or_else(|| {
             OverthroneError::Plugin("WASM plugin not initialized (no instance)".to_string())
         })?;
@@ -562,10 +555,7 @@ impl Plugin for WasmPlugin {
         memory
             .write(store.as_context_mut(), command_offset, command.as_bytes())
             .map_err(|e| {
-                OverthroneError::Plugin(format!(
-                    "Failed to write command to WASM memory: {}",
-                    e
-                ))
+                OverthroneError::Plugin(format!("Failed to write command to WASM memory: {}", e))
             })?;
 
         memory
@@ -593,8 +583,8 @@ impl Plugin for WasmPlugin {
                 })?;
 
             // Optionally deallocate guest memory
-            if let Ok(dealloc_fn) = instance
-                .get_typed_func::<(i32, i32), ()>(store.as_context_mut(), "deallocate")
+            if let Ok(dealloc_fn) =
+                instance.get_typed_func::<(i32, i32), ()>(store.as_context_mut(), "deallocate")
             {
                 let _ = dealloc_fn.call(
                     store.as_context_mut(),

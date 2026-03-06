@@ -3,21 +3,22 @@
 //! Uses ntlmclient for NTLM auth and reqwest for HTTP. Implements the
 //! WS-Management protocol: Create shell, Execute, Receive, Delete.
 
-use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
 use crate::error::{OverthroneError, Result};
+use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use ntlmclient::{respond_challenge_ntlm_v2, Credentials, Flags, get_ntlm_time, Message};
-use quick_xml::events::Event;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use ntlmclient::{Credentials, Flags, Message, get_ntlm_time, respond_challenge_ntlm_v2};
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use reqwest::Client;
 use tracing::{debug, info};
 use uuid::Uuid;
 
 const SHELL_URI: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd";
 const CREATE_ACTION: &str = "http://schemas.xmlsoap.org/ws/2004/09/transfer/Create";
-const CREATE_RESPONSE_ACTION: &str = "http://schemas.xmlsoap.org/ws/2004/09/transfer/CreateResponse";
+const CREATE_RESPONSE_ACTION: &str =
+    "http://schemas.xmlsoap.org/ws/2004/09/transfer/CreateResponse";
 const SEND_ACTION: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Send";
 const RECEIVE_ACTION: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Receive";
 const RECEIVE_RESPONSE_ACTION: &str =
@@ -63,7 +64,7 @@ impl WinRmExecutor {
         }
         builder
             .build()
-            .map_err(|e| OverthroneError::Exec(format!("reqwest client: {e}")))
+            .map_err(|e| OverthroneError::ExecSimple(format!("reqwest client: {e}")))
     }
 
     /// Perform NTLM-authenticated request. Handles Type1/Type2/Type3 exchange.
@@ -84,9 +85,9 @@ impl WinRmExecutor {
             supplied_workstation: "WORKSTATION".to_string(),
             os_version: Default::default(),
         });
-        let nego_bytes = nego_msg.to_bytes().map_err(|e| {
-            OverthroneError::Exec(format!("NTLM negotiate encode: {e:?}"))
-        })?;
+        let nego_bytes = nego_msg
+            .to_bytes()
+            .map_err(|e| OverthroneError::ExecSimple(format!("NTLM negotiate encode: {e:?}")))?;
         let nego_b64 = BASE64.encode(&nego_bytes);
 
         let resp = client
@@ -96,57 +97,63 @@ impl WinRmExecutor {
             .body(body.to_string())
             .send()
             .await
-            .map_err(|e| OverthroneError::Exec(format!("HTTP request: {e}")))?;
+            .map_err(|e| OverthroneError::ExecSimple(format!("HTTP request: {e}")))?;
 
         let status = resp.status();
         let auth_header = resp.headers().get("www-authenticate");
         let challenge_b64 = match auth_header {
             Some(h) => {
                 let s = h.to_str().map_err(|_| {
-                    OverthroneError::Exec("Invalid www-authenticate header".into())
+                    OverthroneError::ExecSimple("Invalid www-authenticate header".into())
                 })?;
                 s.strip_prefix("NTLM ")
                     .or_else(|| s.split_whitespace().nth(1))
-                    .ok_or_else(|| OverthroneError::Exec("No NTLM challenge in response".into()))?
+                    .ok_or_else(|| {
+                        OverthroneError::ExecSimple("No NTLM challenge in response".into())
+                    })?
             }
             None => {
                 if status.is_success() {
                     return Ok((resp, true));
                 }
-                return Err(OverthroneError::Exec(format!(
+                return Err(OverthroneError::ExecSimple(format!(
                     "WinRM request failed: {} (no NTLM challenge)",
                     status
                 )));
             }
         };
 
-        let challenge_bytes = BASE64.decode(challenge_b64).map_err(|e| {
-            OverthroneError::Exec(format!("NTLM challenge decode: {e}"))
-        })?;
+        let challenge_bytes = BASE64
+            .decode(challenge_b64)
+            .map_err(|e| OverthroneError::ExecSimple(format!("NTLM challenge decode: {e}")))?;
         let challenge_msg = Message::try_from(challenge_bytes.as_slice())
-            .map_err(|e| OverthroneError::Exec(format!("NTLM challenge parse: {e:?}")))?;
+            .map_err(|e| OverthroneError::ExecSimple(format!("NTLM challenge parse: {e:?}")))?;
         let challenge = match challenge_msg {
             Message::Challenge(c) => c,
-            _ => return Err(OverthroneError::Exec("Expected NTLM challenge".into())),
+            _ => {
+                return Err(OverthroneError::ExecSimple(
+                    "Expected NTLM challenge".into(),
+                ));
+            }
         };
 
-        let target_info: Vec<u8> = challenge.target_information.iter().flat_map(|ie| ie.to_bytes()).collect();
+        let target_info: Vec<u8> = challenge
+            .target_information
+            .iter()
+            .flat_map(|ie| ie.to_bytes())
+            .collect();
         let creds = Credentials {
             username: self.creds.username.clone(),
             password: self.creds.password.clone(),
             domain: self.creds.domain.clone(),
         };
-        let challenge_response = respond_challenge_ntlm_v2(
-            challenge.challenge,
-            &target_info,
-            get_ntlm_time(),
-            &creds,
-        );
+        let challenge_response =
+            respond_challenge_ntlm_v2(challenge.challenge, &target_info, get_ntlm_time(), &creds);
         let auth_flags = Flags::NEGOTIATE_UNICODE | Flags::NEGOTIATE_NTLM;
         let auth_msg = challenge_response.to_message(&creds, "WORKSTATION", auth_flags);
-        let auth_bytes = auth_msg.to_bytes().map_err(|e| {
-            OverthroneError::Exec(format!("NTLM auth encode: {e:?}"))
-        })?;
+        let auth_bytes = auth_msg
+            .to_bytes()
+            .map_err(|e| OverthroneError::ExecSimple(format!("NTLM auth encode: {e:?}")))?;
         let auth_b64 = BASE64.encode(&auth_bytes);
 
         let resp2 = client
@@ -156,12 +163,18 @@ impl WinRmExecutor {
             .body(body.to_string())
             .send()
             .await
-            .map_err(|e| OverthroneError::Exec(format!("HTTP auth request: {e}")))?;
+            .map_err(|e| OverthroneError::ExecSimple(format!("HTTP auth request: {e}")))?;
 
         Ok((resp2, resp2.status().is_success()))
     }
 
-    fn make_envelope(&self, target: &str, action: &str, body: &str, shell_id: Option<&str>) -> String {
+    fn make_envelope(
+        &self,
+        target: &str,
+        action: &str,
+        body: &str,
+        shell_id: Option<&str>,
+    ) -> String {
         let message_id = Uuid::new_v4();
         let url = self.build_url(target);
         let shell_selector = shell_id.map_or_else(String::new, |id| {
@@ -242,14 +255,11 @@ impl WinRmExecutor {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
-                    if e.name().as_ref() == b"wsman:Selector"
-                        || e.name().as_ref() == b"Selector"
-                    {
+                    if e.name().as_ref() == b"wsman:Selector" || e.name().as_ref() == b"Selector" {
                         let mut is_shell_id = false;
                         for a in e.attributes() {
                             if let Ok(attr) = a {
-                                if attr.key.as_ref() == b"Name"
-                                    && attr.value.as_ref() == b"ShellId"
+                                if attr.key.as_ref() == b"Name" && attr.value.as_ref() == b"ShellId"
                                 {
                                     is_shell_id = true;
                                     break;
@@ -260,11 +270,7 @@ impl WinRmExecutor {
                             buf.clear();
                             match reader.read_event_into(&mut buf) {
                                 Ok(Event::Text(t)) => {
-                                    return Ok(t
-                                        .unescape()
-                                        .unwrap_or_default()
-                                        .trim()
-                                        .to_string());
+                                    return Ok(t.unescape().unwrap_or_default().trim().to_string());
                                 }
                                 _ => {}
                             }
@@ -272,12 +278,14 @@ impl WinRmExecutor {
                     }
                 }
                 Ok(Event::Eof) => break,
-                Err(e) => return Err(OverthroneError::Exec(format!("XML parse: {e}"))),
+                Err(e) => return Err(OverthroneError::ExecSimple(format!("XML parse: {e}"))),
                 _ => {}
             }
             buf.clear();
         }
-        Err(OverthroneError::Exec("ShellId not found in Create response".into()))
+        Err(OverthroneError::ExecSimple(
+            "ShellId not found in Create response".into(),
+        ))
     }
 
     fn extract_stream_output(xml: &str, stream: &str) -> (String, Option<i32>) {
@@ -343,12 +351,13 @@ impl WinRmExecutor {
             .await?;
 
         let status = resp.status();
-        let create_xml = resp.text().await.map_err(|e| {
-            OverthroneError::Exec(format!("Create response read: {e}"))
-        })?;
+        let create_xml = resp
+            .text()
+            .await
+            .map_err(|e| OverthroneError::ExecSimple(format!("Create response read: {e}")))?;
 
         if !status.is_success() {
-            return Err(OverthroneError::Exec(format!(
+            return Err(OverthroneError::ExecSimple(format!(
                 "WinRM Create failed: {} - {}",
                 status,
                 create_xml.chars().take(500).collect::<String>()
@@ -371,11 +380,14 @@ impl WinRmExecutor {
             .await?;
 
         if !send_resp.status().is_success() {
-            return Err(OverthroneError::Exec("WinRM Send/Execute failed".into()));
+            return Err(OverthroneError::ExecSimple(
+                "WinRM Send/Execute failed".into(),
+            ));
         }
 
         let receive_body = Self::receive_body("stdout stderr");
-        let receive_envelope = self.make_envelope(target, RECEIVE_ACTION, &receive_body, Some(&shell_id));
+        let receive_envelope =
+            self.make_envelope(target, RECEIVE_ACTION, &receive_body, Some(&shell_id));
 
         let (recv_resp, _) = self
             .ntlm_request(
@@ -386,9 +398,10 @@ impl WinRmExecutor {
             )
             .await?;
 
-        let recv_xml = recv_resp.text().await.map_err(|e| {
-            OverthroneError::Exec(format!("Receive response read: {e}"))
-        })?;
+        let recv_xml = recv_resp
+            .text()
+            .await
+            .map_err(|e| OverthroneError::ExecSimple(format!("Receive response read: {e}")))?;
 
         let (stdout, _) = Self::extract_stream_output(&recv_xml, "stdout");
         let (stderr, exit_code) = Self::extract_stream_output(&recv_xml, "stderr");
@@ -396,7 +409,8 @@ impl WinRmExecutor {
         let exit_code = exit_code.or(exit_from_stdout);
 
         let delete_body = "";
-        let delete_envelope = self.make_envelope(target, DELETE_ACTION, delete_body, Some(&shell_id));
+        let delete_envelope =
+            self.make_envelope(target, DELETE_ACTION, delete_body, Some(&shell_id));
         let _ = self
             .ntlm_request(
                 &client,
@@ -448,8 +462,12 @@ impl RemoteExecutor for WinRmExecutor {
                     if let Ok(text) = resp.text().await {
                         if let Ok(shell_id) = Self::extract_shell_id(&text) {
                             let delete_body = "";
-                            let delete_envelope =
-                                self.make_envelope(target, DELETE_ACTION, delete_body, Some(&shell_id));
+                            let delete_envelope = self.make_envelope(
+                                target,
+                                DELETE_ACTION,
+                                delete_body,
+                                Some(&shell_id),
+                            );
                             let _ = self
                                 .ntlm_request(
                                     &client,

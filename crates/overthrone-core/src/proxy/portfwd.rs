@@ -75,9 +75,10 @@ impl PortForward {
         );
 
         loop {
-            let (client, peer) = listener.accept().await.map_err(|e| {
-                OverthroneError::custom(format!("PortFwd: Accept failed: {}", e))
-            })?;
+            let (client, peer) = listener
+                .accept()
+                .await
+                .map_err(|e| OverthroneError::custom(format!("PortFwd: Accept failed: {}", e)))?;
 
             let target = self.config.target_addr.clone();
             let timeout = self.config.connect_timeout_secs;
@@ -91,10 +92,7 @@ impl PortForward {
     }
 
     /// Run with a shutdown signal.
-    pub async fn run_until(
-        &self,
-        shutdown: tokio::sync::oneshot::Receiver<()>,
-    ) -> Result<()> {
+    pub async fn run_until(&self, shutdown: tokio::sync::oneshot::Receiver<()>) -> Result<()> {
         let listener = TcpListener::bind(&self.config.listen_addr)
             .await
             .map_err(|e| {

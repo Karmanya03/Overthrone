@@ -707,7 +707,7 @@ mod tests {
 
             let json = serde_json::to_string(&backup).unwrap();
             let restored: TemplateBackup = serde_json::from_str(&json).unwrap();
-            
+
             prop_assert_eq!(restored.name, name);
             prop_assert_eq!(restored.dn, dn);
             prop_assert_eq!(restored.timestamp, timestamp);

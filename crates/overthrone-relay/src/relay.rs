@@ -951,12 +951,13 @@ fn extract_ntlm_from_smb2(data: &[u8]) -> Result<Vec<u8>> {
     // Scan for NTLMSSP signature
     for i in 0..data.len().saturating_sub(12) {
         if &data[i..i + 8] == NTLM_SIGNATURE
-            && let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..]) {
-                // Determine challenge message length from target name + target info fields
-                // Minimum challenge is 56 bytes, but can be longer with target info
-                let end = find_ntlm_challenge_end(&data[i..]);
-                return Ok(data[i..i + end].to_vec());
-            }
+            && let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..])
+        {
+            // Determine challenge message length from target name + target info fields
+            // Minimum challenge is 56 bytes, but can be longer with target info
+            let end = find_ntlm_challenge_end(&data[i..]);
+            return Ok(data[i..i + end].to_vec());
+        }
     }
     Err(RelayError::Protocol("No NTLM challenge in SMB2 response".into()).into())
 }
@@ -1065,10 +1066,11 @@ fn extract_ntlm_from_ldap_response(data: &[u8]) -> Result<Vec<u8>> {
     // Scan for NTLMSSP signature in the response
     for i in 0..data.len().saturating_sub(12) {
         if &data[i..i + 8] == NTLM_SIGNATURE
-            && let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..]) {
-                let end = find_ntlm_challenge_end(&data[i..]);
-                return Ok(data[i..i + end].to_vec());
-            }
+            && let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..])
+        {
+            let end = find_ntlm_challenge_end(&data[i..]);
+            return Ok(data[i..i + end].to_vec());
+        }
     }
     Err(RelayError::Protocol("No NTLM challenge in LDAP response".into()).into())
 }
@@ -1315,10 +1317,11 @@ fn extract_ntlm_from_tds(data: &[u8]) -> Result<Vec<u8>> {
     // Scan for NTLMSSP signature
     for i in 0..data.len().saturating_sub(12) {
         if &data[i..i + 8] == NTLM_SIGNATURE
-            && let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..]) {
-                let end = find_ntlm_challenge_end(&data[i..]);
-                return Ok(data[i..i + end].to_vec());
-            }
+            && let Some(NtlmMessageType::Challenge) = parse_ntlm_type(&data[i..])
+        {
+            let end = find_ntlm_challenge_end(&data[i..]);
+            return Ok(data[i..i + end].to_vec());
+        }
     }
     Err(RelayError::Protocol("No NTLM challenge in TDS response".into()).into())
 }

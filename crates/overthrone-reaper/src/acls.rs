@@ -1,8 +1,8 @@
 //! Dangerous ACL enumeration — GenericAll, WriteDACL, WriteOwner, etc.
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -31,10 +31,10 @@ pub struct AclFinding {
 }
 
 /// ACE access mask bits that map to dangerous rights.
-const GENERIC_ALL: u32       = 0x10000000;
-const GENERIC_WRITE: u32     = 0x40000000;
-const WRITE_DACL: u32        = 0x00040000;
-const WRITE_OWNER: u32       = 0x00080000;
+const GENERIC_ALL: u32 = 0x10000000;
+const GENERIC_WRITE: u32 = 0x40000000;
+const WRITE_DACL: u32 = 0x00040000;
+const WRITE_OWNER: u32 = 0x00080000;
 const ADS_RIGHT_DS_WRITE_PROP: u32 = 0x00000020;
 const ADS_RIGHT_DS_CONTROL_ACCESS: u32 = 0x00000100;
 
@@ -54,7 +54,8 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     // Pull all objects with nTSecurityDescriptor — we parse the SDDL string representation
     // ldap3 returns binary attributes as base64; nTSecurityDescriptor comes back as a string
@@ -74,14 +75,19 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         "(objectClass=domainDNS)",
     ];
 
-    let sd_attrs = &["distinguishedName", "sAMAccountName", "nTSecurityDescriptor"];
+    let sd_attrs = &[
+        "distinguishedName",
+        "sAMAccountName",
+        "nTSecurityDescriptor",
+    ];
 
     for filter in &hv_filters {
         match conn.custom_search(filter, sd_attrs).await {
             Ok(entries) => {
                 for entry in &entries {
                     let target_dn = entry.dn.clone();
-                    let target_name = entry.attrs
+                    let target_name = entry
+                        .attrs
                         .get("sAMAccountName")
                         .and_then(|v| v.first())
                         .cloned()
@@ -103,14 +109,22 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
     }
 
     // ── 2. Users with msDS-AllowedToActOnBehalfOfOtherIdentity (RBCD) ───────────
-    match conn.custom_search(
-        "(&(objectCategory=computer)(msDS-AllowedToActOnBehalfOfOtherIdentity=*))",
-        &["distinguishedName", "sAMAccountName", "msDS-AllowedToActOnBehalfOfOtherIdentity"],
-    ).await {
+    match conn
+        .custom_search(
+            "(&(objectCategory=computer)(msDS-AllowedToActOnBehalfOfOtherIdentity=*))",
+            &[
+                "distinguishedName",
+                "sAMAccountName",
+                "msDS-AllowedToActOnBehalfOfOtherIdentity",
+            ],
+        )
+        .await
+    {
         Ok(entries) => {
             for entry in &entries {
                 let target_dn = entry.dn.clone();
-                let target_name = entry.attrs
+                let target_name = entry
+                    .attrs
                     .get("sAMAccountName")
                     .and_then(|v| v.first())
                     .cloned()
@@ -123,7 +137,9 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
                     principal_sid: None,
                     target: target_name,
                     target_dn,
-                    right: DangerousRight::Custom("RBCD (msDS-AllowedToActOnBehalfOfOtherIdentity)".into()),
+                    right: DangerousRight::Custom(
+                        "RBCD (msDS-AllowedToActOnBehalfOfOtherIdentity)".into(),
+                    ),
                     is_inherited: false,
                 });
             }
@@ -132,20 +148,29 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
     }
 
     // ── 3. Objects with msDS-AllowedToDelegateTo ─────────────────────────────────
-    match conn.custom_search(
-        "(msDS-AllowedToDelegateTo=*)",
-        &["distinguishedName", "sAMAccountName", "msDS-AllowedToDelegateTo"],
-    ).await {
+    match conn
+        .custom_search(
+            "(msDS-AllowedToDelegateTo=*)",
+            &[
+                "distinguishedName",
+                "sAMAccountName",
+                "msDS-AllowedToDelegateTo",
+            ],
+        )
+        .await
+    {
         Ok(entries) => {
             for entry in &entries {
                 let target_dn = entry.dn.clone();
-                let principal = entry.attrs
+                let principal = entry
+                    .attrs
                     .get("sAMAccountName")
                     .and_then(|v| v.first())
                     .cloned()
                     .unwrap_or_else(|| target_dn.clone());
 
-                let targets = entry.attrs
+                let targets = entry
+                    .attrs
                     .get("msDS-AllowedToDelegateTo")
                     .cloned()
                     .unwrap_or_default();
@@ -156,9 +181,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
                         principal_sid: None,
                         target: spn.clone(),
                         target_dn: target_dn.clone(),
-                        right: DangerousRight::Custom(
-                            format!("Constrained delegation → {}", spn)
-                        ),
+                        right: DangerousRight::Custom(format!("Constrained delegation → {}", spn)),
                         is_inherited: false,
                     });
                 }
@@ -236,7 +259,10 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
     }
 
     // Skip well-known system trustees
-    if matches!(trustee, "BA" | "SY" | "PS" | "AU" | "WD" | "DA" | "EA" | "SA") {
+    if matches!(
+        trustee,
+        "BA" | "SY" | "PS" | "AU" | "WD" | "DA" | "EA" | "SA"
+    ) {
         return None;
     }
 
@@ -264,7 +290,10 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
         match object_guid.as_str() {
             g if g == GUID_USER_FORCE_CHANGE_PASSWORD => DangerousRight::ForceChangePassword,
             g if g == GUID_REPLICATING_DIRECTORY_CHANGES
-                || g == GUID_REPLICATING_DIRECTORY_CHANGES_ALL => DangerousRight::DcSync,
+                || g == GUID_REPLICATING_DIRECTORY_CHANGES_ALL =>
+            {
+                DangerousRight::DcSync
+            }
             _ => return None,
         }
     } else if rights_mask & ADS_RIGHT_DS_WRITE_PROP != 0 {
@@ -307,7 +336,7 @@ fn sddl_abbrev_to_mask(s: &str) -> u32 {
             "CC" => mask |= ADS_RIGHT_DS_CONTROL_ACCESS,
             "DC" => mask |= ADS_RIGHT_DS_WRITE_PROP,
             "SW" => mask |= 0x00000080,
-            _   => {}
+            _ => {}
         }
         i += 2;
     }

@@ -1,4 +1,4 @@
-﻿//! Adaptive engine — Reacts to execution results, re-scores attack
+//! Adaptive engine — Reacts to execution results, re-scores attack
 //! paths, and decides whether to retry, skip, or pivot to alternatives.
 //!
 //! When a step fails, the adaptive engine:
@@ -95,10 +95,7 @@ impl FailureClass {
             return Self::Detected;
         }
 
-        if lower.contains("timeout")
-            || lower.contains("timed out")
-            || lower.contains("deadline")
-        {
+        if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
             return Self::Timeout;
         }
 
@@ -346,10 +343,11 @@ impl AdaptiveEngine {
         } else {
             // Mark host as dead
             if let Some(host) = target
-                && !self.dead_hosts.contains(&host) {
-                    self.dead_hosts.push(host.clone());
-                    warn!("  {} Host marked unreachable: {}", "☠".red(), host);
-                }
+                && !self.dead_hosts.contains(&host)
+            {
+                self.dead_hosts.push(host.clone());
+                warn!("  {} Host marked unreachable: {}", "☠".red(), host);
+            }
             AdaptiveDecision::Skip {
                 reason: "Host unreachable after retries".to_string(),
             }
@@ -408,10 +406,7 @@ impl AdaptiveEngine {
         if self.stealth {
             // In stealth mode, try a quieter alternative
             if let Some(alt) = self.find_stealthier_alternative(&step.action) {
-                info!(
-                    "  {} Detected — trying stealthier method",
-                    "🔇".yellow()
-                );
+                info!("  {} Detected — trying stealthier method", "🔇".yellow());
                 return AdaptiveDecision::Substitute { replacement: alt };
             }
 
@@ -581,7 +576,12 @@ impl AdaptiveEngine {
             PlannedAction::Kerberoast { .. } => "kerberoast".to_string(),
             PlannedAction::AsRepRoast { .. } => "asreproast".to_string(),
             PlannedAction::DcsSync { .. } => "dcsync".to_string(),
-            other => format!("{:?}", other).split('{').next().unwrap_or("unknown").trim().to_lowercase(),
+            other => format!("{:?}", other)
+                .split('{')
+                .next()
+                .unwrap_or("unknown")
+                .trim()
+                .to_lowercase(),
         }
     }
 
@@ -617,21 +617,33 @@ impl AdaptiveEngine {
             // Remove steps targeting dead hosts
             if let Some(target) = self.extract_target(&step.action) {
                 if dead_hosts.contains(&target) {
-                    debug!("  {} Pruned step (dead host): {}", "✂".dimmed(), step.description);
+                    debug!(
+                        "  {} Pruned step (dead host): {}",
+                        "✂".dimmed(),
+                        step.description
+                    );
                     return false;
                 }
 
                 // Remove blocked method+host combos
                 let method = self.extract_method_name(&step.action);
                 if blocked.contains(&(target.clone(), method)) {
-                    debug!("  {} Pruned step (blocked): {}", "✂".dimmed(), step.description);
+                    debug!(
+                        "  {} Pruned step (blocked): {}",
+                        "✂".dimmed(),
+                        step.description
+                    );
                     return false;
                 }
             }
 
             // Remove already-blacklisted steps
             if self.blacklisted_actions.contains(&step.id) {
-                debug!("  {} Pruned step (blacklisted): {}", "✂".dimmed(), step.description);
+                debug!(
+                    "  {} Pruned step (blacklisted): {}",
+                    "✂".dimmed(),
+                    step.description
+                );
                 return false;
             }
 
@@ -706,7 +718,10 @@ impl std::fmt::Display for AdaptiveSummary {
 
 /// Pick the next credential to try from the engagement state.
 /// Returns (username, secret, is_hash).
-pub fn rotate_credential(state: &EngagementState, current_user: &str) -> Option<(String, String, bool)> {
+pub fn rotate_credential(
+    state: &EngagementState,
+    current_user: &str,
+) -> Option<(String, String, bool)> {
     // Find a different credential than the current one
     for cred in state.credentials.values() {
         if cred.username != current_user {

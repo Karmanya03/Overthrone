@@ -29,8 +29,7 @@ const UAC_SERVER_TRUST_ACCOUNT: u32 = 0x00002000;
 // Configuration
 // ═══════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct UnconstrainedConfig {
     /// Include domain controllers in results (they always have this flag)
     pub include_dcs: bool,
@@ -39,7 +38,6 @@ pub struct UnconstrainedConfig {
     /// Filter to specific OUs
     pub target_ous: Vec<String>,
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Result
@@ -93,7 +91,8 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
         &config.domain,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     // Use the high-level API instead of raw search
     let ad_computers = conn.find_unconstrained_delegation().await?;
@@ -137,7 +136,10 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
                 " {} {} (DC) — {}{}",
                 "◆".dimmed(),
                 comp.sam_account_name.dimmed(),
-                comp.operating_system.as_deref().unwrap_or("unknown OS").dimmed(),
+                comp.operating_system
+                    .as_deref()
+                    .unwrap_or("unknown OS")
+                    .dimmed(),
                 reachable_icon
             );
             domain_controllers.push(host);
@@ -146,7 +148,10 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
                 " {} {} — {}{}{}",
                 "⚠".red().bold(),
                 comp.sam_account_name.bold().red(),
-                comp.dns_hostname.as_deref().unwrap_or(&comp.sam_account_name).yellow(),
+                comp.dns_hostname
+                    .as_deref()
+                    .unwrap_or(&comp.sam_account_name)
+                    .yellow(),
                 format!(" ({})", comp.operating_system.as_deref().unwrap_or("?")).dimmed(),
                 reachable_icon
             );

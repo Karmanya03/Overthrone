@@ -1,4 +1,4 @@
-﻿//! Attack planner — Build ordered attack plans from the current
+//! Attack planner — Build ordered attack plans from the current
 //! engagement state toward a goal using a scoring/priority system.
 //!
 //! The planner evaluates what's known, what's been tried, and what
@@ -60,53 +60,125 @@ pub enum PlannedAction {
     EnumerateGroups,
     EnumerateTrusts,
     EnumerateGpos,
-    EnumerateShares { target: String },
-    CheckAdminAccess { targets: Vec<String> },
+    EnumerateShares {
+        target: String,
+    },
+    CheckAdminAccess {
+        targets: Vec<String>,
+    },
 
     // ── Kerberos Attacks ──
-    AsRepRoast { users: Vec<String> },
-    Kerberoast { spns: Vec<String> },
-    ConstrainedDelegation { account: String, target_spn: String, impersonate: String },
-    UnconstrainedDelegation { target_host: String },
-    RbcdAttack { controlled: String, target: String },
+    AsRepRoast {
+        users: Vec<String>,
+    },
+    Kerberoast {
+        spns: Vec<String>,
+    },
+    ConstrainedDelegation {
+        account: String,
+        target_spn: String,
+        impersonate: String,
+    },
+    UnconstrainedDelegation {
+        target_host: String,
+    },
+    RbcdAttack {
+        controlled: String,
+        target: String,
+    },
 
     // ── Credential Attacks ──
-    PasswordSpray { users: Vec<String>, password: String },
-    CrackHashes { hashes: Vec<String> },
+    PasswordSpray {
+        users: Vec<String>,
+        password: String,
+    },
+    CrackHashes {
+        hashes: Vec<String>,
+    },
 
     // ── Lateral Movement ──
-    ExecCommand { target: String, command: String, method: String },
-    PsExec { target: String, command: String },
-    SmbExec { target: String, command: String },
-    WmiExec { target: String, command: String },
-    WinRmExec { target: String, command: String },
+    ExecCommand {
+        target: String,
+        command: String,
+        method: String,
+    },
+    PsExec {
+        target: String,
+        command: String,
+    },
+    SmbExec {
+        target: String,
+        command: String,
+    },
+    WmiExec {
+        target: String,
+        command: String,
+    },
+    WinRmExec {
+        target: String,
+        command: String,
+    },
 
     // ── Credential Dumping ──
-    DumpSam { target: String },
-    DumpLsa { target: String },
-    DumpNtds { target: String },
-    DumpDcc2 { target: String },
-    DcsSync { target_user: Option<String> },
+    DumpSam {
+        target: String,
+    },
+    DumpLsa {
+        target: String,
+    },
+    DumpNtds {
+        target: String,
+    },
+    DumpDcc2 {
+        target: String,
+    },
+    DcsSync {
+        target_user: Option<String>,
+    },
 
     // ── Coercion ──
-    Coerce { target: String, listener: String },
+    Coerce {
+        target: String,
+        listener: String,
+    },
 
     // ── ADCS ──
     AdcsEnumerate,
-    AdcsEsc1 { template: String, ca: String, target_upn: String },
-    AdcsEsc4 { template: String },
-    AdcsEsc6 { template: String, ca: String, target_upn: String },
+    AdcsEsc1 {
+        template: String,
+        ca: String,
+        target_upn: String,
+    },
+    AdcsEsc4 {
+        template: String,
+    },
+    AdcsEsc6 {
+        template: String,
+        ca: String,
+        target_upn: String,
+    },
 
     // ── Persistence ──
-    ForgeGoldenTicket { krbtgt_hash: String },
-    ForgeSilverTicket { service_hash: String, spn: String },
+    ForgeGoldenTicket {
+        krbtgt_hash: String,
+    },
+    ForgeSilverTicket {
+        service_hash: String,
+        spn: String,
+    },
 
     // ── Playbook ──
-    RunPlaybook { playbook_id: PlaybookId },
+    RunPlaybook {
+        playbook_id: PlaybookId,
+    },
 
     // ── Utility ──
-    Sleep { seconds: u64 },
-    Checkpoint { message: String },
+    Sleep {
+        seconds: u64,
+    },
+    Checkpoint {
+        message: String,
+    },
 }
 
 /// Result of executing a step
@@ -242,9 +314,7 @@ impl Planner {
         // ── Phase 1b: Extended Recon (trusts, GPOs, shares) ──
         // These give the planner and Q-learner richer state for decision-making.
 
-        if state.trusts.is_empty()
-            && !failed_actions.contains(&"enumerate_trusts".to_string())
-        {
+        if state.trusts.is_empty() && !failed_actions.contains(&"enumerate_trusts".to_string()) {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate domain trusts & trust relationships".to_string(),
@@ -260,9 +330,7 @@ impl Planner {
             });
         }
 
-        if state.gpos.is_empty()
-            && !failed_actions.contains(&"enumerate_gpos".to_string())
-        {
+        if state.gpos.is_empty() && !failed_actions.contains(&"enumerate_gpos".to_string()) {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate GPOs & linked policies".to_string(),
@@ -282,21 +350,21 @@ impl Planner {
         if let Some(ref dc_ip) = state.dc_ip
             && !failed_actions.contains(&"enumerate_shares".to_string())
         {
-                steps.push(PlanStep {
-                    id: next_id(),
-                    description: format!("Enumerate SMB shares on DC ({})", dc_ip),
-                    stage: Stage::Enumerate,
-                    action: PlannedAction::EnumerateShares {
-                        target: dc_ip.clone(),
-                    },
-                    priority: 95,
-                    noise: NoiseLevel::Low,
-                    depends_on: vec![],
-                    executed: false,
-                    result: None,
-                    retries: 0,
-                    max_retries: 1,
-                });
+            steps.push(PlanStep {
+                id: next_id(),
+                description: format!("Enumerate SMB shares on DC ({})", dc_ip),
+                stage: Stage::Enumerate,
+                action: PlannedAction::EnumerateShares {
+                    target: dc_ip.clone(),
+                },
+                priority: 95,
+                noise: NoiseLevel::Low,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
         }
 
         // If goal is recon-only, stop here
@@ -305,10 +373,7 @@ impl Planner {
         }
 
         // ── Phase 2: Kerberos Attacks (low noise, high reward) ──
-        let recon_dep = steps
-            .first()
-            .map(|s| s.id.clone())
-            .unwrap_or_default();
+        let recon_dep = steps.first().map(|s| s.id.clone()).unwrap_or_default();
 
         if state.kerberoastable.is_empty() && !failed_actions.contains(&"kerberoast".to_string()) {
             let kerb_id = next_id();
@@ -331,9 +396,7 @@ impl Planner {
             });
         }
 
-        if state.asrep_roastable.is_empty()
-            && !failed_actions.contains(&"asreproast".to_string())
-        {
+        if state.asrep_roastable.is_empty() && !failed_actions.contains(&"asreproast".to_string()) {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "AS-REP Roast — extract hashes for no-preauth accounts".to_string(),
@@ -354,13 +417,14 @@ impl Planner {
         }
 
         // ── Phase 2.1: Inline Hash Cracking (if we have captured roast hashes) ──
-        if !state.roast_hashes.is_empty()
-            && !failed_actions.contains(&"crack_hashes".to_string())
-        {
+        if !state.roast_hashes.is_empty() && !failed_actions.contains(&"crack_hashes".to_string()) {
             let hashes: Vec<String> = state.roast_hashes.clone();
             steps.push(PlanStep {
                 id: next_id(),
-                description: format!("Crack {} captured hashes (inline wordlist + rules)", hashes.len()),
+                description: format!(
+                    "Crack {} captured hashes (inline wordlist + rules)",
+                    hashes.len()
+                ),
                 stage: Stage::Attack,
                 action: PlannedAction::CrackHashes { hashes },
                 priority: 89,
@@ -377,7 +441,8 @@ impl Planner {
         if !state.users.is_empty()
             && state.credentials.len() <= 1
             && !failed_actions.contains(&"password_spray".to_string())
-            && !self.stealth  // spraying is noisy, skip in stealth mode
+            && !self.stealth
+        // spraying is noisy, skip in stealth mode
         {
             let users: Vec<String> = state
                 .users
@@ -388,7 +453,10 @@ impl Planner {
             if !users.is_empty() {
                 steps.push(PlanStep {
                     id: next_id(),
-                    description: format!("Password spray {} users (seasonal/common passwords)", users.len()),
+                    description: format!(
+                        "Password spray {} users (seasonal/common passwords)",
+                        users.len()
+                    ),
                     stage: Stage::Attack,
                     action: PlannedAction::PasswordSpray {
                         users,
@@ -434,9 +502,8 @@ impl Planner {
             if !failed_actions.contains(&"adcs_esc1".to_string()) {
                 steps.push(PlanStep {
                     id: next_id(),
-                    description:
-                        "ADCS ESC1 — request cert with arbitrary SAN for impersonation"
-                            .to_string(),
+                    description: "ADCS ESC1 — request cert with arbitrary SAN for impersonation"
+                        .to_string(),
                     stage: Stage::Attack,
                     action: PlannedAction::AdcsEsc1 {
                         template: String::new(),
@@ -457,9 +524,8 @@ impl Planner {
             if !failed_actions.contains(&"adcs_esc4".to_string()) {
                 steps.push(PlanStep {
                     id: next_id(),
-                    description:
-                        "ADCS ESC4 — modify writable template then exploit as ESC1"
-                            .to_string(),
+                    description: "ADCS ESC4 — modify writable template then exploit as ESC1"
+                        .to_string(),
                     stage: Stage::Attack,
                     action: PlannedAction::AdcsEsc4 {
                         template: String::new(),
@@ -548,9 +614,7 @@ impl Planner {
         }
 
         // ── Phase 4.5: RBCD Attack (if we have a controlled computer & write access) ──
-        if !state.rbcd_targets.is_empty()
-            && !failed_actions.contains(&"rbcd".to_string())
-        {
+        if !state.rbcd_targets.is_empty() && !failed_actions.contains(&"rbcd".to_string()) {
             for target in &state.rbcd_targets {
                 // Use the first discovered computer we control (or our own machine account)
                 let controlled = state
@@ -669,9 +733,7 @@ impl Planner {
                         unchecked.len()
                     ),
                     stage: Stage::Lateral,
-                    action: PlannedAction::CheckAdminAccess {
-                        targets: unchecked,
-                    },
+                    action: PlannedAction::CheckAdminAccess { targets: unchecked },
                     priority: 65,
                     noise: NoiseLevel::Medium,
                     depends_on: vec![],
@@ -685,27 +747,31 @@ impl Planner {
 
         // ── Phase 7: DCSync / NTDS Dump (final goal) ──
         if state.has_domain_admin
-            && matches!(goal, AttackGoal::DumpNtds { .. } | AttackGoal::DomainAdmin { .. }) {
-                let _dc_target = state
-                    .dc_hostname
-                    .clone()
-                    .or_else(|| state.dc_ip.clone())
-                    .unwrap_or_else(|| "DC".to_string());
+            && matches!(
+                goal,
+                AttackGoal::DumpNtds { .. } | AttackGoal::DomainAdmin { .. }
+            )
+        {
+            let _dc_target = state
+                .dc_hostname
+                .clone()
+                .or_else(|| state.dc_ip.clone())
+                .unwrap_or_else(|| "DC".to_string());
 
-                steps.push(PlanStep {
-                    id: next_id(),
-                    description: "DCSync — replicate credentials".to_string(),
-                    stage: Stage::Loot,
-                    action: PlannedAction::DcsSync { target_user: None },
-                    priority: 60,
-                    noise: NoiseLevel::Critical,
-                    depends_on: vec![],
-                    executed: false,
-                    result: None,
-                    retries: 0,
-                    max_retries: 1,
-                });
-            }
+            steps.push(PlanStep {
+                id: next_id(),
+                description: "DCSync — replicate credentials".to_string(),
+                stage: Stage::Loot,
+                action: PlannedAction::DcsSync { target_user: None },
+                priority: 60,
+                noise: NoiseLevel::Critical,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
 
         // ── Phase 8: Coercion (if other paths blocked) ──
         if !state.has_domain_admin
@@ -715,7 +781,8 @@ impl Planner {
         {
             steps.push(PlanStep {
                 id: next_id(),
-                description: "Coerce DC authentication to unconstrained delegation host".to_string(),
+                description: "Coerce DC authentication to unconstrained delegation host"
+                    .to_string(),
                 stage: Stage::Attack,
                 action: PlannedAction::Coerce {
                     target: state.dc_ip.clone().unwrap_or_default(),

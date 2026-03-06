@@ -1,4 +1,4 @@
-﻿//! Narrative generator — Produces human-readable prose for findings,
+//! Narrative generator — Produces human-readable prose for findings,
 //! executive summaries, and attack chain descriptions.
 
 use crate::session::{EngagementSession, Finding, Severity};
@@ -80,16 +80,10 @@ pub fn scope_description(session: &EngagementSession) -> String {
     let mut parts = Vec::new();
 
     if !scope.domains.is_empty() {
-        parts.push(format!(
-            "**Target Domains:** {}",
-            scope.domains.join(", ")
-        ));
+        parts.push(format!("**Target Domains:** {}", scope.domains.join(", ")));
     }
     if !scope.ip_ranges.is_empty() {
-        parts.push(format!(
-            "**IP Ranges:** {}",
-            scope.ip_ranges.join(", ")
-        ));
+        parts.push(format!("**IP Ranges:** {}", scope.ip_ranges.join(", ")));
     }
     if !scope.excluded_hosts.is_empty() {
         parts.push(format!(
@@ -137,10 +131,7 @@ pub fn finding_narrative(finding: &Finding) -> String {
     }
 
     if !finding.business_impact.is_empty() {
-        parts.push(format!(
-            "**Business Impact:** {}",
-            finding.business_impact
-        ));
+        parts.push(format!("**Business Impact:** {}", finding.business_impact));
     }
 
     parts.join("\n\n")
@@ -158,7 +149,9 @@ pub fn attack_chain_narrative(session: &EngagementSession) -> String {
     }
 
     let mut parts = Vec::new();
-    parts.push("The following attack chain was executed during the automated assessment:\n".to_string());
+    parts.push(
+        "The following attack chain was executed during the automated assessment:\n".to_string(),
+    );
 
     let mut current_stage = String::new();
     let mut step_num = 1;

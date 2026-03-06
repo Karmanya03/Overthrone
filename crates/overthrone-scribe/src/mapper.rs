@@ -1,4 +1,4 @@
-﻿//! MITRE ATT&CK mapper — Maps engagement findings to MITRE ATT&CK
+//! MITRE ATT&CK mapper — Maps engagement findings to MITRE ATT&CK
 //! techniques, tactics, and provides CVSS scoring helpers.
 
 use serde::{Deserialize, Serialize};
@@ -63,22 +63,33 @@ impl std::fmt::Display for MitreMapping {
 pub fn map_technique(attack_type: &str) -> Vec<MitreMapping> {
     match attack_type {
         "kerberoast" => vec![
-            MitreMapping::new("T1558", "Steal or Forge Kerberos Tickets", "Credential Access", Some("003")),
+            MitreMapping::new(
+                "T1558",
+                "Steal or Forge Kerberos Tickets",
+                "Credential Access",
+                Some("003"),
+            ),
             MitreMapping::new("T1110", "Brute Force", "Credential Access", Some("002")),
         ],
 
-        "asrep_roast" => vec![
-            MitreMapping::new("T1558", "Steal or Forge Kerberos Tickets", "Credential Access", Some("004")),
-        ],
+        "asrep_roast" => vec![MitreMapping::new(
+            "T1558",
+            "Steal or Forge Kerberos Tickets",
+            "Credential Access",
+            Some("004"),
+        )],
 
         "credential_access" => vec![
             MitreMapping::new("T1003", "OS Credential Dumping", "Credential Access", None),
             MitreMapping::new("T1110", "Brute Force", "Credential Access", None),
         ],
 
-        "password_spray" => vec![
-            MitreMapping::new("T1110", "Brute Force", "Credential Access", Some("003")),
-        ],
+        "password_spray" => vec![MitreMapping::new(
+            "T1110",
+            "Brute Force",
+            "Credential Access",
+            Some("003"),
+        )],
 
         "lateral_movement" => vec![
             MitreMapping::new("T1021", "Remote Services", "Lateral Movement", Some("002")),
@@ -89,54 +100,103 @@ pub fn map_technique(attack_type: &str) -> Vec<MitreMapping> {
         "psexec" | "smbexec" => vec![
             MitreMapping::new("T1021", "Remote Services", "Lateral Movement", Some("002")),
             MitreMapping::new("T1569", "System Services", "Execution", Some("002")),
-            MitreMapping::new("T1543", "Create or Modify System Process", "Persistence", Some("003")),
+            MitreMapping::new(
+                "T1543",
+                "Create or Modify System Process",
+                "Persistence",
+                Some("003"),
+            ),
         ],
 
-        "wmiexec" => vec![
-            MitreMapping::new("T1047", "Windows Management Instrumentation", "Execution", None),
-        ],
+        "wmiexec" => vec![MitreMapping::new(
+            "T1047",
+            "Windows Management Instrumentation",
+            "Execution",
+            None,
+        )],
 
-        "winrm" => vec![
-            MitreMapping::new("T1021", "Remote Services", "Lateral Movement", Some("006")),
-        ],
+        "winrm" => vec![MitreMapping::new(
+            "T1021",
+            "Remote Services",
+            "Lateral Movement",
+            Some("006"),
+        )],
 
         "constrained_delegation" | "unconstrained_delegation" => vec![
-            MitreMapping::new("T1550", "Use Alternate Authentication Material", "Defense Evasion", Some("003")),
-            MitreMapping::new("T1558", "Steal or Forge Kerberos Tickets", "Credential Access", None),
+            MitreMapping::new(
+                "T1550",
+                "Use Alternate Authentication Material",
+                "Defense Evasion",
+                Some("003"),
+            ),
+            MitreMapping::new(
+                "T1558",
+                "Steal or Forge Kerberos Tickets",
+                "Credential Access",
+                None,
+            ),
         ],
 
-        "dcsync" => vec![
-            MitreMapping::new("T1003", "OS Credential Dumping", "Credential Access", Some("006")),
-        ],
+        "dcsync" => vec![MitreMapping::new(
+            "T1003",
+            "OS Credential Dumping",
+            "Credential Access",
+            Some("006"),
+        )],
 
-        "sam_dump" => vec![
-            MitreMapping::new("T1003", "OS Credential Dumping", "Credential Access", Some("002")),
-        ],
+        "sam_dump" => vec![MitreMapping::new(
+            "T1003",
+            "OS Credential Dumping",
+            "Credential Access",
+            Some("002"),
+        )],
 
-        "lsa_dump" => vec![
-            MitreMapping::new("T1003", "OS Credential Dumping", "Credential Access", Some("004")),
-        ],
+        "lsa_dump" => vec![MitreMapping::new(
+            "T1003",
+            "OS Credential Dumping",
+            "Credential Access",
+            Some("004"),
+        )],
 
-        "ntds_dump" => vec![
-            MitreMapping::new("T1003", "OS Credential Dumping", "Credential Access", Some("003")),
-        ],
+        "ntds_dump" => vec![MitreMapping::new(
+            "T1003",
+            "OS Credential Dumping",
+            "Credential Access",
+            Some("003"),
+        )],
 
-        "golden_ticket" => vec![
-            MitreMapping::new("T1558", "Steal or Forge Kerberos Tickets", "Credential Access", Some("001")),
-        ],
+        "golden_ticket" => vec![MitreMapping::new(
+            "T1558",
+            "Steal or Forge Kerberos Tickets",
+            "Credential Access",
+            Some("001"),
+        )],
 
-        "silver_ticket" => vec![
-            MitreMapping::new("T1558", "Steal or Forge Kerberos Tickets", "Credential Access", Some("002")),
-        ],
+        "silver_ticket" => vec![MitreMapping::new(
+            "T1558",
+            "Steal or Forge Kerberos Tickets",
+            "Credential Access",
+            Some("002"),
+        )],
 
         "domain_admin" => vec![
             MitreMapping::new("T1078", "Valid Accounts", "Defense Evasion", Some("002")),
-            MitreMapping::new("T1484", "Domain Policy Modification", "Defense Evasion", None),
+            MitreMapping::new(
+                "T1484",
+                "Domain Policy Modification",
+                "Defense Evasion",
+                None,
+            ),
         ],
 
         "admin_access" => vec![
             MitreMapping::new("T1021", "Remote Services", "Lateral Movement", Some("002")),
-            MitreMapping::new("T1078", "Valid Accounts", "Privilege Escalation", Some("002")),
+            MitreMapping::new(
+                "T1078",
+                "Valid Accounts",
+                "Privilege Escalation",
+                Some("002"),
+            ),
         ],
 
         "credential_exposure" => vec![
@@ -144,12 +204,20 @@ pub fn map_technique(attack_type: &str) -> Vec<MitreMapping> {
             MitreMapping::new("T1552", "Unsecured Credentials", "Credential Access", None),
         ],
 
-        "coercion" => vec![
-            MitreMapping::new("T1187", "Forced Authentication", "Credential Access", None),
-        ],
+        "coercion" => vec![MitreMapping::new(
+            "T1187",
+            "Forced Authentication",
+            "Credential Access",
+            None,
+        )],
 
         "rbcd" => vec![
-            MitreMapping::new("T1550", "Use Alternate Authentication Material", "Defense Evasion", Some("003")),
+            MitreMapping::new(
+                "T1550",
+                "Use Alternate Authentication Material",
+                "Defense Evasion",
+                Some("003"),
+            ),
             MitreMapping::new("T1098", "Account Manipulation", "Persistence", None),
         ],
 
@@ -166,7 +234,9 @@ pub fn extract_tactics(mappings: &[MitreMapping]) -> Vec<String> {
 }
 
 /// Build a MITRE ATT&CK matrix summary from all findings
-pub fn build_attack_matrix(findings: &[super::session::Finding]) -> Vec<(String, Vec<MitreMapping>)> {
+pub fn build_attack_matrix(
+    findings: &[super::session::Finding],
+) -> Vec<(String, Vec<MitreMapping>)> {
     let mut by_tactic: std::collections::HashMap<String, Vec<MitreMapping>> =
         std::collections::HashMap::new();
 
@@ -182,7 +252,9 @@ pub fn build_attack_matrix(findings: &[super::session::Finding]) -> Vec<(String,
     // Deduplicate within each tactic
     for techniques in by_tactic.values_mut() {
         techniques.sort_by(|a, b| a.technique_id.cmp(&b.technique_id));
-        techniques.dedup_by(|a, b| a.technique_id == b.technique_id && a.sub_technique_id == b.sub_technique_id);
+        techniques.dedup_by(|a, b| {
+            a.technique_id == b.technique_id && a.sub_technique_id == b.sub_technique_id
+        });
     }
 
     // Order by kill chain

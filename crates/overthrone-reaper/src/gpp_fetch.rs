@@ -6,7 +6,7 @@
 //! delegated to `overthrone_core::crypto::gpp`.
 
 use crate::runner::ReaperConfig;
-use overthrone_core::crypto::gpp::{parse_gpp_xml, GppCredential};
+use overthrone_core::crypto::gpp::{GppCredential, parse_gpp_xml};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
@@ -62,11 +62,13 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
         Err(e) => {
             // Try lowercase domain name as fallback
             let lower_path = format!("{}\\Policies", config.domain.to_lowercase());
-            smb.list_directory("SYSVOL", &lower_path).await.map_err(|e2| {
-                OverthroneError::Smb(format!(
-                    "Cannot list SYSVOL\\Policies (tried both cases): {e} / {e2}"
-                ))
-            })?
+            smb.list_directory("SYSVOL", &lower_path)
+                .await
+                .map_err(|e2| {
+                    OverthroneError::Smb(format!(
+                        "Cannot list SYSVOL\\Policies (tried both cases): {e} / {e2}"
+                    ))
+                })?
         }
     };
 
@@ -165,9 +167,7 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
 ///
 /// Some environments leave SYSVOL readable to anonymous users.
 /// This tries the provided creds first, then falls back to a null session.
-pub async fn enumerate_gpp_passwords_with_fallback(
-    config: &ReaperConfig,
-) -> Result<GppScanResult> {
+pub async fn enumerate_gpp_passwords_with_fallback(config: &ReaperConfig) -> Result<GppScanResult> {
     // First attempt: authenticated
     match enumerate_gpp_passwords(config).await {
         Ok(result) => return Ok(result),

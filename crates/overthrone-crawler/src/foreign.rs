@@ -1,4 +1,4 @@
-﻿//! Foreign trust enumeration and Foreign Security Principal (FSP) resolution.
+//! Foreign trust enumeration and Foreign Security Principal (FSP) resolution.
 //!
 //! Maps all inter-forest trust relationships, identifies attack-relevant
 //! misconfigurations (disabled SID filtering, bidirectional trusts), and
@@ -219,13 +219,13 @@ pub async fn enumerate_trusts(domain: &str, dc_ip: &str) -> Result<Vec<TrustRela
 
     // Enumerate trusts using the built-in method
     let ad_trusts = conn.enumerate_trusts().await?;
-    
+
     let _ = conn.disconnect().await;
 
     let mut results = Vec::new();
     for trust in ad_trusts {
         let attrs = trust.trust_attributes;
-        
+
         // Determine SID filtering status
         let sid_filtering = if attrs & trust_attrs::QUARANTINED_DOMAIN != 0 {
             true // Explicitly quarantined
@@ -248,24 +248,36 @@ pub async fn enumerate_trusts(domain: &str, dc_ip: &str) -> Result<Vec<TrustRela
 
         // Build attack notes
         let mut attack_notes = Vec::new();
-        
+
         if !sid_filtering {
-            attack_notes.push("⚠️ SID filtering is DISABLED - full domain compromise possible".to_string());
-        }
-        
-        if tgt_delegation && sid_filtering {
-            attack_notes.push("⚠️ TGT delegation enabled with SID filtering - potential bypass via delegation".to_string());
-        }
-        
-        if trust.trust_direction.to_string().contains("Bidirectional") {
-            attack_notes.push("ℹ️ Bidirectional trust - compromise in either direction affects both domains".to_string());
-        }
-        
-        if forest_transitive {
-            attack_notes.push("ℹ️ Forest-transitive trust - access may extend to entire forest".to_string());
+            attack_notes
+                .push("⚠️ SID filtering is DISABLED - full domain compromise possible".to_string());
         }
 
-        let trust_name = trust.flat_name.clone().unwrap_or_else(|| trust.trust_partner.clone());
+        if tgt_delegation && sid_filtering {
+            attack_notes.push(
+                "⚠️ TGT delegation enabled with SID filtering - potential bypass via delegation"
+                    .to_string(),
+            );
+        }
+
+        if trust.trust_direction.to_string().contains("Bidirectional") {
+            attack_notes.push(
+                "ℹ️ Bidirectional trust - compromise in either direction affects both domains"
+                    .to_string(),
+            );
+        }
+
+        if forest_transitive {
+            attack_notes.push(
+                "ℹ️ Forest-transitive trust - access may extend to entire forest".to_string(),
+            );
+        }
+
+        let trust_name = trust
+            .flat_name
+            .clone()
+            .unwrap_or_else(|| trust.trust_partner.clone());
 
         results.push(TrustRelationship {
             name: trust_name.clone(),
@@ -294,7 +306,10 @@ pub async fn enumerate_foreign_principals(
 ) -> Result<Vec<ForeignSecurityPrincipal>> {
     use overthrone_core::proto::ldap::LdapSession;
 
-    info!("[foreign] Enumerating Foreign Security Principals from {}", domain);
+    info!(
+        "[foreign] Enumerating Foreign Security Principals from {}",
+        domain
+    );
 
     let mut conn = LdapSession::connect(dc_ip, domain, "", "", false).await?;
 
@@ -302,14 +317,18 @@ pub async fn enumerate_foreign_principals(
     let filter = "(objectClass=foreignSecurityPrincipal)";
     let attrs = vec!["objectSid", "distinguishedName", "memberOf"];
 
-    let entries = conn.custom_search_with_base(&base_dn, filter, &attrs).await?;
-    
+    let entries = conn
+        .custom_search_with_base(&base_dn, filter, &attrs)
+        .await?;
+
     let _ = conn.disconnect().await;
 
     let mut results = Vec::new();
     for entry in entries {
         // Extract SID from attributes
-        let sid_str = entry.attrs.get("objectSid")
+        let sid_str = entry
+            .attrs
+            .get("objectSid")
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_default();
@@ -319,14 +338,14 @@ pub async fn enumerate_foreign_principals(
             continue;
         }
 
-        let dn = entry.attrs.get("distinguishedName")
+        let dn = entry
+            .attrs
+            .get("distinguishedName")
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_default();
 
-        let member_of = entry.attrs.get("memberOf")
-            .cloned()
-            .unwrap_or_default();
+        let member_of = entry.attrs.get("memberOf").cloned().unwrap_or_default();
 
         results.push(ForeignSecurityPrincipal {
             sid: sid_str,
@@ -337,7 +356,10 @@ pub async fn enumerate_foreign_principals(
         });
     }
 
-    info!("[foreign] Found {} Foreign Security Principals", results.len());
+    info!(
+        "[foreign] Found {} Foreign Security Principals",
+        results.len()
+    );
     Ok(results)
 }
 
@@ -346,14 +368,12 @@ pub async fn resolve_foreign_sids(
     principals: &mut [ForeignSecurityPrincipal],
     foreign_domains: &HashMap<String, String>,
 ) -> Result<usize> {
-    
-
     let mut resolved_count = 0;
 
     for principal in principals.iter_mut() {
         // Extract domain SID (strip RID)
         let domain_sid = extract_domain_sid(&principal.sid);
-        
+
         // Look up domain FQDN from foreign_domains map
         if let Some(domain_fqdn) = foreign_domains.get(&domain_sid) {
             // Try to resolve the SID in that domain
@@ -362,7 +382,11 @@ pub async fn resolve_foreign_sids(
                     principal.resolved_name = Some(name);
                     principal.source_domain = Some(domain_fqdn.clone());
                     resolved_count += 1;
-                    debug!("[foreign] Resolved {} → {}", principal.sid, principal.resolved_name.as_ref().unwrap());
+                    debug!(
+                        "[foreign] Resolved {} → {}",
+                        principal.sid,
+                        principal.resolved_name.as_ref().unwrap()
+                    );
                 }
                 Err(e) => {
                     debug!("[foreign] Failed to resolve {}: {}", principal.sid, e);
@@ -371,7 +395,11 @@ pub async fn resolve_foreign_sids(
         }
     }
 
-    info!("[foreign] Resolved {}/{} foreign SIDs", resolved_count, principals.len());
+    info!(
+        "[foreign] Resolved {}/{} foreign SIDs",
+        resolved_count,
+        principals.len()
+    );
     Ok(resolved_count)
 }
 
@@ -386,20 +414,27 @@ async fn resolve_sid_in_foreign_domain(sid_str: &str, domain: &str) -> Result<St
     let filter = format!("(objectSid={})", sid_str);
     let attrs = vec!["sAMAccountName", "name"];
 
-    let entries = conn.custom_search_with_base(&base_dn, &filter, &attrs).await?;
-    
+    let entries = conn
+        .custom_search_with_base(&base_dn, &filter, &attrs)
+        .await?;
+
     let _ = conn.disconnect().await;
 
     if let Some(entry) = entries.first() {
-        let name = entry.attrs.get("sAMAccountName")
+        let name = entry
+            .attrs
+            .get("sAMAccountName")
             .or_else(|| entry.attrs.get("name"))
             .and_then(|v| v.first())
             .cloned()
             .ok_or_else(|| OverthroneError::custom("No name found for SID"))?;
-        
+
         Ok(name)
     } else {
-        Err(OverthroneError::custom(format!("SID {} not found in domain {}", sid_str, domain)))
+        Err(OverthroneError::custom(format!(
+            "SID {} not found in domain {}",
+            sid_str, domain
+        )))
     }
 }
 
@@ -410,26 +445,38 @@ pub async fn enumerate_cross_forest_memberships(
 ) -> Result<Vec<CrossForestMembership>> {
     use overthrone_core::proto::ldap::LdapSession;
 
-    info!("[foreign] Enumerating cross-forest memberships for domain SID {}", foreign_domain_sid);
+    info!(
+        "[foreign] Enumerating cross-forest memberships for domain SID {}",
+        foreign_domain_sid
+    );
 
     let mut conn = LdapSession::connect("", local_domain, "", "", false).await?;
 
     // Search for groups with foreign members
     let base_dn = domain_to_dn(local_domain);
     let filter = "(objectClass=group)";
-    let attrs = vec!["sAMAccountName", "distinguishedName", "member", "groupType", "adminCount"];
+    let attrs = vec![
+        "sAMAccountName",
+        "distinguishedName",
+        "member",
+        "groupType",
+        "adminCount",
+    ];
 
-    let entries = conn.custom_search_with_base(&base_dn, filter, &attrs).await?;
-    
+    let entries = conn
+        .custom_search_with_base(&base_dn, filter, &attrs)
+        .await?;
+
     let _ = conn.disconnect().await;
 
     let mut results = Vec::new();
-    
+
     for entry in entries {
         let members = entry.attrs.get("member").cloned().unwrap_or_default();
-        
+
         // Filter members that are FSPs from the target foreign domain
-        let foreign_sids: Vec<String> = members.iter()
+        let foreign_sids: Vec<String> = members
+            .iter()
             .filter_map(|member_dn| {
                 if member_dn.contains("CN=ForeignSecurityPrincipals") {
                     extract_sid_from_fsp_dn_str(member_dn)
@@ -441,22 +488,30 @@ pub async fn enumerate_cross_forest_memberships(
             .collect();
 
         if !foreign_sids.is_empty() {
-            let group_name = entry.attrs.get("sAMAccountName")
+            let group_name = entry
+                .attrs
+                .get("sAMAccountName")
                 .and_then(|v| v.first())
                 .cloned()
                 .unwrap_or_default();
 
-            let group_dn = entry.attrs.get("distinguishedName")
+            let group_dn = entry
+                .attrs
+                .get("distinguishedName")
                 .and_then(|v| v.first())
                 .cloned()
                 .unwrap_or_default();
 
-            let group_type = entry.attrs.get("groupType")
+            let group_type = entry
+                .attrs
+                .get("groupType")
                 .and_then(|v| v.first())
                 .and_then(|v| v.parse::<i32>().ok())
                 .unwrap_or(0);
 
-            let admin_count = entry.attrs.get("adminCount")
+            let admin_count = entry
+                .attrs
+                .get("adminCount")
                 .and_then(|v| v.first())
                 .map(|v| v == "1")
                 .unwrap_or(false);
@@ -473,7 +528,10 @@ pub async fn enumerate_cross_forest_memberships(
         }
     }
 
-    info!("[foreign] Found {} groups with cross-forest memberships", results.len());
+    info!(
+        "[foreign] Found {} groups with cross-forest memberships",
+        results.len()
+    );
     Ok(results)
 }
 
@@ -658,7 +716,7 @@ mod tests {
     #[test]
     fn test_foreign_membership_detection() {
         use overthrone_reaper::groups::GroupKind;
-        
+
         let groups = vec![GroupEntry {
             sam_account_name: "Domain Admins".to_string(),
             distinguished_name: "CN=Domain Admins,CN=Users,DC=parent,DC=corp,DC=local".to_string(),

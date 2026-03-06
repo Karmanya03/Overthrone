@@ -117,13 +117,17 @@ impl Socks5Server {
         let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         loop {
-            let (stream, peer) = listener.accept().await.map_err(|e| {
-                OverthroneError::custom(format!("SOCKS5: Accept failed: {}", e))
-            })?;
+            let (stream, peer) = listener
+                .accept()
+                .await
+                .map_err(|e| OverthroneError::custom(format!("SOCKS5: Accept failed: {}", e)))?;
 
             let current = active.load(std::sync::atomic::Ordering::Relaxed);
             if self.config.max_connections > 0 && current >= self.config.max_connections {
-                warn!("SOCKS5: Max connections ({}) reached, rejecting {}", self.config.max_connections, peer);
+                warn!(
+                    "SOCKS5: Max connections ({}) reached, rejecting {}",
+                    self.config.max_connections, peer
+                );
                 drop(stream);
                 continue;
             }
@@ -143,10 +147,7 @@ impl Socks5Server {
     }
 
     /// Run the server with a shutdown signal (e.g. ctrl+c).
-    pub async fn run_until(
-        &self,
-        shutdown: tokio::sync::oneshot::Receiver<()>,
-    ) -> Result<()> {
+    pub async fn run_until(&self, shutdown: tokio::sync::oneshot::Receiver<()>) -> Result<()> {
         let listener = TcpListener::bind(&self.config.listen_addr)
             .await
             .map_err(|e| {
@@ -215,15 +216,25 @@ async fn handle_client(
     // ── Step 2: Authentication ──
     if let Some(expected_auth) = auth {
         if !methods.contains(&AUTH_USERNAME_PASSWORD) {
-            client.write_all(&[SOCKS_VERSION, AUTH_NO_ACCEPTABLE]).await.map_err(sock_err)?;
-            return Err(OverthroneError::custom("SOCKS5: Client does not support username/password auth"));
+            client
+                .write_all(&[SOCKS_VERSION, AUTH_NO_ACCEPTABLE])
+                .await
+                .map_err(sock_err)?;
+            return Err(OverthroneError::custom(
+                "SOCKS5: Client does not support username/password auth",
+            ));
         }
-        client.write_all(&[SOCKS_VERSION, AUTH_USERNAME_PASSWORD]).await.map_err(sock_err)?;
+        client
+            .write_all(&[SOCKS_VERSION, AUTH_USERNAME_PASSWORD])
+            .await
+            .map_err(sock_err)?;
 
         // Read username/password sub-negotiation (RFC 1929)
         let n = client.read(&mut buf).await.map_err(sock_err)?;
         if n < 2 || buf[0] != 0x01 {
-            return Err(OverthroneError::custom("SOCKS5: Invalid auth sub-negotiation"));
+            return Err(OverthroneError::custom(
+                "SOCKS5: Invalid auth sub-negotiation",
+            ));
         }
         let ulen = buf[1] as usize;
         if n < 2 + ulen + 1 {
@@ -238,16 +249,25 @@ async fn handle_client(
 
         if username != expected_auth.username || password != expected_auth.password {
             client.write_all(&[0x01, 0x01]).await.map_err(sock_err)?; // auth failure
-            return Err(OverthroneError::Auth(format!("SOCKS5: Auth failed for user '{}'", username)));
+            return Err(OverthroneError::Auth(format!(
+                "SOCKS5: Auth failed for user '{}'",
+                username
+            )));
         }
         client.write_all(&[0x01, 0x00]).await.map_err(sock_err)?; // auth success
         debug!("SOCKS5: Authenticated user '{}'", username);
     } else {
         if !methods.contains(&AUTH_NO_AUTH) {
-            client.write_all(&[SOCKS_VERSION, AUTH_NO_ACCEPTABLE]).await.map_err(sock_err)?;
+            client
+                .write_all(&[SOCKS_VERSION, AUTH_NO_ACCEPTABLE])
+                .await
+                .map_err(sock_err)?;
             return Err(OverthroneError::custom("SOCKS5: No acceptable auth method"));
         }
-        client.write_all(&[SOCKS_VERSION, AUTH_NO_AUTH]).await.map_err(sock_err)?;
+        client
+            .write_all(&[SOCKS_VERSION, AUTH_NO_AUTH])
+            .await
+            .map_err(sock_err)?;
     }
 
     // ── Step 3: Request ──
@@ -264,22 +284,31 @@ async fn handle_client(
     let (target_addr, target_port) = parse_target_address(&buf, n, atyp)?;
     if target_addr.is_empty() && cmd != CMD_UDP_ASSOCIATE {
         send_reply(&mut client, REP_ATYP_NOT_SUPPORTED, &[0; 4], 0).await?;
-        return Err(OverthroneError::custom(format!("SOCKS5: Unsupported address type: {:#x}", atyp)));
+        return Err(OverthroneError::custom(format!(
+            "SOCKS5: Unsupported address type: {:#x}",
+            atyp
+        )));
     }
 
     match cmd {
         CMD_CONNECT => {
-            handle_connect(client, peer, &target_addr, target_port, connect_timeout_secs).await
+            handle_connect(
+                client,
+                peer,
+                &target_addr,
+                target_port,
+                connect_timeout_secs,
+            )
+            .await
         }
-        CMD_BIND => {
-            handle_bind(client, peer, connect_timeout_secs).await
-        }
-        CMD_UDP_ASSOCIATE => {
-            handle_udp_associate(client, peer).await
-        }
+        CMD_BIND => handle_bind(client, peer, connect_timeout_secs).await,
+        CMD_UDP_ASSOCIATE => handle_udp_associate(client, peer).await,
         _ => {
             send_reply(&mut client, REP_CMD_NOT_SUPPORTED, &[0; 4], 0).await?;
-            Err(OverthroneError::custom(format!("SOCKS5: Unsupported command: {:#x}", cmd)))
+            Err(OverthroneError::custom(format!(
+                "SOCKS5: Unsupported command: {:#x}",
+                cmd
+            )))
         }
     }
 }
@@ -339,7 +368,10 @@ async fn handle_connect(
         Ok(Err(e)) => {
             warn!("SOCKS5: Connection to {} failed: {}", target, e);
             send_reply(&mut client, REP_HOST_UNREACHABLE, &[0; 4], 0).await?;
-            return Err(OverthroneError::custom(format!("SOCKS5: Connect failed: {}", e)));
+            return Err(OverthroneError::custom(format!(
+                "SOCKS5: Connect failed: {}",
+                e
+            )));
         }
         Err(_) => {
             warn!("SOCKS5: Connection to {} timed out", target);
@@ -358,7 +390,10 @@ async fn handle_connect(
 
     // Send success reply
     send_reply(&mut client, REP_SUCCESS, &bind_ip, bind_port).await?;
-    info!("SOCKS5: {} -> {}:{} established", peer, target_addr, target_port);
+    info!(
+        "SOCKS5: {} -> {}:{} established",
+        peer, target_addr, target_port
+    );
 
     // ── Step 5: Bidirectional relay ──
     let (mut client_r, mut client_w) = client.into_split();
@@ -430,7 +465,10 @@ async fn handle_bind(
         }
         Ok(Err(e)) => {
             send_reply(&mut client, REP_GENERAL_FAILURE, &[0; 4], 0).await?;
-            return Err(OverthroneError::custom(format!("SOCKS5 BIND: accept failed: {}", e)));
+            return Err(OverthroneError::custom(format!(
+                "SOCKS5 BIND: accept failed: {}",
+                e
+            )));
         }
         Err(_) => {
             send_reply(&mut client, REP_GENERAL_FAILURE, &[0; 4], 0).await?;
@@ -464,16 +502,15 @@ async fn handle_bind(
 /// SOCKS5-encapsulated UDP datagrams between the client and
 /// the destination indicated in each datagram header.  The
 /// association is terminated when the TCP control connection closes.
-async fn handle_udp_associate(
-    mut client: TcpStream,
-    peer: SocketAddr,
-) -> Result<()> {
+async fn handle_udp_associate(mut client: TcpStream, peer: SocketAddr) -> Result<()> {
     debug!("SOCKS5: UDP_ASSOCIATE requested from {}", peer);
 
     // Bind an ephemeral UDP socket
-    let udp_sock = tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
-        OverthroneError::custom(format!("SOCKS5 UDP: failed to bind socket: {}", e))
-    })?;
+    let udp_sock = tokio::net::UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| {
+            OverthroneError::custom(format!("SOCKS5 UDP: failed to bind socket: {}", e))
+        })?;
     let udp_addr = udp_sock.local_addr().map_err(sock_err)?;
     let bind_ip = match udp_addr {
         SocketAddr::V4(a) => a.ip().octets().to_vec(),
@@ -517,13 +554,17 @@ async fn handle_udp_associate(
             let atyp = buf[3];
             let (dest_addr, dest_port, data_offset) = match atyp {
                 ATYP_IPV4 => {
-                    if n < 10 { continue; }
+                    if n < 10 {
+                        continue;
+                    }
                     let ip = std::net::Ipv4Addr::new(buf[4], buf[5], buf[6], buf[7]);
                     let port = u16::from_be_bytes([buf[8], buf[9]]);
                     (std::net::IpAddr::V4(ip), port, 10)
                 }
                 ATYP_IPV6 => {
-                    if n < 22 { continue; }
+                    if n < 22 {
+                        continue;
+                    }
                     let mut octets = [0u8; 16];
                     octets.copy_from_slice(&buf[4..20]);
                     let ip = std::net::Ipv6Addr::from(octets);
@@ -532,17 +573,20 @@ async fn handle_udp_associate(
                 }
                 ATYP_DOMAIN => {
                     let dlen = buf[4] as usize;
-                    if n < 5 + dlen + 2 { continue; }
+                    if n < 5 + dlen + 2 {
+                        continue;
+                    }
                     let domain = String::from_utf8_lossy(&buf[5..5 + dlen]);
                     let port = u16::from_be_bytes([buf[5 + dlen], buf[6 + dlen]]);
                     // Resolve domain
-                    let resolved = match tokio::net::lookup_host(format!("{}:{}", domain, port)).await {
-                        Ok(mut addrs) => match addrs.next() {
-                            Some(a) => a.ip(),
-                            None => continue,
-                        },
-                        Err(_) => continue,
-                    };
+                    let resolved =
+                        match tokio::net::lookup_host(format!("{}:{}", domain, port)).await {
+                            Ok(mut addrs) => match addrs.next() {
+                                Some(a) => a.ip(),
+                                None => continue,
+                            },
+                            Err(_) => continue,
+                        };
                     (resolved, port, 7 + dlen)
                 }
                 _ => continue,

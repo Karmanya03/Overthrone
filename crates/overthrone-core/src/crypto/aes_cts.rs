@@ -1,4 +1,4 @@
-﻿//! AES-CTS-HMAC-SHA1 for Kerberos etype 17 (AES-128) and 18 (AES-256).
+//! AES-CTS-HMAC-SHA1 for Kerberos etype 17 (AES-128) and 18 (AES-256).
 //!
 //! Implements AES in CBC mode with CipherText Stealing (CTS) as specified in
 //! RFC 3962 for Kerberos, plus AES-CBC and AES-CFB helpers for SAM/LSA
@@ -34,12 +34,7 @@ const AES_BLOCK_SIZE: usize = 16;
 pub fn derive_key_aes256(password: &str, salt: &str) -> [u8; 32] {
     use sha1::Sha1;
     let mut key = [0u8; 32];
-    pbkdf2::pbkdf2_hmac::<Sha1>(
-        password.as_bytes(),
-        salt.as_bytes(),
-        4096,
-        &mut key,
-    );
+    pbkdf2::pbkdf2_hmac::<Sha1>(password.as_bytes(), salt.as_bytes(), 4096, &mut key);
     key
 }
 
@@ -49,12 +44,7 @@ pub fn derive_key_aes256(password: &str, salt: &str) -> [u8; 32] {
 pub fn derive_key_aes128(password: &str, salt: &str) -> [u8; 16] {
     use sha1::Sha1;
     let mut key = [0u8; 16];
-    pbkdf2::pbkdf2_hmac::<Sha1>(
-        password.as_bytes(),
-        salt.as_bytes(),
-        4096,
-        &mut key,
-    );
+    pbkdf2::pbkdf2_hmac::<Sha1>(password.as_bytes(), salt.as_bytes(), 4096, &mut key);
     key
 }
 
@@ -97,11 +87,15 @@ pub fn aes256_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.is_empty() {
         return Ok(Vec::new());
     }
-    cts_decrypt_impl(ciphertext, |k, iv, data| {
-        let dec = Aes256CbcDec::new(k.into(), iv.into());
-        dec.decrypt_padded_vec_mut::<NoPadding>(data)
-            .map_err(|e| anyhow::anyhow!("AES-256-CTS decrypt: {e}"))
-    }, key)
+    cts_decrypt_impl(
+        ciphertext,
+        |k, iv, data| {
+            let dec = Aes256CbcDec::new(k.into(), iv.into());
+            dec.decrypt_padded_vec_mut::<NoPadding>(data)
+                .map_err(|e| anyhow::anyhow!("AES-256-CTS decrypt: {e}"))
+        },
+        key,
+    )
 }
 
 /// Encrypt with AES-128-CTS (CipherText Stealing).
@@ -132,11 +126,15 @@ pub fn aes128_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.is_empty() {
         return Ok(Vec::new());
     }
-    cts_decrypt_impl(ciphertext, |k, iv, data| {
-        let dec = Aes128CbcDec::new(k.into(), iv.into());
-        dec.decrypt_padded_vec_mut::<NoPadding>(data)
-            .map_err(|e| anyhow::anyhow!("AES-128-CTS decrypt: {e}"))
-    }, key)
+    cts_decrypt_impl(
+        ciphertext,
+        |k, iv, data| {
+            let dec = Aes128CbcDec::new(k.into(), iv.into());
+            dec.decrypt_padded_vec_mut::<NoPadding>(data)
+                .map_err(|e| anyhow::anyhow!("AES-128-CTS decrypt: {e}"))
+        },
+        key,
+    )
 }
 
 /// After CBC encryption, swap the last two ciphertext blocks and truncate.
@@ -359,10 +357,7 @@ pub fn decrypt_sam_hash_aes(
 ///
 /// The decryption is done in 16-byte-at-a-time blocks with the same IV reused
 /// for each block (per Impacket's LSA implementation).
-pub fn decrypt_lsa_secret_vista(
-    encryption_key: &[u8],
-    encrypted_data: &[u8],
-) -> Result<Vec<u8>> {
+pub fn decrypt_lsa_secret_vista(encryption_key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>> {
     if encrypted_data.len() < 32 {
         bail!("LSA secret too short (need IV + at least one block)");
     }
@@ -410,11 +405,8 @@ fn decrypt_lsa_blocks(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 /// - Bytes 32..: AES-256-CBC encrypted key material
 ///
 /// The boot key is SHA-256 hashed to derive the AES-256 key.
-pub fn decrypt_lsa_key_vista(
-    boot_key: &[u8],
-    ek_list: &[u8],
-) -> Result<Vec<u8>> {
-    use sha2::{Sha256, Digest};
+pub fn decrypt_lsa_key_vista(boot_key: &[u8], ek_list: &[u8]) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
 
     if ek_list.len() < 48 {
         bail!("EK list too short for Vista+ decryption");
@@ -435,10 +427,7 @@ pub fn decrypt_lsa_key_vista(
 /// Decrypt a Vista+ cached domain credential entry.
 ///
 /// Uses AES-128-CBC with the NL$KEY and an all-zeros IV.
-pub fn decrypt_cached_credential(
-    nl_key: &[u8],
-    encrypted_entry: &[u8],
-) -> Result<Vec<u8>> {
+pub fn decrypt_cached_credential(nl_key: &[u8], encrypted_entry: &[u8]) -> Result<Vec<u8>> {
     if nl_key.len() < 16 {
         bail!("NL$KEY too short");
     }

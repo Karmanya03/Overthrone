@@ -1,4 +1,4 @@
-﻿//! ASCII art banner and version display for Overthrone.
+//! ASCII art banner and version display for Overthrone.
 
 use colored::Colorize;
 
@@ -65,7 +65,11 @@ pub fn print_fail_detail(context: &str, error: &str, hint: &str) {
 #[allow(dead_code)]
 pub fn print_critical(title: &str, details: &str) {
     println!();
-    println!("  {} {}", "⭐ CRITICAL:".red().bold().blink(), title.red().bold());
+    println!(
+        "  {} {}",
+        "⭐ CRITICAL:".red().bold().blink(),
+        title.red().bold()
+    );
     println!("  {}", details.yellow());
     println!();
 }
@@ -73,7 +77,12 @@ pub fn print_critical(title: &str, details: &str) {
 /// Print a high-value finding
 #[allow(dead_code)]
 pub fn print_high_value(title: &str, details: &str) {
-    println!("  {} {}: {}", "💎".cyan(), title.white().bold(), details.cyan());
+    println!(
+        "  {} {}: {}",
+        "💎".cyan(),
+        title.white().bold(),
+        details.cyan()
+    );
 }
 
 /// Print an attack path discovery
@@ -82,7 +91,12 @@ pub fn print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
     println!();
     println!("  {} ATTACK PATH FOUND", "🎯".green().bold());
     println!("  {} {} → {}", "•".white(), from.cyan(), to.red().bold());
-    println!("  {} {} hops, cost {}", "•".white(), hops.to_string().yellow(), cost.to_string().yellow());
+    println!(
+        "  {} {} hops, cost {}",
+        "•".white(),
+        hops.to_string().yellow(),
+        cost.to_string().yellow()
+    );
     println!();
 }
 
@@ -113,11 +127,24 @@ pub fn print_hash_capture(hash_type: &str, username: &str, hash_preview: &str) {
 /// Print DA achieved banner
 pub fn print_da_achieved(username: &str, host: &str) {
     println!();
-    println!("{}", "╔═══════════════════════════════════════════════════════╗".green());
-    println!("{}", "║        🎉 DOMAIN ADMIN ACCESS ACHIEVED 🎉              ║".green());
-    println!("{}", "╚═══════════════════════════════════════════════════════╝".green());
+    println!(
+        "{}",
+        "╔═══════════════════════════════════════════════════════╗".green()
+    );
+    println!(
+        "{}",
+        "║        🎉 DOMAIN ADMIN ACCESS ACHIEVED 🎉              ║".green()
+    );
+    println!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════╝".green()
+    );
     println!();
-    println!("  {} User: {}", "⭐".yellow().bold(), username.white().bold());
+    println!(
+        "  {} User: {}",
+        "⭐".yellow().bold(),
+        username.white().bold()
+    );
     println!("  {} Host: {}", "💻".cyan(), host.cyan());
     println!();
 }
@@ -135,6 +162,10 @@ pub fn print_stage_summary(stage: &str, succeeded: usize, failed: usize) {
         status,
         stage.white().bold(),
         succeeded.to_string().green(),
-        if failed > 0 { failed.to_string().red() } else { failed.to_string().green() }
+        if failed > 0 {
+            failed.to_string().red()
+        } else {
+            failed.to_string().green()
+        }
     );
 }

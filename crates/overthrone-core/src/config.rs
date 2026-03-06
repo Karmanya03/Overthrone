@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -29,24 +29,13 @@ pub struct OverthroneConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthConfig {
     /// Plaintext username + password
-    Password {
-        username: String,
-        password: String,
-    },
+    Password { username: String, password: String },
     /// Pass-the-Hash with NTLM hash
-    NtlmHash {
-        username: String,
-        hash: String,
-    },
+    NtlmHash { username: String, hash: String },
     /// Pass-the-Ticket with .kirbi or .ccache file
-    Ticket {
-        path: PathBuf,
-    },
+    Ticket { path: PathBuf },
     /// Certificate-based auth (PKINIT) with PFX file
-    Certificate {
-        pfx_path: PathBuf,
-        password: String,
-    },
+    Certificate { pfx_path: PathBuf, password: String },
 }
 
 /// Output format for tool results

@@ -1,4 +1,4 @@
-﻿//! RC4 encryption for Kerberos etype 23 and SAM hash decryption.
+//! RC4 encryption for Kerberos etype 23 and SAM hash decryption.
 //!
 //! Provides RC4 stream cipher operations used in:
 //! - Kerberos RC4-HMAC (etype 23) encryption/decryption
@@ -86,7 +86,10 @@ pub fn rc4_hmac_encrypt(key: &[u8], data: &[u8], key_usage: i32) -> Vec<u8> {
 /// Input format: checksum (16) || encrypted(confounder (8) || plaintext)
 pub fn rc4_hmac_decrypt(key: &[u8], data: &[u8], key_usage: i32) -> Result<Vec<u8>> {
     if data.len() < 24 {
-        bail!("RC4-HMAC ciphertext too short (need >= 24 bytes, got {})", data.len());
+        bail!(
+            "RC4-HMAC ciphertext too short (need >= 24 bytes, got {})",
+            data.len()
+        );
     }
 
     let usage_bytes = key_usage.to_le_bytes();
@@ -141,13 +144,20 @@ pub fn decrypt_sam_hash_rc4(
     encrypted_hash: &[u8],
     is_nt: bool,
 ) -> Result<[u8; 16]> {
-    use md5::{Md5, Digest};
+    use md5::{Digest, Md5};
 
     if encrypted_hash.len() < 16 {
-        bail!("Encrypted SAM hash too short (need >= 16, got {})", encrypted_hash.len());
+        bail!(
+            "Encrypted SAM hash too short (need >= 16, got {})",
+            encrypted_hash.len()
+        );
     }
 
-    let constant = if is_nt { SAM_NTPASSWORD } else { SAM_LMPASSWORD };
+    let constant = if is_nt {
+        SAM_NTPASSWORD
+    } else {
+        SAM_LMPASSWORD
+    };
 
     // Step 1: Derive RC4 key = MD5(hashed_boot_key || RID_le || constant)
     let mut md5 = Md5::new();
@@ -168,8 +178,8 @@ pub fn decrypt_sam_hash_rc4(
 /// The 16-byte hash is split into two 8-byte blocks, each decrypted with a
 /// 7-byte DES key derived from the RID.
 pub(crate) fn des_decrypt_hash(rid: u32, data: &[u8]) -> Result<[u8; 16]> {
-    use des::cipher::{BlockDecrypt, KeyInit as DesKeyInit};
     use des::Des;
+    use des::cipher::{BlockDecrypt, KeyInit as DesKeyInit};
 
     if data.len() < 16 {
         bail!("DES input too short");
@@ -233,11 +243,8 @@ fn str_to_des_key(s: &[u8; 7]) -> [u8; 8] {
 ///     key = md5.finalize()
 /// decrypted = RC4(key, secret[12..60])
 /// ```
-pub fn decrypt_lsa_key_pre_vista(
-    boot_key: &[u8],
-    secret_blob: &[u8],
-) -> Result<Vec<u8>> {
-    use md5::{Md5, Digest};
+pub fn decrypt_lsa_key_pre_vista(boot_key: &[u8], secret_blob: &[u8]) -> Result<Vec<u8>> {
+    use md5::{Digest, Md5};
 
     if secret_blob.len() < 76 {
         bail!("LSA secret blob too short for pre-Vista decryption");

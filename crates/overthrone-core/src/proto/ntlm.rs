@@ -1,4 +1,4 @@
-﻿//! NTLM hash computation and authentication helpers.
+//! NTLM hash computation and authentication helpers.
 //!
 //! Implements NT hash (MD4), NTLMv2 hash (HMAC-MD5), NTLMv2 challenge-response,
 //! and Pass-the-Hash support for Active Directory authentication.
@@ -48,18 +48,13 @@ pub fn nt_hash_hex(password: &str) -> String {
 /// This is used as the key for computing NTLMv2 challenge responses
 /// and session keys. Reference: [MS-NLMP] Section 3.3.2
 pub fn ntlmv2_hash(nt_hash: &[u8], username: &str, domain: &str) -> Vec<u8> {
-    let identity = format!(
-        "{}{}",
-        username.to_uppercase(),
-        domain.to_uppercase()
-    );
+    let identity = format!("{}{}", username.to_uppercase(), domain.to_uppercase());
     let identity_utf16: Vec<u8> = identity
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
         .collect();
 
-    let mut mac = HmacMd5::new_from_slice(nt_hash)
-        .expect("HMAC-MD5 accepts any key length");
+    let mut mac = HmacMd5::new_from_slice(nt_hash).expect("HMAC-MD5 accepts any key length");
     mac.update(&identity_utf16);
     mac.finalize().into_bytes().to_vec()
 }
@@ -88,8 +83,7 @@ pub fn ntlmv2_response(
     client_blob: &[u8],
 ) -> Vec<u8> {
     // NTProofStr = HMAC-MD5(NTLMv2Hash, ServerChallenge + ClientBlob)
-    let mut mac = HmacMd5::new_from_slice(ntlmv2_hash)
-        .expect("HMAC-MD5 accepts any key length");
+    let mut mac = HmacMd5::new_from_slice(ntlmv2_hash).expect("HMAC-MD5 accepts any key length");
     mac.update(server_challenge);
     mac.update(client_blob);
     let nt_proof_str = mac.finalize().into_bytes();
@@ -120,14 +114,14 @@ pub fn build_ntlmv2_client_blob(
 ) -> Vec<u8> {
     let mut blob = Vec::with_capacity(28 + target_info.len());
 
-    blob.push(0x01);                             // RespType
-    blob.push(0x01);                             // HiRespType
+    blob.push(0x01); // RespType
+    blob.push(0x01); // HiRespType
     blob.extend_from_slice(&0u16.to_le_bytes()); // Reserved1
     blob.extend_from_slice(&0u32.to_le_bytes()); // Reserved2
     blob.extend_from_slice(&timestamp.to_le_bytes()); // TimeStamp
-    blob.extend_from_slice(client_challenge);    // ChallengeFromClient
+    blob.extend_from_slice(client_challenge); // ChallengeFromClient
     blob.extend_from_slice(&0u32.to_le_bytes()); // Reserved3
-    blob.extend_from_slice(target_info);         // AvPairs
+    blob.extend_from_slice(target_info); // AvPairs
 
     blob
 }
@@ -158,8 +152,7 @@ pub fn windows_filetime_now() -> u64 {
 /// This session key is used for signing and sealing messages.
 /// Reference: [MS-NLMP] Section 3.3.2
 pub fn ntlmv2_session_base_key(ntlmv2_hash: &[u8], nt_proof_str: &[u8]) -> Vec<u8> {
-    let mut mac = HmacMd5::new_from_slice(ntlmv2_hash)
-        .expect("HMAC-MD5 accepts any key length");
+    let mut mac = HmacMd5::new_from_slice(ntlmv2_hash).expect("HMAC-MD5 accepts any key length");
     mac.update(nt_proof_str);
     mac.finalize().into_bytes().to_vec()
 }
@@ -179,8 +172,7 @@ pub fn lmv2_response(
     server_challenge: &[u8; 8],
     client_challenge: &[u8; 8],
 ) -> Vec<u8> {
-    let mut mac = HmacMd5::new_from_slice(ntlmv2_hash)
-        .expect("HMAC-MD5 accepts any key length");
+    let mut mac = HmacMd5::new_from_slice(ntlmv2_hash).expect("HMAC-MD5 accepts any key length");
     mac.update(server_challenge);
     mac.update(client_challenge);
     let proof = mac.finalize().into_bytes();
@@ -217,9 +209,7 @@ pub fn parse_ntlm_hash(hash_str: &str) -> Result<Vec<u8>> {
         )));
     }
 
-    hex::decode(nt_part).map_err(|e| {
-        OverthroneError::InvalidHash(format!("Invalid hex: {e}"))
-    })
+    hex::decode(nt_part).map_err(|e| OverthroneError::InvalidHash(format!("Invalid hex: {e}")))
 }
 
 /// Parse a full secretsdump-style hash line:
@@ -238,9 +228,8 @@ pub fn parse_secretsdump_line(line: &str) -> Result<(String, u32, Vec<u8>)> {
     let rid: u32 = parts[1].parse().map_err(|_| {
         OverthroneError::InvalidHash(format!("Invalid RID '{}' in: {line}", parts[1]))
     })?;
-    let nt_hash = hex::decode(parts[3]).map_err(|e| {
-        OverthroneError::InvalidHash(format!("Invalid NT hash hex: {e}"))
-    })?;
+    let nt_hash = hex::decode(parts[3])
+        .map_err(|e| OverthroneError::InvalidHash(format!("Invalid NT hash hex: {e}")))?;
 
     if nt_hash.len() != 16 {
         return Err(OverthroneError::InvalidHash(format!(
@@ -318,21 +307,22 @@ pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
 
     // Domain name (optional, we'll include if provided)
     if !domain.is_empty() {
-        let domain_utf16: Vec<u8> = domain.to_uppercase()
+        let domain_utf16: Vec<u8> = domain
+            .to_uppercase()
             .encode_utf16()
             .flat_map(|c| c.to_le_bytes())
             .collect();
-        
+
         // Domain length and offset
         msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
         msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes()); // Max length
         msg.extend_from_slice(&32u32.to_le_bytes()); // Offset after header
-        
+
         // Workstation (empty)
         msg.extend_from_slice(&0u16.to_le_bytes());
         msg.extend_from_slice(&0u16.to_le_bytes());
         msg.extend_from_slice(&32u32.to_le_bytes());
-        
+
         // Payload
         msg.extend_from_slice(&domain_utf16);
     } else {
@@ -354,7 +344,9 @@ pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
 /// Parse NTLM Type 2 (Challenge) message from server
 pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
     if data.len() < 48 {
-        return Err(OverthroneError::Ntlm("Challenge message too short".to_string()));
+        return Err(OverthroneError::Ntlm(
+            "Challenge message too short".to_string(),
+        ));
     }
 
     // Verify signature
@@ -365,19 +357,22 @@ pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
     // Check message type
     let msg_type = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
     if msg_type != 2 {
-        return Err(OverthroneError::Ntlm(format!("Expected Type 2 message, got {}", msg_type)));
+        return Err(OverthroneError::Ntlm(format!(
+            "Expected Type 2 message, got {}",
+            msg_type
+        )));
     }
 
     // Extract target name
     let target_len = u16::from_le_bytes([data[12], data[13]]) as usize;
     let target_offset = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
-    
+
     let target_name = if target_len > 0 && target_offset + target_len <= data.len() {
         Some(String::from_utf16_lossy(
             &data[target_offset..target_offset + target_len]
                 .chunks(2)
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         ))
     } else {
         None
@@ -394,7 +389,7 @@ pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
     let target_info = if data.len() >= 48 {
         let info_len = u16::from_le_bytes([data[40], data[41]]) as usize;
         let info_offset = u32::from_le_bytes([data[44], data[45], data[46], data[47]]) as usize;
-        
+
         if info_len > 0 && info_offset + info_len <= data.len() {
             Some(data[info_offset..info_offset + info_len].to_vec())
         } else {
@@ -449,16 +444,17 @@ pub fn build_authenticate_message(
     let lm_response = lmv2_response(&ntlmv2_h, server_challenge, &client_challenge);
 
     // Convert domain and username to UTF-16LE
-    let domain_utf16: Vec<u8> = domain.to_uppercase()
+    let domain_utf16: Vec<u8> = domain
+        .to_uppercase()
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
         .collect();
-    
+
     let username_utf16: Vec<u8> = username
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
         .collect();
-    
+
     let workstation_utf16: Vec<u8> = "WORKSTATION"
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
@@ -510,7 +506,8 @@ pub fn build_authenticate_message(
     msg.extend_from_slice(&0u32.to_le_bytes());
 
     // Flags
-    let flags: u32 = 0x00000202 | 0x00020000 | 0x00000010 | 0x00000200 | 0x00008000 | 0x00080000 | 0x00002000;
+    let flags: u32 =
+        0x00000202 | 0x00020000 | 0x00000010 | 0x00000200 | 0x00008000 | 0x00080000 | 0x00002000;
     msg.extend_from_slice(&flags.to_le_bytes());
 
     // Version
@@ -603,11 +600,7 @@ mod tests {
         let v2 = ntlmv2_hash(&nt, "user", "DOMAIN");
         let server_challenge = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         let client_challenge = [0xAA; 8];
-        let blob = build_ntlmv2_client_blob(
-            windows_filetime_now(),
-            &client_challenge,
-            &[],
-        );
+        let blob = build_ntlmv2_client_blob(windows_filetime_now(), &client_challenge, &[]);
         let response = ntlmv2_response(&v2, &server_challenge, &blob);
         // Response = NTProofStr (16 bytes) + blob
         assert_eq!(response.len(), 16 + blob.len());
@@ -669,9 +662,7 @@ mod tests {
 
     #[test]
     fn test_parse_ntlm_hash_full() {
-        let result = parse_ntlm_hash(
-            "aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c",
-        );
+        let result = parse_ntlm_hash("aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c");
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 16);
     }
@@ -699,8 +690,7 @@ mod tests {
 
     #[test]
     fn test_parse_secretsdump_line() {
-        let line =
-            "Administrator:500:aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::";
+        let line = "Administrator:500:aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::";
         let (user, rid, hash) = parse_secretsdump_line(line).unwrap();
         assert_eq!(user, "Administrator");
         assert_eq!(rid, 500);

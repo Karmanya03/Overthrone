@@ -12,7 +12,7 @@
 //! Reference: [MS-DRSR] <https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-drsr>
 
 use crate::error::{OverthroneError, Result};
-use md5::{Md5, Digest as Md5Digest};
+use md5::{Digest as Md5Digest, Md5};
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -39,7 +39,6 @@ const ATTID_DN: u32 = 0x00090001;
 /// Encryption type markers in the replicated blob
 const DRS_ENC_TYPE_RC4: u32 = 1;
 const DRS_ENC_TYPE_AES: u32 = 2;
-
 
 // ═══════════════════════════════════════════════════════════
 // Public Types
@@ -88,7 +87,6 @@ pub struct DcSyncResult {
     pub total_objects: u32,
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Main Parser
 // ═══════════════════════════════════════════════════════════
@@ -101,13 +99,12 @@ pub struct DcSyncResult {
 ///
 /// # Returns
 /// Parsed objects with decrypted NT hashes and supplemental credentials.
-pub fn parse_get_nc_changes_reply(
-    response: &[u8],
-    session_key: &[u8],
-) -> Result<DcSyncResult> {
+pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result<DcSyncResult> {
     // Skip RPC PDU header (24 bytes for request PDU)
     if response.len() < 28 {
-        return Err(OverthroneError::custom("DRSGetNCChanges response too short"));
+        return Err(OverthroneError::custom(
+            "DRSGetNCChanges response too short",
+        ));
     }
 
     let stub_data = &response[24..];
@@ -124,18 +121,22 @@ pub fn parse_get_nc_changes_reply(
     match out_version {
         1 | 2 | 6 | 7 => parse_reply_v6(stub_data, session_key, out_version),
         _ => {
-            warn!("Unexpected DRS reply version: {}, attempting v6 parse", out_version);
+            warn!(
+                "Unexpected DRS reply version: {}, attempting v6 parse",
+                out_version
+            );
             parse_reply_v6(stub_data, session_key, out_version)
         }
     }
 }
 
-
 /// Parse DRS_MSG_GETCHGREPLY_V6 (also handles V1/V2/V7 with offset adjustments)
 fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result<DcSyncResult> {
     let min_header = 4 + 16 + 16 + 4 + 16 + 16 + 4; // 76 bytes minimum
     if stub_data.len() < min_header + 16 {
-        return Err(OverthroneError::custom("Reply stub too short for v6 header"));
+        return Err(OverthroneError::custom(
+            "Reply stub too short for v6 header",
+        ));
     }
 
     // We need to find cNumObjects and pObjects in the NDR stream.
@@ -145,12 +146,8 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
     Ok(parse_result)
 }
 
-
 /// Scan the NDR response for REPLENTINFLIST entries using structural heuristics.
-fn scan_for_replentinflist(
-    data: &[u8],
-    session_key: &[u8],
-) -> Result<DcSyncResult> {
+fn scan_for_replentinflist(data: &[u8], session_key: &[u8]) -> Result<DcSyncResult> {
     let mut objects = Vec::new();
     let data_len = data.len();
 
@@ -204,7 +201,6 @@ fn scan_for_replentinflist(
     })
 }
 
-
 /// Check if a u32 value is a known ATTID
 fn is_known_attid(val: u32) -> bool {
     matches!(
@@ -219,7 +215,6 @@ fn is_known_attid(val: u32) -> bool {
             | ATTID_DN
     )
 }
-
 
 /// Search backwards from an ATTID to find the start of the object (ENTINF boundary)
 fn find_object_start(data: &[u8], attid_pos: usize) -> Option<usize> {
@@ -247,7 +242,6 @@ fn find_object_start(data: &[u8], attid_pos: usize) -> Option<usize> {
 
     Some(attid_pos.saturating_sub(4))
 }
-
 
 /// Parse a single replicated object's attributes from the NDR stream
 fn parse_replicated_object(
@@ -314,7 +308,6 @@ fn parse_replicated_object(
     Ok((obj, pos))
 }
 
-
 /// Process a single replicated attribute value
 fn process_attribute(
     obj: &mut ReplicatedObject,
@@ -339,31 +332,29 @@ fn process_attribute(
                 obj.uac = Some(read_u32(value_data, 0));
             }
         }
-        ATTID_UNICODE_PWD => {
-            match decrypt_replicated_secret(value_data, session_key) {
-                Ok(decrypted) => {
-                    if decrypted.len() >= 16 {
-                        obj.nt_hash = Some(decrypted[..16].to_vec());
-                        debug!(
-                            "  unicodePwd decrypted: {}",
-                            hex_encode(&decrypted[..16])
-                        );
-                    }
+        ATTID_UNICODE_PWD => match decrypt_replicated_secret(value_data, session_key) {
+            Ok(decrypted) => {
+                if decrypted.len() >= 16 {
+                    obj.nt_hash = Some(decrypted[..16].to_vec());
+                    debug!("  unicodePwd decrypted: {}", hex_encode(&decrypted[..16]));
                 }
-                Err(e) => warn!("  Failed to decrypt unicodePwd: {}", e),
             }
-        }
+            Err(e) => warn!("  Failed to decrypt unicodePwd: {}", e),
+        },
         ATTID_NT_PWD_HISTORY => {
             if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key)
-                && decrypted.len() >= 16 && obj.nt_hash.is_none() {
-                    obj.nt_hash = Some(decrypted[..16].to_vec());
-                }
+                && decrypted.len() >= 16
+                && obj.nt_hash.is_none()
+            {
+                obj.nt_hash = Some(decrypted[..16].to_vec());
+            }
         }
         ATTID_LM_PWD_HISTORY => {
             if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key)
-                && decrypted.len() >= 16 {
-                    obj.lm_hash = Some(decrypted[..16].to_vec());
-                }
+                && decrypted.len() >= 16
+            {
+                obj.lm_hash = Some(decrypted[..16].to_vec());
+            }
         }
         ATTID_SUPPLEMENTAL_CREDENTIALS => {
             if let Ok(decrypted) = decrypt_replicated_secret(value_data, session_key) {
@@ -375,7 +366,6 @@ fn process_attribute(
         }
     }
 }
-
 
 /// Normalize an ATTID to its well-known form.
 fn normalize_attid(attid: u32) -> u32 {
@@ -401,7 +391,6 @@ fn normalize_attid(attid: u32) -> u32 {
         _ => attid,
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Credential Decryption
@@ -435,7 +424,6 @@ fn decrypt_replicated_secret(enc_data: &[u8], session_key: &[u8]) -> Result<Vec<
     }
 }
 
-
 /// RC4 decryption for DRS replicated attributes
 fn decrypt_rc4_drs(session_key: &[u8], salt: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let rc4_key = {
@@ -447,7 +435,6 @@ fn decrypt_rc4_drs(session_key: &[u8], salt: &[u8], data: &[u8]) -> Result<Vec<u
 
     Ok(rc4_crypt(&rc4_key, data))
 }
-
 
 /// AES-256-CBC decryption for DRS replicated attributes
 fn decrypt_aes_drs(session_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
@@ -476,7 +463,6 @@ fn decrypt_aes_drs(session_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>
     Ok(decrypted.to_vec())
 }
 
-
 /// RC4 encrypt/decrypt (symmetric)
 fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut s: Vec<u8> = (0..=255u8).collect();
@@ -498,7 +484,6 @@ fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
         })
         .collect()
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Supplemental Credentials Parser
@@ -580,7 +565,6 @@ fn parse_supplemental_credentials(data: &[u8]) -> Option<SupplementalCredentials
     Some(result)
 }
 
-
 /// Parse Kerberos keys from the supplemental credential property value
 fn parse_kerberos_keys(data: &[u8], result: &mut SupplementalCredentials) {
     if data.len() < 16 {
@@ -599,7 +583,11 @@ fn parse_kerberos_keys(data: &[u8], result: &mut SupplementalCredentials) {
             break;
         }
 
-        let key_type_offset = if revision >= 3 { entry_pos + 8 } else { entry_pos + 4 };
+        let key_type_offset = if revision >= 3 {
+            entry_pos + 8
+        } else {
+            entry_pos + 4
+        };
         if key_type_offset + 12 > data.len() {
             break;
         }
@@ -645,7 +633,6 @@ fn parse_kerberos_keys(data: &[u8], result: &mut SupplementalCredentials) {
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Utility Helpers
 // ═══════════════════════════════════════════════════════════
@@ -671,7 +658,8 @@ fn sid_to_string(data: &[u8]) -> String {
 
     let revision = data[0];
     let sub_auth_count = data[1] as usize;
-    let authority = u64::from_be_bytes([0, 0, data[2], data[3], data[4], data[5], data[6], data[7]]);
+    let authority =
+        u64::from_be_bytes([0, 0, data[2], data[3], data[4], data[5], data[6], data[7]]);
 
     let mut sid = format!("S-{}-{}", revision, authority);
 
@@ -743,7 +731,6 @@ fn hex_decode_optional(hex: &str) -> Option<Vec<u8>> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,12 +753,8 @@ mod tests {
     #[test]
     fn test_extract_rid() {
         let sid_bytes = [
-            0x01, 0x04,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x05,
-            0x15, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0xF4, 0x01, 0x00, 0x00,
+            0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF4, 0x01, 0x00, 0x00,
         ];
         assert_eq!(extract_rid(&sid_bytes), Some(500));
     }
@@ -787,7 +770,10 @@ mod tests {
 
     #[test]
     fn test_normalize_known_attids() {
-        assert_eq!(normalize_attid(ATTID_SAM_ACCOUNT_NAME), ATTID_SAM_ACCOUNT_NAME);
+        assert_eq!(
+            normalize_attid(ATTID_SAM_ACCOUNT_NAME),
+            ATTID_SAM_ACCOUNT_NAME
+        );
         assert_eq!(normalize_attid(ATTID_UNICODE_PWD), ATTID_UNICODE_PWD);
     }
 

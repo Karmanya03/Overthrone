@@ -105,7 +105,8 @@ async fn enumerate_constrained(config: &HuntConfig) -> Result<Vec<DelegatableAcc
         &config.username,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     let ad_users = conn.find_constrained_delegation_users().await?;
 
@@ -138,7 +139,10 @@ async fn enumerate_constrained(config: &HuntConfig) -> Result<Vec<DelegatableAcc
 
     conn.disconnect().await?;
 
-    info!("LDAP: Found {} constrained delegation accounts", accounts.len());
+    info!(
+        "LDAP: Found {} constrained delegation accounts",
+        accounts.len()
+    );
     Ok(accounts)
 }
 
@@ -196,12 +200,7 @@ async fn execute_s4u_chain(
             }
         }
         Err(e) => {
-            warn!(
-                "  {} S4U2Proxy failed for {}: {}",
-                "✗".red(),
-                target_spn,
-                e
-            );
+            warn!("  {} S4U2Proxy failed for {}: {}", "✗".red(), target_spn, e);
             S4UChainResult {
                 source_account: tgt.client_principal.clone(),
                 impersonated_user: impersonate_user.to_string(),
@@ -292,10 +291,7 @@ pub async fn run(config: &HuntConfig, cc: &ConstrainedConfig) -> Result<Constrai
     );
 
     for (acct, target_spn) in &targets {
-        pb.set_message(format!(
-            "{} → {}",
-            acct.sam_account_name, target_spn
-        ));
+        pb.set_message(format!("{} → {}", acct.sam_account_name, target_spn));
 
         // Only accounts with protocol transition can do S4U2Self without the user
         if !acct.protocol_transition {
@@ -306,8 +302,7 @@ pub async fn run(config: &HuntConfig, cc: &ConstrainedConfig) -> Result<Constrai
             );
         }
 
-        let result =
-            execute_s4u_chain(config, &tgt, &cc.impersonate_user, target_spn).await;
+        let result = execute_s4u_chain(config, &tgt, &cc.impersonate_user, target_spn).await;
 
         if let Some(ref err) = result.error {
             errors.push(err.clone());

@@ -1,8 +1,8 @@
 //! Delegation enumeration — unconstrained, constrained, RBCD.
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -28,14 +28,17 @@ pub fn delegation_filter() -> String {
 }
 
 // UAC bits
-const UAC_TRUSTED_FOR_DELEGATION: u32   = 0x00080000; // unconstrained
-const UAC_TRUSTED_TO_AUTH: u32          = 0x01000000; // constrained w/ T2A4D
+const UAC_TRUSTED_FOR_DELEGATION: u32 = 0x00080000; // unconstrained
+const UAC_TRUSTED_TO_AUTH: u32 = 0x01000000; // constrained w/ T2A4D
 #[allow(dead_code)] // Protocol reference UAC flag
-const UAC_NOT_DELEGATED: u32            = 0x00100000;
-const UAC_DISABLED: u32                 = 0x00000002;
+const UAC_NOT_DELEGATED: u32 = 0x00100000;
+const UAC_DISABLED: u32 = 0x00000002;
 
 pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<DelegationEntry>> {
-    info!("[delegations] Querying {} for delegation configs", config.dc_ip);
+    info!(
+        "[delegations] Querying {} for delegation configs",
+        config.dc_ip
+    );
 
     let mut conn = LdapSession::connect(
         &config.dc_ip,
@@ -43,7 +46,8 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     let filter = delegation_filter();
     let attrs = &[
@@ -66,7 +70,8 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
     let mut results = Vec::new();
 
     for entry in &entries {
-        let principal = entry.attrs
+        let principal = entry
+            .attrs
             .get("sAMAccountName")
             .and_then(|v| v.first())
             .cloned()
@@ -74,7 +79,8 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
 
         let dn = entry.dn.clone();
 
-        let uac: u32 = entry.attrs
+        let uac: u32 = entry
+            .attrs
             .get("userAccountControl")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
@@ -82,12 +88,14 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
 
         let enabled = uac & UAC_DISABLED == 0;
 
-        let constrained_targets: Vec<String> = entry.attrs
+        let constrained_targets: Vec<String> = entry
+            .attrs
             .get("msDS-AllowedToDelegateTo")
             .cloned()
             .unwrap_or_default();
 
-        let has_rbcd = entry.attrs
+        let has_rbcd = entry
+            .attrs
             .contains_key("msDS-AllowedToActOnBehalfOfOtherIdentity");
 
         // ── Unconstrained delegation (TRUSTED_FOR_DELEGATION, not DC)

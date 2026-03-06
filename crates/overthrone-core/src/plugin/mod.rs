@@ -325,14 +325,15 @@ impl PluginRegistry {
 
         // Check version compatibility
         if let Some(ref min_ver) = manifest.min_overthrone_version
-            && !is_version_compatible(min_ver) {
-                return Err(OverthroneError::Plugin(format!(
-                    "Plugin '{}' requires Overthrone >= {}, current is {}",
-                    id,
-                    min_ver,
-                    env!("CARGO_PKG_VERSION")
-                )));
-            }
+            && !is_version_compatible(min_ver)
+        {
+            return Err(OverthroneError::Plugin(format!(
+                "Plugin '{}' requires Overthrone >= {}, current is {}",
+                id,
+                min_ver,
+                env!("CARGO_PKG_VERSION")
+            )));
+        }
 
         // Initialize
         log::info!(
@@ -412,10 +413,9 @@ impl PluginRegistry {
         }
 
         let plugin_id_owned = plugin_id.clone();
-        let plugin = self
-            .plugins
-            .get_mut(&plugin_id_owned)
-            .ok_or_else(|| OverthroneError::Plugin(format!("Plugin '{}' not loaded", plugin_id_owned)))?;
+        let plugin = self.plugins.get_mut(&plugin_id_owned).ok_or_else(|| {
+            OverthroneError::Plugin(format!("Plugin '{}' not loaded", plugin_id_owned))
+        })?;
 
         plugin.execute_command(command, args, ctx).await
     }
@@ -431,9 +431,10 @@ impl PluginRegistry {
             if manifest
                 .capabilities
                 .contains(&PluginCapability::EventHandler)
-                && let Err(e) = plugin.on_event(event, ctx).await {
-                    log::warn!("[plugin] Event handler error in '{}': {}", manifest.name, e);
-                }
+                && let Err(e) = plugin.on_event(event, ctx).await
+            {
+                log::warn!("[plugin] Event handler error in '{}': {}", manifest.name, e);
+            }
         }
     }
 
@@ -473,9 +474,10 @@ impl PluginRegistry {
     pub async fn shutdown_all(&mut self) {
         for id in self.load_order.iter().rev() {
             if let Some(plugin) = self.plugins.get(id)
-                && let Err(e) = plugin.shutdown().await {
-                    log::warn!("[plugin] Shutdown error for '{}': {}", id, e);
-                }
+                && let Err(e) = plugin.shutdown().await
+            {
+                log::warn!("[plugin] Shutdown error for '{}': {}", id, e);
+            }
         }
         self.plugins.clear();
         self.command_map.clear();

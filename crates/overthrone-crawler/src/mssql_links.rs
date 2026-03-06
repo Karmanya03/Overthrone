@@ -1,4 +1,4 @@
-﻿//! MSSQL linked server chain analysis.
+//! MSSQL linked server chain analysis.
 //!
 //! Groups MSSQL instances discovered by reaper and identifies
 //! potential cross-domain link chains based on SPN analysis.
@@ -61,14 +61,14 @@ impl MssqlLinkChain {
 /// Since we can't connect to SQL servers directly, we analyze SPNs
 /// to identify cross-domain MSSQL instances and group them by
 /// service account (same account = potential link chain).
-pub fn build_mssql_chains(
-    source_domain: &str,
-    instances: &[MssqlInstance],
-) -> Vec<MssqlLinkChain> {
+pub fn build_mssql_chains(source_domain: &str, instances: &[MssqlInstance]) -> Vec<MssqlLinkChain> {
     let mut chains = Vec::new();
     let source_upper = source_domain.to_uppercase();
 
-    info!("[mssql_links] Analyzing {} MSSQL instances for link chains", instances.len());
+    info!(
+        "[mssql_links] Analyzing {} MSSQL instances for link chains",
+        instances.len()
+    );
 
     if instances.is_empty() {
         return chains;
@@ -93,29 +93,30 @@ pub fn build_mssql_chains(
             if let Some(ref host) = inst.hostname {
                 let inst_domain = domain_from_hostname(host);
                 if let Some(ref dom) = inst_domain
-                    && dom.to_uppercase() != source_upper {
-                        chains.push(MssqlLinkChain {
-                            links: vec![MssqlLink {
-                                source_server: format!("(local {source_domain})"),
-                                source_domain: source_domain.to_string(),
-                                target_server: host.clone(),
-                                target_domain: Some(dom.clone()),
-                                link_login: LinkLoginType::Unknown,
-                                rpc_out_enabled: false,
-                            }],
-                            start_server: source_domain.to_string(),
-                            end_server: host.clone(),
-                            service_account: inst.service_account.clone(),
-                            crosses_domain: true,
-                            depth: 1,
-                            risk_level: "MEDIUM".into(),
-                            description: format!(
-                                "Cross-domain MSSQL: service account '{}' has SPN for {} (domain: {}). \
+                    && dom.to_uppercase() != source_upper
+                {
+                    chains.push(MssqlLinkChain {
+                        links: vec![MssqlLink {
+                            source_server: format!("(local {source_domain})"),
+                            source_domain: source_domain.to_string(),
+                            target_server: host.clone(),
+                            target_domain: Some(dom.clone()),
+                            link_login: LinkLoginType::Unknown,
+                            rpc_out_enabled: false,
+                        }],
+                        start_server: source_domain.to_string(),
+                        end_server: host.clone(),
+                        service_account: inst.service_account.clone(),
+                        crosses_domain: true,
+                        depth: 1,
+                        risk_level: "MEDIUM".into(),
+                        description: format!(
+                            "Cross-domain MSSQL: service account '{}' has SPN for {} (domain: {}). \
                                  If Kerberoasted, provides access across trust boundary.",
-                                inst.service_account, host, dom
-                            ),
-                        });
-                    }
+                            inst.service_account, host, dom
+                        ),
+                    });
+                }
             }
             continue;
         }
@@ -155,10 +156,12 @@ pub fn build_mssql_chains(
         }
 
         if !chain_links.is_empty() {
-            let start = sorted_instances.first()
+            let start = sorted_instances
+                .first()
                 .and_then(|i| i.hostname.clone())
                 .unwrap_or_default();
-            let end = sorted_instances.last()
+            let end = sorted_instances
+                .last()
                 .and_then(|i| i.hostname.clone())
                 .unwrap_or_default();
 
@@ -177,7 +180,11 @@ pub fn build_mssql_chains(
                     sorted_instances.len() - 1,
                     account_instances[0].service_account,
                     domains_seen.len(),
-                    if crosses_domain { " — CROSSES TRUST BOUNDARY" } else { "" }
+                    if crosses_domain {
+                        " — CROSSES TRUST BOUNDARY"
+                    } else {
+                        ""
+                    }
                 ),
             });
         }
@@ -186,7 +193,8 @@ pub fn build_mssql_chains(
     // Sort: cross-domain chains first
     chains.sort_by(|a, b| b.crosses_domain.cmp(&a.crosses_domain));
 
-    info!("[mssql_links] Found {} potential MSSQL chains ({} cross-domain)",
+    info!(
+        "[mssql_links] Found {} potential MSSQL chains ({} cross-domain)",
         chains.len(),
         chains.iter().filter(|c| c.crosses_domain).count()
     );
@@ -196,5 +204,9 @@ pub fn build_mssql_chains(
 
 fn domain_from_hostname(hostname: &str) -> Option<String> {
     let parts: Vec<&str> = hostname.splitn(2, '.').collect();
-    if parts.len() == 2 { Some(parts[1].to_string()) } else { None }
+    if parts.len() == 2 {
+        Some(parts[1].to_string())
+    } else {
+        None
+    }
 }

@@ -32,7 +32,7 @@ zstd.workspace = true
 
 # Protocols
 ldap3.workspace = true
-petgraph = { version = "0.7", features = ["serde-1"] }
+petgraph = { version = "0.8.3", features = ["serde-1"] }
 
 # Crypto (use workspace versions)
 aes.workspace = true

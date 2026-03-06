@@ -52,9 +52,7 @@ pub struct ShellConfig {
 /// Backend state held once connected
 enum ShellBackend {
     /// WinRM — stores credentials; each `execute` call delegates to `WinRmExecutor`
-    Winrm {
-        creds: ExecCredentials,
-    },
+    Winrm { creds: ExecCredentials },
     /// SMB — keeps a persistent `SmbSession` for command-per-service execution
     Smb {
         session: crate::proto::smb::SmbSession,
@@ -184,10 +182,13 @@ impl InteractiveShell {
     // ═══════════════════════════════════════════════════════
 
     fn require_creds(config: &ShellConfig) -> Result<&ExecCredentials> {
-        config.credentials.as_ref().ok_or_else(|| OverthroneError::Exec {
-            target: config.target.clone(),
-            reason: "Credentials required for connection".to_string(),
-        })
+        config
+            .credentials
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Exec {
+                target: config.target.clone(),
+                reason: "Credentials required for connection".to_string(),
+            })
     }
 
     // ═══════════════════════════════════════════════════════
@@ -228,7 +229,9 @@ impl InteractiveShell {
         let timeout = Duration::from_secs(5);
 
         let addr = format!("{}:{}", config.target, winrm_port);
-        if let Ok(Ok(_)) = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+        if let Ok(Ok(_)) =
+            tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await
+        {
             debug!("WinRM HTTP port (5985) is accessible");
             return Ok(());
         }

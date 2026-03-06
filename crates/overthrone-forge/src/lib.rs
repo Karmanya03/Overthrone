@@ -1,4 +1,4 @@
-﻿//! overthrone-forge — Kerberos ticket forging & persistence engine.
+//! overthrone-forge — Kerberos ticket forging & persistence engine.
 //!
 //! Forges Golden Tickets (krbtgt), Silver Tickets (service keys),
 //! Diamond Tickets (legitimate TGT modification), inter-realm TGTs,
@@ -36,4 +36,6 @@ pub mod skeleton;
 pub mod validate;
 
 pub use runner::{ForgeConfig, ForgeResult, run_forge};
-pub use shadow_credentials::{ShadowCredentialsConfig, ShadowCredentialsResult, execute as shadow_credentials_attack};
+pub use shadow_credentials::{
+    ShadowCredentialsConfig, ShadowCredentialsResult, execute as shadow_credentials_attack,
+};

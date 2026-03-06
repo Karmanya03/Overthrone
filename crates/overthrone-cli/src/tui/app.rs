@@ -157,9 +157,10 @@ impl App {
 
             // Attractive forces along edges
             for edge in graph.edges() {
-                if let (Some(&(x1, y1)), Some(&(x2, y2))) =
-                    (self.layout.get(&edge.source()), self.layout.get(&edge.target()))
-                {
+                if let (Some(&(x1, y1)), Some(&(x2, y2))) = (
+                    self.layout.get(&edge.source()),
+                    self.layout.get(&edge.target()),
+                ) {
                     let dx = x2 - x1;
                     let dy = y2 - y1;
                     let dist = (dx * dx + dy * dy).sqrt().max(0.1);

@@ -163,12 +163,12 @@ impl SmbSession {
         // Strategy 1: Try Windows LogonUser + impersonation
         #[cfg(windows)]
         {
-            use windows::core::PCWSTR;
             use windows::Win32::Foundation::{CloseHandle, HANDLE};
             use windows::Win32::Security::{
-                ImpersonateLoggedOnUser, LogonUserW, RevertToSelf,
-                LOGON32_LOGON_NEW_CREDENTIALS, LOGON32_PROVIDER_WINNT50,
+                ImpersonateLoggedOnUser, LOGON32_LOGON_NEW_CREDENTIALS, LOGON32_PROVIDER_WINNT50,
+                LogonUserW, RevertToSelf,
             };
+            use windows::core::PCWSTR;
 
             // Encode UTF-16 null-terminated strings
             let user_w: Vec<u16> = username.encode_utf16().chain(std::iter::once(0)).collect();
@@ -201,7 +201,9 @@ impl SmbSession {
                     }
                     return result;
                 }
-                unsafe { let _ = CloseHandle(token); }
+                unsafe {
+                    let _ = CloseHandle(token);
+                }
                 warn!("SMB: ImpersonateLoggedOnUser failed, falling back to hash-as-password");
             } else {
                 warn!("SMB: LogonUserW failed for PTH, falling back to hash-as-password");
@@ -657,7 +659,9 @@ impl SmbSession {
                 info!("SMB: Authenticated via cached Kerberos ticket to \\\\{target}");
             }
             Err(e) => {
-                debug!("SMB: SSPI with cached ticket did not succeed ({e}), falling back to session-key auth");
+                debug!(
+                    "SMB: SSPI with cached ticket did not succeed ({e}), falling back to session-key auth"
+                );
                 // Attempt 2: Use session key hex as pass-the-hash
                 let session_key_hex = hex::encode(&ticket.session_key);
                 client
@@ -691,7 +695,7 @@ impl SmbSession {
     #[cfg(windows)]
     fn inject_ticket_windows(ticket: &KerberosTicket) -> Result<()> {
         use std::ffi::c_void;
-        
+
         use windows::Win32::Security::Authentication::Identity::{
             LsaCallAuthenticationPackage, LsaConnectUntrusted, LsaDeregisterLogonProcess,
             LsaLookupAuthenticationPackage,
@@ -1065,7 +1069,7 @@ impl SmbSession {
 
     pub async fn connect_share(&self, share: &str) -> Result<()> {
         let share_path = format!(r"\\{}\{}", self.target, share);
-        let mut conn = self.inner.lock().await;
+        let conn = self.inner.lock().await;
         let _tree_id = conn.tree_connect(&share_path).await?;
         debug!("SMB: Connected to \\\\{}\\{}", self.target, share);
         Ok(())
@@ -1082,17 +1086,14 @@ impl SmbSession {
             return false;
         }
         let share_path = format!(r"\\{}\{}", self.target, share);
-        let mut conn = self.inner.lock().await;
-        let tree_id = match conn.tree_connect(&share_path).await {
+        let conn = self.inner.lock().await;
+        let _tree_id = match conn.tree_connect(&share_path).await {
             Ok(id) => id,
             Err(_) => return false,
         };
         let test_file = format!("__overthrone_test_{}.tmp", rand::random::<u32>());
         // Try to create, write, and delete a test file
-        match conn
-            .open_file_write(&test_file)
-            .await
-        {
+        match conn.open_file_write(&test_file).await {
             Ok(fid) => {
                 let _ = conn.write(&fid, 0, b"x").await;
                 let _ = conn.close(&fid).await;
@@ -1159,7 +1160,7 @@ impl SmbSession {
         );
 
         let share_path = format!(r"\\{}\{}", self.target, share);
-        let mut conn = self.inner.lock().await;
+        let conn = self.inner.lock().await;
         let _tree_id = conn.tree_connect(&share_path).await?;
 
         let dir_path = remote_path.replace('/', "\\");
@@ -1196,7 +1197,7 @@ impl SmbSession {
         );
 
         let share_path = format!(r"\\{}\{}", self.target, share);
-        let mut conn = self.inner.lock().await;
+        let conn = self.inner.lock().await;
         let _tree_id = conn.tree_connect(&share_path).await?;
 
         let file_path = remote_path.replace('/', "\\");
@@ -1216,7 +1217,7 @@ impl SmbSession {
         );
 
         let share_path = format!(r"\\{}\{}", self.target, share);
-        let mut conn = self.inner.lock().await;
+        let conn = self.inner.lock().await;
         let _tree_id = conn.tree_connect(&share_path).await?;
 
         let file_path = remote_path.replace('/', "\\");
@@ -1235,7 +1236,7 @@ impl SmbSession {
         );
 
         let share_path = format!(r"\\{}\{}", self.target, share);
-        let mut conn = self.inner.lock().await;
+        let conn = self.inner.lock().await;
         let _tree_id = conn.tree_connect(&share_path).await?;
 
         let file_path = remote_path.replace('/', "\\");
@@ -1289,12 +1290,10 @@ impl SmbSession {
         );
 
         let ipc_path = format!(r"\\{}\IPC$", self.target);
-        let mut conn = self.inner.lock().await;
+        let conn = self.inner.lock().await;
         let _tree_id = conn.tree_connect(&ipc_path).await?;
 
-        let name = pipe_name
-            .trim_start_matches('/')
-            .trim_start_matches('\\');
+        let name = pipe_name.trim_start_matches('/').trim_start_matches('\\');
 
         let fid = conn.open_pipe(name).await?;
         let response = conn.ioctl_pipe_transceive(&fid, request).await?;

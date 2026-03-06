@@ -1,4 +1,4 @@
-﻿//! HMAC utilities for ticket validation and protocol authentication.
+//! HMAC utilities for ticket validation and protocol authentication.
 //!
 //! Centralised HMAC helpers used across Kerberos ticket forging (PAC checksums),
 //! NTLMSSP session key derivation, and domain credential validation.
@@ -11,8 +11,7 @@ use sha1::Sha1;
 ///
 /// Returns a 16-byte MAC.
 pub fn hmac_md5(key: &[u8], data: &[u8]) -> [u8; 16] {
-    let mut mac =
-        Hmac::<Md5>::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
+    let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut out = [0u8; 16];
@@ -22,8 +21,7 @@ pub fn hmac_md5(key: &[u8], data: &[u8]) -> [u8; 16] {
 
 /// HMAC-MD5 with multiple data segments (avoids concatenation allocation).
 pub fn hmac_md5_multi(key: &[u8], parts: &[&[u8]]) -> [u8; 16] {
-    let mut mac =
-        Hmac::<Md5>::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
+    let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
     for part in parts {
         mac.update(part);
     }
@@ -35,8 +33,7 @@ pub fn hmac_md5_multi(key: &[u8], parts: &[&[u8]]) -> [u8; 16] {
 
 /// HMAC-SHA1: full 20-byte keyed hash.
 pub fn hmac_sha1(key: &[u8], data: &[u8]) -> [u8; 20] {
-    let mut mac =
-        Hmac::<Sha1>::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
+    let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut out = [0u8; 20];
@@ -59,8 +56,7 @@ pub fn hmac_sha1_96_aes(key: &[u8], data: &[u8]) -> [u8; 12] {
 
 /// HMAC-SHA1 with multiple data segments.
 pub fn hmac_sha1_multi(key: &[u8], parts: &[&[u8]]) -> [u8; 20] {
-    let mut mac =
-        Hmac::<Sha1>::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
+    let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
     for part in parts {
         mac.update(part);
     }
@@ -139,10 +135,7 @@ mod tests {
         let key = [0x0bu8; 16];
         let data = b"Hi There";
         let result = hmac_md5(&key, data);
-        assert_eq!(
-            hex::encode(result),
-            "9294727a3638bb1c13f48ef8158bfc9d"
-        );
+        assert_eq!(hex::encode(result), "9294727a3638bb1c13f48ef8158bfc9d");
     }
 
     #[test]

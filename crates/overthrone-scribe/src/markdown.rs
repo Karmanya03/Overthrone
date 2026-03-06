@@ -1,4 +1,4 @@
-﻿//! Markdown report renderer — Produces a complete pentest report
+//! Markdown report renderer — Produces a complete pentest report
 //! in Markdown format suitable for conversion to HTML/PDF or
 //! direct rendering in documentation platforms.
 
@@ -82,11 +82,20 @@ pub fn render(session: &EngagementSession) -> String {
 
 fn render_title_page(md: &mut String, session: &EngagementSession) {
     md.push_str(&format!("# {}\n\n", session.title));
-    md.push_str(&format!("**Classification:** {}\n\n", session.classification));
+    md.push_str(&format!(
+        "**Classification:** {}\n\n",
+        session.classification
+    ));
     md.push_str("| | |\n|---|---|\n");
     md.push_str(&format!("| **Client** | {} |\n", session.client_name));
-    md.push_str(&format!("| **Assessor** | {} ({}) |\n", session.assessor_name, session.assessor_company));
-    md.push_str(&format!("| **Engagement Type** | {} |\n", session.engagement_type));
+    md.push_str(&format!(
+        "| **Assessor** | {} ({}) |\n",
+        session.assessor_name, session.assessor_company
+    ));
+    md.push_str(&format!(
+        "| **Engagement Type** | {} |\n",
+        session.engagement_type
+    ));
     md.push_str(&format!(
         "| **Assessment Period** | {} — {} |\n",
         session.started_at.format("%Y-%m-%d"),
@@ -212,7 +221,11 @@ fn render_finding(md: &mut String, finding: &Finding, num: usize) {
             let display = if ev.content_type == EvidenceType::Credential {
                 "[REDACTED — see secure appendix]".to_string()
             } else if ev.content.len() > 500 {
-                format!("{}…\n\n*(truncated — {} total characters)*", &ev.content[..500], ev.content.len())
+                format!(
+                    "{}…\n\n*(truncated — {} total characters)*",
+                    &ev.content[..500],
+                    ev.content.len()
+                )
             } else {
                 ev.content.clone()
             };
@@ -265,11 +278,9 @@ fn render_mitre_matrix(md: &mut String, session: &EngagementSession) {
     for (tactic, techniques) in &matrix {
         let techs: Vec<String> = techniques
             .iter()
-            .map(|t| {
-                match &t.sub_technique_id {
-                    Some(sub) => format!("{}/{} ({})", t.technique_id, sub, t.technique_name),
-                    None => format!("{} ({})", t.technique_id, t.technique_name),
-                }
+            .map(|t| match &t.sub_technique_id {
+                Some(sub) => format!("{}/{} ({})", t.technique_id, sub, t.technique_name),
+                None => format!("{} ({})", t.technique_id, t.technique_name),
             })
             .collect();
         md.push_str(&format!("| **{}** | {} |\n", tactic, techs.join(", ")));

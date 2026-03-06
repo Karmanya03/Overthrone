@@ -1,4 +1,4 @@
-﻿//! Cleanup and opsec utilities for the forge pipeline.
+//! Cleanup and opsec utilities for the forge pipeline.
 //!
 //! Provides functions to:
 //! - Securely wipe forged tickets from disk
@@ -25,39 +25,41 @@ pub fn secure_delete_ticket(path: &str) -> Result<()> {
     }
 
     // Read file size
-    let metadata = std::fs::metadata(file_path).map_err(|e| {
-        OverthroneError::Custom(format!("Cannot stat '{}': {}", path, e))
-    })?;
+    let metadata = std::fs::metadata(file_path)
+        .map_err(|e| OverthroneError::Custom(format!("Cannot stat '{}': {}", path, e)))?;
     let size = metadata.len() as usize;
 
     // Overwrite with random data (3 passes)
     for pass in 0..3 {
         let random_data: Vec<u8> = (0..size).map(|_| rand::random::<u8>()).collect();
         std::fs::write(file_path, &random_data).map_err(|e| {
-            OverthroneError::Custom(format!("Overwrite pass {} failed for '{}': {}", pass, path, e))
+            OverthroneError::Custom(format!(
+                "Overwrite pass {} failed for '{}': {}",
+                pass, path, e
+            ))
         })?;
         // Force flush to disk
         let file = std::fs::OpenOptions::new()
             .write(true)
             .open(file_path)
             .map_err(|e| OverthroneError::Custom(format!("Cannot open for sync: {e}")))?;
-        file.sync_all().map_err(|e| {
-            OverthroneError::Custom(format!("Sync failed: {e}"))
-        })?;
+        file.sync_all()
+            .map_err(|e| OverthroneError::Custom(format!("Sync failed: {e}")))?;
     }
 
     // Zero-fill final pass
     let zeros = vec![0u8; size];
-    std::fs::write(file_path, &zeros).map_err(|e| {
-        OverthroneError::Custom(format!("Zero-fill failed: {e}"))
-    })?;
+    std::fs::write(file_path, &zeros)
+        .map_err(|e| OverthroneError::Custom(format!("Zero-fill failed: {e}")))?;
 
     // Delete the file
-    std::fs::remove_file(file_path).map_err(|e| {
-        OverthroneError::Custom(format!("Cannot remove '{}': {}", path, e))
-    })?;
+    std::fs::remove_file(file_path)
+        .map_err(|e| OverthroneError::Custom(format!("Cannot remove '{}': {}", path, e)))?;
 
-    info!("[cleanup] Securely deleted: {} ({} bytes, 4 passes)", path, size);
+    info!(
+        "[cleanup] Securely deleted: {} ({} bytes, 4 passes)",
+        path, size
+    );
     Ok(())
 }
 
@@ -66,27 +68,27 @@ pub fn cleanup_ticket_directory(dir: &str) -> Result<usize> {
     let dir_path = Path::new(dir);
     if !dir_path.is_dir() {
         return Err(OverthroneError::Custom(format!(
-            "'{}' is not a directory", dir
+            "'{}' is not a directory",
+            dir
         )));
     }
 
     let mut cleaned = 0;
     let extensions = ["kirbi", "ccache", "ticket"];
 
-    for entry in std::fs::read_dir(dir_path).map_err(|e| {
-        OverthroneError::Custom(format!("Cannot read dir '{}': {}", dir, e))
-    })? {
-        let entry = entry.map_err(|e| {
-            OverthroneError::Custom(format!("Dir entry error: {e}"))
-        })?;
+    for entry in std::fs::read_dir(dir_path)
+        .map_err(|e| OverthroneError::Custom(format!("Cannot read dir '{}': {}", dir, e)))?
+    {
+        let entry = entry.map_err(|e| OverthroneError::Custom(format!("Dir entry error: {e}")))?;
 
         let path = entry.path();
         if let Some(ext) = path.extension()
-            && extensions.iter().any(|&e| ext == e) {
-                let path_str = path.to_string_lossy().to_string();
-                secure_delete_ticket(&path_str)?;
-                cleaned += 1;
-            }
+            && extensions.iter().any(|&e| ext == e)
+        {
+            let path_str = path.to_string_lossy().to_string();
+            secure_delete_ticket(&path_str)?;
+            cleaned += 1;
+        }
     }
 
     info!("[cleanup] Cleaned {} ticket files from {}", cleaned, dir);
@@ -131,18 +133,20 @@ pub fn generate_cleanup_plan(result: &ForgeResult) -> CleanupPlan {
 
     // Persistence-specific cleanup
     if let Some(ref persistence) = result.persistence_result
-        && let Some(ref cmd) = persistence.cleanup_command {
-            steps.push(CleanupStep {
-                order: 10,
-                category: CleanupCategory::RemotePersistence,
-                description: format!("Remove {} from {}", persistence.mechanism, persistence.target),
-                command: Some(cmd.clone()),
-                risk_if_skipped: format!(
-                    "Persistent backdoor remains: {}", persistence.mechanism
-                ),
-                automated: false,
-            });
-        }
+        && let Some(ref cmd) = persistence.cleanup_command
+    {
+        steps.push(CleanupStep {
+            order: 10,
+            category: CleanupCategory::RemotePersistence,
+            description: format!(
+                "Remove {} from {}",
+                persistence.mechanism, persistence.target
+            ),
+            command: Some(cmd.clone()),
+            risk_if_skipped: format!("Persistent backdoor remains: {}", persistence.mechanism),
+            automated: false,
+        });
+    }
 
     // Environment cleanup
     steps.push(CleanupStep {
@@ -150,7 +154,7 @@ pub fn generate_cleanup_plan(result: &ForgeResult) -> CleanupPlan {
         category: CleanupCategory::Environment,
         description: "Clear Kerberos ticket cache".into(),
         command: Some(
-            "# Linux:\nkdestroy -A\n\n# Windows:\nklist purge\n\n# macOS:\nkdestroy -A".into()
+            "# Linux:\nkdestroy -A\n\n# Windows:\nklist purge\n\n# macOS:\nkdestroy -A".into(),
         ),
         risk_if_skipped: "Forged tickets remain in memory".into(),
         automated: true,
@@ -174,9 +178,7 @@ pub fn generate_cleanup_plan(result: &ForgeResult) -> CleanupPlan {
         order: 22,
         category: CleanupCategory::Environment,
         description: "Remove environment variables with credentials".into(),
-        command: Some(
-            "unset KRB5CCNAME\nunset NTLM_HASH\nunset KRBTGT_KEY".into()
-        ),
+        command: Some("unset KRB5CCNAME\nunset NTLM_HASH\nunset KRBTGT_KEY".into()),
         risk_if_skipped: "Credentials in environment variables".into(),
         automated: true,
     });
@@ -210,27 +212,28 @@ pub fn execute_cleanup_plan(plan: &CleanupPlan) -> Result<CleanupReport> {
             CleanupCategory::LocalFile => {
                 // Extract file path from description and attempt deletion
                 if let Some(ref cmd) = step.command
-                    && cmd.contains("secure_delete_ticket") {
-                        // Parse path from command
-                        if let Some(path) = extract_path_from_cleanup_cmd(cmd) {
-                            match secure_delete_ticket(&path) {
-                                Ok(()) => {
-                                    completed.push(CleanupStepResult {
-                                        step: step.description.clone(),
-                                        status: StepStatus::Completed,
-                                        message: "File securely deleted".into(),
-                                    });
-                                }
-                                Err(e) => {
-                                    failed.push(CleanupStepResult {
-                                        step: step.description.clone(),
-                                        status: StepStatus::Failed,
-                                        message: format!("Delete failed: {e}"),
-                                    });
-                                }
+                    && cmd.contains("secure_delete_ticket")
+                {
+                    // Parse path from command
+                    if let Some(path) = extract_path_from_cleanup_cmd(cmd) {
+                        match secure_delete_ticket(&path) {
+                            Ok(()) => {
+                                completed.push(CleanupStepResult {
+                                    step: step.description.clone(),
+                                    status: StepStatus::Completed,
+                                    message: "File securely deleted".into(),
+                                });
+                            }
+                            Err(e) => {
+                                failed.push(CleanupStepResult {
+                                    step: step.description.clone(),
+                                    status: StepStatus::Failed,
+                                    message: format!("Delete failed: {e}"),
+                                });
                             }
                         }
                     }
+                }
             }
             CleanupCategory::Environment => {
                 // Clear KRB5CCNAME env var
@@ -258,7 +261,10 @@ pub fn execute_cleanup_plan(plan: &CleanupPlan) -> Result<CleanupReport> {
     let total = completed.len() + failed.len() + skipped.len();
     info!(
         "[cleanup] Results: {}/{} completed, {} failed, {} skipped",
-        completed.len(), total, failed.len(), skipped.len()
+        completed.len(),
+        total,
+        failed.len(),
+        skipped.len()
     );
 
     Ok(CleanupReport {
@@ -349,13 +355,11 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
         ForgeAction::InterRealmTgt { .. } => DetectionAssessment {
             overall_risk: RiskLevel::Medium,
             description: "Inter-realm TGT is moderate risk — cross-domain traffic is logged".into(),
-            indicators: vec![
-                DetectionIndicator {
-                    source: "Event ID 4769".into(),
-                    detail: "Cross-realm TGS request with unusual SID history".into(),
-                    severity: RiskLevel::Medium,
-                },
-            ],
+            indicators: vec![DetectionIndicator {
+                source: "Event ID 4769".into(),
+                detail: "Cross-realm TGS request with unusual SID history".into(),
+                severity: RiskLevel::Medium,
+            }],
             mitigations: vec![
                 "SID filtering may block ExtraSIDs — check trust configuration".into(),
                 "Use a trust key obtained through legitimate compromise".into(),
@@ -405,14 +409,13 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
 
         ForgeAction::DcSyncUser { .. } => DetectionAssessment {
             overall_risk: RiskLevel::Medium,
-            description: "DCSync replication is logged — but looks like normal DC replication".into(),
-            indicators: vec![
-                DetectionIndicator {
-                    source: "Event ID 4662".into(),
-                    detail: "Replicating Directory Changes All from non-DC source".into(),
-                    severity: RiskLevel::High,
-                },
-            ],
+            description: "DCSync replication is logged — but looks like normal DC replication"
+                .into(),
+            indicators: vec![DetectionIndicator {
+                source: "Event ID 4662".into(),
+                detail: "Replicating Directory Changes All from non-DC source".into(),
+                severity: RiskLevel::High,
+            }],
             mitigations: vec![
                 "Perform from a machine with a DC-like hostname".into(),
                 "Limit to specific users rather than full domain dump".into(),
@@ -535,9 +538,10 @@ impl std::fmt::Display for RiskLevel {
 fn extract_path_from_cleanup_cmd(cmd: &str) -> Option<String> {
     // Parse: secure_delete_ticket("some/path.kirbi")
     if let Some(start) = cmd.find('"')
-        && let Some(end) = cmd[start + 1..].find('"') {
-            return Some(cmd[start + 1..start + 1 + end].to_string());
-        }
+        && let Some(end) = cmd[start + 1..].find('"')
+    {
+        return Some(cmd[start + 1..start + 1 + end].to_string());
+    }
     None
 }
 

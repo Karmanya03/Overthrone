@@ -407,33 +407,33 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 "!".yellow().bold()
             );
         } else {
-        match overthrone_core::proto::ldap::LdapSession::connect(
-            &ctx.dc_ip,
-            &ctx.domain,
-            &ctx.username,
-            &ctx.secret,
-            ctx.use_ldaps,
-        )
-        .await
-        {
-            Ok(mut session) => {
-                println!(
-                    "  {} LDAP bind OK ({})",
-                    "✓".green().bold(),
-                    session.bind_type
-                );
-                let _ = session.disconnect().await;
-            }
-            Err(e) => {
-                println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
-                println!(
-                    "  {} LDAP-dependent enumeration steps will be skipped. \
+            match overthrone_core::proto::ldap::LdapSession::connect(
+                &ctx.dc_ip,
+                &ctx.domain,
+                &ctx.username,
+                &ctx.secret,
+                ctx.use_ldaps,
+            )
+            .await
+            {
+                Ok(mut session) => {
+                    println!(
+                        "  {} LDAP bind OK ({})",
+                        "✓".green().bold(),
+                        session.bind_type
+                    );
+                    let _ = session.disconnect().await;
+                }
+                Err(e) => {
+                    println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
+                    println!(
+                        "  {} LDAP-dependent enumeration steps will be skipped. \
                      Kerberos and SMB operations will still be attempted.",
-                    "!".yellow().bold()
-                );
-                ctx.ldap_available = false;
+                        "!".yellow().bold()
+                    );
+                    ctx.ldap_available = false;
+                }
             }
-        }
         } // end else (non-PtH LDAP pre-flight)
     }
 
@@ -478,8 +478,14 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             if current_stage.is_some() {
                 print_kill_chain_pipeline(current_stage, &stage_stats);
             }
-            let steps_in_stage = plan.steps.iter().filter(|s| s.stage == step.stage && !s.executed).count();
-            let noise_in_stage = plan.steps.iter()
+            let steps_in_stage = plan
+                .steps
+                .iter()
+                .filter(|s| s.stage == step.stage && !s.executed)
+                .count();
+            let noise_in_stage = plan
+                .steps
+                .iter()
                 .filter(|s| s.stage == step.stage)
                 .map(|s| s.noise)
                 .max()
@@ -529,7 +535,11 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                         String::new()
                     },
                     if result.new_admin_hosts > 0 {
-                        format!("{}+{} hosts", if result.new_credentials > 0 { "  " } else { "" }, result.new_admin_hosts)
+                        format!(
+                            "{}+{} hosts",
+                            if result.new_credentials > 0 { "  " } else { "" },
+                            result.new_admin_hosts
+                        )
                     } else {
                         String::new()
                     },
@@ -739,12 +749,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
 
             AdaptiveDecision::Abort { reason } => {
-                println!(
-                    "\n  {} {} {}",
-                    "└─".dimmed(),
-                    "ABORT:".red().bold(),
-                    reason,
-                );
+                println!("\n  {} {} {}", "└─".dimmed(), "ABORT:".red().bold(), reason,);
                 break 'main;
             }
 
@@ -984,7 +989,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
     // ─── 9. Audit trail (last 20) ───
     if !state.action_log.is_empty() {
-        println!("\n  {}", "AUDIT TRAIL (last 20)".bold().underline().dimmed());
+        println!(
+            "\n  {}",
+            "AUDIT TRAIL (last 20)".bold().underline().dimmed()
+        );
         let start = if state.action_log.len() > 20 {
             state.action_log.len() - 20
         } else {
@@ -1047,18 +1055,22 @@ fn print_stage_banner(stage: Stage, step_count: usize, noise: crate::planner::No
         icon, stage, step_count, noise,
     );
     let width = 56;
-    let pad = if inner.len() < width { width - inner.len() } else { 0 };
+    let pad = if inner.len() < width {
+        width - inner.len()
+    } else {
+        0
+    };
     println!();
     println!("  {}", color_fn(format!("╔{}╗", "═".repeat(width))).bold());
-    println!("  {}", color_fn(format!("║{}{}║", inner, " ".repeat(pad))).bold());
+    println!(
+        "  {}",
+        color_fn(format!("║{}{}║", inner, " ".repeat(pad))).bold()
+    );
     println!("  {}", color_fn(format!("╚{}╝", "═".repeat(width))).bold());
 }
 
 /// Print live kill-chain pipeline showing stage completion status.
-fn print_kill_chain_pipeline(
-    current: Option<Stage>,
-    stats: &HashMap<Stage, (usize, usize)>,
-) {
+fn print_kill_chain_pipeline(current: Option<Stage>, stats: &HashMap<Stage, (usize, usize)>) {
     let stages = [
         Stage::Enumerate,
         Stage::Attack,
@@ -1152,11 +1164,7 @@ fn resolve_playbook_step(
                 controlled.clone()
             };
             let tgt = if target.is_empty() {
-                state
-                    .rbcd_targets
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
+                state.rbcd_targets.first().cloned().unwrap_or_default()
             } else {
                 target.clone()
             };
@@ -1215,18 +1223,23 @@ fn resolve_playbook_step(
         }
         // Fill in coerce targets
         PlannedAction::Coerce { target, listener } if target.is_empty() => {
-            let dc = state
-                .dc_ip
-                .clone()
-                .unwrap_or_else(|| ctx.dc_ip.clone());
+            let dc = state.dc_ip.clone().unwrap_or_else(|| ctx.dc_ip.clone());
             let unconstrained = state
                 .unconstrained_delegation
                 .first()
                 .cloned()
                 .unwrap_or_default();
             PlannedAction::Coerce {
-                target: if target.is_empty() { dc } else { target.clone() },
-                listener: if listener.is_empty() { unconstrained } else { listener.clone() },
+                target: if target.is_empty() {
+                    dc
+                } else {
+                    target.clone()
+                },
+                listener: if listener.is_empty() {
+                    unconstrained
+                } else {
+                    listener.clone()
+                },
             }
         }
         // Everything else passes through unchanged

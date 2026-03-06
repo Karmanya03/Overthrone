@@ -6,12 +6,12 @@
 use crate::error::{OverthroneError, Result};
 use base64::Engine;
 use rsa::{
-    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
     Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey,
+    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
 };
 use sha2::{Digest, Sha256};
-use yasna::models::ObjectIdentifier;
 use yasna::Tag;
+use yasna::models::ObjectIdentifier;
 
 // ═══════════════════════════════════════════════════════════
 // RSA Key Pair
@@ -29,8 +29,9 @@ impl RsaKeyPair {
     pub fn generate(key_size: usize) -> Result<Self> {
         let mut rng = rsa::rand_core::OsRng;
 
-        let private_key = RsaPrivateKey::new(&mut rng, key_size)
-            .map_err(|e| OverthroneError::Encryption(format!("RSA key generation failed: {}", e)))?;
+        let private_key = RsaPrivateKey::new(&mut rng, key_size).map_err(|e| {
+            OverthroneError::Encryption(format!("RSA key generation failed: {}", e))
+        })?;
 
         let public_key = private_key.to_public_key();
 
@@ -51,17 +52,17 @@ impl RsaKeyPair {
 
     /// Get private key in PKCS#8 DER format
     pub fn private_key_der(&self) -> Result<Vec<u8>> {
-        let doc = self.private_key
-            .to_pkcs8_der()
-            .map_err(|e| OverthroneError::Encryption(format!("PKCS#8 DER encoding failed: {}", e)))?;
+        let doc = self.private_key.to_pkcs8_der().map_err(|e| {
+            OverthroneError::Encryption(format!("PKCS#8 DER encoding failed: {}", e))
+        })?;
         Ok(doc.as_bytes().to_vec())
     }
 
     /// Get public key in DER format (for CSR)
     pub fn public_key_der(&self) -> Result<Vec<u8>> {
-        let doc = self.public_key
-            .to_public_key_der()
-            .map_err(|e| OverthroneError::Encryption(format!("Public key DER encoding failed: {}", e)))?;
+        let doc = self.public_key.to_public_key_der().map_err(|e| {
+            OverthroneError::Encryption(format!("Public key DER encoding failed: {}", e))
+        })?;
         Ok(doc.to_vec())
     }
 }
@@ -226,12 +227,16 @@ impl CertificateSigningRequest {
 
                 // SignatureAlgorithm
                 writer.next().write_sequence(|writer| {
-                    writer.next().write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 1, 11])); // sha256WithRSA
+                    writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                        1, 2, 840, 113549, 1, 1, 11,
+                    ])); // sha256WithRSA
                     writer.next().write_null();
                 });
 
                 // Signature
-                writer.next().write_bitvec_bytes(&signature, signature.len() * 8);
+                writer
+                    .next()
+                    .write_bitvec_bytes(&signature, signature.len() * 8);
             });
         });
 
@@ -250,7 +255,9 @@ impl CertificateSigningRequest {
                     if let Some(ref cn) = self.subject.common_name {
                         writer.next().write_set(|writer| {
                             writer.next().write_sequence(|writer| {
-                                writer.next().write_oid(&ObjectIdentifier::from_slice(&[2, 5, 4, 3])); // CN
+                                writer
+                                    .next()
+                                    .write_oid(&ObjectIdentifier::from_slice(&[2, 5, 4, 3])); // CN
                                 writer.next().write_utf8_string(cn);
                             });
                         });
@@ -260,7 +267,9 @@ impl CertificateSigningRequest {
                 // subjectPKInfo
                 writer.next().write_sequence(|writer| {
                     writer.next().write_sequence(|writer| {
-                        writer.next().write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 1, 1])); // RSA
+                        writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                            1, 2, 840, 113549, 1, 1, 1,
+                        ])); // RSA
                         writer.next().write_null();
                     });
                     let pk_der = self.key_pair.public_key_der().unwrap_or_default();
@@ -274,7 +283,9 @@ impl CertificateSigningRequest {
                         if self.san.is_some() || self.eku.is_some() {
                             writer.next().write_sequence(|writer| {
                                 // extensionRequest OID
-                                writer.next().write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 9, 14]));
+                                writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                    1, 2, 840, 113549, 1, 9, 14,
+                                ]));
                                 writer.next().write_set(|writer| {
                                     // Build extensions
                                     let ext_der = self.build_extensions();
@@ -286,7 +297,9 @@ impl CertificateSigningRequest {
                         // Template attribute
                         if let Some(ref template) = self.template {
                             writer.next().write_sequence(|writer| {
-                                writer.next().write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 113549, 1, 9, 7]));
+                                writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                    1, 2, 840, 113549, 1, 9, 7,
+                                ]));
                                 writer.next().write_set(|writer| {
                                     writer.next().write_utf8_string(template);
                                 });
@@ -305,7 +318,9 @@ impl CertificateSigningRequest {
                 // SAN extension
                 if let Some(ref san) = self.san {
                     writer.next().write_sequence(|writer| {
-                        writer.next().write_oid(&ObjectIdentifier::from_slice(&[2, 5, 29, 17])); // san
+                        writer
+                            .next()
+                            .write_oid(&ObjectIdentifier::from_slice(&[2, 5, 29, 17])); // san
                         writer.next().write_bool(true); // critical
                         let san_der = self.build_san(san);
                         writer.next().write_bytes(&san_der);
@@ -315,7 +330,9 @@ impl CertificateSigningRequest {
                 // EKU extension
                 if let Some(ref eku) = self.eku {
                     writer.next().write_sequence(|writer| {
-                        writer.next().write_oid(&ObjectIdentifier::from_slice(&[2, 5, 29, 37])); // eku
+                        writer
+                            .next()
+                            .write_oid(&ObjectIdentifier::from_slice(&[2, 5, 29, 37])); // eku
                         let eku_der = yasna::construct_der(|w| {
                             w.write_sequence(|writer| {
                                 for purpose in &eku.purposes {
@@ -349,7 +366,9 @@ impl CertificateSigningRequest {
                         SanEntry::Upn(upn) => {
                             writer.next().write_tagged(Tag::context(0), |writer| {
                                 writer.write_sequence(|writer| {
-                                    writer.next().write_oid(&ObjectIdentifier::from_slice(&[1, 3, 6, 1, 4, 1, 311, 20, 2, 3]));
+                                    writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                        1, 3, 6, 1, 4, 1, 311, 20, 2, 3,
+                                    ]));
                                     writer.next().write_tagged(Tag::context(0), |writer| {
                                         writer.write_utf8_string(upn);
                                     });
@@ -370,7 +389,9 @@ impl CertificateSigningRequest {
         let hash = hasher.finalize();
 
         // Sign with PKCS#1 v1.5 using unprefixed hash
-        let signature = self.key_pair.private_key
+        let signature = self
+            .key_pair
+            .private_key
             .sign(Pkcs1v15Sign::new_unprefixed(), &hash)
             .map_err(|e| OverthroneError::Encryption(format!("Signing failed: {}", e)))?;
 
@@ -382,7 +403,8 @@ impl CertificateSigningRequest {
         let der = self.to_der()?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&der);
 
-        let lines: Vec<&str> = b64.as_bytes()
+        let lines: Vec<&str> = b64
+            .as_bytes()
             .chunks(64)
             .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
             .collect();
@@ -498,11 +520,7 @@ mod tests {
 
     #[test]
     fn test_esc1_csr() {
-        let result = create_esc1_csr(
-            "attack-machine",
-            "administrator@corp.local",
-            "User",
-        );
+        let result = create_esc1_csr("attack-machine", "administrator@corp.local", "User");
 
         assert!(result.is_ok());
         let (der, private_key) = result.unwrap();

@@ -1,4 +1,4 @@
-﻿//! Attack path graph engine for Active Directory environments.
+//! Attack path graph engine for Active Directory environments.
 //!
 //! Models AD objects (users, computers, groups, domains) as nodes and
 //! relationships (MemberOf, AdminTo, HasSession, etc.) as directed edges.
@@ -1249,15 +1249,19 @@ impl AttackGraph {
     }
 
     /// Get edges originating from a node
-    pub fn edges_from(&self, node: NodeIndex) -> impl Iterator<Item = petgraph::graph::EdgeReference<'_, EdgeType>> + '_ {
-        self.graph
-            .edges_directed(node, Direction::Outgoing)
+    pub fn edges_from(
+        &self,
+        node: NodeIndex,
+    ) -> impl Iterator<Item = petgraph::graph::EdgeReference<'_, EdgeType>> + '_ {
+        self.graph.edges_directed(node, Direction::Outgoing)
     }
 
     /// Get edges pointing to a node
-    pub fn edges_to(&self, node: NodeIndex) -> impl Iterator<Item = petgraph::graph::EdgeReference<'_, EdgeType>> + '_ {
-        self.graph
-            .edges_directed(node, Direction::Incoming)
+    pub fn edges_to(
+        &self,
+        node: NodeIndex,
+    ) -> impl Iterator<Item = petgraph::graph::EdgeReference<'_, EdgeType>> + '_ {
+        self.graph.edges_directed(node, Direction::Incoming)
     }
 
     /// Get an edge by its EdgeIndex
@@ -1266,7 +1270,10 @@ impl AttackGraph {
     }
 
     /// Get nodes of a specific type
-    pub fn nodes_of_type(&self, node_type: NodeType) -> impl Iterator<Item = (NodeIndex, &AdNode)> + '_ {
+    pub fn nodes_of_type(
+        &self,
+        node_type: NodeType,
+    ) -> impl Iterator<Item = (NodeIndex, &AdNode)> + '_ {
         self.nodes()
             .filter(move |(_, node)| node.node_type == node_type)
     }
@@ -1276,9 +1283,12 @@ impl AttackGraph {
         self.nodes()
             .filter(|(_, node)| {
                 // High-value targets: Domain Admins, Enterprise Admins, etc.
-                node.name.to_lowercase().contains("admin") ||
-                node.name.to_lowercase().contains("domain") ||
-                node.properties.get("high_value").is_some_and(|v| v == "true")
+                node.name.to_lowercase().contains("admin")
+                    || node.name.to_lowercase().contains("domain")
+                    || node
+                        .properties
+                        .get("high_value")
+                        .is_some_and(|v| v == "true")
             })
             .count()
     }
@@ -1305,21 +1315,17 @@ impl AttackGraph {
         let reversed = petgraph::visit::Reversed(&self.graph);
 
         // Run Dijkstra from target on the reversed graph
-        let costs: std::collections::HashMap<NodeIndex, u32> = dijkstra(
-            &reversed,
-            target,
-            None,
-            |e| {
+        let costs: std::collections::HashMap<NodeIndex, u32> =
+            dijkstra(&reversed, target, None, |e| {
                 let weight = e.weight();
                 if !weight.is_traversable() {
                     u32::MAX / 2 // effectively unreachable
                 } else {
                     weight.default_cost()
                 }
-            },
-        )
-        .into_iter()
-        .collect();
+            })
+            .into_iter()
+            .collect();
 
         // Collect reachable sources sorted by cost (cheapest first)
         let mut reachable: Vec<(NodeIndex, u32)> = costs
@@ -1348,7 +1354,8 @@ impl AttackGraph {
                     if let Some(&next_cost) = costs.get(&next) {
                         let edge_cost = edge.weight().default_cost();
                         // next_cost should equal current_cost - edge_cost (in reverse)
-                        if next_cost < best_next_cost && edge.weight().is_traversable()
+                        if next_cost < best_next_cost
+                            && edge.weight().is_traversable()
                             && let Some(&cur_cost) = costs.get(&current)
                             && cur_cost == next_cost + edge_cost
                         {
@@ -1487,7 +1494,13 @@ mod tests {
 
         // Add edges
         g.add_edge_by_name("jdoe", domain, "HelpDesk", domain, EdgeType::MemberOf);
-        g.add_edge_by_name("HelpDesk", domain, "Domain Admins", domain, EdgeType::MemberOf);
+        g.add_edge_by_name(
+            "HelpDesk",
+            domain,
+            "Domain Admins",
+            domain,
+            EdgeType::MemberOf,
+        );
         g.add_edge_by_name("WS01$", domain, "jdoe", domain, EdgeType::HasSession);
         g.add_edge_by_name("jdoe", domain, "WS01$", domain, EdgeType::AdminTo);
         g.add_edge_by_name("WS01$", domain, "DC01$", domain, EdgeType::AdminTo);
@@ -1555,7 +1568,9 @@ mod tests {
     fn test_shortest_path_direct() {
         let g = build_test_graph();
         // jdoe -> WS01$ via AdminTo (cost 1)
-        let path = g.shortest_path("jdoe@corp.local", "WS01$@corp.local").unwrap();
+        let path = g
+            .shortest_path("jdoe@corp.local", "WS01$@corp.local")
+            .unwrap();
         assert_eq!(path.total_cost, 1);
         assert_eq!(path.hop_count, 1);
         assert_eq!(path.hops[0].edge, EdgeType::AdminTo);
@@ -1565,7 +1580,9 @@ mod tests {
     fn test_shortest_path_multi_hop() {
         let g = build_test_graph();
         // jdoe -> WS01$ -> DC01$ (cost 1 + 1 = 2)
-        let path = g.shortest_path("jdoe@corp.local", "DC01$@corp.local").unwrap();
+        let path = g
+            .shortest_path("jdoe@corp.local", "DC01$@corp.local")
+            .unwrap();
         assert_eq!(path.total_cost, 2);
         assert_eq!(path.hop_count, 2);
     }
@@ -1574,7 +1591,9 @@ mod tests {
     fn test_shortest_path_with_memberof() {
         let g = build_test_graph();
         // jdoe -> HelpDesk -> Domain Admins (cost 0 + 0 = 0, MemberOf is free)
-        let path = g.shortest_path("jdoe@corp.local", "Domain Admins@corp.local").unwrap();
+        let path = g
+            .shortest_path("jdoe@corp.local", "Domain Admins@corp.local")
+            .unwrap();
         assert_eq!(path.total_cost, 0);
         assert_eq!(path.hop_count, 2);
     }
@@ -1604,7 +1623,7 @@ mod tests {
         // sqlsvc has HasSpn but jdoe can't *reach* sqlsvc through graph edges
         // The only kerberoastable node reachable would need a path to sqlsvc
         // In our test graph, jdoe has no outgoing path to sqlsvc
-        // But sqlsvc has outgoing HasSpn to domain, so only nodes that are 
+        // But sqlsvc has outgoing HasSpn to domain, so only nodes that are
         // both reachable AND have HasSpn matter
         assert!(targets.is_empty() || targets.iter().all(|t| !t.contains("jdoe")));
     }

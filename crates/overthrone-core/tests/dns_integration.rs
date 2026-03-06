@@ -8,8 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 
 use overthrone_core::proto::dns::{
-    DnsResolver, SrvRecord,
-    SRV_LDAP_DC, SRV_KERBEROS, SRV_GC, SRV_KPASSWD, SRV_LDAP,
+    DnsResolver, SRV_GC, SRV_KERBEROS, SRV_KPASSWD, SRV_LDAP, SRV_LDAP_DC, SrvRecord,
 };
 
 #[test]
@@ -34,8 +33,16 @@ fn dns_resolver_rejects_invalid_ip() {
 fn srv_prefix_constants_are_well_formed() {
     let prefixes = [SRV_LDAP_DC, SRV_KERBEROS, SRV_GC, SRV_KPASSWD, SRV_LDAP];
     for prefix in &prefixes {
-        assert!(prefix.starts_with('_'), "SRV prefix should start with '_': {}", prefix);
-        assert!(prefix.contains("._tcp"), "SRV prefix should contain '._tcp': {}", prefix);
+        assert!(
+            prefix.starts_with('_'),
+            "SRV prefix should start with '_': {}",
+            prefix
+        );
+        assert!(
+            prefix.contains("._tcp"),
+            "SRV prefix should contain '._tcp': {}",
+            prefix
+        );
     }
 }
 
@@ -86,10 +93,8 @@ fn srv_record_struct_fields() {
 
 #[tokio::test]
 async fn resolve_hostname_returns_error_for_bogus() {
-    let result = overthrone_core::proto::dns::resolve_hostname(
-        "this.host.does.not.exist.invalid.tld",
-    )
-    .await;
+    let result =
+        overthrone_core::proto::dns::resolve_hostname("this.host.does.not.exist.invalid.tld").await;
     // Should return an error (no DNS resolution for .invalid.tld)
     assert!(result.is_err(), "Bogus hostname should fail to resolve");
 }

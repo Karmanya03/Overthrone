@@ -332,9 +332,7 @@ impl Smb2Connection {
         let max_transact = u32::from_le_bytes([body[28], body[29], body[30], body[31]]);
         let max_read = u32::from_le_bytes([body[32], body[33], body[34], body[35]]);
         let max_write = u32::from_le_bytes([body[36], body[37], body[38], body[39]]);
-        debug!(
-            "SMB2: MaxTransact={max_transact}, MaxRead={max_read}, MaxWrite={max_write}"
-        );
+        debug!("SMB2: MaxTransact={max_transact}, MaxRead={max_read}, MaxWrite={max_write}");
 
         // Store server capabilities (we don't mutate self's sizes since they're not
         // behind Mutex — we use safe defaults set during construction)
@@ -477,9 +475,8 @@ impl Smb2Connection {
     ) -> Result<Vec<u8>> {
         debug!("SMB2: Session setup PtH for {domain}\\{username}");
 
-        let nt_hash = hex::decode(nt_hash_hex).map_err(|e| {
-            OverthroneError::Smb(format!("Invalid NT hash hex: {e}"))
-        })?;
+        let nt_hash = hex::decode(nt_hash_hex)
+            .map_err(|e| OverthroneError::Smb(format!("Invalid NT hash hex: {e}")))?;
         if nt_hash.len() != 16 {
             return Err(OverthroneError::Smb(format!(
                 "NT hash must be 16 bytes, got {}",
@@ -642,10 +639,7 @@ impl Smb2Connection {
     ) -> Result<[u8; 32]> {
         trace!("SMB2: Create '{path}'");
 
-        let path_utf16: Vec<u8> = path
-            .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
-            .collect();
+        let path_utf16: Vec<u8> = path.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
 
         let hdr = self.build_header(SMB2_CREATE, 0).await;
         let mut body = Vec::new();
@@ -955,11 +949,7 @@ impl Smb2Connection {
 
     /// FSCTL_PIPE_TRANSCEIVE — send DCE/RPC request, receive response.
     /// This is the critical operation for WMI, SAMR, DRSUAPI, etc.
-    pub async fn ioctl_pipe_transceive(
-        &self,
-        file_id: &[u8; 32],
-        input: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub async fn ioctl_pipe_transceive(&self, file_id: &[u8; 32], input: &[u8]) -> Result<Vec<u8>> {
         let hdr = self.build_header(SMB2_IOCTL, 0).await;
         let mut body = Vec::new();
         // StructureSize = 57
@@ -1028,10 +1018,7 @@ impl Smb2Connection {
     // ───────────────── Query Directory ─────────────────
 
     /// List directory entries. Returns `(name, is_directory, size)` tuples.
-    pub async fn query_directory(
-        &self,
-        dir_id: &[u8; 32],
-    ) -> Result<Vec<(String, bool, u64)>> {
+    pub async fn query_directory(&self, dir_id: &[u8; 32]) -> Result<Vec<(String, bool, u64)>> {
         let mut all_entries = Vec::new();
         let mut first = true;
 
@@ -1192,9 +1179,7 @@ fn build_ntlmssp_negotiate() -> Vec<u8> {
 /// Parse NTLMSSP Type 2 (Challenge) message.
 fn parse_ntlmssp_challenge(data: &[u8]) -> Result<NtlmChallenge> {
     if data.len() < 32 {
-        return Err(OverthroneError::Smb(
-            "NTLMSSP Type 2 too short".to_string(),
-        ));
+        return Err(OverthroneError::Smb("NTLMSSP Type 2 too short".to_string()));
     }
 
     // Verify signature
@@ -1523,9 +1508,7 @@ fn rc4_encrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut s: Vec<u8> = (0..=255).collect();
     let mut j: u8 = 0;
     for i in 0..256 {
-        j = j
-            .wrapping_add(s[i])
-            .wrapping_add(key[i % key.len()]);
+        j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
         s.swap(i, j as usize);
     }
 
@@ -1544,9 +1527,7 @@ fn rc4_encrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// Find a subsequence within a byte slice.
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Parse FILE_DIRECTORY_INFORMATION entries from a QueryDirectory response buffer.

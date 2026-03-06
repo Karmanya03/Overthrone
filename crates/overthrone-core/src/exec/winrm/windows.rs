@@ -9,10 +9,10 @@ use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
 use async_trait::async_trait;
 use std::ffi::c_void;
 use tracing::{debug, info, warn};
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::RemoteManagement::*;
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent, WaitForSingleObject};
+use windows::core::PCWSTR;
 
 // ── Constants ───────────────────────────────────────────────────
 
@@ -221,7 +221,10 @@ unsafe fn wait_or_err(event: HANDLE, target: &str, op: &str) -> Result<()> {
     let rc = unsafe { WaitForSingleObject(event, OP_TIMEOUT_MS) };
     // WAIT_OBJECT_0 == 0
     if rc.0 != 0 {
-        Err(exec_err(target, &format!("{op} timed out ({OP_TIMEOUT_MS}ms)")))
+        Err(exec_err(
+            target,
+            &format!("{op} timed out ({OP_TIMEOUT_MS}ms)"),
+        ))
     } else {
         Ok(())
     }
@@ -233,11 +236,7 @@ unsafe fn wait_or_err(event: HANDLE, target: &str, op: &str) -> Result<()> {
 ///
 /// Calls Win32 FFI – valid parameters and correct handle lifetimes are ensured
 /// by the implementation.
-unsafe fn execute_wsm(
-    target: &str,
-    command: &str,
-    creds: &ExecCredentials,
-) -> Result<ExecOutput> {
+unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> Result<ExecOutput> {
     info!("[winrm/native] Executing on {target}: {command}");
 
     // ── Synchronization event (manual-reset, initially non-signaled) ──
@@ -248,7 +247,18 @@ unsafe fn execute_wsm(
     let ctx_ptr: *mut c_void = &mut ctx as *mut WsCallbackCtx as *mut c_void;
     let async_op = WSMAN_SHELL_ASYNC {
         operationContext: ctx_ptr,
-        completionFunction: Some(wsman_callback as unsafe extern "system" fn(*const c_void, u32, *const WSMAN_ERROR, WSMAN_SHELL_HANDLE, WSMAN_COMMAND_HANDLE, WSMAN_OPERATION_HANDLE, *const WSMAN_RESPONSE_DATA)),
+        completionFunction: Some(
+            wsman_callback
+                as unsafe extern "system" fn(
+                    *const c_void,
+                    u32,
+                    *const WSMAN_ERROR,
+                    WSMAN_SHELL_HANDLE,
+                    WSMAN_COMMAND_HANDLE,
+                    WSMAN_OPERATION_HANDLE,
+                    *const WSMAN_RESPONSE_DATA,
+                ),
+        ),
     };
 
     // ── 1  WSManInitialize ──────────────────────────────────────
@@ -318,7 +328,10 @@ unsafe fn execute_wsm(
         return Err(e);
     }
     if ctx.has_error() {
-        let msg = format!("CreateShell: {} ({:#010x})", ctx.error_detail, ctx.error_code);
+        let msg = format!(
+            "CreateShell: {} ({:#010x})",
+            ctx.error_detail, ctx.error_code
+        );
         unsafe { cleanup_api(api, session) };
         return Err(exec_err(target, &msg));
     }
@@ -351,10 +364,7 @@ unsafe fn execute_wsm(
     // ── 5  WSManReceiveShellOutput loop ─────────────────────────
     let stdout_id_w = to_wide("stdout");
     let stderr_id_w = to_wide("stderr");
-    let stream_ids = [
-        PCWSTR(stdout_id_w.as_ptr()),
-        PCWSTR(stderr_id_w.as_ptr()),
-    ];
+    let stream_ids = [PCWSTR(stdout_id_w.as_ptr()), PCWSTR(stderr_id_w.as_ptr())];
     let stream_set = WSMAN_STREAM_ID_SET {
         streamIDsCount: 2,
         streamIDs: stream_ids.as_ptr(),

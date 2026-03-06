@@ -97,7 +97,7 @@ pub async fn run_tui_with_crawler(
     // Spawn crawler in background
     let crawler_handle = tokio::spawn(async move {
         info!("[tui] Starting crawler for {} in background", domain_str);
-        
+
         // Build crawler config from credentials
         let crawler_config = overthrone_crawler::runner::CrawlerConfig {
             dc_ip: "".to_string(), // Would need to be passed in or resolved
@@ -140,14 +140,15 @@ pub async fn run_tui_with_crawler(
         // Run crawler analysis
         match overthrone_crawler::runner::run_crawler(&crawler_config, &reaper_data).await {
             Ok(crawler_result) => {
-                info!("[tui] Crawler completed: {} findings", 
-                    crawler_result.foreign_memberships.len() + 
-                    crawler_result.escalation_paths.len() +
-                    crawler_result.sid_filter_findings.len() +
-                    crawler_result.mssql_chains.len() +
-                    crawler_result.pam_findings.len()
+                info!(
+                    "[tui] Crawler completed: {} findings",
+                    crawler_result.foreign_memberships.len()
+                        + crawler_result.escalation_paths.len()
+                        + crawler_result.sid_filter_findings.len()
+                        + crawler_result.mssql_chains.len()
+                        + crawler_result.pam_findings.len()
                 );
-                
+
                 // Update graph with crawler findings
                 // This would integrate the crawler results into the attack graph
                 let _graph_lock = graph_clone.lock().unwrap();
@@ -162,7 +163,7 @@ pub async fn run_tui_with_crawler(
                 warn!("[tui] Crawler error: {}", e);
             }
         }
-        
+
         Ok::<(), OverthroneError>(())
     });
 

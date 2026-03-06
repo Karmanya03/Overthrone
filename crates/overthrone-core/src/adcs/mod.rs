@@ -705,7 +705,10 @@ impl SccmClient {
                 info!("SCCM: Site code = {}", config.site_code);
             }
             Err(e) => {
-                warn!("SCCM: AdminService SMS_Site query failed ({}), trying legacy", e);
+                warn!(
+                    "SCCM: AdminService SMS_Site query failed ({}), trying legacy",
+                    e
+                );
                 // Fallback: try legacy management point
                 if let Ok(code) = self.discover_site_code_legacy(server).await {
                     config.site_code = code;
@@ -714,39 +717,48 @@ impl SccmClient {
         }
 
         // 2. Collections
-        if let Ok(json) = self.query_admin_service(&admin_base, "SMS_Collection").await
-            && let Some(values) = json.get("value").and_then(|v| v.as_array()) {
-                config.collections = values
-                    .iter()
-                    .filter_map(|c| {
-                        let name = c.get("Name")?.as_str()?;
-                        let id = c.get("CollectionID")?.as_str()?;
-                        Some(format!("{} ({})", name, id))
-                    })
-                    .collect();
-            }
+        if let Ok(json) = self
+            .query_admin_service(&admin_base, "SMS_Collection")
+            .await
+            && let Some(values) = json.get("value").and_then(|v| v.as_array())
+        {
+            config.collections = values
+                .iter()
+                .filter_map(|c| {
+                    let name = c.get("Name")?.as_str()?;
+                    let id = c.get("CollectionID")?.as_str()?;
+                    Some(format!("{} ({})", name, id))
+                })
+                .collect();
+        }
 
         // 3. Applications
-        if let Ok(json) = self.query_admin_service(&admin_base, "SMS_Application").await
-            && let Some(values) = json.get("value").and_then(|v| v.as_array()) {
-                config.applications = values
-                    .iter()
-                    .filter_map(|a| a.get("LocalizedDisplayName")?.as_str().map(String::from))
-                    .collect();
-            }
+        if let Ok(json) = self
+            .query_admin_service(&admin_base, "SMS_Application")
+            .await
+            && let Some(values) = json.get("value").and_then(|v| v.as_array())
+        {
+            config.applications = values
+                .iter()
+                .filter_map(|a| a.get("LocalizedDisplayName")?.as_str().map(String::from))
+                .collect();
+        }
 
         // 4. Site systems (distribution points, management points)
-        if let Ok(json) = self.query_admin_service(&admin_base, "SMS_SiteSystemSummarizer").await
-            && let Some(values) = json.get("value").and_then(|v| v.as_array()) {
-                config.site_systems = values
-                    .iter()
-                    .filter_map(|s| {
-                        let name = s.get("SiteSystem")?.as_str()?;
-                        let role = s.get("Role")?.as_str().unwrap_or("Unknown");
-                        Some(format!("{} [{}]", name, role))
-                    })
-                    .collect();
-            }
+        if let Ok(json) = self
+            .query_admin_service(&admin_base, "SMS_SiteSystemSummarizer")
+            .await
+            && let Some(values) = json.get("value").and_then(|v| v.as_array())
+        {
+            config.site_systems = values
+                .iter()
+                .filter_map(|s| {
+                    let name = s.get("SiteSystem")?.as_str()?;
+                    let role = s.get("Role")?.as_str().unwrap_or("Unknown");
+                    Some(format!("{} [{}]", name, role))
+                })
+                .collect();
+        }
 
         // 5. Check for common vulnerable settings (NAA, PXE, task sequences)
         config.vulnerable_settings = self.check_vulnerable_settings(&admin_base).await;
@@ -806,13 +818,14 @@ impl SccmClient {
                 .iter_common_name()
                 .next()
                 .and_then(|cn| cn.as_str().ok())
+        {
+            // CN is typically "SMS Signing Certificate - <SiteCode>"
+            if let Some(code) = cn.split('-').next_back().map(|s| s.trim().to_string())
+                && code.len() == 3
             {
-                // CN is typically "SMS Signing Certificate - <SiteCode>"
-                if let Some(code) = cn.split('-').next_back().map(|s| s.trim().to_string())
-                    && code.len() == 3 {
-                        return Ok(code);
-                    }
+                return Ok(code);
             }
+        }
 
         Err("Could not extract site code from signing cert".into())
     }
@@ -826,38 +839,44 @@ impl SccmClient {
             .query_admin_service(admin_base, "SMS_SCI_Reserved")
             .await
             && let Some(values) = json.get("value").and_then(|v| v.as_array())
-                && !values.is_empty() {
-                    vulns.push("Network Access Account (NAA) configured — credentials may be recoverable from policy".to_string());
-                }
+            && !values.is_empty()
+        {
+            vulns.push("Network Access Account (NAA) configured — credentials may be recoverable from policy".to_string());
+        }
 
         // Check PXE-enabled distribution points
         if let Ok(json) = self
             .query_admin_service(admin_base, "SMS_DistributionPointInfo")
             .await
-            && let Some(values) = json.get("value").and_then(|v| v.as_array()) {
-                for dp in values {
-                    let pxe = dp.get("IsPXE").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let name = dp
-                        .get("ServerName")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    if pxe {
-                        vulns.push(format!("PXE-enabled DP: {} — possible PXE boot attack vector", name));
-                    }
+            && let Some(values) = json.get("value").and_then(|v| v.as_array())
+        {
+            for dp in values {
+                let pxe = dp.get("IsPXE").and_then(|v| v.as_bool()).unwrap_or(false);
+                let name = dp
+                    .get("ServerName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                if pxe {
+                    vulns.push(format!(
+                        "PXE-enabled DP: {} — possible PXE boot attack vector",
+                        name
+                    ));
                 }
             }
+        }
 
         // Check task sequences that may contain plaintext credentials
         if let Ok(json) = self
             .query_admin_service(admin_base, "SMS_TaskSequencePackage")
             .await
             && let Some(values) = json.get("value").and_then(|v| v.as_array())
-                && !values.is_empty() {
-                    vulns.push(format!(
-                        "{} Task Sequence(s) found — may contain embedded credentials",
-                        values.len()
-                    ));
-                }
+            && !values.is_empty()
+        {
+            vulns.push(format!(
+                "{} Task Sequence(s) found — may contain embedded credentials",
+                values.len()
+            ));
+        }
 
         vulns
     }

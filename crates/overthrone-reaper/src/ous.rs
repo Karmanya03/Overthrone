@@ -1,8 +1,8 @@
 //! Organizational Unit enumeration.
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -27,7 +27,8 @@ pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     let filter = ou_filter();
     let attrs = &[
@@ -51,21 +52,24 @@ pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {
     let mut results = Vec::new();
 
     for entry in &entries {
-        let name = entry.attrs
+        let name = entry
+            .attrs
             .get("ou")
             .or_else(|| entry.attrs.get("name"))
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| entry.dn.clone());
 
-        let description = entry.attrs
+        let description = entry
+            .attrs
             .get("description")
             .and_then(|v| v.first())
             .cloned();
 
         // gPLink contains semicolon-separated GPO DNs like
         // [LDAP://CN={GUID},CN=Policies,...;0][...]
-        let linked_gpos: Vec<String> = entry.attrs
+        let linked_gpos: Vec<String> = entry
+            .attrs
             .get("gPLink")
             .and_then(|v| v.first())
             .map(|s| {
@@ -73,9 +77,10 @@ pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {
                     .filter(|seg| seg.starts_with('['))
                     .filter_map(|seg| {
                         let inner = seg.trim_start_matches('[');
-                        inner.split(';').next().map(|dn| {
-                            dn.trim_start_matches("LDAP://").to_string()
-                        })
+                        inner
+                            .split(';')
+                            .next()
+                            .map(|dn| dn.trim_start_matches("LDAP://").to_string())
                     })
                     .collect()
             })

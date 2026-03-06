@@ -1,4 +1,4 @@
-﻿//! Kerberos protocol operations: AS-REQ, TGS-REQ, S4U2Self, S4U2Proxy.
+//! Kerberos protocol operations: AS-REQ, TGS-REQ, S4U2Self, S4U2Proxy.
 //!
 //! Uses `kerberos_asn1` (v0.2) for ASN.1 message construction
 //! and `kerberos_crypto` (v0.3) for encryption/decryption.
@@ -166,22 +166,21 @@ async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
         .parse()
         .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
 
-    let mut stream = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| OverthroneError::Kerberos(format!("KDC connection timed out after 10s: {addr}")))?
-    .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
+    let mut stream =
+        tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(addr))
+            .await
+            .map_err(|_| {
+                OverthroneError::Kerberos(format!("KDC connection timed out after 10s: {addr}"))
+            })?
+            .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
 
     debug!("Connected to KDC at {addr}");
     kdc_send(&mut stream, request_bytes).await?;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        kdc_recv(&mut stream),
-    )
-    .await
-    .map_err(|_| OverthroneError::Kerberos(format!("KDC response timed out after 15s: {addr}")))?
+    tokio::time::timeout(std::time::Duration::from_secs(15), kdc_recv(&mut stream))
+        .await
+        .map_err(|_| {
+            OverthroneError::Kerberos(format!("KDC response timed out after 15s: {addr}"))
+        })?
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -406,7 +405,11 @@ pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<Cr
             // Hashcat mode 18200 format:
             // $krb5asrep$23$user@realm:<checksum_32hex>$<edata2_hex>
             // RC4: checksum = first 16 bytes; AES256: first 12 bytes
-            let cksum_len = if enc_part.etype == ETYPE_RC4_HMAC { 16 } else { 12 };
+            let cksum_len = if enc_part.etype == ETYPE_RC4_HMAC {
+                16
+            } else {
+                12
+            };
             let (checksum, edata2) = cipher.split_at(std::cmp::min(cksum_len, cipher.len()));
             let hash_string = format!(
                 "$krb5asrep${}${}@{}:{}${}",

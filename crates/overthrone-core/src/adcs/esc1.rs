@@ -72,10 +72,7 @@ impl Esc1Exploiter {
 
         // Verify the issued cert actually contains the target SAN
         if let Err(e) = Self::verify_certificate_san(&cert_data, target_upn) {
-            warn!(
-                "ESC1 SAN verification warning (cert may still work): {}",
-                e
-            );
+            warn!("ESC1 SAN verification warning (cert may still work): {}", e);
         }
 
         // Build PKCS#12 (PFX) bundle

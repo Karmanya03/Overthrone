@@ -405,9 +405,10 @@ impl C2Manager {
     pub async fn disconnect_all(&mut self) {
         for (name, channel) in &mut self.channels {
             if channel.is_connected()
-                && let Err(e) = channel.disconnect().await {
-                    log::warn!("[c2] Error disconnecting '{}': {}", name, e);
-                }
+                && let Err(e) = channel.disconnect().await
+            {
+                log::warn!("[c2] Error disconnecting '{}': {}", name, e);
+            }
         }
     }
 }

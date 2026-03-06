@@ -88,7 +88,6 @@ pub struct RoastedAccount {
 // LDAP Enumeration
 // ═══════════════════════════════════════════════════════════
 
-
 /// Discovered AS-REP roastable account from LDAP
 #[derive(Debug, Clone)]
 struct EnumeratedUser {
@@ -108,7 +107,8 @@ async fn enumerate_asrep_users(config: &HuntConfig) -> Result<Vec<EnumeratedUser
         &config.username,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     let ad_users = conn.find_asrep_roastable().await?;
 
@@ -159,26 +159,26 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
     info!("{}", "═══ AS-REP ROAST ═══".bold().magenta());
 
     // Step 1: Get target list (from config or LDAP enum)
-    let targets: Vec<(String, Option<String>, Option<String>, bool)> =
-        if ac.target_users.is_empty() {
-            let enumerated = enumerate_asrep_users(config).await?;
-            enumerated
-                .into_iter()
-                .map(|u| {
-                    (
-                        u.sam_account_name,
-                        Some(u.distinguished_name),
-                        u.description,
-                        u.admin_count,
-                    )
-                })
-                .collect()
-        } else {
-            ac.target_users
-                .iter()
-                .map(|u| (u.clone(), None, None, false))
-                .collect()
-        };
+    let targets: Vec<(String, Option<String>, Option<String>, bool)> = if ac.target_users.is_empty()
+    {
+        let enumerated = enumerate_asrep_users(config).await?;
+        enumerated
+            .into_iter()
+            .map(|u| {
+                (
+                    u.sam_account_name,
+                    Some(u.distinguished_name),
+                    u.description,
+                    u.admin_count,
+                )
+            })
+            .collect()
+    } else {
+        ac.target_users
+            .iter()
+            .map(|u| (u.clone(), None, None, false))
+            .collect()
+    };
 
     if targets.is_empty() {
         warn!("No AS-REP roastable accounts found");
@@ -256,11 +256,7 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
             .collect::<Vec<_>>()
             .join("\n");
         tokio::fs::write(output_path, &hash_lines).await?;
-        info!(
-            "Saved {} hashes to {}",
-            hashes.len(),
-            output_path.display()
-        );
+        info!("Saved {} hashes to {}", hashes.len(), output_path.display());
     }
 
     // Summary

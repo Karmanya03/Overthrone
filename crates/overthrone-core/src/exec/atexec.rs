@@ -19,15 +19,13 @@ const ATSVC_PIPE: &str = "atsvc";
 
 /// ATSVC interface UUID: 1D9F47C0-6A8F-11D0-8C39-00C04FD9DC61
 const ATSVC_UUID: [u8; 16] = [
-    0xC0, 0x47, 0x9F, 0x1D, 0x8F, 0x6A, 0xD0, 0x11,
-    0x8C, 0x39, 0x00, 0xC0, 0x4F, 0xD9, 0xDC, 0x61,
+    0xC0, 0x47, 0x9F, 0x1D, 0x8F, 0x6A, 0xD0, 0x11, 0x8C, 0x39, 0x00, 0xC0, 0x4F, 0xD9, 0xDC, 0x61,
 ];
 const ATSVC_VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00]; // v1.0
 
 /// NDR transfer syntax UUID
 const NDR_UUID: [u8; 16] = [
-    0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
-    0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+    0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11, 0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
 ];
 const NDR_VERSION: [u8; 4] = [0x02, 0x00, 0x00, 0x00];
 
@@ -102,10 +100,10 @@ fn build_bind_packet() -> Vec<u8> {
     let mut pkt = Vec::with_capacity(72);
 
     // Header
-    pkt.push(5);                        // version
-    pkt.push(0);                        // minor version
-    pkt.push(DCERPC_BIND);              // packet type
-    pkt.push(0x03);                     // flags: first + last frag
+    pkt.push(5); // version
+    pkt.push(0); // minor version
+    pkt.push(DCERPC_BIND); // packet type
+    pkt.push(0x03); // flags: first + last frag
     pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data representation (LE)
     pkt.extend_from_slice(&[0x00, 0x00]); // frag length placeholder
     pkt.extend_from_slice(&[0x00, 0x00]); // auth length
@@ -295,10 +293,7 @@ fn extract_job_id(response: &[u8]) -> Result<u32> {
 ///
 /// Creates an "at" job (scheduled task), waits for execution,
 /// reads output, then cleans up.
-pub async fn exec_command(
-    session: &SmbSession,
-    command: &str,
-) -> Result<AtExecResult> {
+pub async fn exec_command(session: &SmbSession, command: &str) -> Result<AtExecResult> {
     let config = AtExecConfig::default();
     execute(session, command, &config).await
 }
@@ -329,7 +324,7 @@ pub async fn execute(
     let add_stub = build_job_add_stub(&server, command, &output_unc);
     let add_pkt = build_request_packet(OP_NETR_JOB_ADD, &add_stub, 1);
     let add_resp = session.pipe_transact(ATSVC_PIPE, &add_pkt).await?;
-    
+
     let job_id = extract_job_id(&add_resp)?;
     info!("AtExec: Job ID {} created", job_id);
 
@@ -348,7 +343,9 @@ pub async fn execute(
 
     // Step 5: Cleanup output file
     if config.cleanup {
-        let _ = session.delete_file(&config.output_share, &config.output_path).await;
+        let _ = session
+            .delete_file(&config.output_share, &config.output_path)
+            .await;
     }
 
     Ok(AtExecResult {
@@ -362,18 +359,17 @@ pub async fn execute(
 }
 
 /// Wait for output file and read it
-async fn wait_for_output(
-    session: &SmbSession,
-    config: &AtExecConfig,
-    _output_unc: &str,
-) -> String {
+async fn wait_for_output(session: &SmbSession, config: &AtExecConfig, _output_unc: &str) -> String {
     let poll_interval = std::time::Duration::from_millis(500);
     let max_attempts = (config.timeout_secs * 2) as usize;
 
     for attempt in 0..max_attempts {
         tokio::time::sleep(poll_interval).await;
 
-        match session.read_file(&config.output_share, &config.output_path).await {
+        match session
+            .read_file(&config.output_share, &config.output_path)
+            .await
+        {
             Ok(data) if !data.is_empty() => {
                 debug!(
                     "AtExec: Output ready after {}ms ({} bytes)",
@@ -401,10 +397,7 @@ async fn wait_for_output(
 }
 
 /// Execute multiple commands sequentially
-pub async fn exec_commands(
-    session: &SmbSession,
-    commands: &[&str],
-) -> Vec<AtExecResult> {
+pub async fn exec_commands(session: &SmbSession, commands: &[&str]) -> Vec<AtExecResult> {
     let mut results = Vec::new();
 
     for cmd in commands {
@@ -450,7 +443,8 @@ impl<'a> AtExecShell<'a> {
         self.config.output_path = format!("Windows\\Temp\\__atexec_{:04X}.tmp", id);
 
         let result = execute(self.session, command, &self.config).await?;
-        self.history.push((command.to_string(), result.output.clone()));
+        self.history
+            .push((command.to_string(), result.output.clone()));
         Ok(result.output)
     }
 

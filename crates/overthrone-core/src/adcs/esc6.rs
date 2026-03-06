@@ -48,11 +48,7 @@ impl Esc6Exploiter {
     ///
     /// # Returns
     /// * `Ok(IssuedCertificate)` on success
-    pub async fn exploit(
-        &self,
-        template: &str,
-        target_upn: &str,
-    ) -> Result<IssuedCertificate> {
+    pub async fn exploit(&self, template: &str, target_upn: &str) -> Result<IssuedCertificate> {
         info!(
             "Executing ESC6 attack: template={}, target_upn={}",
             template, target_upn
@@ -80,10 +76,7 @@ impl Esc6Exploiter {
 
         // Verify the SAN made it into the issued certificate
         if let Err(e) = Self::verify_san_in_response(&cert_data, target_upn) {
-            warn!(
-                "ESC6 SAN verification warning (cert may still work): {}",
-                e
-            );
+            warn!("ESC6 SAN verification warning (cert may still work): {}", e);
         }
 
         Ok(IssuedCertificate {

@@ -6,9 +6,7 @@
 use crate::asreproast::RoastedAccount;
 use crate::kerberoast::RoastedService;
 use colored::Colorize;
-use overthrone_core::crypto::{
-    CrackResult, CrackerConfig, HashCracker, HashType,
-};
+use overthrone_core::crypto::{CrackResult, CrackerConfig, HashCracker, HashType};
 use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -58,7 +56,7 @@ pub struct FailedHash {
 /// Auto-detect hash type from string format
 pub fn detect_hash_type(hash_str: &str) -> Result<HashType> {
     let trimmed = hash_str.trim();
-    
+
     if trimmed.starts_with("$krb5asrep$") {
         HashType::parse_asrep(trimmed)
     } else if trimmed.starts_with("$krb5tgs$") {
@@ -67,7 +65,7 @@ pub fn detect_hash_type(hash_str: &str) -> Result<HashType> {
         HashType::parse_ntlm(trimmed)
     } else {
         Err(OverthroneError::custom(
-            "Unknown hash format. Expected AS-REP ($krb5asrep$), Kerberoast ($krb5tgs$), or NTLM (32 hex chars)"
+            "Unknown hash format. Expected AS-REP ($krb5asrep$), Kerberoast ($krb5tgs$), or NTLM (32 hex chars)",
         ))
     }
 }
@@ -105,16 +103,16 @@ pub fn crack_asrep_hashes(
 ) -> Result<CrackReport> {
     let start = std::time::Instant::now();
     let cracker = HashCracker::new(config.clone())?;
-    
+
     info!("Cracking {} AS-REP hashes...", accounts.len());
-    
+
     let mut cracked = Vec::new();
     let mut failed = Vec::new();
-    
+
     for account in accounts {
         let hash = HashType::parse_asrep(&account.hash_string)?;
         let result = cracker.crack(&hash);
-        
+
         if result.cracked {
             if let Some(password) = &result.password {
                 info!(
@@ -146,16 +144,16 @@ pub fn crack_asrep_hashes(
             });
         }
     }
-    
+
     let elapsed = start.elapsed().as_millis() as u64;
-    
+
     info!(
         "AS-REP Cracking: {}/{} cracked in {}ms",
         cracked.len().to_string().green(),
         accounts.len(),
         elapsed
     );
-    
+
     Ok(CrackReport {
         total_hashes: accounts.len(),
         cracked,
@@ -171,12 +169,12 @@ pub fn crack_kerberoast_hashes(
 ) -> Result<CrackReport> {
     let start = std::time::Instant::now();
     let cracker = HashCracker::new(config.clone())?;
-    
+
     info!("Cracking {} Kerberoast hashes...", services.len());
-    
+
     let mut cracked = Vec::new();
     let mut failed = Vec::new();
-    
+
     for service in services {
         // Skip AES hashes (not supported by inline cracker yet)
         if service.etype != "RC4" {
@@ -188,10 +186,10 @@ pub fn crack_kerberoast_hashes(
             );
             continue;
         }
-        
+
         let hash = HashType::parse_kerberoast(&service.hash_string)?;
         let result = cracker.crack(&hash);
-        
+
         if result.cracked {
             if let Some(password) = &result.password {
                 info!(
@@ -224,16 +222,16 @@ pub fn crack_kerberoast_hashes(
             });
         }
     }
-    
+
     let elapsed = start.elapsed().as_millis() as u64;
-    
+
     info!(
         "Kerberoast Cracking: {}/{} cracked in {}ms",
         cracked.len().to_string().green(),
         services.len(),
         elapsed
     );
-    
+
     Ok(CrackReport {
         total_hashes: services.len(),
         cracked,
@@ -243,24 +241,24 @@ pub fn crack_kerberoast_hashes(
 }
 
 /// Crack multiple hash strings (auto-detect type)
-pub fn crack_hashes(
-    hash_strings: &[String],
-    config: &CrackerConfig,
-) -> Result<CrackReport> {
+pub fn crack_hashes(hash_strings: &[String], config: &CrackerConfig) -> Result<CrackReport> {
     let start = std::time::Instant::now();
     let cracker = HashCracker::new(config.clone())?;
-    
-    info!("Cracking {} hashes (auto-detecting types)...", hash_strings.len());
-    
+
+    info!(
+        "Cracking {} hashes (auto-detecting types)...",
+        hash_strings.len()
+    );
+
     let mut cracked = Vec::new();
     let mut failed = Vec::new();
-    
+
     for hash_str in hash_strings {
         match detect_hash_type(hash_str) {
             Ok(hash) => {
                 let result = cracker.crack(&hash);
                 let username = hash.username().map(|s| s.to_string());
-                
+
                 if result.cracked {
                     if let Some(password) = &result.password {
                         info!(
@@ -305,9 +303,9 @@ pub fn crack_hashes(
             }
         }
     }
-    
+
     let elapsed = start.elapsed().as_millis() as u64;
-    
+
     Ok(CrackReport {
         total_hashes: hash_strings.len(),
         cracked,
@@ -331,7 +329,7 @@ impl CrackReport {
             (self.cracked.len() as f64 / self.total_hashes.max(1) as f64) * 100.0
         );
         println!("  Time:          {}ms", self.time_ms);
-        
+
         if !self.cracked.is_empty() {
             println!("\n  {} Cracked Credentials:", "✓".green().bold());
             for cred in &self.cracked {
@@ -343,10 +341,10 @@ impl CrackReport {
                 );
             }
         }
-        
+
         println!("{}\n", "═══════════════════".cyan());
     }
-    
+
     /// Export cracked credentials to hashcat format
     pub fn to_cracked_file(&self) -> String {
         self.cracked

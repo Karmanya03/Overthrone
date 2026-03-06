@@ -1,12 +1,14 @@
-﻿//! Top-level orchestrator that runs all reaper modules in sequence.
+//! Top-level orchestrator that runs all reaper modules in sequence.
 
-use overthrone_core::error::{OverthroneError, Result};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::{acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, spns, trusts, users};
+use crate::{
+    acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, spns, trusts, users,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReaperConfig {
@@ -26,7 +28,11 @@ impl ReaperConfig {
     }
 
     pub fn base_dn_from_domain(domain: &str) -> String {
-        domain.split('.').map(|p| format!("DC={p}")).collect::<Vec<_>>().join(",")
+        domain
+            .split('.')
+            .map(|p| format!("DC={p}"))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -49,8 +55,18 @@ pub struct ReaperResult {
 }
 
 const MODULES: &[&str] = &[
-    "users", "groups", "computers", "ous", "gpos", "trusts",
-    "spns", "delegations", "acls", "laps", "mssql", "adcs",
+    "users",
+    "groups",
+    "computers",
+    "ous",
+    "gpos",
+    "trusts",
+    "spns",
+    "delegations",
+    "acls",
+    "laps",
+    "mssql",
+    "adcs",
 ];
 
 pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
@@ -58,7 +74,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     let separator = "═══════════════════════════════════════════════";
 
     println!("\n{}", separator.bright_red());
-    println!("{} {} ({})",
+    println!(
+        "{} {} ({})",
         "☠ REAPER".bright_red().bold(),
         config.domain.as_str().bright_white().bold(),
         config.dc_ip.as_str().dimmed()
@@ -68,7 +85,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     let pb = ProgressBar::new(active.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "{prefix:.red.bold} [{bar:40.red/dark_gray}] {pos}/{len} {msg}"
+            "{prefix:.red.bold} [{bar:40.red/dark_gray}] {pos}/{len} {msg}",
         )
         .unwrap()
         .progress_chars("━╸─"),
@@ -101,7 +118,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                         let count = data.len();
                         result.$field = data;
                         let count_str = count.to_string();
-                        pb.println(format!("  {} {} → {} found",
+                        pb.println(format!(
+                            "  {} {} → {} found",
                             "✓".green().bold(),
                             $name.bright_white(),
                             count_str.as_str().bright_green()
@@ -109,7 +127,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                         info!("[reaper] {} → {count} entries", $name);
                     }
                     Err(OverthroneError::NotImplemented { .. }) => {
-                        pb.println(format!("  {} {} → {}",
+                        pb.println(format!(
+                            "  {} {} → {}",
                             "○".dimmed(),
                             $name.dimmed(),
                             "stub (not yet wired)".dimmed()
@@ -117,7 +136,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                     }
                     Err(e) => {
                         let err_str = format!("{e}");
-                        pb.println(format!("  {} {} → {}",
+                        pb.println(format!(
+                            "  {} {} → {}",
                             "✗".red().bold(),
                             $name.bright_white(),
                             err_str.as_str().red()
@@ -130,18 +150,22 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
         };
     }
 
-    run_module!("users",       users::enumerate_users,             users);
-    run_module!("groups",      groups::enumerate_groups,           groups);
-    run_module!("computers",   computers::enumerate_computers,     computers);
-    run_module!("ous",         ous::enumerate_ous,                 ous);
-    run_module!("gpos",        gpos::enumerate_gpos,               gpos);
-    run_module!("trusts",      trusts::enumerate_trusts,           trusts);
-    run_module!("spns",        spns::enumerate_spn_accounts,       spn_accounts);
-    run_module!("delegations", delegations::enumerate_delegations, delegations);
-    run_module!("acls",        acls::enumerate_dangerous_acls,     acl_findings);
-    run_module!("laps",        laps::enumerate_laps,               laps_entries);
-    run_module!("mssql",       mssql::enumerate_mssql,             mssql_instances);
-    run_module!("adcs",        adcs::enumerate_adcs,               adcs_templates);
+    run_module!("users", users::enumerate_users, users);
+    run_module!("groups", groups::enumerate_groups, groups);
+    run_module!("computers", computers::enumerate_computers, computers);
+    run_module!("ous", ous::enumerate_ous, ous);
+    run_module!("gpos", gpos::enumerate_gpos, gpos);
+    run_module!("trusts", trusts::enumerate_trusts, trusts);
+    run_module!("spns", spns::enumerate_spn_accounts, spn_accounts);
+    run_module!(
+        "delegations",
+        delegations::enumerate_delegations,
+        delegations
+    );
+    run_module!("acls", acls::enumerate_dangerous_acls, acl_findings);
+    run_module!("laps", laps::enumerate_laps, laps_entries);
+    run_module!("mssql", mssql::enumerate_mssql, mssql_instances);
+    run_module!("adcs", adcs::enumerate_adcs, adcs_templates);
 
     pb.finish_with_message("done");
 
@@ -154,12 +178,18 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     let a = result.acl_findings.len().to_string();
 
     println!("\n{}", "─── Summary ───".bright_red());
-    println!("  Users: {}  Groups: {}  Computers: {}",
-        u.as_str().bright_green(), g.as_str().bright_green(), c.as_str().bright_green(),
+    println!(
+        "  Users: {}  Groups: {}  Computers: {}",
+        u.as_str().bright_green(),
+        g.as_str().bright_green(),
+        c.as_str().bright_green(),
     );
-    println!("  Trusts: {}  SPNs: {}  Delegations: {}  ACLs: {}",
-        t.as_str().bright_yellow(), s.as_str().bright_yellow(),
-        d.as_str().bright_yellow(), a.as_str().bright_yellow(),
+    println!(
+        "  Trusts: {}  SPNs: {}  Delegations: {}  ACLs: {}",
+        t.as_str().bright_yellow(),
+        s.as_str().bright_yellow(),
+        d.as_str().bright_yellow(),
+        a.as_str().bright_yellow(),
     );
     println!();
 

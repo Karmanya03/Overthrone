@@ -18,25 +18,15 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AttackGoal {
     /// Achieve membership/token for a target group (default: "Domain Admins")
-    DomainAdmin {
-        target_group: String,
-    },
+    DomainAdmin { target_group: String },
     /// Obtain credentials for a specific user
-    CompromiseUser {
-        target_user: String,
-    },
+    CompromiseUser { target_user: String },
     /// Gain admin access to a specific host
-    CompromiseHost {
-        target_host: String,
-    },
+    CompromiseHost { target_host: String },
     /// Extract domain credential database (NTDS.dit)
-    DumpNtds {
-        target_dc: Option<String>,
-    },
+    DumpNtds { target_dc: Option<String> },
     /// Establish persistent access via golden/silver ticket
-    Persistence {
-        method: PersistenceMethod,
-    },
+    Persistence { method: PersistenceMethod },
     /// Full domain enumeration only (no exploitation)
     ReconOnly,
     /// Custom goal with freeform success criteria
@@ -310,17 +300,32 @@ pub struct StateStats {
 
 impl std::fmt::Display for StateStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Users: {} | Computers: {} | Groups: {}", 
-            self.total_users, self.total_computers, self.total_groups)?;
-        writeln!(f, "Credentials: {} | Admin Hosts: {}", 
-            self.credentials_obtained, self.admin_hosts)?;
-        writeln!(f, "Kerberoast: {} | AS-REP: {} | Cracked: {}", 
-            self.kerberoastable, self.asrep_roastable, self.cracked_passwords)?;
-        writeln!(f, "Domain Admin: {} ({})", 
+        writeln!(
+            f,
+            "Users: {} | Computers: {} | Groups: {}",
+            self.total_users, self.total_computers, self.total_groups
+        )?;
+        writeln!(
+            f,
+            "Credentials: {} | Admin Hosts: {}",
+            self.credentials_obtained, self.admin_hosts
+        )?;
+        writeln!(
+            f,
+            "Kerberoast: {} | AS-REP: {} | Cracked: {}",
+            self.kerberoastable, self.asrep_roastable, self.cracked_passwords
+        )?;
+        writeln!(
+            f,
+            "Domain Admin: {} ({})",
             if self.domain_admin { "YES" } else { "NO" },
-            self.da_user.as_deref().unwrap_or("N/A"))?;
-        writeln!(f, "Actions: {} | Loot: {}", 
-            self.actions_logged, self.loot_items)
+            self.da_user.as_deref().unwrap_or("N/A")
+        )?;
+        writeln!(
+            f,
+            "Actions: {} | Loot: {}",
+            self.actions_logged, self.loot_items
+        )
     }
 }
 
@@ -331,8 +336,7 @@ impl EngagementState {
 
     /// Save state to a JSON file
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)?;
         Ok(())
     }
@@ -340,8 +344,7 @@ impl EngagementState {
     /// Load state from a JSON file
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
-        let state: Self = serde_json::from_str(&json)
-            .map_err(std::io::Error::other)?;
+        let state: Self = serde_json::from_str(&json).map_err(std::io::Error::other)?;
         Ok(state)
     }
 
@@ -504,8 +507,14 @@ impl EngagementState {
         );
         println!("  Users:       {}", self.users.len());
         println!("  Computers:   {}", self.computers.len());
-        println!("  Credentials: {}", self.credentials.len().to_string().green());
-        println!("  Admin hosts: {}", self.admin_hosts.len().to_string().yellow());
+        println!(
+            "  Credentials: {}",
+            self.credentials.len().to_string().green()
+        );
+        println!(
+            "  Admin hosts: {}",
+            self.admin_hosts.len().to_string().yellow()
+        );
         println!(
             "  Kerberoast:  {} | AS-REP: {}",
             self.kerberoastable.len(),

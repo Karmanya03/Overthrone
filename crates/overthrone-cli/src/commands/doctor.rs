@@ -8,8 +8,8 @@
 
 use crate::banner;
 use colored::Colorize;
-use std::process::Command;
 use std::net::TcpStream;
+use std::process::Command;
 use std::time::Duration;
 
 /// Result of a single diagnostic check
@@ -41,7 +41,11 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
     let results: Vec<CheckResult> = if let Some(specific) = checks {
         all_checks
             .into_iter()
-            .filter(|c| specific.iter().any(|s| c.name.to_lowercase().contains(&s.to_lowercase())))
+            .filter(|c| {
+                specific
+                    .iter()
+                    .any(|s| c.name.to_lowercase().contains(&s.to_lowercase()))
+            })
             .collect()
     } else {
         all_checks
@@ -60,12 +64,7 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
             "✗".red().bold()
         };
 
-        println!(
-            "  {} {}: {}",
-            status,
-            result.name,
-            result.message
-        );
+        println!("  {} {}: {}", status, result.name, result.message);
 
         if let Some(ref hint) = result.hint {
             println!("    {} {}", "→".yellow(), hint.yellow().dimmed());
@@ -76,7 +75,11 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
     println!();
     println!(
         "  {} {} passed, {} failed",
-        if failed == 0 { "✓".green() } else { "!".yellow() },
+        if failed == 0 {
+            "✓".green()
+        } else {
+            "!".yellow()
+        },
         passed.to_string().cyan(),
         failed.to_string().red()
     );
@@ -84,13 +87,10 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
     if failed > 0 {
         println!(
             "  {} Some checks failed. Read the hints above, or consult the docs.",
-          "!".yellow()
+            "!".yellow()
         );
     } else {
-        println!(
-            "  {} All systems go. Go overthrow something.",
-            "✓".green()
-        );
+        println!("  {} All systems go. Go overthrow something.", "✓".green());
     }
 
     if failed > 0 { 1 } else { 0 }
@@ -106,12 +106,20 @@ fn check_platform() -> CheckResult {
     } else if cfg!(target_os = "linux") {
         (
             "Linux",
-            vec!["SMB (pavao/libsmbclient)", "WinRM (WS-Man)", "NTLM (ntlmclient)"],
+            vec![
+                "SMB (pavao/libsmbclient)",
+                "WinRM (WS-Man)",
+                "NTLM (ntlmclient)",
+            ],
         )
     } else if cfg!(target_os = "macos") {
         (
             "macOS",
-            vec!["SMB (pavao/libsmbclient)", "WinRM (WS-Man)", "NTLM (ntlmclient)"],
+            vec![
+                "SMB (pavao/libsmbclient)",
+                "WinRM (WS-Man)",
+                "NTLM (ntlmclient)",
+            ],
         )
     } else {
         ("Unknown", vec![])
@@ -139,9 +147,7 @@ fn check_smbclient() -> CheckResult {
 
     #[cfg(not(windows))]
     {
-        let result = Command::new("smbclient")
-            .arg("--version")
-            .output();
+        let result = Command::new("smbclient").arg("--version").output();
 
         match result {
             Ok(output) if output.status.success() => {
@@ -162,13 +168,19 @@ fn check_smbclient() -> CheckResult {
                 name: "smbclient".to_string(),
                 passed: false,
                 message: "found but not executable".to_string(),
-                hint: Some("apt install smbclient (Debian/Ubuntu) or brew install samba (macOS)".to_string()),
+                hint: Some(
+                    "apt install smbclient (Debian/Ubuntu) or brew install samba (macOS)"
+                        .to_string(),
+                ),
             },
             Err(_) => CheckResult {
                 name: "smbclient".to_string(),
                 passed: false,
                 message: "not found".to_string(),
-                hint: Some("apt install smbclient (Debian/Ubuntu) or brew install samba (macOS)".to_string()),
+                hint: Some(
+                    "apt install smbclient (Debian/Ubuntu) or brew install samba (macOS)"
+                        .to_string(),
+                ),
             },
         }
     }
@@ -217,7 +229,10 @@ fn check_libsmbclient() -> CheckResult {
                 name: "libsmbclient".to_string(),
                 passed: false,
                 message: "not found".to_string(),
-                hint: Some("apt install libsmbclient-dev (Debian/Ubuntu) or brew install samba (macOS)".to_string()),
+                hint: Some(
+                    "apt install libsmbclient-dev (Debian/Ubuntu) or brew install samba (macOS)"
+                        .to_string(),
+                ),
             }
         }
     }
@@ -270,7 +285,9 @@ fn check_kerberos_config() -> CheckResult {
             name: "kerberos".to_string(),
             passed: false,
             message: "no krb5.conf found".to_string(),
-            hint: Some("apt install krb5-user (Debian/Ubuntu) or brew install krb5 (macOS)".to_string()),
+            hint: Some(
+                "apt install krb5-user (Debian/Ubuntu) or brew install krb5 (macOS)".to_string(),
+            ),
         }
     }
 }
@@ -376,7 +393,9 @@ pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
     for (port, name) in &ports {
         let addr = format!("{}:{}", dc, port);
         let result = TcpStream::connect_timeout(
-            &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
+            &addr
+                .parse()
+                .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
             Duration::from_secs(3),
         );
 
@@ -392,7 +411,10 @@ pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
             passed,
             message: format!("{} — {}", name, message),
             hint: if !passed {
-                Some(format!("Port {} appears to be filtered or the service is down", port))
+                Some(format!(
+                    "Port {} appears to be filtered or the service is down",
+                    port
+                ))
             } else {
                 None
             },

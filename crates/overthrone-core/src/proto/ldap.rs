@@ -1,4 +1,4 @@
-﻿//! LDAP enumeration for Active Directory reconnaissance.
+//! LDAP enumeration for Active Directory reconnaissance.
 //!
 //! Provides async LDAP operations for enumerating users, groups, computers,
 //! SPNs (Kerberoastable accounts), AS-REP Roastable accounts, trusts, and ACLs.
@@ -7,8 +7,8 @@
 
 use crate::error::{OverthroneError, Result};
 use base64::Engine as _;
-use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use ldap3::controls::RawControl;
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -1123,8 +1123,7 @@ impl LdapSession {
         let mut spn_map: HashMap<String, Vec<String>> = HashMap::new();
 
         // Users with SPNs
-        let user_filter =
-            "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*))";
+        let user_filter = "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*))";
         let user_entries = self
             .search_entries(
                 &self.base_dn.clone(),
@@ -1136,10 +1135,7 @@ impl LdapSession {
         for entry in &user_entries {
             let account = get_first_attr(entry, "sAMAccountName").unwrap_or_default();
             for spn in get_attr_values(entry, "servicePrincipalName") {
-                spn_map
-                    .entry(spn)
-                    .or_default()
-                    .push(account.clone());
+                spn_map.entry(spn).or_default().push(account.clone());
             }
         }
 
@@ -1156,10 +1152,7 @@ impl LdapSession {
         for entry in &comp_entries {
             let account = get_first_attr(entry, "sAMAccountName").unwrap_or_default();
             for spn in get_attr_values(entry, "servicePrincipalName") {
-                spn_map
-                    .entry(spn)
-                    .or_default()
-                    .push(account.clone());
+                spn_map.entry(spn).or_default().push(account.clone());
             }
         }
 
@@ -1192,15 +1185,11 @@ impl LdapSession {
             let display_name =
                 get_first_attr(entry, "displayName").unwrap_or_else(|| "(unnamed)".to_string());
             let cn = get_first_attr(entry, "cn").unwrap_or_default();
-            let gpc_path =
-                get_first_attr(entry, "gPCFileSysPath").unwrap_or_default();
+            let gpc_path = get_first_attr(entry, "gPCFileSysPath").unwrap_or_default();
             let when_changed = get_first_attr(entry, "whenChanged");
             let flags = get_attr_u32(entry, "flags");
 
-            info!(
-                "  → {} [{}] → {}",
-                display_name, cn, gpc_path
-            );
+            info!("  → {} [{}] → {}", display_name, cn, gpc_path);
 
             gpos.push(GpoInfo {
                 display_name,
@@ -1225,10 +1214,7 @@ impl LdapSession {
     /// Uses the SD_FLAGS control to request only DACL + Owner from the
     /// `nTSecurityDescriptor` attribute, then parses the binary
     /// NT Security Descriptor into structured ACE entries.
-    pub async fn enumerate_acls(
-        &mut self,
-        filter: &str,
-    ) -> Result<Vec<DaclInfo>> {
+    pub async fn enumerate_acls(&mut self, filter: &str) -> Result<Vec<DaclInfo>> {
         info!("Enumerating ACLs with filter: {filter}");
 
         // Build SD_FLAGS control to request DACL + Owner
@@ -1237,12 +1223,7 @@ impl LdapSession {
         let (rs, _res) = self
             .ldap
             .with_controls(vec![sd_ctrl])
-            .search(
-                &self.base_dn.clone(),
-                Scope::Subtree,
-                filter,
-                ACL_ATTRS,
-            )
+            .search(&self.base_dn.clone(), Scope::Subtree, filter, ACL_ATTRS)
             .await
             .map_err(|e| OverthroneError::Ldap {
                 target: self.base_dn.clone(),
@@ -1254,8 +1235,7 @@ impl LdapSession {
                 reason: format!("ACL search error: {e}"),
             })?;
 
-        let entries: Vec<SearchEntry> =
-            rs.into_iter().map(SearchEntry::construct).collect();
+        let entries: Vec<SearchEntry> = rs.into_iter().map(SearchEntry::construct).collect();
 
         let mut results = Vec::new();
         for entry in &entries {
@@ -1274,10 +1254,7 @@ impl LdapSession {
                         });
                     }
                     Err(e) => {
-                        debug!(
-                            "Failed to parse SD for {}: {e}",
-                            entry.dn
-                        );
+                        debug!("Failed to parse SD for {}: {e}", entry.dn);
                     }
                 }
             }
@@ -1295,10 +1272,7 @@ impl LdapSession {
     ///
     /// Searches for DACLs containing ACEs that grant the given SID
     /// GenericAll, WriteDacl, WriteOwner, GenericWrite, or DCSync rights.
-    pub async fn find_abusable_acls(
-        &mut self,
-        trustee_sid: &str,
-    ) -> Result<Vec<DaclInfo>> {
+    pub async fn find_abusable_acls(&mut self, trustee_sid: &str) -> Result<Vec<DaclInfo>> {
         let all_acls = self
             .enumerate_acls(
                 "(|(objectClass=user)(objectClass=group)(objectClass=computer)(objectClass=organizationalUnit)(objectClass=domain))"
@@ -1312,7 +1286,10 @@ impl LdapSession {
                 .iter()
                 .filter(|ace| {
                     ace.trustee_sid == trustee_sid
-                        && matches!(ace.ace_type, AceType::AccessAllowed | AceType::AccessAllowedObject)
+                        && matches!(
+                            ace.ace_type,
+                            AceType::AccessAllowed | AceType::AccessAllowedObject
+                        )
                         && (ace.is_generic_all()
                             || ace.is_write_dacl()
                             || ace.is_write_owner()
@@ -1870,12 +1847,8 @@ fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<Ac
             // ACCESS_ALLOWED_ACE (0x00) / ACCESS_DENIED_ACE (0x01)
             0x00 | 0x01 => {
                 if ace_data.len() >= 8 {
-                    let mask = u32::from_le_bytes([
-                        ace_data[4],
-                        ace_data[5],
-                        ace_data[6],
-                        ace_data[7],
-                    ]);
+                    let mask =
+                        u32::from_le_bytes([ace_data[4], ace_data[5], ace_data[6], ace_data[7]]);
                     let sid = if ace_data.len() > 8 {
                         parse_sid(&ace_data[8..])
                     } else {
@@ -1895,18 +1868,10 @@ fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<Ac
             // ACCESS_ALLOWED_OBJECT_ACE (0x05) / ACCESS_DENIED_OBJECT_ACE (0x06)
             0x05 | 0x06 => {
                 if ace_data.len() >= 12 {
-                    let mask = u32::from_le_bytes([
-                        ace_data[4],
-                        ace_data[5],
-                        ace_data[6],
-                        ace_data[7],
-                    ]);
-                    let obj_flags = u32::from_le_bytes([
-                        ace_data[8],
-                        ace_data[9],
-                        ace_data[10],
-                        ace_data[11],
-                    ]);
+                    let mask =
+                        u32::from_le_bytes([ace_data[4], ace_data[5], ace_data[6], ace_data[7]]);
+                    let obj_flags =
+                        u32::from_le_bytes([ace_data[8], ace_data[9], ace_data[10], ace_data[11]]);
 
                     let mut pos = 12;
                     let object_type = if obj_flags & 0x01 != 0 && pos + 16 <= ace_data.len() {
@@ -1959,7 +1924,8 @@ fn parse_sid(data: &[u8]) -> String {
     }
     let revision = data[0];
     let sub_count = data[1] as usize;
-    let authority = u64::from_be_bytes([0, 0, data[2], data[3], data[4], data[5], data[6], data[7]]);
+    let authority =
+        u64::from_be_bytes([0, 0, data[2], data[3], data[4], data[5], data[6], data[7]]);
     let mut sid = format!("S-{revision}-{authority}");
     for i in 0..sub_count {
         let off = 8 + (i * 4);
@@ -1988,8 +1954,6 @@ fn format_guid(data: &[u8]) -> String {
     let d3 = u16::from_le_bytes([data[6], data[7]]);
     format!(
         "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        d1, d2, d3,
-        data[8], data[9], data[10], data[11],
-        data[12], data[13], data[14], data[15]
+        d1, d2, d3, data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]
     )
 }

@@ -1,4 +1,4 @@
-﻿//! Report runner — Top-level orchestrator that drives report generation.
+//! Report runner — Top-level orchestrator that drives report generation.
 //! Takes an engagement session and produces output in the requested format.
 
 use crate::markdown;
@@ -120,9 +120,7 @@ impl ReportConfig {
 
     /// Construct a timestamped filename base from a domain name
     pub fn filename_from_domain(mut self, domain: &str) -> Self {
-        let sanitized = domain
-            .replace(['.', ' '], "_")
-            .to_lowercase();
+        let sanitized = domain.replace(['.', ' '], "_").to_lowercase();
         self.filename_base = format!(
             "overthrone-{}-{}",
             sanitized,
@@ -237,9 +235,7 @@ pub async fn generate_from_session(
             output.files.push(path);
         }
         ReportFormat::All => {
-            output
-                .files
-                .push(generate_markdown(session, config).await?);
+            output.files.push(generate_markdown(session, config).await?);
             output.files.push(generate_pdf(session, config).await?);
             output.files.push(generate_json(session, config).await?);
         }
@@ -387,8 +383,7 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
     );
     println!(
         "{}",
-        "╠══════════════════════════════════════════════════╣"
-            .magenta()
+        "╠══════════════════════════════════════════════════╣".magenta()
     );
 
     // Findings breakdown
@@ -406,28 +401,13 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
         );
     }
     if high > 0 {
-        println!(
-            "{}    {} High:     {}",
-            "║".magenta(),
-            "●".red(),
-            high
-        );
+        println!("{}    {} High:     {}", "║".magenta(), "●".red(), high);
     }
     if medium > 0 {
-        println!(
-            "{}    {} Medium:   {}",
-            "║".magenta(),
-            "●".yellow(),
-            medium
-        );
+        println!("{}    {} Medium:   {}", "║".magenta(), "●".yellow(), medium);
     }
     if low > 0 {
-        println!(
-            "{}    {} Low:      {}",
-            "║".magenta(),
-            "●".green(),
-            low
-        );
+        println!("{}    {} Low:      {}", "║".magenta(), "●".green(), low);
     }
     if info_count > 0 {
         println!(
@@ -511,15 +491,8 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
 // ═══════════════════════════════════════════════════════════
 
 /// Quick markdown report — minimal config
-pub async fn quick_markdown(
-    result: &AutoPwnResult,
-    output_dir: &str,
-) -> anyhow::Result<PathBuf> {
-    let domain = result
-        .state
-        .domain
-        .as_deref()
-        .unwrap_or("unknown");
+pub async fn quick_markdown(result: &AutoPwnResult, output_dir: &str) -> anyhow::Result<PathBuf> {
+    let domain = result.state.domain.as_deref().unwrap_or("unknown");
 
     let config = ReportConfig::default()
         .format(ReportFormat::Markdown)
@@ -542,11 +515,7 @@ pub async fn quick_all(
     assessor: &str,
     company: &str,
 ) -> anyhow::Result<ReportOutput> {
-    let domain = result
-        .state
-        .domain
-        .as_deref()
-        .unwrap_or("unknown");
+    let domain = result.state.domain.as_deref().unwrap_or("unknown");
 
     let config = ReportConfig::default()
         .format(ReportFormat::All)
@@ -614,9 +583,7 @@ pub fn merge_sessions(
     }
 
     // Re-sort by severity
-    merged
-        .findings
-        .sort_by(|a, b| b.severity.cmp(&a.severity));
+    merged.findings.sort_by(|a, b| b.severity.cmp(&a.severity));
 
     // Update stats (take max)
     merged.total_users_enumerated = merged
@@ -628,11 +595,8 @@ pub fn merge_sessions(
     merged.total_credentials_compromised = merged
         .total_credentials_compromised
         .max(additional.total_credentials_compromised);
-    merged.total_admin_hosts = merged
-        .total_admin_hosts
-        .max(additional.total_admin_hosts);
-    merged.domain_admin_achieved =
-        merged.domain_admin_achieved || additional.domain_admin_achieved;
+    merged.total_admin_hosts = merged.total_admin_hosts.max(additional.total_admin_hosts);
+    merged.domain_admin_achieved = merged.domain_admin_achieved || additional.domain_admin_achieved;
 
     // Extend scope
     for domain in &additional.scope.domains {
@@ -654,10 +618,7 @@ pub fn merge_sessions(
     }
 
     // Bump version
-    merged.version = format!(
-        "{}-merged",
-        merged.version.trim_end_matches("-merged")
-    );
+    merged.version = format!("{}-merged", merged.version.trim_end_matches("-merged"));
 
     info!(
         "  {} Merged sessions: {} findings total",
@@ -676,7 +637,7 @@ pub fn merge_sessions(
 mod tests {
     use super::*;
     use crate::session::{
-        EngagementSession, EngagementScope, EngagementType, Finding, FindingCategory, Severity,
+        EngagementScope, EngagementSession, EngagementType, Finding, FindingCategory, Severity,
     };
     use chrono::Utc;
 
@@ -773,8 +734,7 @@ mod tests {
 
     #[test]
     fn test_filename_from_domain() {
-        let config = ReportConfig::default()
-            .filename_from_domain("corp.local");
+        let config = ReportConfig::default().filename_from_domain("corp.local");
         assert!(config.filename_base.contains("corp_local"));
     }
 
@@ -795,9 +755,7 @@ mod tests {
     fn test_mitre_mapping() {
         let mappings = crate::mapper::map_technique("kerberoast");
         assert!(!mappings.is_empty());
-        assert!(mappings
-            .iter()
-            .any(|m| m.technique_id == "T1558"));
+        assert!(mappings.iter().any(|m| m.technique_id == "T1558"));
     }
 
     #[test]

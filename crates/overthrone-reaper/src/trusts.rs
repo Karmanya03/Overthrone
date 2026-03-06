@@ -1,8 +1,8 @@
 //! Domain trust enumeration.
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -17,10 +17,10 @@ pub enum TrustDirection {
 impl std::fmt::Display for TrustDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Inbound       => write!(f, "Inbound"),
-            Self::Outbound      => write!(f, "Outbound"),
+            Self::Inbound => write!(f, "Inbound"),
+            Self::Outbound => write!(f, "Outbound"),
             Self::Bidirectional => write!(f, "Bidirectional"),
-            Self::Unknown(v)    => write!(f, "Unknown({})", v),
+            Self::Unknown(v) => write!(f, "Unknown({})", v),
         }
     }
 }
@@ -38,9 +38,9 @@ impl std::fmt::Display for TrustType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ParentChild => write!(f, "ParentChild"),
-            Self::External   => write!(f, "External"),
-            Self::Forest     => write!(f, "Forest"),
-            Self::CrossLink  => write!(f, "CrossLink"),
+            Self::External => write!(f, "External"),
+            Self::Forest => write!(f, "Forest"),
+            Self::CrossLink => write!(f, "CrossLink"),
             Self::Unknown(v) => write!(f, "Unknown({})", v),
         }
     }
@@ -61,12 +61,12 @@ pub fn trust_filter() -> String {
 }
 
 // trustAttributes bit flags
-const TRUST_ATTR_NON_TRANSITIVE: u32     = 0x00000001;
+const TRUST_ATTR_NON_TRANSITIVE: u32 = 0x00000001;
 const TRUST_ATTR_QUARANTINED_DOMAIN: u32 = 0x00000004; // SID filtering
-const TRUST_ATTR_FOREST_TRANSITIVE: u32  = 0x00000008;
-const TRUST_ATTR_CROSS_ORG: u32          = 0x00000010;
-const TRUST_ATTR_WITHIN_FOREST: u32      = 0x00000020;
-const TRUST_ATTR_TGT_DELEGATION: u32     = 0x00000200;
+const TRUST_ATTR_FOREST_TRANSITIVE: u32 = 0x00000008;
+const TRUST_ATTR_CROSS_ORG: u32 = 0x00000010;
+const TRUST_ATTR_WITHIN_FOREST: u32 = 0x00000020;
+const TRUST_ATTR_TGT_DELEGATION: u32 = 0x00000200;
 
 pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> {
     info!("[trusts] Querying {} for domain trusts", config.dc_ip);
@@ -77,7 +77,8 @@ pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> 
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     // Trusts live under CN=System,<base_dn>
     let base_dn = ReaperConfig::base_dn_from_domain(&config.domain);
@@ -92,7 +93,10 @@ pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> 
         "securityIdentifier",
     ];
 
-    let entries = match conn.custom_search_with_base(&trust_base, &filter, attrs).await {
+    let entries = match conn
+        .custom_search_with_base(&trust_base, &filter, attrs)
+        .await
+    {
         Ok(e) => e,
         Err(e) => {
             warn!("[trusts] LDAP search failed: {}", e);
@@ -104,13 +108,15 @@ pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> 
     let mut results = Vec::new();
 
     for entry in &entries {
-        let target_domain = entry.attrs
+        let target_domain = entry
+            .attrs
             .get("trustPartner")
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| entry.dn.clone());
 
-        let raw_dir: u32 = entry.attrs
+        let raw_dir: u32 = entry
+            .attrs
             .get("trustDirection")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
@@ -123,13 +129,15 @@ pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> 
             other => TrustDirection::Unknown(other),
         };
 
-        let raw_type: u32 = entry.attrs
+        let raw_type: u32 = entry
+            .attrs
             .get("trustType")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
-        let trust_attrs: u32 = entry.attrs
+        let trust_attrs: u32 = entry
+            .attrs
             .get("trustAttributes")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
@@ -155,8 +163,10 @@ pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> 
         let sid_filtering_enabled = trust_attrs & TRUST_ATTR_QUARANTINED_DOMAIN != 0;
         let tgt_delegation_enabled = trust_attrs & TRUST_ATTR_TGT_DELEGATION != 0;
 
-        info!("[trusts]  {} ({}, {}, transitive={}, sid-filter={})",
-            target_domain, direction, trust_type, transitive, sid_filtering_enabled);
+        info!(
+            "[trusts]  {} ({}, {}, transitive={}, sid-filter={})",
+            target_domain, direction, trust_type, transitive, sid_filtering_enabled
+        );
 
         results.push(TrustEntry {
             target_domain,

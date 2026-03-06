@@ -7,8 +7,8 @@
 
 use clap::Parser;
 use colored::Colorize;
-use overthrone_pilot::runner::{AutoPwnConfig, Credentials, ExecMethod, Stage};
 use overthrone_pilot::WizardSession;
+use overthrone_pilot::runner::{AutoPwnConfig, Credentials, ExecMethod, Stage};
 use std::path::PathBuf;
 use tracing::info;
 
@@ -110,11 +110,11 @@ impl From<StageArg> for Stage {
     fn from(arg: StageArg) -> Self {
         match arg {
             StageArg::Enumerate => Stage::Enumerate,
-            StageArg::Attack    => Stage::Attack,
-            StageArg::Escalate  => Stage::Escalate,
-            StageArg::Lateral   => Stage::Lateral,
-            StageArg::Loot      => Stage::Loot,
-            StageArg::Cleanup   => Stage::Cleanup,
+            StageArg::Attack => Stage::Attack,
+            StageArg::Escalate => Stage::Escalate,
+            StageArg::Lateral => Stage::Lateral,
+            StageArg::Loot => Stage::Loot,
+            StageArg::Cleanup => Stage::Cleanup,
         }
     }
 }
@@ -131,11 +131,11 @@ pub enum ExecMethodArg {
 impl From<ExecMethodArg> for ExecMethod {
     fn from(arg: ExecMethodArg) -> Self {
         match arg {
-            ExecMethodArg::Auto    => ExecMethod::Auto,
-            ExecMethodArg::Psexec  => ExecMethod::PsExec,
+            ExecMethodArg::Auto => ExecMethod::Auto,
+            ExecMethodArg::Psexec => ExecMethod::PsExec,
             ExecMethodArg::Smbexec => ExecMethod::SmbExec,
             ExecMethodArg::Wmiexec => ExecMethod::WmiExec,
-            ExecMethodArg::Winrm   => ExecMethod::WinRm,
+            ExecMethodArg::Winrm => ExecMethod::WinRm,
         }
     }
 }
@@ -145,14 +145,25 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
     if let Some(checkpoint_path) = args.resume {
         info!("Resuming wizard from {}", checkpoint_path.display());
 
-        let mut session = WizardSession::from_checkpoint(checkpoint_path).await
+        let mut session = WizardSession::from_checkpoint(checkpoint_path)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to load checkpoint: {}", e))?;
 
-        if args.no_pause      { session.pause_after_stage = false; }
-        if args.no_auto_crack { session.auto_crack = false; }
-        session.max_pause_secs = if args.pause_timeout == 0 { None } else { Some(args.pause_timeout) };
+        if args.no_pause {
+            session.pause_after_stage = false;
+        }
+        if args.no_auto_crack {
+            session.auto_crack = false;
+        }
+        session.max_pause_secs = if args.pause_timeout == 0 {
+            None
+        } else {
+            Some(args.pause_timeout)
+        };
 
-        let result = session.run().await
+        let result = session
+            .run()
+            .await
             .map_err(|e| anyhow::anyhow!("Wizard execution failed: {}", e))?;
 
         if result.domain_admin_achieved {
@@ -164,16 +175,25 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
     }
 
     // ── New session — validate required args ──
-    let target   = args.target.ok_or_else(|| anyhow::anyhow!("--target is required (or use --resume)"))?;
-    let dc_host  = args.dc_host.ok_or_else(|| anyhow::anyhow!("--dc-host / OT_DC_HOST required"))?;
-    let domain   = args.domain.ok_or_else(|| anyhow::anyhow!("--domain / OT_DOMAIN required"))?;
-    let username = args.username.ok_or_else(|| anyhow::anyhow!("--username / OT_USERNAME required"))?;
+    let target = args
+        .target
+        .ok_or_else(|| anyhow::anyhow!("--target is required (or use --resume)"))?;
+    let dc_host = args
+        .dc_host
+        .ok_or_else(|| anyhow::anyhow!("--dc-host / OT_DC_HOST required"))?;
+    let domain = args
+        .domain
+        .ok_or_else(|| anyhow::anyhow!("--domain / OT_DOMAIN required"))?;
+    let username = args
+        .username
+        .ok_or_else(|| anyhow::anyhow!("--username / OT_USERNAME required"))?;
 
     let creds = if let Some(hash) = args.nt_hash {
         info!("Using NTLM hash authentication");
         Credentials::ntlm_hash(&domain, &username, &hash)
     } else {
-        let password = args.password
+        let password = args
+            .password
             .ok_or_else(|| anyhow::anyhow!("--password or --nt-hash required"))?;
         Credentials::password(&domain, &username, &password)
     };
@@ -182,13 +202,13 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         dc_host,
         creds,
         target,
-        max_stage:   args.max_stage.into(),
-        stealth:     args.stealth,
-        dry_run:     args.dry_run,
+        max_stage: args.max_stage.into(),
+        stealth: args.stealth,
+        dry_run: args.dry_run,
         exec_method: args.exec_method.into(),
-        jitter_ms:   args.jitter_ms,
-        use_ldaps:   args.ldaps,
-        timeout:     args.timeout,
+        jitter_ms: args.jitter_ms,
+        use_ldaps: args.ldaps,
+        timeout: args.timeout,
         #[cfg(feature = "qlearn")]
         adaptive_mode: overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
         #[cfg(feature = "qlearn")]
@@ -197,29 +217,40 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
 
     let mut session = WizardSession::new(config, Some(args.checkpoint_dir));
     session.pause_after_stage = !args.no_pause;
-    session.auto_crack        = !args.no_auto_crack;
-    session.max_pause_secs    = if args.pause_timeout == 0 { None } else { Some(args.pause_timeout) };
+    session.auto_crack = !args.no_auto_crack;
+    session.max_pause_secs = if args.pause_timeout == 0 {
+        None
+    } else {
+        Some(args.pause_timeout)
+    };
 
     // ── Skip enum if requested ──
     if args.skip_enum {
-        let state_file = args.from_file
+        let state_file = args
+            .from_file
             .ok_or_else(|| anyhow::anyhow!("--from-file required with --skip-enum"))?;
 
         info!("Loading state from {}", state_file.display());
-        let state_json = tokio::fs::read_to_string(&state_file).await
+        let state_json = tokio::fs::read_to_string(&state_file)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to read state file: {}", e))?;
         session.state = serde_json::from_str(&state_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse state JSON: {}", e))?;
 
         session.current_stage = Stage::Attack;
         session.completed_stages.push(Stage::Enumerate);
-        info!("Loaded {} users, {} computers — skipping enum",
-            session.state.users.len(), session.state.computers.len());
+        info!(
+            "Loaded {} users, {} computers — skipping enum",
+            session.state.users.len(),
+            session.state.computers.len()
+        );
     }
 
     // ── Run ──
     let checkpoint_path = session.checkpoint_path.clone();
-    let result = session.run().await
+    let result = session
+        .run()
+        .await
         .map_err(|e| anyhow::anyhow!("Wizard execution failed: {}", e))?;
 
     if result.domain_admin_achieved {
@@ -227,7 +258,10 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         std::process::exit(0);
     } else {
         println!("\n{}", "Wizard completed (goal not achieved)".yellow());
-        println!("  Resume with: ovt wizard --resume {}", checkpoint_path.display());
+        println!(
+            "  Resume with: ovt wizard --resume {}",
+            checkpoint_path.display()
+        );
         std::process::exit(1);
     }
 }

@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Karmanya03"]
 license = "MIT"
@@ -23,7 +23,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # Async Runtime
-tokio = { version = "1.49", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -32,7 +32,7 @@ toml = "0.9.8"
 
 # Error Handling
 thiserror = "2.0"
-anyhow = "1.0"
+anyhow = "1.0.102"
 
 # Logging
 tracing = "0.1"
@@ -47,13 +47,13 @@ clap = { version = "4.5", features = ["derive", "color", "env", "wrap_help"] }
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 
 # Graph Engine
-petgraph = { version = "0.6", features = ["serde"] }
+petgraph = { version = "0.8.3", features = ["serde"] }
 
 # Date/Time
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 
 # UUID
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.22.0", features = ["v4", "serde"] }
 
 # Terminal Output
 colored = "3.0"
@@ -76,11 +76,11 @@ rc4 = "0.1"
 pbkdf2 = "0.12"
 
 # Networking
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "cookies"] }
 hickory-resolver = "0.25"
 
 # ASN.1 / Kerberos
-rasn = "0.28"
+rasn = "0.28.8"
 kerberos_asn1 = "0.2"
 kerberos_crypto = "0.3"
 
@@ -102,7 +102,7 @@ directories = "6.0"
 
 # Testing
 tokio-test = "0.4"
-tempfile = "3.14"
+tempfile = "3.26.0"
 pretty_assertions = "1.4"
 
 # NOTE: sspi git patch removed — Devolutions master branch pulls in

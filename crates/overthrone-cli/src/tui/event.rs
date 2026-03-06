@@ -1,6 +1,6 @@
-use std::time::Duration;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, KeyEvent};
 use crate::tui::app::App;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use std::time::Duration;
 
 pub struct EventLoop;
 
@@ -60,15 +60,19 @@ impl EventLoop {
             KeyCode::Char('5') => app.active_tab = super::app::Tab::Trusts,
 
             // Graph navigation
-            KeyCode::Left  | KeyCode::Char('h') => app.pan(-5.0, 0.0),
+            KeyCode::Left | KeyCode::Char('h') => app.pan(-5.0, 0.0),
             KeyCode::Right | KeyCode::Char('l') => app.pan(5.0, 0.0),
-            KeyCode::Up    | KeyCode::Char('k') => app.pan(0.0, -5.0),
-            KeyCode::Down  | KeyCode::Char('j') => app.pan(0.0, 5.0),
+            KeyCode::Up | KeyCode::Char('k') => app.pan(0.0, -5.0),
+            KeyCode::Down | KeyCode::Char('j') => app.pan(0.0, 5.0),
 
             // Zoom
             KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),
             KeyCode::Char('-') => app.zoom_out(),
-            KeyCode::Char('0') => { app.zoom = 1.0; app.camera_x = 0.0; app.camera_y = 0.0; }
+            KeyCode::Char('0') => {
+                app.zoom = 1.0;
+                app.camera_x = 0.0;
+                app.camera_y = 0.0;
+            }
 
             // Search
             KeyCode::Char('/') => {

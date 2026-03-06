@@ -108,11 +108,7 @@ impl LinkCrawlResult {
         output.push_str("╚══════════════════════════════════════════\n\n");
 
         // Find root nodes (depth 0)
-        let mut roots: Vec<&LinkNode> = self
-            .nodes
-            .values()
-            .filter(|n| n.depth == 0)
-            .collect();
+        let mut roots: Vec<&LinkNode> = self.nodes.values().filter(|n| n.depth == 0).collect();
         roots.sort_by_key(|n| &n.server_name);
 
         for root in &roots {
@@ -123,10 +119,7 @@ impl LinkCrawlResult {
             output.push_str("\n🔑 Sysadmin access on:\n");
             for name in &self.sysadmin_nodes {
                 if let Some(node) = self.nodes.get(name) {
-                    output.push_str(&format!(
-                        "   → {} (as {})\n",
-                        name, node.login_context
-                    ));
+                    output.push_str(&format!("   → {} (as {})\n", name, node.login_context));
                 }
             }
         }
@@ -237,7 +230,10 @@ impl<'a> LinkCrawler<'a> {
 
     /// Run the full linked server crawl starting from the current connection
     pub async fn crawl(&mut self) -> Result<LinkCrawlResult> {
-        info!("Starting linked server crawl (max_depth={})", self.config.max_depth);
+        info!(
+            "Starting linked server crawl (max_depth={})",
+            self.config.max_depth
+        );
 
         // Step 1: Discover the root node (current server)
         let root = self.discover_current_node().await?;
@@ -275,7 +271,10 @@ impl<'a> LinkCrawler<'a> {
         // BFS loop
         while let Some((link_name, chain, depth)) = queue.pop_front() {
             if depth > self.config.max_depth {
-                debug!("Skipping {} — max depth {} reached", link_name, self.config.max_depth);
+                debug!(
+                    "Skipping {} — max depth {} reached",
+                    link_name, self.config.max_depth
+                );
                 continue;
             }
 
@@ -327,23 +326,16 @@ impl<'a> LinkCrawler<'a> {
                             node.children = children;
                         }
                         Err(e) => {
-                            warn!(
-                                "Could not enumerate links at {}: {}",
-                                link_name, e
-                            );
+                            warn!("Could not enumerate links at {}: {}", link_name, e);
                         }
                     }
 
-                    self.result
-                        .nodes
-                        .insert(node.server_name.clone(), node);
+                    self.result.nodes.insert(node.server_name.clone(), node);
                 }
                 Err(e) => {
                     let reason = format!("{}", e);
                     warn!("Failed to discover {}: {}", link_name, reason);
-                    self.result
-                        .failed_nodes
-                        .push((link_name.clone(), reason));
+                    self.result.failed_nodes.push((link_name.clone(), reason));
                 }
             }
         }
@@ -569,10 +561,7 @@ pub async fn exec_on_link(
 }
 
 /// Enable xp_cmdshell on a remote linked server through RPC
-pub async fn enable_xp_cmdshell_on_link(
-    client: &mut MssqlClient,
-    link_name: &str,
-) -> Result<()> {
+pub async fn enable_xp_cmdshell_on_link(client: &mut MssqlClient, link_name: &str) -> Result<()> {
     // Use EXEC AT for RPC-enabled linked servers
     let sql = format!(
         "EXEC ('sp_configure ''show advanced options'', 1; RECONFIGURE;') AT [{}];",

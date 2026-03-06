@@ -44,7 +44,6 @@ pub const REG_BINARY: u32 = 3;
 pub const REG_DWORD: u32 = 4;
 pub const REG_MULTI_SZ: u32 = 7;
 
-
 // ═══════════════════════════════════════════════════════════
 // Types
 // ═══════════════════════════════════════════════════════════
@@ -92,7 +91,6 @@ pub struct RegValue {
     /// Raw data bytes
     pub data: Vec<u8>,
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Hive Parser
@@ -318,12 +316,19 @@ impl RegistryHive {
             if data_abs + real_len <= self.data.len() {
                 self.data[data_abs..data_abs + real_len].to_vec()
             } else {
-                warn!("VK data out of bounds: offset=0x{:x} len={}", data_abs, real_len);
+                warn!(
+                    "VK data out of bounds: offset=0x{:x} len={}",
+                    data_abs, real_len
+                );
                 Vec::new()
             }
         };
 
-        Ok(RegValue { name, data_type, data })
+        Ok(RegValue {
+            name,
+            data_type,
+            data,
+        })
     }
 
     fn parse_subkey_list(&self, offset: usize) -> Result<Vec<RegKey>> {
@@ -398,7 +403,6 @@ impl RegistryHive {
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════
@@ -413,7 +417,6 @@ fn utf16le_to_string(bytes: &[u8]) -> String {
         .trim_end_matches('\0')
         .to_string()
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Remote WINREG RPC (MS-RRP)
@@ -634,7 +637,10 @@ impl RemoteRegistry {
         pkt.extend_from_slice(parent_handle);
 
         // Subkey name (RPC_UNICODE_STRING)
-        let name_utf16: Vec<u8> = subkey_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let name_utf16: Vec<u8> = subkey_name
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
         pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
         pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
         pkt.extend_from_slice(&name_utf16);
@@ -669,7 +675,10 @@ impl RemoteRegistry {
         pkt.extend_from_slice(key_handle);
 
         // Value name (RPC_UNICODE_STRING)
-        let name_utf16: Vec<u8> = value_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let name_utf16: Vec<u8> = value_name
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
         pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
         pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
         pkt.extend_from_slice(&name_utf16);
@@ -712,7 +721,10 @@ impl RemoteRegistry {
         pkt.extend_from_slice(key_handle);
 
         // Value name (RPC_UNICODE_STRING)
-        let name_utf16: Vec<u8> = value_name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let name_utf16: Vec<u8> = value_name
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
         pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
         pkt.extend_from_slice(&(name_utf16.len() as u16).to_le_bytes());
         pkt.extend_from_slice(&name_utf16);
@@ -782,7 +794,8 @@ impl RemoteRegistry {
         // [RPC header][type:u32][len:u32][data...]
         let offset = 24; // Skip RPC header
         let data_type = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
-        let data_len = u32::from_le_bytes(response[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let data_len =
+            u32::from_le_bytes(response[offset + 4..offset + 8].try_into().unwrap()) as usize;
 
         if offset + 8 + data_len > response.len() {
             return Err(OverthroneError::custom("QueryValue data truncated"));
@@ -894,17 +907,23 @@ pub async fn read_remote_registry_value(
     // 1. DCE/RPC Bind to WINREG interface
     let bind_req = reg.build_bind_request(call_id);
     call_id += 1;
-    let bind_resp = smb_session.pipe_transact(pipe, &bind_req).await
+    let bind_resp = smb_session
+        .pipe_transact(pipe, &bind_req)
+        .await
         .map_err(|e| OverthroneError::custom(format!("WINREG bind transport failed: {e}")))?;
     if bind_resp.len() < 4 || bind_resp[2] != 12 {
-        return Err(OverthroneError::custom("WINREG RPC bind rejected by server"));
+        return Err(OverthroneError::custom(
+            "WINREG RPC bind rejected by server",
+        ));
     }
     info!("RemoteRegistry: RPC bind to WINREG accepted");
 
     // 2. Open the predefined hive
     let open_hive_req = reg.build_open_hive_request(hive, call_id);
     call_id += 1;
-    let open_hive_resp = smb_session.pipe_transact(pipe, &open_hive_req).await
+    let open_hive_resp = smb_session
+        .pipe_transact(pipe, &open_hive_req)
+        .await
         .map_err(|e| OverthroneError::custom(format!("OpenHive failed: {e}")))?;
     let hive_handle = reg.parse_open_hive_response(&open_hive_resp)?;
 
@@ -927,7 +946,8 @@ pub async fn read_remote_registry_value(
                     let _ = smb_session.pipe_transact(pipe, &close_req).await;
                 }
                 return Err(OverthroneError::custom(format!(
-                    "Failed to open registry key '{}': {}", part, e
+                    "Failed to open registry key '{}': {}",
+                    part, e
                 )));
             }
         };
@@ -939,7 +959,8 @@ pub async fn read_remote_registry_value(
                 let _ = smb_session.pipe_transact(pipe, &close_req).await;
             }
             return Err(OverthroneError::custom(format!(
-                "OpenKey response too short for '{}'", part
+                "OpenKey response too short for '{}'",
+                part
             )));
         }
 
@@ -962,20 +983,25 @@ pub async fn read_remote_registry_value(
     }
 
     // 6. Parse and return the result (after cleanup)
-    let query_resp = query_resp
-        .map_err(|e| OverthroneError::custom(format!("QueryValue failed: {e}")))?;
+    let query_resp =
+        query_resp.map_err(|e| OverthroneError::custom(format!("QueryValue failed: {e}")))?;
     let mut value = reg.parse_query_value_response(&query_resp)?;
     value.name = value_name.to_string();
 
-    info!("RemoteRegistry: Read value '{}' (type={}, {} bytes)",
-        value_name, value.data_type, value.data.len());
+    info!(
+        "RemoteRegistry: Read value '{}' (type={}, {} bytes)",
+        value_name,
+        value.data_type,
+        value.data.len()
+    );
     Ok(value)
 }
 
 /// Common remote registry paths for security assessments
 pub mod registry_paths {
     /// Windows Defender exclusion paths
-    pub const DEFENDER_EXCLUSIONS: &str = "SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
+    pub const DEFENDER_EXCLUSIONS: &str =
+        "SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
     /// LSA configuration
     pub const LSA_CONFIG: &str = "SYSTEM\\CurrentControlSet\\Control\\Lsa";
     /// Cached domain logons

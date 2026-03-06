@@ -1,8 +1,8 @@
 //! SPN enumeration — finds Kerberoastable accounts.
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -27,7 +27,10 @@ pub fn spn_filter() -> String {
 }
 
 pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAccount>> {
-    info!("[spns] Querying {} for Kerberoastable accounts", config.dc_ip);
+    info!(
+        "[spns] Querying {} for Kerberoastable accounts",
+        config.dc_ip
+    );
 
     let mut conn = LdapSession::connect(
         &config.dc_ip,
@@ -35,7 +38,8 @@ pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAcco
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     let filter = spn_filter();
     let attrs = &[
@@ -59,7 +63,8 @@ pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAcco
     let mut results = Vec::new();
 
     for entry in &entries {
-        let sam = entry.attrs
+        let sam = entry
+            .attrs
             .get("sAMAccountName")
             .and_then(|v| v.first())
             .cloned()
@@ -70,32 +75,39 @@ pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAcco
             continue;
         }
 
-        let uac: u32 = entry.attrs
+        let uac: u32 = entry
+            .attrs
             .get("userAccountControl")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
         let enabled = uac & 0x0002 == 0;
-        let admin_count = entry.attrs
+        let admin_count = entry
+            .attrs
             .get("adminCount")
             .and_then(|v| v.first())
             .map(|v| v == "1")
             .unwrap_or(false);
 
-        let spns: Vec<String> = entry.attrs
+        let spns: Vec<String> = entry
+            .attrs
             .get("servicePrincipalName")
             .cloned()
             .unwrap_or_default();
 
-        let pwd_last_set = entry.attrs
+        let pwd_last_set = entry
+            .attrs
             .get("pwdLastSet")
             .and_then(|v| v.first())
             .cloned();
 
-        info!("[spns]  {} — {} SPN(s){}",
-            sam, spns.len(),
-            if admin_count { " [adminCount=1]" } else { "" });
+        info!(
+            "[spns]  {} — {} SPN(s){}",
+            sam,
+            spns.len(),
+            if admin_count { " [adminCount=1]" } else { "" }
+        );
 
         results.push(SpnAccount {
             sam_account_name: sam,

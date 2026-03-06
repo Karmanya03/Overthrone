@@ -4,7 +4,7 @@
 //! serialization, type variants.
 
 use overthrone_core::plugin::{
-    PluginManifest, PluginRegistry, PluginType, PluginCapability, PluginCommand,
+    PluginCapability, PluginCommand, PluginManifest, PluginRegistry, PluginType,
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -44,10 +44,7 @@ fn manifest_serialization_roundtrip() {
         description: "Roundtrip test".to_string(),
         min_overthrone_version: None,
         plugin_type: PluginType::Native,
-        capabilities: vec![
-            PluginCapability::Execution,
-            PluginCapability::Attack,
-        ],
+        capabilities: vec![PluginCapability::Execution, PluginCapability::Attack],
         commands: vec![],
         needs_network: true,
         needs_admin: false,

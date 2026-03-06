@@ -1,4 +1,4 @@
-﻿//! Engagement session — Holds all metadata, scope, findings, and raw
+//! Engagement session — Holds all metadata, scope, findings, and raw
 //! data needed to produce a report. Acts as the single input struct
 //! that the report renderers consume.
 
@@ -238,7 +238,10 @@ impl EngagementSession {
         assessor_company: &str,
     ) -> Self {
         let state = &result.state;
-        let domain = state.domain.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        let domain = state
+            .domain
+            .clone()
+            .unwrap_or_else(|| "UNKNOWN".to_string());
 
         let mut session = Self {
             id: Uuid::new_v4().to_string(),
@@ -286,7 +289,12 @@ impl EngagementSession {
     }
 
     /// Create an empty session for manual report building
-    pub fn new(title: &str, client_name: &str, assessor_name: &str, assessor_company: &str) -> Self {
+    pub fn new(
+        title: &str,
+        client_name: &str,
+        assessor_name: &str,
+        assessor_company: &str,
+    ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             title: title.to_string(),
@@ -402,9 +410,7 @@ impl EngagementSession {
                 business_impact: "These accounts can be attacked without any authentication, \
                     representing a zero-credential attack path."
                     .to_string(),
-                references: vec![
-                    "https://attack.mitre.org/techniques/T1558/004/".to_string(),
-                ],
+                references: vec!["https://attack.mitre.org/techniques/T1558/004/".to_string()],
                 discovered_at: Utc::now(),
             });
         }
@@ -468,9 +474,7 @@ impl EngagementSession {
                 business_impact: "Compromised administrative credentials grant full control \
                     over domain-joined systems and sensitive data."
                     .to_string(),
-                references: vec![
-                    "https://attack.mitre.org/tactics/TA0006/".to_string(),
-                ],
+                references: vec!["https://attack.mitre.org/tactics/TA0006/".to_string()],
                 discovered_at: Utc::now(),
             });
         }
@@ -508,9 +512,7 @@ impl EngagementSession {
                 business_impact: "Complete domain compromise possible through TGT capture \
                     and replay."
                     .to_string(),
-                references: vec![
-                    "https://attack.mitre.org/techniques/T1550/003/".to_string(),
-                ],
+                references: vec!["https://attack.mitre.org/techniques/T1550/003/".to_string()],
                 discovered_at: Utc::now(),
             });
         }
@@ -541,9 +543,7 @@ impl EngagementSession {
                 business_impact: "Lateral movement enables attackers to pivot across \
                     the network, dumping credentials and escalating privileges."
                     .to_string(),
-                references: vec![
-                    "https://attack.mitre.org/tactics/TA0008/".to_string(),
-                ],
+                references: vec!["https://attack.mitre.org/tactics/TA0008/".to_string()],
                 discovered_at: Utc::now(),
             });
         }
@@ -577,9 +577,7 @@ impl EngagementSession {
                     emails, access all file shares, deploy ransomware domain-wide, \
                     create persistent backdoors, and exfiltrate any data."
                     .to_string(),
-                references: vec![
-                    "https://attack.mitre.org/techniques/T1078/002/".to_string(),
-                ],
+                references: vec!["https://attack.mitre.org/techniques/T1078/002/".to_string()],
                 discovered_at: Utc::now(),
             });
         }
@@ -599,7 +597,11 @@ impl EngagementSession {
 
     /// Overall risk rating based on findings
     pub fn overall_risk(&self) -> Severity {
-        if self.findings.iter().any(|f| f.severity == Severity::Critical) {
+        if self
+            .findings
+            .iter()
+            .any(|f| f.severity == Severity::Critical)
+        {
             Severity::Critical
         } else if self.findings.iter().any(|f| f.severity == Severity::High) {
             Severity::High

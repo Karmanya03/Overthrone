@@ -172,7 +172,10 @@ impl CobaltStrikeChannel {
             let mut beacons = self.beacons.lock().await;
             *beacons = parsed;
         } else {
-            log::debug!("[c2:cs] Could not parse beacon list: {}", &resp[..resp.len().min(200)]);
+            log::debug!(
+                "[c2:cs] Could not parse beacon list: {}",
+                &resp[..resp.len().min(200)]
+            );
         }
         Ok(())
     }
@@ -435,12 +438,9 @@ impl C2Channel for CobaltStrikeChannel {
 
         // Find an existing elevated beacon to pivot from
         let beacons = self.beacons.lock().await;
-        let pivot_beacon = beacons
-            .iter()
-            .find(|b| b.is_admin)
-            .ok_or_else(|| {
-                OverthroneError::C2("No elevated beacon available for lateral movement".into())
-            })?;
+        let pivot_beacon = beacons.iter().find(|b| b.is_admin).ok_or_else(|| {
+            OverthroneError::C2("No elevated beacon available for lateral movement".into())
+        })?;
         let pivot_id = pivot_beacon.id.clone();
         drop(beacons);
 
@@ -470,10 +470,7 @@ impl C2Channel for CobaltStrikeChannel {
 
                 listeners.push(C2Listener {
                     name: name.clone(),
-                    listener_type: parsed["payload"]
-                        .as_str()
-                        .unwrap_or("unknown")
-                        .to_string(),
+                    listener_type: parsed["payload"].as_str().unwrap_or("unknown").to_string(),
                     host: parsed["host"].as_str().unwrap_or("").to_string(),
                     port: parsed["port"].as_u64().unwrap_or(0) as u16,
                     active: true,

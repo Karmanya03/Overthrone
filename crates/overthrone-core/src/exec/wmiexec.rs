@@ -172,10 +172,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         .await
         .map_err(|e| OverthroneError::Smb(format!("EPM ept_map failed: {e}")))?;
 
-    debug!(
-        "WMI/DCOM: ept_map response ({} bytes)",
-        ept_map_resp.len()
-    );
+    debug!("WMI/DCOM: ept_map response ({} bytes)", ept_map_resp.len());
 
     // Parse dynamic endpoint from ept_map response.
     // Tower data is complex; the response may contain TCP port or named pipe.
@@ -210,10 +207,8 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
     );
 
     // Parse OBJREF from response to get IWbemLevel1Login IPID
-    let (login_ipid, _login_oxid, login_oid) =
-        parse_objref(&create_resp).map_err(|e| {
-            OverthroneError::Smb(format!("OBJREF parse failed: {e}"))
-        })?;
+    let (login_ipid, _login_oxid, login_oid) = parse_objref(&create_resp)
+        .map_err(|e| OverthroneError::Smb(format!("OBJREF parse failed: {e}")))?;
 
     debug!(
         "WMI/DCOM: Got IWbemLevel1Login IPID={:02x?}",
@@ -228,16 +223,11 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         .await
         .map_err(|e| OverthroneError::Smb(format!("IWbemLevel1Login::NTLMLogin failed: {e}")))?;
 
-    debug!(
-        "WMI/DCOM: NTLMLogin response ({} bytes)",
-        login_resp.len()
-    );
+    debug!("WMI/DCOM: NTLMLogin response ({} bytes)", login_resp.len());
 
     // Parse IWbemServices IPID from NTLMLogin response
-    let (services_ipid, _svc_oxid, services_oid) =
-        parse_objref(&login_resp).map_err(|e| {
-            OverthroneError::Smb(format!("IWbemServices OBJREF parse failed: {e}"))
-        })?;
+    let (services_ipid, _svc_oxid, services_oid) = parse_objref(&login_resp)
+        .map_err(|e| OverthroneError::Smb(format!("IWbemServices OBJREF parse failed: {e}")))?;
 
     debug!(
         "WMI/DCOM: Got IWbemServices IPID={:02x?}",
@@ -251,10 +241,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         .await
         .map_err(|e| OverthroneError::Smb(format!("ExecMethod failed: {e}")))?;
 
-    debug!(
-        "WMI/DCOM: ExecMethod response ({} bytes)",
-        exec_resp.len()
-    );
+    debug!("WMI/DCOM: ExecMethod response ({} bytes)", exec_resp.len());
 
     // Check if process creation succeeded
     // The response contains ORPC_THAT header followed by method results.
@@ -287,40 +274,34 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
 
 /// IRemoteSCMActivator UUID: 000001A0-0000-0000-C000-000000000046
 const SCM_ACTIVATOR_UUID: [u8; 16] = [
-    0xA0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+    0xA0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
 
 /// IRemUnknown2 UUID: 00000143-0000-0000-C000-000000000046
 #[allow(dead_code)] // DCOM interface UUID
 const IREMUNKNOWN2_UUID: [u8; 16] = [
-    0x43, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+    0x43, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
 
 /// CLSID_WbemLocator: {4590f811-1d3a-11d0-891f-00aa004b2e24}
 const CLSID_WBEM_LOCATOR: [u8; 16] = [
-    0x11, 0xF8, 0x90, 0x45, 0x3A, 0x1D, 0xD0, 0x11,
-    0x89, 0x1F, 0x00, 0xAA, 0x00, 0x4B, 0x2E, 0x24,
+    0x11, 0xF8, 0x90, 0x45, 0x3A, 0x1D, 0xD0, 0x11, 0x89, 0x1F, 0x00, 0xAA, 0x00, 0x4B, 0x2E, 0x24,
 ];
 
 /// IID_IWbemLevel1Login: {F309AD18-D86A-11d0-A075-00C04FB68820}
 const IID_IWBEM_LEVEL1_LOGIN: [u8; 16] = [
-    0x18, 0xAD, 0x09, 0xF3, 0x6A, 0xD8, 0xD0, 0x11,
-    0xA0, 0x75, 0x00, 0xC0, 0x4F, 0xB6, 0x88, 0x20,
+    0x18, 0xAD, 0x09, 0xF3, 0x6A, 0xD8, 0xD0, 0x11, 0xA0, 0x75, 0x00, 0xC0, 0x4F, 0xB6, 0x88, 0x20,
 ];
 
 /// IID_IWbemServices: {9556DC99-828C-11CF-A37E-00AA003240C7}
 #[allow(dead_code)] // DCOM interface UUID
 const IID_IWBEM_SERVICES: [u8; 16] = [
-    0x99, 0xDC, 0x56, 0x95, 0x8C, 0x82, 0xCF, 0x11,
-    0xA3, 0x7E, 0x00, 0xAA, 0x00, 0x32, 0x40, 0xC7,
+    0x99, 0xDC, 0x56, 0x95, 0x8C, 0x82, 0xCF, 0x11, 0xA3, 0x7E, 0x00, 0xAA, 0x00, 0x32, 0x40, 0xC7,
 ];
 
 /// NDR transfer syntax UUID
 const NDR_UUID: [u8; 16] = [
-    0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
-    0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+    0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11, 0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
 ];
 
 /// Generate a random causality ID for ORPC_THIS
@@ -351,9 +332,9 @@ fn build_orpc_this() -> Vec<u8> {
 fn build_rpc_bind(interface_uuid: &[u8; 16], version_major: u16, call_id: u32) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(72);
 
-    pkt.push(5);    // version
-    pkt.push(0);    // minor
-    pkt.push(11);   // bind
+    pkt.push(5); // version
+    pkt.push(0); // minor
+    pkt.push(11); // bind
     pkt.push(0x03); // first + last
     pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data repr
     pkt.extend_from_slice(&[0x00, 0x00]); // frag length (patched)
@@ -363,8 +344,8 @@ fn build_rpc_bind(interface_uuid: &[u8; 16], version_major: u16, call_id: u32) -
     // Bind body
     pkt.extend_from_slice(&4096u16.to_le_bytes()); // max xmit
     pkt.extend_from_slice(&4096u16.to_le_bytes()); // max recv
-    pkt.extend_from_slice(&0u32.to_le_bytes());    // assoc group
-    pkt.extend_from_slice(&1u32.to_le_bytes());    // num ctx items
+    pkt.extend_from_slice(&0u32.to_le_bytes()); // assoc group
+    pkt.extend_from_slice(&1u32.to_le_bytes()); // num ctx items
 
     // Context item 0
     pkt.extend_from_slice(&0u16.to_le_bytes()); // ctx id
@@ -388,12 +369,7 @@ fn build_rpc_bind(interface_uuid: &[u8; 16], version_major: u16, call_id: u32) -
 }
 
 /// Build a DCE/RPC request PDU with DCOM ORPC_THIS header.
-fn build_dcom_request(
-    opnum: u16,
-    ipid: &[u8; 16],
-    stub_data: &[u8],
-    call_id: u32,
-) -> Vec<u8> {
+fn build_dcom_request(opnum: u16, ipid: &[u8; 16], stub_data: &[u8], call_id: u32) -> Vec<u8> {
     let mut pdu = vec![5, 0, 0, 0x03]; // version 5.0, request, first+last
     pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
     let frag_len = (24 + 16 + stub_data.len()) as u16; // header + object UUID + stub
@@ -502,7 +478,7 @@ fn build_ntlm_login_request(login_ipid: &[u8; 16]) -> Vec<u8> {
     // Referent ID for string pointer
     stub.extend_from_slice(&0x00020000u32.to_le_bytes());
     stub.extend_from_slice(&char_count.to_le_bytes()); // max count
-    stub.extend_from_slice(&0u32.to_le_bytes());       // offset
+    stub.extend_from_slice(&0u32.to_le_bytes()); // offset
     stub.extend_from_slice(&char_count.to_le_bytes()); // actual count
     stub.extend_from_slice(&ns_utf16);
     // Pad to 4-byte boundary
@@ -624,9 +600,9 @@ fn write_bstr(buf: &mut Vec<u8>, s: &str) {
     let char_count = (s.len() + 1) as u32;
 
     buf.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent ID
-    buf.extend_from_slice(&char_count.to_le_bytes());     // max count
-    buf.extend_from_slice(&0u32.to_le_bytes());           // offset
-    buf.extend_from_slice(&char_count.to_le_bytes());     // actual count
+    buf.extend_from_slice(&char_count.to_le_bytes()); // max count
+    buf.extend_from_slice(&0u32.to_le_bytes()); // offset
+    buf.extend_from_slice(&char_count.to_le_bytes()); // actual count
     buf.extend_from_slice(&utf16);
     // Pad to 4-byte boundary
     while buf.len() % 4 != 0 {
@@ -801,16 +777,16 @@ fn find_pattern(data: &[u8], pattern: &[u8]) -> Option<usize> {
 fn build_ept_map_request() -> Vec<u8> {
     // IRemoteSCMActivator UUID: 000001A0-0000-0000-C000-000000000046
     let scm_uuid: [u8; 16] = [
-        0xA0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+        0xA0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x46,
     ];
 
     let mut pkt = Vec::with_capacity(128);
 
     // DCE/RPC header (request)
-    pkt.push(5);    // version
-    pkt.push(0);    // minor
-    pkt.push(0);    // request
+    pkt.push(5); // version
+    pkt.push(0); // minor
+    pkt.push(0); // request
     pkt.push(0x03); // first + last
     pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data repr (little-endian)
     pkt.extend_from_slice(&[0x00, 0x00]); // frag length (patched below)
@@ -839,8 +815,8 @@ fn build_ept_map_request() -> Vec<u8> {
     // Floor 2: NDR transfer syntax
     pkt.push(0x0D);
     pkt.extend_from_slice(&[
-        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
-        0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11, 0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48,
+        0x60,
     ]);
     pkt.extend_from_slice(&[0x02, 0x00]); // v2.0
     // Floor 3: RPC connection-oriented
@@ -1081,7 +1057,10 @@ impl super::RemoteExecutor for WmiExecutor {
         Ok(super::ExecOutput {
             stdout: result.output,
             stderr: String::new(),
-            exit_code: result.return_code.map(|rc| rc as i32).or(Some(if result.success { 0 } else { 1 })),
+            exit_code: result
+                .return_code
+                .map(|rc| rc as i32)
+                .or(Some(if result.success { 0 } else { 1 })),
             method: super::ExecMethod::WmiExec,
         })
     }

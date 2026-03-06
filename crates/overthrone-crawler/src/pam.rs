@@ -1,4 +1,4 @@
-﻿//! PAM (Privileged Access Management) trust analysis.
+//! PAM (Privileged Access Management) trust analysis.
 //!
 //! Detects PAM trusts and analyzes their configuration for
 //! abuse potential including shadow principal misconfigurations.
@@ -68,14 +68,14 @@ pub fn shadow_principal_filter() -> String {
 }
 
 /// Analyze the trust graph for PAM trust configurations and risks.
-pub fn analyze_pam_trusts(
-    source_domain: &str,
-    graph: &TrustGraph,
-) -> Vec<PamFinding> {
+pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFinding> {
     let mut findings = Vec::new();
     let source_upper = source_domain.to_uppercase();
 
-    info!("[pam] Analyzing PAM trust configuration for {}", source_domain);
+    info!(
+        "[pam] Analyzing PAM trust configuration for {}",
+        source_domain
+    );
 
     // Check each trust for PAM characteristics
     let mut pam_trusts_found = false;
@@ -151,7 +151,8 @@ pub fn analyze_pam_trusts(
                     trust.source_domain, trust.target_domain
                 ),
                 remediation: "Monitor for trust attribute changes (Event ID 4706, 4707). \
-                    Restrict forest admin access. Implement trust modification alerting.".into(),
+                    Restrict forest admin access. Implement trust modification alerting."
+                    .into(),
             });
         }
     }
@@ -165,14 +166,19 @@ pub fn analyze_pam_trusts(
             shadow_principals: Vec::new(),
             risk_level: "OK".into(),
             description: "No PAM trusts detected in the environment. \
-                Shadow principal-based attacks are not applicable.".into(),
+                Shadow principal-based attacks are not applicable."
+                .into(),
             remediation: "No action needed for PAM-specific risks.".into(),
         });
     }
 
-    info!("[pam] {} PAM findings ({} critical)",
+    info!(
+        "[pam] {} PAM findings ({} critical)",
         findings.len(),
-        findings.iter().filter(|f| f.risk_level == "CRITICAL").count()
+        findings
+            .iter()
+            .filter(|f| f.risk_level == "CRITICAL")
+            .count()
     );
 
     findings

@@ -86,7 +86,10 @@ pub async fn run_remote_command(smb: &SmbSession, command: &str) -> Result<Strin
 
     // Step 8: Delete temp file
     let _ = smb.delete_file("ADMIN$", remote_path).await;
-    info!("[exec_util] Command complete ({} bytes output)", output.len());
+    info!(
+        "[exec_util] Command complete ({} bytes output)",
+        output.len()
+    );
 
     Ok(output)
 }
@@ -96,8 +99,8 @@ pub async fn run_remote_command(smb: &SmbSession, command: &str) -> Result<Strin
 fn build_svcctl_bind() -> Vec<u8> {
     // SVCCTL UUID: 367abb81-9844-35f1-ad32-98f038001003
     let uuid: [u8; 16] = [
-        0x81, 0xbb, 0x7a, 0x36, 0x44, 0x98, 0xf1, 0x35, 0xad, 0x32, 0x98, 0xf0, 0x38, 0x00,
-        0x10, 0x03,
+        0x81, 0xbb, 0x7a, 0x36, 0x44, 0x98, 0xf1, 0x35, 0xad, 0x32, 0x98, 0xf0, 0x38, 0x00, 0x10,
+        0x03,
     ];
 
     let mut buf = Vec::new();
@@ -120,8 +123,8 @@ fn build_svcctl_bind() -> Vec<u8> {
     buf.extend_from_slice(&0u16.to_le_bytes()); // version minor
     // NDR transfer syntax
     buf.extend_from_slice(&[
-        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10,
-        0x48, 0x60,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
+        0x60,
     ]);
     buf.extend_from_slice(&2u32.to_le_bytes());
 

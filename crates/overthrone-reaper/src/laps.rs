@@ -236,16 +236,16 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
                 .map(|s| parse_encrypted_blob_bytes(s));
 
             if let Some(ref bytes) = blob_bytes
-                && let Some(header) = parse_laps_v2_encrypted_header(bytes) {
-                    debug!(
-                        "[laps]  {} → v2 encrypted blob: {} bytes, flags={:#x}, ts={}",
-                        computer_name,
-                        header.payload_size,
-                        header.flags,
-                        filetime_to_string_i64(header.update_timestamp)
-                            .unwrap_or_else(|| "?".into()),
-                    );
-                }
+                && let Some(header) = parse_laps_v2_encrypted_header(bytes)
+            {
+                debug!(
+                    "[laps]  {} → v2 encrypted blob: {} bytes, flags={:#x}, ts={}",
+                    computer_name,
+                    header.payload_size,
+                    header.flags,
+                    filetime_to_string_i64(header.update_timestamp).unwrap_or_else(|| "?".into()),
+                );
+            }
 
             (None, None, blob_bytes, LapsSource::V2Encrypted)
         } else {
@@ -344,10 +344,12 @@ fn parse_encrypted_blob_bytes(raw: &str) -> Vec<u8> {
     }
 
     // Try hex
-    if raw.len() % 2 == 0 && raw.chars().all(|c| c.is_ascii_hexdigit())
-        && let Ok(decoded) = hex::decode(raw) {
-            return decoded;
-        }
+    if raw.len() % 2 == 0
+        && raw.chars().all(|c| c.is_ascii_hexdigit())
+        && let Ok(decoded) = hex::decode(raw)
+    {
+        return decoded;
+    }
 
     // Last resort: treat as raw UTF-8 bytes
     raw.as_bytes().to_vec()

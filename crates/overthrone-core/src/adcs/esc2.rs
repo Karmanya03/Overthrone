@@ -6,8 +6,8 @@
 //!
 //! Reference: SpecterOps "Certified Pre-Owned" — ESC2
 
-use crate::adcs::{IssuedCertificate, create_client_auth_csr};
 use crate::adcs::web_enrollment::WebEnrollmentClient;
+use crate::adcs::{IssuedCertificate, create_client_auth_csr};
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
@@ -24,12 +24,12 @@ impl Esc2Exploiter {
     }
 
     /// Execute ESC2 attack
-    /// 
+    ///
     /// # Arguments
     /// * `template` - Template name with Any Purpose EKU
     /// * `subject_cn` - Subject Common Name for the certificate
     /// * `custom_eku` - Optional custom EKU values to request
-    /// 
+    ///
     /// # Returns
     /// * `Ok(IssuedCertificate)` - Successfully issued certificate
     /// * `Err(OverthroneError)` - If the attack fails
@@ -95,15 +95,19 @@ impl Esc2Exploiter {
         if let Ok(Some(eku)) = cert.extended_key_usage() {
             // Check for Client Authentication (1.3.6.1.5.5.7.3.2)
             let has_client_auth = eku.value.client_auth
-                || eku.value.other.iter().any(|oid| {
-                    oid.to_string() == "1.3.6.1.5.5.7.3.2"
-                });
+                || eku
+                    .value
+                    .other
+                    .iter()
+                    .any(|oid| oid.to_string() == "1.3.6.1.5.5.7.3.2");
 
             // Check for Any Purpose (2.5.29.37.0)
             let has_any_purpose = eku.value.any
-                || eku.value.other.iter().any(|oid| {
-                    oid.to_string() == "2.5.29.37.0"
-                });
+                || eku
+                    .value
+                    .other
+                    .iter()
+                    .any(|oid| oid.to_string() == "2.5.29.37.0");
 
             if has_client_auth || has_any_purpose {
                 return Ok(());

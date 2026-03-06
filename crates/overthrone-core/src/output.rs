@@ -1,4 +1,4 @@
-﻿use crate::error::Result;
+use crate::error::Result;
 use colored::Colorize;
 use serde::Serialize;
 
@@ -19,12 +19,7 @@ pub fn write_json<T: Serialize>(data: &T, path: &std::path::Path) -> Result<()> 
 
 /// Print a status banner line
 pub fn status(icon: &str, label: &str, value: &str) {
-    println!(
-        "  {} {:<22} {}",
-        icon,
-        label.dimmed(),
-        value.white().bold()
-    );
+    println!("  {} {:<22} {}", icon, label.dimmed(), value.white().bold());
 }
 
 /// Print a section header
@@ -95,7 +90,11 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) {
         .map(|(i, h)| format!("{:<width$}", h, width = widths[i] + 2))
         .collect();
     println!("  {}", header_line.cyan().bold());
-    let sep: String = widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("");
+    let sep: String = widths
+        .iter()
+        .map(|w| "─".repeat(w + 2))
+        .collect::<Vec<_>>()
+        .join("");
     println!("  {}", sep.dimmed());
 
     // Print rows

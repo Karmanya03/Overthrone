@@ -31,9 +31,10 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
         .paint(|ctx| {
             // Draw edges first (below nodes)
             for edge in graph.edges() {
-                if let (Some(&(x1, y1)), Some(&(x2, y2))) =
-                    (app.layout.get(&edge.source()), app.layout.get(&edge.target()))
-                {
+                if let (Some(&(x1, y1)), Some(&(x2, y2))) = (
+                    app.layout.get(&edge.source()),
+                    app.layout.get(&edge.target()),
+                ) {
                     let color =
                         edge_color(edge.weight(), app.highlighted_path.contains(&edge.id()));
                     ctx.draw(&CanvasLine {
@@ -139,7 +140,8 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
                     if let Some(target) = graph.get_node(edge.target()) {
                         lines.push(Line::from(format!(
                             "  {:?} → {}",
-                            edge.weight(), target.name
+                            edge.weight(),
+                            target.name
                         )));
                     }
                 }
@@ -157,7 +159,8 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
                     if let Some(source) = graph.get_node(edge.source()) {
                         lines.push(Line::from(format!(
                             "  {} {:?} →",
-                            source.name, edge.weight()
+                            source.name,
+                            edge.weight()
                         )));
                     }
                 }

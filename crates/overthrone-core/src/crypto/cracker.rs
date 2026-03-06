@@ -28,16 +28,43 @@ use tracing::{debug, info, warn};
 /// Compressed with zstd level 19: 90KB → 40KB (44.5% ratio).
 ///
 /// To regenerate: `zstd -19 wordlist.txt -o wordlist.txt.zst`
-static WORDLIST_ZST: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/wordlist_top10k.txt.zst"));
+static WORDLIST_ZST: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/wordlist_top10k.txt.zst"
+));
 
 /// Fallback minimal wordlist if decompression fails
 const FALLBACK_WORDLIST: &[&str] = &[
-    "password", "Password1", "Password123", "P@ssw0rd", "P@ssword123",
-    "admin", "Admin123", "administrator", "Administrator1", "letmein",
-    "welcome", "Welcome1", "Welcome123", "qwerty", "qwerty123",
-    "abc123", "123456", "1234567", "12345678", "123456789",
-    "1234567890", "Password1!", "Spring2024", "Summer2024", "Fall2024",
-    "Winter2024", "changeme", "ChangeMe1", "secret", "Secret123",
+    "password",
+    "Password1",
+    "Password123",
+    "P@ssw0rd",
+    "P@ssword123",
+    "admin",
+    "Admin123",
+    "administrator",
+    "Administrator1",
+    "letmein",
+    "welcome",
+    "Welcome1",
+    "Welcome123",
+    "qwerty",
+    "qwerty123",
+    "abc123",
+    "123456",
+    "1234567",
+    "12345678",
+    "123456789",
+    "1234567890",
+    "Password1!",
+    "Spring2024",
+    "Summer2024",
+    "Fall2024",
+    "Winter2024",
+    "changeme",
+    "ChangeMe1",
+    "secret",
+    "Secret123",
 ];
 
 /// Decompress and return the embedded wordlist
@@ -52,7 +79,7 @@ pub fn get_embedded_wordlist() -> Vec<String> {
 fn decompress_wordlist(compressed: &[u8]) -> Result<Vec<String>> {
     let decompressed = zstd::decode_all(compressed)
         .map_err(|e| OverthroneError::custom(format!("Wordlist decompression failed: {}", e)))?;
-    
+
     let text = String::from_utf8_lossy(&decompressed);
     Ok(text
         .lines()
@@ -110,27 +137,19 @@ impl Rule {
                 }
                 vec![chars.into_iter().collect()]
             }
-            Rule::AppendDigit => {
-                (0..=9).map(|d| format!("{}{}", password, d)).collect()
-            }
-            Rule::AppendTwoDigits => {
-                (0..=99).map(|d| format!("{}{:02}", password, d)).collect()
-            }
-            Rule::AppendYear => {
-                (2015..=2026).map(|y| format!("{}{}", password, y)).collect()
-            }
-            Rule::PrependDigit => {
-                (0..=9).map(|d| format!("{}{}", d, password)).collect()
-            }
+            Rule::AppendDigit => (0..=9).map(|d| format!("{}{}", password, d)).collect(),
+            Rule::AppendTwoDigits => (0..=99).map(|d| format!("{}{:02}", password, d)).collect(),
+            Rule::AppendYear => (2015..=2026)
+                .map(|y| format!("{}{}", password, y))
+                .collect(),
+            Rule::PrependDigit => (0..=9).map(|d| format!("{}{}", d, password)).collect(),
             Rule::Leet => {
                 vec![apply_leet(password)]
             }
-            Rule::AppendSpecial => {
-                ['!', '@', '#', '$', '%', '^', '&', '*']
-                    .iter()
-                    .map(|c| format!("{}{}", password, c))
-                    .collect()
-            }
+            Rule::AppendSpecial => ['!', '@', '#', '$', '%', '^', '&', '*']
+                .iter()
+                .map(|c| format!("{}{}", password, c))
+                .collect(),
             Rule::CapitalizeDigit => {
                 let cap = {
                     let mut chars: Vec<char> = password.chars().collect();
@@ -196,13 +215,13 @@ fn apply_leet(s: &str) -> String {
 /// Generate expanded wordlist with rule-based variations
 pub fn expand_wordlist(base: &[String], rules: &[Rule]) -> Vec<String> {
     let mut expanded = Vec::with_capacity(base.len() * 10);
-    
+
     for password in base {
         for rule in rules {
             expanded.extend(rule.apply(password));
         }
     }
-    
+
     // Remove duplicates
     expanded.sort();
     expanded.dedup();
@@ -376,9 +395,7 @@ pub enum HashType {
         cipher: Vec<u8>,
     },
     /// NTLM hash (hashcat mode 1000)
-    Ntlm {
-        hash: [u8; 16],
-    },
+    Ntlm { hash: [u8; 16] },
 }
 
 impl HashType {
@@ -389,17 +406,17 @@ impl HashType {
         if parts.len() < 4 || !hash_str.starts_with("$krb5asrep$") {
             return Err(OverthroneError::custom("Invalid AS-REP hash format"));
         }
-        
+
         // Parse: $krb5asrep${etype}${user}@{domain}:{cipher}
         let inner = &parts[2..].join("$");
         let main_parts: Vec<&str> = inner.split(':').collect();
         if main_parts.len() != 2 {
             return Err(OverthroneError::custom("Invalid AS-REP hash format"));
         }
-        
+
         let user_domain = main_parts[0];
         let cipher_hex = main_parts[1];
-        
+
         // Extract etype and user@domain
         let first_dollar = user_domain.find('$').unwrap_or(0);
         let (etype_str, user_domain_part) = if first_dollar > 0 {
@@ -407,74 +424,92 @@ impl HashType {
         } else {
             ("23", user_domain) // Default to RC4
         };
-        
+
         let etype: i32 = etype_str.parse().unwrap_or(23);
-        
+
         // Parse user@domain
-        let ud_parts: Vec<&str> = user_domain_part.trim_start_matches('$').split('@').collect();
+        let ud_parts: Vec<&str> = user_domain_part
+            .trim_start_matches('$')
+            .split('@')
+            .collect();
         let (username, domain) = if ud_parts.len() == 2 {
             (ud_parts[0].to_string(), ud_parts[1].to_string())
         } else {
             (ud_parts[0].to_string(), String::new())
         };
-        
+
         let cipher = hex::decode(cipher_hex)
             .map_err(|e| OverthroneError::custom(format!("Invalid cipher hex: {}", e)))?;
-        
-        Ok(HashType::AsRep { username, domain, etype, cipher })
+
+        Ok(HashType::AsRep {
+            username,
+            domain,
+            etype,
+            cipher,
+        })
     }
-    
+
     /// Parse a Kerberoast hash string (hashcat format)
     /// Format: $krb5tgs${etype}${user}${domain}${spn}*${cipher}
     pub fn parse_kerberoast(hash_str: &str) -> Result<Self> {
         if !hash_str.starts_with("$krb5tgs$") {
             return Err(OverthroneError::custom("Invalid Kerberoast hash format"));
         }
-        
+
         // Simplified parsing - hashcat format varies by etype
         let parts: Vec<&str> = hash_str.split('$').collect();
         if parts.len() < 5 {
             return Err(OverthroneError::custom("Invalid Kerberoast hash format"));
         }
-        
+
         let etype: i32 = parts[2].parse().unwrap_or(23);
-        
+
         // Find the cipher (after the last $ or *)
         let cipher_start = hash_str.rfind('*').or_else(|| hash_str.rfind('$'));
         let cipher_hex = if let Some(pos) = cipher_start {
             &hash_str[pos + 1..]
         } else {
-            return Err(OverthroneError::custom("Cannot find cipher in Kerberoast hash"));
+            return Err(OverthroneError::custom(
+                "Cannot find cipher in Kerberoast hash",
+            ));
         };
-        
+
         let cipher = hex::decode(cipher_hex)
             .map_err(|e| OverthroneError::custom(format!("Invalid cipher hex: {}", e)))?;
-        
+
         // Extract user/domain/spn from hash string (simplified)
         let username = parts.get(3).unwrap_or(&"unknown").to_string();
         let domain = parts.get(4).unwrap_or(&"unknown").to_string();
         let spn = parts.get(5).unwrap_or(&"unknown").to_string();
-        
-        Ok(HashType::Kerberoast { username, domain, spn, etype, cipher })
+
+        Ok(HashType::Kerberoast {
+            username,
+            domain,
+            spn,
+            etype,
+            cipher,
+        })
     }
-    
+
     /// Parse an NTLM hash string
     /// Format: 32 hex characters
     pub fn parse_ntlm(hash_str: &str) -> Result<Self> {
         let clean = hash_str.trim();
         if clean.len() != 32 {
-            return Err(OverthroneError::custom("NTLM hash must be 32 hex characters"));
+            return Err(OverthroneError::custom(
+                "NTLM hash must be 32 hex characters",
+            ));
         }
-        
+
         let bytes = hex::decode(clean)
             .map_err(|e| OverthroneError::custom(format!("Invalid NTLM hex: {}", e)))?;
-        
+
         let mut arr = [0u8; 16];
         arr.copy_from_slice(&bytes);
-        
+
         Ok(HashType::Ntlm { hash: arr })
     }
-    
+
     /// Get the hashcat mode number for this hash type
     pub fn hashcat_mode(&self) -> u32 {
         match self {
@@ -495,13 +530,16 @@ impl HashType {
 
 /// Compute NTLM hash from password (used as RC4-HMAC key for Kerberos)
 pub fn password_to_nt_hash(password: &str) -> [u8; 16] {
-    use md4::{Md4, Digest as Md4Digest};
-    let utf16le: Vec<u8> = password.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
-    
+    use md4::{Digest as Md4Digest, Md4};
+    let utf16le: Vec<u8> = password
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+
     let mut hasher = Md4::new();
     hasher.update(&utf16le);
     let result = hasher.finalize();
-    
+
     let mut hash = [0u8; 16];
     hash.copy_from_slice(&result);
     hash
@@ -513,15 +551,15 @@ pub fn password_to_nt_hash(password: &str) -> [u8; 16] {
 pub fn rc4_hmac_verify(key: &[u8; 16], data: &[u8], checksum: &[u8]) -> bool {
     use hmac::{Hmac, Mac};
     use md5::Md5;
-    
+
     type HmacMd5 = Hmac<Md5>;
-    
+
     let mut mac = HmacMd5::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
     mac.update(data);
-    
+
     let result = mac.finalize();
     let computed = result.into_bytes();
-    
+
     computed.as_slice() == checksum
 }
 
@@ -535,12 +573,12 @@ pub fn rc4_decrypt_kerberos(key: &[u8; 16], cipher: &[u8]) -> Vec<u8> {
 fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut s: Vec<u8> = (0..=255).collect();
     let mut j: usize = 0;
-    
+
     for i in 0..256 {
         j = (j + s[i] as usize + key[i % key.len()] as usize) % 256;
         s.swap(i, j);
     }
-    
+
     let mut i: usize = 0;
     j = 0;
     data.iter()
@@ -558,7 +596,7 @@ fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// Build the Kerberos salt for AES key derivation.
-/// Convention: `REALM` + principal (e.g. `CORP.LOCALjdoe` for user, 
+/// Convention: `REALM` + principal (e.g. `CORP.LOCALjdoe` for user,
 /// `CORP.LOCALhostdc01.corp.local` for computer).
 fn kerberos_aes_salt(realm: &str, principal: &str) -> String {
     format!("{}{}", realm.to_uppercase(), principal)
@@ -567,7 +605,7 @@ fn kerberos_aes_salt(realm: &str, principal: &str) -> String {
 /// Verify AES Kerberoast/AS-REP by using kerberos_crypto to decrypt + check.
 /// Returns `true` if the password produces a key that decrypts the cipher correctly.
 fn verify_aes_candidate(password: &str, salt: &str, etype: i32, cipher: &[u8]) -> bool {
-    // Use kerberos_crypto's cipher abstraction 
+    // Use kerberos_crypto's cipher abstraction
     let kc = match kerberos_crypto::new_kerberos_cipher(etype) {
         Ok(c) => c,
         Err(_) => return false,
@@ -658,7 +696,7 @@ impl CrackerConfig {
             hybrid_masks: Vec::new(),
         }
     }
-    
+
     /// Thorough mode — all rules, expanded candidates, common masks
     pub fn thorough() -> Self {
         Self {
@@ -683,15 +721,15 @@ impl CrackerConfig {
             threads: 0,
             // Common AD password masks
             masks: vec![
-                "?u?l?l?l?l?l?d?d".into(),       // Passwo12
-                "?u?l?l?l?l?l?l?d?d".into(),     // Passwor12
-                "?u?l?l?l?l?l?l?l?d?d".into(),   // Password12
-                "?u?l?l?l?l?l?d?d?d?d".into(),   // Passwo1234
+                "?u?l?l?l?l?l?d?d".into(),     // Passwo12
+                "?u?l?l?l?l?l?l?d?d".into(),   // Passwor12
+                "?u?l?l?l?l?l?l?l?d?d".into(), // Password12
+                "?u?l?l?l?l?l?d?d?d?d".into(), // Passwo1234
             ],
             hybrid_masks: vec![
-                "?d?d?d?d".into(),     // word + 4 digits
-                "?d?d?d?d?s".into(),   // word + 4 digits + symbol
-                "?s?d?d".into(),       // word + symbol + 2 digits
+                "?d?d?d?d".into(),   // word + 4 digits
+                "?d?d?d?d?s".into(), // word + 4 digits + symbol
+                "?s?d?d".into(),     // word + symbol + 2 digits
             ],
         }
     }
@@ -713,7 +751,7 @@ impl HashCracker {
                 .build_global()
                 .ok(); // Ignore error if already built
         }
-        
+
         // Load wordlist
         let wordlist = if let Some(ref path) = config.custom_wordlist {
             load_wordlist_from_file(path)?
@@ -722,12 +760,12 @@ impl HashCracker {
         } else {
             return Err(OverthroneError::custom("No wordlist source configured"));
         };
-        
+
         info!("Loaded {} base words", wordlist.len());
-        
+
         Ok(Self { config, wordlist })
     }
-    
+
     /// Crack a single hash
     pub fn crack(&self, hash: &HashType) -> CrackResult {
         let start = std::time::Instant::now();
@@ -740,7 +778,7 @@ impl HashCracker {
             }
             HashType::Ntlm { .. } => "NTLM".to_string(),
         };
-        
+
         // Try hashcat first if preferred and available
         if self.config.prefer_hashcat && is_hashcat_available() {
             info!("Attempting hashcat GPU cracking...");
@@ -755,7 +793,7 @@ impl HashCracker {
                 };
             }
         }
-        
+
         // Phase 1: Dictionary + rules
         let candidates = expand_wordlist(&self.wordlist, &self.config.rules);
         let total_candidates = if self.config.max_candidates > 0 {
@@ -763,13 +801,13 @@ impl HashCracker {
         } else {
             candidates.len()
         };
-        
+
         info!(
             "Phase 1: Dictionary+rules — {} candidates ({} rules)",
             total_candidates,
             self.config.rules.len()
         );
-        
+
         // Parallel cracking — Phase 1: Dictionary
         let counter = AtomicUsize::new(0);
         let password = candidates
@@ -780,18 +818,21 @@ impl HashCracker {
                 if count.is_multiple_of(10_000) {
                     debug!("Tried {} candidates...", count);
                 }
-                
+
                 if verify_candidate(hash, candidate) {
                     Some(candidate.clone())
                 } else {
                     None
                 }
             });
-        
+
         if let Some(pwd) = password {
             let tried = counter.load(Ordering::Relaxed);
             let elapsed = start.elapsed().as_millis() as u64;
-            info!("✓ Password found (dictionary): {} ({} candidates, {}ms)", pwd, tried, elapsed);
+            info!(
+                "✓ Password found (dictionary): {} ({} candidates, {}ms)",
+                pwd, tried, elapsed
+            );
             return CrackResult {
                 hash_type: hash_type_str,
                 username: hash.username().map(|s| s.to_string()),
@@ -819,16 +860,14 @@ impl HashCracker {
                         info!("  Mask '{}' — keyspace {} (limit {})", mask_str, ks, limit);
                         let mask_candidates = mask.generate_limited(limit);
                         let mask_counter = AtomicUsize::new(0);
-                        let found = mask_candidates
-                            .par_iter()
-                            .find_map_any(|candidate| {
-                                mask_counter.fetch_add(1, Ordering::Relaxed);
-                                if verify_candidate(hash, candidate) {
-                                    Some(candidate.clone())
-                                } else {
-                                    None
-                                }
-                            });
+                        let found = mask_candidates.par_iter().find_map_any(|candidate| {
+                            mask_counter.fetch_add(1, Ordering::Relaxed);
+                            if verify_candidate(hash, candidate) {
+                                Some(candidate.clone())
+                            } else {
+                                None
+                            }
+                        });
 
                         let mask_tried = mask_counter.load(Ordering::Relaxed);
                         counter.fetch_add(mask_tried, Ordering::Relaxed);
@@ -836,7 +875,10 @@ impl HashCracker {
                         if let Some(pwd) = found {
                             let total_tried = counter.load(Ordering::Relaxed);
                             let elapsed = start.elapsed().as_millis() as u64;
-                            info!("✓ Password found (mask): {} ({} total candidates, {}ms)", pwd, total_tried, elapsed);
+                            info!(
+                                "✓ Password found (mask): {} ({} total candidates, {}ms)",
+                                pwd, total_tried, elapsed
+                            );
                             return CrackResult {
                                 hash_type: hash_type_str,
                                 username: hash.username().map(|s| s.to_string()),
@@ -856,7 +898,11 @@ impl HashCracker {
 
         // Phase 3: Hybrid (wordlist base + mask suffix)
         if !self.config.hybrid_masks.is_empty() {
-            info!("Phase 3: Hybrid attack — {} masks × {} words", self.config.hybrid_masks.len(), self.wordlist.len());
+            info!(
+                "Phase 3: Hybrid attack — {} masks × {} words",
+                self.config.hybrid_masks.len(),
+                self.wordlist.len()
+            );
             for mask_str in &self.config.hybrid_masks {
                 match MaskPattern::parse(mask_str) {
                     Ok(mask) => {
@@ -864,13 +910,17 @@ impl HashCracker {
                         let hybrid_counter = AtomicUsize::new(0);
 
                         // Build capitalized base words (most common in AD)
-                        let bases: Vec<String> = self.wordlist.iter().map(|w| {
-                            let mut chars: Vec<char> = w.chars().collect();
-                            if let Some(first) = chars.first_mut() {
-                                *first = first.to_uppercase().next().unwrap_or(*first);
-                            }
-                            chars.into_iter().collect()
-                        }).collect();
+                        let bases: Vec<String> = self
+                            .wordlist
+                            .iter()
+                            .map(|w| {
+                                let mut chars: Vec<char> = w.chars().collect();
+                                if let Some(first) = chars.first_mut() {
+                                    *first = first.to_uppercase().next().unwrap_or(*first);
+                                }
+                                chars.into_iter().collect()
+                            })
+                            .collect();
 
                         let found = bases.par_iter().find_map_any(|base| {
                             for suffix in &suffixes {
@@ -889,7 +939,10 @@ impl HashCracker {
                         if let Some(pwd) = found {
                             let total_tried = counter.load(Ordering::Relaxed);
                             let elapsed = start.elapsed().as_millis() as u64;
-                            info!("✓ Password found (hybrid): {} ({} total, {}ms)", pwd, total_tried, elapsed);
+                            info!(
+                                "✓ Password found (hybrid): {} ({} total, {}ms)",
+                                pwd, total_tried, elapsed
+                            );
                             return CrackResult {
                                 hash_type: hash_type_str,
                                 username: hash.username().map(|s| s.to_string()),
@@ -906,10 +959,13 @@ impl HashCracker {
                 }
             }
         }
-        
+
         let tried = counter.load(Ordering::Relaxed);
         let elapsed = start.elapsed().as_millis() as u64;
-        info!("✗ Password not found after {} candidates ({}ms)", tried, elapsed);
+        info!(
+            "✗ Password not found after {} candidates ({}ms)",
+            tried, elapsed
+        );
         CrackResult {
             hash_type: hash_type_str,
             username: hash.username().map(|s| s.to_string()),
@@ -919,7 +975,7 @@ impl HashCracker {
             time_ms: elapsed,
         }
     }
-    
+
     /// Crack multiple hashes in parallel
     pub fn crack_batch(&self, hashes: &[HashType]) -> Vec<CrackResult> {
         info!("Cracking {} hashes in parallel", hashes.len());
@@ -931,7 +987,7 @@ impl HashCracker {
 fn load_wordlist_from_file(path: &str) -> Result<Vec<String>> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| OverthroneError::custom(format!("Cannot read wordlist: {}", e)))?;
-    
+
     Ok(content
         .lines()
         .map(|s| s.trim().to_string())
@@ -942,7 +998,13 @@ fn load_wordlist_from_file(path: &str) -> Result<Vec<String>> {
 /// Verify if a password candidate matches the hash
 fn verify_candidate(hash: &HashType, password: &str) -> bool {
     match hash {
-        HashType::AsRep { cipher, etype, username, domain, .. } => {
+        HashType::AsRep {
+            cipher,
+            etype,
+            username,
+            domain,
+            ..
+        } => {
             match *etype {
                 23 => {
                     // RC4-HMAC verification
@@ -951,8 +1013,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                         return false;
                     }
                     let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
-                    decrypted.len() >= 32 && 
-                        (decrypted[0] == 0x30 || decrypted[0] == 0x7A)
+                    decrypted.len() >= 32 && (decrypted[0] == 0x30 || decrypted[0] == 0x7A)
                 }
                 17 | 18 => {
                     // AES verification — salt is REALM + username
@@ -962,8 +1023,14 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                 _ => false,
             }
         }
-        
-        HashType::Kerberoast { cipher, etype, domain, spn, .. } => {
+
+        HashType::Kerberoast {
+            cipher,
+            etype,
+            domain,
+            spn,
+            ..
+        } => {
             match *etype {
                 23 => {
                     // RC4-HMAC — service account's NT hash
@@ -995,7 +1062,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                 _ => false,
             }
         }
-        
+
         HashType::Ntlm { hash } => {
             // Simple NTLM comparison
             let nt_hash = password_to_nt_hash(password);
@@ -1020,7 +1087,12 @@ pub fn is_hashcat_available() -> bool {
 /// Write hash to file for hashcat
 fn write_hash_file(hash: &HashType) -> Result<std::path::PathBuf> {
     let hash_str = match hash {
-        HashType::AsRep { username, domain, etype, cipher } => {
+        HashType::AsRep {
+            username,
+            domain,
+            etype,
+            cipher,
+        } => {
             format!(
                 "$krb5asrep${}${}@{}:{}",
                 etype,
@@ -1029,7 +1101,13 @@ fn write_hash_file(hash: &HashType) -> Result<std::path::PathBuf> {
                 hex::encode(cipher)
             )
         }
-        HashType::Kerberoast { username, domain, spn, etype, cipher } => {
+        HashType::Kerberoast {
+            username,
+            domain,
+            spn,
+            etype,
+            cipher,
+        } => {
             format!(
                 "$krb5tgs${}${}${}${}*${}",
                 etype,
@@ -1039,17 +1117,15 @@ fn write_hash_file(hash: &HashType) -> Result<std::path::PathBuf> {
                 hex::encode(cipher)
             )
         }
-        HashType::Ntlm { hash } => {
-            hex::encode(hash)
-        }
+        HashType::Ntlm { hash } => hex::encode(hash),
     };
-    
+
     let temp_dir = std::env::temp_dir();
     let hash_file = temp_dir.join(format!("overthrone_hash_{}.txt", rand::random::<u32>()));
-    
+
     std::fs::write(&hash_file, &hash_str)
         .map_err(|e| OverthroneError::custom(format!("Cannot write hash file: {}", e)))?;
-    
+
     Ok(hash_file)
 }
 
@@ -1057,19 +1133,21 @@ fn write_hash_file(hash: &HashType) -> Result<std::path::PathBuf> {
 fn try_hashcat(hash: &HashType) -> Option<String> {
     let hash_file = write_hash_file(hash).ok()?;
     let wordlist_file = std::env::temp_dir().join("overthrone_wordlist.txt");
-    
+
     // Write wordlist
     let wordlist = get_embedded_wordlist();
     let wordlist_content = wordlist.join("\n");
     std::fs::write(&wordlist_file, &wordlist_content).ok()?;
-    
+
     let mode = hash.hashcat_mode();
-    
+
     // Run hashcat in quiet mode
     let output = Command::new("hashcat")
         .args([
-            "-m", &mode.to_string(),
-            "-a", "0", // Dictionary attack
+            "-m",
+            &mode.to_string(),
+            "-a",
+            "0", // Dictionary attack
             "--quiet",
             "--force",
             hash_file.to_str()?,
@@ -1077,25 +1155,26 @@ fn try_hashcat(hash: &HashType) -> Option<String> {
         ])
         .output()
         .ok()?;
-    
+
     // Cleanup
     let _ = std::fs::remove_file(&hash_file);
     let _ = std::fs::remove_file(&wordlist_file);
-    
+
     if output.status.success() {
         // Try to get the cracked password with --show
         let show_output = Command::new("hashcat")
-            .args([
-                "-m", &mode.to_string(),
-                "--show",
-                hash_file.to_str()?,
-            ])
+            .args(["-m", &mode.to_string(), "--show", hash_file.to_str()?])
             .output()
             .ok()?;
-        
+
         let result = String::from_utf8_lossy(&show_output.stdout);
         // Parse: hash:password
-        result.lines().next()?.split(':').nth(1).map(|s| s.to_string())
+        result
+            .lines()
+            .next()?
+            .split(':')
+            .nth(1)
+            .map(|s| s.to_string())
     } else {
         None
     }
@@ -1123,7 +1202,7 @@ impl HashType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_password_to_nt_hash() {
         // Known NT hash for "Password123"
@@ -1132,13 +1211,13 @@ mod tests {
         let expected = hex::decode("58a478135a93ac3bf058a5ea0e8fdb71").unwrap();
         assert_eq!(hash.as_slice(), expected.as_slice());
     }
-    
+
     #[test]
     fn test_rule_capitalize() {
         let results = Rule::Capitalize.apply("password");
         assert_eq!(results, vec!["Password"]);
     }
-    
+
     #[test]
     fn test_rule_append_digit() {
         let results = Rule::AppendDigit.apply("password");
@@ -1146,51 +1225,56 @@ mod tests {
         assert_eq!(results[0], "password0");
         assert_eq!(results[9], "password9");
     }
-    
+
     #[test]
     fn test_rule_append_year() {
         let results = Rule::AppendYear.apply("password");
         assert!(results.contains(&"password2024".to_string()));
     }
-    
+
     #[test]
     fn test_leet_substitution() {
         let leet = apply_leet("password");
         // a→@, s→$, o→0, so "password" becomes "p@$$w0rd"
         assert_eq!(leet, "p@$$w0rd");
     }
-    
+
     #[test]
     fn test_ntlm_parsing() {
         let hash = HashType::parse_ntlm("2ac9cb7dc02b3c0083eb70898e549b63").unwrap();
         match hash {
             HashType::Ntlm { hash } => {
-                assert_eq!(hash, [0x2a, 0xc9, 0xcb, 0x7d, 0xc0, 0x2b, 0x3c, 0x00, 
-                                  0x83, 0xeb, 0x70, 0x89, 0x8e, 0x54, 0x9b, 0x63]);
+                assert_eq!(
+                    hash,
+                    [
+                        0x2a, 0xc9, 0xcb, 0x7d, 0xc0, 0x2b, 0x3c, 0x00, 0x83, 0xeb, 0x70, 0x89,
+                        0x8e, 0x54, 0x9b, 0x63
+                    ]
+                );
             }
             _ => panic!("Wrong hash type"),
         }
     }
-    
+
     #[test]
     fn test_ntlm_crack() {
         let config = CrackerConfig::fast();
         let cracker = HashCracker::new(config).unwrap();
-        
+
         // Use the correct NT hash for "Password123" computed by our MD4 implementation
         let hash = HashType::parse_ntlm("58a478135a93ac3bf058a5ea0e8fdb71").unwrap();
         let result = cracker.crack(&hash);
-        
+
         assert!(result.cracked);
         assert_eq!(result.password, Some("Password123".to_string()));
     }
-    
+
     #[test]
     fn test_expand_wordlist() {
         let base = vec!["password".to_string()];
         let rules = vec![Rule::None, Rule::Capitalize];
         let expanded = expand_wordlist(&base, &rules);
-        
+
         assert!(expanded.contains(&"password".to_string()));
         assert!(expanded.contains(&"Password".to_string()));
     }

@@ -104,7 +104,10 @@ struct SpnAccount {
 }
 
 /// Enumerate user accounts with SPNs using the high-level LdapSession API
-async fn enumerate_spn_accounts(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Vec<SpnAccount>> {
+async fn enumerate_spn_accounts(
+    config: &HuntConfig,
+    kc: &KerberoastConfig,
+) -> Result<Vec<SpnAccount>> {
     info!("LDAP: Enumerating SPN accounts (kerberoastable)");
 
     let mut conn = ldap::LdapSession::connect(
@@ -113,7 +116,8 @@ async fn enumerate_spn_accounts(config: &HuntConfig, kc: &KerberoastConfig) -> R
         &config.username,
         &config.secret,
         config.use_ldaps,
-    ).await?;
+    )
+    .await?;
 
     let ad_users = conn.find_kerberoastable().await?;
 

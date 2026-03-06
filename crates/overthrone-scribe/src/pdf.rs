@@ -3,8 +3,8 @@
 //! The PDF includes a cover page, table of contents, findings with
 //! severity badges, MITRE ATT&CK table, and remediation roadmap.
 
-use crate::session::{EngagementSession, Finding, Severity};
 use crate::narrative;
+use crate::session::{EngagementSession, Finding, Severity};
 use printpdf::*;
 
 /// PDF page dimensions (A4)
@@ -21,7 +21,6 @@ const HEADING1_SIZE: f32 = 18.0;
 const HEADING2_SIZE: f32 = 14.0;
 const BODY_SIZE: f32 = 10.0;
 const SMALL_SIZE: f32 = 8.0;
-
 
 // ═══════════════════════════════════════════════════════════
 // PDF Context Helper — accumulates Ops for page-based output
@@ -190,7 +189,6 @@ impl PdfContext {
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════
 // Main Render Entry Point
 // ═══════════════════════════════════════════════════════════
@@ -253,10 +251,7 @@ pub fn render(session: &EngagementSession) -> Vec<u8> {
     for (tactic, techniques) in &matrix {
         ctx.write_heading2(tactic);
         for t in techniques {
-            ctx.write_body(&format!(
-                "  • {} — {}",
-                t.technique_id, t.technique_name
-            ));
+            ctx.write_body(&format!("  • {} — {}", t.technique_id, t.technique_name));
         }
         ctx.skip_lines(1);
     }
@@ -279,7 +274,10 @@ pub fn render(session: &EngagementSession) -> Vec<u8> {
     let mitigations = crate::mitigations::aggregate_mitigations(&finding_types);
     for (i, mit) in mitigations.iter().enumerate() {
         ctx.write_heading2(&format!("{}. {}", i + 1, mit.title));
-        ctx.write_body(&format!("Priority: {} | Effort: {}", mit.priority, mit.effort));
+        ctx.write_body(&format!(
+            "Priority: {} | Effort: {}",
+            mit.priority, mit.effort
+        ));
         ctx.write_body_wrapped(&mit.description);
         ctx.skip_lines(1);
     }
@@ -287,9 +285,9 @@ pub fn render(session: &EngagementSession) -> Vec<u8> {
     // Finalize all pages and save
     let pages = ctx.finish();
     let mut warnings = Vec::new();
-    doc.with_pages(pages).save(&PdfSaveOptions::default(), &mut warnings)
+    doc.with_pages(pages)
+        .save(&PdfSaveOptions::default(), &mut warnings)
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Font Loading Helpers
@@ -310,8 +308,7 @@ fn load_builtin_font_regular() -> ParsedFont {
         "C:\\Windows\\Fonts\\arial.ttf",
         "C:\\Windows\\Fonts\\calibri.ttf",
     ];
-    load_font_from_paths(&candidates)
-        .expect("Could not find any sans-serif font on this system")
+    load_font_from_paths(&candidates).expect("Could not find any sans-serif font on this system")
 }
 
 fn load_builtin_font_bold() -> ParsedFont {
@@ -338,21 +335,20 @@ fn load_builtin_font_mono() -> ParsedFont {
         "C:\\Windows\\Fonts\\cour.ttf",
         "C:\\Windows\\Fonts\\consola.ttf",
     ];
-    load_font_from_paths(&candidates)
-        .expect("Could not find any monospace font on this system")
+    load_font_from_paths(&candidates).expect("Could not find any monospace font on this system")
 }
 
 fn load_font_from_paths(paths: &[&str]) -> Option<ParsedFont> {
     let mut warnings = Vec::new();
     for path in paths {
         if let Ok(bytes) = std::fs::read(path)
-            && let Some(font) = ParsedFont::from_bytes(&bytes, 0, &mut warnings) {
-                return Some(font);
-            }
+            && let Some(font) = ParsedFont::from_bytes(&bytes, 0, &mut warnings)
+        {
+            return Some(font);
+        }
     }
     None
 }
-
 
 // ═══════════════════════════════════════════════════════════
 // Page Renderers
@@ -366,7 +362,10 @@ fn render_cover_page(ctx: &mut PdfContext, session: &EngagementSession) {
     // Metadata
     let lines = [
         format!("Client: {}", session.client_name),
-        format!("Assessor: {} ({})", session.assessor_name, session.assessor_company),
+        format!(
+            "Assessor: {} ({})",
+            session.assessor_name, session.assessor_company
+        ),
         format!("Type: {}", session.engagement_type),
         format!(
             "Period: {} — {}",
@@ -387,7 +386,6 @@ fn render_cover_page(ctx: &mut PdfContext, session: &EngagementSession) {
         y -= 6.0;
     }
 }
-
 
 fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
     ctx.write_heading1(&format!("Finding {} — {}", num, finding.title));
@@ -426,7 +424,6 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         }
     }
 }
-
 
 fn severity_color(severity: Severity) -> (f32, f32, f32) {
     match severity {

@@ -134,9 +134,9 @@ async fn read_and_cleanup_output(session: &SmbSession, config: &SmbExecConfig) -
                 && let Err(e) = session
                     .delete_file(&config.output_share, &config.output_path)
                     .await
-                {
-                    warn!("SMBExec: Failed to cleanup output file: {e}");
-                }
+            {
+                warn!("SMBExec: Failed to cleanup output file: {e}");
+            }
 
             output
         }

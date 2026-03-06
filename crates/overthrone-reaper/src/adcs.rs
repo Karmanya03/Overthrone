@@ -1,9 +1,9 @@
 //! AD Certificate Services (ADCS) template enumeration.
 //! Identifies vulnerable certificate templates (ESC1-ESC8).
 
+use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use crate::runner::ReaperConfig;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -94,7 +94,9 @@ impl CertTemplate {
         !self.requires_manager_approval
             && self.authorized_signatures_required == 0
             && (self.extended_key_usage.is_empty()
-                || self.extended_key_usage.contains(&OID_ANY_PURPOSE.to_string()))
+                || self
+                    .extended_key_usage
+                    .contains(&OID_ANY_PURPOSE.to_string()))
     }
 
     // ──────────────────────────────────── ESC3 ─────────────────
@@ -178,12 +180,13 @@ impl CertTemplate {
         // OID_ANY_PURPOSE also qualifies since it grants unrestricted usage
         let is_subca_template = self.extended_key_usage.is_empty()
             || self.extended_key_usage.contains(&OID_SUBCA.to_string())
-            || self.extended_key_usage.contains(&OID_ANY_PURPOSE.to_string());
+            || self
+                .extended_key_usage
+                .contains(&OID_ANY_PURPOSE.to_string());
 
         let low_priv_enroll = {
             let aces = parse_sddl_aces(&self.enroll_permissions);
-            aces.iter()
-                .any(|a| is_low_privilege_sid(&a.trustee_sid))
+            aces.iter().any(|a| is_low_privilege_sid(&a.trustee_sid))
         };
 
         is_subca_template && low_priv_enroll
@@ -208,9 +211,7 @@ impl CertTemplate {
     fn has_authentication_eku(&self) -> bool {
         self.extended_key_usage.is_empty()
             || self.extended_key_usage.iter().any(|eku| {
-                eku == OID_CLIENT_AUTH
-                    || eku == OID_SMART_CARD_LOGON
-                    || eku == OID_ANY_PURPOSE
+                eku == OID_CLIENT_AUTH || eku == OID_SMART_CARD_LOGON || eku == OID_ANY_PURPOSE
             })
     }
 
@@ -237,12 +238,14 @@ impl CertTemplate {
                 .push("ESC5: Overly permissive PKI object ACLs (GenericAll/WriteOwner)".into());
         }
         if self.check_esc6() {
-            self.vulnerabilities
-                .push("ESC6: Potential EDITF_ATTRIBUTESUBJECTALTNAME2 (client auth, no SAN flag)".into());
+            self.vulnerabilities.push(
+                "ESC6: Potential EDITF_ATTRIBUTESUBJECTALTNAME2 (client auth, no SAN flag)".into(),
+            );
         }
         if self.check_esc7() {
-            self.vulnerabilities
-                .push("ESC7: SubCA/any-EKU template enrollable by low-priv (ManageCA target)".into());
+            self.vulnerabilities.push(
+                "ESC7: SubCA/any-EKU template enrollable by low-priv (ManageCA target)".into(),
+            );
         }
         if self.check_esc8() {
             self.vulnerabilities
@@ -383,7 +386,9 @@ fn is_low_privilege_sid(sid: &str) -> bool {
 // ═══════════════════════════════════════════════════════════
 
 pub fn adcs_base_dn(domain_base_dn: &str) -> String {
-    format!("CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,{domain_base_dn}")
+    format!(
+        "CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,{domain_base_dn}"
+    )
 }
 
 pub fn adcs_filter() -> String {
@@ -392,11 +397,21 @@ pub fn adcs_filter() -> String {
 
 pub fn adcs_attributes() -> Vec<String> {
     [
-        "cn", "displayName", "distinguishedName", "msPKI-Cert-Template-OID",
-        "revision", "pKIExtendedKeyUsage", "msPKI-Certificate-Name-Flag",
-        "msPKI-Enrollment-Flag", "msPKI-RA-Signature",
-        "msPKI-Template-Schema-Version", "nTSecurityDescriptor",
-    ].iter().map(|s| s.to_string()).collect()
+        "cn",
+        "displayName",
+        "distinguishedName",
+        "msPKI-Cert-Template-OID",
+        "revision",
+        "pKIExtendedKeyUsage",
+        "msPKI-Certificate-Name-Flag",
+        "msPKI-Enrollment-Flag",
+        "msPKI-RA-Signature",
+        "msPKI-Template-Schema-Version",
+        "nTSecurityDescriptor",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -404,7 +419,10 @@ pub fn adcs_attributes() -> Vec<String> {
 // ═══════════════════════════════════════════════════════════
 
 pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> {
-    info!("[adcs] Querying {} for ADCS certificate templates", config.dc_ip);
+    info!(
+        "[adcs] Querying {} for ADCS certificate templates",
+        config.dc_ip
+    );
 
     let mut conn = LdapSession::connect(
         &config.dc_ip,
@@ -412,22 +430,37 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
         &config.username,
         config.password.as_deref().unwrap_or(""),
         false,
-    ).await?;
+    )
+    .await?;
 
     let base_dn = ReaperConfig::base_dn_from_domain(&config.domain);
     let adcs_dn = adcs_base_dn(&base_dn);
-    let filter  = adcs_filter();
+    let filter = adcs_filter();
     let attr_refs: Vec<&str> = [
-        "cn", "displayName", "distinguishedName", "msPKI-Cert-Template-OID",
-        "revision", "pKIExtendedKeyUsage", "msPKI-Certificate-Name-Flag",
-        "msPKI-Enrollment-Flag", "msPKI-RA-Signature",
-        "msPKI-Template-Schema-Version", "nTSecurityDescriptor",
-    ].to_vec();
+        "cn",
+        "displayName",
+        "distinguishedName",
+        "msPKI-Cert-Template-OID",
+        "revision",
+        "pKIExtendedKeyUsage",
+        "msPKI-Certificate-Name-Flag",
+        "msPKI-Enrollment-Flag",
+        "msPKI-RA-Signature",
+        "msPKI-Template-Schema-Version",
+        "nTSecurityDescriptor",
+    ]
+    .to_vec();
 
-    let entries = match conn.custom_search_with_base(&adcs_dn, &filter, &attr_refs).await {
+    let entries = match conn
+        .custom_search_with_base(&adcs_dn, &filter, &attr_refs)
+        .await
+    {
         Ok(e) => e,
         Err(e) => {
-            warn!("[adcs] Certificate template query failed (ADCS may not be deployed): {}", e);
+            warn!(
+                "[adcs] Certificate template query failed (ADCS may not be deployed): {}",
+                e
+            );
             let _ = conn.disconnect().await;
             return Ok(Vec::new());
         }
@@ -436,34 +469,40 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
     let mut results = Vec::new();
 
     for entry in &entries {
-        let name = entry.attrs
+        let name = entry
+            .attrs
             .get("cn")
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| entry.dn.clone());
 
-        let display_name = entry.attrs
+        let display_name = entry
+            .attrs
             .get("displayName")
             .and_then(|v| v.first())
             .cloned();
 
-        let schema_version: u32 = entry.attrs
+        let schema_version: u32 = entry
+            .attrs
             .get("msPKI-Template-Schema-Version")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
 
-        let oid = entry.attrs
+        let oid = entry
+            .attrs
             .get("msPKI-Cert-Template-OID")
             .and_then(|v| v.first())
             .cloned();
 
-        let extended_key_usage: Vec<String> = entry.attrs
+        let extended_key_usage: Vec<String> = entry
+            .attrs
             .get("pKIExtendedKeyUsage")
             .cloned()
             .unwrap_or_default();
 
-        let name_flag: u32 = entry.attrs
+        let name_flag: u32 = entry
+            .attrs
             .get("msPKI-Certificate-Name-Flag")
             .and_then(|v| v.first())
             .and_then(|s| {
@@ -475,13 +514,15 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
             })
             .unwrap_or(0);
 
-        let enroll_flag: u32 = entry.attrs
+        let enroll_flag: u32 = entry
+            .attrs
             .get("msPKI-Enrollment-Flag")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
-        let ra_sigs: u32 = entry.attrs
+        let ra_sigs: u32 = entry
+            .attrs
             .get("msPKI-RA-Signature")
             .and_then(|v| v.first())
             .and_then(|s| s.parse().ok())
@@ -490,7 +531,8 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
         let enrollee_supplies_subject = name_flag & CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT != 0;
         let requires_manager_approval = enroll_flag & CT_FLAG_PEND_ALL_REQUESTS != 0;
 
-        let enroll_permissions: Vec<String> = entry.attrs
+        let enroll_permissions: Vec<String> = entry
+            .attrs
             .get("nTSecurityDescriptor")
             .cloned()
             .unwrap_or_default();
@@ -522,9 +564,15 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
 
     let _ = conn.disconnect().await;
 
-    let vuln_count = results.iter().filter(|t| !t.vulnerabilities.is_empty()).count();
-    info!("[adcs] Found {} templates ({} potentially vulnerable)",
-        results.len(), vuln_count);
+    let vuln_count = results
+        .iter()
+        .filter(|t| !t.vulnerabilities.is_empty())
+        .count();
+    info!(
+        "[adcs] Found {} templates ({} potentially vulnerable)",
+        results.len(),
+        vuln_count
+    );
     Ok(results)
 }
 
@@ -654,12 +702,14 @@ mod tests {
     #[test]
     fn test_analyze_populates_all_vulns() {
         let perms = ["(A;;GA;;;AU)"];
-        let mut t = make_template(
-            "MegaVuln", true, false, 0, &[OID_ANY_PURPOSE], &perms
-        );
+        let mut t = make_template("MegaVuln", true, false, 0, &[OID_ANY_PURPOSE], &perms);
         t.analyze();
         // Should flag ESC1, ESC2, ESC4, ESC5, ESC7, ESC8 at minimum
-        assert!(t.vulnerabilities.len() >= 4, "Expected multiple vulns, got: {:?}", t.vulnerabilities);
+        assert!(
+            t.vulnerabilities.len() >= 4,
+            "Expected multiple vulns, got: {:?}",
+            t.vulnerabilities
+        );
     }
 
     #[test]
@@ -676,7 +726,10 @@ mod tests {
     #[test]
     fn test_parse_rights_string() {
         let rights = parse_rights_string("RPWPCCDCLCSWRCWDWO");
-        assert_eq!(rights, vec!["RP","WP","CC","DC","LC","SW","RC","WD","WO"]);
+        assert_eq!(
+            rights,
+            vec!["RP", "WP", "CC", "DC", "LC", "SW", "RC", "WD", "WO"]
+        );
     }
 
     #[test]
@@ -684,7 +737,9 @@ mod tests {
         assert!(is_low_privilege_sid("AU"));
         assert!(is_low_privilege_sid("WD"));
         assert!(is_low_privilege_sid("S-1-5-11"));
-        assert!(is_low_privilege_sid("S-1-5-21-1234567890-1234567890-1234567890-513"));
+        assert!(is_low_privilege_sid(
+            "S-1-5-21-1234567890-1234567890-1234567890-513"
+        ));
         assert!(!is_low_privilege_sid("DA"));
         assert!(!is_low_privilege_sid("BA"));
     }
