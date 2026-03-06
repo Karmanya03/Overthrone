@@ -95,12 +95,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo-audit binary
+        id: cache-cargo-audit
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-${{ runner.os }}-v0.21
 
       - name: Install cargo-audit
+        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --locked
 
       - name: Generate lockfile
@@ -128,6 +130,7 @@ jobs:
           shared-key: "coverage"
 
       - name: Cache cargo-tarpaulin binary
+        id: cache-cargo-tarpaulin
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-tarpaulin
@@ -137,6 +140,7 @@ jobs:
         run: cargo generate-lockfile
 
       - name: Install cargo-tarpaulin
+        if: steps.cache-cargo-tarpaulin.outputs.cache-hit != 'true'
         run: cargo install cargo-tarpaulin --locked
 
       - name: Run coverage

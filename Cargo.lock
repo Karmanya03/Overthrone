@@ -3819,7 +3819,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -3927,7 +3927,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-crawler"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3948,7 +3948,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-forge"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3977,7 +3977,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-hunter"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4000,7 +4000,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-pilot"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4026,7 +4026,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-reaper"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4048,7 +4048,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-relay"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-scribe"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
