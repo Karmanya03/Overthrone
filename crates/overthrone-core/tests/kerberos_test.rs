@@ -5,8 +5,8 @@
 //! No KDC connection is required.
 
 use overthrone_core::proto::kerberos::{
-    krb_error_to_string, normalize_realm, normalize_username, EncType, ETYPE_AES128_CTS,
-    ETYPE_AES256_CTS, ETYPE_RC4_HMAC,
+    ETYPE_AES128_CTS, ETYPE_AES256_CTS, ETYPE_RC4_HMAC, EncType, krb_error_to_string,
+    normalize_realm, normalize_username,
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -33,7 +33,10 @@ fn test_normalize_username_strips_upn_domain_suffix() {
 #[test]
 fn test_normalize_username_prefers_downlevel_over_upn() {
     // If both separators: take the backslash path first
-    assert_eq!(normalize_username("CORP\\alice@corp.local"), "alice@corp.local");
+    assert_eq!(
+        normalize_username("CORP\\alice@corp.local"),
+        "alice@corp.local"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -66,12 +69,18 @@ fn test_etype_rc4_hmac_is_23() {
 
 #[test]
 fn test_etype_aes128_is_17() {
-    assert_eq!(ETYPE_AES128_CTS, 17, "AES128-CTS etype must be 17 per RFC 3962");
+    assert_eq!(
+        ETYPE_AES128_CTS, 17,
+        "AES128-CTS etype must be 17 per RFC 3962"
+    );
 }
 
 #[test]
 fn test_etype_aes256_is_18() {
-    assert_eq!(ETYPE_AES256_CTS, 18, "AES256-CTS etype must be 18 per RFC 3962");
+    assert_eq!(
+        ETYPE_AES256_CTS, 18,
+        "AES256-CTS etype must be 18 per RFC 3962"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════

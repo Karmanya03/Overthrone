@@ -17,7 +17,10 @@ fn dirs_home() -> PathBuf {
     #[cfg(windows)]
     {
         std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOMEDRIVE").and_then(|d| std::env::var("HOMEPATH").map(|p| format!("{}{}", d, p))))
+            .or_else(|_| {
+                std::env::var("HOMEDRIVE")
+                    .and_then(|d| std::env::var("HOMEPATH").map(|p| format!("{}{}", d, p)))
+            })
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."))
     }
@@ -74,7 +77,13 @@ pub fn session_path(name: &str) -> PathBuf {
     // Sanitize name to avoid path traversal
     let safe_name: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     default_session_dir().join(format!("{}.json", safe_name))
 }
@@ -83,7 +92,13 @@ pub fn session_path(name: &str) -> PathBuf {
 pub fn auto_session_path(dc_host: &str, domain: &str) -> PathBuf {
     let name = format!("{}-{}", domain, dc_host)
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     default_session_dir().join(format!("{}.json", name))
 }

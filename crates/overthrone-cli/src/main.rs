@@ -1330,7 +1330,10 @@ async fn async_main() {
         }
 
         // ─── Shell completion generation ─────────────────────
-        Commands::Completions { shell, output: ref completion_output } => {
+        Commands::Completions {
+            shell,
+            output: ref completion_output,
+        } => {
             let clap_shell = match shell {
                 CompletionShell::Bash => ClapShell::Bash,
                 CompletionShell::Fish => ClapShell::Fish,
@@ -2857,7 +2860,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
     {
         let save_path = crate::session_store::auto_session_path(
             &dc,
-            &result.state.domain.as_deref().unwrap_or("unknown"),
+            result.state.domain.as_deref().unwrap_or("unknown"),
         );
         match crate::session_store::save_session(&save_path, &result.state) {
             Ok(_) => banner::print_info(&format!("Session saved → {}", save_path.display())),

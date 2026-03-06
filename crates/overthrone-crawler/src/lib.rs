@@ -1,4 +1,4 @@
-﻿//! overthrone-crawler — AD trust traversal & cross-domain escalation engine.
+//! overthrone-crawler — AD trust traversal & cross-domain escalation engine.
 //!
 //! Analyzes reaper enumeration data to map trust relationships,
 //! detect cross-domain attack paths, SID filtering gaps, foreign
@@ -22,8 +22,8 @@ pub use runner::{CrawlerConfig, CrawlerResult, run_crawler};
 // Re-export cross-forest analysis types
 pub use cross_forest::{
     CrossForestAssessment, CrossForestOpportunity, CrossForestTechnique, Severity,
-    TrustKeyGuidance, find_cross_forest_opportunities, run_cross_forest_assessment,
-    build_trust_key_guidance,
+    TrustKeyGuidance, build_trust_key_guidance, find_cross_forest_opportunities,
+    run_cross_forest_assessment,
 };
 
 // Re-export the main analysis types (always available)

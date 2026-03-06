@@ -12,14 +12,15 @@
 //! - Persistence: the vault can be serialized to JSON (same as session state).
 
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 // ─── Public Entry Types ───────────────────────────────────────────────────────
 
 /// Privilege tier of a credential (higher = better)
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum CredPrivilege {
+    #[default]
     Unknown = 0,
     LocalAdmin = 1,
     ServiceAccount = 2,
@@ -29,19 +30,16 @@ pub enum CredPrivilege {
     DcSync = 6,
 }
 
-impl Default for CredPrivilege {
-    fn default() -> Self {
-        CredPrivilege::Unknown
-    }
-}
-
 /// The credential secret — either a plaintext password or an NT hash.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CredSecret {
     Password(String),
     NtHash(String),
     /// ntlm hash stored as LM:NT colon form
-    NtlmPair { lm: String, nt: String },
+    NtlmPair {
+        lm: String,
+        nt: String,
+    },
     /// Kerberos ticket cache path
     TicketPath(String),
 }
@@ -215,8 +213,7 @@ impl CredStore {
         entries
             .iter()
             .filter(|e| {
-                e.domain.eq_ignore_ascii_case(domain)
-                    && e.username.eq_ignore_ascii_case(username)
+                e.domain.eq_ignore_ascii_case(domain) && e.username.eq_ignore_ascii_case(username)
             })
             .cloned()
             .collect()
@@ -237,9 +234,7 @@ impl CredStore {
         let entries = self.entries.lock().unwrap();
         entries
             .iter()
-            .filter(|e| {
-                e.privilege >= CredPrivilege::DomainAdmin
-            })
+            .filter(|e| e.privilege >= CredPrivilege::DomainAdmin)
             .cloned()
             .collect()
     }
@@ -278,10 +273,9 @@ impl CredStore {
         for entry in entries.iter_mut() {
             if entry.domain.eq_ignore_ascii_case(domain)
                 && entry.username.eq_ignore_ascii_case(username)
+                && priv_level > entry.privilege
             {
-                if priv_level > entry.privilege {
-                    entry.privilege = priv_level.clone();
-                }
+                entry.privilege = priv_level.clone();
             }
         }
     }
@@ -319,8 +313,8 @@ impl CredStore {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         let data = std::fs::read_to_string(path)
             .map_err(|e| format!("Cannot read cred store {}: {}", path.display(), e))?;
-        let entries: Vec<CredEntry> = serde_json::from_str(&data)
-            .map_err(|e| format!("Parse error: {}", e))?;
+        let entries: Vec<CredEntry> =
+            serde_json::from_str(&data).map_err(|e| format!("Parse error: {}", e))?;
         Ok(Self {
             entries: Mutex::new(entries),
         })

@@ -4,8 +4,8 @@
 //! SQL type classification helpers.  All tests are offline.
 
 use overthrone_core::mssql::tds::{
-    fixed_type_length, is_fixed_length_type, is_u16_length_type, sql_type_name, sql_types,
-    TdsMessage, TdsMessageType,
+    TdsMessage, TdsMessageType, fixed_type_length, is_fixed_length_type, is_u16_length_type,
+    sql_type_name, sql_types,
 };
 
 // ═══════════════════════════════════════════════════════════

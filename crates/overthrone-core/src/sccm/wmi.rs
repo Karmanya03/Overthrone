@@ -7,14 +7,14 @@
 //! On **non-Windows** systems, equivalent PowerShell commands are generated for
 //! the operator to run on a Windows pivot.
 
-use crate::error::{OverthroneError, Result};
 use super::SccmSite;
+use crate::error::{OverthroneError, Result};
 use tracing::info;
 
 #[cfg(windows)]
 use {
-    serde::Deserialize,
     ::wmi::{COMLibrary, WMIConnection},
+    serde::Deserialize,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -173,8 +173,8 @@ pub async fn enumerate_devices(site: &SccmSite) -> Result<Vec<SccmDevice>> {
 
 #[cfg(windows)]
 async fn enumerate_collections_native(site: &SccmSite) -> Result<Vec<SccmCollection>> {
-    let server  = site.site_server.clone();
-    let sc      = site.site_code.clone();
+    let server = site.site_server.clone();
+    let sc = site.site_code.clone();
 
     tokio::task::spawn_blocking(move || -> Result<Vec<SccmCollection>> {
         let com = COMLibrary::new().map_err(|e| OverthroneError::Protocol {
@@ -193,15 +193,17 @@ async fn enumerate_collections_native(site: &SccmSite) -> Result<Vec<SccmCollect
         #[derive(Deserialize, Debug)]
         #[serde(rename_all = "PascalCase")]
         struct RawCollection {
-            collection_id:   String,
-            name:            String,
-            member_count:    u32,
+            collection_id: String,
+            name: String,
+            member_count: u32,
             collection_type: u32,
-            is_built_in:     bool,
+            is_built_in: bool,
         }
 
         let rows: Vec<RawCollection> = wmi
-            .raw_query("SELECT CollectionID,Name,MemberCount,CollectionType,IsBuiltIn FROM SMS_Collection")
+            .raw_query(
+                "SELECT CollectionID,Name,MemberCount,CollectionType,IsBuiltIn FROM SMS_Collection",
+            )
             .map_err(|e| OverthroneError::Protocol {
                 protocol: "SCCM".into(),
                 reason: format!("WMI query failed: {e}"),
@@ -210,11 +212,11 @@ async fn enumerate_collections_native(site: &SccmSite) -> Result<Vec<SccmCollect
         Ok(rows
             .into_iter()
             .map(|r| SccmCollection {
-                collection_id:   r.collection_id,
-                name:            r.name,
-                member_count:    r.member_count,
+                collection_id: r.collection_id,
+                name: r.name,
+                member_count: r.member_count,
                 collection_type: CollectionType::from_u32(r.collection_type),
-                is_built_in:     r.is_built_in,
+                is_built_in: r.is_built_in,
             })
             .collect())
     })
@@ -228,7 +230,7 @@ async fn enumerate_collections_native(site: &SccmSite) -> Result<Vec<SccmCollect
 #[cfg(windows)]
 async fn enumerate_applications_native(site: &SccmSite) -> Result<Vec<SccmApplication>> {
     let server = site.site_server.clone();
-    let sc     = site.site_code.clone();
+    let sc = site.site_code.clone();
 
     tokio::task::spawn_blocking(move || -> Result<Vec<SccmApplication>> {
         let com = COMLibrary::new().map_err(|e| OverthroneError::Protocol {
@@ -247,11 +249,11 @@ async fn enumerate_applications_native(site: &SccmSite) -> Result<Vec<SccmApplic
         #[derive(Deserialize, Debug)]
         #[serde(rename_all = "PascalCase")]
         struct RawApp {
-            model_id:         Option<String>,
-            local_id:         u32,
-            local_name:       String,
+            model_id: Option<String>,
+            local_id: u32,
+            local_name: String,
             software_version: Option<String>,
-            is_deployed:      bool,
+            is_deployed: bool,
         }
 
         let rows: Vec<RawApp> = wmi
@@ -267,11 +269,11 @@ async fn enumerate_applications_native(site: &SccmSite) -> Result<Vec<SccmApplic
         Ok(rows
             .into_iter()
             .map(|r| SccmApplication {
-                app_id:           r.model_id.unwrap_or_default(),
-                local_id:         r.local_id,
-                name:             r.local_name,
+                app_id: r.model_id.unwrap_or_default(),
+                local_id: r.local_id,
+                name: r.local_name,
                 software_version: r.software_version.unwrap_or_default(),
-                is_deployed:      r.is_deployed,
+                is_deployed: r.is_deployed,
                 deployment_types: Vec::new(),
             })
             .collect())
@@ -286,7 +288,7 @@ async fn enumerate_applications_native(site: &SccmSite) -> Result<Vec<SccmApplic
 #[cfg(windows)]
 async fn enumerate_devices_native(site: &SccmSite) -> Result<Vec<SccmDevice>> {
     let server = site.site_server.clone();
-    let sc     = site.site_code.clone();
+    let sc = site.site_code.clone();
 
     tokio::task::spawn_blocking(move || -> Result<Vec<SccmDevice>> {
         let com = COMLibrary::new().map_err(|e| OverthroneError::Protocol {
@@ -305,13 +307,13 @@ async fn enumerate_devices_native(site: &SccmSite) -> Result<Vec<SccmDevice>> {
         #[derive(Deserialize, Debug)]
         #[serde(rename_all = "PascalCase")]
         struct RawDevice {
-            resource_id:      u32,
-            name:             String,
-            dns_name:         Option<String>,
-            os_name:          Option<String>,
-            user_name:        Option<String>,
-            client_version:   Option<String>,
-            client_activity:  Option<u32>,
+            resource_id: u32,
+            name: String,
+            dns_name: Option<String>,
+            os_name: Option<String>,
+            user_name: Option<String>,
+            client_version: Option<String>,
+            client_activity: Option<u32>,
         }
 
         let rows: Vec<RawDevice> = wmi
@@ -330,14 +332,14 @@ async fn enumerate_devices_native(site: &SccmSite) -> Result<Vec<SccmDevice>> {
             .map(|r| {
                 let active = r.client_activity.unwrap_or(0);
                 SccmDevice {
-                    resource_id:      r.resource_id,
-                    name:             r.name,
-                    dns_name:         r.dns_name.unwrap_or_default(),
-                    os_name:          r.os_name.unwrap_or_default(),
-                    last_logon_user:  r.user_name.unwrap_or_default(),
-                    client_version:   r.client_version.unwrap_or_default(),
-                    client_activity:  active,
-                    is_active:        active > 0,
+                    resource_id: r.resource_id,
+                    name: r.name,
+                    dns_name: r.dns_name.unwrap_or_default(),
+                    os_name: r.os_name.unwrap_or_default(),
+                    last_logon_user: r.user_name.unwrap_or_default(),
+                    client_version: r.client_version.unwrap_or_default(),
+                    client_activity: active,
+                    is_active: active > 0,
                 }
             })
             .collect())

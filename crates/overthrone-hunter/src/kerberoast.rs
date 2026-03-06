@@ -110,7 +110,7 @@ async fn enumerate_spn_accounts(
 ) -> Result<Vec<SpnAccount>> {
     info!("LDAP: Enumerating SPN accounts (kerberoastable)");
 
-let mut conn = if config.use_hash {
+    let mut conn = if config.use_hash {
         ldap::LdapSession::connect_with_hash(
             &config.dc_ip,
             &config.domain,

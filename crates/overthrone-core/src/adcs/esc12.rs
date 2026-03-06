@@ -150,10 +150,7 @@ impl Esc12Exploiter {
                 r"\\{}\c$\ProgramData\Microsoft\Crypto\RSA\MachineKeys\",
                 self.config.ca_host
             ),
-            format!(
-                r"\\{}\c$\Windows\System32\CertLog\",
-                self.config.ca_host
-            ),
+            format!(r"\\{}\c$\Windows\System32\CertLog\", self.config.ca_host),
         ];
 
         Esc12Assessment {
@@ -211,8 +208,10 @@ mod tests {
         let exploiter = Esc12Exploiter::new(cfg);
         let assessment = exploiter.assess();
 
-        assert!(assessment.certutil_backup_command.contains("TestCA") || 
-                assessment.certutil_backup_command.contains("10.0.0.20"));
+        assert!(
+            assessment.certutil_backup_command.contains("TestCA")
+                || assessment.certutil_backup_command.contains("10.0.0.20")
+        );
         assert!(assessment.certipy_command.contains("TestCA"));
         assert!(assessment.certipy_command.contains("10.0.0.20"));
         assert!(!assessment.ca_key_paths.is_empty());

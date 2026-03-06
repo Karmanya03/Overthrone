@@ -170,7 +170,11 @@ fn test_admin_check_result_target_is_hostname() {
 
 #[test]
 fn test_admin_check_result_shares_contains_specific_share() {
-    let shares = vec!["SYSVOL".to_string(), "NETLOGON".to_string(), "C$".to_string()];
+    let shares = vec![
+        "SYSVOL".to_string(),
+        "NETLOGON".to_string(),
+        "C$".to_string(),
+    ];
     let result = AdminCheckResult {
         target: "dc01.corp.local".to_string(),
         has_admin: true,

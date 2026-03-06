@@ -57,7 +57,10 @@ fn test_authenticate_message_type_is_3() {
     let challenge = [0u8; 8];
     let msg = build_authenticate_message("CORP", "admin", &key, &challenge, None, None);
     let msg_type = u32::from_le_bytes([msg[8], msg[9], msg[10], msg[11]]);
-    assert_eq!(msg_type, 3, "Authenticate message must carry message type 3");
+    assert_eq!(
+        msg_type, 3,
+        "Authenticate message must carry message type 3"
+    );
 }
 
 #[test]
@@ -144,10 +147,8 @@ fn test_parse_secretsdump_invalid_hash_hex_returns_err() {
 #[test]
 fn test_parse_ntlm_hash_colon_separated() {
     // Format: LM:NT — must return NT part only
-    let h = parse_ntlm_hash(
-        "aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c",
-    )
-    .unwrap();
+    let h = parse_ntlm_hash("aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c")
+        .unwrap();
     assert_eq!(
         hex::encode(&h),
         "8846f7eaee8fb117ad06bdd830b7586c",

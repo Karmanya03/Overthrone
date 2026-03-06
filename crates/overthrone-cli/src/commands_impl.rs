@@ -27,14 +27,13 @@ use tracing::warn;
 /// Emit result as JSON to stdout (and optionally to a file), then return 0.
 /// Callers should return the result of this function directly.
 fn emit_json(cli: &Cli, value: serde_json::Value) -> i32 {
-    let json_str = serde_json::to_string_pretty(&value).unwrap_or_else(|e| {
-        format!("{{\"error\": \"serialization failure: {}\"}}", e)
-    });
+    let json_str = serde_json::to_string_pretty(&value)
+        .unwrap_or_else(|e| format!("{{\"error\": \"serialization failure: {}\"}}", e));
     println!("{}", json_str);
-    if let Some(ref path) = cli.outfile {
-        if let Err(e) = std::fs::write(path, &json_str) {
-            eprintln!("warn: failed to write output file '{}': {}", path, e);
-        }
+    if let Some(ref path) = cli.outfile
+        && let Err(e) = std::fs::write(path, &json_str)
+    {
+        eprintln!("warn: failed to write output file '{}': {}", path, e);
     }
     0
 }
@@ -67,11 +66,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     );
 
     // Build ExecContext from credentials (LDAPS defaults to false; no global ldaps flag on Cli)
-    let ctx = match creds.to_exec_context(
-        target,
-        false,
-        false,
-    ) {
+    let ctx = match creds.to_exec_context(target, false, false) {
         Ok(c) => c,
         Err(e) => {
             banner::print_fail(&format!("Failed to build execution context: {}", e));
@@ -86,19 +81,27 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     // Map DumpSource → PlannedAction
     let (action, description) = match source {
         DumpSource::Sam => (
-            overthrone_pilot::planner::PlannedAction::DumpSam { target: target.to_string() },
+            overthrone_pilot::planner::PlannedAction::DumpSam {
+                target: target.to_string(),
+            },
             format!("Dump SAM credentials from {}", target),
         ),
         DumpSource::Lsa => (
-            overthrone_pilot::planner::PlannedAction::DumpLsa { target: target.to_string() },
+            overthrone_pilot::planner::PlannedAction::DumpLsa {
+                target: target.to_string(),
+            },
             format!("Dump LSA secrets from {}", target),
         ),
         DumpSource::Ntds => (
-            overthrone_pilot::planner::PlannedAction::DumpNtds { target: target.to_string() },
+            overthrone_pilot::planner::PlannedAction::DumpNtds {
+                target: target.to_string(),
+            },
             format!("Dump NTDS.dit from {}", target),
         ),
         DumpSource::Dcc2 => (
-            overthrone_pilot::planner::PlannedAction::DumpDcc2 { target: target.to_string() },
+            overthrone_pilot::planner::PlannedAction::DumpDcc2 {
+                target: target.to_string(),
+            },
             format!("Dump DCC2 cached credentials from {}", target),
         ),
     };
@@ -123,21 +126,28 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
 
     if result.success {
         if wants_json(cli) {
-            let loot_json: Vec<serde_json::Value> = state.loot.iter().map(|l| {
-                serde_json::json!({
-                    "loot_type": l.loot_type,
-                    "source": l.source,
-                    "entries": l.entries,
+            let loot_json: Vec<serde_json::Value> = state
+                .loot
+                .iter()
+                .map(|l| {
+                    serde_json::json!({
+                        "loot_type": l.loot_type,
+                        "source": l.source,
+                        "entries": l.entries,
+                    })
                 })
-            }).collect();
-            return emit_json(cli, serde_json::json!({
-                "status": "success",
-                "target": target,
-                "source": format!("{:?}", source),
-                "credentials_extracted": result.new_credentials,
-                "loot": loot_json,
-                "output": result.output,
-            }));
+                .collect();
+            return emit_json(
+                cli,
+                serde_json::json!({
+                    "status": "success",
+                    "target": target,
+                    "source": format!("{:?}", source),
+                    "credentials_extracted": result.new_credentials,
+                    "loot": loot_json,
+                    "output": result.output,
+                }),
+            );
         }
 
         println!(
@@ -164,12 +174,15 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         0
     } else {
         if wants_json(cli) {
-            return emit_json(cli, serde_json::json!({
-                "status": "error",
-                "target": target,
-                "source": format!("{:?}", source),
-                "error": result.output,
-            }));
+            return emit_json(
+                cli,
+                serde_json::json!({
+                    "status": "error",
+                    "target": target,
+                    "source": format!("{:?}", source),
+                    "error": result.output,
+                }),
+            );
         }
         banner::print_fail(&format!("Dump failed: {}", result.output));
         1
@@ -695,22 +708,28 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
                 .count();
 
             if wants_json(cli) {
-                let accounts: Vec<serde_json::Value> = results.iter().map(|r| {
-                    serde_json::json!({
-                        "rid": r.rid,
-                        "name": r.name,
-                        "account_type": format!("{:?}", r.account_type),
+                let accounts: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "rid": r.rid,
+                            "name": r.name,
+                            "account_type": format!("{:?}", r.account_type),
+                        })
                     })
-                }).collect();
-                return emit_json(cli, serde_json::json!({
-                    "status": "success",
-                    "target": dc,
-                    "total": results.len(),
-                    "users": users,
-                    "groups": groups,
-                    "aliases": aliases,
-                    "accounts": accounts,
-                }));
+                    .collect();
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "target": dc,
+                        "total": results.len(),
+                        "users": users,
+                        "groups": groups,
+                        "aliases": aliases,
+                        "accounts": accounts,
+                    }),
+                );
             }
 
             println!("\n  {} Results:", "▸".bright_black());
@@ -746,11 +765,14 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         }
         Err(e) => {
             if wants_json(cli) {
-                return emit_json(cli, serde_json::json!({
-                    "status": "error",
-                    "target": dc,
-                    "error": e.to_string(),
-                }));
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "error",
+                        "target": dc,
+                        "error": e.to_string(),
+                    }),
+                );
             }
             banner::print_fail(&format!("RID cycling failed: {}", e));
             1
@@ -1098,11 +1120,14 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
         match decrypt_gpp_password(cpass) {
             Ok(password) => {
                 if wants_json(cli) {
-                    return emit_json(cli, serde_json::json!({
-                        "status": "success",
-                        "mode": "cpassword",
-                        "credentials": [{"cpassword": cpass, "password": password}],
-                    }));
+                    return emit_json(
+                        cli,
+                        serde_json::json!({
+                            "status": "success",
+                            "mode": "cpassword",
+                            "credentials": [{"cpassword": cpass, "password": password}],
+                        }),
+                    );
                 }
                 println!(
                     "  {} Decrypted password: {}",
@@ -1114,11 +1139,14 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
             }
             Err(e) => {
                 if wants_json(cli) {
-                    return emit_json(cli, serde_json::json!({
-                        "status": "error",
-                        "mode": "cpassword",
-                        "error": e.to_string(),
-                    }));
+                    return emit_json(
+                        cli,
+                        serde_json::json!({
+                            "status": "error",
+                            "mode": "cpassword",
+                            "error": e.to_string(),
+                        }),
+                    );
                 }
                 banner::print_fail(&format!("Decryption failed: {}", e));
                 1
@@ -1138,12 +1166,15 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
 
                 if creds.is_empty() {
                     if wants_json(cli) {
-                        return emit_json(cli, serde_json::json!({
-                            "status": "success",
-                            "mode": "file",
-                            "file": file_path,
-                            "credentials": [],
-                        }));
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "mode": "file",
+                                "file": file_path,
+                                "credentials": [],
+                            }),
+                        );
                     }
                     println!("  {} No credentials found in file", "!".yellow());
                     banner::print_warn("No cpassword entries found");
@@ -1151,19 +1182,25 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
                 }
 
                 if wants_json(cli) {
-                    let creds_json: Vec<serde_json::Value> = creds.iter().map(|c| {
-                        serde_json::json!({
-                            "username": c.username,
-                            "password": c.password,
-                            "changed": c.changed,
+                    let creds_json: Vec<serde_json::Value> = creds
+                        .iter()
+                        .map(|c| {
+                            serde_json::json!({
+                                "username": c.username,
+                                "password": c.password,
+                                "changed": c.changed,
+                            })
                         })
-                    }).collect();
-                    return emit_json(cli, serde_json::json!({
-                        "status": "success",
-                        "mode": "file",
-                        "file": file_path,
-                        "credentials": creds_json,
-                    }));
+                        .collect();
+                    return emit_json(
+                        cli,
+                        serde_json::json!({
+                            "status": "success",
+                            "mode": "file",
+                            "file": file_path,
+                            "credentials": creds_json,
+                        }),
+                    );
                 }
 
                 println!("  {} Found {} credential(s)", "✓".green(), creds.len());
@@ -1182,12 +1219,15 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
             }
             Err(e) => {
                 if wants_json(cli) {
-                    return emit_json(cli, serde_json::json!({
-                        "status": "error",
-                        "mode": "file",
-                        "file": file_path,
-                        "error": e.to_string(),
-                    }));
+                    return emit_json(
+                        cli,
+                        serde_json::json!({
+                            "status": "error",
+                            "mode": "file",
+                            "file": file_path,
+                            "error": e.to_string(),
+                        }),
+                    );
                 }
                 banner::print_fail(&format!("Failed to read file: {}", e));
                 1
@@ -1195,10 +1235,13 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
         }
     } else {
         if wants_json(cli) {
-            return emit_json(cli, serde_json::json!({
-                "status": "error",
-                "error": "No cpassword or file specified. Use --cpassword or --file",
-            }));
+            return emit_json(
+                cli,
+                serde_json::json!({
+                    "status": "error",
+                    "error": "No cpassword or file specified. Use --cpassword or --file",
+                }),
+            );
         }
         banner::print_fail("No cpassword or file specified. Use --cpassword or --file");
         1
@@ -1253,20 +1296,26 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
             let total = entries.len();
 
             if wants_json(cli) {
-                let entries_json: Vec<serde_json::Value> = entries.iter().map(|e| {
-                    serde_json::json!({
-                        "computer_name": e.computer_name,
-                        "password": e.password,
-                        "laps_version": if e.is_laps_v2 { "v2" } else { "v1" },
+                let entries_json: Vec<serde_json::Value> = entries
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "computer_name": e.computer_name,
+                            "password": e.password,
+                            "laps_version": if e.is_laps_v2 { "v2" } else { "v1" },
+                        })
                     })
-                }).collect();
-                return emit_json(cli, serde_json::json!({
-                    "status": "success",
-                    "dc": dc,
-                    "total": total,
-                    "readable": entries.iter().filter(|e| e.password.is_some()).count(),
-                    "entries": entries_json,
-                }));
+                    .collect();
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "dc": dc,
+                        "total": total,
+                        "readable": entries.iter().filter(|e| e.password.is_some()).count(),
+                        "entries": entries_json,
+                    }),
+                );
             }
 
             let readable: Vec<_> = entries.iter().filter(|e| e.password.is_some()).collect();
@@ -1346,11 +1395,14 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
         }
         Err(e) => {
             if wants_json(cli) {
-                return emit_json(cli, serde_json::json!({
-                    "status": "error",
-                    "dc": dc,
-                    "error": e.to_string(),
-                }));
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "error",
+                        "dc": dc,
+                        "error": e.to_string(),
+                    }),
+                );
             }
             banner::print_fail(&format!("LAPS enumeration failed: {}", e));
             1
@@ -1708,7 +1760,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             ldap_url,
             output,
         } => {
-            println!("  {} Executing ESC9 attack (No Security Extension + UPN poisoning)...", "▸".bright_black());
+            println!(
+                "  {} Executing ESC9 attack (No Security Extension + UPN poisoning)...",
+                "▸".bright_black()
+            );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             println!("    Target UPN: {}", target_upn.cyan());
@@ -1727,7 +1782,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             println!("\n  {} LDAP Setup Commands:", "▸".bright_black());
             println!("{}", set_cmd.yellow());
-            println!("\n  {} After obtaining certificate, restore the UPN:", "▸".bright_black());
+            println!(
+                "\n  {} After obtaining certificate, restore the UPN:",
+                "▸".bright_black()
+            );
             println!("{}", restore_cmd.dimmed());
 
             let exploiter = match overthrone_core::adcs::Esc9Exploiter::new(ca) {
@@ -1758,7 +1816,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             variant,
             output,
         } => {
-            println!("  {} Executing ESC10 attack (Weak Certificate Mapping)...", "▸".bright_black());
+            println!(
+                "  {} Executing ESC10 attack (Weak Certificate Mapping)...",
+                "▸".bright_black()
+            );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             println!("    Target UPN: {}", target_upn.cyan());
@@ -1792,7 +1853,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Auth: {}", result.auth_hints.certipy_command.yellow());
-                    println!("    Remediation: {}", result.auth_hints.remediation.dimmed());
+                    println!(
+                        "    Remediation: {}",
+                        result.auth_hints.remediation.dimmed()
+                    );
                 }
                 Err(e) => {
                     banner::print_fail(&format!("ESC10 attack failed: {}", e));
@@ -1805,7 +1869,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             ca_name,
             template,
         } => {
-            println!("  {} Assessing ESC11 (NTLM Relay to ICPR)...", "▸".bright_black());
+            println!(
+                "  {} Assessing ESC11 (NTLM Relay to ICPR)...",
+                "▸".bright_black()
+            );
             println!("    CA Host: {}", ca_host.cyan());
             println!("    CA Name: {}", ca_name.cyan());
             println!("    Template: {}", template.cyan());
@@ -1840,7 +1907,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             operator,
             backup_path,
         } => {
-            println!("  {} Generating ESC12 CA key extraction guidance...", "▸".bright_black());
+            println!(
+                "  {} Generating ESC12 CA key extraction guidance...",
+                "▸".bright_black()
+            );
             println!("    CA Host: {}", ca_host.cyan());
             println!("    CA Name: {}", ca_name.cyan());
             println!("    Operator: {}", operator.cyan());
@@ -1876,7 +1946,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             subject,
             output,
         } => {
-            println!("  {} Executing ESC13 attack (Issuance Policy OID-to-Group Link)...", "▸".bright_black());
+            println!(
+                "  {} Executing ESC13 attack (Issuance Policy OID-to-Group Link)...",
+                "▸".bright_black()
+            );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             println!("    Policy OID: {}", policy_oid.cyan());
@@ -2025,7 +2098,13 @@ pub async fn cmd_sccm(action: &SccmAction) -> i32 {
 // cmd_scan — Port Scanner
 // ═══════════════════════════════════════════════════════
 
-pub async fn cmd_scan(cli: &Cli, targets: &str, ports: &str, scan_type: &ScanType, timeout: u64) -> i32 {
+pub async fn cmd_scan(
+    cli: &Cli,
+    targets: &str,
+    ports: &str,
+    scan_type: &ScanType,
+    timeout: u64,
+) -> i32 {
     use overthrone_core::scan::{PortScanner, ScanConfig, ScanType as CoreScanType};
 
     banner::print_module_banner("SCAN");
@@ -2057,21 +2136,28 @@ pub async fn cmd_scan(cli: &Cli, targets: &str, ports: &str, scan_type: &ScanTyp
             let open_ports = results.iter().filter(|r| r.open).count();
 
             if wants_json(cli) {
-                let ports_json: Vec<serde_json::Value> = results.iter().filter(|r| r.open).map(|r| {
-                    serde_json::json!({
-                        "host": r.host,
-                        "port": r.port,
-                        "service": r.service,
-                        "response_time_ms": r.response_time_ms,
+                let ports_json: Vec<serde_json::Value> = results
+                    .iter()
+                    .filter(|r| r.open)
+                    .map(|r| {
+                        serde_json::json!({
+                            "host": r.host,
+                            "port": r.port,
+                            "service": r.service,
+                            "response_time_ms": r.response_time_ms,
+                        })
                     })
-                }).collect();
-                return emit_json(cli, serde_json::json!({
-                    "status": "success",
-                    "targets": targets,
-                    "ports": ports,
-                    "open_count": open_ports,
-                    "results": ports_json,
-                }));
+                    .collect();
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "targets": targets,
+                        "ports": ports,
+                        "open_count": open_ports,
+                        "results": ports_json,
+                    }),
+                );
             }
 
             println!(
@@ -2096,11 +2182,14 @@ pub async fn cmd_scan(cli: &Cli, targets: &str, ports: &str, scan_type: &ScanTyp
         }
         Err(e) => {
             if wants_json(cli) {
-                return emit_json(cli, serde_json::json!({
-                    "status": "error",
-                    "targets": targets,
-                    "error": e.to_string(),
-                }));
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "error",
+                        "targets": targets,
+                        "error": e.to_string(),
+                    }),
+                );
             }
             banner::print_fail(&format!("Scan failed: {}", e));
             return 1;

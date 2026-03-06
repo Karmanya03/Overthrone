@@ -3,7 +3,7 @@
 //! Tests CollectionType parsing, SccmTechnique display, and SccmAbuseResult
 //! field access.  All tests are offline.
 
-use overthrone_core::sccm::{CollectionType, SccmAbuseResult, SccmTechnique, NaaCredential};
+use overthrone_core::sccm::{CollectionType, NaaCredential, SccmAbuseResult, SccmTechnique};
 
 // ═══════════════════════════════════════════════════════════
 //  CollectionType::from_u32
@@ -109,10 +109,7 @@ fn test_sccm_abuse_result_success_fields() {
     assert!(result.success);
     assert_eq!(result.affected_targets.len(), 2);
     assert!(result.credentials.is_empty());
-    assert_eq!(
-        result.command_output.as_deref(),
-        Some("Install triggered")
-    );
+    assert_eq!(result.command_output.as_deref(), Some("Install triggered"));
     assert_eq!(result.notes[0], "Relay listener required on attacker host");
 }
 

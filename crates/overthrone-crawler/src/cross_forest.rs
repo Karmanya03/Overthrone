@@ -65,14 +65,20 @@ pub enum CrossForestTechnique {
 impl std::fmt::Display for CrossForestTechnique {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SidHistoryGoldenTicket       => write!(f, "SID-History Golden Ticket"),
-            Self::TgtDelegationAbuse            => write!(f, "TGT Delegation Abuse"),
-            Self::ExternalTrustNoFilter         => write!(f, "External Trust — No SID Filtering"),
-            Self::NoSelectiveAuth               => write!(f, "Selective Auth Disabled"),
-            Self::ForeignPrivilegedMembership { principal, local_group } => {
-                write!(f, "Foreign Principal ({principal}) in privileged group ({local_group})")
+            Self::SidHistoryGoldenTicket => write!(f, "SID-History Golden Ticket"),
+            Self::TgtDelegationAbuse => write!(f, "TGT Delegation Abuse"),
+            Self::ExternalTrustNoFilter => write!(f, "External Trust — No SID Filtering"),
+            Self::NoSelectiveAuth => write!(f, "Selective Auth Disabled"),
+            Self::ForeignPrivilegedMembership {
+                principal,
+                local_group,
+            } => {
+                write!(
+                    f,
+                    "Foreign Principal ({principal}) in privileged group ({local_group})"
+                )
             }
-            Self::PamTrustAbuse                 => write!(f, "PAM Trust Shadow-Principal Abuse"),
+            Self::PamTrustAbuse => write!(f, "PAM Trust Shadow-Principal Abuse"),
         }
     }
 }
@@ -91,10 +97,10 @@ impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Informational => "INFO",
-            Self::Low           => "LOW",
-            Self::Medium        => "MEDIUM",
-            Self::High          => "HIGH",
-            Self::Critical      => "CRITICAL",
+            Self::Low => "LOW",
+            Self::Medium => "MEDIUM",
+            Self::High => "HIGH",
+            Self::Critical => "CRITICAL",
         };
         write!(f, "{s}")
     }
@@ -118,7 +124,7 @@ pub fn find_cross_forest_opportunities(
             source_domain: fm.foreign_domain.clone(),
             target_domain: fm.local_domain.clone(),
             technique: CrossForestTechnique::ForeignPrivilegedMembership {
-                principal:   fm.foreign_principal.clone(),
+                principal: fm.foreign_principal.clone(),
                 local_group: fm.local_group.clone(),
             },
             severity: Severity::Critical,
@@ -127,8 +133,14 @@ pub fn find_cross_forest_opportunities(
                 fm.foreign_principal, fm.foreign_domain, fm.local_group
             ),
             steps: vec![
-                format!("Compromise the account '{}/{}' (phishing, spray, etc.)", fm.foreign_domain, fm.foreign_principal),
-                format!("Use account as member of '{}' in {}", fm.local_group, fm.local_domain),
+                format!(
+                    "Compromise the account '{}/{}' (phishing, spray, etc.)",
+                    fm.foreign_domain, fm.foreign_principal
+                ),
+                format!(
+                    "Use account as member of '{}' in {}",
+                    fm.local_group, fm.local_domain
+                ),
                 "Escalate within the local domain using the inherited privileges.".to_string(),
             ],
             sid_filtering_blocks: false,
@@ -170,9 +182,7 @@ pub fn find_cross_forest_opportunities(
                 target_domain: trust.target_domain.clone(),
                 technique: CrossForestTechnique::TgtDelegationAbuse,
                 severity: Severity::Medium,
-                description: format!(
-                    "TGT delegation enabled with SID filtering — S4U2Proxy may allow cross-trust delegation abuse"
-                ),
+                description: "TGT delegation enabled with SID filtering — S4U2Proxy may allow cross-trust delegation abuse".to_string(),
                 steps: vec![
                     "Find a service account with constrained delegation configured across the trust.".to_string(),
                     format!("Run S4U2Self + S4U2Proxy to impersonate a privileged user in {}", trust.target_domain),
@@ -267,7 +277,11 @@ pub fn build_trust_key_guidance(
     // Trust key credential name: krbtgt/TARGET_NETBIOS@SOURCE
     let trust_upn = format!(
         "{}$",
-        target_domain.split('.').next().unwrap_or(target_domain).to_uppercase()
+        target_domain
+            .split('.')
+            .next()
+            .unwrap_or(target_domain)
+            .to_uppercase()
     );
 
     TrustKeyGuidance {
@@ -322,8 +336,8 @@ pub fn build_extra_sids_guidance(
 
     ExtraSidsGuidance {
         enterprise_admins_sid: format!("{placeholder}-519"),
-        domain_admins_sid:     format!("{placeholder}-512"),
-        schema_admins_sid:     format!("{placeholder}-518"),
+        domain_admins_sid: format!("{placeholder}-512"),
+        schema_admins_sid: format!("{placeholder}-518"),
         sid_discovery_command: format!(
             "overthrone reaper --dc-ip <{target_domain} DC> --domain {target_domain} --whoami --show-domain-sid\n\
              # OR\n\
@@ -361,7 +375,11 @@ impl CrossForestAssessment {
             self.opportunities.len(),
         );
         for (i, opp) in self.opportunities.iter().enumerate() {
-            let blocked = if opp.sid_filtering_blocks { " [SID-FILTERED]" } else { "" };
+            let blocked = if opp.sid_filtering_blocks {
+                " [SID-FILTERED]"
+            } else {
+                ""
+            };
             info!(
                 "[cross-forest] #{}: [{}]{} {} → {}",
                 i + 1,
@@ -372,7 +390,11 @@ impl CrossForestAssessment {
             );
         }
         if !self.foreign_memberships.is_empty() {
-            let priv_count = self.foreign_memberships.iter().filter(|m| m.is_privileged_group).count();
+            let priv_count = self
+                .foreign_memberships
+                .iter()
+                .filter(|m| m.is_privileged_group)
+                .count();
             info!(
                 "[cross-forest] {} foreign principal memberships ({} in privileged groups)",
                 self.foreign_memberships.len(),
@@ -409,8 +431,7 @@ pub async fn run_cross_forest_assessment(
     };
 
     // Foreign membership analysis (works offline from reaper data)
-    let foreign_memberships =
-        analyze_foreign_memberships(source_domain, &reaper.groups);
+    let foreign_memberships = analyze_foreign_memberships(source_domain, &reaper.groups);
 
     // Opportunity detection
     let opportunities = find_cross_forest_opportunities(trust_graph, &foreign_memberships);

@@ -26,7 +26,10 @@ fn test_parse_less_than_28_bytes_returns_err() {
     // Parser requires at least 28 bytes (24 PDU header + 4 dwOutVersion)
     let short = vec![0u8; 27];
     let result = parse_get_nc_changes_reply(&short, &[0u8; 16]);
-    assert!(result.is_err(), "Slice shorter than 28 bytes must return Err");
+    assert!(
+        result.is_err(),
+        "Slice shorter than 28 bytes must return Err"
+    );
 }
 
 #[test]

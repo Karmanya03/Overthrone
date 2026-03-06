@@ -168,13 +168,13 @@ impl OverthroneConfig {
     #[allow(dead_code)]
     pub fn apply_cli_override(&mut self, key: &str, value: &str) {
         match key {
-            "dc"       => self.targets.dc       = Some(value.to_string()),
-            "domain"   => self.targets.domain   = Some(value.to_string()),
+            "dc" => self.targets.dc = Some(value.to_string()),
+            "domain" => self.targets.domain = Some(value.to_string()),
             "username" => self.credentials.username = Some(value.to_string()),
             "password" => self.credentials.password = Some(value.to_string()),
-            "nt_hash"  => self.credentials.nt_hash  = Some(value.to_string()),
-            "ticket"   => self.credentials.ticket   = Some(value.to_string()),
-            "opsec"    => self.options.opsec     = value.to_string(),
+            "nt_hash" => self.credentials.nt_hash = Some(value.to_string()),
+            "ticket" => self.credentials.ticket = Some(value.to_string()),
+            "opsec" => self.options.opsec = value.to_string(),
             _ => {}
         }
     }
@@ -198,9 +198,8 @@ fn dirs_home() -> PathBuf {
     {
         std::env::var("USERPROFILE")
             .or_else(|_| {
-                std::env::var("HOMEDRIVE").and_then(|d| {
-                    std::env::var("HOMEPATH").map(|p| format!("{}{}", d, p))
-                })
+                std::env::var("HOMEDRIVE")
+                    .and_then(|d| std::env::var("HOMEPATH").map(|p| format!("{}{}", d, p)))
             })
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."))

@@ -43,8 +43,7 @@ use tracing::info;
 // ─────────────────────────────────────────────────────────
 
 /// Registry key controlling certificate binding enforcement on DCs
-pub const KDC_REG_KEY: &str =
-    r"HKLM\SYSTEM\CurrentControlSet\Services\Kdc";
+pub const KDC_REG_KEY: &str = r"HKLM\SYSTEM\CurrentControlSet\Services\Kdc";
 
 /// Registry value name for strong binding enforcement
 pub const STRONG_BINDING_VALUE: &str = "StrongCertificateBindingEnforcement";
@@ -71,14 +70,12 @@ pub enum Esc10Variant {
 impl std::fmt::Display for Esc10Variant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::WeakBindingEnforcement => write!(
-                f,
-                "StrongCertificateBindingEnforcement=0 (Variant A)"
-            ),
-            Self::UPNMappingEnabled => write!(
-                f,
-                "CertificateMappingMethods has UPN match bit (Variant B)"
-            ),
+            Self::WeakBindingEnforcement => {
+                write!(f, "StrongCertificateBindingEnforcement=0 (Variant A)")
+            }
+            Self::UPNMappingEnabled => {
+                write!(f, "CertificateMappingMethods has UPN match bit (Variant B)")
+            }
         }
     }
 }
@@ -190,9 +187,9 @@ impl Esc10Exploiter {
                  /dc:<DC_IP> /nowrap"
             ),
             remediation: match config.variant {
-                Esc10Variant::WeakBindingEnforcement => format!(
-                    "Set HKLM\\...\\Kdc\\{STRONG_BINDING_VALUE} = 2 on all DCs and reboot"
-                ),
+                Esc10Variant::WeakBindingEnforcement => {
+                    format!("Set HKLM\\...\\Kdc\\{STRONG_BINDING_VALUE} = 2 on all DCs and reboot")
+                }
                 Esc10Variant::UPNMappingEnabled => format!(
                     "Clear UPN match bit: HKLM\\...\\Kdc\\{CERT_MAPPING_METHODS_VALUE} &= ~0x{UPN_MATCH_FLAG:X}"
                 ),
@@ -207,7 +204,7 @@ impl Esc10Exploiter {
                 valid_from: "Unknown".to_string(),
                 valid_to: "Unknown".to_string(),
                 template: config.template.clone(),
-                subject: format!("CN=overthrone-esc10"),
+                subject: "CN=overthrone-esc10".to_string(),
                 issuer: self.web_client.base_url(),
                 public_key_algorithm: "RSA".to_string(),
                 signature_algorithm: "SHA256RSA".to_string(),

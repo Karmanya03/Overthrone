@@ -158,9 +158,9 @@ pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result
 /// All deferred (pointer-referent) data follows after offset 140.
 fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result<DcSyncResult> {
     const CNUMOBJECTS_OFF: usize = 108;
-    const POBJ_REF_OFF:    usize = 116;
-    const FMOREDATA_OFF:   usize = 120;
-    const FIXED_HDR:       usize = 140;
+    const POBJ_REF_OFF: usize = 116;
+    const FMOREDATA_OFF: usize = 120;
+    const FIXED_HDR: usize = 140;
 
     if stub_data.len() < FIXED_HDR {
         return Err(OverthroneError::custom(
@@ -169,8 +169,8 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
     }
 
     let c_num_objects = read_u32(stub_data, CNUMOBJECTS_OFF) as usize;
-    let p_obj_ref     = read_u32(stub_data, POBJ_REF_OFF);
-    let f_more_data   = read_u32(stub_data, FMOREDATA_OFF) != 0;
+    let p_obj_ref = read_u32(stub_data, POBJ_REF_OFF);
+    let f_more_data = read_u32(stub_data, FMOREDATA_OFF) != 0;
 
     debug!(
         "DRS header: cNumObjects={}, pObjects_ref=0x{:08x}, fMoreData={}",
@@ -193,7 +193,9 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
 
     info!(
         "DCSync: parsed {} of {} expected object(s), more_data={}",
-        objects.len(), target_count, f_more_data
+        objects.len(),
+        target_count,
+        f_more_data
     );
 
     let n = objects.len() as u32;

@@ -3,11 +3,11 @@
 //! All tests are offline; they use manually crafted TrustGraph / ForeignMembership
 //! objects rather than live enumeration data.
 
-use overthrone_crawler::{
-    find_cross_forest_opportunities, build_trust_key_guidance,
-    CrossForestTechnique, ForeignMembership, Severity,
-};
 use overthrone_crawler::trust_map::{TrustDirection, TrustEdge, TrustGraph, TrustKind};
+use overthrone_crawler::{
+    CrossForestTechnique, ForeignMembership, Severity, build_trust_key_guidance,
+    find_cross_forest_opportunities,
+};
 
 // ─────────────────────────────────────────────────────────
 //  Test helpers
@@ -110,7 +110,9 @@ fn test_empty_memberships_and_no_interesting_trusts() {
 #[test]
 fn test_no_sid_filtering_produces_sid_history_opportunity() {
     let mut graph = TrustGraph::new();
-    graph.trusts.push(outbound_forest_trust("source.local", "target.local", false));
+    graph
+        .trusts
+        .push(outbound_forest_trust("source.local", "target.local", false));
     let opps = find_cross_forest_opportunities(&graph, &[]);
 
     let techniques: Vec<&CrossForestTechnique> = opps.iter().map(|o| &o.technique).collect();
@@ -124,7 +126,9 @@ fn test_no_sid_filtering_produces_sid_history_opportunity() {
 fn test_forest_trust_no_sid_filter_severity_is_high() {
     // External (cross-forest) trust without SID filtering = High severity
     let mut graph = TrustGraph::new();
-    graph.trusts.push(outbound_forest_trust("source.local", "target.local", false));
+    graph
+        .trusts
+        .push(outbound_forest_trust("source.local", "target.local", false));
     let opps = find_cross_forest_opportunities(&graph, &[]);
 
     let sid_hist = opps
@@ -143,7 +147,9 @@ fn test_forest_trust_no_sid_filter_severity_is_high() {
 #[test]
 fn test_sid_filtering_enabled_no_sid_history_opportunity() {
     let mut graph = TrustGraph::new();
-    graph.trusts.push(outbound_forest_trust("source.local", "target.local", true));
+    graph
+        .trusts
+        .push(outbound_forest_trust("source.local", "target.local", true));
     let opps = find_cross_forest_opportunities(&graph, &[]);
 
     let has_sid_hist = opps
@@ -168,8 +174,8 @@ fn test_tgt_delegation_with_sid_filtering_produces_delegation_opportunity() {
         direction: TrustDirection::Outbound,
         trust_type: TrustKind::Forest,
         transitive: true,
-        sid_filtering: true,    // SID filtering ON
-        tgt_delegation: true,   // TGT delegation ON → S4U2Proxy path
+        sid_filtering: true,  // SID filtering ON
+        tgt_delegation: true, // TGT delegation ON → S4U2Proxy path
         is_within_forest: false,
         uses_aes: true,
         uses_rc4: false,
@@ -193,12 +199,8 @@ fn test_tgt_delegation_with_sid_filtering_produces_delegation_opportunity() {
 #[test]
 fn test_privileged_foreign_membership_detected() {
     let graph = TrustGraph::new();
-    let fm = privileged_foreign_membership(
-        "evil_user",
-        "evil.local",
-        "Domain Admins",
-        "corp.local",
-    );
+    let fm =
+        privileged_foreign_membership("evil_user", "evil.local", "Domain Admins", "corp.local");
     let opps = find_cross_forest_opportunities(&graph, &[fm]);
 
     assert!(
@@ -245,9 +247,11 @@ fn test_non_privileged_membership_produces_no_opportunity() {
 #[test]
 fn test_external_trust_no_sid_filtering_produces_external_trust_opportunity() {
     let mut graph = TrustGraph::new();
-    graph
-        .trusts
-        .push(outbound_external_trust("source.local", "target.local", false));
+    graph.trusts.push(outbound_external_trust(
+        "source.local",
+        "target.local",
+        false,
+    ));
     let opps = find_cross_forest_opportunities(&graph, &[]);
 
     let has_ext = opps
@@ -267,14 +271,11 @@ fn test_external_trust_no_sid_filtering_produces_external_trust_opportunity() {
 fn test_results_sorted_by_severity_descending() {
     let mut graph = TrustGraph::new();
     // Forest trust, no SID filtering (High)
-    graph.trusts.push(outbound_forest_trust("source.local", "target.local", false));
+    graph
+        .trusts
+        .push(outbound_forest_trust("source.local", "target.local", false));
     // Privileged foreign membership (Critical)
-    let fm = privileged_foreign_membership(
-        "attacker",
-        "evil.local",
-        "Domain Admins",
-        "corp.local",
-    );
+    let fm = privileged_foreign_membership("attacker", "evil.local", "Domain Admins", "corp.local");
     let opps = find_cross_forest_opportunities(&graph, &[fm]);
 
     assert!(!opps.is_empty());
@@ -292,7 +293,9 @@ fn test_results_sorted_by_severity_descending() {
 #[test]
 fn test_critical_before_high() {
     let mut graph = TrustGraph::new();
-    graph.trusts.push(outbound_forest_trust("a.local", "b.local", false));
+    graph
+        .trusts
+        .push(outbound_forest_trust("a.local", "b.local", false));
     let fm = privileged_foreign_membership("u", "evil.local", "Domain Admins", "corp.local");
     let opps = find_cross_forest_opportunities(&graph, &[fm]);
 

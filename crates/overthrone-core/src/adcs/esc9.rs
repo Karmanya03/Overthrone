@@ -115,10 +115,7 @@ impl Esc9Exploiter {
         if !response.is_issued() {
             return Err(OverthroneError::EscAttack {
                 esc_number: 9,
-                reason: format!(
-                    "CA rejected certificate request: {}",
-                    response.message
-                ),
+                reason: format!("CA rejected certificate request: {}", response.message),
             });
         }
 

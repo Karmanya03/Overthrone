@@ -7,13 +7,12 @@ pub mod abuse;
 pub mod wmi;
 
 pub use abuse::{
-    SccmAbuseResult, SccmTechnique,
-    client_push_coercion, deploy_malicious_application, extract_naa_credentials,
-    admin_service_harvest,
+    SccmAbuseResult, SccmTechnique, admin_service_harvest, client_push_coercion,
+    deploy_malicious_application, extract_naa_credentials,
 };
 pub use wmi::{
-    CollectionType, SccmApplication, SccmCollection, SccmDevice,
-    enumerate_collections, enumerate_applications, enumerate_devices,
+    CollectionType, SccmApplication, SccmCollection, SccmDevice, enumerate_applications,
+    enumerate_collections, enumerate_devices,
 };
 
 use crate::error::{OverthroneError, Result};
@@ -24,9 +23,9 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 #[cfg(windows)]
-use serde::Deserialize;
-#[cfg(windows)]
 use ::wmi::{COMLibrary, WMIConnection};
+#[cfg(windows)]
+use serde::Deserialize;
 
 /// Configuration for SCCM Scanner operations
 pub struct SccmScannerConfig {

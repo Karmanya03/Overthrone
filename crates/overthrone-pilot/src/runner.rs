@@ -369,7 +369,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     println!();
 
     let mut state = if let Some(initial) = config.initial_state.clone() {
-        println!("  {} Resuming from saved session state", colored::Colorize::cyan("►"));
+        println!(
+            "  {} Resuming from saved session state",
+            colored::Colorize::cyan("►")
+        );
         initial
     } else {
         EngagementState::new()
@@ -495,14 +498,15 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             if step_noise > max_allowed {
                 warn!(
                     "  OPSEC: skipping '{}' (noise={} > max={})",
-                    step_desc,
-                    step_noise,
-                    max_allowed
+                    step_desc, step_noise, max_allowed
                 );
                 plan.steps[step_idx].executed = true;
                 plan.steps[step_idx].result = Some(crate::planner::StepResult {
                     success: false,
-                    output: format!("Skipped: noise level {} exceeds OPSEC budget ({})", step_noise, max_allowed),
+                    output: format!(
+                        "Skipped: noise level {} exceeds OPSEC budget ({})",
+                        step_noise, max_allowed
+                    ),
                     new_credentials: 0,
                     new_admin_hosts: 0,
                 });

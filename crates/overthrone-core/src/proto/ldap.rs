@@ -169,12 +169,13 @@ pub(crate) struct RawLdapConn {
 
 impl RawLdapConn {
     async fn connect(addr: &str) -> crate::error::Result<Self> {
-        let stream = tokio::net::TcpStream::connect(addr)
-            .await
-            .map_err(|e| OverthroneError::Ldap {
-                target: addr.to_string(),
-                reason: format!("TCP connect failed: {e}"),
-            })?;
+        let stream =
+            tokio::net::TcpStream::connect(addr)
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: addr.to_string(),
+                    reason: format!("TCP connect failed: {e}"),
+                })?;
         Ok(Self { stream, next_id: 1 })
     }
 
@@ -196,7 +197,7 @@ impl RawLdapConn {
         // ── Step 1: Send NTLMSSP NEGOTIATE ──
         let negotiate = ntlm::build_negotiate_message(domain);
         let id1 = self.next_msg_id();
-        let req1 = build_bind_sasl(&mut vec![], id1, "NTLM", &negotiate);
+        let req1 = build_bind_sasl(&mut [], id1, "NTLM", &negotiate);
         raw_ldap_send(&mut self.stream, &req1).await?;
 
         // ── Step 2: Receive NTLMSSP CHALLENGE ──
@@ -206,12 +207,11 @@ impl RawLdapConn {
             reason: format!("NTLM SASL step 1 failed: {e}"),
         })?;
 
-        let challenge_msg = ntlm::parse_challenge_message(&sasl_creds).map_err(|e| {
-            OverthroneError::Ldap {
+        let challenge_msg =
+            ntlm::parse_challenge_message(&sasl_creds).map_err(|e| OverthroneError::Ldap {
                 target: "raw".to_string(),
                 reason: format!("NTLM challenge parse failed: {e}"),
-            }
-        })?;
+            })?;
 
         // ── Step 3: Send NTLMSSP AUTHENTICATE ──
         let authenticate = ntlm::build_authenticate_message(
@@ -223,7 +223,7 @@ impl RawLdapConn {
             None,
         );
         let id2 = self.next_msg_id();
-        let req2 = build_bind_sasl(&mut vec![], id2, "NTLM", &authenticate);
+        let req2 = build_bind_sasl(&mut [], id2, "NTLM", &authenticate);
         raw_ldap_send(&mut self.stream, &req2).await?;
 
         // ── Step 4: Receive final BindResponse ──
@@ -354,7 +354,7 @@ fn ber_sequence(data: &[u8]) -> Vec<u8> {
 // ──────────────── LDAP message builders ────────────────
 
 /// Build an LDAP BindRequest with SASL mechanism and credentials.
-fn build_bind_sasl(_scratch: &mut Vec<u8>, msg_id: u32, mechanism: &str, creds: &[u8]) -> Vec<u8> {
+fn build_bind_sasl(_scratch: &mut [u8], msg_id: u32, mechanism: &str, creds: &[u8]) -> Vec<u8> {
     let mut sasl = Vec::new();
     sasl.extend_from_slice(&ber_octet_string(mechanism.as_bytes()));
     sasl.extend_from_slice(&ber_octet_string(creds));
@@ -431,7 +431,10 @@ fn encode_ldap_filter(s: &str) -> Vec<u8> {
         }
         Some('!') => {
             let parts = split_ldap_filter_list(&inner[1..]);
-            let sub = parts.first().map(|s| s.as_str()).unwrap_or("(objectClass=*)");
+            let sub = parts
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("(objectClass=*)");
             ber_tlv(0xA2, &encode_ldap_filter(sub)) // NOT
         }
         _ => {
@@ -475,9 +478,7 @@ fn split_ldap_filter_list(s: &str) -> Vec<String> {
                 depth += 1;
             }
             ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
                     result.push(s[start..=i].to_string());
                 }
@@ -493,7 +494,11 @@ fn encode_extensible_filter(attr_part: &str, value: &str) -> Vec<u8> {
     // attr_part can be  "attr", "attr:oid", ":oid", "attr:dn:oid", etc.
     let segs: Vec<&str> = attr_part.split(':').collect();
     let attr = segs.first().copied().unwrap_or("");
-    let oid = if segs.len() > 1 { segs[segs.len() - 1] } else { "" };
+    let oid = if segs.len() > 1 {
+        segs[segs.len() - 1]
+    } else {
+        ""
+    };
 
     let mut data = Vec::new();
     if !oid.is_empty() {
@@ -509,35 +514,39 @@ fn encode_extensible_filter(attr_part: &str, value: &str) -> Vec<u8> {
 
 // ──────────────── Raw TCP send/recv ────────────────
 
-async fn raw_ldap_send(
-    stream: &mut tokio::net::TcpStream,
-    msg: &[u8],
-) -> crate::error::Result<()> {
+async fn raw_ldap_send(stream: &mut tokio::net::TcpStream, msg: &[u8]) -> crate::error::Result<()> {
     use tokio::io::AsyncWriteExt;
-    stream.write_all(msg).await.map_err(|e| OverthroneError::Ldap {
-        target: "raw".to_string(),
-        reason: format!("LDAP send failed: {e}"),
-    })
+    stream
+        .write_all(msg)
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP send failed: {e}"),
+        })
 }
 
-async fn raw_ldap_recv(
-    stream: &mut tokio::net::TcpStream,
-) -> crate::error::Result<Vec<u8>> {
+async fn raw_ldap_recv(stream: &mut tokio::net::TcpStream) -> crate::error::Result<Vec<u8>> {
     use tokio::io::AsyncReadExt;
 
     // Read tag (always 0x30 = SEQUENCE for LDAPMessage)
     let mut tag_buf = [0u8; 1];
-    stream.read_exact(&mut tag_buf).await.map_err(|e| OverthroneError::Ldap {
-        target: "raw".to_string(),
-        reason: format!("LDAP recv tag failed: {e}"),
-    })?;
+    stream
+        .read_exact(&mut tag_buf)
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP recv tag failed: {e}"),
+        })?;
 
     // Read length (may be multi-byte)
     let mut len_first = [0u8; 1];
-    stream.read_exact(&mut len_first).await.map_err(|e| OverthroneError::Ldap {
-        target: "raw".to_string(),
-        reason: format!("LDAP recv length failed: {e}"),
-    })?;
+    stream
+        .read_exact(&mut len_first)
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP recv length failed: {e}"),
+        })?;
 
     let length: usize = if len_first[0] < 0x80 {
         len_first[0] as usize
@@ -550,10 +559,13 @@ async fn raw_ldap_recv(
             });
         }
         let mut len_buf = vec![0u8; extra_bytes];
-        stream.read_exact(&mut len_buf).await.map_err(|e| OverthroneError::Ldap {
-            target: "raw".to_string(),
-            reason: format!("LDAP recv length bytes failed: {e}"),
-        })?;
+        stream
+            .read_exact(&mut len_buf)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: "raw".to_string(),
+                reason: format!("LDAP recv length bytes failed: {e}"),
+            })?;
         let mut l = 0usize;
         for b in &len_buf {
             l = (l << 8) | (*b as usize);
@@ -569,10 +581,13 @@ async fn raw_ldap_recv(
     }
 
     let mut data = vec![0u8; length];
-    stream.read_exact(&mut data).await.map_err(|e| OverthroneError::Ldap {
-        target: "raw".to_string(),
-        reason: format!("LDAP recv data failed: {e}"),
-    })?;
+    stream
+        .read_exact(&mut data)
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP recv data failed: {e}"),
+        })?;
 
     // Reconstruct full message (tag + length + data)
     let mut msg = vec![tag_buf[0]];
@@ -730,16 +745,16 @@ fn parse_bind_response_sasl(msg: &[u8]) -> std::result::Result<Vec<u8>, String> 
     ber_read_tlv(&op_data, &mut oi); // matchedDN
     ber_read_tlv(&op_data, &mut oi); // diagnosticMessage
     // serverSaslCreds = [7] IMPLICIT OCTET STRING
-    if let Some((tag, creds)) = ber_read_tlv(&op_data, &mut oi) {
-        if tag == 0x87 || tag == 0x04 {
-            return Ok(creds);
-        }
+    if let Some((tag, creds)) = ber_read_tlv(&op_data, &mut oi)
+        && (tag == 0x87 || tag == 0x04)
+    {
+        return Ok(creds);
     }
     Err("No SASL credentials in BindResponse".to_string())
 }
 
 /// BER TLV reader: returns (tag, value) and advances `offset`.
-fn ber_read_tlv<'a>(data: &'a [u8], offset: &mut usize) -> Option<(u8, Vec<u8>)> {
+fn ber_read_tlv(data: &[u8], offset: &mut usize) -> Option<(u8, Vec<u8>)> {
     if *offset >= data.len() {
         return None;
     }
@@ -774,8 +789,6 @@ fn ber_read_tlv<'a>(data: &'a [u8], offset: &mut usize) -> Option<(u8, Vec<u8>)>
     *offset += length;
     Some((tag, value))
 }
-
-
 
 /// Parsed AD user object
 #[derive(Debug, Clone)]
@@ -1203,12 +1216,10 @@ impl LdapSession {
     /// Unbind and close the LDAP session
     pub async fn disconnect(&mut self) -> Result<()> {
         if let Some(ldap) = self.ldap.as_mut() {
-            ldap.unbind()
-                .await
-                .map_err(|e| OverthroneError::Ldap {
-                    target: self.dc_ip.clone(),
-                    reason: format!("Unbind failed: {e}"),
-                })?;
+            ldap.unbind().await.map_err(|e| OverthroneError::Ldap {
+                target: self.dc_ip.clone(),
+                reason: format!("Unbind failed: {e}"),
+            })?;
         } else if let Some(raw) = self.raw.as_mut() {
             raw.disconnect().await;
         }
@@ -1956,7 +1967,9 @@ impl LdapSession {
         let base = self.base_dn.clone();
         let entries: Vec<SearchEntry> = if let Some(raw) = self.raw.as_mut() {
             // Raw backend: search without SD_FLAGS control (no binary security descriptor)
-            warn!("enumerate_acls: raw NTLM session does not support SD_FLAGS control; nTSecurityDescriptor will be unavailable");
+            warn!(
+                "enumerate_acls: raw NTLM session does not support SD_FLAGS control; nTSecurityDescriptor will be unavailable"
+            );
             raw.search(&base, filter, ACL_ATTRS).await?
         } else {
             let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {

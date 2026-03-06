@@ -99,8 +99,13 @@ fn test_add_edge_between_existing_nodes_succeeds() {
     let mut g = AttackGraph::new();
     g.add_node(user_node("alice", "corp.local"));
     g.add_node(computer_node("DC01", "corp.local"));
-    let added =
-        g.add_edge_by_name("alice", "corp.local", "DC01", "corp.local", EdgeType::AdminTo);
+    let added = g.add_edge_by_name(
+        "alice",
+        "corp.local",
+        "DC01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
     assert!(added, "Edge between two existing nodes must return true");
     assert_eq!(g.edge_count(), 1);
 }
@@ -109,8 +114,13 @@ fn test_add_edge_between_existing_nodes_succeeds() {
 fn test_add_edge_where_source_missing_returns_false() {
     let mut g = AttackGraph::new();
     g.add_node(computer_node("DC01", "corp.local"));
-    let added =
-        g.add_edge_by_name("missing", "corp.local", "DC01", "corp.local", EdgeType::AdminTo);
+    let added = g.add_edge_by_name(
+        "missing",
+        "corp.local",
+        "DC01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
     assert!(!added);
     assert_eq!(g.edge_count(), 0);
 }
@@ -119,8 +129,13 @@ fn test_add_edge_where_source_missing_returns_false() {
 fn test_add_edge_where_target_missing_returns_false() {
     let mut g = AttackGraph::new();
     g.add_node(user_node("alice", "corp.local"));
-    let added =
-        g.add_edge_by_name("alice", "corp.local", "missing", "corp.local", EdgeType::AdminTo);
+    let added = g.add_edge_by_name(
+        "alice",
+        "corp.local",
+        "missing",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
     assert!(!added);
 }
 
@@ -168,7 +183,13 @@ fn test_shortest_path_single_hop() {
     let mut g = AttackGraph::new();
     g.add_node(user_node("alice", "corp.local"));
     g.add_node(computer_node("DC01", "corp.local"));
-    g.add_edge_by_name("alice", "corp.local", "DC01", "corp.local", EdgeType::AdminTo);
+    g.add_edge_by_name(
+        "alice",
+        "corp.local",
+        "DC01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
 
     let path = g
         .shortest_path("ALICE@CORP.LOCAL", "DC01@CORP.LOCAL")
@@ -185,8 +206,20 @@ fn test_shortest_path_two_hops() {
     g.add_node(user_node("alice", "corp.local"));
     g.add_node(computer_node("WS01", "corp.local"));
     g.add_node(computer_node("DC01", "corp.local"));
-    g.add_edge_by_name("alice", "corp.local", "WS01", "corp.local", EdgeType::AdminTo);
-    g.add_edge_by_name("WS01", "corp.local", "DC01", "corp.local", EdgeType::AdminTo);
+    g.add_edge_by_name(
+        "alice",
+        "corp.local",
+        "WS01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
+    g.add_edge_by_name(
+        "WS01",
+        "corp.local",
+        "DC01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
 
     let path = g
         .shortest_path("ALICE@CORP.LOCAL", "DC01@CORP.LOCAL")
@@ -209,7 +242,13 @@ fn test_shortest_path_prefers_lower_cost_route() {
     g.add_node(group_node("Domain Admins", "corp.local"));
     g.add_node(computer_node("DC01", "corp.local"));
     // Direct path: alice → DC01 (cost 1)
-    g.add_edge_by_name("alice", "corp.local", "DC01", "corp.local", EdgeType::AdminTo);
+    g.add_edge_by_name(
+        "alice",
+        "corp.local",
+        "DC01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
     // Indirect path: alice → Domain Admins (MemberOf, cost 0) → DC01 (AdminTo, cost 1)
     g.add_edge_by_name(
         "alice",
@@ -255,14 +294,20 @@ fn test_shortest_path_no_path_returns_err() {
 fn test_shortest_path_source_not_found_returns_err() {
     let mut g = AttackGraph::new();
     g.add_node(computer_node("DC01", "corp.local"));
-    assert!(g.shortest_path("GHOST@CORP.LOCAL", "DC01@CORP.LOCAL").is_err());
+    assert!(
+        g.shortest_path("GHOST@CORP.LOCAL", "DC01@CORP.LOCAL")
+            .is_err()
+    );
 }
 
 #[test]
 fn test_shortest_path_target_not_found_returns_err() {
     let mut g = AttackGraph::new();
     g.add_node(user_node("alice", "corp.local"));
-    assert!(g.shortest_path("ALICE@CORP.LOCAL", "GHOST@CORP.LOCAL").is_err());
+    assert!(
+        g.shortest_path("ALICE@CORP.LOCAL", "GHOST@CORP.LOCAL")
+            .is_err()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -328,7 +373,13 @@ fn test_stats_counts_edges() {
     let mut g = AttackGraph::new();
     g.add_node(user_node("alice", "corp.local"));
     g.add_node(computer_node("DC01", "corp.local"));
-    g.add_edge_by_name("alice", "corp.local", "DC01", "corp.local", EdgeType::AdminTo);
+    g.add_edge_by_name(
+        "alice",
+        "corp.local",
+        "DC01",
+        "corp.local",
+        EdgeType::AdminTo,
+    );
 
     let stats = g.stats();
     assert_eq!(stats.total_edges, 1);

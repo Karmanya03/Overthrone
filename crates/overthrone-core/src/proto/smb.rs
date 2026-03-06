@@ -599,9 +599,7 @@ impl SmbSession {
             .client
             .create_file(&unc, &open_args)
             .await
-            .map_err(|e| {
-                OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name))
-            })?;
+            .map_err(|e| OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name)))?;
         let pipe = match resource {
             Resource::Pipe(p) => p,
             _ => {
@@ -658,9 +656,7 @@ impl SmbSession {
         // payload to drain remaining data from the pipe.
         loop {
             // Send an empty IOCTL to drain the next fragment
-            let frag_result = pipe
-                .ioctl(0x0011_C017, vec![], 65536u32)
-                .await;
+            let frag_result = pipe.ioctl(0x0011_C017, vec![], 65536u32).await;
             let frag = match frag_result {
                 Ok(data) => data,
                 Err(_) => break, // pipe likely closed / no more data
@@ -1786,31 +1782,31 @@ pub async fn check_admin_targets(
 fn build_srvsvc_bind() -> Vec<u8> {
     // SRVSVC interface UUID (little-endian fields)
     let uuid: [u8; 16] = [
-        0xc8, 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3, 0x01,
-        0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88,
+        0xc8, 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3, 0x01, 0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1,
+        0x88,
     ];
     let mut buf = Vec::with_capacity(72);
-    buf.extend_from_slice(&[5, 0, 11, 3]);            // v5.0, bind, PFC_FIRST_FRAG | PFC_LAST_FRAG
+    buf.extend_from_slice(&[5, 0, 11, 3]); // v5.0, bind, PFC_FIRST_FRAG | PFC_LAST_FRAG
     buf.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // little-endian NDR
-    buf.extend_from_slice(&72u16.to_le_bytes());       // frag_len
-    buf.extend_from_slice(&0u16.to_le_bytes());        // auth_len
-    buf.extend_from_slice(&2u32.to_le_bytes());        // call_id (2 avoids colliding with SAMR)
-    buf.extend_from_slice(&4096u16.to_le_bytes());     // max_xmit_frag
-    buf.extend_from_slice(&4096u16.to_le_bytes());     // max_recv_frag
-    buf.extend_from_slice(&0u32.to_le_bytes());        // assoc_group_id
-    buf.push(1);                                       // num_ctx_items
-    buf.extend_from_slice(&[0, 0, 0]);                 // padding
+    buf.extend_from_slice(&72u16.to_le_bytes()); // frag_len
+    buf.extend_from_slice(&0u16.to_le_bytes()); // auth_len
+    buf.extend_from_slice(&2u32.to_le_bytes()); // call_id (2 avoids colliding with SAMR)
+    buf.extend_from_slice(&4096u16.to_le_bytes()); // max_xmit_frag
+    buf.extend_from_slice(&4096u16.to_le_bytes()); // max_recv_frag
+    buf.extend_from_slice(&0u32.to_le_bytes()); // assoc_group_id
+    buf.push(1); // num_ctx_items
+    buf.extend_from_slice(&[0, 0, 0]); // padding
     // Context item 0
-    buf.extend_from_slice(&0u16.to_le_bytes());        // context_id
-    buf.push(1);                                       // num_transfer_syntaxes
-    buf.push(0);                                       // padding
-    buf.extend_from_slice(&uuid);                      // interface UUID
-    buf.extend_from_slice(&3u16.to_le_bytes());        // if_version major = 3
-    buf.extend_from_slice(&0u16.to_le_bytes());        // if_version minor = 0
+    buf.extend_from_slice(&0u16.to_le_bytes()); // context_id
+    buf.push(1); // num_transfer_syntaxes
+    buf.push(0); // padding
+    buf.extend_from_slice(&uuid); // interface UUID
+    buf.extend_from_slice(&3u16.to_le_bytes()); // if_version major = 3
+    buf.extend_from_slice(&0u16.to_le_bytes()); // if_version minor = 0
     // NDR transfer syntax: 8a885d04-1ceb-11c9-9fe8-08002b104860 v2
     buf.extend_from_slice(&[
-        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
-        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
+        0x60,
     ]);
     buf.extend_from_slice(&2u32.to_le_bytes());
     buf
@@ -1828,11 +1824,11 @@ fn build_srvsvc_net_share_enum_req(server: &str) -> Vec<u8> {
         .collect();
     let char_count = (server_unc.encode_utf16().count() as u32) + 1; // +1 for null
     stub.extend_from_slice(&0x0002_0000u32.to_le_bytes()); // referent ID
-    stub.extend_from_slice(&char_count.to_le_bytes());     // max_count
-    stub.extend_from_slice(&0u32.to_le_bytes());           // offset
-    stub.extend_from_slice(&char_count.to_le_bytes());     // actual_count
-    stub.extend_from_slice(&utf16);                        // UTF-16LE chars
-    stub.extend_from_slice(&[0x00, 0x00]);                 // null terminator
+    stub.extend_from_slice(&char_count.to_le_bytes()); // max_count
+    stub.extend_from_slice(&0u32.to_le_bytes()); // offset
+    stub.extend_from_slice(&char_count.to_le_bytes()); // actual_count
+    stub.extend_from_slice(&utf16); // UTF-16LE chars
+    stub.extend_from_slice(&[0x00, 0x00]); // null terminator
     while stub.len() % 4 != 0 {
         stub.push(0);
     }
@@ -1852,7 +1848,7 @@ fn build_srvsvc_net_share_enum_req(server: &str) -> Vec<u8> {
 
     // ResumeHandle: non-null pointer + value 0
     stub.extend_from_slice(&0x0002_0008u32.to_le_bytes()); // referent
-    stub.extend_from_slice(&0u32.to_le_bytes());           // value
+    stub.extend_from_slice(&0u32.to_le_bytes()); // value
 
     build_rpc_request(15, &stub)
 }
@@ -1897,7 +1893,7 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
         return Vec::new();
     }
     let entry_count = u32::from_le_bytes([s[20], s[21], s[22], s[23]]) as usize;
-    let array_ref   = u32::from_le_bytes([s[24], s[25], s[26], s[27]]);
+    let array_ref = u32::from_le_bytes([s[24], s[25], s[26], s[27]]);
     if array_ref == 0 || entry_count == 0 {
         return Vec::new();
     }
@@ -1912,8 +1908,8 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
     let mut ptrs: Vec<(u32, u32)> = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let off = ARR_OFF + i * 12;
-        let name_ptr   = u32::from_le_bytes([s[off],   s[off+1], s[off+2], s[off+3]]);
-        let remark_ptr = u32::from_le_bytes([s[off+8], s[off+9], s[off+10], s[off+11]]);
+        let name_ptr = u32::from_le_bytes([s[off], s[off + 1], s[off + 2], s[off + 3]]);
+        let remark_ptr = u32::from_le_bytes([s[off + 8], s[off + 9], s[off + 10], s[off + 11]]);
         ptrs.push((name_ptr, remark_ptr));
     }
 
@@ -1921,16 +1917,16 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
     let mut pos = ARR_OFF + entry_count * 12;
     let mut names = Vec::new();
     for (name_ptr, remark_ptr) in &ptrs {
-        if *name_ptr != 0 {
-            if let Some((name, new_pos)) = read_ndr_wide_string(s, pos) {
-                pos = new_pos;
-                names.push(name);
-            }
+        if *name_ptr != 0
+            && let Some((name, new_pos)) = read_ndr_wide_string(s, pos)
+        {
+            pos = new_pos;
+            names.push(name);
         }
-        if *remark_ptr != 0 {
-            if let Some((_, new_pos)) = read_ndr_wide_string(s, pos) {
-                pos = new_pos;
-            }
+        if *remark_ptr != 0
+            && let Some((_, new_pos)) = read_ndr_wide_string(s, pos)
+        {
+            pos = new_pos;
         }
     }
     names
@@ -1950,7 +1946,7 @@ fn read_ndr_wide_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
         data[offset + 11],
     ]) as usize;
     let str_start = offset + 12;
-    let str_end   = str_start + actual * 2;
+    let str_end = str_start + actual * 2;
     if str_end > data.len() {
         return None;
     }

