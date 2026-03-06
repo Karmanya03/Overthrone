@@ -1511,7 +1511,7 @@ impl MssqlClient {
                         row.push(Some(String::new()));
                     } else if pos + len <= data.len() {
                         // Heuristic: if even length and all looks like UTF-16, decode
-                        if len % 2 == 0 {
+                        if len.is_multiple_of(2) {
                             let s = utf16le_to_string(&data[pos..pos + len]);
                             row.push(Some(s));
                         } else {
@@ -1598,7 +1598,7 @@ impl MssqlClient {
                         if len == 0 {
                             row.push(Some(String::new()));
                         } else if pos + len <= data.len() {
-                            if len % 2 == 0 {
+                            if len.is_multiple_of(2) {
                                 row.push(Some(utf16le_to_string(&data[pos..pos + len])));
                             } else {
                                 let hex: String = data[pos..pos + len]

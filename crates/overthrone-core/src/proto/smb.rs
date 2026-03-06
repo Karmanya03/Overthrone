@@ -25,6 +25,7 @@ use std::str::FromStr;
 
 pub const SMB_PORT: u16 = 445;
 pub const ADMIN_SHARES: &[&str] = &["C$", "ADMIN$", "IPC$"];
+#[cfg(windows)]
 const READ_BUF_SIZE: usize = 65536;
 
 // Public Types (available on all platforms)

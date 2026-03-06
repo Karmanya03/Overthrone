@@ -17,13 +17,8 @@ use uuid::Uuid;
 
 const SHELL_URI: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd";
 const CREATE_ACTION: &str = "http://schemas.xmlsoap.org/ws/2004/09/transfer/Create";
-const CREATE_RESPONSE_ACTION: &str =
-    "http://schemas.xmlsoap.org/ws/2004/09/transfer/CreateResponse";
 const SEND_ACTION: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Send";
 const RECEIVE_ACTION: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Receive";
-const RECEIVE_RESPONSE_ACTION: &str =
-    "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/ReceiveResponse";
-const SIGNAL_ACTION: &str = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Signal";
 const DELETE_ACTION: &str = "http://schemas.xmlsoap.org/ws/2004/09/transfer/Delete";
 
 pub struct WinRmExecutor {
@@ -257,25 +252,13 @@ impl WinRmExecutor {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     if e.name().as_ref() == b"wsman:Selector" || e.name().as_ref() == b"Selector" {
-                        let mut is_shell_id = false;
-                        for a in e.attributes() {
-                            if let Ok(attr) = a {
-                                if attr.key.as_ref() == b"Name" && attr.value.as_ref() == b"ShellId"
-                                {
-                                    is_shell_id = true;
-                                    break;
-                                }
-                            }
-                        }
+                        let is_shell_id = e.attributes().flatten().any(|attr| {
+                            attr.key.as_ref() == b"Name" && attr.value.as_ref() == b"ShellId"
+                        });
                         if is_shell_id {
                             buf.clear();
-                            match reader.read_event_into(&mut buf) {
-                                Ok(Event::Text(t)) => {
-                                    return Ok(String::from_utf8_lossy(t.as_ref())
-                                        .trim()
-                                        .to_string());
-                                }
-                                _ => {}
+                            if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
+                                return Ok(String::from_utf8_lossy(t.as_ref()).trim().to_string());
                             }
                         }
                     }
@@ -315,16 +298,14 @@ impl WinRmExecutor {
                         if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
                             let unescaped = String::from_utf8_lossy(t.as_ref());
                             if let Ok(decoded) = BASE64.decode(unescaped.trim()) {
-                                stdout.push_str(&String::from_utf8_lossy(&decoded).to_string());
+                                stdout.push_str(String::from_utf8_lossy(&decoded).as_ref());
                             }
                         }
-                    } else if is_exit {
-                        if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                            if let Ok(n) = String::from_utf8_lossy(t.as_ref()).trim().parse::<i32>()
-                            {
-                                exit_code = Some(n);
-                            }
-                        }
+                    } else if is_exit
+                        && let Ok(Event::Text(t)) = reader.read_event_into(&mut buf)
+                        && let Ok(n) = String::from_utf8_lossy(t.as_ref()).trim().parse::<i32>()
+                    {
+                        exit_code = Some(n);
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -449,7 +430,7 @@ impl RemoteExecutor for WinRmExecutor {
         };
         let create_body = Self::create_shell_body();
         let create_envelope = self.make_envelope(target, CREATE_ACTION, &create_body, None);
-        match self
+        if let Ok((resp, _)) = self
             .ntlm_request(
                 &client,
                 &url,
@@ -458,31 +439,24 @@ impl RemoteExecutor for WinRmExecutor {
             )
             .await
         {
-            Ok((resp, _)) => {
-                if resp.status().is_success() {
-                    if let Ok(text) = resp.text().await {
-                        if let Ok(shell_id) = Self::extract_shell_id(&text) {
-                            let delete_body = "";
-                            let delete_envelope = self.make_envelope(
-                                target,
-                                DELETE_ACTION,
-                                delete_body,
-                                Some(&shell_id),
-                            );
-                            let _ = self
-                                .ntlm_request(
-                                    &client,
-                                    &url,
-                                    &delete_envelope,
-                                    "application/soap+xml;charset=UTF-8",
-                                )
-                                .await;
-                        }
-                    }
-                    return true;
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await
+                    && let Ok(shell_id) = Self::extract_shell_id(&text)
+                {
+                    let delete_body = "";
+                    let delete_envelope =
+                        self.make_envelope(target, DELETE_ACTION, delete_body, Some(&shell_id));
+                    let _ = self
+                        .ntlm_request(
+                            &client,
+                            &url,
+                            &delete_envelope,
+                            "application/soap+xml;charset=UTF-8",
+                        )
+                        .await;
                 }
+                return true;
             }
-            Err(_) => {}
         }
         false
     }

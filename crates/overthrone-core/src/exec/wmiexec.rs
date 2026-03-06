@@ -605,7 +605,7 @@ fn write_bstr(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual count
     buf.extend_from_slice(&utf16);
     // Pad to 4-byte boundary
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
 }
