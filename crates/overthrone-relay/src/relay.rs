@@ -1511,9 +1511,9 @@ mod tests {
         assert_eq!(&pdu[4..8], b"\xfeSMB");
         // Check command = SESSION_SETUP (0x0001)
         assert_eq!(&pdu[16..18], &0x0001u16.to_le_bytes());
-        // Check session ID at offset 44..52 (after netbios+4)
+        // Check session ID at absolute offset 44..52 (netbios=4 + smb2_field_offset=40)
         let sid = u64::from_le_bytes([
-            pdu[48], pdu[49], pdu[50], pdu[51], pdu[52], pdu[53], pdu[54], pdu[55],
+            pdu[44], pdu[45], pdu[46], pdu[47], pdu[48], pdu[49], pdu[50], pdu[51],
         ]);
         assert_eq!(sid, 0x1234);
     }

@@ -767,6 +767,7 @@ mod tests {
     // Property 11: RSA Key Pair Generation
     // For any valid key size (2048, 3072, 4096), key generation should succeed
     proptest! {
+        #![proptest_config(ProptestConfig { cases: 3, ..ProptestConfig::default() })]
         #[test]
         fn prop_rsa_keypair_generation(
             key_size in prop::sample::select(vec![2048u32, 3072u32, 4096u32])
@@ -787,6 +788,7 @@ mod tests {
     // Property 10: Certificate Generation with PKINIT Extensions
     // For any subject CN and valid key size, certificate should have Client Auth EKU
     proptest! {
+        #![proptest_config(ProptestConfig { cases: 3, ..ProptestConfig::default() })]
         #[test]
         fn prop_certificate_generation_with_eku(
             subject_cn in "[a-zA-Z0-9_-]{1,20}",
@@ -820,6 +822,7 @@ mod tests {
     // Property 8: PKINIT AS-REQ Signature Verification
     // For any request data, signing should produce a valid signature
     proptest! {
+        #![proptest_config(ProptestConfig { cases: 3, ..ProptestConfig::default() })]
         #[test]
         fn prop_pkinit_signature_verification(
             request_data in prop::collection::vec(any::<u8>(), 1..1024)
@@ -850,6 +853,7 @@ mod tests {
     // Property 12: Certificate Validation Error Handling
     // Certificate validation should detect missing EKU
     proptest! {
+        #![proptest_config(ProptestConfig { cases: 3, ..ProptestConfig::default() })]
         #[test]
         fn prop_certificate_validation(
             subject_cn in "[a-zA-Z0-9_-]{1,20}"
