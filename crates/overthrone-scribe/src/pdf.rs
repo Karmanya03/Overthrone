@@ -341,7 +341,7 @@ fn load_builtin_font_mono() -> ParsedFont {
     ];
     // Fall back to the regular sans-serif font if no mono font is found — better
     // than panicking in CI environments without mono fonts installed.
-    load_font_from_paths(&candidates).unwrap_or_else(|| load_builtin_font_regular())
+    load_font_from_paths(&candidates).unwrap_or_else(load_builtin_font_regular)
 }
 
 fn load_font_from_paths(paths: &[&str]) -> Option<ParsedFont> {
