@@ -27,6 +27,7 @@ overthrone-forge = { path = "../overthrone-forge" }
 overthrone-scribe = { path = "../overthrone-scribe" }
 overthrone-relay = { path = "../overthrone-relay" }
 clap.workspace = true
+clap_complete.workspace = true
 ratatui = "0.29"
 crossterm = "0.28"
 tui-widget-list = "0.13"
@@ -40,8 +41,9 @@ console.workspace = true
 indicatif.workspace = true
 toml.workspace = true
 directories.workspace = true
-rpassword = "7.4.0"
+serde.workspace = true
 serde_json.workspace = true
+rpassword = "7.4.0"
 kerberos_asn1.workspace = true
 hex.workspace = true
 base64.workspace = true

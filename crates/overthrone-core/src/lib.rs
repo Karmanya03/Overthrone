@@ -1,6 +1,7 @@
 ﻿pub mod adcs;
 pub mod c2; // ← Export C2 module
 pub mod config;
+pub mod cred_store;
 pub mod crypto;
 pub mod error;
 pub mod exec; // ← This now points to exec/mod.rs (which has all types)

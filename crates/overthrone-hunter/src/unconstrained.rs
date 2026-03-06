@@ -85,14 +85,25 @@ async fn check_host_reachable(hostname: &str) -> bool {
 pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<UnconstrainedResult> {
     info!("{}", "═══ UNCONSTRAINED DELEGATION ═══".bold().red());
 
-    let mut conn = ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.username,
-        &config.domain,
-        &config.secret,
-        config.use_ldaps,
-    )
-    .await?;
+    let mut conn = if config.use_hash {
+        ldap::LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    } else {
+        ldap::LdapSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    };
 
     // Use the high-level API instead of raw search
     let ad_computers = conn.find_unconstrained_delegation().await?;

@@ -58,9 +58,16 @@ ehthumbs.db
 /output/
 /loot/
 /reports/
+/sessions/
 *.pdf
 *.html.report
 *.json.report
+
+# ═══════════════════════════════════════════════════════════
+# Overthrone — Runtime / Engagement State Files
+# ═══════════════════════════════════════════════════════════
+q_table.json
+engagement.json
 
 # ═══════════════════════════════════════════════════════════
 # Overthrone — Credential & Dump Files
@@ -129,6 +136,8 @@ docker-compose.override.yml
 # Temporary Build Check Files
 # ═══════════════════════════════════════════════════════════
 cargo_check_output.txt
+cargo_cli_check.txt
+cargo_errors.txt
 check_*.txt
 build_errors*.txt
 clippy_output.txt

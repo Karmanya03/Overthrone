@@ -2,6 +2,20 @@
 //!
 //! Provides capabilities for System Center Configuration Manager (SCCM / MECM)
 //! enumeration, discovery, and exploitation functionalities.
+
+pub mod abuse;
+pub mod wmi;
+
+pub use abuse::{
+    SccmAbuseResult, SccmTechnique,
+    client_push_coercion, deploy_malicious_application, extract_naa_credentials,
+    admin_service_harvest,
+};
+pub use wmi::{
+    CollectionType, SccmApplication, SccmCollection, SccmDevice,
+    enumerate_collections, enumerate_applications, enumerate_devices,
+};
+
 use crate::error::{OverthroneError, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as b64};
 use rsa::{RsaPrivateKey, pkcs1v15::Pkcs1v15Encrypt, pkcs8::EncodePublicKey};
@@ -12,7 +26,7 @@ use tracing::{info, warn};
 #[cfg(windows)]
 use serde::Deserialize;
 #[cfg(windows)]
-use wmi::{COMLibrary, WMIConnection};
+use ::wmi::{COMLibrary, WMIConnection};
 
 /// Configuration for SCCM Scanner operations
 pub struct SccmScannerConfig {

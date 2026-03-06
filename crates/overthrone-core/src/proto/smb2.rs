@@ -971,8 +971,8 @@ impl Smb2Connection {
         body.extend_from_slice(&0u32.to_le_bytes());
         // OutputCount = 0
         body.extend_from_slice(&0u32.to_le_bytes());
-        // MaxOutputResponse
-        body.extend_from_slice(&65536u32.to_le_bytes());
+        // MaxOutputResponse — 1 MiB budget so DCSync / large RPC replies are not truncated
+        body.extend_from_slice(&1_048_576u32.to_le_bytes());
         // Flags = SMB2_0_IOCTL_IS_FSCTL (1)
         body.extend_from_slice(&1u32.to_le_bytes());
         // Reserved2 = 0

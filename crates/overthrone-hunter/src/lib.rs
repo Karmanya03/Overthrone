@@ -18,6 +18,7 @@ pub mod crack;
 pub mod kerberoast;
 pub mod rbcd;
 pub mod runner;
+pub mod spray;
 pub mod tickets;
 pub mod unconstrained;
 
@@ -27,4 +28,5 @@ pub use crack::{
     crack_kerberoast_hashes,
 };
 pub use runner::{HuntAction, HuntConfig, HuntReport, run_hunt};
+pub use spray::{SprayConfig, SprayResult, run_spray};
 pub use tickets::{TicketFormat, TicketOps};

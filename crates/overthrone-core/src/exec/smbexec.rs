@@ -48,6 +48,24 @@ pub struct SmbExecResult {
     pub output: String,
 }
 
+/// Escape Windows CMD shell metacharacters to prevent command injection.
+///
+/// Prefixes `^`, `&`, `|`, `<`, `>`, and `"` with a caret (`^`) so they
+/// are treated as literals when passed to `cmd.exe /C`.
+pub fn escape_cmd_metacharacters(command: &str) -> String {
+    let mut escaped = String::with_capacity(command.len());
+    for ch in command.chars() {
+        match ch {
+            '^' | '&' | '|' | '<' | '>' | '"' => {
+                escaped.push('^');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 // ═══════════════════════════════════════════════════════════
 //  SMBExec Execution
 // ═══════════════════════════════════════════════════════════
@@ -79,9 +97,10 @@ pub async fn execute(
         "\\\\127.0.0.1\\{}\\{}",
         config.output_share, config.output_path
     );
+    let escaped_command = escape_cmd_metacharacters(command);
     let binary_path = format!(
         "%COMSPEC% /Q /c echo {} ^> {} 2^>^&1 > {} 2>&1",
-        command, output_unc, output_unc
+        escaped_command, output_unc, output_unc
     );
 
     // Use PSExec-style SCM interaction to create and start the service

@@ -7,7 +7,7 @@
 
 use crate::error::{OverthroneError, Result};
 use base64::Engine as _;
-use ldap3::controls::RawControl;
+use ldap3::controls::{Control, ControlType, PagedResults, RawControl};
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -143,13 +143,639 @@ impl std::fmt::Display for BindType {
 
 /// Represents an authenticated LDAP session to a Domain Controller
 pub struct LdapSession {
-    ldap: ldap3::Ldap,
+    ldap: Option<ldap3::Ldap>,
+    /// Raw NTLM-authenticated session (used when `use_hash=true`)
+    raw: Option<Box<RawLdapConn>>,
     pub base_dn: String,
     pub domain: String,
     pub dc_ip: String,
     /// How the session was authenticated
     pub bind_type: BindType,
 }
+
+// ═══════════════════════════════════════════════════════════
+//  Raw LDAP / NTLM-SASL Backend (pass-the-hash support)
+// ═══════════════════════════════════════════════════════════
+
+/// Minimal raw LDAP client backed by a `tokio::net::TcpStream`.
+///
+/// Supports NTLM SASL bind (pass-the-hash) and basic `SearchRequest`
+/// operations without paging.  Used by `LdapSession::connect_with_hash`
+/// when an NT hash is provided instead of a cleartext password.
+pub(crate) struct RawLdapConn {
+    stream: tokio::net::TcpStream,
+    next_id: u32,
+}
+
+impl RawLdapConn {
+    async fn connect(addr: &str) -> crate::error::Result<Self> {
+        let stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: addr.to_string(),
+                reason: format!("TCP connect failed: {e}"),
+            })?;
+        Ok(Self { stream, next_id: 1 })
+    }
+
+    fn next_msg_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// NTLM SASL bind (3-way NTLMSSP exchange) using pass-the-hash.
+    pub(crate) async fn ntlm_bind(
+        &mut self,
+        domain: &str,
+        username: &str,
+        nt_hash: &[u8],
+    ) -> crate::error::Result<()> {
+        use crate::proto::ntlm;
+
+        // ── Step 1: Send NTLMSSP NEGOTIATE ──
+        let negotiate = ntlm::build_negotiate_message(domain);
+        let id1 = self.next_msg_id();
+        let req1 = build_bind_sasl(&mut vec![], id1, "NTLM", &negotiate);
+        raw_ldap_send(&mut self.stream, &req1).await?;
+
+        // ── Step 2: Receive NTLMSSP CHALLENGE ──
+        let resp1 = raw_ldap_recv(&mut self.stream).await?;
+        let sasl_creds = parse_bind_response_sasl(&resp1).map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("NTLM SASL step 1 failed: {e}"),
+        })?;
+
+        let challenge_msg = ntlm::parse_challenge_message(&sasl_creds).map_err(|e| {
+            OverthroneError::Ldap {
+                target: "raw".to_string(),
+                reason: format!("NTLM challenge parse failed: {e}"),
+            }
+        })?;
+
+        // ── Step 3: Send NTLMSSP AUTHENTICATE ──
+        let authenticate = ntlm::build_authenticate_message(
+            domain,
+            username,
+            nt_hash,
+            &challenge_msg.challenge,
+            challenge_msg.target_info.as_deref(),
+            None,
+        );
+        let id2 = self.next_msg_id();
+        let req2 = build_bind_sasl(&mut vec![], id2, "NTLM", &authenticate);
+        raw_ldap_send(&mut self.stream, &req2).await?;
+
+        // ── Step 4: Receive final BindResponse ──
+        let resp2 = raw_ldap_recv(&mut self.stream).await?;
+        let rc = parse_bind_response_rc(&resp2);
+        if rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: "raw".to_string(),
+                reason: format!("NTLM SASL auth rejected (rc={rc}): invalid credentials"),
+            });
+        }
+
+        debug!("RawLDAP: NTLM SASL bind succeeded");
+        Ok(())
+    }
+
+    /// Basic LDAP search (no paging — returns up to server's sizeLimit results).
+    pub(crate) async fn search(
+        &mut self,
+        base: &str,
+        filter: &str,
+        attrs: &[&str],
+    ) -> crate::error::Result<Vec<ldap3::SearchEntry>> {
+        let id = self.next_msg_id();
+        let req = build_search_request(id, base, filter, attrs);
+        raw_ldap_send(&mut self.stream, &req).await?;
+
+        let mut entries: Vec<ldap3::SearchEntry> = Vec::new();
+
+        loop {
+            let msg = raw_ldap_recv(&mut self.stream).await?;
+            match classify_ldap_message(&msg) {
+                LdapMsgKind::SearchEntry => {
+                    if let Some(e) = parse_search_result_entry(&msg) {
+                        entries.push(e);
+                    }
+                }
+                LdapMsgKind::SearchDone(rc) => {
+                    if rc != 0 && rc != 4 {
+                        // rc=4 = sizeLimitExceeded (partial results OK)
+                        return Err(OverthroneError::Ldap {
+                            target: base.to_string(),
+                            reason: format!("Search failed (rc={rc})"),
+                        });
+                    }
+                    break;
+                }
+                LdapMsgKind::Other => {
+                    // Unknown, keep reading
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub(crate) async fn disconnect(&mut self) {
+        // Send UnbindRequest (tag 0x42 = [APPLICATION 2] primitive)
+        let id = self.next_msg_id();
+        let mut msg_body = Vec::new();
+        msg_body.extend_from_slice(&ber_integer(id));
+        msg_body.push(0x42);
+        msg_body.push(0);
+        let unbind = ber_tlv(0x30, &msg_body);
+        let _ = raw_ldap_send(&mut self.stream, &unbind).await;
+    }
+}
+
+// ──────────────── BER helpers ────────────────
+
+fn ber_len_bytes(length: usize) -> Vec<u8> {
+    if length < 128 {
+        vec![length as u8]
+    } else if length < 256 {
+        vec![0x81, length as u8]
+    } else if length < 65536 {
+        vec![0x82, (length >> 8) as u8, (length & 0xFF) as u8]
+    } else {
+        vec![
+            0x83,
+            (length >> 16) as u8,
+            (length >> 8) as u8,
+            (length & 0xFF) as u8,
+        ]
+    }
+}
+
+fn ber_tlv(tag: u8, data: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    out.extend_from_slice(&ber_len_bytes(data.len()));
+    out.extend_from_slice(data);
+    out
+}
+
+fn ber_integer(val: u32) -> Vec<u8> {
+    let bytes = if val == 0 {
+        vec![0]
+    } else if val < 0x80 {
+        vec![val as u8]
+    } else if val < 0x8000 {
+        vec![(val >> 8) as u8, (val & 0xFF) as u8]
+    } else if val < 0x80_0000 {
+        vec![(val >> 16) as u8, (val >> 8) as u8, (val & 0xFF) as u8]
+    } else {
+        vec![
+            (val >> 24) as u8,
+            (val >> 16) as u8,
+            (val >> 8) as u8,
+            (val & 0xFF) as u8,
+        ]
+    };
+    ber_tlv(0x02, &bytes)
+}
+
+fn ber_octet_string(data: &[u8]) -> Vec<u8> {
+    ber_tlv(0x04, data)
+}
+fn ber_boolean(val: bool) -> Vec<u8> {
+    ber_tlv(0x01, &[if val { 0xFF } else { 0x00 }])
+}
+fn ber_enumerated(val: u8) -> Vec<u8> {
+    ber_tlv(0x0A, &[val])
+}
+fn ber_sequence(data: &[u8]) -> Vec<u8> {
+    ber_tlv(0x30, data)
+}
+
+// ──────────────── LDAP message builders ────────────────
+
+/// Build an LDAP BindRequest with SASL mechanism and credentials.
+fn build_bind_sasl(_scratch: &mut Vec<u8>, msg_id: u32, mechanism: &str, creds: &[u8]) -> Vec<u8> {
+    let mut sasl = Vec::new();
+    sasl.extend_from_slice(&ber_octet_string(mechanism.as_bytes()));
+    sasl.extend_from_slice(&ber_octet_string(creds));
+
+    let auth = ber_tlv(0xA3, &sasl); // [3] sasl (context-constructed 3)
+
+    let mut bind_body = Vec::new();
+    bind_body.extend_from_slice(&ber_integer(3)); // LDAP v3
+    bind_body.extend_from_slice(&ber_octet_string(b"")); // name = empty
+    bind_body.extend_from_slice(&auth);
+
+    let bind_req = ber_tlv(0x60, &bind_body); // [APPLICATION 0]
+
+    let mut msg = Vec::new();
+    msg.extend_from_slice(&ber_integer(msg_id));
+    msg.extend_from_slice(&bind_req);
+    ber_sequence(&msg)
+}
+
+/// Build an LDAP SearchRequest.
+fn build_search_request(msg_id: u32, base: &str, filter: &str, attrs: &[&str]) -> Vec<u8> {
+    let mut search = Vec::new();
+    search.extend_from_slice(&ber_octet_string(base.as_bytes()));
+    search.extend_from_slice(&ber_enumerated(2)); // scope = wholeSubtree
+    search.extend_from_slice(&ber_enumerated(0)); // derefAliases = never
+    search.extend_from_slice(&ber_integer(0)); // sizeLimit = 0 (unlimited)
+    search.extend_from_slice(&ber_integer(30)); // timeLimit = 30s
+    search.extend_from_slice(&ber_boolean(false)); // typesOnly = FALSE
+    search.extend_from_slice(&encode_ldap_filter(filter));
+
+    let mut attr_seq = Vec::new();
+    for a in attrs {
+        attr_seq.extend_from_slice(&ber_octet_string(a.as_bytes()));
+    }
+    search.extend_from_slice(&ber_sequence(&attr_seq));
+
+    let search_req = ber_tlv(0x63, &search); // [APPLICATION 3]
+
+    let mut msg = Vec::new();
+    msg.extend_from_slice(&ber_integer(msg_id));
+    msg.extend_from_slice(&search_req);
+    ber_sequence(&msg)
+}
+
+// ──────────────── LDAP filter encoder ────────────────
+
+fn encode_ldap_filter(s: &str) -> Vec<u8> {
+    let s = s.trim();
+    if !s.starts_with('(') {
+        // Bare attribute presence
+        return ber_tlv(0x87, s.as_bytes());
+    }
+    if !s.ends_with(')') {
+        return ber_tlv(0x87, s.as_bytes()); // fallback
+    }
+    let inner = &s[1..s.len() - 1];
+
+    match inner.chars().next() {
+        Some('&') => {
+            let parts = split_ldap_filter_list(&inner[1..]);
+            let mut data = Vec::new();
+            for p in &parts {
+                data.extend_from_slice(&encode_ldap_filter(p));
+            }
+            ber_tlv(0xA0, &data) // AND
+        }
+        Some('|') => {
+            let parts = split_ldap_filter_list(&inner[1..]);
+            let mut data = Vec::new();
+            for p in &parts {
+                data.extend_from_slice(&encode_ldap_filter(p));
+            }
+            ber_tlv(0xA1, &data) // OR
+        }
+        Some('!') => {
+            let parts = split_ldap_filter_list(&inner[1..]);
+            let sub = parts.first().map(|s| s.as_str()).unwrap_or("(objectClass=*)");
+            ber_tlv(0xA2, &encode_ldap_filter(sub)) // NOT
+        }
+        _ => {
+            // Search for '=' sign
+            if let Some(eq) = inner.find('=') {
+                let attr_part = &inner[..eq];
+                let value_part = &inner[eq + 1..];
+
+                if attr_part.contains(':') {
+                    // Extensible match: attr:matchingRuleOID:=value
+                    encode_extensible_filter(attr_part, value_part)
+                } else if value_part == "*" {
+                    // Present filter
+                    ber_tlv(0x87, attr_part.as_bytes())
+                } else {
+                    // Equality filter [APPLICATION 3]
+                    let mut data = Vec::new();
+                    data.extend_from_slice(&ber_octet_string(attr_part.as_bytes()));
+                    data.extend_from_slice(&ber_octet_string(value_part.as_bytes()));
+                    ber_tlv(0xA3, &data)
+                }
+            } else {
+                // No equals sign; treat as presence
+                ber_tlv(0x87, inner.as_bytes())
+            }
+        }
+    }
+}
+
+/// Split `(f1)(f2)...` into `["(f1)", "(f2)", ...]`
+fn split_ldap_filter_list(s: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                if depth == 0 {
+                    result.push(s[start..=i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Encode `attr:oid:=value` (or `:oid:=value`) as an extensible match filter.
+fn encode_extensible_filter(attr_part: &str, value: &str) -> Vec<u8> {
+    // attr_part can be  "attr", "attr:oid", ":oid", "attr:dn:oid", etc.
+    let segs: Vec<&str> = attr_part.split(':').collect();
+    let attr = segs.first().copied().unwrap_or("");
+    let oid = if segs.len() > 1 { segs[segs.len() - 1] } else { "" };
+
+    let mut data = Vec::new();
+    if !oid.is_empty() {
+        data.extend_from_slice(&ber_tlv(0x81, oid.as_bytes())); // [1] matchingRule
+    }
+    if !attr.is_empty() {
+        data.extend_from_slice(&ber_tlv(0x82, attr.as_bytes())); // [2] type
+    }
+    data.extend_from_slice(&ber_tlv(0x83, value.as_bytes())); // [3] matchValue
+    // [4] dnAttributes default FALSE — omit
+    ber_tlv(0xA9, &data) // [APPLICATION 9] ExtensibleMatch
+}
+
+// ──────────────── Raw TCP send/recv ────────────────
+
+async fn raw_ldap_send(
+    stream: &mut tokio::net::TcpStream,
+    msg: &[u8],
+) -> crate::error::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    stream.write_all(msg).await.map_err(|e| OverthroneError::Ldap {
+        target: "raw".to_string(),
+        reason: format!("LDAP send failed: {e}"),
+    })
+}
+
+async fn raw_ldap_recv(
+    stream: &mut tokio::net::TcpStream,
+) -> crate::error::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+
+    // Read tag (always 0x30 = SEQUENCE for LDAPMessage)
+    let mut tag_buf = [0u8; 1];
+    stream.read_exact(&mut tag_buf).await.map_err(|e| OverthroneError::Ldap {
+        target: "raw".to_string(),
+        reason: format!("LDAP recv tag failed: {e}"),
+    })?;
+
+    // Read length (may be multi-byte)
+    let mut len_first = [0u8; 1];
+    stream.read_exact(&mut len_first).await.map_err(|e| OverthroneError::Ldap {
+        target: "raw".to_string(),
+        reason: format!("LDAP recv length failed: {e}"),
+    })?;
+
+    let length: usize = if len_first[0] < 0x80 {
+        len_first[0] as usize
+    } else {
+        let extra_bytes = (len_first[0] & 0x7F) as usize;
+        if extra_bytes > 4 {
+            return Err(OverthroneError::Ldap {
+                target: "raw".to_string(),
+                reason: "LDAP message length too large".to_string(),
+            });
+        }
+        let mut len_buf = vec![0u8; extra_bytes];
+        stream.read_exact(&mut len_buf).await.map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP recv length bytes failed: {e}"),
+        })?;
+        let mut l = 0usize;
+        for b in &len_buf {
+            l = (l << 8) | (*b as usize);
+        }
+        l
+    };
+
+    if length > 16 * 1024 * 1024 {
+        return Err(OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP message too large: {length} bytes"),
+        });
+    }
+
+    let mut data = vec![0u8; length];
+    stream.read_exact(&mut data).await.map_err(|e| OverthroneError::Ldap {
+        target: "raw".to_string(),
+        reason: format!("LDAP recv data failed: {e}"),
+    })?;
+
+    // Reconstruct full message (tag + length + data)
+    let mut msg = vec![tag_buf[0]];
+    msg.extend_from_slice(&ber_len_bytes(length));
+    msg.extend_from_slice(&data);
+    Ok(msg)
+}
+
+// ──────────────── LDAP response parsers ────────────────
+
+enum LdapMsgKind {
+    SearchEntry,
+    SearchDone(u8),
+    Other,
+}
+
+fn classify_ldap_message(msg: &[u8]) -> LdapMsgKind {
+    // LDAPMessage = SEQUENCE { messageID, protocolOp, ... }
+    // Skip SEQUENCE tag and length, then messageID
+    let mut off = 0usize;
+    let (_, rest) = match ber_read_tlv(msg, &mut off) {
+        Some(v) => v,
+        None => return LdapMsgKind::Other,
+    };
+    // Rest is the SEQUENCE content; read messageID
+    let mut inner = 0usize;
+    let _ = ber_read_tlv(&rest, &mut inner); // skip messageID
+    if let Some((op_tag, op_data)) = ber_read_tlv(&rest, &mut inner) {
+        match op_tag {
+            0x64 => LdapMsgKind::SearchEntry, // [APPLICATION 4]
+            0x65 => {
+                // SearchResultDone [APPLICATION 5]
+                let mut oi = 0usize;
+                if let Some((0x0A, rc_data)) = ber_read_tlv(&op_data, &mut oi) {
+                    let rc = rc_data.first().copied().unwrap_or(80);
+                    LdapMsgKind::SearchDone(rc)
+                } else {
+                    LdapMsgKind::SearchDone(80)
+                }
+            }
+            _ => LdapMsgKind::Other,
+        }
+    } else {
+        LdapMsgKind::Other
+    }
+}
+
+/// Parse a SearchResultEntry [APPLICATION 4] into an ldap3::SearchEntry.
+fn parse_search_result_entry(msg: &[u8]) -> Option<ldap3::SearchEntry> {
+    use std::collections::HashMap;
+
+    let mut off = 0usize;
+    let (_, seq_data) = ber_read_tlv(msg, &mut off)?; // SEQUENCE
+
+    let mut inner = 0usize;
+    ber_read_tlv(&seq_data, &mut inner)?; // skip messageID
+
+    let (op_tag, op_data) = ber_read_tlv(&seq_data, &mut inner)?;
+    if op_tag != 0x64 {
+        return None;
+    } // [APPLICATION 4]
+
+    let mut entry_off = 0usize;
+    let (_, dn_data) = ber_read_tlv(&op_data, &mut entry_off)?; // objectName OCTET STRING
+    let dn = String::from_utf8_lossy(&dn_data).into_owned();
+
+    let (_, attrs_data) = ber_read_tlv(&op_data, &mut entry_off)?; // attributes SEQUENCE OF
+
+    let mut attrs: std::collections::HashMap<String, Vec<String>> = HashMap::new();
+    let mut bin_attrs: std::collections::HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+    let mut attr_off = 0usize;
+
+    while attr_off < attrs_data.len() {
+        let (_, seq_inner) = match ber_read_tlv(&attrs_data, &mut attr_off) {
+            Some(v) => v,
+            None => break,
+        };
+
+        let mut pair_off = 0usize;
+        let (_, type_data) = match ber_read_tlv(&seq_inner, &mut pair_off) {
+            Some(v) => v,
+            None => continue,
+        };
+        let attr_name = String::from_utf8_lossy(&type_data).into_owned();
+
+        let (_, set_data) = match ber_read_tlv(&seq_inner, &mut pair_off) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        let mut str_vals: Vec<String> = Vec::new();
+        let mut bin_vals: Vec<Vec<u8>> = Vec::new();
+        let mut val_off = 0usize;
+        while val_off < set_data.len() {
+            let (_, val_data) = match ber_read_tlv(&set_data, &mut val_off) {
+                Some(v) => v,
+                None => break,
+            };
+            match String::from_utf8(val_data.clone()) {
+                Ok(s) => str_vals.push(s),
+                Err(_) => {
+                    // Binary value — store in bin_attrs and a hex string in attrs
+                    str_vals.push(hex::encode(&val_data));
+                    bin_vals.push(val_data);
+                }
+            }
+        }
+
+        attrs.insert(attr_name.clone(), str_vals);
+        if !bin_vals.is_empty() {
+            bin_attrs.insert(attr_name, bin_vals);
+        }
+    }
+
+    Some(ldap3::SearchEntry {
+        dn,
+        attrs,
+        bin_attrs,
+    })
+}
+
+/// Parse the resultCode from a BindResponse [APPLICATION 1].
+fn parse_bind_response_rc(msg: &[u8]) -> u8 {
+    let mut off = 0usize;
+    if let Some((_, seq_data)) = ber_read_tlv(msg, &mut off) {
+        let mut inner = 0usize;
+        ber_read_tlv(&seq_data, &mut inner); // skip messageID
+        if let Some((_, op_data)) = ber_read_tlv(&seq_data, &mut inner) {
+            let mut oi = 0usize;
+            if let Some((0x0A, rc_data)) = ber_read_tlv(&op_data, &mut oi) {
+                return rc_data.first().copied().unwrap_or(80);
+            }
+        }
+    }
+    80 // generic error
+}
+
+/// Parse SASL server credentials from a BindResponse (rc=14 = saslBindInProgress).
+fn parse_bind_response_sasl(msg: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    let mut off = 0usize;
+    let (_, seq_data) = ber_read_tlv(msg, &mut off).ok_or("No outer sequence")?;
+    let mut inner = 0usize;
+    ber_read_tlv(&seq_data, &mut inner); // skip messageID
+    let (_, op_data) = ber_read_tlv(&seq_data, &mut inner).ok_or("No protocolOp")?;
+    let mut oi = 0usize;
+    let (rc_tag, rc_data) = ber_read_tlv(&op_data, &mut oi).ok_or("No resultCode")?;
+    if rc_tag != 0x0A {
+        return Err(format!("Expected ENUMERATED, got 0x{rc_tag:02X}"));
+    }
+    let rc = rc_data.first().copied().unwrap_or(80);
+    if rc != 14 && rc != 0 {
+        return Err(format!("BindResponse rc={rc}"));
+    }
+    // Skip matchedDN and diagnosticMessage
+    ber_read_tlv(&op_data, &mut oi); // matchedDN
+    ber_read_tlv(&op_data, &mut oi); // diagnosticMessage
+    // serverSaslCreds = [7] IMPLICIT OCTET STRING
+    if let Some((tag, creds)) = ber_read_tlv(&op_data, &mut oi) {
+        if tag == 0x87 || tag == 0x04 {
+            return Ok(creds);
+        }
+    }
+    Err("No SASL credentials in BindResponse".to_string())
+}
+
+/// BER TLV reader: returns (tag, value) and advances `offset`.
+fn ber_read_tlv<'a>(data: &'a [u8], offset: &mut usize) -> Option<(u8, Vec<u8>)> {
+    if *offset >= data.len() {
+        return None;
+    }
+    let tag = data[*offset];
+    *offset += 1;
+
+    if *offset >= data.len() {
+        return None;
+    }
+    let first_len = data[*offset];
+    *offset += 1;
+
+    let length = if first_len < 0x80 {
+        first_len as usize
+    } else {
+        let extra = (first_len & 0x7F) as usize;
+        if extra == 0 || extra > 4 || *offset + extra > data.len() {
+            return None;
+        }
+        let mut l = 0usize;
+        for i in 0..extra {
+            l = (l << 8) | (data[*offset + i] as usize);
+        }
+        *offset += extra;
+        l
+    };
+
+    if *offset + length > data.len() {
+        return None;
+    }
+    let value = data[*offset..*offset + length].to_vec();
+    *offset += length;
+    Some((tag, value))
+}
+
+
 
 /// Parsed AD user object
 #[derive(Debug, Clone)]
@@ -521,32 +1147,10 @@ impl LdapSession {
                 ldap_rc_to_string(result.rc)
             );
             warn!("LDAP authenticated bind failed: {auth_err}");
-            warn!("Attempting anonymous bind fallback...");
-
-            // Try anonymous bind: empty DN and empty password
-            let anon_result =
-                ldap.simple_bind("", "")
-                    .await
-                    .map_err(|e| OverthroneError::Ldap {
-                        target: dc_ip.to_string(),
-                        reason: format!("Anonymous bind failed: {e}"),
-                    })?;
-
-            if anon_result.rc != 0 {
-                // Both authenticated and anonymous binds failed
-                return Err(OverthroneError::Ldap {
-                    target: dc_ip.to_string(),
-                    reason: format!(
-                        "All bind attempts failed. Authenticated: {}. Anonymous: rc={} {}",
-                        auth_err,
-                        anon_result.rc,
-                        ldap_rc_to_string(anon_result.rc)
-                    ),
-                });
-            }
-
-            warn!("LDAP anonymous bind succeeded — results may be limited");
-            BindType::Anonymous
+            return Err(OverthroneError::Ldap {
+                target: dc_ip.to_string(),
+                reason: auth_err,
+            });
         } else {
             BindType::Authenticated
         };
@@ -555,7 +1159,8 @@ impl LdapSession {
         info!("LDAP bind successful ({}). Base DN: {base_dn}", bind_type);
 
         Ok(LdapSession {
-            ldap,
+            ldap: Some(ldap),
+            raw: None,
             base_dn,
             domain: domain.to_string(),
             dc_ip: dc_ip.to_string(),
@@ -563,15 +1168,50 @@ impl LdapSession {
         })
     }
 
+    /// Connect and bind using an NT hash (pass-the-hash) via raw NTLM SASL over TCP.
+    pub async fn connect_with_hash(
+        dc_ip: &str,
+        domain: &str,
+        username: &str,
+        nt_hash_str: &str,
+        _use_tls: bool,
+    ) -> Result<Self> {
+        let nt_hash = crate::proto::ntlm::parse_ntlm_hash(nt_hash_str).map_err(|e| {
+            OverthroneError::Ldap {
+                target: dc_ip.to_string(),
+                reason: format!("Bad NT hash: {e}"),
+            }
+        })?;
+
+        let addr = format!("{dc_ip}:{LDAP_PORT}");
+        info!("Connecting to LDAP (raw/NTLM): {addr}");
+        let mut raw = RawLdapConn::connect(&addr).await?;
+        raw.ntlm_bind(domain, username, &nt_hash).await?;
+
+        let base_dn = domain_to_base_dn(domain);
+        info!("Raw LDAP NTLM bind successful. Base DN: {base_dn}");
+        Ok(LdapSession {
+            ldap: None,
+            raw: Some(Box::new(raw)),
+            base_dn,
+            domain: domain.to_string(),
+            dc_ip: dc_ip.to_string(),
+            bind_type: BindType::Authenticated,
+        })
+    }
+
     /// Unbind and close the LDAP session
     pub async fn disconnect(&mut self) -> Result<()> {
-        self.ldap
-            .unbind()
-            .await
-            .map_err(|e| OverthroneError::Ldap {
-                target: self.dc_ip.clone(),
-                reason: format!("Unbind failed: {e}"),
-            })?;
+        if let Some(ldap) = self.ldap.as_mut() {
+            ldap.unbind()
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: self.dc_ip.clone(),
+                    reason: format!("Unbind failed: {e}"),
+                })?;
+        } else if let Some(raw) = self.raw.as_mut() {
+            raw.disconnect().await;
+        }
         info!("LDAP session closed");
         Ok(())
     }
@@ -593,8 +1233,12 @@ impl LdapSession {
         values.insert(value_str);
         let mods = vec![Mod::Replace(attr.to_string(), values)];
 
-        let result = self
-            .ldap
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Modify operations require password auth (not supported with NT hash)"
+                .to_string(),
+        })?;
+        let result = ldap
             .modify(dn, mods)
             .await
             .map_err(|e| OverthroneError::Ldap {
@@ -627,8 +1271,12 @@ impl LdapSession {
         let values = HashSet::new();
         let mods = vec![Mod::Delete(attr.to_string(), values)];
 
-        let result = self
-            .ldap
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Modify operations require password auth (not supported with NT hash)"
+                .to_string(),
+        })?;
+        let result = ldap
             .modify(dn, mods)
             .await
             .map_err(|e| OverthroneError::Ldap {
@@ -664,8 +1312,12 @@ impl LdapSession {
         let value_set: HashSet<String> = values.iter().cloned().collect();
         let mods = vec![Mod::Add(attr.to_string(), value_set)];
 
-        let result = self
-            .ldap
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Modify operations require password auth (not supported with NT hash)"
+                .to_string(),
+        })?;
+        let result = ldap
             .modify(dn, mods)
             .await
             .map_err(|e| OverthroneError::Ldap {
@@ -706,8 +1358,12 @@ impl LdapSession {
         let value_set: HashSet<String> = values.iter().cloned().collect();
         let mods = vec![Mod::Delete(attr.to_string(), value_set)];
 
-        let result = self
-            .ldap
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Modify operations require password auth (not supported with NT hash)"
+                .to_string(),
+        })?;
+        let result = ldap
             .modify(dn, mods)
             .await
             .map_err(|e| OverthroneError::Ldap {
@@ -757,8 +1413,12 @@ impl LdapSession {
             crate::adcs::esc4::ModifyOp::Delete => Mod::Delete(attribute.to_string(), value_set),
         }];
 
-        let result = self
-            .ldap
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Modify operations require password auth (not supported with NT hash)"
+                .to_string(),
+        })?;
+        let result = ldap
             .modify(dn, mods)
             .await
             .map_err(|e| OverthroneError::Ldap {
@@ -797,6 +1457,19 @@ impl LdapSession {
     ) -> Result<Vec<SearchEntry>> {
         debug!("LDAP search: base={base}, filter={filter}");
 
+        // ── Raw NTLM backend ──
+        if let Some(raw) = self.raw.as_mut() {
+            let entries = raw.search(base, filter, attrs).await?;
+            debug!("Raw LDAP search returned {} entries", entries.len());
+            return Ok(entries);
+        }
+
+        // ── ldap3 backend (password auth) ──
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "No LDAP session available".to_string(),
+        })?;
+
         const PAGE_SIZE: i32 = 1000;
         let mut all_entries = Vec::new();
         let mut cookie: Vec<u8> = Vec::new();
@@ -804,8 +1477,7 @@ impl LdapSession {
         loop {
             let ctrl = build_paged_results_control(PAGE_SIZE, &cookie);
 
-            let (rs, res) = self
-                .ldap
+            let (rs, res) = ldap
                 .with_controls(vec![ctrl])
                 .search(base, Scope::Subtree, filter, attrs)
                 .await
@@ -1080,6 +1752,67 @@ impl LdapSession {
     }
 
     // ═══════════════════════════════════════════════════════
+    //  Transitive Membership
+    // ═══════════════════════════════════════════════════════
+
+    /// Return every account that is transitively a member of Domain Admins.
+    ///
+    /// Uses the LDAP_MATCHING_RULE_IN_CHAIN OID (1.2.840.113556.1.4.1941)
+    /// which Active Directory resolves server-side — no recursive client
+    /// enumeration required.  Returns `sAMAccountName` strings.
+    pub async fn find_transitive_domain_admins(&mut self) -> Result<Vec<String>> {
+        info!("Finding transitive Domain Admins (MATCHING_RULE_IN_CHAIN)...");
+
+        // Step 1: resolve the DN of the Domain Admins group
+        let da_filter = "(&(objectCategory=group)(sAMAccountName=Domain Admins))";
+        let da_entries = self
+            .search_entries(&self.base_dn.clone(), da_filter, &["distinguishedName"])
+            .await?;
+
+        let da_dn = match da_entries.first() {
+            Some(e) => e.dn.clone(),
+            None => {
+                warn!("Domain Admins group not found");
+                return Ok(Vec::new());
+            }
+        };
+
+        // Step 2: use LDAP_MATCHING_RULE_IN_CHAIN for transitive membership
+        // The filter `(memberOf:1.2.840.113556.1.4.1941:=<DN>)` returns
+        // every object that directly or transitively has that value as a
+        // member of its memberOf chain — i.e., all accounts in the group
+        // tree regardless of nesting depth.
+        let chain_filter = format!("(memberOf:1.2.840.113556.1.4.1941:={})", da_dn);
+        let entries = self
+            .search_entries(
+                &self.base_dn.clone(),
+                &chain_filter,
+                &["sAMAccountName", "distinguishedName", "objectClass"],
+            )
+            .await?;
+
+        let members: Vec<String> = entries
+            .iter()
+            .filter_map(|e| {
+                e.attrs
+                    .get("sAMAccountName")
+                    .and_then(|v| v.first())
+                    .cloned()
+            })
+            .collect();
+
+        info!(
+            "Transitive Domain Admins: {} member(s) under '{}'",
+            members.len(),
+            da_dn
+        );
+        for m in &members {
+            info!("  → {m}");
+        }
+        Ok(members)
+    }
+
+    // ═══════════════════════════════════════════════════════
     //  Trust Enumeration
     // ═══════════════════════════════════════════════════════
 
@@ -1220,22 +1953,31 @@ impl LdapSession {
         // Build SD_FLAGS control to request DACL + Owner
         let sd_ctrl = build_sd_flags_control(SD_FLAGS_DACL_OWNER);
 
-        let (rs, _res) = self
-            .ldap
-            .with_controls(vec![sd_ctrl])
-            .search(&self.base_dn.clone(), Scope::Subtree, filter, ACL_ATTRS)
-            .await
-            .map_err(|e| OverthroneError::Ldap {
-                target: self.base_dn.clone(),
-                reason: format!("ACL search failed: {e}"),
-            })?
-            .success()
-            .map_err(|e| OverthroneError::Ldap {
-                target: self.base_dn.clone(),
-                reason: format!("ACL search error: {e}"),
+        let base = self.base_dn.clone();
+        let entries: Vec<SearchEntry> = if let Some(raw) = self.raw.as_mut() {
+            // Raw backend: search without SD_FLAGS control (no binary security descriptor)
+            warn!("enumerate_acls: raw NTLM session does not support SD_FLAGS control; nTSecurityDescriptor will be unavailable");
+            raw.search(&base, filter, ACL_ATTRS).await?
+        } else {
+            let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+                target: self.dc_ip.clone(),
+                reason: "No LDAP session available".to_string(),
             })?;
-
-        let entries: Vec<SearchEntry> = rs.into_iter().map(SearchEntry::construct).collect();
+            let (rs, _res) = ldap
+                .with_controls(vec![sd_ctrl])
+                .search(&base, Scope::Subtree, filter, ACL_ATTRS)
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.clone(),
+                    reason: format!("ACL search failed: {e}"),
+                })?
+                .success()
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.clone(),
+                    reason: format!("ACL search error: {e}"),
+                })?;
+            rs.into_iter().map(SearchEntry::construct).collect()
+        };
 
         let mut results = Vec::new();
         for entry in &entries {
@@ -1669,61 +2411,8 @@ fn build_sd_flags_control(flags: u32) -> RawControl {
 /// then parses the BER-encoded value to extract the cookie.
 fn extract_paged_cookie(ctrls: &[ldap3::controls::Control]) -> Vec<u8> {
     for ctrl in ctrls {
-        // Control is a tuple struct wrapping Option<ControlType>
-        // Check if it's a PagedResults variant (typed parse may lack cookie access)
-        if let Some(ldap3::controls::ControlType::PagedResults) = ctrl.0 {
-            // The parsed control identifies the type but doesn't expose the
-            // cookie struct directly. Fall through to raw parsing below.
-        }
-    }
-
-    // Fallback: parse from raw bytes if available
-    // ldap3 Control also preserves the raw form
-    // Attempt to reconstruct cookie from the control's BER data
-    for ctrl in ctrls {
-        // ldap3 0.12 Control may have a raw() method or we can try downcast
-        // Since we cannot easily extract the cookie via the typed API,
-        // we use the raw control approach
-        let raw_bytes = extract_raw_paged_control_bytes(ctrl);
-        if !raw_bytes.is_empty() {
-            return raw_bytes;
-        }
-    }
-
-    Vec::new()
-}
-
-/// Try to extract paged results cookie bytes from a Control.
-///
-/// The ldap3 Control struct wraps ControlType. For PagedResults, we
-/// need the cookie that the server returned. ldap3 0.12 parses it
-/// into ControlType::PagedResults but accessing the inner PagedResults
-/// struct requires matching the variant.
-fn extract_raw_paged_control_bytes(ctrl: &ldap3::controls::Control) -> Vec<u8> {
-    // In ldap3 0.12, Control(pub Option<ControlType>) where
-    // ControlType::PagedResults wraps the PagedResults struct.
-    // Try the typed API first.
-    if let Some(ref ct) = ctrl.0 {
-        // ControlType might have a method or we can match exhaustively
-        // Using debug format to extract cookie when typed matching is complex
-        let debug_str = format!("{ct:?}");
-        if debug_str.contains("PagedResults") {
-            // Parse cookie from debug representation as fallback
-            // Format: PagedResults(PagedResults { size: N, cookie: [...] })
-            if let Some(start) = debug_str.find("cookie: [") {
-                let remaining = &debug_str[start + 9..];
-                if let Some(end) = remaining.find(']') {
-                    let byte_str = &remaining[..end];
-                    if byte_str.is_empty() {
-                        return Vec::new();
-                    }
-                    let bytes: Vec<u8> = byte_str
-                        .split(", ")
-                        .filter_map(|s| s.trim().parse::<u8>().ok())
-                        .collect();
-                    return bytes;
-                }
-            }
+        if let Control(Some(ControlType::PagedResults), raw) = ctrl {
+            return raw.parse::<PagedResults>().cookie;
         }
     }
     Vec::new()

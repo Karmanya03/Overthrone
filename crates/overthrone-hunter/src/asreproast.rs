@@ -101,14 +101,25 @@ struct EnumeratedUser {
 async fn enumerate_asrep_users(config: &HuntConfig) -> Result<Vec<EnumeratedUser>> {
     info!("LDAP: Enumerating AS-REP roastable accounts");
 
-    let mut conn = ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        &config.secret,
-        config.use_ldaps,
-    )
-    .await?;
+    let mut conn = if config.use_hash {
+        ldap::LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    } else {
+        ldap::LdapSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    };
 
     let ad_users = conn.find_asrep_roastable().await?;
 

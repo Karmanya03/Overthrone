@@ -26,7 +26,7 @@ use std::str::FromStr;
 pub const SMB_PORT: u16 = 445;
 pub const ADMIN_SHARES: &[&str] = &["C$", "ADMIN$", "IPC$"];
 #[cfg(windows)]
-const READ_BUF_SIZE: usize = 65536;
+const READ_BUF_SIZE: usize = 1_048_576; // 1 MiB — large enough for DCSync/Kerberos responses
 
 // Public Types (available on all platforms)
 
@@ -205,15 +205,19 @@ impl SmbSession {
                 unsafe {
                     let _ = CloseHandle(token);
                 }
-                warn!("SMB: ImpersonateLoggedOnUser failed, falling back to hash-as-password");
+                warn!(
+                    "SMB: ImpersonateLoggedOnUser failed, no unsafe hash-as-password fallback will be attempted"
+                );
             } else {
-                warn!("SMB: LogonUserW failed for PTH, falling back to hash-as-password");
+                warn!(
+                    "SMB: LogonUserW failed for PTH, no unsafe hash-as-password fallback will be attempted"
+                );
             }
         }
 
-        // Strategy 2: Pass the hex hash directly as password (works with some SMB servers)
-        info!("SMB: PTH fallback — using hash as password string");
-        Self::connect(target, domain, username, nt_hash).await
+        Err(OverthroneError::Smb(
+            "Pass-the-hash fallback via literal password string is disabled".to_string(),
+        ))
     }
 
     pub fn session_key(&self) -> Option<Vec<u8>> {
@@ -574,6 +578,132 @@ impl SmbSession {
         Ok(response)
     }
 
+    /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
+    ///
+    /// The DC may return a DRSGetNCChanges reply in multiple RPC PDU fragments
+    /// (each with `PFC_LAST_FRAG` bit 1 of pfc_flags clear except the last).
+    /// This method reads all fragments and returns a synthetic single-PDU buffer:
+    /// the 24-byte header of the first fragment followed by all stub payloads
+    /// concatenated — ready for `drsr::parse_get_nc_changes_reply`.
+    pub async fn pipe_transact_multifrag(
+        &self,
+        pipe_name: &str,
+        request: &[u8],
+    ) -> Result<Vec<u8>> {
+        const RPC_HDR: usize = 24; // DCE/RPC response PDU fixed header
+        const FRAG_LEN_OFF: usize = 4; // offset of frag_len (u16 LE) in PDU
+
+        let unc = self.unc("IPC$", Some(pipe_name))?;
+        let open_args = FileCreateArgs::make_pipe();
+        let resource = self
+            .client
+            .create_file(&unc, &open_args)
+            .await
+            .map_err(|e| {
+                OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name))
+            })?;
+        let pipe = match resource {
+            Resource::Pipe(p) => p,
+            _ => {
+                return Err(OverthroneError::Smb(format!(
+                    "'{pipe_name}' is not a named pipe"
+                )));
+            }
+        };
+
+        // First fragment via FSCTL_PIPE_TRANSCEIVE
+        let first = pipe
+            .ioctl(0x0011C017, request.to_vec(), READ_BUF_SIZE as u32)
+            .await
+            .map_err(|e| {
+                OverthroneError::Smb(format!(
+                    "Pipe transact multifrag failed on '{}': {e}",
+                    pipe_name
+                ))
+            })?;
+
+        // Non-response PDUs (bind_ack=12, fault=3, alter_context_resp=15)
+        // and single-fragment responses are returned as-is.
+        let ptype = first.get(2).copied().unwrap_or(0);
+        let pfc_flags = first.get(3).copied().unwrap_or(0x02);
+        let is_last = (pfc_flags & 0x02) != 0;
+        if first.len() < 6 || ptype != 2 || is_last {
+            pipe.close()
+                .await
+                .map_err(|e| OverthroneError::Smb(format!("Pipe close failed: {e}")))?;
+            return Ok(first);
+        }
+
+        // Multi-fragment path: preserve the first PDU header, accumulate stub data.
+        let first_frag_len =
+            u16::from_le_bytes([first[FRAG_LEN_OFF], first[FRAG_LEN_OFF + 1]]) as usize;
+        let header: Vec<u8> = first[..RPC_HDR.min(first.len())].to_vec();
+        let mut all_stubs: Vec<u8> =
+            first[RPC_HDR.min(first.len())..first_frag_len.min(first.len())].to_vec();
+
+        debug!(
+            "SMB: Multi-fragment RPC on '{}' — fragment 1: {} bytes (stub: {})",
+            pipe_name,
+            first.len(),
+            all_stubs.len()
+        );
+
+        // Read subsequent PDU fragments via ReadFile on the same pipe
+        //
+        // NOTE: On the Windows smb crate path, FSCTL_PIPE_TRANSCEIVE already
+        // buffers the full pipe response (all fragments) when the output buffer
+        // is large enough (READ_BUF_SIZE = 1 MiB). The loop below is thus only
+        // reached when the first IOCTL response is genuinely partial, which is
+        // rare. In that case we fall back to re-issuing the IOCTL with an empty
+        // payload to drain remaining data from the pipe.
+        loop {
+            // Send an empty IOCTL to drain the next fragment
+            let frag_result = pipe
+                .ioctl(0x0011_C017, vec![], 65536u32)
+                .await;
+            let frag = match frag_result {
+                Ok(data) => data,
+                Err(_) => break, // pipe likely closed / no more data
+            };
+
+            if frag.is_empty() {
+                break;
+            }
+
+            let flen = if frag.len() >= FRAG_LEN_OFF + 2 {
+                u16::from_le_bytes([frag[FRAG_LEN_OFF], frag[FRAG_LEN_OFF + 1]]) as usize
+            } else {
+                frag.len()
+            };
+            all_stubs.extend_from_slice(&frag[RPC_HDR.min(frag.len())..flen.min(frag.len())]);
+
+            let last = frag.len() >= 4 && (frag[3] & 0x02 != 0);
+            debug!(
+                "SMB: Fragment received: {} bytes (stub: {}), last={}",
+                frag.len(),
+                flen.saturating_sub(RPC_HDR),
+                last
+            );
+            if last {
+                break;
+            }
+        }
+
+        pipe.close()
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("Pipe close failed: {e}")))?;
+
+        // Synthesize a single-PDU response: header + all stub data
+        let mut result = header;
+        result.extend_from_slice(&all_stubs);
+        debug!(
+            "SMB: Reassembled {} bytes from multi-fragment RPC on '{}'",
+            result.len(),
+            pipe_name
+        );
+        Ok(result)
+    }
+
     pub async fn deploy_payload(
         &self,
         payload_bytes: &[u8],
@@ -871,6 +1001,47 @@ impl SmbSession {
             ))
         }
     }
+
+    /// Enumerate all shares on the target via SRVSVC NetShareEnumAll (opnum 15).
+    pub async fn list_shares(&self) -> Result<Vec<String>> {
+        info!("SMB: Enumerating shares on {} via SRVSVC", self.target);
+
+        let bind = build_srvsvc_bind();
+        let bind_resp = self.pipe_transact("srvsvc", &bind).await?;
+        // type byte [2] == 12 means BIND_ACK
+        if bind_resp.len() < 4 || bind_resp[2] != 12 {
+            return Err(OverthroneError::Smb(
+                "SRVSVC bind rejected — cannot enumerate shares".to_string(),
+            ));
+        }
+
+        let req = build_srvsvc_net_share_enum_req(&self.target);
+        let resp = self.pipe_transact("srvsvc", &req).await?;
+        let names = parse_srvsvc_share_names(&resp);
+        info!(
+            "SMB: Found {} share(s) on {}: [{}]",
+            names.len(),
+            self.target,
+            names.join(", ")
+        );
+        Ok(names)
+    }
+
+    /// List all shares and return access results for each one.
+    pub async fn enumerate_accessible_shares(&self) -> Vec<ShareAccessResult> {
+        let all_shares = match self.list_shares().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    "SMB: list_shares on {} failed: {e} — falling back to known shares",
+                    self.target
+                );
+                ADMIN_SHARES.iter().map(|s| s.to_string()).collect()
+            }
+        };
+        let share_refs: Vec<&str> = all_shares.iter().map(String::as_str).collect();
+        self.check_share_access(&share_refs).await
+    }
 }
 
 /// Build SAMR RPC bind
@@ -993,7 +1164,7 @@ fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 /// NDR conformant string encoding
 fn ndr_conformant_string(s: &str) -> Vec<u8> {
     let utf16: Vec<u8> = s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
-    let char_count = s.len() as u32;
+    let char_count = s.encode_utf16().count() as u32;
     let mut buf = Vec::new();
     buf.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent ID
     buf.extend_from_slice(&char_count.to_le_bytes()); // max_count
@@ -1304,6 +1475,90 @@ impl SmbSession {
         Ok(response)
     }
 
+    /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
+    ///
+    /// Issues `FSCTL_PIPE_TRANSCEIVE` for the first fragment, then loops
+    /// `SMB2_READ` until `PFC_LAST_FRAG` (bit 1) is set in the PDU header.
+    /// Returns a synthetic single-PDU: first-fragment header + all stubs
+    /// concatenated, so `drsr::parse_get_nc_changes_reply` sees one response.
+    pub async fn pipe_transact_multifrag(
+        &self,
+        pipe_name: &str,
+        request: &[u8],
+    ) -> Result<Vec<u8>> {
+        const RPC_HDR: usize = 24; // DCE/RPC response PDU fixed header
+        const FRAG_LEN_OFF: usize = 4; // frag_len field offset (u16 LE)
+
+        let ipc_path = format!(r"\\{}\IPC$", self.target);
+        let conn = self.inner.lock().await;
+        let _tree_id = conn.tree_connect(&ipc_path).await?;
+        let name = pipe_name.trim_start_matches('/').trim_start_matches('\\');
+        let fid = conn.open_pipe(name).await?;
+
+        // First fragment via FSCTL_PIPE_TRANSCEIVE (MaxOutputResponse = 1 MiB)
+        let first = conn.ioctl_pipe_transceive(&fid, request).await?;
+
+        let ptype = first.get(2).copied().unwrap_or(0);
+        let pfc_flags = first.get(3).copied().unwrap_or(0x02);
+        let is_last = (pfc_flags & 0x02) != 0;
+
+        if first.len() < 6 || ptype != 2 || is_last {
+            // Single-fragment or non-response PDU — close and return as-is
+            conn.close(&fid).await?;
+            return Ok(first);
+        }
+
+        let first_frag_len =
+            u16::from_le_bytes([first[FRAG_LEN_OFF], first[FRAG_LEN_OFF + 1]]) as usize;
+        let header: Vec<u8> = first[..RPC_HDR.min(first.len())].to_vec();
+        let mut all_stubs: Vec<u8> =
+            first[RPC_HDR.min(first.len())..first_frag_len.min(first.len())].to_vec();
+
+        debug!(
+            "SMB2: Multi-fragment RPC on '{}' — frag 1: {} bytes (stub: {})",
+            pipe_name,
+            first.len(),
+            all_stubs.len()
+        );
+
+        // Read remaining fragments via SMB2_READ on the same pipe FID
+        loop {
+            let frag = conn.read(&fid, 0, 65536).await.unwrap_or_default();
+            if frag.is_empty() {
+                break;
+            }
+
+            let flen = if frag.len() >= FRAG_LEN_OFF + 2 {
+                u16::from_le_bytes([frag[FRAG_LEN_OFF], frag[FRAG_LEN_OFF + 1]]) as usize
+            } else {
+                frag.len()
+            };
+            all_stubs.extend_from_slice(&frag[RPC_HDR.min(frag.len())..flen.min(frag.len())]);
+
+            let last = frag.len() >= 4 && (frag[3] & 0x02 != 0);
+            debug!(
+                "SMB2: Fragment: {} bytes (stub: {}), last={}",
+                frag.len(),
+                flen.saturating_sub(RPC_HDR),
+                last
+            );
+            if last {
+                break;
+            }
+        }
+
+        conn.close(&fid).await?;
+
+        let mut result = header;
+        result.extend_from_slice(&all_stubs);
+        debug!(
+            "SMB2: Reassembled {} bytes from multi-fragment RPC on '{}'",
+            result.len(),
+            pipe_name
+        );
+        Ok(result)
+    }
+
     pub async fn deploy_payload(
         &self,
         payload_bytes: &[u8],
@@ -1431,6 +1686,46 @@ impl SmbSession {
             ))
         }
     }
+
+    /// Enumerate all shares on the target via SRVSVC NetShareEnumAll (opnum 15).
+    pub async fn list_shares(&self) -> Result<Vec<String>> {
+        info!("SMB: Enumerating shares on {} via SRVSVC", self.target);
+
+        let bind = build_srvsvc_bind();
+        let bind_resp = self.pipe_transact("srvsvc", &bind).await?;
+        if bind_resp.len() < 4 || bind_resp[2] != 12 {
+            return Err(OverthroneError::Smb(
+                "SRVSVC bind rejected — cannot enumerate shares".to_string(),
+            ));
+        }
+
+        let req = build_srvsvc_net_share_enum_req(&self.target);
+        let resp = self.pipe_transact("srvsvc", &req).await?;
+        let names = parse_srvsvc_share_names(&resp);
+        info!(
+            "SMB: Found {} share(s) on {}: [{}]",
+            names.len(),
+            self.target,
+            names.join(", ")
+        );
+        Ok(names)
+    }
+
+    /// List all shares and return access results for each one.
+    pub async fn enumerate_accessible_shares(&self) -> Vec<ShareAccessResult> {
+        let all_shares = match self.list_shares().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    "SMB: list_shares on {} failed: {e} — falling back to known shares",
+                    self.target
+                );
+                ADMIN_SHARES.iter().map(|s| s.to_string()).collect()
+            }
+        };
+        let share_refs: Vec<&str> = all_shares.iter().map(String::as_str).collect();
+        self.check_share_access(&share_refs).await
+    }
 }
 
 // Bulk Operations (multi-target)
@@ -1483,4 +1778,194 @@ pub async fn check_admin_targets(
     let admin_count = results.iter().filter(|r| r.has_admin).count();
     info!("SMB: Admin on {admin_count}/{} targets", results.len());
     results
+}
+
+// ─── SRVSVC helpers (used by list_shares on both Windows and non-Windows) ──────
+
+/// DCE/RPC BIND for SRVSVC (UUID 4b324fc8-1670-01d3-1278-5a47bf6ee188 v3.0).
+fn build_srvsvc_bind() -> Vec<u8> {
+    // SRVSVC interface UUID (little-endian fields)
+    let uuid: [u8; 16] = [
+        0xc8, 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3, 0x01,
+        0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88,
+    ];
+    let mut buf = Vec::with_capacity(72);
+    buf.extend_from_slice(&[5, 0, 11, 3]);            // v5.0, bind, PFC_FIRST_FRAG | PFC_LAST_FRAG
+    buf.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // little-endian NDR
+    buf.extend_from_slice(&72u16.to_le_bytes());       // frag_len
+    buf.extend_from_slice(&0u16.to_le_bytes());        // auth_len
+    buf.extend_from_slice(&2u32.to_le_bytes());        // call_id (2 avoids colliding with SAMR)
+    buf.extend_from_slice(&4096u16.to_le_bytes());     // max_xmit_frag
+    buf.extend_from_slice(&4096u16.to_le_bytes());     // max_recv_frag
+    buf.extend_from_slice(&0u32.to_le_bytes());        // assoc_group_id
+    buf.push(1);                                       // num_ctx_items
+    buf.extend_from_slice(&[0, 0, 0]);                 // padding
+    // Context item 0
+    buf.extend_from_slice(&0u16.to_le_bytes());        // context_id
+    buf.push(1);                                       // num_transfer_syntaxes
+    buf.push(0);                                       // padding
+    buf.extend_from_slice(&uuid);                      // interface UUID
+    buf.extend_from_slice(&3u16.to_le_bytes());        // if_version major = 3
+    buf.extend_from_slice(&0u16.to_le_bytes());        // if_version minor = 0
+    // NDR transfer syntax: 8a885d04-1ceb-11c9-9fe8-08002b104860 v2
+    buf.extend_from_slice(&[
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+    ]);
+    buf.extend_from_slice(&2u32.to_le_bytes());
+    buf
+}
+
+/// Build a NetShareEnumAll (opnum 15) request stub for the given server.
+fn build_srvsvc_net_share_enum_req(server: &str) -> Vec<u8> {
+    let mut stub = Vec::new();
+
+    // ServerName: [unique] SRVSVC_HANDLE (conformant varying wide string)
+    let server_unc = format!("\\\\{}", server);
+    let utf16: Vec<u8> = server_unc
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    let char_count = (server_unc.encode_utf16().count() as u32) + 1; // +1 for null
+    stub.extend_from_slice(&0x0002_0000u32.to_le_bytes()); // referent ID
+    stub.extend_from_slice(&char_count.to_le_bytes());     // max_count
+    stub.extend_from_slice(&0u32.to_le_bytes());           // offset
+    stub.extend_from_slice(&char_count.to_le_bytes());     // actual_count
+    stub.extend_from_slice(&utf16);                        // UTF-16LE chars
+    stub.extend_from_slice(&[0x00, 0x00]);                 // null terminator
+    while stub.len() % 4 != 0 {
+        stub.push(0);
+    }
+
+    // SHARE_ENUM_STRUCT: Level = 1
+    stub.extend_from_slice(&1u32.to_le_bytes());
+    // Union discriminant = 1
+    stub.extend_from_slice(&1u32.to_le_bytes());
+    // Pointer to SHARE_INFO_1_CONTAINER
+    stub.extend_from_slice(&0x0002_0004u32.to_le_bytes()); // referent ID
+    // SHARE_INFO_1_CONTAINER: cEntries = 0, Buffer = NULL
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+
+    // PrefMaxLen: unlimited
+    stub.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+
+    // ResumeHandle: non-null pointer + value 0
+    stub.extend_from_slice(&0x0002_0008u32.to_le_bytes()); // referent
+    stub.extend_from_slice(&0u32.to_le_bytes());           // value
+
+    build_rpc_request(15, &stub)
+}
+
+/// Parse share names from a SRVSVC NetShareEnumAll response.
+/// Layout (stub after 24-byte DCE/RPC header):
+///   Level(4) + container_ptr(4) + TotalEntries(4) + resume_ptr(4) + rc(4)   = 20 bytes
+///   [deferred] cEntries(4) + array_ptr(4)                                    = 8 bytes
+///   [deferred] max_count(4) + N * SHARE_INFO_1{ name_ptr(4)+type(4)+remark_ptr(4) }
+///   [deferred strings: (name_str, remark_str) per entry]
+fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
+    const HDR: usize = 24;
+    if resp.len() < HDR + 28 {
+        return Vec::new();
+    }
+    let s = &resp[HDR..];
+
+    // Level must be 1
+    let level = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+    if level != 1 {
+        debug!("SRVSVC: unexpected enumeration level {}", level);
+        return Vec::new();
+    }
+    // Container referent (non-null = we have data)
+    let container_ref = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
+    if container_ref == 0 {
+        return Vec::new();
+    }
+
+    // Return code at s[16..20]
+    if s.len() < 20 {
+        return Vec::new();
+    }
+    let rc = u32::from_le_bytes([s[16], s[17], s[18], s[19]]);
+    if rc != 0 {
+        debug!("SRVSVC NetShareEnumAll: NET_API_STATUS = 0x{:08x}", rc);
+        // carry on — partial results may still be valid
+    }
+
+    // Deferred SHARE_INFO_1_CONTAINER at s[20]
+    if s.len() < 28 {
+        return Vec::new();
+    }
+    let entry_count = u32::from_le_bytes([s[20], s[21], s[22], s[23]]) as usize;
+    let array_ref   = u32::from_le_bytes([s[24], s[25], s[26], s[27]]);
+    if array_ref == 0 || entry_count == 0 {
+        return Vec::new();
+    }
+
+    // Array: max_count at s[28], elements at s[32]
+    const ARR_OFF: usize = 32;
+    if s.len() < ARR_OFF + entry_count * 12 {
+        return Vec::new();
+    }
+    // We only care about name_ptr and remark_ptr (to know which deferred strings
+    // to read) — skip share type.
+    let mut ptrs: Vec<(u32, u32)> = Vec::with_capacity(entry_count);
+    for i in 0..entry_count {
+        let off = ARR_OFF + i * 12;
+        let name_ptr   = u32::from_le_bytes([s[off],   s[off+1], s[off+2], s[off+3]]);
+        let remark_ptr = u32::from_le_bytes([s[off+8], s[off+9], s[off+10], s[off+11]]);
+        ptrs.push((name_ptr, remark_ptr));
+    }
+
+    // Walk deferred strings: name then remark for each entry
+    let mut pos = ARR_OFF + entry_count * 12;
+    let mut names = Vec::new();
+    for (name_ptr, remark_ptr) in &ptrs {
+        if *name_ptr != 0 {
+            if let Some((name, new_pos)) = read_ndr_wide_string(s, pos) {
+                pos = new_pos;
+                names.push(name);
+            }
+        }
+        if *remark_ptr != 0 {
+            if let Some((_, new_pos)) = read_ndr_wide_string(s, pos) {
+                pos = new_pos;
+            }
+        }
+    }
+    names
+}
+
+/// Read an NDR conformant-varying wide string at `offset` within `data`.
+/// Format: max_count(4) + offset(4) + actual_count(4) + u16[actual_count] + padding.
+/// Returns `(string, next_offset)` on success, aligned to 4 bytes.
+fn read_ndr_wide_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
+    if offset + 12 > data.len() {
+        return None;
+    }
+    let actual = u32::from_le_bytes([
+        data[offset + 8],
+        data[offset + 9],
+        data[offset + 10],
+        data[offset + 11],
+    ]) as usize;
+    let str_start = offset + 12;
+    let str_end   = str_start + actual * 2;
+    if str_end > data.len() {
+        return None;
+    }
+    let raw: Vec<u16> = (0..actual)
+        .map(|i| {
+            let b = str_start + i * 2;
+            u16::from_le_bytes([data[b], data[b + 1]])
+        })
+        .collect();
+    let nul = raw.iter().position(|&c| c == 0).unwrap_or(raw.len());
+    let s = String::from_utf16_lossy(&raw[..nul]).to_string();
+    // Advance past string data, align to 4 bytes
+    let mut next = str_end;
+    if next % 4 != 0 {
+        next += 4 - (next % 4);
+    }
+    Some((s, next))
 }

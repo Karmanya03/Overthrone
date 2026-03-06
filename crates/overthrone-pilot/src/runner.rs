@@ -24,7 +24,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 #[cfg(feature = "qlearn")]
 use crate::qlearner::{AdaptiveMode, AdaptiveQLearner, EngagementStateKey, decision_to_action};
@@ -204,6 +204,8 @@ pub struct AutoPwnConfig {
     /// Path for Q-table persistence (only used with `qlearn` feature)
     #[cfg(feature = "qlearn")]
     pub q_table_path: std::path::PathBuf,
+    /// Pre-loaded engagement state (for session resume)
+    pub initial_state: Option<crate::goals::EngagementState>,
 }
 
 impl AutoPwnConfig {
@@ -289,6 +291,7 @@ impl AutoPwnConfig {
             adaptive_mode: AdaptiveMode::default(),
             #[cfg(feature = "qlearn")]
             q_table_path: std::path::PathBuf::from("q_table.json"),
+            initial_state: None,
         }
     }
 }
@@ -365,9 +368,14 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     );
     println!();
 
-    let mut state = EngagementState::new();
-    state.domain = Some(config.creds.domain.clone());
-    state.dc_ip = Some(config.dc_host.clone());
+    let mut state = if let Some(initial) = config.initial_state.clone() {
+        println!("  {} Resuming from saved session state", colored::Colorize::cyan("►"));
+        initial
+    } else {
+        EngagementState::new()
+    };
+    state.domain = state.domain.or_else(|| Some(config.creds.domain.clone()));
+    state.dc_ip = state.dc_ip.or_else(|| Some(config.dc_host.clone()));
 
     let planner = Planner::new(config.stealth);
     let mut adaptive = AdaptiveEngine::new(config.stealth);
@@ -471,6 +479,36 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 config.max_stage
             );
             break 'main;
+        }
+
+        // ── OPSEC gate: skip steps that exceed the noise budget ──
+        {
+            let max_allowed = if config.stealth {
+                crate::planner::NoiseLevel::Medium
+            } else {
+                crate::planner::NoiseLevel::Critical
+            };
+            let (step_noise, step_desc) = {
+                let s = &plan.steps[step_idx];
+                (s.noise, s.description.clone())
+            };
+            if step_noise > max_allowed {
+                warn!(
+                    "  OPSEC: skipping '{}' (noise={} > max={})",
+                    step_desc,
+                    step_noise,
+                    max_allowed
+                );
+                plan.steps[step_idx].executed = true;
+                plan.steps[step_idx].result = Some(crate::planner::StepResult {
+                    success: false,
+                    output: format!("Skipped: noise level {} exceeds OPSEC budget ({})", step_noise, max_allowed),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                });
+                steps_failed += 1;
+                continue 'main;
+            }
         }
 
         // ── Stage transition: print banner when entering a new stage ──

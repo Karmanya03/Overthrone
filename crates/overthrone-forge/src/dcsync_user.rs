@@ -218,77 +218,7 @@ async fn pipe_transact_reassemble(
     pipe_name: &str,
     request: &[u8],
 ) -> Result<Vec<u8>> {
-    let first_resp = smb.pipe_transact(pipe_name, request).await?;
-
-    if first_resp.len() < 4 {
-        return Ok(first_resp);
-    }
-
-    let ptype = first_resp[2];
-
-    // If it's a bind_ack (ptype 12) or fault (ptype 3), return immediately
-    if ptype == 12 || ptype == 3 || ptype == 13 {
-        return Ok(first_resp);
-    }
-
-    // For response PDUs (ptype 2): check PFC_LAST_FRAG (bit 1 of pfc_flags)
-    let pfc_flags = first_resp[3];
-    let is_last = (pfc_flags & 0x02) != 0;
-
-    if is_last {
-        // Single-fragment response — return as-is
-        return Ok(first_resp);
-    }
-
-    // Multi-fragment: accumulate stub data from all fragments
-    // First fragment: stub starts at offset 24 (after common + request-specific header)
-    let mut assembled = Vec::with_capacity(first_resp.len() * 4);
-
-    // Keep the full first PDU header (24 bytes) + first fragment stub
-    assembled.extend_from_slice(&first_resp);
-
-    debug!(
-        "[dcsync] Multi-fragment response detected, assembling (first frag: {} bytes)",
-        first_resp.len()
-    );
-
-    // Read subsequent fragments until we get PFC_LAST_FRAG
-    let mut frag_count = 1u32;
-    loop {
-        // Read next fragment from the pipe (it's already on the pipe, just read)
-        let frag = smb.pipe_transact(pipe_name, &[]).await?;
-
-        if frag.len() < 24 {
-            warn!(
-                "[dcsync] Fragment {} too short ({} bytes), stopping reassembly",
-                frag_count,
-                frag.len()
-            );
-            break;
-        }
-
-        frag_count += 1;
-
-        // Append only the stub data (skip 24-byte RPC header)
-        assembled.extend_from_slice(&frag[24..]);
-
-        let frag_flags = frag[3];
-        if (frag_flags & 0x02) != 0 {
-            debug!(
-                "[dcsync] Last fragment received (#{}, total assembled: {} bytes)",
-                frag_count,
-                assembled.len()
-            );
-            break;
-        }
-
-        if frag_count > 1000 {
-            warn!("[dcsync] Excessive fragments ({}), stopping", frag_count);
-            break;
-        }
-    }
-
-    Ok(assembled)
+    smb.pipe_transact_multifrag(pipe_name, request).await
 }
 
 // ═══════════════════════════════════════════════════════════

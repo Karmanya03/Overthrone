@@ -401,7 +401,7 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
     // Add smart card logon EKU for PKINIT (OID: 1.3.6.1.4.1.311.20.2.2)
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
     // Add the Microsoft Smart Card Logon OID as a custom extension
-    let smart_card_logon_oid = vec![1, 3, 6, 1, 4, 1, 130, 55, 20, 2, 2]; // 1.3.6.1.4.1.311.20.2.2
+    let smart_card_logon_oid = vec![43, 6, 1, 4, 1, 130, 55, 20, 2, 2]; // 1.3.6.1.4.1.311.20.2.2 in DER OID content
     params
         .custom_extensions
         .push(rcgen::CustomExtension::from_oid_content(

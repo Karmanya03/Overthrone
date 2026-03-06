@@ -6,11 +6,14 @@ mod banner;
 mod commands;
 mod commands_impl;
 mod interactive_shell;
+mod ovt_config;
+mod session_store;
 mod tui;
 
 use auth::{AuthMethod, Credentials};
 use autopwn::ExecMethod;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell as ClapShell, generate as clap_generate};
 use colored::Colorize;
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -202,6 +205,12 @@ enum Commands {
         /// Run a named playbook instead of goal-driven planning
         #[arg(long, value_enum)]
         playbook: Option<PlaybookArg>,
+        /// TOML config file to load targets/credentials/options from
+        #[arg(short = 'C', long, value_name = "FILE")]
+        config: Option<String>,
+        /// Resume a previously saved session file
+        #[arg(long, value_name = "SESSION_FILE")]
+        resume: Option<String>,
     },
 
     /// Credential dumping (SAM, LSA, NTDS, DCC2)
@@ -388,6 +397,18 @@ enum Commands {
         #[clap(subcommand)]
         action: C2Action,
     },
+
+    // ─── Shell completion generation ────────────────────────
+    /// Generate shell tab-completion scripts
+    #[command(name = "completions", alias = "completion", hide = true)]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
+        /// Write completions to file instead of stdout
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
 
 // ──────────────────────────────────────────────────────────
@@ -451,6 +472,20 @@ enum ReportFormat {
     Markdown,
     Pdf,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CompletionShell {
+    /// Bash shell
+    Bash,
+    /// Fish shell
+    Fish,
+    /// Zsh shell
+    Zsh,
+    /// PowerShell
+    PowerShell,
+    /// Elvish shell
+    Elvish,
 }
 
 // ──────────────────────────────────────────────────────────
@@ -792,6 +827,96 @@ enum AdcsAction {
         #[arg(short, long, required = true)]
         target_user: String,
     },
+    /// ESC9 — No Security Extension (CT_FLAG_NO_SECURITY_EXTENSION + UPN poisoning)
+    Esc9 {
+        /// CA web enrollment server (e.g. http://ca.corp.local)
+        #[arg(short, long, required = true)]
+        ca: String,
+        /// Certificate template name (must have CT_FLAG_NO_SECURITY_EXTENSION)
+        #[arg(short, long, required = true)]
+        template: String,
+        /// Target UPN to impersonate (e.g. Administrator@corp.local)
+        #[arg(short = 'T', long, required = true)]
+        target_upn: String,
+        /// Victim account whose UPN will be temporarily modified
+        #[arg(short, long, required = true)]
+        victim: String,
+        /// Original UPN of the victim account (for restoration)
+        #[arg(short, long, required = true)]
+        original_upn: String,
+        /// LDAP URL (for UPN modification commands, e.g. ldap://dc01.corp.local)
+        #[arg(short, long, default_value = "ldap://dc01.corp.local")]
+        ldap_url: String,
+        /// Output PFX file path
+        #[arg(short, long, default_value = "esc9_cert.pfx")]
+        output: String,
+    },
+    /// ESC10 — Weak Certificate Mapping (StrongCertificateBindingEnforcement / CertificateMappingMethods)
+    Esc10 {
+        /// CA web enrollment server
+        #[arg(short, long, required = true)]
+        ca: String,
+        /// Certificate template to enroll in
+        #[arg(short, long, required = true)]
+        template: String,
+        /// Target UPN to impersonate
+        #[arg(short = 'T', long, required = true)]
+        target_upn: String,
+        /// ESC10 variant: 'a' (StrongCertificateBindingEnforcement=0) or 'b' (CertificateMappingMethods UPN bit)
+        #[arg(short = 'V', long, default_value = "a")]
+        variant: String,
+        /// Output PFX file path
+        #[arg(short, long, default_value = "esc10_cert.pfx")]
+        output: String,
+    },
+    /// ESC11 — Relay NTLM to ICPR (ICertPassage; IF_ENFORCEENCRYPTICERTREQUEST disabled)
+    Esc11 {
+        /// CA hostname or IP address
+        #[arg(short, long, required = true)]
+        ca_host: String,
+        /// CA common name (e.g. corp-CA01)
+        #[arg(short = 'N', long, required = true)]
+        ca_name: String,
+        /// Certificate template to request for the relayed identity
+        #[arg(short, long, required = true)]
+        template: String,
+    },
+    /// ESC12 — CA private key exfiltration via shell access to the CA server
+    Esc12 {
+        /// CA server hostname or IP
+        #[arg(short, long, required = true)]
+        ca_host: String,
+        /// CA common name (e.g. corp-CA01)
+        #[arg(short = 'N', long, required = true)]
+        ca_name: String,
+        /// Privileged account on the CA server
+        #[arg(short, long, default_value = "Administrator")]
+        operator: String,
+        /// Path on the CA server to write the backup
+        #[arg(short, long, default_value = r"C:\Windows\Temp\cabackup")]
+        backup_path: String,
+    },
+    /// ESC13 — Issuance Policy OID linked to privileged group (msDS-OIDToGroupLink)
+    Esc13 {
+        /// CA web enrollment server
+        #[arg(short, long, required = true)]
+        ca: String,
+        /// Certificate template containing the linked issuance policy OID
+        #[arg(short, long, required = true)]
+        template: String,
+        /// The issuance policy OID value linked to a privileged group
+        #[arg(short, long, required = true)]
+        policy_oid: String,
+        /// DN of the privileged group linked to the OID
+        #[arg(short = 'G', long, required = true)]
+        linked_group_dn: String,
+        /// Subject CN for the certificate request
+        #[arg(short, long, default_value = "overthrone-esc13")]
+        subject: String,
+        /// Output PFX file path
+        #[arg(short, long, default_value = "esc13_cert.pfx")]
+        output: String,
+    },
     /// Request a certificate
     Request {
         #[arg(short, long, required = true)]
@@ -1106,6 +1231,8 @@ async fn async_main() {
             ldaps,
             timeout,
             playbook,
+            ref config,
+            ref resume,
         } => {
             cmd_autopwn(
                 &cli,
@@ -1121,6 +1248,8 @@ async fn async_main() {
                     ldaps,
                     timeout,
                     playbook,
+                    config: config.clone(),
+                    resume: resume.clone(),
                 },
             )
             .await
@@ -1179,7 +1308,7 @@ async fn async_main() {
             ref ports,
             ref scan_type,
             timeout,
-        } => commands_impl::cmd_scan(targets, ports, scan_type, timeout).await,
+        } => commands_impl::cmd_scan(&cli, targets, ports, scan_type, timeout).await,
         Commands::Mssql { ref action } => cmd_mssql(&cli, action.clone()).await,
         Commands::Tui {
             ref domain,
@@ -1198,6 +1327,33 @@ async fn async_main() {
         Commands::C2 { ref action } => {
             let mut c2_manager = C2Manager::new();
             commands_impl::cmd_c2(&mut c2_manager, action.clone()).await
+        }
+
+        // ─── Shell completion generation ─────────────────────
+        Commands::Completions { shell, output: ref completion_output } => {
+            let clap_shell = match shell {
+                CompletionShell::Bash => ClapShell::Bash,
+                CompletionShell::Fish => ClapShell::Fish,
+                CompletionShell::Zsh => ClapShell::Zsh,
+                CompletionShell::PowerShell => ClapShell::PowerShell,
+                CompletionShell::Elvish => ClapShell::Elvish,
+            };
+            let mut cmd = Cli::command();
+            if let Some(path) = completion_output.as_deref() {
+                match std::fs::File::create(path) {
+                    Ok(mut f) => {
+                        clap_generate(clap_shell, &mut cmd, "ovt", &mut f);
+                        eprintln!("Completions written to: {}", path);
+                    }
+                    Err(e) => {
+                        eprintln!("error: failed to create file '{}': {}", path, e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                clap_generate(clap_shell, &mut cmd, "ovt", &mut std::io::stdout());
+            }
+            0
         }
     };
 
@@ -2530,6 +2686,8 @@ struct AutoPwnArgs {
     ldaps: bool,
     timeout: u64,
     playbook: Option<PlaybookArg>,
+    config: Option<String>,
+    resume: Option<String>,
 }
 
 // cmd_autopwn — wired to overthrone-pilot runner with Q-learning
@@ -2546,8 +2704,19 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         ldaps,
         timeout,
         playbook,
+        ref config,
+        ref resume,
     } = args;
     banner::print_module_banner("AUTONOMOUS ATTACK");
+
+    // ── Config file loading ──
+    let _ovt_cfg = match crate::ovt_config::OverthroneConfig::load(config.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            banner::print_warn(&format!("Config file warning: {}", e));
+            crate::ovt_config::OverthroneConfig::default()
+        }
+    };
 
     let creds_cli = match require_creds(cli) {
         Ok(c) => c,
@@ -2592,6 +2761,22 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         )
     };
 
+    // ── Session Resume ──
+    let initial_state = if let Some(session_path) = resume.as_deref() {
+        match crate::session_store::load_session(std::path::Path::new(session_path)) {
+            Ok(s) => {
+                banner::print_info(&format!("Loaded session from {}", session_path));
+                Some(s)
+            }
+            Err(e) => {
+                banner::print_fail(&format!("Failed to load session: {}", e));
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
     // Build the AutoPwnConfig for the pilot runner
     let config = overthrone_pilot::runner::AutoPwnConfig {
         dc_host: dc.clone(),
@@ -2612,6 +2797,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         },
         #[cfg(feature = "qlearn")]
         q_table_path: std::path::PathBuf::from(q_table),
+        initial_state,
     };
 
     println!("{} Target:    {}", "🎯".bright_black(), target.cyan());
@@ -2666,6 +2852,18 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
 
     // Run the full autonomous attack chain via pilot runner
     let result = overthrone_pilot::runner::run(config).await;
+
+    // ── Auto-save session state ──
+    {
+        let save_path = crate::session_store::auto_session_path(
+            &dc,
+            &result.state.domain.as_deref().unwrap_or("unknown"),
+        );
+        match crate::session_store::save_session(&save_path, &result.state) {
+            Ok(_) => banner::print_info(&format!("Session saved → {}", save_path.display())),
+            Err(e) => banner::print_warn(&format!("Could not save session: {}", e)),
+        }
+    }
 
     if result.domain_admin_achieved {
         0

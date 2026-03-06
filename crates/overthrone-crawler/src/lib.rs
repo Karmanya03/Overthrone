@@ -4,6 +4,7 @@
 //! detect cross-domain attack paths, SID filtering gaps, foreign
 //! group memberships, MSSQL link chains, and PAM trust abuse.
 
+pub mod cross_forest;
 pub mod escalation;
 pub mod foreign;
 pub mod mssql_links;
@@ -17,6 +18,13 @@ pub mod trust_map;
 pub mod interrealm;
 
 pub use runner::{CrawlerConfig, CrawlerResult, run_crawler};
+
+// Re-export cross-forest analysis types
+pub use cross_forest::{
+    CrossForestAssessment, CrossForestOpportunity, CrossForestTechnique, Severity,
+    TrustKeyGuidance, find_cross_forest_opportunities, run_cross_forest_assessment,
+    build_trust_key_guidance,
+};
 
 // Re-export the main analysis types (always available)
 pub use foreign::{

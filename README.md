@@ -194,6 +194,12 @@ Every project has a backlog. Ours just got a whole lot smaller. Most of what use
 | **C2 implant deploy CLI** | `cli/src/main.rs` | ✅ Wired | Constructs `ImplantRequest` and calls `C2Manager::deploy_implant()`. The TODO ascended to real code. |
 | **TUI crawler integration** | `cli/src/tui/runner.rs` | ✅ Integrated | Builds `CrawlerConfig`, calls `run_crawler()`. The two crates finally had lunch. It went well. |
 | **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | ✅ Full | `WSManReceiveShellOutput` loop collects real output. Schrödinger's remote execution has been observed. The command ran AND we know what it said. |
+| **Session Resume** | `cli/src/main.rs`, `pilot/src/runner.rs` | ✅ Implemented | `--resume <file>` deserializes versioned `EngagementState` JSON and restarts the pilot runner from the saved step index. |
+| **TOML Config File** | `core/src/config.rs`, `cli/src/main.rs` | ✅ Implemented | `--config <file>` / `-C` loads `OverthroneConfig` from a TOML file. DC, domain, auth, targets, adaptive mode, stealth, jitter all configurable. Auto-discovery falls back to defaults if field omitted. |
+| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | ✅ Implemented | Thread-safe credential store with privilege ranking (DA > EA > Local Admin > Service > User) and per-source tracking. Surfaced in the final autopwn report credential table. |
+| **OPSEC Noise Gate** | `pilot/src/runner.rs` | ✅ Implemented | `--stealth` enforces `NoiseLevel::Medium` budget ceiling. Steps exceeding the limit are skipped and logged. |
+| **JSON Output** | `cli/src/commands_impl.rs` | ✅ Implemented | `--output json` / `-o json` + `--outfile` on `dump`, `rid`, `laps`, `gpp`, `scan`. Structured JSON with `status`, target, and result arrays. |
+| **Shell Tab Completion** | `cli/src/main.rs` | ✅ Implemented | `ovt completions <shell>` generates completion scripts for bash, fish, zsh, powershell, elvish. Optional `--output <file>` to write directly to disk. |
 | **Integration tests** | Project-wide | ❌ Still missing | 222 unit tests and property-based tests pass. But nobody has tested against a real lab DC yet. "It compiles" is progress. "It passes 222 tests" is more progress. "It works against a real DC" is the goal. |
 
 ## Does It Actually Work?
@@ -240,13 +246,15 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 ```bash
 ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS           # Full AI killchain
+ovt auto-pwn --config ./eng.toml --resume session.json  # Resume with config
 ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER      # Guided mode
 ovt enum all -H DC -d DOMAIN -u USER -p PASS            # Enumerate everything
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
-ovt dump -t DC ntds -d DOMAIN -u DA -p PASS              # Dump NTDS
+ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
 ovt doctor                                                # Health check
+ovt completions bash                                      # Shell tab completion
 ```
 
 ---
@@ -407,6 +415,10 @@ The "I'll hack it myself" engine. Now with machine learning.
 | **Goal System** | ✅ Target DA, Enterprise Admin, specific user, specific host |
 | **Playbooks** | ✅ Pre-built YAML attack sequences for common scenarios |
 | **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist |
+| **Session Resume** | ✅ `--resume <file>` reloads serialized `EngagementState` from a previous run. VPN dropped? Pick up mid-chain from the exact step where you left off. |
+| **TOML Config** | ✅ `--config <file>` loads engagement params from a TOML file. Set DC, domain, auth, targets, adaptive mode, jitter, and more without repeating flags every run. |
+| **Credential Vault** | ✅ Thread-safe in-process credential store (`CredStore`) with privilege ranking. Discovered credentials are ranked DA > Enterprise Admin > Local Admin > Service > Domain User and surfaced in the final report. |
+| **OPSEC Noise Gate** | ✅ `--stealth` caps the noise budget at `Medium`. Steps rated `High` or `Critical` noise are skipped automatically. Every skipped step is logged in the audit trail. |
 | **AutoPwn Runner** | ✅ Full engagement orchestrator: enum → graph → exploit → persist → report. Live kill-chain pipeline shows stage completion. Per-step output with noise level, priority, credential/host gains. 9-section final report: kill-chain visual, per-stage stats, goal status, credential table, admin hosts, loot summary, Q-learner session stats, adaptive summary, audit trail. |
 
 ### Reporting (overthrone-scribe)
@@ -575,6 +587,13 @@ ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 
 # Stealth mode - when the SOC is awake
 ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --stealth --jitter-ms 3000
+
+# Load engagement params from a TOML config file
+ovt autopwn --config ./corp-local.toml
+
+# Resume a previous session (VPN dropped? no problem)
+ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
+  --resume ~/.overthrone/sessions/corp.local-10.10.10.1.json
 
 # Recon only - enumerate everything, touch nothing
 ovt autopwn --dc 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --max-stage enumerate

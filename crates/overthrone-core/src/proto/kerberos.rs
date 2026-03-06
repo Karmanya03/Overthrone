@@ -27,13 +27,13 @@ pub const KDC_PORT: u16 = 88;
 /// This prevents double-domain bugs like "user@domain.com@DOMAIN.COM".
 /// Also handles DOMAIN\user format.
 pub fn normalize_username(username: &str) -> &str {
-    // Handle UPN format: user@domain -> extract user
-    if let Some(before_at) = username.split('@').next() {
-        return before_at;
-    }
     // Handle down-level format: DOMAIN\user -> extract user
     if let Some((_, user)) = username.split_once('\\') {
         return user;
+    }
+    // Handle UPN format: user@domain -> extract user
+    if let Some((before_at, _)) = username.split_once('@') {
+        return before_at;
     }
     username
 }
@@ -149,7 +149,7 @@ async fn kdc_recv(stream: &mut TcpStream) -> Result<Vec<u8>> {
     stream.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
 
-    if len > 65535 {
+    if len > 16 * 1024 * 1024 {
         return Err(OverthroneError::Kerberos(format!(
             "KDC response too large: {len} bytes"
         )));

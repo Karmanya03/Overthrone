@@ -108,7 +108,7 @@ pub enum NbnsNodeType {
 
 /// Parse NBT-NS name from query
 pub fn parse_nbns_name(data: &[u8]) -> Option<String> {
-    if data.is_empty() || data[0] as usize > data.len() - 1 {
+    if data.len() < 33 || data[0] as usize > data.len() - 1 {
         return None;
     }
 
@@ -123,6 +123,12 @@ pub fn parse_nbns_name(data: &[u8]) -> Option<String> {
 
     for chunk in encoded.chunks(2) {
         if chunk.len() == 2 {
+            // NBT-NS level-1 encoding uses only 'A'..'P' (nibble 0..=0xF + 'A')
+            // Bytes outside this range indicate a malformed/crafted packet —
+            // return None instead of panicking on the subtraction.
+            if chunk[0] < b'A' || chunk[0] > b'P' || chunk[1] < b'A' || chunk[1] > b'P' {
+                return None;
+            }
             let high = (chunk[0] - b'A') << 4;
             let low = chunk[1] - b'A';
             let byte = high | low;

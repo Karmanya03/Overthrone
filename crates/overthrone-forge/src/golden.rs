@@ -395,10 +395,13 @@ pub(crate) fn build_pac(
     pac.extend_from_slice(&(client_offset as u64).to_le_bytes());
 
     // Buffer 3: SERVER_CHECKSUM (type=6)
-    let cksum_size: u32 = if etype == ETYPE_AES256_CTS {
-        12 + 16
+    // PAC_SIGNATURE_DATA = sig_type(4) + signature(N):
+    //   RC4-HMAC:   HMAC-MD5 = 16 bytes  → total 20
+    //   AES256/128: HMAC-SHA1-96 = 12 bytes → total 16
+    let cksum_size: u32 = if etype == ETYPE_AES256_CTS || etype == 17 {
+        4 + 12 // sig_type(4) + HMAC-SHA1-96(12)
     } else {
-        4 + 16
+        4 + 16 // sig_type(4) + HMAC-MD5(16)
     };
     let server_cksum_offset = align_to_8(client_offset + client_info.len());
     pac.extend_from_slice(&6u32.to_le_bytes());
@@ -423,19 +426,45 @@ pub(crate) fn build_pac(
     }
     pac.extend_from_slice(&client_info);
 
-    // Server checksum (HMAC-MD5 for RC4, HMAC-SHA1-96 for AES)
+    // Finalize the PAC layout with zeroed checksum placeholders before hashing.
     while pac.len() < server_cksum_offset {
         pac.push(0);
     }
-    let server_cksum = compute_pac_checksum(&pac, key, etype, true)?;
-    pac.extend_from_slice(&server_cksum);
-
-    // KDC checksum
+    pac.resize(server_cksum_offset + cksum_size as usize, 0);
     while pac.len() < kdc_cksum_offset {
         pac.push(0);
     }
-    let kdc_cksum = compute_pac_checksum(&server_cksum, key, etype, false)?;
-    pac.extend_from_slice(&kdc_cksum);
+    pac.resize(kdc_cksum_offset + cksum_size as usize, 0);
+
+    // Server checksum (HMAC-MD5 for RC4, HMAC-SHA1-96 for AES).
+    //
+    // compute_pac_checksum returns [sig_type(4) || signature(N)].
+    let server_cksum = compute_pac_checksum(&pac, key, etype, true)?;
+    // Guard: cksum_size must match actual output length — mismatch means the PAC
+    // header declared the wrong size and a copy would overwrite adjacent data.
+    if server_cksum.len() != cksum_size as usize {
+        return Err(OverthroneError::TicketForge(format!(
+            "PAC server checksum length mismatch: expected {cksum_size}, got {}",
+            server_cksum.len()
+        )));
+    }
+    pac[server_cksum_offset..server_cksum_offset + cksum_size as usize]
+        .copy_from_slice(&server_cksum);
+
+    // KDC checksum — per [MS-PAC] §2.8.2 the KDC checksum is computed over
+    // only the *Signature* field of the server PAC_SIGNATURE_DATA structure,
+    // NOT including the 4-byte SignatureType prefix.  Using the full
+    // server_cksum (sig_type + signature) produces tickets that some KDC
+    // implementations reject.
+    let server_sig_bytes = &server_cksum[4..]; // strip the 4-byte SignatureType
+    let kdc_cksum = compute_pac_checksum(server_sig_bytes, key, etype, false)?;
+    if kdc_cksum.len() != cksum_size as usize {
+        return Err(OverthroneError::TicketForge(format!(
+            "PAC KDC checksum length mismatch: expected {cksum_size}, got {}",
+            kdc_cksum.len()
+        )));
+    }
+    pac[kdc_cksum_offset..kdc_cksum_offset + cksum_size as usize].copy_from_slice(&kdc_cksum);
 
     Ok(pac)
 }

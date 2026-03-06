@@ -12,6 +12,7 @@ use crate::planner::{PlanStep, PlannedAction, StepResult};
 use chrono::Utc;
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::exec::smbexec::escape_cmd_metacharacters;
 use overthrone_core::proto::{kerberos, ldap, smb::SmbSession};
 use overthrone_hunter::HuntConfig;
 use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
@@ -1727,7 +1728,9 @@ async fn exec_remote(
     // Write to %SYSTEMROOT%\Temp so we can read via ADMIN$ share consistently
     let output_hex = format!("{:08x}", rand::random::<u32>());
     let output_path = format!("C:\\Windows\\Temp\\{}.tmp", output_hex);
-    let svc_cmd = format!("%COMSPEC% /Q /c {} > {} 2>&1", command, output_path);
+    // Escape cmd.exe metacharacters (^, &, |, <, >, ") to prevent command injection
+    let escaped_command = escape_cmd_metacharacters(command);
+    let svc_cmd = format!("%COMSPEC% /Q /c {} > {} 2>&1", escaped_command, output_path);
 
     // Create service via svcctl pipe
     let svc_name = format!("OT{:08X}", rand::random::<u32>());

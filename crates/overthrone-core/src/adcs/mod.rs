@@ -1,7 +1,7 @@
 //! ADCS (Active Directory Certificate Services) abuse module
 //!
-//! Implements certificate template attacks ESC1-ESC8 as described in
-//! Certified Pre-Owned research by SpecterOps.
+//! Implements certificate template attacks ESC1-ESC13 as described in
+//! Certified Pre-Owned research by SpecterOps and subsequent community research.
 //!
 //! # Modules
 //! - `csr`: PKCS#10 Certificate Signing Request generation with real RSA crypto
@@ -18,8 +18,17 @@
 //! - ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 enabled
 //! - ESC7: Vulnerable CA permissions
 //! - ESC8: ADCS Web Enrollment relay (NTLM relay to Web Enrollment)
+//! - ESC9: No Security Extension (CT_FLAG_NO_SECURITY_EXTENSION + UPN poisoning)
+//! - ESC10: Weak Certificate Mapping (StrongCertificateBindingEnforcement / CertificateMappingMethods)
+//! - ESC11: Relaying NTLM to ICPR (IForceCertificateRequirements disabled)
+//! - ESC12: Shell access to CA server — CA private key exfiltration
+//! - ESC13: Issuance Policy OID linked to privileged group (msDS-OIDToGroupLink)
 pub mod csr;
 pub mod esc1;
+pub mod esc10;
+pub mod esc11;
+pub mod esc12;
+pub mod esc13;
 pub mod esc2;
 pub mod esc3;
 pub mod esc4;
@@ -27,6 +36,7 @@ pub mod esc5;
 pub mod esc6;
 pub mod esc7;
 pub mod esc8;
+pub mod esc9;
 pub mod ldap_enumeration;
 pub mod pfx;
 pub mod web_enrollment;
@@ -41,6 +51,13 @@ pub use csr::{
     create_client_auth_csr, create_esc1_csr,
 };
 pub use esc1::Esc1Exploiter;
+pub use esc10::{Esc10Config, Esc10Exploiter, Esc10Result, Esc10Variant};
+pub use esc11::{Esc11Config, Esc11Exploiter, Esc11VulnAssessment};
+pub use esc12::{Esc12Assessment, Esc12Config, Esc12Exploiter};
+pub use esc13::{
+    Esc13Config, Esc13Exploiter, Esc13Result, Esc13VulnerableTemplate, LinkedIssuancePolicy,
+    linked_oid_ldap_filter, oid_container_dn,
+};
 pub use esc2::Esc2Exploiter;
 pub use esc3::Esc3Exploiter;
 pub use esc4::Esc4Target;
@@ -48,6 +65,7 @@ pub use esc5::{Esc5AclResult, Esc5Target};
 pub use esc6::Esc6Exploiter;
 pub use esc7::Esc7Target;
 pub use esc8::{Esc8AttackConfig, Esc8RelayTarget};
+pub use esc9::{Esc9Config, Esc9Exploiter, Esc9Result};
 pub use ldap_enumeration::{
     CaConfiguration, CaVulnerabilityInfo, EnrollmentService, LdapAdcsEnumerator,
     LdapCertificateTemplate, LdapCertificationAuthority,
@@ -111,6 +129,17 @@ impl TemplateConfig {
             return Some(4);
         }
 
+        // ESC9: CT_FLAG_NO_SECURITY_EXTENSION (0x00080000) is set on the template
+        if self.has_no_security_extension_flag() {
+            return Some(9);
+        }
+
+        // ESC13: Template has non-empty issuance policies (msDS-OIDToGroupLink check
+        // is done against the directory; here we flag templates with any issuance policy)
+        if !self.issuance_policies.is_empty() {
+            return Some(13);
+        }
+
         None
     }
 
@@ -139,6 +168,12 @@ impl TemplateConfig {
         // Check if security descriptor allows enrollment by authenticated users
         self.security_descriptor.contains("S-1-5-11") || // Authenticated Users
         self.security_descriptor.contains("S-1-1-0") // Everyone
+    }
+
+    /// Returns true when `CT_FLAG_NO_SECURITY_EXTENSION` (0x00080000) is set,
+    /// indicating the template is a candidate for ESC9.
+    pub fn has_no_security_extension_flag(&self) -> bool {
+        (self.certificate_name_flag & esc9::CT_FLAG_NO_SECURITY_EXTENSION) != 0
     }
 
     /// Check if template allows key archival

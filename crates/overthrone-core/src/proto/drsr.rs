@@ -130,75 +130,119 @@ pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result
     }
 }
 
-/// Parse DRS_MSG_GETCHGREPLY_V6 (also handles V1/V2/V7 with offset adjustments)
+/// Parse DRS_MSG_GETCHGREPLY_V6 (also handles V1/V2/V7 with offset adjustments).
+///
+/// DRS_MSG_GETCHGREPLY_V6 fixed inline header layout (offsets within stub_data,
+/// which starts *after* the 24-byte DCE/RPC PDU header):
+///
+///  [0..4]    dwOutVersion
+///  [4..8]    pNC                  (pointer referent ID)
+///  [8..24]   uuidDsaObjSrc        (16 bytes)
+///  [24..40]  uuidInvocIdSrc       (16 bytes)
+///  [40..44]  pUpToDateVecSrc      (pointer)
+///  [44..48]  PrefixTableSrc.PrefixCount
+///  [48..52]  PrefixTableSrc.pPrefixEntry (pointer)
+///  [52..76]  usnvecFrom           (24 bytes)
+///  [76..100] usnvecTo             (24 bytes)
+///  [100..104] pUpToDateVecDst     (pointer)
+///  [104..108] ulExtendedRet
+///  [108..112] cNumObjects         ← key count
+///  [112..116] cNumBytes
+///  [116..120] pObjects            (pointer, non-null when objects present)
+///  [120..124] fMoreData
+///  [124..128] cNumNcSizeObjects
+///  [128..136] cNumNcSizeData      (u64)
+///  [136..140] dwDRSError
+///  = 140 bytes total fixed inline header
+///
+/// All deferred (pointer-referent) data follows after offset 140.
 fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result<DcSyncResult> {
-    let min_header = 4 + 16 + 16 + 4 + 16 + 16 + 4; // 76 bytes minimum
-    if stub_data.len() < min_header + 16 {
+    const CNUMOBJECTS_OFF: usize = 108;
+    const POBJ_REF_OFF:    usize = 116;
+    const FMOREDATA_OFF:   usize = 120;
+    const FIXED_HDR:       usize = 140;
+
+    if stub_data.len() < FIXED_HDR {
         return Err(OverthroneError::custom(
-            "Reply stub too short for v6 header",
+            "DRS reply stub too short for fixed v6 header",
         ));
     }
 
-    // We need to find cNumObjects and pObjects in the NDR stream.
-    // Due to NDR alignment and variable prefix table, we use a heuristic scanner.
-    let parse_result = scan_for_replentinflist(stub_data, session_key)?;
+    let c_num_objects = read_u32(stub_data, CNUMOBJECTS_OFF) as usize;
+    let p_obj_ref     = read_u32(stub_data, POBJ_REF_OFF);
+    let f_more_data   = read_u32(stub_data, FMOREDATA_OFF) != 0;
 
-    Ok(parse_result)
+    debug!(
+        "DRS header: cNumObjects={}, pObjects_ref=0x{:08x}, fMoreData={}",
+        c_num_objects, p_obj_ref, f_more_data
+    );
+
+    // If no objects or null pointer — return empty result
+    if c_num_objects == 0 || p_obj_ref == 0 {
+        return Ok(DcSyncResult {
+            objects: Vec::new(),
+            more_data: f_more_data,
+            total_objects: 0,
+        });
+    }
+
+    // Clamp to a sane upper bound to handle corrupt/unexpected responses
+    let target_count = c_num_objects.min(50_000);
+
+    let objects = scan_for_replentinflist(stub_data, FIXED_HDR, target_count, session_key)?;
+
+    info!(
+        "DCSync: parsed {} of {} expected object(s), more_data={}",
+        objects.len(), target_count, f_more_data
+    );
+
+    let n = objects.len() as u32;
+    Ok(DcSyncResult {
+        objects,
+        more_data: f_more_data,
+        total_objects: n,
+    })
 }
 
-/// Scan the NDR response for REPLENTINFLIST entries using structural heuristics.
-fn scan_for_replentinflist(data: &[u8], session_key: &[u8]) -> Result<DcSyncResult> {
+/// Scan the NDR response for REPLENTINFLIST entries.
+///
+/// Starts at `start_offset` (after the fixed inline header) and walks forward
+/// looking for NDR-encoded ENTINF attribute-block patterns.  Stops after
+/// `target_count` valid objects are found or the buffer is exhausted.
+fn scan_for_replentinflist(
+    data: &[u8],
+    start_offset: usize,
+    target_count: usize,
+    session_key: &[u8],
+) -> Result<Vec<ReplicatedObject>> {
     let mut objects = Vec::new();
     let data_len = data.len();
+    let mut scan_pos = start_offset.min(data_len);
 
-    let mut scan_pos = 76.min(data_len); // Skip past fixed header
-
-    while scan_pos + 12 < data_len {
-        // Look for ATTID_SAM_ACCOUNT_NAME as a marker for attribute blocks
+    while scan_pos + 12 < data_len && objects.len() < target_count {
         let maybe_attid = read_u32(data, scan_pos);
 
         if is_known_attid(maybe_attid) {
-            // Found an attribute block — try to parse the surrounding object
+            // Found a recognisable ATTID — search backwards for the
+            // ENTINF.AttrBlock boundary (attrCount).
             if let Some(obj_start) = find_object_start(data, scan_pos) {
                 match parse_replicated_object(data, obj_start, session_key) {
-                    Ok((obj, next_pos)) => {
+                    Ok((obj, next_pos)) if next_pos > scan_pos => {
                         if !obj.sam_account_name.is_empty() || obj.nt_hash.is_some() {
                             objects.push(obj);
                         }
                         scan_pos = next_pos;
                         continue;
                     }
-                    Err(_) => {
-                        // Failed to parse — advance and keep scanning
-                    }
+                    _ => {}
                 }
             }
         }
 
-        scan_pos += 4; // Advance by 4 bytes (u32 aligned)
+        scan_pos += 4;
     }
 
-    // Check fMoreData (typically last 4 bytes before auth padding)
-    let more_data = if data_len >= 8 {
-        let last_word = read_u32(data, data_len - 4);
-        last_word != 0
-    } else {
-        false
-    };
-
-    let num_objects = objects.len() as u32;
-
-    info!(
-        "DCSync parsed: {} objects with credentials, more_data={}",
-        objects.len(),
-        more_data
-    );
-
-    Ok(DcSyncResult {
-        objects,
-        more_data,
-        total_objects: num_objects,
-    })
+    Ok(objects)
 }
 
 /// Check if a u32 value is a known ATTID

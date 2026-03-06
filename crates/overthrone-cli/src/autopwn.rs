@@ -100,16 +100,33 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
     // ── LDAP Pre-flight Check ──
     if !config.dryrun {
-        let password = config.creds.password().unwrap_or("");
-        match overthrone_core::proto::ldap::LdapSession::connect(
-            &config.dchost,
-            &config.creds.domain,
-            &config.creds.username,
-            password,
-            false,
-        )
-        .await
-        {
+        let ldap_result = match config.creds.secret_and_hash_flag() {
+            Ok((secret, true)) => {
+                // PtH path — use NTLM hash bind
+                overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+                    &config.dchost,
+                    &config.creds.domain,
+                    &config.creds.username,
+                    &secret,
+                    false,
+                )
+                .await
+            }
+            Ok((secret, false)) => {
+                // Cleartext password path
+                overthrone_core::proto::ldap::LdapSession::connect(
+                    &config.dchost,
+                    &config.creds.domain,
+                    &config.creds.username,
+                    &secret,
+                    false,
+                )
+                .await
+            }
+            Err(e) => Err(overthrone_core::OverthroneError::Auth(e)),
+        };
+
+        match ldap_result {
             Ok(mut session) => {
                 banner::print_info(&format!("LDAP pre-flight OK ({})", session.bind_type));
                 let _ = session.disconnect().await;

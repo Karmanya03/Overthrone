@@ -51,7 +51,8 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
   <a href="#ovt-plugin---plugin-system">plugin</a> &nbsp;·&nbsp;
   <a href="#ovt-report---engagement-reporting">report</a> &nbsp;·&nbsp;
   <a href="#ovt-doctor---environment-diagnostics">doctor</a> &nbsp;·&nbsp;
-  <a href="#ovt-tui---interactive-terminal-ui">tui</a>
+  <a href="#ovt-tui---interactive-terminal-ui">tui</a> &nbsp;·&nbsp;
+  <a href="#ovt-completions---shell-tab-completion">completions</a>
 </p>
 
 ---
@@ -109,6 +110,8 @@ ovt auto-pwn -H 10.10.10.1 -d corp.local -u admin --nt-hash aad3b435b51404ee:884
 |---|---|---|
 | `--target`, `-t` | `Domain Admins` | Goal: `"Domain Admins"`, `"ntds"`, `"recon"`, a hostname, or a username. What do you want to own today? |
 | `--method`, `-m` | `auto` | Exec method: `auto`, `psexec`, `smbexec`, `wmiexec`, `winrm`. Auto picks the best one like a sommelier for lateral movement. |
+| `--config`, `-C` | none | Path to a TOML engagement config file. Loads DC, domain, auth, targets, adaptive mode, stealth, and jitter from file. Flags on the CLI override config values. |
+| `--resume` | none | Path to a session JSON file saved by a previous run. Deserializes `EngagementState` and restarts the runner from the last completed step index. |
 | `--stealth` | `false` | Low-noise mode. Skips noisy attacks, adds jitter. For when the SOC is actually awake. |
 | `--dry-run` | `false` | Plan only, no execution. See the whole attack plan without committing any career-limiting moves. |
 | `--max-stage` | `loot` | Stop at a stage: `enumerate`, `attack`, `escalate`, `lateral`, `loot`, `cleanup`. Like a volume knob for destruction. |
@@ -769,6 +772,44 @@ ovt tui --domain corp.local -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026
 # Load a previous graph
 ovt tui --domain corp.local --load graph.json --crawl false
 ```
+
+---
+
+## `ovt completions` - Shell Tab Completion
+
+Generate shell completion scripts. Source them once, tab-complete forever.
+
+Aliases: `ovt completion`
+
+```bash
+# Print completion script to stdout
+ovt completions bash
+ovt completions fish
+ovt completions zsh
+ovt completions powershell
+ovt completions elvish
+
+# Write directly to a file
+ovt completions bash --output ~/.bash_completion.d/ovt.bash
+ovt completions zsh  --output ~/.zsh/completions/_ovt
+
+# Quick setup (bash)
+ovt completions bash >> ~/.bashrc && source ~/.bashrc
+
+# Quick setup (zsh)
+ovt completions zsh > "$(brew --prefix)/share/zsh/site-functions/_ovt" && compinit
+
+# Quick setup (fish)
+ovt completions fish > ~/.config/fish/completions/ovt.fish
+
+# Quick setup (PowerShell)
+ovt completions powershell >> $PROFILE
+```
+
+| Flag | What it does |
+|---|---|
+| `<shell>` | Required. One of: `bash`, `fish`, `zsh`, `powershell`, `elvish` |
+| `--output`, `-o` | Write script to file instead of stdout |
 
 ---
 
