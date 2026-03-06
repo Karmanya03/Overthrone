@@ -165,7 +165,8 @@ impl WinRmExecutor {
             .await
             .map_err(|e| OverthroneError::ExecSimple(format!("HTTP auth request: {e}")))?;
 
-        Ok((resp2, resp2.status().is_success()))
+        let success = resp2.status().is_success();
+        Ok((resp2, success))
     }
 
     fn make_envelope(
@@ -270,7 +271,9 @@ impl WinRmExecutor {
                             buf.clear();
                             match reader.read_event_into(&mut buf) {
                                 Ok(Event::Text(t)) => {
-                                    return Ok(t.unescape().unwrap_or_default().trim().to_string());
+                                    return Ok(String::from_utf8_lossy(t.as_ref())
+                                        .trim()
+                                        .to_string());
                                 }
                                 _ => {}
                             }
@@ -308,7 +311,7 @@ impl WinRmExecutor {
                                 let val = attr.value.as_ref();
                                 if key == b"Name" && val == stream.as_bytes() {
                                     if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                                        let unescaped = t.unescape().unwrap_or_default();
+                                        let unescaped = String::from_utf8_lossy(t.as_ref());
                                         if let Ok(decoded) = BASE64.decode(unescaped.trim()) {
                                             stdout.push_str(
                                                 &String::from_utf8_lossy(&decoded).to_string(),
@@ -320,7 +323,8 @@ impl WinRmExecutor {
                         }
                     } else if name == b"rsp:ExitCode" || name == b"ExitCode" {
                         if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                            if let Ok(n) = t.unescape().unwrap_or_default().trim().parse::<i32>() {
+                            if let Ok(n) = String::from_utf8_lossy(t.as_ref()).trim().parse::<i32>()
+                            {
                                 exit_code = Some(n);
                             }
                         }
