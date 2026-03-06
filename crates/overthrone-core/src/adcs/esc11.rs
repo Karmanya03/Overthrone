@@ -10,7 +10,7 @@
 //! NTLM-signed (not Kerberos / Negotiate with signing) connections.
 //!
 //! **Registry check:**
-//! ```
+//! ```text
 //! reg query \\<CA_HOST>\HKLM\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\<CA_NAME>
 //!      /v InterfaceFlags
 //! ```

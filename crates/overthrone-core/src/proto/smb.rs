@@ -1960,7 +1960,7 @@ fn read_ndr_wide_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
     let s = String::from_utf16_lossy(&raw[..nul]).to_string();
     // Advance past string data, align to 4 bytes
     let mut next = str_end;
-    if next % 4 != 0 {
+    if !next.is_multiple_of(4) {
         next += 4 - (next % 4);
     }
     Some((s, next))
