@@ -438,25 +438,24 @@ impl RemoteExecutor for WinRmExecutor {
                 "application/soap+xml;charset=UTF-8",
             )
             .await
+            && resp.status().is_success()
         {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await
-                    && let Ok(shell_id) = Self::extract_shell_id(&text)
-                {
-                    let delete_body = "";
-                    let delete_envelope =
-                        self.make_envelope(target, DELETE_ACTION, delete_body, Some(&shell_id));
-                    let _ = self
-                        .ntlm_request(
-                            &client,
-                            &url,
-                            &delete_envelope,
-                            "application/soap+xml;charset=UTF-8",
-                        )
-                        .await;
-                }
-                return true;
+            if let Ok(text) = resp.text().await
+                && let Ok(shell_id) = Self::extract_shell_id(&text)
+            {
+                let delete_body = "";
+                let delete_envelope =
+                    self.make_envelope(target, DELETE_ACTION, delete_body, Some(&shell_id));
+                let _ = self
+                    .ntlm_request(
+                        &client,
+                        &url,
+                        &delete_envelope,
+                        "application/soap+xml;charset=UTF-8",
+                    )
+                    .await;
             }
+            return true;
         }
         false
     }
