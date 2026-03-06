@@ -382,7 +382,7 @@ async fn wait_for_output(session: &SmbSession, config: &AtExecConfig, _output_un
                 debug!("AtExec: Output file empty, waiting...");
             }
             Err(_) => {
-                if attempt % 4 == 0 {
+                if attempt.is_multiple_of(4) {
                     debug!("AtExec: Waiting for output (attempt {})", attempt + 1);
                 }
             }

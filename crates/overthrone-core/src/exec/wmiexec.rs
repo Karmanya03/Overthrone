@@ -891,7 +891,7 @@ async fn wait_for_output(
             }
             Err(_) => {
                 // File doesn't exist yet
-                if attempt % 4 == 0 {
+                if attempt.is_multiple_of(4) {
                     debug!("WMIExec: Waiting for output (attempt {})", attempt + 1);
                 }
             }
