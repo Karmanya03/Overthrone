@@ -1958,7 +1958,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     buf.extend_from_slice(&utf16);
     // Pad to 4-byte boundary
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
     buf
@@ -2495,7 +2495,25 @@ async fn exec_dcsync(
     // Step 4: DRSGetNCChanges (opnum 3) — request replication
     let nc_dn = ctx.base_dn();
     let target_dn = if let Some(user) = target_user {
-        format!("CN={},CN=Users,{}", user, nc_dn)
+        // Look up the actual user DN via LDAP to support users in any OU.
+        // Fall back to CN=Users if LDAP lookup fails.
+        let filter = format!("(&(objectClass=user)(sAMAccountName={}))", user);
+        match ldap_connect(ctx, state).await {
+            Ok(mut ldap) => {
+                let found_dn = match ldap.custom_search(&filter, &["distinguishedName"]).await {
+                    Ok(entries) if !entries.is_empty() => entries[0]
+                        .attrs
+                        .get("distinguishedName")
+                        .and_then(|v| v.first())
+                        .cloned()
+                        .unwrap_or_else(|| format!("CN={},CN=Users,{}", user, nc_dn)),
+                    _ => format!("CN={},CN=Users,{}", user, nc_dn),
+                };
+                let _ = ldap.disconnect().await;
+                found_dn
+            }
+            Err(_) => format!("CN={},CN=Users,{}", user, nc_dn),
+        }
     } else {
         nc_dn.clone()
     };
@@ -2720,7 +2738,7 @@ fn build_dsname(dn: &str) -> Vec<u8> {
     buf.extend_from_slice(&char_count.to_le_bytes()); // NameLen (wchar count, incl NUL)
     buf.extend_from_slice(&name_bytes); // Name[] UTF-16LE
     // Pad to 4-byte boundary
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
     buf

@@ -204,14 +204,14 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
             let accounts = enumerate_spn_accounts(config, kc).await?;
             let mut targets = Vec::new();
             for acct in accounts {
-                // Use first SPN for each account
-                if let Some(spn) = acct.spns.first() {
+                // Iterate ALL SPNs for each account — each SPN may have a distinct ticket
+                for spn in &acct.spns {
                     targets.push((
-                        acct.sam_account_name,
+                        acct.sam_account_name.clone(),
                         spn.clone(),
-                        Some(acct.distinguished_name),
+                        Some(acct.distinguished_name.clone()),
                         acct.admin_count,
-                        acct.password_last_set,
+                        acct.password_last_set.clone(),
                     ));
                 }
             }

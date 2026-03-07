@@ -162,7 +162,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf.extend_from_slice(&0u32.to_le_bytes());
     buf.extend_from_slice(&char_count.to_le_bytes());
     buf.extend_from_slice(&utf16);
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
     buf

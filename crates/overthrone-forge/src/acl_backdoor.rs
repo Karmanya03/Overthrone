@@ -132,18 +132,21 @@ pub async fn install_acl_backdoor(
     Ok(ForgeResult {
         action: format!("ACL Backdoor ({})", backdoor_type),
         domain: config.domain.clone(),
-        success: true,
+        // success is false: commands were generated but no LDAP write has been performed
+        // or verified. Execute the generated commands and verify result code 0 to confirm.
+        success: false,
         ticket_data: None,
         persistence_result: Some(PersistenceResult {
             mechanism: format!("ACL Backdoor — {}", backdoor_type),
             target: format!("{} → {}", trustee, effective_target),
-            success: true,
+            // success is false until LDAP modify is confirmed (result code 0)
+            success: false,
             details,
             cleanup_command: Some(cleanup_cmds),
         }),
         message: format!(
-            "ACL backdoor ({}) installed: '{}' now has {} rights on '{}'",
-            backdoor_type, trustee, backdoor_type, effective_target
+            "ACL backdoor ({}) commands prepared for '{}' on '{}' — execute commands to apply",
+            backdoor_type, trustee, effective_target
         ),
     })
 }

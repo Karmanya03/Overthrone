@@ -153,7 +153,11 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
                     .dimmed(),
                 reachable_icon
             );
-            domain_controllers.push(host);
+            domain_controllers.push(host.clone());
+            // When include_dcs is set, also add DCs to the vulnerable_hosts list
+            if uc.include_dcs {
+                vulnerable_hosts.push(host);
+            }
         } else {
             info!(
                 " {} {} — {}{}{}",

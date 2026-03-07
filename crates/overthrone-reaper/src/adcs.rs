@@ -19,8 +19,13 @@ const OID_SMART_CARD_LOGON: &str = "1.3.6.1.4.1.311.20.2.2";
 const OID_CERT_REQUEST_AGENT: &str = "1.3.6.1.4.1.311.20.2.1";
 /// Any Purpose EKU
 const OID_ANY_PURPOSE: &str = "2.5.29.37.0";
-/// SubCA (Subordinate Certification Authority) — no EKU or explicit SubCA
-const OID_SUBCA: &str = "1.3.6.1.5.5.7.3.9";
+/// SubCA (Subordinate Certification Authority).
+/// SubCA templates in Microsoft AD CS typically have no EKU restriction (any-EKU) or
+/// use Basic Constraints isCA=TRUE. The OID below is used as a heuristic marker;
+/// a more reliable check is verifying the absence of restrictive EKUs combined with
+/// Basic Constraints isCA=TRUE.  Note: 1.3.6.1.5.5.7.3.9 is OCSP Signing (wrong).
+/// Note: 1.3.6.1.4.1.311.20.2.1 is Certificate Request Agent (also wrong for SubCA).
+const OID_SUBCA: &str = "2.5.29.37.0"; // anyExtendedKeyUsage — SubCA templates allow any EKU
 
 // ═══════════════════════════════════════════════════════════
 //  Well-known SIDs (low-privilege)

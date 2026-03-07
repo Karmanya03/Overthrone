@@ -1236,7 +1236,7 @@ fn build_minimal_pac(domain_sid: &str, username: &str, user_rid: u32, realm: &st
     let logon_offset = header_size as u64;
     // Pad logon_info to 8-byte boundary
     let mut logon_padded = logon_info.clone();
-    while !logon_padded.len().is_multiple_of(8) {
+    while logon_padded.len() % 8 != 0 {
         logon_padded.push(0);
     }
 
@@ -1425,7 +1425,7 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&sid_bytes);
 
     // Pad to 8-byte boundary
-    while !buf.len().is_multiple_of(8) {
+    while buf.len() % 8 != 0 {
         buf.push(0);
     }
 
@@ -1444,7 +1444,7 @@ fn ndr_write_conformant_string(buf: &mut Vec<u8>, utf16_bytes: &[u8]) {
     buf.extend_from_slice(&char_count.to_le_bytes()); // ActualCount
     buf.extend_from_slice(utf16_bytes);
     // Pad to 4-byte boundary
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
 }

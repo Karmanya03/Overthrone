@@ -344,7 +344,7 @@ fn parse_encrypted_blob_bytes(raw: &str) -> Vec<u8> {
     }
 
     // Try hex
-    if raw.len().is_multiple_of(2)
+    if raw.len() % 2 == 0
         && raw.chars().all(|c| c.is_ascii_hexdigit())
         && let Ok(decoded) = hex::decode(raw)
     {

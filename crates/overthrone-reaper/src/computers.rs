@@ -122,7 +122,11 @@ pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEnt
         .get("servicePrincipalName")
         .cloned()
         .unwrap_or_default();
-    let is_dc = spns.iter().any(|s| s.to_lowercase().starts_with("ldap/"));
+    // Use UAC SERVER_TRUST_ACCOUNT bit (0x2000) for reliable DC detection.
+    // SPN-based heuristics (e.g. starts_with("ldap/")) are unreliable because
+    // non-DC servers can also have LDAP SPNs registered.
+    const UAC_SERVER_TRUST_ACCOUNT: u32 = 0x00002000;
+    let is_dc = uac & UAC_SERVER_TRUST_ACCOUNT != 0;
 
     ComputerEntry {
         sam_account_name: first_val(attrs, "sAMAccountName").unwrap_or_default(),

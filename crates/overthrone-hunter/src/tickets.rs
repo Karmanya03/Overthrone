@@ -304,11 +304,10 @@ fn write_ccache_keyblock(buf: &mut Vec<u8>, etype: i32, key: &[u8]) {
 
 fn write_ccache_times(buf: &mut Vec<u8>, end_time: Option<&kerberos_asn1::KerberosTime>) {
     let now = Utc::now().timestamp() as u32;
+    // Use the provided end_time by converting KerberosTime (Deref → DateTime<Utc>) to epoch.
+    // Fall back to 10 hours (36000 seconds) if no end_time is provided.
     let end = end_time
-        .map(|_t| {
-            // Approximate: parse KerberosTime to epoch
-            now + 36000 // Default 10 hours if parse fails
-        })
+        .map(|t| t.timestamp() as u32)
         .unwrap_or(now + 36000);
 
     buf.extend_from_slice(&now.to_be_bytes()); // authtime

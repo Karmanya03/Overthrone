@@ -236,6 +236,29 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
     // ── Domains ──
     let domain_upper = result.domain.to_uppercase();
+
+    // Derive domain SID from an enumerated object's SID (strip the last RID component).
+    // A Windows SID has the form S-1-5-21-<sub1>-<sub2>-<sub3>-<RID>.
+    // The domain SID is everything except the last component.
+    // If no object SID is available, omit the ObjectIdentifier rather than emitting
+    // a syntactically invalid fake SID.
+    let domain_sid: Option<String> = result
+        .users
+        .iter()
+        .filter_map(|u| u.sid.as_deref())
+        .chain(result.computers.iter().filter_map(|c| c.sid.as_deref()))
+        .find_map(|sid| {
+            let parts: Vec<&str> = sid.splitn(8, '-').collect();
+            // SID: S-1-5-21-<A>-<B>-<C>-<RID> → 8 components; domain = first 7
+            if parts.len() >= 7 {
+                Some(parts[..parts.len() - 1].join("-"))
+            } else {
+                None
+            }
+        });
+
+    let domain_object_id = domain_sid.as_deref().unwrap_or("UNKNOWN");
+
     let domain_json = json!({
         "meta": {
             "methods": 0,
@@ -244,7 +267,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             "version": 4
         },
         "data": [{
-            "ObjectIdentifier": format!("S-1-5-21-{}", domain_upper),
+            "ObjectIdentifier": domain_object_id,
             "Properties": {
                 "name": domain_upper,
                 "domain": domain_upper,

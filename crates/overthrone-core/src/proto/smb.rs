@@ -1167,7 +1167,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf.extend_from_slice(&0u32.to_le_bytes()); // offset
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     buf.extend_from_slice(&utf16);
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
     buf
@@ -1960,7 +1960,7 @@ fn read_ndr_wide_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
     let s = String::from_utf16_lossy(&raw[..nul]).to_string();
     // Advance past string data, align to 4 bytes
     let mut next = str_end;
-    if !next.is_multiple_of(4) {
+    if !next % 4 == 0 {
         next += 4 - (next % 4);
     }
     Some((s, next))
