@@ -180,7 +180,7 @@ fn ndr_string(s: &str) -> Vec<u8> {
         buf.extend_from_slice(&w.to_le_bytes());
     }
     // Pad to 4-byte alignment
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
     buf
@@ -194,7 +194,7 @@ fn ndr_wstring(s: &str) -> Vec<u8> {
         buf.extend_from_slice(&w.to_le_bytes());
     }
     // Pad to 4-byte alignment
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
     buf
@@ -382,7 +382,7 @@ async fn wait_for_output(session: &SmbSession, config: &AtExecConfig, _output_un
                 debug!("AtExec: Output file empty, waiting...");
             }
             Err(_) => {
-                if attempt % 4 == 0 {
+                if attempt.is_multiple_of(4) {
                     debug!("AtExec: Waiting for output (attempt {})", attempt + 1);
                 }
             }

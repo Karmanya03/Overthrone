@@ -66,7 +66,7 @@ pub fn decrypt_gpp_password(cpassword: &str) -> Result<String> {
         .map_err(|e| OverthroneError::Decryption(format!("AES decrypt failed: {e}")))?;
 
     // GPP passwords are UTF-16LE encoded
-    let password = if plaintext.len() >= 2 && plaintext.len() % 2 == 0 {
+    let password = if plaintext.len() >= 2 && plaintext.len().is_multiple_of(2) {
         let utf16: Vec<u16> = plaintext
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))

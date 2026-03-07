@@ -1421,7 +1421,7 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&sid_bytes);
 
     // Pad to 8-byte boundary
-    while buf.len() % 8 != 0 {
+    while !buf.len().is_multiple_of(8) {
         buf.push(0);
     }
 

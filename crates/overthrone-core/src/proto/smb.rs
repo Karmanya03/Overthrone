@@ -1167,7 +1167,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf.extend_from_slice(&0u32.to_le_bytes()); // offset
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     buf.extend_from_slice(&utf16);
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
     buf
@@ -1829,7 +1829,7 @@ fn build_srvsvc_net_share_enum_req(server: &str) -> Vec<u8> {
     stub.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     stub.extend_from_slice(&utf16); // UTF-16LE chars
     stub.extend_from_slice(&[0x00, 0x00]); // null terminator
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
 

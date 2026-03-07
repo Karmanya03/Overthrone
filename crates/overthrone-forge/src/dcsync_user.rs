@@ -507,7 +507,7 @@ fn build_drs_get_nc_changes(handle: &[u8], object_dn: &str, _nc_dn: &str) -> Vec
     stub.extend_from_slice(&nc_utf16); // StringName (UTF-16LE)
 
     // Align to 4 bytes
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
 
@@ -644,7 +644,7 @@ fn hex_encode_bytes(data: &[u8]) -> String {
 
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {
     let hex = hex.trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     (0..hex.len())

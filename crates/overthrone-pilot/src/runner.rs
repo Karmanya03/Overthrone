@@ -816,7 +816,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             tokio::time::sleep(tokio::time::Duration::from_millis(jitter)).await;
         }
 
-        if steps_executed > 0 && steps_executed % 10 == 0 {
+        if steps_executed > 0 && steps_executed.is_multiple_of(10) {
             state.auto_save();
         }
     }

@@ -541,7 +541,7 @@ fn winreg_set_value(hkey: &[u8; 20], value_name: &str, reg_type: u32, data: &[u8
     // [in] lpData: conformant array
     stub.extend_from_slice(&(data.len() as u32).to_le_bytes());
     stub.extend_from_slice(data);
-    while stub.len() % 4 != 0 {
+    while !stub.len().is_multiple_of(4) {
         stub.push(0);
     }
     // cbData
