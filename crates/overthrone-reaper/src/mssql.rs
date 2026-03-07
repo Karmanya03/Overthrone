@@ -52,7 +52,10 @@ impl MssqlInstance {
 }
 
 pub fn mssql_filter() -> String {
-    "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=MSSQLSvc/*))".to_string()
+    // Include user accounts, computer accounts, and MSA/gMSA accounts that may
+    // run MSSQL services. Limiting to objectCategory=person misses computer-hosted
+    // SQL instances and Managed Service Accounts.
+    "(&(servicePrincipalName=MSSQLSvc/*)(|(objectCategory=person)(objectCategory=computer)(objectClass=msDS-ManagedServiceAccount)(objectClass=msDS-GroupManagedServiceAccount)))".to_string()
 }
 
 pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>> {

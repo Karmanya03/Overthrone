@@ -219,10 +219,18 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
 
         match roast_single(&config.dc_ip, &config.domain, username).await {
             Ok(crackable) => {
+                // Parse the actual etype from the hash string format:
+                // $krb5asrep$<etype>$user@realm:<checksum>$<edata>
+                let etype = crackable
+                    .hash_string
+                    .strip_prefix("$krb5asrep$")
+                    .and_then(|s| s.split('$').next())
+                    .and_then(|e| e.parse::<i32>().ok())
+                    .unwrap_or(kerberos::ETYPE_RC4_HMAC);
                 let roasted = RoastedAccount {
                     username: crackable.username.clone(),
                     domain: crackable.domain.clone(),
-                    etype: kerberos::ETYPE_RC4_HMAC,
+                    etype,
                     hash_string: crackable.hash_string,
                     distinguished_name: dn.clone(),
                     description: desc.clone(),

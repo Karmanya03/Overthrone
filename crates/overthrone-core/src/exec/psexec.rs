@@ -179,7 +179,7 @@ fn ndr_string(s: &str) -> Vec<u8> {
         buf.extend_from_slice(&w.to_le_bytes());
     }
     // Pad to 4-byte alignment
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
     buf

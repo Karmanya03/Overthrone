@@ -29,7 +29,11 @@ pub enum GroupKind {
 
 impl GroupKind {
     pub fn from_group_type(gt: i64) -> Self {
-        let base = if gt < 0 { gt & 0x7FFFFFFF } else { gt };
+        // The high bit (0x80000000) is the GROUP_TYPE_SECURITY_ENABLED flag.
+        // Mask it off with 0x7FFFFFFF to isolate the group scope/type bits.
+        // Note: this mask is intentional and correct for both 32-bit and 64-bit
+        // parsed values; only the lower 32 bits are meaningful per MS-ADTS §2.2.16.
+        let base = if gt < 0 { gt & 0x7FFF_FFFF } else { gt };
         match base & 0xF {
             2 => Self::Global,
             4 => Self::DomainLocal,
