@@ -6,7 +6,6 @@
 //! Uses the `ldap3` crate (v0.11) with async Tokio support.
 
 use crate::error::{OverthroneError, Result};
-use base64::Engine as _;
 use ldap3::controls::{Control, ControlType, PagedResults, RawControl};
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use std::collections::HashMap;
@@ -1234,16 +1233,17 @@ impl LdapSession {
 
     /// Replace an attribute value on a DN (raw LDAP modify-replace).
     /// Used by RBCD to write msDS-AllowedToActOnBehalfOfOtherIdentity.
+    /// Sends raw bytes so binary AD attributes are written correctly.
     pub async fn modify_replace(&mut self, dn: &str, attr: &str, value: &[u8]) -> Result<()> {
         use ldap3::Mod;
         use std::collections::HashSet;
         debug!("LDAP modify-replace: dn={dn}, attr={attr}");
 
-        // Convert value to base64 string for LDAP
-        let value_str = base64::engine::general_purpose::STANDARD.encode(value);
-        let mut values = HashSet::new();
-        values.insert(value_str);
-        let mods = vec![Mod::Replace(attr.to_string(), values)];
+        // Send raw bytes — using Mod<Vec<u8>> so the LDAP encode path
+        // does not UTF-8 transform the value (binary attribute safe).
+        let mut values: HashSet<Vec<u8>> = HashSet::new();
+        values.insert(value.to_vec());
+        let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(attr.as_bytes().to_vec(), values)];
 
         let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
             target: self.dc_ip.clone(),
@@ -1349,6 +1349,49 @@ impl LdapSession {
         }
 
         debug!("LDAP modify-add successful on {dn}");
+        Ok(())
+    }
+
+    /// Add a single raw binary value to an attribute on a DN (raw LDAP modify-add).
+    /// Uses `Mod<Vec<u8>>` so binary AD attributes (e.g. msDS-KeyCredentialLink) are
+    /// written as raw bytes rather than as UTF-8 strings.
+    pub async fn modify_add_binary(&mut self, dn: &str, attr: &str, value: Vec<u8>) -> Result<()> {
+        use ldap3::Mod;
+        use std::collections::HashSet;
+        debug!(
+            "LDAP modify-add-binary: dn={dn}, attr={attr}, {} bytes",
+            value.len()
+        );
+
+        let mut values: HashSet<Vec<u8>> = HashSet::new();
+        values.insert(value);
+        let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Add(attr.as_bytes().to_vec(), values)];
+
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Modify operations require password auth (not supported with NT hash)"
+                .to_string(),
+        })?;
+        let result = ldap
+            .modify(dn, mods)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("Modify-add-binary failed: {e}"),
+            })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!(
+                    "Modify-add-binary rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP modify-add-binary successful on {dn}");
         Ok(())
     }
 

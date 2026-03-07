@@ -121,6 +121,65 @@ pub async fn enumerate_groups(config: &ReaperConfig) -> Result<Vec<GroupEntry>> 
     Ok(results)
 }
 
+/// Resolve all groups a principal (user or group DN) is a *transitive* member of.
+///
+/// Uses the AD-specific `LDAP_MATCHING_RULE_IN_CHAIN` OID
+/// (1.2.840.113556.1.4.1941) which AD evaluates server-side and returns
+/// every group in the ancestry chain, including nested parents.
+///
+/// Returns a `Vec<String>` of distinguished names of every group the
+/// principal is a member of (directly or indirectly).
+pub async fn resolve_nested_memberships(
+    config: &ReaperConfig,
+    principal_dn: &str,
+) -> Result<Vec<String>> {
+    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
+        &config.dc_ip,
+        &config.domain,
+        &config.username,
+        config.password.as_deref().unwrap_or(""),
+        false,
+    )
+    .await?;
+
+    // The LDAP_MATCHING_RULE_IN_CHAIN OID resolves transitive group membership.
+    let filter = format!(
+        "(member:1.2.840.113556.1.4.1941:={})",
+        ldap_escape_dn(principal_dn)
+    );
+    let attrs = &["distinguishedName", "sAMAccountName"];
+
+    let entries = match conn.custom_search(&filter, attrs).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[groups] Nested membership query failed: {}", e);
+            let _ = conn.disconnect().await;
+            return Err(e);
+        }
+    };
+
+    let dns: Vec<String> = entries.iter().map(|e| e.dn.clone()).collect();
+    let _ = conn.disconnect().await;
+    Ok(dns)
+}
+
+/// Escape a DN for use inside an LDAP filter value (RFC 4515 §3).
+/// Parentheses and backslashes must be escaped.
+fn ldap_escape_dn(dn: &str) -> String {
+    let mut out = String::with_capacity(dn.len() + 4);
+    for ch in dn.chars() {
+        match ch {
+            '\\' => out.push_str("\\5c"),
+            '(' => out.push_str("\\28"),
+            ')' => out.push_str("\\29"),
+            '*' => out.push_str("\\2a"),
+            '\0' => out.push_str("\\00"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 pub fn parse_group_entry(attrs: &HashMap<String, Vec<String>>) -> GroupEntry {
     let gt: i64 = first_val(attrs, "groupType")
         .and_then(|v| v.parse().ok())

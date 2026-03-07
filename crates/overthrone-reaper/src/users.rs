@@ -36,6 +36,10 @@ pub struct UserEntry {
     pub dont_require_preauth: bool,
     pub service_principal_names: Vec<String>,
     pub sid: Option<String>,
+    /// msDS-AllowedToDelegateTo — constrained delegation targets for this user.
+    pub allowed_to_delegate_to: Vec<String>,
+    /// True when msDS-AllowedToActOnBehalfOfOtherIdentity is present (RBCD configured).
+    pub has_rbcd: bool,
 }
 
 impl UserEntry {
@@ -89,6 +93,8 @@ pub fn user_attributes() -> Vec<String> {
         "objectSid",
         "whenCreated",
         "whenChanged",
+        "msDS-AllowedToDelegateTo",
+        "msDS-AllowedToActOnBehalfOfOtherIdentity",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -158,6 +164,11 @@ pub fn parse_user_entry(attrs: &HashMap<String, Vec<String>>) -> UserEntry {
             .cloned()
             .unwrap_or_default(),
         sid: first_val(attrs, "objectSid"),
+        allowed_to_delegate_to: attrs
+            .get("msDS-AllowedToDelegateTo")
+            .cloned()
+            .unwrap_or_default(),
+        has_rbcd: attrs.contains_key("msDS-AllowedToActOnBehalfOfOtherIdentity"),
     }
 }
 
