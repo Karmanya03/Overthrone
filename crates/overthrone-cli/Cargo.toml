@@ -48,6 +48,7 @@ kerberos_asn1.workspace = true
 hex.workspace = true
 base64.workspace = true
 chrono = { version = "0.4.44", features = ["serde"] }
+ldap3 = { workspace = true }
 rand = "0.8"
 rustyline = { version = "14.0", features = ["derive"] }
 rustyline-derive = "0.10"

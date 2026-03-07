@@ -52,6 +52,8 @@ pub struct KerberosTicket {
     pub data: Vec<u8>,
     /// Session key
     pub session_key: Vec<u8>,
+    /// Encryption type for the session key (e.g. 23=RC4, 17=AES128, 18=AES256)
+    pub session_key_etype: i32,
     /// Ticket type (TGT or TGS)
     pub is_tgt: bool,
     /// Service SPN (for TGS)
@@ -60,10 +62,17 @@ pub struct KerberosTicket {
 
 impl KerberosTicket {
     /// Create a new Kerberos ticket
-    pub fn new(data: Vec<u8>, session_key: Vec<u8>, is_tgt: bool, spn: Option<String>) -> Self {
+    pub fn new(
+        data: Vec<u8>,
+        session_key: Vec<u8>,
+        session_key_etype: i32,
+        is_tgt: bool,
+        spn: Option<String>,
+    ) -> Self {
         Self {
             data,
             session_key,
+            session_key_etype,
             is_tgt,
             spn,
         }
@@ -78,6 +87,7 @@ impl KerberosTicket {
         Ok(Self {
             data,
             session_key: Vec::new(),
+            session_key_etype: 23, // default RC4
             is_tgt: false,
             spn: None,
         })
@@ -1605,13 +1615,20 @@ impl SmbSession {
     ) -> Result<Self> {
         info!("SMB: Kerberos ticket auth to \\\\{target} for {username}");
 
-        // On non-Windows, use the ticket's session key for an NTLM-based
-        // fallback auth via our pure Rust SMB2 client.
-        let session_key_hex = hex::encode(&ticket.session_key);
         let conn = super::smb2::Smb2Connection::connect(target, SMB_PORT).await?;
         conn.negotiate().await?;
+
+        // Build Kerberos AP-REQ and authenticate via SPNEGO
+        let realm = super::kerberos::normalize_realm(domain);
+        let ap_req_bytes = super::kerberos::build_ap_req_bytes(
+            &ticket.data,
+            &ticket.session_key,
+            ticket.session_key_etype,
+            &realm,
+            username,
+        )?;
         let session_key = conn
-            .session_setup_hash(domain, username, &session_key_hex)
+            .session_setup_kerberos(&ap_req_bytes, &ticket.session_key)
             .await?;
 
         Ok(Self {

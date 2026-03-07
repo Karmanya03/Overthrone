@@ -290,7 +290,7 @@ fn build_pa_enc_timestamp(key: &[u8], etype: i32) -> Result<PaData> {
 }
 
 /// Build Authenticator encrypted with session key for AP-REQ
-fn build_encrypted_authenticator(
+pub(crate) fn build_encrypted_authenticator(
     realm: &str,
     cname: &str,
     session_key: &[u8],
@@ -327,7 +327,7 @@ fn build_encrypted_authenticator(
 }
 
 /// Build AP-REQ wrapping a ticket + encrypted authenticator
-fn build_ap_req(ticket: &Ticket, encrypted_auth: EncryptedData) -> ApReq {
+pub(crate) fn build_ap_req(ticket: &Ticket, encrypted_auth: EncryptedData) -> ApReq {
     ApReq {
         pvno: 5,
         msg_type: 14,
@@ -335,6 +335,22 @@ fn build_ap_req(ticket: &Ticket, encrypted_auth: EncryptedData) -> ApReq {
         ticket: ticket.clone(),
         authenticator: encrypted_auth,
     }
+}
+
+/// Build a serialized AP-REQ from raw ticket bytes + session key.
+/// This is the entry point for SMB2 Kerberos SPNEGO authentication.
+pub fn build_ap_req_bytes(
+    ticket_data: &[u8],
+    session_key: &[u8],
+    etype: i32,
+    realm: &str,
+    cname: &str,
+) -> Result<Vec<u8>> {
+    let (_, ticket) = Ticket::parse(ticket_data)
+        .map_err(|e| OverthroneError::Kerberos(format!("Failed to parse ticket: {e}")))?;
+    let encrypted_auth = build_encrypted_authenticator(realm, cname, session_key, etype)?;
+    let ap_req = build_ap_req(&ticket, encrypted_auth);
+    Ok(ap_req.build())
 }
 
 /// Try to parse a KDC response as KRB-ERROR and return a meaningful error
@@ -372,6 +388,32 @@ fn parse_krb_error(data: &[u8]) -> OverthroneError {
         }
         Err(_) => OverthroneError::Kerberos("Failed to parse KDC response".to_string()),
     }
+}
+
+/// Extract the suggested realm from a KDC_ERR_WRONG_REALM (code 68) response.
+/// Returns `None` if the error is not code 68 or no realm can be extracted.
+fn extract_wrong_realm(data: &[u8]) -> Option<String> {
+    let (_, krb_err) = KrbError::parse(data).ok()?;
+    if krb_err.error_code != 68 {
+        return None;
+    }
+    krb_err.crealm.as_ref().map(|r| r.to_string()).or_else(|| {
+        let r = krb_err.realm.to_string();
+        if !r.is_empty() { Some(r) } else { None }
+    })
+}
+
+/// Resolve a KDC IP for the given realm via DNS SRV lookup.
+async fn resolve_realm_kdc(realm: &str) -> Result<String> {
+    let query = format!("{}.{}", super::dns::SRV_KERBEROS, realm);
+    let resolver = super::dns::DnsResolver::system()?;
+    let records = resolver.lookup_srv(&query).await?;
+    records
+        .first()
+        .and_then(|r| r.ips.first().cloned())
+        .ok_or_else(|| {
+            OverthroneError::Kerberos(format!("No KDC found via DNS SRV for realm '{realm}'"))
+        })
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -524,6 +566,10 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
 
 /// Request a TGT via AS-REQ with PA-ENC-TIMESTAMP pre-auth.
 /// `secret` is either a password or NT hash (set `use_hash=true`).
+///
+/// If the KDC returns KDC_ERR_WRONG_REALM (code 68), the function
+/// automatically follows the referral by resolving the suggested realm's
+/// KDC via DNS SRV and retrying (max 2 hops).
 pub async fn request_tgt(
     dc_ip: &str,
     domain: &str,
@@ -541,47 +587,85 @@ pub async fn request_tgt(
         (ntlm::nt_hash(secret), ETYPE_RC4_HMAC)
     };
 
-    let pa_timestamp = build_pa_enc_timestamp(&key, etype)?;
-    let pa_pac = build_pa_pac_request(true);
-    let req_body = build_as_req_body(clean_username, &realm, &[etype]);
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
 
-    let as_req = AsReq {
-        pvno: 5,
-        msg_type: 10,
-        padata: Some(vec![pa_timestamp, pa_pac]),
-        req_body,
-    };
+    for hop in 0..=2 {
+        let pa_timestamp = build_pa_enc_timestamp(&key, etype)?;
+        let pa_pac = build_pa_pac_request(true);
+        let req_body = build_as_req_body(clean_username, &current_realm, &[etype]);
 
-    let response_bytes = kdc_exchange(dc_ip, &as_req.build()).await?;
+        let as_req = AsReq {
+            pvno: 5,
+            msg_type: 10,
+            padata: Some(vec![pa_timestamp, pa_pac]),
+            req_body,
+        };
 
-    let (_, as_rep) =
-        AsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
+        let response_bytes = kdc_exchange(&current_dc, &as_req.build()).await?;
 
-    // Decrypt enc-part to extract session key
-    let cipher = new_kerberos_cipher(etype)
-        .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
+        match AsRep::parse(&response_bytes) {
+            Ok((_, as_rep)) => {
+                // Decrypt enc-part to extract session key
+                let cipher = new_kerberos_cipher(etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
 
-    // kerberos_crypto v0.3: decrypt() returns Result
-    let decrypted = cipher
-        .decrypt(&key, 3, &as_rep.enc_part.cipher)
-        .map_err(|e| OverthroneError::Kerberos(format!("AS-REP decrypt failed: {e}")))?;
+                let decrypted = cipher
+                    .decrypt(&key, 3, &as_rep.enc_part.cipher)
+                    .map_err(|e| {
+                        OverthroneError::Kerberos(format!("AS-REP decrypt failed: {e}"))
+                    })?;
 
-    let (_, enc_part) = EncAsRepPart::parse(&decrypted)
-        .map_err(|e| OverthroneError::Kerberos(format!("Parse EncAsRepPart: {e}")))?;
+                let (_, enc_part) = EncAsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse EncAsRepPart: {e}")))?;
 
-    info!(
-        "TGT obtained for {username}@{realm} (etype: {})",
-        enc_part.key.keytype
-    );
+                info!(
+                    "TGT obtained for {username}@{current_realm} (etype: {})",
+                    enc_part.key.keytype
+                );
 
-    Ok(TicketGrantingData {
-        ticket: as_rep.ticket,
-        session_key: enc_part.key.keyvalue.clone(),
-        session_key_etype: enc_part.key.keytype,
-        client_principal: username.to_string(),
-        client_realm: realm,
-        end_time: Some(enc_part.endtime),
-    })
+                return Ok(TicketGrantingData {
+                    ticket: as_rep.ticket,
+                    session_key: enc_part.key.keyvalue.clone(),
+                    session_key_etype: enc_part.key.keytype,
+                    client_principal: username.to_string(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_part.endtime),
+                });
+            }
+            Err(_) => {
+                // Check if this is a WRONG_REALM referral
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "KDC_ERR_WRONG_REALM: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("KDC referred us to realm '{suggested}' (hop {hop})");
+
+                    // Resolve the new realm's KDC via DNS SRV
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "KDC_ERR_WRONG_REALM: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                // Not a WRONG_REALM — return the original error
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "request_tgt: referral loop exhausted".to_string(),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════

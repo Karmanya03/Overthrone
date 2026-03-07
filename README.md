@@ -19,9 +19,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/enumeration-LDAP_SMB_Kerberos-blueviolet?style=flat-square" alt="protocols" />
   <img src="https://img.shields.io/badge/attack_graph-BloodHound_style-blueviolet?style=flat-square" alt="graph" />
-  <img src="https://img.shields.io/badge/lateral_movement-Pass_the_Hash-blueviolet?style=flat-square" alt="pth" />
-  <img src="https://img.shields.io/badge/persistence-Golden_Ticket-blueviolet?style=flat-square" alt="persistence" />
+  <img src="https://img.shields.io/badge/lateral_movement-PtH_%2B_PtT_%2B_Tickets-blueviolet?style=flat-square" alt="pth ptt" />
+  <img src="https://img.shields.io/badge/persistence-Golden_%2F_Silver_%2F_Diamond-blueviolet?style=flat-square" alt="persistence" />
   <img src="https://img.shields.io/badge/reporting-Markdown_PDF_JSON-blueviolet?style=flat-square" alt="reports" />
+  <img src="https://img.shields.io/badge/smb2-packet_signing-blueviolet?style=flat-square" alt="smb2 signing" />
+  <img src="https://img.shields.io/badge/kerberos-SPNEGO_%2B_cross--domain-blueviolet?style=flat-square" alt="kerberos spnego" />
 </p>
 
 <p align="center">
@@ -29,6 +31,7 @@
   <img src="https://img.shields.io/badge/python-not_needed-ff4444?style=flat-square" alt="no python" />
   <img src="https://img.shields.io/badge/.NET-not_needed-ff4444?style=flat-square" alt="no dotnet" />
   <img src="https://img.shields.io/badge/wine-not_needed-ff4444?style=flat-square" alt="no wine" />
+  <img src="https://img.shields.io/badge/impacket-not_needed-ff4444?style=flat-square" alt="no impacket" />
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
 </p>
 
@@ -54,11 +57,11 @@ You know how in medieval warfare, taking a castle required siege engineers, scou
 
 Overthrone is a full-spectrum AD red team framework that handles the entire kill chain - from "I have network access and a dream" to "I own every domain in this forest and here's a 47-page PDF proving it." Built in Rust because C2 frameworks deserve memory safety too, and because debugging use-after-free bugs during an engagement is how you develop trust issues (both the Active Directory kind and the personal kind).
 
-This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is not another Python wrapper that breaks when you look at it funny. This is the whole siege engine. One binary. Zero dependencies\*. All regret (for the blue team).
+This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is not another Python wrapper that breaks when you look at it funny. This is the whole siege engine. One binary. Minimal runtime dependencies\*. All regret (for the blue team).
 
 > **Shorthand:** Every command works with both `overthrone` and `ovt`. Because life is too short to type 10 characters when 3 will do. `ovt autopwn` = `overthrone autopwn`. Same war crimes against Active Directory, fewer keystrokes.
 
-\*Okay, one dependency. `smbclient`. We'll explain later. Don't @ us.
+\*The binary is statically linked with ~35 Rust crates (Tokio, ldap3, kerberos\_asn1, etc.) — no Python, no .NET, no JVM. On Linux you need `smbclient` for some legacy SMB paths; most features use the built-in pure-Rust SMB2 client.
 
 ### The Kill Chain
 
@@ -179,29 +182,40 @@ overthrone-cli      ████████████████████
                                                    code. --help doesn't lie anymore.
 ```
 
-## What's Still Cooking (The Remaining Backlog)
+## What's Still Cooking (The Backlog)
 
-Every project has a backlog. Ours just got a whole lot smaller. Most of what used to live here has graduated to "implemented." We're proud parents at an empty-nest party.
+Every project has a backlog. Ours just got a whole lot smaller. Split into two honest tables: what's shipped, and what's genuinely still on the stove. No marketing spin. The shipped table is longer. We're proud.
 
-| What | Where | Status | Notes |
+### ✅ Shipped — Graduated from Backlog
+
+The items below used to be `todo!()`. They are now real code. Some of them took longer than we'd like to admit. All of them work.
+
+| What | Where | Notes |
+|---|---|---|
+| **SMB2 packet signing** | `core/src/proto/smb2.rs` | HMAC-SHA256 over every post-session-setup packet. `sign_required` negotiated from server SecurityMode. 9 call sites updated. The packets are wearing seatbelts now. |
+| **Kerberos SPNEGO auth** | `core/src/proto/smb2.rs`, `kerberos.rs` | Proper AP-REQ wrapped in SPNEGO NegTokenInit. `connect_with_ticket()` on Linux no longer falls back to a broken NTLM hash. Real Kerberos or nothing. |
+| **Cross-domain TGT referral** | `core/src/proto/kerberos.rs` | 2-hop referral loop in `request_tgt()`. Follows `KDC_ERR_WRONG_REALM` redirects to the right KDC via DNS SRV. Cross-forest attacks no longer require manual realm wrangling. |
+| **WmiExec Linux guard** | `core/src/exec/wmiexec.rs` | `#[cfg(not(windows))]` returns a clear error instead of silently failing or panicking. `auto_exec()` skips WmiExec entirely on Linux. Use PsExec. It's fine. |
+| **Clock skew check in `ovt doctor`** | `cli/src/commands/doctor.rs` | Anonymous LDAP bind to RootDSE, reads `currentTime`, diffs against local clock. Fails loud if drift > 5 min (Kerberos will reject you before you even start). |
+| **ADCS ESC1 + ESC6** | `core/src/adcs/esc{1,6}.rs` | Full exploiters — SAN UPN abuse, CSR, enrollment, hash extraction, EDITF flag abuse. Iron Man has joined the MCU. |
+| **LDAP signing bypass** | `relay/src/relay.rs` | CVE-2019-1040 "Drop the MIC" — strips SIGN/SEAL/ALWAYS_SIGN from CHALLENGE before victim sees it, zeroes MIC in AUTHENTICATE. Post-relay LDAP operations (add-to-group, search, modify) work on the relayed session. 7 new unit tests. The LDAP server said "please sign your messages" and we said "no." |
+| **WASM plugin system** | `core/src/plugin/loader.rs` | State persistence, manifest section parsing, `allocate()` export support, `fn_free` fallback. Your WASM plugins have long-term memory now. They remember their first day at work. |
+| **CLI PDF + C2 + TUI wiring** | `cli/src/commands_impl.rs`, `tui/runner.rs` | PDF reports, C2 implant deploy, TUI crawler — all actually call real code now. The three crates went to couples therapy. It worked. |
+| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | `WSManReceiveShellOutput` loop collects real output. Schrödinger's remote execution has been resolved. The command ran AND we know what it said. |
+| **Session resume + TOML config** | `cli/src/main.rs`, `pilot/src/runner.rs` | `--resume <file>` picks up mid-chain. `--config <file>` loads DC, domain, auth, stealth, jitter from TOML. No more repeating 14 flags every run. |
+| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final autopwn report. Knows which creds are worth more than others. |
+| **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. The audit trail explains why it chickened out. |
+| **JSON output + shell completions** | `cli/src/commands_impl.rs`, `main.rs` | `--output json` on `dump`/`rid`/`laps`/`gpp`/`scan`. `ovt completions <shell>` for bash, fish, zsh, powershell, elvish. Quality-of-life was underrated. |
+
+### ❌ Still Pending — Honest About It
+
+No sugarcoating. These are genuinely not done.
+
+| What | Why It Matters | Status | Notes |
 |---|---|---|---|
-| **ADCS ESC1** | `core/src/adcs/esc1.rs` | ✅ Implemented | 204 lines. Full `Esc1Exploiter` with SAN UPN abuse, CSR generation, enrollment, and hash extraction. Iron Man has joined the MCU. |
-| **ADCS ESC6** | `core/src/adcs/esc6.rs` | ✅ Implemented | 200 lines. Full `Esc6Exploiter` exploiting `EDITF_ATTRIBUTESUBJECTALTNAME2`. The CA flag we always knew about - now we own it. |
-| **WASM plugin state persistence** | `core/src/plugin/loader.rs` | ✅ Fixed | Store is cached and reused per call. Your WASM plugins have long-term memory now. They remember their first day at work. |
-| **WASM manifest parsing** | `core/src/plugin/loader.rs` | ✅ Implemented | Full custom section parser extracts `plugin_manifest` from WASM modules. The manifest was in there. Now we can read it. |
-| **WASM memory allocation** | `core/src/plugin/loader.rs` | ✅ Improved | Tries plugin's `allocate()` export first, falls back to offset 1024 with a warning. Your command string can be longer than "hello" now. |
-| **Native plugin free()** | `core/src/plugin/loader.rs` | ✅ Improved | Uses `fn_free` when provided by the plugin, falls back to libc with a warning. Rust plugins get a fair shake. |
-| **CLI PDF output wiring** | `cli/src/commands_impl.rs` | ✅ Wired | Scribe's PDF renderer is now called from the CLI. The two crates had couples therapy. It worked. |
-| **C2 implant deploy CLI** | `cli/src/main.rs` | ✅ Wired | Constructs `ImplantRequest` and calls `C2Manager::deploy_implant()`. The TODO ascended to real code. |
-| **TUI crawler integration** | `cli/src/tui/runner.rs` | ✅ Integrated | Builds `CrawlerConfig`, calls `run_crawler()`. The two crates finally had lunch. It went well. |
-| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | ✅ Full | `WSManReceiveShellOutput` loop collects real output. Schrödinger's remote execution has been observed. The command ran AND we know what it said. |
-| **Session Resume** | `cli/src/main.rs`, `pilot/src/runner.rs` | ✅ Implemented | `--resume <file>` deserializes versioned `EngagementState` JSON and restarts the pilot runner from the saved step index. |
-| **TOML Config File** | `core/src/config.rs`, `cli/src/main.rs` | ✅ Implemented | `--config <file>` / `-C` loads `OverthroneConfig` from a TOML file. DC, domain, auth, targets, adaptive mode, stealth, jitter all configurable. Auto-discovery falls back to defaults if field omitted. |
-| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | ✅ Implemented | Thread-safe credential store with privilege ranking (DA > EA > Local Admin > Service > User) and per-source tracking. Surfaced in the final autopwn report credential table. |
-| **OPSEC Noise Gate** | `pilot/src/runner.rs` | ✅ Implemented | `--stealth` enforces `NoiseLevel::Medium` budget ceiling. Steps exceeding the limit are skipped and logged. |
-| **JSON Output** | `cli/src/commands_impl.rs` | ✅ Implemented | `--output json` / `-o json` + `--outfile` on `dump`, `rid`, `laps`, `gpp`, `scan`. Structured JSON with `status`, target, and result arrays. |
-| **Shell Tab Completion** | `cli/src/main.rs` | ✅ Implemented | `ovt completions <shell>` generates completion scripts for bash, fish, zsh, powershell, elvish. Optional `--output <file>` to write directly to disk. |
-| **Integration tests** | Project-wide | ❌ Still missing | 222 unit tests and property-based tests pass. But nobody has tested against a real lab DC yet. "It compiles" is progress. "It passes 222 tests" is more progress. "It works against a real DC" is the goal. |
+| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ❌ Not yet | 292 unit tests pass. Property-based tests pass. Nobody has run this against GOAD or a real lab yet. That's the next milestone. The bravery check is scheduled. |
+| **LDAP signing “Require” mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn’t enough — the server demands signed LDAP messages for every operation. | ⚠️ Partial | The bypass works when policy is "Negotiate" (common in many environments). When it’s "Require", we’d need the session key to sign messages — which we can’t derive in a relay scenario (we don’t know the victim’s NT hash). `ovt doctor` tells you which mode the DC is using. |
+| **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ⚠️ Windows only | Use `--method psexec` or `--method smbexec` on Linux. They work everywhere. WmiExec is a Windows-only creature and it knows it. |
 
 ## Does It Actually Work?
 
@@ -217,14 +231,14 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **SMB2 client** | ✅ | ✅ | ✅ | ✅ | 1669-line pure Rust SMB2 - negotiate, session setup, share enum, file read/write, admin check. No libsmbclient, no Python. |
 | **Remote exec - PsExec** | ✅ | ✅ | ✅ | ✅ | Real `svcctl` named pipe. Creates → starts → reads → deletes the service. 543 lines of legit service control manager abuse. |
 | **Remote exec - SmbExec** | ✅ | ✅ | ✅ | ✅ | Temp service + cmd.exe redirect → output via C$ share. Quieter than PsExec. |
-| **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via service-based exec. WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
+| **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via DCOM over SMB (⚠️ Windows only — use PsExec/SmbExec on Linux). WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
 | **DCSync** | ✅ | ✅ | ⚠️ | ✅ | MS-DRSR `DRSGetNCChanges` over named pipe. Asks the DC to replicate hashes. The DC complies. WS 2025 tightened some defaults - use `--stealth`. |
 | **Golden Ticket** | ✅ | ✅ | ⚠️ | ✅ | Full PAC construction with `KERB_VALIDATION_INFO`, server + KDC checksums. Needs krbtgt hash. WS 2025 may need `FAST` armor depending on config. |
 | **Silver Ticket** | ✅ | ✅ | ✅ | ✅ | Forge a TGS for any service. No DC contact at all. Quieter than Golden, harder to detect. |
 | **Attack graph + path to DA** | ✅ | ✅ | ✅ | ✅ | Reverse Dijkstra from DA back to you. Shows the exact sequence of moves to go from zero to domain admin. Usually 3 hops. Always embarrassing for someone. |
 | **ADCS ESC1-ESC6** | ✅ | ✅ | ⚠️ | ✅ | CSR + SAN UPN abuse via certsrv. WS 2025 ships PKINIT armor and EPA on newer CAs by default - check `ovt adcs enum` output first. |
 | **ADCS ESC7-ESC8** | ✅ | ✅ | ⚠️ | ✅ | ESC8 relays NTLM auth to the AD CS HTTP endpoint. WS 2025 enables Extended Protection for Authentication by default. Annoying. Documented. |
-| **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB). WS 2022+ has SMB signing on by default. WS 2025 enforces it even harder. Run `ovt doctor` first. |
+| **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB). Includes LDAP signing bypass via CVE-2019-1040 "Drop the MIC" technique — strips SIGN/SEAL flags from challenge + zeroes MIC in AUTHENTICATE. Works when DC LDAP signing policy is "Negotiate" (default on many configs). WS 2022+ with signing set to "Require" will still block relay. Run `ovt doctor` first. |
 | **LAPS (v1 + v2)** | ✅ | ✅ | ✅ | ✅ | LAPS v1 reads `ms-Mcs-AdmPwd` in plaintext. LAPS v2 decrypts `msLAPS-EncryptedPassword` via DPAPI/AES-256-GCM. Both work. |
 | **GPP decrypt** | ✅ | ✅ | ✅ | ✅ | Microsoft literally shipped the AES key in their documentation. We use it. `cpassword` → plaintext, every time. Thanks, Microsoft. |
 | **RID cycling** | ✅ | ✅ | ✅ | ✅ | Enumerate users by RID even without valid creds (`--null-session`). Still works on misconfigured/legacy hosts. |
@@ -320,6 +334,7 @@ Born complete. Zero stubs. The prodigy crate that showed up on day one and said 
 | Feature | Details | Status |
 |---|---|---|
 | **NTLM Relay Engine** | Full relay - capture NTLM auth from one protocol, replay to another. SMB → LDAP, HTTP → SMB, mix and match like a deadly cocktail. | ✅ Full |
+| **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" — strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). Works when DC signing policy is "Negotiate." | ✅ Full |
 | **LLMNR/NBT-NS/mDNS Poisoner** | Respond to broadcast name resolution. "Who is FILESERVER?" "Me. I'm FILESERVER now." Identity theft, but for computers. | ✅ Full |
 | **Network Poisoner** | Decides when to poison, what to poison, and how aggressively - while avoiding detection. Subtlety is an art form. | ✅ Full |
 | **ADCS Relay (ESC8)** | Relay NTLM auth to AD Certificate Services web enrollment. Get a certificate as the victim. Certificates: the new hashes. | ✅ Full |
@@ -367,7 +382,7 @@ Six lateral movement methods. All implemented. The `todo!()` trio graduated.
 | **AtExec** | ATSVC over SMB | ✅ Full | Scheduled task creation via named pipe. "Task Scheduler is a feature, not a vulnerability." |
 | **PsExec** | DCE/RPC + SMB | ✅ Full | Real DCE/RPC bind packet building, service creation, payload upload to ADMIN$, execution, cleanup. The sports car now has a steering wheel. |
 | **SmbExec** | SCM over SMB | ✅ Full | Service-based command execution via SMB named pipes. Clean, simple, effective. |
-| **WmiExec** | DCOM/WMI | ✅ Full | WMI-based semi-interactive command execution with output retrieval via SMB. |
+| **WmiExec** | DCOM/WMI | ✅ Full (Windows) | WMI-based semi-interactive command execution with output retrieval via SMB. ⚠️ Windows only — returns a clear error on Linux/macOS. |
 
 ### C2 Framework Integration (overthrone-core)
 

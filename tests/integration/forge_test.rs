@@ -11,6 +11,7 @@ fn test_kerberos_ticket_creation() {
     let ticket = overthrone_core::proto::smb::KerberosTicket::new(
         vec![0x30, 0x82, 0x01, 0x00], // dummy ASN.1
         vec![0u8; 32],                // dummy session key
+        18,                           // AES256
         true,                         // is TGT
         None,                         // no SPN for TGT
     );
@@ -24,6 +25,7 @@ fn test_kerberos_ticket_tgs() {
     let ticket = overthrone_core::proto::smb::KerberosTicket::new(
         vec![0x30, 0x82, 0x02, 0x00],
         vec![0u8; 16],
+        23,
         false,
         Some("cifs/DC01.yourorg.local".to_string()),
     );

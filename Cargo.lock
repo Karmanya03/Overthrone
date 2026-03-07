@@ -3843,6 +3843,7 @@ dependencies = [
  "hex",
  "indicatif",
  "kerberos_asn1",
+ "ldap3",
  "openssl",
  "overthrone-core",
  "overthrone-crawler",

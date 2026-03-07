@@ -182,13 +182,15 @@ pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> 
     use tracing::info;
 
     // Order: WinRM → AtExec → SmbExec → PsExec → WMI (most reliable first)
-    let executors: Vec<Box<dyn RemoteExecutor>> = vec![
+    let mut executors: Vec<Box<dyn RemoteExecutor>> = vec![
         Box::new(winrm::WinRmExecutor::new(creds.clone())),
         Box::new(atexec::AtExecutor::new(creds.clone())),
         Box::new(smbexec::SmbExecutor::new(creds.clone())),
         Box::new(psexec::PsExecutor::new(creds.clone())),
-        Box::new(wmiexec::WmiExecutor::new(creds.clone())),
     ];
+    // WmiExec only works on Windows — skip on other platforms
+    #[cfg(windows)]
+    executors.push(Box::new(wmiexec::WmiExecutor::new(creds.clone())));
 
     for executor in &executors {
         if executor.check_available(target).await {

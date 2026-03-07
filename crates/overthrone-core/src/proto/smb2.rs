@@ -17,6 +17,9 @@ use hmac::{Hmac, Mac};
 use md4::{Digest as Md4Digest, Md4};
 use md5::Md5;
 use rand::Rng;
+use sha2::Sha256;
+
+type HmacSha256 = Hmac<Sha256>;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -53,6 +56,7 @@ const SMB2_DIALECT_302: u16 = 0x0302; // SMB 3.0.2
 // SMB2 Flags
 #[allow(dead_code)] // Protocol reference constants
 const SMB2_FLAGS_SERVER_TO_REDIR: u32 = 0x0000_0001;
+const SMB2_FLAGS_SIGNED: u32 = 0x0000_0008;
 
 // NTLMSSP
 const NTLMSSP_SIGNATURE: &[u8; 8] = b"NTLMSSP\0";
@@ -116,6 +120,10 @@ const SPNEGO_OID: &[u8] = &[0x06, 0x06, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x02];
 const NTLMSSP_OID: &[u8] = &[
     0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0a,
 ];
+// Kerberos OID: 1.2.840.113554.1.2.2
+const KERBEROS_OID: &[u8] = &[
+    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02,
+];
 
 // Status codes
 const STATUS_SUCCESS: u32 = 0x0000_0000;
@@ -134,6 +142,8 @@ pub struct Smb2Connection {
     tree_id: Mutex<u32>,
     /// NTLMSSP session base key (16 bytes) — needed for DCSync and signing
     session_key: Mutex<Option<Vec<u8>>>,
+    /// Whether the server requires packet signing
+    sign_required: std::sync::atomic::AtomicBool,
     /// Negotiated max transaction size
     #[allow(dead_code)] // Populated during SMB2 negotiation
     max_transact_size: u32,
@@ -167,6 +177,7 @@ impl Smb2Connection {
             session_id: Mutex::new(0),
             tree_id: Mutex::new(0),
             session_key: Mutex::new(None),
+            sign_required: std::sync::atomic::AtomicBool::new(false),
             max_transact_size: 65536,
             max_read_size: 65536,
             max_write_size: 65536,
@@ -270,6 +281,42 @@ impl Smb2Connection {
         hdr
     }
 
+    /// Sign an SMB2 packet using HMAC-SHA256 (MS-SMB2 §3.1.4.1).
+    ///
+    /// Sets the SMB2_FLAGS_SIGNED flag, zeroes the signature field,
+    /// computes HMAC-SHA256(session_key, entire_packet), and writes
+    /// the first 16 bytes of the HMAC into bytes 48–64.
+    fn sign_packet(pkt: &mut [u8], session_key: &[u8]) {
+        // Set SMB2_FLAGS_SIGNED (bit 3) in the Flags field (bytes 16..20)
+        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
+        let flags = flags | SMB2_FLAGS_SIGNED;
+        pkt[16..20].copy_from_slice(&flags.to_le_bytes());
+
+        // Zero the signature field before computing
+        pkt[48..64].fill(0);
+
+        // Compute HMAC-SHA256
+        let mut mac =
+            HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
+        mac.update(pkt);
+        let result = mac.finalize().into_bytes();
+
+        // Write first 16 bytes of the HMAC as the signature
+        pkt[48..64].copy_from_slice(&result[..16]);
+    }
+
+    /// Send a packet, signing it first if signing is required and a session key is available.
+    async fn send_signed(&self, pkt: &mut [u8]) -> Result<()> {
+        if self
+            .sign_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && let Some(ref key) = *self.session_key.lock().await
+        {
+            Self::sign_packet(pkt, key);
+        }
+        self.send(pkt).await
+    }
+
     // ───────────────── Negotiate ─────────────────
 
     /// SMB2 Negotiate — establishes dialect (2.1 / 3.0.2).
@@ -327,6 +374,14 @@ impl Smb2Connection {
         let body = &resp[SMB2_HEADER_SIZE..];
         let dialect = u16::from_le_bytes([body[4], body[5]]);
         debug!("SMB2: Negotiated dialect 0x{:04X}", dialect);
+
+        // SecurityMode (offset 2): bit 0 = signing enabled, bit 1 = signing required
+        let server_security_mode = u16::from_le_bytes([body[2], body[3]]);
+        if server_security_mode & 0x02 != 0 {
+            debug!("SMB2: Server REQUIRES signing");
+            self.sign_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
 
         // MaxTransactSize (offset 28)
         let max_transact = u32::from_le_bytes([body[28], body[29], body[30], body[31]]);
@@ -568,6 +623,66 @@ impl Smb2Connection {
         Ok(session_key)
     }
 
+    /// Authenticate using a Kerberos AP-REQ (SPNEGO wrapped).
+    /// `ap_req_bytes` is the DER-encoded AP-REQ from kerberos::build_ap_req_bytes.
+    /// `session_key` is the Kerberos session key from the service ticket.
+    pub async fn session_setup_kerberos(
+        &self,
+        ap_req_bytes: &[u8],
+        session_key: &[u8],
+    ) -> Result<Vec<u8>> {
+        debug!("SMB2: Kerberos session setup");
+
+        let spnego_init = wrap_spnego_kerberos(ap_req_bytes);
+
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 0).await;
+        let mut body = Vec::new();
+        body.extend_from_slice(&25u16.to_le_bytes()); // StructureSize
+        body.push(0); // Flags
+        body.push(0x01); // SecurityMode = Signing Enabled
+        body.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
+        body.extend_from_slice(&0u32.to_le_bytes()); // Channel
+        let sec_offset = (SMB2_HEADER_SIZE + 24) as u16;
+        body.extend_from_slice(&sec_offset.to_le_bytes());
+        body.extend_from_slice(&(spnego_init.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u64.to_le_bytes()); // PreviousSessionId
+        while body.len() < 24 {
+            body.push(0);
+        }
+        body.extend_from_slice(&spnego_init);
+
+        let mut pkt = hdr;
+        pkt.extend_from_slice(&body);
+        self.send(&pkt).await?;
+        let resp = self.recv().await?;
+
+        if resp.len() < SMB2_HEADER_SIZE {
+            return Err(OverthroneError::Smb(
+                "SMB2 Kerberos Session Setup response too short".to_string(),
+            ));
+        }
+
+        let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
+        if status != STATUS_SUCCESS && status != STATUS_MORE_PROCESSING_REQUIRED {
+            return Err(OverthroneError::Auth(format!(
+                "SMB2 Kerberos auth failed: 0x{status:08X}"
+            )));
+        }
+
+        // Store session ID
+        let session_id = u64::from_le_bytes([
+            resp[40], resp[41], resp[42], resp[43], resp[44], resp[45], resp[46], resp[47],
+        ]);
+        *self.session_id.lock().await = session_id;
+        debug!("SMB2: Kerberos session ID 0x{session_id:016X}");
+
+        // Use the Kerberos session key as the SMB session key
+        let key = session_key.to_vec();
+        *self.session_key.lock().await = Some(key.clone());
+
+        Ok(key)
+    }
+
     // ───────────────── Tree Connect ─────────────────
 
     /// Connect to a share (e.g. `\\target\IPC$`).
@@ -595,7 +710,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let resp = self.recv().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -619,7 +734,7 @@ impl Smb2Connection {
         body.extend_from_slice(&0u16.to_le_bytes()); // Reserved
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let _resp = self.recv().await?;
         *self.tree_id.lock().await = 0;
         Ok(())
@@ -683,7 +798,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let resp = self.recv().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -786,7 +901,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let _resp = self.recv().await?;
         Ok(())
     }
@@ -824,7 +939,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let resp = self.recv().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -914,7 +1029,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let resp = self.recv().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -986,7 +1101,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let resp = self.recv().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -1051,7 +1166,7 @@ impl Smb2Connection {
 
             let mut pkt = hdr;
             pkt.extend_from_slice(&body);
-            self.send(&pkt).await?;
+            self.send_signed(&mut pkt).await?;
             let resp = self.recv().await?;
 
             let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -1130,7 +1245,7 @@ impl Smb2Connection {
         body.extend_from_slice(&0u16.to_le_bytes()); // Reserved
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send(&pkt).await?;
+        self.send_signed(&mut pkt).await?;
         let _resp = self.recv().await?;
         *self.session_id.lock().await = 0;
         Ok(())
@@ -1434,6 +1549,17 @@ fn wrap_spnego_response(ntlmssp: &[u8]) -> Vec<u8> {
     let resp_token = asn1_context_tag(2, &asn1_octet_string(ntlmssp));
     let neg_token_resp = asn1_sequence(&resp_token);
     asn1_context_tag(1, &neg_token_resp)
+}
+
+/// Wrap a Kerberos AP-REQ token in a SPNEGO NegTokenInit.
+fn wrap_spnego_kerberos(ap_req: &[u8]) -> Vec<u8> {
+    let mech_types = asn1_sequence(KERBEROS_OID);
+    let mech_token = asn1_context_tag(2, &asn1_octet_string(ap_req));
+    let neg_token_init_inner =
+        asn1_sequence(&[asn1_context_tag(0, &mech_types), mech_token].concat());
+    let neg_token_init = asn1_context_tag(0, &neg_token_init_inner);
+    let spnego = [SPNEGO_OID, &neg_token_init].concat();
+    asn1_application_tag(0, &spnego)
 }
 
 /// Extract the NTLMSSP token from a SPNEGO response.

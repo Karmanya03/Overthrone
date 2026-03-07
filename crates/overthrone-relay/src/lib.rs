@@ -179,6 +179,7 @@ impl RelayController {
                 round_robin: true,
                 remove_on_success: true,
                 timeout_secs: 30,
+                ldap_signing_bypass: true,
             };
             self.relay = Some(relay::NtlmRelay::new(relay_config));
             info!(
