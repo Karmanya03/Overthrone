@@ -158,7 +158,10 @@ pub fn build_key_credential(public_key_der: &[u8], device_id_bytes: &[u8; 16]) -
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let filetime: u64 = (unix_secs + 11_644_473_600) * 10_000_000;
+    // Use saturating arithmetic to avoid any hypothetical overflow.
+    let filetime: u64 = unix_secs
+        .saturating_add(11_644_473_600)
+        .saturating_mul(10_000_000);
     let creation_time = filetime.to_le_bytes();
 
     // Build blob without KeyHash (tag 0x02) first — hash is computed over this
