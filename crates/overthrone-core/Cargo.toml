@@ -37,6 +37,7 @@ petgraph = { version = "0.8.3", features = ["serde-1"] }
 # Crypto (use workspace versions)
 aes.workspace = true
 aes-gcm = "0.10"        # AES-256-GCM for LAPS v2 decryption
+cmac.workspace = true
 cbc.workspace = true
 hmac = "0.12"
 md-5 = "0.10"

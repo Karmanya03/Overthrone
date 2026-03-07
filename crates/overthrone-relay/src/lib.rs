@@ -104,6 +104,9 @@ pub struct RelayControllerConfig {
     pub wpad_script: Option<String>,
     /// Force authentication downgrade
     pub downgrade_auth: bool,
+    /// If `true`, skip all poisoning/responder components.
+    /// Useful when pre-captured hashes are fed externally — relay only mode.
+    pub no_poison: bool,
 }
 
 impl Default for RelayControllerConfig {
@@ -118,6 +121,7 @@ impl Default for RelayControllerConfig {
             challenge: None,
             wpad_script: None,
             downgrade_auth: false,
+            no_poison: false,
         }
     }
 }
@@ -140,8 +144,8 @@ impl RelayController {
             self.config.interface
         );
 
-        // Initialize poisoner if enabled
-        if self.config.llmnr || self.config.nbtns || self.config.mdns {
+        // Initialize poisoner if enabled (skipped in no-poison / relay-only mode)
+        if !self.config.no_poison && (self.config.llmnr || self.config.nbtns || self.config.mdns) {
             let poisoner_config = poisoner::PoisonerConfig {
                 listen_ip: self.config.interface.clone(),
                 poison_ip: self.config.interface.clone(),
@@ -157,8 +161,8 @@ impl RelayController {
             info!("Poisoner initialized");
         }
 
-        // Initialize responder if enabled
-        if self.config.responder {
+        // Initialize responder if enabled (skipped in no-poison / relay-only mode)
+        if !self.config.no_poison && self.config.responder {
             let responder_config = responder::ResponderConfig {
                 listen_ip: self.config.interface.clone(),
                 challenge: self.config.challenge.clone(),
@@ -265,6 +269,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         challenge: challenge.map(|s| s.to_string()),
         wpad_script: None,
         downgrade_auth: false,
+        no_poison: false,
     };
 
     let mut controller = RelayController::new(config);
@@ -290,6 +295,7 @@ pub async fn run_relay_attack(
         challenge: challenge.map(|s| s.to_string()),
         wpad_script: None,
         downgrade_auth: false,
+        no_poison: false,
     };
 
     let mut controller = RelayController::new(config);

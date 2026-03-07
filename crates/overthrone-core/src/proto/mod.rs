@@ -2,6 +2,7 @@
 
 pub mod dns;
 pub mod drsr;
+pub mod gpo_write;
 pub mod kerberos;
 pub mod ldap;
 pub mod ntlm;

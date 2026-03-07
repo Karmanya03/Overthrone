@@ -931,12 +931,23 @@ dependencies = [
 
 [[package]]
 name = "cmac"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8543454e3c3f5126effff9cd44d562af4e31fb8ce1cc0d3dcd8f084515dbc1aa"
+dependencies = [
+ "cipher 0.4.4",
+ "dbl 0.3.2",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "cmac"
 version = "0.8.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2fa99ca412f76b4656efeab943ef06f1ddd8036c31ca38f35188f173d0dc85e"
 dependencies = [
  "cipher 0.5.0-rc.1",
- "dbl",
+ "dbl 0.5.0",
  "digest 0.11.0-rc.3",
 ]
 
@@ -1476,6 +1487,15 @@ name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
+
+[[package]]
+name = "dbl"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd2735a791158376708f9347fe8faba9667589d82427ef3aed6794a8981de3d9"
+dependencies = [
+ "generic-array",
+]
 
 [[package]]
 name = "dbl"
@@ -3882,6 +3902,7 @@ dependencies = [
  "bytes",
  "cbc 0.1.2",
  "chrono",
+ "cmac 0.7.2",
  "colored",
  "des 0.8.1",
  "digest 0.10.7",
@@ -6210,7 +6231,7 @@ dependencies = [
  "aes-gcm 0.11.0-rc.1",
  "binrw",
  "ccm",
- "cmac",
+ "cmac 0.8.0-rc.1",
  "crypto-common 0.2.0-rc.4",
  "futures",
  "futures-core",

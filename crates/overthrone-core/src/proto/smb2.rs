@@ -13,6 +13,8 @@
 //!   MS-NLMP: <https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/>
 
 use crate::error::{OverthroneError, Result};
+use aes::Aes128;
+use cmac::Cmac;
 use hmac::{Hmac, Mac};
 use md4::{Digest as Md4Digest, Md4};
 use md5::Md5;
@@ -20,7 +22,7 @@ use rand::Rng;
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -144,6 +146,8 @@ pub struct Smb2Connection {
     session_key: Mutex<Option<Vec<u8>>>,
     /// Whether the server requires packet signing
     sign_required: std::sync::atomic::AtomicBool,
+    /// Negotiated SMB dialect (e.g. 0x0210 = SMB 2.1, 0x0300 = SMB 3.0, 0x0302 = SMB 3.0.2)
+    dialect: AtomicU16,
     /// Negotiated max transaction size
     #[allow(dead_code)] // Populated during SMB2 negotiation
     max_transact_size: u32,
@@ -178,6 +182,7 @@ impl Smb2Connection {
             tree_id: Mutex::new(0),
             session_key: Mutex::new(None),
             sign_required: std::sync::atomic::AtomicBool::new(false),
+            dialect: AtomicU16::new(0),
             max_transact_size: 65536,
             max_read_size: 65536,
             max_write_size: 65536,
@@ -281,12 +286,11 @@ impl Smb2Connection {
         hdr
     }
 
-    /// Sign an SMB2 packet using HMAC-SHA256 (MS-SMB2 §3.1.4.1).
+    /// Sign an SMB2/3 packet (MS-SMB2 §3.1.4.1).
     ///
-    /// Sets the SMB2_FLAGS_SIGNED flag, zeroes the signature field,
-    /// computes HMAC-SHA256(session_key, entire_packet), and writes
-    /// the first 16 bytes of the HMAC into bytes 48–64.
-    fn sign_packet(pkt: &mut [u8], session_key: &[u8]) {
+    /// SMB 2.x uses HMAC-SHA256(session_key, packet)[0:16].
+    /// SMB 3.x+ derives a signing key via SP800-108 KDF and uses AES-128-CMAC.
+    fn sign_packet(pkt: &mut [u8], session_key: &[u8], dialect: u16) {
         // Set SMB2_FLAGS_SIGNED (bit 3) in the Flags field (bytes 16..20)
         let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
         let flags = flags | SMB2_FLAGS_SIGNED;
@@ -295,14 +299,23 @@ impl Smb2Connection {
         // Zero the signature field before computing
         pkt[48..64].fill(0);
 
-        // Compute HMAC-SHA256
-        let mut mac =
-            HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
-        mac.update(pkt);
-        let result = mac.finalize().into_bytes();
-
-        // Write first 16 bytes of the HMAC as the signature
-        pkt[48..64].copy_from_slice(&result[..16]);
+        if dialect >= SMB2_DIALECT_300 {
+            // SMB 3.x: derive SigningKey = SP800-108(session_key, "SMBSigningKey\0", "SmbSign\0")
+            let signing_key = sp800_108_counter_kdf(
+                session_key,
+                b"SMBSigningKey\x00",
+                b"SmbSign\x00",
+            );
+            let sig = aes_cmac_16(&signing_key, pkt);
+            pkt[48..64].copy_from_slice(&sig);
+        } else {
+            // SMB 2.x: HMAC-SHA256(session_key, packet)[0:16]
+            let mut mac = HmacSha256::new_from_slice(session_key)
+                .expect("HMAC-SHA256 accepts any key size");
+            mac.update(pkt);
+            let result = mac.finalize().into_bytes();
+            pkt[48..64].copy_from_slice(&result[..16]);
+        }
     }
 
     /// Send a packet, signing it first if signing is required and a session key is available.
@@ -312,7 +325,8 @@ impl Smb2Connection {
             .load(std::sync::atomic::Ordering::Relaxed)
             && let Some(ref key) = *self.session_key.lock().await
         {
-            Self::sign_packet(pkt, key);
+            let dialect = self.dialect.load(Ordering::Relaxed);
+            Self::sign_packet(pkt, key, dialect);
         }
         self.send(pkt).await
     }
@@ -374,6 +388,8 @@ impl Smb2Connection {
         let body = &resp[SMB2_HEADER_SIZE..];
         let dialect = u16::from_le_bytes([body[4], body[5]]);
         debug!("SMB2: Negotiated dialect 0x{:04X}", dialect);
+        // Store dialect for use in signing key derivation
+        self.dialect.store(dialect, Ordering::Relaxed);
 
         // SecurityMode (offset 2): bit 0 = signing enabled, bit 1 = signing required
         let server_security_mode = u16::from_le_bytes([body[2], body[3]]);
@@ -1616,6 +1632,52 @@ fn asn1_application_tag(tag: u8, data: &[u8]) -> Vec<u8> {
     r.extend_from_slice(&asn1_length(data.len()));
     r.extend_from_slice(data);
     r
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Crypto Helpers — KDF + AES-CMAC
+// ═══════════════════════════════════════════════════════════
+
+/// NIST SP800-108 Counter Mode KDF using HMAC-SHA256.
+///
+/// Derives a 16-byte key from `key_in`, `label` (null-terminated), and
+/// `context` (null-terminated).  Used to produce SMB 3.x signing and
+/// encryption keys from the exported session key.
+///
+/// Input to one HMAC iteration:
+///   `\x00\x00\x00\x01` || label || `\x00` || context || `\x00\x00\x00\x80`
+fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
+    // counter = 1 (single 128-bit block is enough)
+    let mut input = Vec::with_capacity(4 + label.len() + 1 + context.len() + 4);
+    input.extend_from_slice(&1u32.to_be_bytes()); // i = 1
+    input.extend_from_slice(label); // already null-terminated by caller
+    input.push(0x00); // separator
+    input.extend_from_slice(context); // already null-terminated by caller
+    input.extend_from_slice(&128u32.to_be_bytes()); // L = 128 bits
+
+    let mut mac =
+        HmacSha256::new_from_slice(key_in).expect("HMAC-SHA256 accepts any key size");
+    mac.update(&input);
+    mac.finalize().into_bytes()[..16].to_vec()
+}
+
+/// AES-128-CMAC over `data` using `key` (should be 16 bytes).  Returns 16-byte tag.
+fn aes_cmac_16(key: &[u8], data: &[u8]) -> [u8; 16] {
+    // Ensure exactly 16 bytes — zero-pad or truncate if necessary.
+    // In practice the session-derived key is always 16 bytes; the fallback
+    // path is a safety net only.
+    let mut key16 = [0u8; 16];
+    let n = key.len().min(16);
+    key16[..n].copy_from_slice(&key[..n]);
+
+    type AesCmac = Cmac<Aes128>;
+    let mut mac =
+        AesCmac::new_from_slice(&key16).expect("CMAC accepts 16-byte key");
+    mac.update(data);
+    let result = mac.finalize().into_bytes();
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&result[..16]);
+    out
 }
 
 // ═══════════════════════════════════════════════════════════

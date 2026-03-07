@@ -7,7 +7,6 @@
 
 use colored::Colorize;
 use hmac::Hmac;
-use md4::{Digest as Md4Digest, Md4};
 use md5::Md5;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::drsr;
@@ -551,14 +550,10 @@ fn build_rpc_request_pdu(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 
 /// Compute the DRS session key used for decrypting replicated secrets.
 ///
-/// The DRS protocol uses the NTLMSSP session base key from the SMB
-/// authentication. If SMB didn't provide one (e.g. PtH scenario where
-/// pavao doesn't expose it), fall back to deriving from the NT hash.
-/// Compute the DRS session key used for decrypting replicated secrets.
-///
-/// The DRS protocol uses the NTLMSSP session base key from the SMB
-/// authentication. If SMB didn't provide one (e.g. PtH scenario where
-/// pavao doesn't expose it), fall back to deriving from the NT hash.
+/// The DRS protocol uses the NTLMSSP exported session key from the SMB
+/// authentication.  The fallback path (deriving from NT hash via MD4)
+/// was incorrect and has been removed — NT-hash alone cannot reproduce
+/// the session base key without the NTLM challenge/response exchange.
 fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) -> Result<Vec<u8>> {
     // Primary path: use the SMB session key directly
     if smb_session_key.len() >= 16 {
@@ -571,21 +566,15 @@ fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) ->
         return Ok(key);
     }
 
-    // Fallback: derive from NT hash when SMB session key is unavailable
-    // (Pass-the-Hash scenario)
-    // SessionBaseKey = MD4(NT_Hash) per MS-NLMP simplified
-    if let Some(hash) = nt_hash
-        && hash.len() >= 16
-    {
-        info!("[dcsync] Deriving session key from NT hash (PtH fallback)");
-        let mut md4 = Md4::new();
-        md4.update(hash);
-        let derived = md4.finalize().to_vec();
-        return Ok(derived);
-    }
-
+    // No valid session key available.  MD4(NT_Hash) is NOT the session base key —
+    // the real session_base_key = HMAC-MD5(HMAC-MD5(NTHash, UPPERuser+domain), NTProofStr)
+    // and requires the NTLM challenge/response from the wire.  We cannot derive it
+    // from the NT hash alone, so we fail loudly here.
+    let _ = nt_hash; // acknowledged but not usable
     Err(OverthroneError::custom(
-        "No session key available — provide password or NT hash for DCSync",
+        "No SMB session key available for DCSync — provide a plaintext password or ensure \
+         the SMB session exported its session key (pass-the-hash requires the NT hash to \
+         be fed through a full NTLMv2 challenge/response authenticated SMB connection)",
     ))
 }
 

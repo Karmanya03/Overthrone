@@ -1481,6 +1481,49 @@ impl SmbSession {
         Ok(response)
     }
 
+    /// Open a named pipe on `\\target\IPC$` and return the file ID for persistent use.
+    ///
+    /// Unlike `pipe_transact`, which opens and closes on every call, this keeps
+    /// the pipe open so callers (e.g. psexec) can issue multiple DCE/RPC rounds
+    /// without re-authenticating the pipe session.  Call `close_pipe` when done.
+    pub async fn open_pipe_persistent(&self, pipe_name: &str) -> Result<[u8; 32]> {
+        let ipc_path = format!(r"\\{}\IPC$", self.target);
+        let conn = self.inner.lock().await;
+        let _tree_id = conn.tree_connect(&ipc_path).await?;
+        let name = pipe_name.trim_start_matches('/').trim_start_matches('\\');
+        let fid = conn.open_pipe(name).await?;
+        debug!("SMB: Opened persistent pipe '{}' fid={:?}", name, &fid[..4]);
+        Ok(fid)
+    }
+
+    /// Send `request` through an already-open pipe FID and receive the response.
+    ///
+    /// Uses `FSCTL_PIPE_TRANSCEIVE` (one round-trip).  For multi-fragment
+    /// responses prefer `ioctl_multifrag_persistent`.
+    pub async fn ioctl_pipe_persistent(
+        &self,
+        fid: &[u8; 32],
+        request: &[u8],
+    ) -> Result<Vec<u8>> {
+        let conn = self.inner.lock().await;
+        conn.ioctl_pipe_transceive(fid, request).await
+    }
+
+    /// Read the next data chunk from an open pipe FID (SMB2 READ, not IOCTL).
+    ///
+    /// Used to drain additional fragments when a DCE/RPC response spans
+    /// multiple PDUs.
+    pub async fn read_pipe_persistent(&self, fid: &[u8; 32], max_len: u32) -> Result<Vec<u8>> {
+        let conn = self.inner.lock().await;
+        conn.read(fid, 0, max_len).await
+    }
+
+    /// Close a previously-opened persistent pipe FID.
+    pub async fn close_pipe_persistent(&self, fid: &[u8; 32]) -> Result<()> {
+        let conn = self.inner.lock().await;
+        conn.close(fid).await
+    }
+
     /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
     ///
     /// Issues `FSCTL_PIPE_TRANSCEIVE` for the first fragment, then loops

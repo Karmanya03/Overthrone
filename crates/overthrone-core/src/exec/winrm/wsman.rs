@@ -25,6 +25,9 @@ pub struct WinRmExecutor {
     pub(super) creds: ExecCredentials,
     pub(super) use_ssl: bool,
     pub(super) port: u16,
+    /// Accept self-signed / untrusted certificates.  Only set by callers that
+    /// explicitly pass `--insecure` — never enabled by default.
+    pub(super) insecure_ssl: bool,
 }
 
 impl WinRmExecutor {
@@ -33,6 +36,7 @@ impl WinRmExecutor {
             creds,
             use_ssl: true,
             port: 5986,
+            insecure_ssl: false,
         }
     }
 
@@ -47,6 +51,13 @@ impl WinRmExecutor {
         self
     }
 
+    /// Enable accepting untrusted/self-signed TLS certificates.
+    /// Should only be called when the user explicitly opts in (e.g. `--insecure`).
+    pub fn with_insecure_ssl(mut self) -> Self {
+        self.insecure_ssl = true;
+        self
+    }
+
     fn build_url(&self, target: &str) -> String {
         let scheme = if self.use_ssl { "https" } else { "http" };
         format!("{scheme}://{target}:{}/wsman", self.port)
@@ -54,7 +65,7 @@ impl WinRmExecutor {
 
     fn build_client(&self) -> Result<Client> {
         let mut builder = Client::builder().cookie_store(true);
-        if self.use_ssl {
+        if self.use_ssl && self.insecure_ssl {
             builder = builder.danger_accept_invalid_certs(true);
         }
         builder
