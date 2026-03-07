@@ -567,6 +567,18 @@ enum KerberosAction {
         #[arg(short = 'U', long)]
         userlist: Option<String>,
     },
+    /// Zero-knowledge username enumeration via Kerberos AS-REQ probes (no creds needed)
+    UserEnum {
+        /// Path to username wordlist (one per line)
+        #[arg(short = 'U', long)]
+        userlist: String,
+        /// Output file for discovered valid usernames
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Delay between probes in milliseconds (evasion)
+        #[arg(long, default_value = "0")]
+        delay: u64,
+    },
     GetTgt,
     GetTgs {
         #[arg(long)]
@@ -1679,6 +1691,55 @@ async fn cmd_enum(
 // cmd_kerberos
 async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     banner::print_module_banner("KERBEROS");
+
+    // UserEnum is a zero-knowledge operation — no credentials needed
+    if let KerberosAction::UserEnum {
+        ref userlist,
+        ref output,
+        delay,
+    } = action
+    {
+        let dc = match require_dc(cli) {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
+        let domain = match cli.domain.as_deref() {
+            Some(d) => d,
+            None => {
+                banner::print_fail("--domain is required");
+                return 1;
+            }
+        };
+
+        let uc = overthrone_hunter::UserEnumConfig {
+            userlist: std::path::PathBuf::from(userlist),
+            output_file: output.as_ref().map(std::path::PathBuf::from),
+            save_asrep_hashes: true,
+            concurrency: 10,
+        };
+
+        return match overthrone_hunter::userenum::run(&dc, domain, &uc, delay).await {
+            Ok(result) => {
+                let total = result.valid_users.len() + result.no_preauth_users.len();
+                if total > 0 {
+                    banner::print_success(&format!(
+                        "{} valid user(s) discovered ({} with AS-REP hash)",
+                        total,
+                        result.no_preauth_users.len()
+                    ));
+                    0
+                } else {
+                    banner::print_fail("No valid users found");
+                    1
+                }
+            }
+            Err(e) => {
+                banner::print_fail(&format!("User enumeration failed: {}", e));
+                1
+            }
+        };
+    }
+
     let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
@@ -1911,6 +1972,10 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     return 1;
                 }
             }
+        }
+        KerberosAction::UserEnum { .. } => {
+            // Handled above before credential check (zero-knowledge, no creds needed)
+            unreachable!()
         }
     }
     0

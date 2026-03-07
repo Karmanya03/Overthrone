@@ -21,6 +21,7 @@ pub mod runner;
 pub mod spray;
 pub mod tickets;
 pub mod unconstrained;
+pub mod userenum;
 
 // Re-exports for ergonomic use
 pub use crack::{
@@ -30,3 +31,4 @@ pub use crack::{
 pub use runner::{HuntAction, HuntConfig, HuntReport, run_hunt};
 pub use spray::{SprayConfig, SprayResult, run_spray};
 pub use tickets::{TicketFormat, TicketOps};
+pub use userenum::{UserEnumConfig, UserEnumResult};

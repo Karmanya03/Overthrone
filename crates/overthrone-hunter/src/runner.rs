@@ -8,6 +8,7 @@ use crate::kerberoast::{KerberoastConfig, KerberoastResult};
 use crate::rbcd::{RbcdConfig, RbcdResult};
 use crate::tickets::TicketRequest;
 use crate::unconstrained::{UnconstrainedConfig, UnconstrainedResult};
+use crate::userenum::{UserEnumConfig, UserEnumResult};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
@@ -88,6 +89,8 @@ pub enum HuntAction {
     Coerce(CoerceConfig),
     /// Ticket operations (request, convert, import/export)
     Ticket(TicketRequest),
+    /// Kerberos username enumeration (zero-knowledge, no creds needed)
+    UserEnum(UserEnumConfig),
     /// Run all enumeration scans
     FullScan,
 }
@@ -109,6 +112,7 @@ pub struct HuntReport {
     pub unconstrained: Option<UnconstrainedResult>,
     pub rbcd: Option<RbcdResult>,
     pub coerce: Option<CoerceResult>,
+    pub user_enum: Option<UserEnumResult>,
     pub errors: Vec<String>,
 }
 
@@ -125,6 +129,7 @@ impl HuntReport {
             unconstrained: None,
             rbcd: None,
             coerce: None,
+            user_enum: None,
             errors: Vec::new(),
         }
     }
@@ -151,6 +156,9 @@ impl HuntReport {
         }
         if let Some(ref r) = self.coerce {
             count += r.successful_coercions.len();
+        }
+        if let Some(ref r) = self.user_enum {
+            count += r.valid_users.len() + r.no_preauth_users.len();
         }
         count
     }
@@ -337,6 +345,17 @@ pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<Hun
                     report.errors.push(format!("ticket: {e}"));
                 }
             },
+            HuntAction::UserEnum(uc) => {
+                match crate::userenum::run(&config.dc_ip, &config.domain, uc, config.jitter_ms)
+                    .await
+                {
+                    Ok(result) => report.user_enum = Some(result),
+                    Err(e) => {
+                        error!("User enumeration failed: {e}");
+                        report.errors.push(format!("userenum: {e}"));
+                    }
+                }
+            }
             HuntAction::FullScan => {
                 info!("Running full enumeration scan...");
                 // AS-REP Roast — auto-enumerate

