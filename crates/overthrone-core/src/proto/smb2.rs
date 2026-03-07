@@ -301,17 +301,14 @@ impl Smb2Connection {
 
         if dialect >= SMB2_DIALECT_300 {
             // SMB 3.x: derive SigningKey = SP800-108(session_key, "SMBSigningKey\0", "SmbSign\0")
-            let signing_key = sp800_108_counter_kdf(
-                session_key,
-                b"SMBSigningKey\x00",
-                b"SmbSign\x00",
-            );
+            let signing_key =
+                sp800_108_counter_kdf(session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
             let sig = aes_cmac_16(&signing_key, pkt);
             pkt[48..64].copy_from_slice(&sig);
         } else {
             // SMB 2.x: HMAC-SHA256(session_key, packet)[0:16]
-            let mut mac = HmacSha256::new_from_slice(session_key)
-                .expect("HMAC-SHA256 accepts any key size");
+            let mut mac =
+                HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
             mac.update(pkt);
             let result = mac.finalize().into_bytes();
             pkt[48..64].copy_from_slice(&result[..16]);
@@ -1655,8 +1652,7 @@ fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8>
     input.extend_from_slice(context); // already null-terminated by caller
     input.extend_from_slice(&128u32.to_be_bytes()); // L = 128 bits
 
-    let mut mac =
-        HmacSha256::new_from_slice(key_in).expect("HMAC-SHA256 accepts any key size");
+    let mut mac = HmacSha256::new_from_slice(key_in).expect("HMAC-SHA256 accepts any key size");
     mac.update(&input);
     mac.finalize().into_bytes()[..16].to_vec()
 }
@@ -1671,8 +1667,7 @@ fn aes_cmac_16(key: &[u8], data: &[u8]) -> [u8; 16] {
     key16[..n].copy_from_slice(&key[..n]);
 
     type AesCmac = Cmac<Aes128>;
-    let mut mac =
-        AesCmac::new_from_slice(&key16).expect("CMAC accepts 16-byte key");
+    let mut mac = AesCmac::new_from_slice(&key16).expect("CMAC accepts 16-byte key");
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut out = [0u8; 16];

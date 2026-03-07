@@ -1079,18 +1079,14 @@ pub async fn dump_lsa_secrets(
             data: Vec::new(),
         });
 
-        let old = read_remote_registry_value(
-            smb_session,
-            PredefinedHive::PerformanceData,
-            &old_path,
-            "",
-        )
-        .await
-        .unwrap_or_else(|_| RemoteRegValue {
-            name: String::new(),
-            data_type: 0,
-            data: Vec::new(),
-        });
+        let old =
+            read_remote_registry_value(smb_session, PredefinedHive::PerformanceData, &old_path, "")
+                .await
+                .unwrap_or_else(|_| RemoteRegValue {
+                    name: String::new(),
+                    data_type: 0,
+                    data: Vec::new(),
+                });
 
         if !curr.data.is_empty() || !old.data.is_empty() {
             info!("RemoteRegistry: Found LSA secret '{}'", name);
@@ -1141,8 +1137,7 @@ pub async fn dump_cached_creds(
                 // Attempt to extract username from the 72-byte header
                 // Offset 0x48 (72): username length (u16), offset 0x4A: username offset
                 let username = if val.data.len() >= 74 {
-                    let uname_len =
-                        u16::from_le_bytes([val.data[72], val.data[73]]) as usize;
+                    let uname_len = u16::from_le_bytes([val.data[72], val.data[73]]) as usize;
                     let uname_off = 76usize;
                     if uname_off + uname_len * 2 <= val.data.len() {
                         let raw = &val.data[uname_off..uname_off + uname_len * 2];

@@ -182,6 +182,7 @@ pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> 
     use tracing::info;
 
     // Order: WinRM → AtExec → SmbExec → PsExec → WMI (most reliable first)
+    #[allow(unused_mut)]
     let mut executors: Vec<Box<dyn RemoteExecutor>> = vec![
         Box::new(winrm::WinRmExecutor::new(creds.clone())),
         Box::new(atexec::AtExecutor::new(creds.clone())),

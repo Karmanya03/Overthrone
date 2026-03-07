@@ -2244,7 +2244,8 @@ impl LdapSession {
             .flat_map(|c| c.to_le_bytes())
             .collect();
 
-        self.modify_replace(user_dn, "unicodePwd", &pwd_utf16).await?;
+        self.modify_replace(user_dn, "unicodePwd", &pwd_utf16)
+            .await?;
         info!("ACL: Password changed for '{}'", user_dn);
         Ok(())
     }
@@ -2253,10 +2254,7 @@ impl LdapSession {
     ///
     /// Requires `WriteProperty(member)` or `GenericAll` on the group object.
     pub async fn add_member_to_group(&mut self, group_dn: &str, member_dn: &str) -> Result<()> {
-        info!(
-            "ACL: Adding '{}' to group '{}'",
-            member_dn, group_dn
-        );
+        info!("ACL: Adding '{}' to group '{}'", member_dn, group_dn);
         self.modify_add(group_dn, "member", &[member_dn.to_string()])
             .await?;
         info!("ACL: Group membership write succeeded");
@@ -2271,10 +2269,7 @@ impl LdapSession {
         group_dn: &str,
         member_dn: &str,
     ) -> Result<()> {
-        info!(
-            "ACL: Removing '{}' from group '{}'",
-            member_dn, group_dn
-        );
+        info!("ACL: Removing '{}' from group '{}'", member_dn, group_dn);
         self.modify_delete_values(group_dn, "member", &[member_dn.to_string()])
             .await?;
         info!("ACL: Group membership removal succeeded");
@@ -2294,10 +2289,7 @@ impl LdapSession {
         target_dn: &str,
         trustee_sid_bytes: &[u8],
     ) -> Result<()> {
-        info!(
-            "ACL: Writing GenericAll ACE for trustee on '{}'",
-            target_dn
-        );
+        info!("ACL: Writing GenericAll ACE for trustee on '{}'", target_dn);
 
         let mut ntsd = self.read_ntsd(target_dn).await?;
 
@@ -2333,8 +2325,7 @@ impl LdapSession {
         // Update AclSize and AceCount
         let old_acl_size =
             u16::from_le_bytes([ntsd[dacl_offset + 2], ntsd[dacl_offset + 3]]) as usize;
-        let ace_count =
-            u16::from_le_bytes([ntsd[dacl_offset + 4], ntsd[dacl_offset + 5]]) as u16;
+        let ace_count = u16::from_le_bytes([ntsd[dacl_offset + 4], ntsd[dacl_offset + 5]]) as u16;
 
         let new_acl_size = (old_acl_size + new_ace.len()) as u16;
         let new_ace_count = ace_count + 1;
@@ -2344,10 +2335,8 @@ impl LdapSession {
         ntsd.splice(insert_pos..insert_pos, new_ace.iter().cloned());
 
         // Update AclSize and AceCount in the DACL header
-        ntsd[dacl_offset + 2..dacl_offset + 4]
-            .copy_from_slice(&new_acl_size.to_le_bytes());
-        ntsd[dacl_offset + 4..dacl_offset + 6]
-            .copy_from_slice(&new_ace_count.to_le_bytes());
+        ntsd[dacl_offset + 2..dacl_offset + 4].copy_from_slice(&new_acl_size.to_le_bytes());
+        ntsd[dacl_offset + 4..dacl_offset + 6].copy_from_slice(&new_ace_count.to_le_bytes());
 
         // Write the modified security descriptor back
         self.modify_replace(target_dn, "nTSecurityDescriptor", &ntsd)

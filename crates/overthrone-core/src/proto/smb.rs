@@ -1500,11 +1500,7 @@ impl SmbSession {
     ///
     /// Uses `FSCTL_PIPE_TRANSCEIVE` (one round-trip).  For multi-fragment
     /// responses prefer `ioctl_multifrag_persistent`.
-    pub async fn ioctl_pipe_persistent(
-        &self,
-        fid: &[u8; 32],
-        request: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub async fn ioctl_pipe_persistent(&self, fid: &[u8; 32], request: &[u8]) -> Result<Vec<u8>> {
         let conn = self.inner.lock().await;
         conn.ioctl_pipe_transceive(fid, request).await
     }

@@ -1641,12 +1641,20 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
     banner::print_module_banner("NTLM RELAY");
 
     match action {
-        NtlmAction::Capture { interface, port: _, no_poison } => {
+        NtlmAction::Capture {
+            interface,
+            port: _,
+            no_poison,
+        } => {
             println!(
                 "{} Starting NTLM capture on {} {}",
                 "🎯".bright_black(),
                 interface.cyan(),
-                if no_poison { "(relay-only / no poison)" } else { "" }
+                if no_poison {
+                    "(relay-only / no poison)"
+                } else {
+                    ""
+                }
             );
             let config = RelayControllerConfig {
                 interface: interface.clone(),
@@ -1688,7 +1696,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 "{} Starting NTLM relay to {} targets {}",
                 "🎯".bright_black(),
                 targets.join(", ").cyan(),
-                if no_poison { "(relay-only)" } else { "" }
+                if no_poison {
+                    "(relay-only)"
+                } else {
+                    ""
+                }
             );
 
             let relay_targets: Vec<RelayTarget> = targets
@@ -1880,16 +1892,26 @@ async fn cmd_acl(cli: &Cli, action: AclAction) -> i32 {
         }
         AclAction::Enum { sid } => {
             let trustee_sid = sid.unwrap_or_else(|| {
-                println!("{} No SID specified, scanning all objects (may be slow)", "[!]".yellow());
+                println!(
+                    "{} No SID specified, scanning all objects (may be slow)",
+                    "[!]".yellow()
+                );
                 "*".to_string()
             });
-            println!("{} Enumerating abusable ACEs for SID: {}", "[*]".bright_black(), trustee_sid.cyan());
+            println!(
+                "{} Enumerating abusable ACEs for SID: {}",
+                "[*]".bright_black(),
+                trustee_sid.cyan()
+            );
             match ldap.find_abusable_acls(&trustee_sid).await {
                 Ok(dacls) => {
                     if dacls.is_empty() {
                         println!("{} No abusable ACEs found", "[-]".yellow());
                     } else {
-                        banner::print_success(&format!("Found {} objects with abusable ACLs", dacls.len()));
+                        banner::print_success(&format!(
+                            "Found {} objects with abusable ACLs",
+                            dacls.len()
+                        ));
                         for dacl in &dacls {
                             println!("  {} {}", "[+]".green(), dacl.object_dn.cyan());
                             for ace in &dacl.aces {
@@ -2037,7 +2059,10 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
                         "ImmediateTask XML written to {}\\{}",
                         share, rel_path
                     ));
-                    println!("    {} Waiting for Group Policy refresh (90s default) ...", "[!]".yellow());
+                    println!(
+                        "    {} Waiting for Group Policy refresh (90s default) ...",
+                        "[!]".yellow()
+                    );
                     0
                 }
                 Err(e) => {
@@ -2081,7 +2106,8 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
             let policy_subdir = if user_policy { "User" } else { "Machine" };
             let rel_path = format!(
                 "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
-                sysvol.trim_start_matches(&format!("\\\\{}\\{}", target_dc, share))
+                sysvol
+                    .trim_start_matches(&format!("\\\\{}\\{}", target_dc, share))
                     .trim_start_matches('\\'),
                 gpo,
                 policy_subdir

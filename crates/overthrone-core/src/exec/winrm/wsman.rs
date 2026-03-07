@@ -478,6 +478,7 @@ impl Clone for WinRmExecutor {
             creds: self.creds.clone(),
             use_ssl: self.use_ssl,
             port: self.port,
+            insecure_ssl: self.insecure_ssl,
         }
     }
 }
