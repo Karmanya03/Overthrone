@@ -23,6 +23,8 @@ pub struct ComputerEntry {
     pub last_logon: Option<String>,
     pub sid: Option<String>,
     pub is_domain_controller: bool,
+    /// LAPS v1 password expiration (ms-Mcs-AdmPwdExpirationTime as Windows FILETIME string).
+    pub laps_expiry: Option<String>,
 }
 
 impl ComputerEntry {
@@ -66,6 +68,7 @@ pub fn computer_attributes() -> Vec<String> {
         "servicePrincipalName",
         "lastLogonTimestamp",
         "objectSid",
+        "ms-Mcs-AdmPwdExpirationTime",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -122,7 +125,9 @@ pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEnt
         .get("servicePrincipalName")
         .cloned()
         .unwrap_or_default();
-    let is_dc = spns.iter().any(|s| s.to_lowercase().starts_with("ldap/"));
+    // Domain Controllers have UAC flag SERVER_TRUST (0x2000).
+    // Checking SPN prefixes is unreliable (member servers can have LDAP SPNs too).
+    let is_dc = uac & 0x2000 != 0;
 
     ComputerEntry {
         sam_account_name: first_val(attrs, "sAMAccountName").unwrap_or_default(),
@@ -139,6 +144,7 @@ pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEnt
         last_logon: first_val(attrs, "lastLogonTimestamp"),
         sid: first_val(attrs, "objectSid"),
         is_domain_controller: is_dc,
+        laps_expiry: first_val(attrs, "ms-Mcs-AdmPwdExpirationTime"),
     }
 }
 

