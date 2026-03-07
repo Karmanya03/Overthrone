@@ -77,7 +77,7 @@ impl LlmnrHeader {
     pub fn response(&self) -> Self {
         Self {
             transaction_id: self.transaction_id,
-            flags: self.flags | 0x8000, // Set QR=1 (response)
+            flags: self.flags | 0x8400, // Set QR=1 (response) and AA=1 (Authoritative Answer)
             questions: self.questions,
             answers: 1,
             authority: 0,
@@ -546,7 +546,7 @@ impl Poisoner {
             match socket.recv_from(&mut buf) {
                 Ok((len, src)) => {
                     // Parse NBT-NS query
-                    if let Some(query_name) = parse_nbns_name(&buf[13..]) {
+                    if let Some(query_name) = parse_nbns_name(&buf[12..]) {
                         debug!("NBT-NS query for '{}' from {}", query_name, src);
 
                         // Record captured query
@@ -622,7 +622,9 @@ impl Poisoner {
         response.extend_from_slice(&0u16.to_be_bytes());
 
         // Copy question name from query
-        let name_end = 14 + 32 + 2; // Header + encoded name + null + suffix
+        // NBT-NS header is 12 bytes; encoded name is 32 bytes + 1 null byte + 2 byte suffix.
+        // Name field starts at offset 12 (not 14).
+        let name_end = 12 + 32 + 2 + 1; // Header(12) + encoded name(32) + suffix(2) + null(1)
         if name_end > query.len() {
             return Err(RelayError::Protocol("Invalid NBT-NS query format".to_string()).into());
         }

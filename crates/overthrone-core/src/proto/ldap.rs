@@ -1135,11 +1135,12 @@ impl LdapSession {
 
         drive!(conn);
 
-        // Build bind DN: DOMAIN\user or user@domain
+        // Build bind DN: use UPN (user@domain) format for Kerberos compatibility.
+        // DOMAIN\user (NTLM) format breaks Kerberos LDAP bind; UPN works for both.
         let bind_dn = if username.contains('\\') || username.contains('@') {
             username.to_string()
         } else {
-            format!("{domain}\\{username}")
+            format!("{username}@{domain}")
         };
 
         info!("LDAP bind as: {bind_dn}");

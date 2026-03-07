@@ -28,11 +28,18 @@ impl ReaperConfig {
     }
 
     pub fn base_dn_from_domain(domain: &str) -> String {
-        domain
-            .split('.')
-            .map(|p| format!("DC={p}"))
-            .collect::<Vec<_>>()
-            .join(",")
+        // Handle both FQDN (corp.local → DC=corp,DC=local) and NetBIOS-style names.
+        // If the domain contains no dot it is treated as a single DC component.
+        if domain.contains('.') {
+            domain
+                .split('.')
+                .map(|p| format!("DC={p}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        } else {
+            // NetBIOS name (e.g. CORP) — use as a single DC component
+            format!("DC={domain}")
+        }
     }
 }
 

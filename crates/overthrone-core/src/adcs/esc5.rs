@@ -568,7 +568,7 @@ fn append_rpc_unicode_string(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual_count
     buf.extend_from_slice(&utf16);
     buf.extend_from_slice(&[0x00, 0x00]); // null terminator
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
 }

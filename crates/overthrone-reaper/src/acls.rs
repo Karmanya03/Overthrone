@@ -37,13 +37,15 @@ const WRITE_DACL: u32 = 0x00040000;
 const WRITE_OWNER: u32 = 0x00080000;
 const ADS_RIGHT_DS_WRITE_PROP: u32 = 0x00000020;
 const ADS_RIGHT_DS_CONTROL_ACCESS: u32 = 0x00000100;
+/// ADS_RIGHT_DS_CREATE_CHILD — SDDL abbreviation "CC" (0x1, not to be confused with CR=0x100)
+const ADS_RIGHT_DS_CREATE_CHILD: u32 = 0x00000001;
 
 /// Well-known GUIDs for extended rights / properties.
 const GUID_USER_FORCE_CHANGE_PASSWORD: &str = "00299570-246d-11d0-a768-00aa006e0529";
 const GUID_REPLICATING_DIRECTORY_CHANGES: &str = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_REPLICATING_DIRECTORY_CHANGES_ALL: &str = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_MEMBER: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
-const GUID_MS_MCS_ADMPWD: &str = "ms-mcs-admpwd";
+const GUID_MS_MCS_ADMPWD: &str = "faa13209-962c-4e55-8cfe-1b99ae3f1169";
 
 pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFinding>> {
     info!("[acls] Querying {} for dangerous ACLs", config.dc_ip);
@@ -333,7 +335,7 @@ fn sddl_abbrev_to_mask(s: &str) -> u32 {
             "WO" => mask |= WRITE_OWNER,
             "SD" => mask |= 0x00010000,
             "RC" => mask |= 0x00020000,
-            "CC" => mask |= ADS_RIGHT_DS_CONTROL_ACCESS,
+            "CC" => mask |= ADS_RIGHT_DS_CREATE_CHILD,
             "DC" => mask |= ADS_RIGHT_DS_WRITE_PROP,
             "SW" => mask |= 0x00000080,
             _ => {}

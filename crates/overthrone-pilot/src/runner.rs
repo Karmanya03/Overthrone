@@ -411,12 +411,17 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             "PRE".bold().cyan()
         );
         if ctx.use_hash {
+            // In pass-the-hash mode the pre-flight LDAP check is skipped because
+            // simple bind requires a cleartext password. Mark LDAP as unavailable
+            // conservatively; it will be re-enabled if a cleartext credential is
+            // cracked or provided later.
             println!(
                 "  {} LDAP pre-flight skipped (pass-the-hash mode). \
                  LDAP-dependent steps will try Kerberos-first auth or wait \
                  for a cracked cleartext credential.",
                 "!".yellow().bold()
             );
+            ctx.ldap_available = false;
         } else {
             match overthrone_core::proto::ldap::LdapSession::connect(
                 &ctx.dc_ip,
@@ -811,7 +816,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             tokio::time::sleep(tokio::time::Duration::from_millis(jitter)).await;
         }
 
-        if steps_executed > 0 && steps_executed.is_multiple_of(10) {
+        if steps_executed > 0 && steps_executed % 10 == 0 {
             state.auto_save();
         }
     }

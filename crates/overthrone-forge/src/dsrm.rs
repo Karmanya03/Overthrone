@@ -133,7 +133,11 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
             String::new()
         });
 
-    let verified = verify_output.contains("0x2") || verify_output.contains("REG_DWORD");
+    // Parse the registry output to verify DsrmAdminLogonBehavior is set to 2.
+    // A valid output contains "DsrmAdminLogonBehavior" and "0x2" (REG_DWORD = 2).
+    // Checking only for "REG_DWORD" is insufficient since any DWORD matches.
+    let verified = verify_output.contains("DsrmAdminLogonBehavior")
+        && (verify_output.contains("0x2") || verify_output.contains("0x00000002"));
     if verified {
         info!("[dsrm] Verified: DsrmAdminLogonBehavior = 2");
     } else {

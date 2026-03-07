@@ -482,7 +482,7 @@ fn build_ntlm_login_request(login_ipid: &[u8; 16]) -> Vec<u8> {
     stub.extend_from_slice(&char_count.to_le_bytes()); // actual count
     stub.extend_from_slice(&ns_utf16);
     // Pad to 4-byte boundary
-    while !stub.len().is_multiple_of(4) {
+    while stub.len() % 4 != 0 {
         stub.push(0);
     }
 
@@ -530,7 +530,7 @@ fn build_exec_method_request(services_ipid: &[u8; 16], command: &str) -> Vec<u8>
     stub.extend(in_params);
 
     // Pad to 4-byte boundary
-    while !stub.len().is_multiple_of(4) {
+    while stub.len() % 4 != 0 {
         stub.push(0);
     }
 
@@ -583,7 +583,7 @@ fn build_win32_process_create_params(command: &str) -> Vec<u8> {
     data.extend_from_slice(&cmd_utf16);
 
     // Pad to 4-byte boundary
-    while !data.len().is_multiple_of(4) {
+    while data.len() % 4 != 0 {
         data.push(0);
     }
 
@@ -605,7 +605,7 @@ fn write_bstr(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(&char_count.to_le_bytes()); // actual count
     buf.extend_from_slice(&utf16);
     // Pad to 4-byte boundary
-    while !buf.len().is_multiple_of(4) {
+    while buf.len() % 4 != 0 {
         buf.push(0);
     }
 }
@@ -891,7 +891,7 @@ async fn wait_for_output(
             }
             Err(_) => {
                 // File doesn't exist yet
-                if attempt.is_multiple_of(4) {
+                if attempt % 4 == 0 {
                     debug!("WMIExec: Waiting for output (attempt {})", attempt + 1);
                 }
             }
