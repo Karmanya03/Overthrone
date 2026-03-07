@@ -3,6 +3,7 @@
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -43,10 +44,39 @@ impl ReaperConfig {
     }
 }
 
+/// Hash-aware LDAP connect helper shared by all reaper modules.
+///
+/// When `config.nt_hash` is set (pass-the-hash auth) this calls
+/// `connect_with_hash`; otherwise it uses the cleartext password.
+/// This prevents all enumeration returning 0 results when the
+/// operator authenticates via NT hash.
+pub async fn ldap_connect(config: &ReaperConfig) -> Result<LdapSession> {
+    if let Some(hash) = config.nt_hash.as_deref() {
+        LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            hash,
+            false,
+        )
+        .await
+    } else {
+        LdapSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            config.password.as_deref().unwrap_or(""),
+            false,
+        )
+        .await
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReaperResult {
     pub domain: String,
     pub base_dn: String,
+    pub functional_level: Option<u32>,
     pub users: Vec<users::UserEntry>,
     pub groups: Vec<groups::GroupEntry>,
     pub computers: Vec<computers::ComputerEntry>,
@@ -102,6 +132,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     let mut result = ReaperResult {
         domain: config.domain.clone(),
         base_dn: config.base_dn.clone(),
+        functional_level: None,
         users: Vec::new(),
         groups: Vec::new(),
         computers: Vec::new(),
@@ -155,6 +186,39 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                 pb.inc(1);
             }
         };
+    }
+
+    // Query msDS-Behavior-Version from the domain root to get AD functional level.
+    // This is a single lightweight LDAP lookup done before the heavy module sweeps.
+    result.functional_level = {
+        match ldap_connect(config).await {
+            Ok(mut sess) => {
+                let entries = sess
+                    .custom_search_with_base(
+                        &config.base_dn,
+                        "(objectClass=domain)",
+                        &["msDS-Behavior-Version"],
+                    )
+                    .await;
+                sess.disconnect().await.ok();
+                entries
+                    .ok()
+                    .and_then(|e| e.into_iter().next())
+                    .and_then(|e| {
+                        e.attrs
+                            .get("msDS-Behavior-Version")
+                            .and_then(|v| v.first())
+                            .and_then(|v| v.parse::<u32>().ok())
+                    })
+            }
+            Err(e) => {
+                warn!("[reaper] functional level query failed: {e}");
+                None
+            }
+        }
+    };
+    if let Some(fl) = result.functional_level {
+        info!("[reaper] Domain functional level: {fl}");
     }
 
     run_module!("users", users::enumerate_users, users);

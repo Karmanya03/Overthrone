@@ -265,6 +265,20 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
     let domain_object_id = domain_sid.as_deref().unwrap_or("UNKNOWN");
 
+    // Map msDS-Behavior-Version integer to BloodHound functional level string.
+    // https://docs.microsoft.com/en-us/windows/win32/adschema/a-msds-behavior-version
+    let functional_level = match result.functional_level {
+        Some(0) => "2000",
+        Some(1) => "2003Mixed",
+        Some(2) => "2003",
+        Some(3) => "2008",
+        Some(4) => "2008R2",
+        Some(5) => "2012",
+        Some(6) => "2012R2",
+        Some(7) => "2016",
+        _ => "Unknown",
+    };
+
     let domain_json = json!({
         "meta": {
             "methods": 0,
@@ -277,7 +291,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             "Properties": {
                 "name": domain_upper,
                 "domain": domain_upper,
-                "functionallevel": "Unknown",
+                "functionallevel": functional_level,
             },
             "Trusts": result.trusts.iter().map(|t| json!({
                 "TargetDomainName": t.target_domain.to_uppercase(),

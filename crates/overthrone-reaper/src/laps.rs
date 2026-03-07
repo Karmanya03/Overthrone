@@ -7,7 +7,6 @@
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -118,14 +117,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
         config.dc_ip
     );
 
-    let mut conn = LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     let filter = laps_filter();
     let attr_refs: Vec<&str> = LAPS_ATTRS.to_vec();

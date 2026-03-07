@@ -2,7 +2,6 @@
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
-use overthrone_core::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -21,14 +20,7 @@ pub fn ou_filter() -> String {
 pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {
     info!("[ous] Querying {} for organizational units", config.dc_ip);
 
-    let mut conn = LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     let filter = ou_filter();
     let attrs = &[

@@ -78,14 +78,7 @@ pub fn computer_attributes() -> Vec<String> {
 pub async fn enumerate_computers(config: &ReaperConfig) -> Result<Vec<ComputerEntry>> {
     info!("[computers] Querying {} for domain computers", config.dc_ip);
 
-    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     let filter = computer_filter();
     let attr_list = computer_attributes();
@@ -125,17 +118,11 @@ pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEnt
         .get("servicePrincipalName")
         .cloned()
         .unwrap_or_default();
-<<<<<<< HEAD
-    // Domain Controllers have UAC flag SERVER_TRUST (0x2000).
-    // Checking SPN prefixes is unreliable (member servers can have LDAP SPNs too).
-    let is_dc = uac & 0x2000 != 0;
-=======
     // Use UAC SERVER_TRUST_ACCOUNT bit (0x2000) for reliable DC detection.
     // SPN-based heuristics (e.g. starts_with("ldap/")) are unreliable because
     // non-DC servers can also have LDAP SPNs registered.
     const UAC_SERVER_TRUST_ACCOUNT: u32 = 0x00002000;
     let is_dc = uac & UAC_SERVER_TRUST_ACCOUNT != 0;
->>>>>>> origin/main
 
     ComputerEntry {
         sam_account_name: first_val(attrs, "sAMAccountName").unwrap_or_default(),

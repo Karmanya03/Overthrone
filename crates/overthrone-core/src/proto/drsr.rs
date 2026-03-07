@@ -497,7 +497,7 @@ fn decrypt_aes_drs(session_key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>
 
     let mut buf = data.to_vec();
     // Pad to AES block size
-    while buf.len() % 16 != 0 {
+    while !buf.len().is_multiple_of(16) {
         buf.push(0);
     }
 
@@ -763,7 +763,7 @@ fn hex_encode(data: &[u8]) -> String {
 
 fn hex_decode_optional(hex: &str) -> Option<Vec<u8>> {
     let hex = hex.trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let bytes: Vec<u8> = (0..hex.len())

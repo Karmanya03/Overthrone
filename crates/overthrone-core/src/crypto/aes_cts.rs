@@ -262,7 +262,7 @@ pub fn aes128_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Ve
     if iv.len() != 16 {
         bail!("AES-128-CBC IV must be 16 bytes");
     }
-    if ciphertext.is_empty() || ciphertext.len() % AES_BLOCK_SIZE != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(AES_BLOCK_SIZE) {
         bail!("AES-128-CBC ciphertext must be a non-empty multiple of 16 bytes");
     }
     let dec = Aes128CbcDec::new(key.into(), iv.into());
@@ -290,7 +290,7 @@ pub fn aes256_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Ve
     if iv.len() != 16 {
         bail!("AES-256-CBC IV must be 16 bytes");
     }
-    if ciphertext.is_empty() || ciphertext.len() % AES_BLOCK_SIZE != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(AES_BLOCK_SIZE) {
         bail!("AES-256-CBC ciphertext must be a non-empty multiple of 16 bytes");
     }
     let dec = Aes256CbcDec::new(key.into(), iv.into());
@@ -332,7 +332,7 @@ pub fn decrypt_sam_hash_aes(
     // Step 1: AES-128-CBC decrypt
     // Pad ciphertext to block size if needed
     let mut ct = encrypted_hash.to_vec();
-    if ct.len() % AES_BLOCK_SIZE != 0 {
+    if !ct.len().is_multiple_of(AES_BLOCK_SIZE) {
         ct.resize(ct.len().div_ceil(AES_BLOCK_SIZE) * AES_BLOCK_SIZE, 0);
     }
     let decrypted = aes128_cbc_decrypt(&hashed_boot_key[..16], iv, &ct)?;
@@ -436,7 +436,7 @@ pub fn decrypt_cached_credential(nl_key: &[u8], encrypted_entry: &[u8]) -> Resul
 
     // Pad to block boundary
     let mut ct = encrypted_entry.to_vec();
-    if ct.len() % 16 != 0 {
+    if !ct.len().is_multiple_of(16) {
         ct.resize(ct.len().div_ceil(16) * 16, 0);
     }
 

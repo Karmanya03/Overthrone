@@ -612,7 +612,7 @@ fn read_nk_class(data: &[u8], nk_offset: usize) -> Result<Vec<u8>> {
 /// Convert a hex string to bytes
 fn hex_str_to_bytes(hex: &str) -> Result<Vec<u8>> {
     let hex = hex.trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(anyhow!("odd-length hex string"));
     }
     (0..hex.len())

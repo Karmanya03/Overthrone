@@ -89,14 +89,7 @@ pub fn group_attributes() -> Vec<String> {
 pub async fn enumerate_groups(config: &ReaperConfig) -> Result<Vec<GroupEntry>> {
     info!("[groups] Querying {} for domain groups", config.dc_ip);
 
-    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     let filter = group_filter();
     let attr_list = group_attributes();
@@ -133,14 +126,7 @@ pub async fn resolve_nested_memberships(
     config: &ReaperConfig,
     principal_dn: &str,
 ) -> Result<Vec<String>> {
-    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     // The LDAP_MATCHING_RULE_IN_CHAIN OID resolves transitive group membership.
     let filter = format!(

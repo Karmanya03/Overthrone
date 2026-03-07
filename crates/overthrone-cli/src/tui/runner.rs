@@ -123,6 +123,7 @@ pub async fn run_tui_with_crawler(
         let reaper_data = overthrone_reaper::runner::ReaperResult {
             domain: domain_str.clone(),
             base_dn: crawler_config.base_dn.clone(),
+            functional_level: None,
             users: Vec::new(),
             groups: Vec::new(),
             computers: Vec::new(),

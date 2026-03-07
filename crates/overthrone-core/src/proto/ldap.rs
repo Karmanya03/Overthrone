@@ -2117,6 +2117,114 @@ impl LdapSession {
     }
 
     // ═══════════════════════════════════════════════════════
+    //  Security Descriptor Helpers (for ACL persistence)
+    // ═══════════════════════════════════════════════════════
+
+    /// Read the binary `nTSecurityDescriptor` for an object identified by its full DN.
+    ///
+    /// Uses a base-scoped search with the SD_FLAGS critical control (DACL + Owner) so
+    /// that the returned bytes include the DACL and can be modified and written back.
+    ///
+    /// Only works with ldap3 (password / Kerberos) sessions — raw NTLM sessions cannot
+    /// send the SD_FLAGS control.
+    pub async fn read_ntsd(&mut self, dn: &str) -> Result<Vec<u8>> {
+        let sd_ctrl = build_sd_flags_control(SD_FLAGS_DACL_OWNER);
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "read_ntsd requires a password/Kerberos session (not raw NTLM)".to_string(),
+        })?;
+
+        let (rs, _res) = ldap
+            .with_controls(vec![sd_ctrl])
+            .search(
+                dn,
+                Scope::Base,
+                "(objectClass=*)",
+                &["nTSecurityDescriptor"],
+            )
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("NTSD search failed: {e}"),
+            })?
+            .success()
+            .map_err(|e| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("NTSD search error: {e}"),
+            })?;
+
+        let entry = rs
+            .into_iter()
+            .map(SearchEntry::construct)
+            .next()
+            .ok_or_else(|| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: "Object not found".to_string(),
+            })?;
+
+        entry
+            .bin_attrs
+            .get("nTSecurityDescriptor")
+            .and_then(|v| v.first())
+            .cloned()
+            .ok_or_else(|| OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: "nTSecurityDescriptor attribute missing or empty".to_string(),
+            })
+    }
+
+    /// Resolve a `sAMAccountName` to its binary `objectSid` bytes.
+    ///
+    /// Searches users, groups, and computers with the given account name and returns
+    /// the raw 28-byte binary SID suitable for embedding in ACE structures.
+    pub async fn resolve_object_sid_binary(&mut self, sam_account_name: &str) -> Result<Vec<u8>> {
+        let base = self.base_dn.clone();
+        // LDAP-escape special characters in the account name (RFC 4515)
+        let escaped = sam_account_name
+            .replace('\\', "\\5c")
+            .replace('*', "\\2a")
+            .replace('(', "\\28")
+            .replace(')', "\\29")
+            .replace('\0', "\\00");
+        let filter = format!(
+            "(&(|(objectClass=user)(objectClass=group)(objectClass=computer))(sAMAccountName={escaped}))"
+        );
+
+        let entries: Vec<SearchEntry> = if let Some(raw) = self.raw.as_mut() {
+            raw.search(&base, &filter, &["objectSid"]).await?
+        } else {
+            let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+                target: self.dc_ip.clone(),
+                reason: "No LDAP session".to_string(),
+            })?;
+            let (rs, _res) = ldap
+                .search(&base, Scope::Subtree, &filter, &["objectSid"])
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.clone(),
+                    reason: format!("SID resolve search failed: {e}"),
+                })?
+                .success()
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.clone(),
+                    reason: format!("SID resolve search error: {e}"),
+                })?;
+            rs.into_iter().map(SearchEntry::construct).collect()
+        };
+
+        for entry in &entries {
+            if let Some(sid_bytes) = entry.bin_attrs.get("objectSid").and_then(|v| v.first()) {
+                return Ok(sid_bytes.clone());
+            }
+        }
+
+        Err(OverthroneError::Ldap {
+            target: base,
+            reason: format!("Account not found or objectSid missing: {sam_account_name}"),
+        })
+    }
+
+    // ═══════════════════════════════════════════════════════
     //  Custom Queries
     // ═══════════════════════════════════════════════════════
 

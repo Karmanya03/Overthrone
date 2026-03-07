@@ -104,14 +104,7 @@ pub fn user_attributes() -> Vec<String> {
 pub async fn enumerate_users(config: &ReaperConfig) -> Result<Vec<UserEntry>> {
     info!("[users] Querying {} for domain users", config.dc_ip);
 
-    let mut conn = overthrone_core::proto::ldap::LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     let filter = user_filter();
     let attr_list = user_attributes();

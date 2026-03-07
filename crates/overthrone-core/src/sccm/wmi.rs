@@ -121,7 +121,9 @@ pub async fn enumerate_collections(site: &SccmSite) -> Result<Vec<SccmCollection
             "[SCCM/wmi] Non-Windows host — run the following on a Windows machine with SCCM access:\n{}",
             cmd
         );
-        Ok(Vec::new())
+        Err(crate::error::OverthroneError::Custom(
+            "SCCM WMI enumeration requires Windows (native COM/WMI). Run on a Windows host or use the printed PowerShell command.".to_string()
+        ))
     }
 }
 
@@ -144,7 +146,9 @@ pub async fn enumerate_applications(site: &SccmSite) -> Result<Vec<SccmApplicati
             "[SCCM/wmi] Non-Windows host — run the following on a Windows machine:\n{}",
             cmd
         );
-        Ok(Vec::new())
+        Err(crate::error::OverthroneError::Custom(
+            "SCCM WMI enumeration requires Windows (native COM/WMI). Run on a Windows host or use the printed PowerShell command.".to_string()
+        ))
     }
 }
 
@@ -167,7 +171,9 @@ pub async fn enumerate_devices(site: &SccmSite) -> Result<Vec<SccmDevice>> {
             "[SCCM/wmi] Non-Windows host — run the following on a Windows machine:\n{}",
             cmd
         );
-        Ok(Vec::new())
+        Err(crate::error::OverthroneError::Custom(
+            "SCCM WMI enumeration requires Windows (native COM/WMI). Run on a Windows host or use the printed PowerShell command.".to_string()
+        ))
     }
 }
 

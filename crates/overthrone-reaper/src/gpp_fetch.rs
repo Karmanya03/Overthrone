@@ -45,13 +45,23 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
         config.dc_ip, config.domain, config.username
     );
 
-    let smb = SmbSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-    )
-    .await?;
+    let smb = if let Some(hash) = config.nt_hash.as_deref() {
+        SmbSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            hash,
+        )
+        .await?
+    } else {
+        SmbSession::connect(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            config.password.as_deref().unwrap_or(""),
+        )
+        .await?
+    };
 
     // SYSVOL share path: <domain>\Policies
     let policies_path = format!("{}\\Policies", config.domain);

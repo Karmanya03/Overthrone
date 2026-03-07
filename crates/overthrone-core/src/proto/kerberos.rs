@@ -949,6 +949,9 @@ pub fn forge_tgt(
         username, realm, user_rid, etype
     );
 
+    // Validate domain SID format before building PAC
+    validate_sid_format(domain_sid)?;
+
     // Generate a random session key (same length as the etype key)
     let session_key = generate_session_key(etype);
 
@@ -1035,6 +1038,9 @@ pub fn forge_service_ticket(
         "Forging Silver Ticket: {}@{} → {} (etype={})",
         username, realm, spn, etype
     );
+
+    // Validate domain SID format before building PAC
+    validate_sid_format(domain_sid)?;
 
     let session_key = generate_session_key(etype);
     let pac_bytes = build_minimal_pac(domain_sid, username, user_rid, &realm);
@@ -1226,7 +1232,7 @@ fn build_minimal_pac(domain_sid: &str, username: &str, user_rid: u32, realm: &st
     let logon_offset = header_size as u64;
     // Pad logon_info to 8-byte boundary
     let mut logon_padded = logon_info.clone();
-    while logon_padded.len() % 8 != 0 {
+    while !logon_padded.len().is_multiple_of(8) {
         logon_padded.push(0);
     }
 
@@ -1434,21 +1440,61 @@ fn ndr_write_conformant_string(buf: &mut Vec<u8>, utf16_bytes: &[u8]) {
     buf.extend_from_slice(&char_count.to_le_bytes()); // ActualCount
     buf.extend_from_slice(utf16_bytes);
     // Pad to 4-byte boundary
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
 }
 
-/// Parse a SID string ("S-1-5-21-...") into binary format
-fn parse_sid_to_bytes(sid_str: &str) -> Vec<u8> {
+/// Validate that a SID string has the correct `S-R-A-SA1-SA2-...` format
+/// with at least 3 sub-authorities (typical for domain SIDs like `S-1-5-21-x-y-z`).
+fn validate_sid_format(sid_str: &str) -> Result<()> {
     let parts: Vec<&str> = sid_str.split('-').collect();
     if parts.len() < 4 || parts[0] != "S" {
-        // Return a dummy SID
-        return vec![
-            0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
+        return Err(crate::error::OverthroneError::Protocol {
+            protocol: "Kerberos/PAC".to_string(),
+            reason: format!(
+                "Invalid domain SID format '{}'. Expected S-R-A-SA1[-SA2...] (e.g. S-1-5-21-x-y-z)",
+                sid_str
+            ),
+        });
     }
+    // Validate that revision and authority are numeric
+    if parts[1].parse::<u8>().is_err() {
+        return Err(crate::error::OverthroneError::Protocol {
+            protocol: "Kerberos/PAC".to_string(),
+            reason: format!("Invalid SID revision '{}' in '{}'", parts[1], sid_str),
+        });
+    }
+    if parts[2].parse::<u64>().is_err() {
+        return Err(crate::error::OverthroneError::Protocol {
+            protocol: "Kerberos/PAC".to_string(),
+            reason: format!("Invalid SID authority '{}' in '{}'", parts[2], sid_str),
+        });
+    }
+    // Validate sub-authorities are numeric
+    for part in &parts[3..] {
+        if part.parse::<u32>().is_err() {
+            return Err(crate::error::OverthroneError::Protocol {
+                protocol: "Kerberos/PAC".to_string(),
+                reason: format!("Invalid SID sub-authority '{}' in '{}'", part, sid_str),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Parse a SID string ("S-1-5-21-...") into binary format.
+///
+/// Callers must validate the SID via `validate_sid_format` before
+/// calling this function.  An invalid SID here indicates a logic
+/// bug (the validation gate was skipped).
+fn parse_sid_to_bytes(sid_str: &str) -> Vec<u8> {
+    let parts: Vec<&str> = sid_str.split('-').collect();
+    assert!(
+        parts.len() >= 4 && parts[0] == "S",
+        "parse_sid_to_bytes called with invalid SID (should have been validated earlier): {}",
+        sid_str
+    );
 
     let revision: u8 = parts[1].parse().unwrap_or(1);
     let authority: u64 = parts[2].parse().unwrap_or(5);

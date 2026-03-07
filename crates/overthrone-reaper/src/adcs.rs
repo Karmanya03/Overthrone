@@ -3,7 +3,6 @@
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
-use overthrone_core::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -429,14 +428,7 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
         config.dc_ip
     );
 
-    let mut conn = LdapSession::connect(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        config.password.as_deref().unwrap_or(""),
-        false,
-    )
-    .await?;
+    let mut conn = crate::runner::ldap_connect(config).await?;
 
     let base_dn = ReaperConfig::base_dn_from_domain(&config.domain);
     let adcs_dn = adcs_base_dn(&base_dn);

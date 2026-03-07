@@ -95,29 +95,33 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
         let ldap_user = &config.username;
         let ldap_pass = config.password.as_deref().unwrap_or("");
         let filter = format!("(&(objectClass=user)(sAMAccountName={}))", target_user);
-        match LdapSession::connect(&config.dc_ip, &config.domain, ldap_user, ldap_pass, false).await {
-            Ok(mut ldap) => {
-                match ldap.custom_search(&filter, &["distinguishedName"]).await {
-                    Ok(entries) if !entries.is_empty() => {
-                        let dn = entries[0]
-                            .attrs
-                            .get("distinguishedName")
-                            .and_then(|v| v.first())
-                            .cloned()
-                            .unwrap_or_else(|| format!("CN={},CN=Users,{}", target_user, base_dn));
-                        info!("[dcsync] Resolved DN for '{}': {}", target_user, dn);
-                        let _ = ldap.disconnect().await;
-                        dn
-                    }
-                    _ => {
-                        warn!("[dcsync] LDAP search failed; falling back to CN=Users,{}", base_dn);
-                        let _ = ldap.disconnect().await;
-                        format!("CN={},CN=Users,{}", target_user, base_dn)
-                    }
+        match LdapSession::connect(&config.dc_ip, &config.domain, ldap_user, ldap_pass, false).await
+        {
+            Ok(mut ldap) => match ldap.custom_search(&filter, &["distinguishedName"]).await {
+                Ok(entries) if !entries.is_empty() => {
+                    let dn = entries[0]
+                        .attrs
+                        .get("distinguishedName")
+                        .and_then(|v| v.first())
+                        .cloned()
+                        .unwrap_or_else(|| format!("CN={},CN=Users,{}", target_user, base_dn));
+                    info!("[dcsync] Resolved DN for '{}': {}", target_user, dn);
+                    let _ = ldap.disconnect().await;
+                    dn
                 }
-            }
+                _ => {
+                    warn!(
+                        "[dcsync] LDAP search failed; falling back to CN=Users,{}",
+                        base_dn
+                    );
+                    let _ = ldap.disconnect().await;
+                    format!("CN={},CN=Users,{}", target_user, base_dn)
+                }
+            },
             Err(e) => {
-                warn!("[dcsync] Could not connect to LDAP for DN lookup: {e}; using CN=Users fallback");
+                warn!(
+                    "[dcsync] Could not connect to LDAP for DN lookup: {e}; using CN=Users fallback"
+                );
                 format!("CN={},CN=Users,{}", target_user, base_dn)
             }
         }

