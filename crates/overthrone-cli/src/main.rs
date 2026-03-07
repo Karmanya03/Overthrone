@@ -3020,10 +3020,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
                             }
                             println!();
                         }
-                        banner::print_success(&format!(
-                            "{} linked server(s) found",
-                            servers.len()
-                        ));
+                        banner::print_success(&format!("{} linked server(s) found", servers.len()));
                     }
                 }
                 Err(e) => {

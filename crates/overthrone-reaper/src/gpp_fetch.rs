@@ -46,13 +46,7 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
     );
 
     let smb = if let Some(hash) = config.nt_hash.as_deref() {
-        SmbSession::connect_with_hash(
-            &config.dc_ip,
-            &config.domain,
-            &config.username,
-            hash,
-        )
-        .await?
+        SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash).await?
     } else {
         SmbSession::connect(
             &config.dc_ip,

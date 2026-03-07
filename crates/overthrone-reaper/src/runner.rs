@@ -52,14 +52,8 @@ impl ReaperConfig {
 /// operator authenticates via NT hash.
 pub async fn ldap_connect(config: &ReaperConfig) -> Result<LdapSession> {
     if let Some(hash) = config.nt_hash.as_deref() {
-        LdapSession::connect_with_hash(
-            &config.dc_ip,
-            &config.domain,
-            &config.username,
-            hash,
-            false,
-        )
-        .await
+        LdapSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash, false)
+            .await
     } else {
         LdapSession::connect(
             &config.dc_ip,

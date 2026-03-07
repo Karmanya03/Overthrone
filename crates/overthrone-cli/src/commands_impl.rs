@@ -238,7 +238,10 @@ pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i3
         println!("  {} Checking dependencies...", "▸".bright_black());
 
         // Rust toolchain
-        match std::process::Command::new("rustc").arg("--version").output() {
+        match std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+        {
             Ok(o) if o.status.success() => {
                 let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
                 println!("    {} Rust toolchain: {}", "✓".green(), ver);
@@ -253,12 +256,18 @@ pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i3
         }
         #[cfg(not(windows))]
         {
-            match std::process::Command::new("openssl").arg("version").output() {
+            match std::process::Command::new("openssl")
+                .arg("version")
+                .output()
+            {
                 Ok(o) if o.status.success() => {
                     let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
                     println!("    {} OpenSSL: {}", "✓".green(), ver);
                 }
-                _ => println!("    {} OpenSSL: not found (needed on Linux/macOS)", "✗".red()),
+                _ => println!(
+                    "    {} OpenSSL: not found (needed on Linux/macOS)",
+                    "✗".red()
+                ),
             }
         }
 
@@ -2536,11 +2545,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
             };
 
             if sites.is_empty() {
-                println!(
-                    "  {} No SCCM site found on {}",
-                    "!".yellow(),
-                    target.cyan()
-                );
+                println!("  {} No SCCM site found on {}", "!".yellow(), target.cyan());
                 return 0;
             }
 
@@ -2687,10 +2692,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                         Ok(res) => {
                             println!("  {} Technique: {}", "▸".bright_black(), res.technique);
                             if res.credentials.is_empty() {
-                                println!(
-                                    "  {} No NAA credentials extracted",
-                                    "!".yellow()
-                                );
+                                println!("  {} No NAA credentials extracted", "!".yellow());
                             } else {
                                 println!(
                                     "  {} {} NAA credential(s):",
@@ -3250,7 +3252,10 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
                 match ch.deploy_implant(&request).await {
                     Ok(result) => {
                         if result.success {
-                            banner::print_success(&format!("Implant deployed to {}: {}", target, result.output));
+                            banner::print_success(&format!(
+                                "Implant deployed to {}: {}",
+                                target, result.output
+                            ));
                         } else {
                             banner::print_fail(&format!("Deployment failed: {}", result.error));
                         }
