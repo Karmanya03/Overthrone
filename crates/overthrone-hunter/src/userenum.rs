@@ -75,19 +75,22 @@ pub struct AsRepCapture {
 
 /// Run Kerberos username enumeration against the target DC.
 /// No credentials required — uses only AS-REQ error code analysis.
-pub async fn run(dc_ip: &str, domain: &str, uc: &UserEnumConfig, jitter_ms: u64) -> Result<UserEnumResult> {
+pub async fn run(
+    dc_ip: &str,
+    domain: &str,
+    uc: &UserEnumConfig,
+    jitter_ms: u64,
+) -> Result<UserEnumResult> {
     info!("{}", "═══ KERBEROS USER ENUMERATION ═══".bold().magenta());
 
     // Load username wordlist
-    let content = tokio::fs::read_to_string(&uc.userlist)
-        .await
-        .map_err(|e| {
-            OverthroneError::Custom(format!(
-                "Cannot read userlist {}: {}",
-                uc.userlist.display(),
-                e
-            ))
-        })?;
+    let content = tokio::fs::read_to_string(&uc.userlist).await.map_err(|e| {
+        OverthroneError::Custom(format!(
+            "Cannot read userlist {}: {}",
+            uc.userlist.display(),
+            e
+        ))
+    })?;
 
     let usernames: Vec<&str> = content
         .lines()
@@ -116,9 +119,7 @@ pub async fn run(dc_ip: &str, domain: &str, uc: &UserEnumConfig, jitter_ms: u64)
     let pb = ProgressBar::new(usernames.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template(
-                "{spinner:.yellow} [{bar:40.cyan/dim}] {pos}/{len} user-enum {msg}",
-            )
+            .template("{spinner:.yellow} [{bar:40.cyan/dim}] {pos}/{len} user-enum {msg}")
             .unwrap()
             .progress_chars("█▓░"),
     );

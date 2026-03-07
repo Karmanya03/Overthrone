@@ -506,14 +506,13 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
     // Parse KRB-ERROR to determine user existence
     match KrbError::parse(&response_bytes) {
         Ok((_, krb_err)) => match krb_err.error_code {
-            6 => UserEnumStatus::NotFound,      // KDC_ERR_C_PRINCIPAL_UNKNOWN
-            25 => UserEnumStatus::Valid,         // KDC_ERR_PREAUTH_REQUIRED
-            18 => UserEnumStatus::Disabled,      // KDC_ERR_CLIENT_REVOKED
-            24 => UserEnumStatus::Valid,         // KDC_ERR_PREAUTH_FAILED (user exists)
-            code => UserEnumStatus::Error(format!(
-                "KRB_ERROR {code}: {}",
-                krb_error_to_string(code)
-            )),
+            6 => UserEnumStatus::NotFound,  // KDC_ERR_C_PRINCIPAL_UNKNOWN
+            25 => UserEnumStatus::Valid,    // KDC_ERR_PREAUTH_REQUIRED
+            18 => UserEnumStatus::Disabled, // KDC_ERR_CLIENT_REVOKED
+            24 => UserEnumStatus::Valid,    // KDC_ERR_PREAUTH_FAILED (user exists)
+            code => {
+                UserEnumStatus::Error(format!("KRB_ERROR {code}: {}", krb_error_to_string(code)))
+            }
         },
         Err(_) => UserEnumStatus::Error("Failed to parse KDC response".to_string()),
     }

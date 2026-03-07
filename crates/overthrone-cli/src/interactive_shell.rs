@@ -121,7 +121,9 @@ const COMMANDS: &[&str] = &[
 ];
 
 /// Subcommands for specific commands
-const KERBEROS_SUBCOMMANDS: &[&str] = &["roast", "asrep", "userenum", "tgt", "tgs", "list", "purge", "ptt"];
+const KERBEROS_SUBCOMMANDS: &[&str] = &[
+    "roast", "asrep", "userenum", "tgt", "tgs", "list", "purge", "ptt",
+];
 const SMB_SUBCOMMANDS: &[&str] = &["shares", "admin", "spider", "get", "put", "ls", "cat"];
 const GRAPH_SUBCOMMANDS: &[&str] = &["build", "path", "path_to_da", "stats", "export", "shortest"];
 const ENUM_SUBCOMMANDS: &[&str] = &[
@@ -1109,7 +1111,10 @@ impl InteractiveSession {
                 println!("\n{} Kerberos Operations:", "▸".bright_yellow());
                 println!("  {:<20} Perform Kerberoasting attack", "roast".cyan());
                 println!("  {:<20} Perform AS-REP Roasting", "asrep".cyan());
-                println!("  {:<20} Username enum via Kerberos (no creds)", "userenum <file>".cyan());
+                println!(
+                    "  {:<20} Username enum via Kerberos (no creds)",
+                    "userenum <file>".cyan()
+                );
                 println!("  {:<20} Request TGT for current user", "tgt".cyan());
                 println!("  {:<20} Request TGS for SPN", "tgs <spn>".cyan());
                 println!("  {:<20} List cached tickets", "list".cyan());
@@ -2136,18 +2141,32 @@ impl InteractiveSession {
             }
             "userenum" => {
                 if args.len() < 2 {
-                    println!("{} Usage: kerberos userenum <userlist_file> [delay_ms]", "Error:".red());
+                    println!(
+                        "{} Usage: kerberos userenum <userlist_file> [delay_ms]",
+                        "Error:".red()
+                    );
                     return Ok(());
                 }
                 let userlist = args[1];
                 let delay: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
                 let dc_ip = self.initial_target.clone().unwrap_or_default();
-                let domain = self.credentials.as_ref().map(|(d, _, _)| d.clone()).unwrap_or_default();
+                let domain = self
+                    .credentials
+                    .as_ref()
+                    .map(|(d, _, _)| d.clone())
+                    .unwrap_or_default();
                 if dc_ip.is_empty() || domain.is_empty() {
-                    println!("{} DC and domain must be set first (use 'set dc <ip>' and 'set domain <domain>')", "Error:".red());
+                    println!(
+                        "{} DC and domain must be set first (use 'set dc <ip>' and 'set domain <domain>')",
+                        "Error:".red()
+                    );
                     return Ok(());
                 }
-                println!("{} Enumerating users via Kerberos AS-REQ against {}...", "▸".bright_black(), dc_ip);
+                println!(
+                    "{} Enumerating users via Kerberos AS-REQ against {}...",
+                    "▸".bright_black(),
+                    dc_ip
+                );
                 let uc = overthrone_hunter::UserEnumConfig {
                     userlist: std::path::PathBuf::from(userlist),
                     output_file: None,
