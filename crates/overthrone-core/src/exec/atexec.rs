@@ -222,6 +222,10 @@ fn build_job_add_stub(server: &str, command: &str, output_path: &str) -> Vec<u8>
     // Flags: JOB_NONINTERACTIVE = 0x10
     stub.extend_from_slice(&0x10u8.to_le_bytes()); // Flags
 
+    // NDR alignment: pad to 4-byte boundary before LPWSTR Command pointer
+    // AT_INFO offsets: JobTime(4)+DaysOfMonth(4)+DaysOfWeek(1)+Flags(1) = 10 bytes → pad to 12
+    stub.extend_from_slice(&[0u8, 0u8]); // 2 bytes NDR alignment padding
+
     // Command (the actual command to run)
     // Wrap command to redirect output
     let wrapped_cmd = format!("cmd.exe /c {} > {} 2>&1", command, output_path);

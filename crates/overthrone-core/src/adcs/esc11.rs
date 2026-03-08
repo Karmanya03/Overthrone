@@ -27,6 +27,8 @@
 //! Reference: Oliver Lyak, "Certificates and Pwnage and Patches" (2022)
 
 use crate::error::Result;
+use crate::proto::registry::{PredefinedHive, read_remote_registry_value};
+use crate::proto::smb::SmbSession;
 use tracing::{info, warn};
 
 // ─────────────────────────────────────────────────────────
@@ -89,6 +91,73 @@ impl Esc11Exploiter {
     /// Create a new ESC11 exploiter
     pub fn new(config: Esc11Config) -> Self {
         Self { config }
+    }
+
+    /// Assess the CA for ESC11 vulnerability by reading `InterfaceFlags` from
+    /// the remote registry of the CA server via WINREG RPC.
+    ///
+    /// This performs a **live** registry read and returns an accurate
+    /// `is_vulnerable` value.  Requires an authenticated `SmbSession` to the
+    /// CA server with at least `winreg` read access.
+    pub async fn assess_with_smb(&self, smb: &mut SmbSession) -> Result<Esc11VulnAssessment> {
+        let reg_path = format!(
+            r"SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\{}",
+            self.config.ca_name
+        );
+
+        info!(
+            "ESC11: Reading InterfaceFlags from {} via WINREG RPC",
+            self.config.ca_host
+        );
+
+        let interface_flags = match read_remote_registry_value(
+            smb,
+            PredefinedHive::LocalMachine,
+            &reg_path,
+            "InterfaceFlags",
+        )
+        .await
+        {
+            Ok(val) => {
+                // Registry value is a DWORD (4 bytes, little-endian)
+                if val.data.len() >= 4 {
+                    let flags =
+                        u32::from_le_bytes([val.data[0], val.data[1], val.data[2], val.data[3]]);
+                    info!("ESC11: InterfaceFlags = 0x{:08X}", flags);
+                    Some(flags)
+                } else {
+                    warn!(
+                        "ESC11: InterfaceFlags value too short ({}B) — treating as absent",
+                        val.data.len()
+                    );
+                    Some(0u32)
+                }
+            }
+            Err(e) => {
+                warn!("ESC11: Could not read InterfaceFlags from registry: {e}");
+                None
+            }
+        };
+
+        let registry_path_full = format!(
+            r"HKLM\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\{}\InterfaceFlags",
+            self.config.ca_name
+        );
+
+        match interface_flags {
+            Some(flags) => Ok(self.assess_from_flags(flags)),
+            None => Ok(Esc11VulnAssessment {
+                is_vulnerable: false,
+                interface_flags: None,
+                registry_path: registry_path_full,
+                exploitation_guide: self.generate_exploitation_guide(),
+                relay_command: self.generate_relay_command(),
+                remediation: format!(
+                    "Enable IF_ENFORCEENCRYPTICERTREQUEST (0x{:08X}) on CA '{}':",
+                    IF_ENFORCEENCRYPTICERTREQUEST, self.config.ca_name
+                ),
+            }),
+        }
     }
 
     /// Assess the CA for ESC11 vulnerability.

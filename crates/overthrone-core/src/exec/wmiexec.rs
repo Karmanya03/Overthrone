@@ -76,18 +76,8 @@ pub struct WmiExecResult {
 /// Uses `wmic.exe` process call or falls back to SCM-based execution
 /// with WMI-compatible command wrapping.
 pub async fn exec_command(session: &SmbSession, command: &str) -> Result<WmiExecResult> {
-    #[cfg(not(windows))]
-    {
-        let _ = (session, command);
-        Err(OverthroneError::Custom(
-            "WmiExec requires Windows \u{2014} use --method psexec or smbexec on Linux".to_string(),
-        ))
-    }
-    #[cfg(windows)]
-    {
-        let config = WmiExecConfig::default();
-        execute(session, command, &config).await
-    }
+    let config = WmiExecConfig::default();
+    execute(session, command, &config).await
 }
 
 /// Execute with custom configuration
@@ -96,70 +86,60 @@ pub async fn execute(
     command: &str,
     config: &WmiExecConfig,
 ) -> Result<WmiExecResult> {
-    #[cfg(not(windows))]
-    {
-        let _ = (session, command, config);
-        Err(OverthroneError::Custom(
-            "WmiExec requires Windows \u{2014} use --method psexec or smbexec on Linux".to_string(),
-        ))
-    }
-    #[cfg(windows)]
-    {
-        info!("WMIExec: Executing on {}", session.target);
-        debug!("WMIExec: Command: {}", command);
+    info!("WMIExec: Executing on {}", session.target);
+    debug!("WMIExec: Command: {}", command);
 
-        let id = rand::random::<u32>();
-        let output_filename = format!("{}_{:08X}.tmp", OUTPUT_PREFIX, id);
+    let id = rand::random::<u32>();
+    let output_filename = format!("{}_{:08X}.tmp", OUTPUT_PREFIX, id);
 
-        // Build the WMI-style command that captures output
-        let output_unc = format!(
-            "\\\\127.0.0.1\\{}\\{}",
-            config.output_share, output_filename
-        );
+    // Build the WMI-style command that captures output
+    let output_unc = format!(
+        "\\\\127.0.0.1\\{}\\{}",
+        config.output_share, output_filename
+    );
 
-        let working_dir = config
-            .working_directory
-            .as_deref()
-            .unwrap_or("C:\\Windows\\System32");
+    let working_dir = config
+        .working_directory
+        .as_deref()
+        .unwrap_or("C:\\Windows\\System32");
 
-        // Use cmd.exe to execute and redirect output
-        let wrapped_command = format!(
-            "cmd.exe /Q /c cd /d {} && {} 1> {} 2>&1",
-            working_dir, command, output_unc
-        );
+    // Use cmd.exe to execute and redirect output
+    let wrapped_command = format!(
+        "cmd.exe /Q /c cd /d {} && {} 1> {} 2>&1",
+        working_dir, command, output_unc
+    );
 
-        // Try DCOM-based WMI first, fall back to SCM
-        let success = match try_wmi_process_create(session, &wrapped_command).await {
-            Ok(_) => {
-                info!("WMIExec: Process created via WMI");
-                true
-            }
-            Err(e) => {
-                debug!("WMIExec: WMI failed ({e}), falling back to SCM");
-                match try_scm_execution(session, &wrapped_command).await {
-                    Ok(_) => {
-                        info!("WMIExec: Process created via SCM fallback");
-                        true
-                    }
-                    Err(e2) => {
-                        warn!("WMIExec: Both WMI and SCM failed: {e2}");
-                        false
-                    }
+    // Try DCOM-based WMI first, fall back to SCM
+    let success = match try_wmi_process_create(session, &wrapped_command).await {
+        Ok(_) => {
+            info!("WMIExec: Process created via WMI");
+            true
+        }
+        Err(e) => {
+            debug!("WMIExec: WMI failed ({e}), falling back to SCM");
+            match try_scm_execution(session, &wrapped_command).await {
+                Ok(_) => {
+                    info!("WMIExec: Process created via SCM fallback");
+                    true
+                }
+                Err(e2) => {
+                    warn!("WMIExec: Both WMI and SCM failed: {e2}");
+                    false
                 }
             }
-        };
+        }
+    };
 
-        // Wait for output
-        let output = wait_for_output(session, config, &output_filename).await;
+    // Wait for output
+    let output = wait_for_output(session, config, &output_filename).await;
 
-        Ok(WmiExecResult {
-            target: session.target.clone(),
-            command: command.to_string(),
-            success,
-            output,
-            return_code: None,
-        })
-    } // #[cfg(windows)]
+    Ok(WmiExecResult {
+        target: session.target.clone(),
+        command: command.to_string(),
+        success,
+        output,
+        return_code: None,
+    })
 }
 
 /// Attempt WMI process creation via DCOM activation over named pipes.

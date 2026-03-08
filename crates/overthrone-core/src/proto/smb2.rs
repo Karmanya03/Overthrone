@@ -22,7 +22,7 @@ use rand::Rng;
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -148,9 +148,8 @@ pub struct Smb2Connection {
     sign_required: std::sync::atomic::AtomicBool,
     /// Negotiated SMB dialect (e.g. 0x0210 = SMB 2.1, 0x0300 = SMB 3.0, 0x0302 = SMB 3.0.2)
     dialect: AtomicU16,
-    /// Negotiated max transaction size
-    #[allow(dead_code)] // Populated during SMB2 negotiation
-    max_transact_size: u32,
+    /// Negotiated max transaction size (from server NEGOTIATE response)
+    max_transact_size: AtomicU32,
     /// Negotiated max read size
     max_read_size: u32,
     /// Negotiated max write size
@@ -183,7 +182,7 @@ impl Smb2Connection {
             session_key: Mutex::new(None),
             sign_required: std::sync::atomic::AtomicBool::new(false),
             dialect: AtomicU16::new(0),
-            max_transact_size: 65536,
+            max_transact_size: AtomicU32::new(65536),
             max_read_size: 65536,
             max_write_size: 65536,
         })
@@ -402,8 +401,9 @@ impl Smb2Connection {
         let max_write = u32::from_le_bytes([body[36], body[37], body[38], body[39]]);
         debug!("SMB2: MaxTransact={max_transact}, MaxRead={max_read}, MaxWrite={max_write}");
 
-        // Store server capabilities (we don't mutate self's sizes since they're not
-        // behind Mutex — we use safe defaults set during construction)
+        // Store negotiated sizes — used when building IOCTL MaxOutputResponse
+        self.max_transact_size
+            .store(max_transact, Ordering::Relaxed);
 
         Ok(())
     }
@@ -1099,8 +1099,12 @@ impl Smb2Connection {
         body.extend_from_slice(&0u32.to_le_bytes());
         // OutputCount = 0
         body.extend_from_slice(&0u32.to_le_bytes());
-        // MaxOutputResponse — 1 MiB budget so DCSync / large RPC replies are not truncated
-        body.extend_from_slice(&1_048_576u32.to_le_bytes());
+        // MaxOutputResponse — honour server's negotiated MaxTransactSize, capped at 1 MiB
+        let max_out = self
+            .max_transact_size
+            .load(Ordering::Relaxed)
+            .min(1_048_576);
+        body.extend_from_slice(&max_out.to_le_bytes());
         // Flags = SMB2_0_IOCTL_IS_FSCTL (1)
         body.extend_from_slice(&1u32.to_le_bytes());
         // Reserved2 = 0

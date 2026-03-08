@@ -75,11 +75,12 @@ impl Esc1Exploiter {
             warn!("ESC1 SAN verification warning (cert may still work): {}", e);
         }
 
-        // Build PKCS#12 (PFX) bundle
-        let _pfx_data = create_pfx(&cert_data, &private_key, None).unwrap_or_default();
+        // Build PKCS#12 (PFX) bundle; fall back to raw DER if PFX construction fails
+        let pfx_data =
+            create_pfx(&cert_data, &private_key, None).unwrap_or_else(|_| cert_data.clone());
 
         Ok(IssuedCertificate {
-            pfx_data: cert_data.clone(),
+            pfx_data,
             thumbprint: Self::compute_thumbprint(&cert_data),
             serial_number: Self::extract_serial(&cert_data).unwrap_or_default(),
             valid_from: "Unknown".to_string(),

@@ -880,6 +880,25 @@ enum AdcsAction {
         /// LDAP URL (for UPN modification commands, e.g. ldap://dc01.corp.local)
         #[arg(short, long, default_value = "ldap://dc01.corp.local")]
         ldap_url: String,
+        /// [LIVE] DC IP/hostname — when provided with ldap-user/ldap-pass/ldap-domain/victim-dn
+        /// enables fully automated UPN poisoning via exploit_with_ldap()
+        #[arg(long)]
+        dc: Option<String>,
+        /// [LIVE] LDAP bind username for live UPN modification
+        #[arg(long)]
+        ldap_user: Option<String>,
+        /// [LIVE] LDAP bind password for live UPN modification
+        #[arg(long)]
+        ldap_pass: Option<String>,
+        /// [LIVE] LDAP domain (e.g. corp.local)
+        #[arg(long)]
+        ldap_domain: Option<String>,
+        /// [LIVE] Full distinguished name of the victim account (e.g. CN=alice,CN=Users,DC=corp,DC=local)
+        #[arg(long)]
+        victim_dn: Option<String>,
+        /// [LIVE] Use LDAPS (port 636) for the live LDAP modification
+        #[arg(long)]
+        ldaps: bool,
         /// Output PFX file path
         #[arg(short, long, default_value = "esc9_cert.pfx")]
         output: String,
@@ -898,6 +917,30 @@ enum AdcsAction {
         /// ESC10 variant: 'a' (StrongCertificateBindingEnforcement=0) or 'b' (CertificateMappingMethods UPN bit)
         #[arg(short = 'V', long, default_value = "a")]
         variant: String,
+        /// [Variant B / LIVE] Victim account name whose UPN is temporarily overwritten
+        #[arg(long)]
+        victim: Option<String>,
+        /// [Variant B / LIVE] Full distinguished name of the victim account
+        #[arg(long)]
+        victim_dn: Option<String>,
+        /// [Variant B / LIVE] Victim's original UPN (restored after cert is issued)
+        #[arg(long)]
+        original_upn: Option<String>,
+        /// [Variant B / LIVE] DC IP/hostname for LDAP
+        #[arg(long)]
+        dc: Option<String>,
+        /// [Variant B / LIVE] LDAP bind username
+        #[arg(long)]
+        ldap_user: Option<String>,
+        /// [Variant B / LIVE] LDAP bind password
+        #[arg(long)]
+        ldap_pass: Option<String>,
+        /// [Variant B / LIVE] LDAP domain
+        #[arg(long)]
+        ldap_domain: Option<String>,
+        /// [Variant B / LIVE] Use LDAPS (port 636)
+        #[arg(long)]
+        ldaps: bool,
         /// Output PFX file path
         #[arg(short, long, default_value = "esc10_cert.pfx")]
         output: String,
@@ -913,6 +956,16 @@ enum AdcsAction {
         /// Certificate template to request for the relayed identity
         #[arg(short, long, required = true)]
         template: String,
+        /// [LIVE] SMB username — when provided with smb-pass and smb-domain enables live
+        /// InterfaceFlags registry read via assess_with_smb() instead of guidance-only
+        #[arg(long)]
+        smb_user: Option<String>,
+        /// [LIVE] SMB password for live registry read
+        #[arg(long)]
+        smb_pass: Option<String>,
+        /// [LIVE] SMB domain for live registry read
+        #[arg(long)]
+        smb_domain: Option<String>,
     },
     /// ESC12 — CA private key exfiltration via shell access to the CA server
     Esc12 {
