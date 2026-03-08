@@ -2303,7 +2303,7 @@ impl LdapSession {
 
         // Build a minimal ACCESS_ALLOWED_ACE:
         // AceType=0x00, AceFlags=0x00, AceSize=u16, Mask=GENERIC_ALL(0x10000000), Sid=trustee
-        let ace_size = (4u16 + 4 + trustee_sid_bytes.len() as u16) as u16;
+        let ace_size = 4u16 + 4 + trustee_sid_bytes.len() as u16;
         let mut new_ace = Vec::with_capacity(ace_size as usize);
         new_ace.push(0x00); // AceType: ACCESS_ALLOWED_ACE_TYPE
         new_ace.push(0x00); // AceFlags
@@ -2325,7 +2325,7 @@ impl LdapSession {
         // Update AclSize and AceCount
         let old_acl_size =
             u16::from_le_bytes([ntsd[dacl_offset + 2], ntsd[dacl_offset + 3]]) as usize;
-        let ace_count = u16::from_le_bytes([ntsd[dacl_offset + 4], ntsd[dacl_offset + 5]]) as u16;
+        let ace_count = u16::from_le_bytes([ntsd[dacl_offset + 4], ntsd[dacl_offset + 5]]);
 
         let new_acl_size = (old_acl_size + new_ace.len()) as u16;
         let new_ace_count = ace_count + 1;

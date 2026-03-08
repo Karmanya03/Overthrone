@@ -1696,11 +1696,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 "{} Starting NTLM relay to {} targets {}",
                 "🎯".bright_black(),
                 targets.join(", ").cyan(),
-                if no_poison {
-                    "(relay-only)"
-                } else {
-                    ""
-                }
+                if no_poison { "(relay-only)" } else { "" }
             );
 
             let relay_targets: Vec<RelayTarget> = targets

@@ -4,6 +4,10 @@
 //! Uses the `\pipe\wkssvc` or direct DCOM for Win32_Process.Create.
 //! Output is captured by redirecting to a file on the admin share.
 
+// The helper constants and functions below are used only on Windows;
+// they are kept for completeness but not yet wired up on all targets.
+#![allow(dead_code)]
+
 use crate::error::{OverthroneError, Result};
 use crate::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
@@ -75,9 +79,9 @@ pub async fn exec_command(session: &SmbSession, command: &str) -> Result<WmiExec
     #[cfg(not(windows))]
     {
         let _ = (session, command);
-        return Err(OverthroneError::Custom(
+        Err(OverthroneError::Custom(
             "WmiExec requires Windows \u{2014} use --method psexec or smbexec on Linux".to_string(),
-        ));
+        ))
     }
     #[cfg(windows)]
     {
@@ -95,9 +99,9 @@ pub async fn execute(
     #[cfg(not(windows))]
     {
         let _ = (session, command, config);
-        return Err(OverthroneError::Custom(
+        Err(OverthroneError::Custom(
             "WmiExec requires Windows \u{2014} use --method psexec or smbexec on Linux".to_string(),
-        ));
+        ))
     }
     #[cfg(windows)]
     {

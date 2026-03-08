@@ -169,12 +169,12 @@ pub async fn cleanup_gpo_task(
 /// the quoted portion becomes the program, the rest are args.
 fn split_command(command: &str) -> (String, String) {
     let s = command.trim();
-    if s.starts_with('"') {
-        if let Some(end) = s[1..].find('"') {
-            let prog = s[1..=end].to_string();
-            let args = s[end + 2..].trim().to_string();
-            return (prog, args);
-        }
+    if let Some(rest) = s.strip_prefix('"')
+        && let Some(end) = rest.find('"')
+    {
+        let prog = rest[..end].to_string();
+        let args = rest[end + 1..].trim().to_string();
+        return (prog, args);
     }
     if let Some(sp) = s.find(' ') {
         (s[..sp].to_string(), s[sp + 1..].to_string())
