@@ -583,8 +583,7 @@ impl EngagementSession {
         }
 
         // Sort findings by severity (Critical first)
-        self.findings
-            .sort_by_key(|b| std::cmp::Reverse(b.severity));
+        self.findings.sort_by_key(|b| std::cmp::Reverse(b.severity));
     }
 
     /// Severity breakdown for summary
