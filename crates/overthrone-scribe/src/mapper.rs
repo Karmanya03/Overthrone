@@ -251,7 +251,7 @@ pub fn build_attack_matrix(
 
     // Deduplicate within each tactic
     for techniques in by_tactic.values_mut() {
-        techniques.sort_by(|a, b| a.technique_id.cmp(&b.technique_id));
+        techniques.sort_by_key(|a| (a.technique_id.clone(), a.sub_technique_id.clone()));
         techniques.dedup_by(|a, b| {
             a.technique_id == b.technique_id && a.sub_technique_id == b.sub_technique_id
         });

@@ -583,7 +583,9 @@ pub fn merge_sessions(
     }
 
     // Re-sort by severity
-    merged.findings.sort_by(|a, b| b.severity.cmp(&a.severity));
+    merged
+        .findings
+        .sort_by_key(|b| std::cmp::Reverse(b.severity));
 
     // Update stats (take max)
     merged.total_users_enumerated = merged

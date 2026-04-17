@@ -283,7 +283,7 @@ pub fn aggregate_mitigations(finding_types: &[&str]) -> Vec<Mitigation> {
         .flat_map(|ft| get_mitigations(ft))
         .collect();
 
-    all.sort_by(|a, b| a.priority.cmp(&b.priority));
+    all.sort_by_key(|a| a.priority);
     all.dedup_by(|a, b| a.title == b.title);
     all
 }

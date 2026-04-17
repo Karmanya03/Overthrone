@@ -154,9 +154,8 @@ pub fn attack_chain_narrative(session: &EngagementSession) -> String {
     );
 
     let mut current_stage = String::new();
-    let mut step_num = 1;
 
-    for entry in &state.action_log {
+    for (step_num, entry) in (1..).zip(state.action_log.iter()) {
         if entry.stage != current_stage {
             current_stage = entry.stage.clone();
             parts.push(format!("\n**Phase: {}**\n", current_stage));
@@ -177,7 +176,6 @@ pub fn attack_chain_narrative(session: &EngagementSession) -> String {
             entry.action,
             detail_short
         ));
-        step_num += 1;
     }
 
     let succeeded = state.action_log.iter().filter(|a| a.success).count();
