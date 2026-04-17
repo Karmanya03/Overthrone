@@ -39,11 +39,11 @@ aes.workspace = true
 aes-gcm = "0.10"        # AES-256-GCM for LAPS v2 decryption
 cmac.workspace = true
 cbc.workspace = true
-hmac = "0.12"
-md-5 = "0.10"
-md4 = "0.10"
+hmac.workspace = true
+md-5.workspace = true
+md4.workspace = true
 sha2 = { workspace = true, features = ["oid"] }
-rand = "0.8"
+rand.workspace = true
 base64.workspace = true
 hex.workspace = true
 digest.workspace = true
@@ -71,12 +71,12 @@ rcgen = "0.14.7"
 p12 = "0.6.3"
 foreign-types = "0.5.0"
 pfx = "0.4.1"
-p12-keystore = "0.2.0"
+p12-keystore = "0.2.1"
 
 # ─── Plugin System ─────────────────────────────────────────
 libloading = "0.8"       # Dynamic .dll/.so loading for native plugins
 shellexpand = "3.1"      # Tilde expansion for plugin paths (~/.overthrone)
-wasmtime = "28.0"        # WASM runtime for sandboxed plugins
+wasmtime = "36.0.7"      # WASM runtime for sandboxed plugins
 
 # ─── C2 Integration ────────────────────────────────────────
 tonic = { version = "0.12", optional = true }   # gRPC client for Sliver
@@ -115,4 +115,4 @@ full-c2 = ["sliver-grpc"]             # All C2 integrations
 [dev-dependencies]
 tokio-test.workspace = true
 pretty_assertions.workspace = true
-proptest = "1.4"        # Property-based testing
+proptest = "1.11"       # Property-based testing

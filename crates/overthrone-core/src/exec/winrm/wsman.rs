@@ -261,16 +261,17 @@ impl WinRmExecutor {
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => {
-                    if e.name().as_ref() == b"wsman:Selector" || e.name().as_ref() == b"Selector" {
-                        let is_shell_id = e.attributes().flatten().any(|attr| {
-                            attr.key.as_ref() == b"Name" && attr.value.as_ref() == b"ShellId"
-                        });
-                        if is_shell_id {
-                            buf.clear();
-                            if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
-                                return Ok(String::from_utf8_lossy(t.as_ref()).trim().to_string());
-                            }
+                Ok(Event::Start(e))
+                    if e.name().as_ref() == b"wsman:Selector"
+                        || e.name().as_ref() == b"Selector" =>
+                {
+                    let is_shell_id = e.attributes().flatten().any(|attr| {
+                        attr.key.as_ref() == b"Name" && attr.value.as_ref() == b"ShellId"
+                    });
+                    if is_shell_id {
+                        buf.clear();
+                        if let Ok(Event::Text(t)) = reader.read_event_into(&mut buf) {
+                            return Ok(String::from_utf8_lossy(t.as_ref()).trim().to_string());
                         }
                     }
                 }

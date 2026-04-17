@@ -344,43 +344,115 @@ fn try_rpcclient(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
 /// Windows fallback: use `net rpc` / PowerShell for basic RPC operations
 #[cfg(windows)]
 fn try_net_rpc(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
+    fn ps_single_quote_escape(s: &str) -> String {
+        s.replace('\'', "''")
+    }
+
+    fn run_powershell(config: &RidCycleConfig, script: &str, op: &str) -> Result<String> {
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        let output = cmd.output().map_err(|e| OverthroneError::Rpc {
+            target: config.target.clone(),
+            reason: format!("PowerShell {op} failed to start: {e}"),
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(OverthroneError::Rpc {
+                target: config.target.clone(),
+                reason: format!("PowerShell {op} failed: {}", stderr.trim()),
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
     let server_arg = format!("/S:{}", config.target);
 
     if rpc_cmd == "lsaquery" {
-        // net rpc info gives domain SID
+        // Prefer Samba net rpc if available in PATH.
         let mut cmd = Command::new("net");
         cmd.args(["rpc", "info", &server_arg]);
         if !config.null_session && !config.username.is_empty() {
             cmd.arg(format!("/U:{}\\{}", config.domain, config.username));
             cmd.arg(format!("/P:{}", config.password));
         }
-        let output = cmd.output().map_err(|e| OverthroneError::Rpc {
-            target: config.target.clone(),
-            reason: format!("net rpc exec failed: {e}"),
-        })?;
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        if let Ok(output) = cmd.output()
+            && output.status.success()
+            && !output.stdout.is_empty()
+        {
+            return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+
+        // Fall back to a native PowerShell/LDAP query for the domain SID.
+        let dc = ps_single_quote_escape(&config.target);
+        let domain = ps_single_quote_escape(&config.domain);
+        let user = ps_single_quote_escape(&config.username);
+        let pass = ps_single_quote_escape(&config.password);
+
+        let script = if !config.null_session && !config.username.is_empty() {
+            format!(
+                r#"try {{
+  $dc = '{dc}';
+  $dom = '{domain}';
+  $usr = '{user}';
+  $pwd = '{pass}';
+  $bindUser = if ([string]::IsNullOrWhiteSpace($dom)) {{ $usr }} else {{ "$dom\$usr" }};
+  $root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/RootDSE", $bindUser, $pwd);
+  $base = $root.Properties['defaultNamingContext'][0];
+  if (-not $base) {{ throw 'defaultNamingContext missing' }}
+  $de = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/$base", $bindUser, $pwd);
+  $sidBytes = $de.Properties['objectSid'][0];
+  if (-not $sidBytes) {{ throw 'objectSid missing' }}
+  $sid = New-Object System.Security.Principal.SecurityIdentifier($sidBytes, 0);
+  if ([string]::IsNullOrWhiteSpace($dom)) {{ $dom = ($base -replace ',DC=', '.' -replace '^DC=', '') }}
+  Write-Output "Domain Name: $dom";
+  Write-Output "Domain Sid: $($sid.Value)";
+}} catch {{
+  throw
+}}"#
+            )
+        } else {
+            format!(
+                r#"try {{
+  $dc = '{dc}';
+  $dom = '{domain}';
+  $root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/RootDSE");
+  $base = $root.Properties['defaultNamingContext'][0];
+  if (-not $base) {{ throw 'defaultNamingContext missing' }}
+  $de = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/$base");
+  $sidBytes = $de.Properties['objectSid'][0];
+  if (-not $sidBytes) {{ throw 'objectSid missing' }}
+  $sid = New-Object System.Security.Principal.SecurityIdentifier($sidBytes, 0);
+  if ([string]::IsNullOrWhiteSpace($dom)) {{ $dom = ($base -replace ',DC=', '.' -replace '^DC=', '') }}
+  Write-Output "Domain Name: $dom";
+  Write-Output "Domain Sid: $($sid.Value)";
+}} catch {{
+  throw
+}}"#
+            )
+        };
+
+        return run_powershell(config, &script, "lsaquery");
     }
 
     if let Some(sid) = rpc_cmd.strip_prefix("lookupsids ") {
         // Use PowerShell SID-to-name translation and format like rpcclient output
+        let sid_escaped = ps_single_quote_escape(sid);
         let ps_script = format!(
             "try {{ $s=[System.Security.Principal.SecurityIdentifier]::new('{}'); \
              $n=$s.Translate([System.Security.Principal.NTAccount]).Value; \
              Write-Output \"$s $n (1)\" }} catch {{ Write-Output '{} *unknown* (8)' }}",
-            sid, sid
+            sid_escaped, sid_escaped
         );
-        let mut cmd = Command::new("powershell");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
-        let output = cmd.output().map_err(|e| OverthroneError::Rpc {
-            target: config.target.clone(),
-            reason: format!("PowerShell SID lookup failed: {e}"),
-        })?;
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        return run_powershell(config, &ps_script, "lookupsids");
     }
 
     Err(OverthroneError::Rpc {
         target: config.target.clone(),
-        reason: format!("net rpc fallback not implemented for: {rpc_cmd}"),
+        reason: format!(
+            "Windows fallback supports only lsaquery/lookupsids; unsupported rpc command: {rpc_cmd}"
+        ),
     })
 }
 

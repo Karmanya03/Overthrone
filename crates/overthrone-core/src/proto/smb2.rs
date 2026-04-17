@@ -18,7 +18,7 @@ use cmac::Cmac;
 use hmac::{Hmac, Mac};
 use md4::{Digest as Md4Digest, Md4};
 use md5::Md5;
-use rand::Rng;
+use rand::RngExt;
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -349,7 +349,7 @@ impl Smb2Connection {
         body.extend_from_slice(&0u32.to_le_bytes());
         // ClientGuid (16 bytes random)
         let mut guid = [0u8; 16];
-        rand::thread_rng().fill(&mut guid);
+        rand::rng().fill(&mut guid);
         body.extend_from_slice(&guid);
         // ClientStartTime = 0
         body.extend_from_slice(&0u64.to_le_bytes());
@@ -1394,7 +1394,7 @@ fn build_ntlmssp_authenticate_hash(
     let response_key = hmac_md5(nt_hash, &user_domain)?;
 
     // Step 2: Build NTLMv2 client challenge blob
-    let client_challenge: [u8; 8] = rand::thread_rng().r#gen();
+    let client_challenge: [u8; 8] = rand::rng().random();
     let timestamp = filetime_now();
     let blob = build_ntlmv2_blob(&client_challenge, &timestamp, &challenge.target_info);
 
@@ -1434,7 +1434,7 @@ fn build_ntlmssp_authenticate_hash(
 
     // Encrypted random session key (key exchange)
     let exported_session_key: Vec<u8> = if flags & NTLMSSP_NEGOTIATE_KEY_EXCH != 0 {
-        let random_key: [u8; 16] = rand::thread_rng().r#gen();
+        let random_key: [u8; 16] = rand::rng().random();
         random_key.to_vec()
     } else {
         session_base_key.clone()

@@ -21,9 +21,9 @@ indicatif.workspace = true
 uuid.workspace = true
 rand.workspace = true
 comfy-table = "7"
-md4 = "0.10"
-md-5 = "0.10"
-hmac = "0.12"
+md4.workspace = true
+md-5.workspace = true
+hmac.workspace = true
 rurel = { version = "0.5", optional = true }
 
 [features]

@@ -2844,66 +2844,60 @@ fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<Ac
 
         match ace_type_raw {
             // ACCESS_ALLOWED_ACE (0x00) / ACCESS_DENIED_ACE (0x01)
-            0x00 | 0x01 => {
-                if ace_data.len() >= 8 {
-                    let mask =
-                        u32::from_le_bytes([ace_data[4], ace_data[5], ace_data[6], ace_data[7]]);
-                    let sid = if ace_data.len() > 8 {
-                        parse_sid(&ace_data[8..])
-                    } else {
-                        "S-1-0-0".to_string()
-                    };
+            0x00 | 0x01 if ace_data.len() >= 8 => {
+                let mask = u32::from_le_bytes([ace_data[4], ace_data[5], ace_data[6], ace_data[7]]);
+                let sid = if ace_data.len() > 8 {
+                    parse_sid(&ace_data[8..])
+                } else {
+                    "S-1-0-0".to_string()
+                };
 
-                    aces.push(AceEntry {
-                        ace_type,
-                        ace_flags,
-                        access_mask: mask,
-                        trustee_sid: sid,
-                        object_type: None,
-                        inherited_object_type: None,
-                    });
-                }
+                aces.push(AceEntry {
+                    ace_type,
+                    ace_flags,
+                    access_mask: mask,
+                    trustee_sid: sid,
+                    object_type: None,
+                    inherited_object_type: None,
+                });
             }
             // ACCESS_ALLOWED_OBJECT_ACE (0x05) / ACCESS_DENIED_OBJECT_ACE (0x06)
-            0x05 | 0x06 => {
-                if ace_data.len() >= 12 {
-                    let mask =
-                        u32::from_le_bytes([ace_data[4], ace_data[5], ace_data[6], ace_data[7]]);
-                    let obj_flags =
-                        u32::from_le_bytes([ace_data[8], ace_data[9], ace_data[10], ace_data[11]]);
+            0x05 | 0x06 if ace_data.len() >= 12 => {
+                let mask = u32::from_le_bytes([ace_data[4], ace_data[5], ace_data[6], ace_data[7]]);
+                let obj_flags =
+                    u32::from_le_bytes([ace_data[8], ace_data[9], ace_data[10], ace_data[11]]);
 
-                    let mut pos = 12;
-                    let object_type = if obj_flags & 0x01 != 0 && pos + 16 <= ace_data.len() {
-                        let guid = format_guid(&ace_data[pos..pos + 16]);
-                        pos += 16;
-                        Some(guid)
-                    } else {
-                        None
-                    };
+                let mut pos = 12;
+                let object_type = if obj_flags & 0x01 != 0 && pos + 16 <= ace_data.len() {
+                    let guid = format_guid(&ace_data[pos..pos + 16]);
+                    pos += 16;
+                    Some(guid)
+                } else {
+                    None
+                };
 
-                    let inherited = if obj_flags & 0x02 != 0 && pos + 16 <= ace_data.len() {
-                        let guid = format_guid(&ace_data[pos..pos + 16]);
-                        pos += 16;
-                        Some(guid)
-                    } else {
-                        None
-                    };
+                let inherited = if obj_flags & 0x02 != 0 && pos + 16 <= ace_data.len() {
+                    let guid = format_guid(&ace_data[pos..pos + 16]);
+                    pos += 16;
+                    Some(guid)
+                } else {
+                    None
+                };
 
-                    let sid = if pos < ace_data.len() {
-                        parse_sid(&ace_data[pos..])
-                    } else {
-                        "S-1-0-0".to_string()
-                    };
+                let sid = if pos < ace_data.len() {
+                    parse_sid(&ace_data[pos..])
+                } else {
+                    "S-1-0-0".to_string()
+                };
 
-                    aces.push(AceEntry {
-                        ace_type,
-                        ace_flags,
-                        access_mask: mask,
-                        trustee_sid: sid,
-                        object_type,
-                        inherited_object_type: inherited,
-                    });
-                }
+                aces.push(AceEntry {
+                    ace_type,
+                    ace_flags,
+                    access_mask: mask,
+                    trustee_sid: sid,
+                    object_type,
+                    inherited_object_type: inherited,
+                });
             }
             _ => {
                 // Skip unrecognized ACE types

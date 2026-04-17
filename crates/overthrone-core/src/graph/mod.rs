@@ -1008,7 +1008,7 @@ impl AttackGraph {
             .collect();
 
         // Sort descending by degree, take top N
-        degrees.sort_by(|a, b| b.1.cmp(&a.1));
+        degrees.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         degrees.truncate(top_n);
 
         degrees

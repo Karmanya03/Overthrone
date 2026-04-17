@@ -373,10 +373,8 @@ fn process_attribute(
             obj.rid = extract_rid(value_data);
             debug!("  objectSid: {:?} (RID: {:?})", obj.object_sid, obj.rid);
         }
-        ATTID_USER_ACCOUNT_CONTROL => {
-            if value_data.len() >= 4 {
-                obj.uac = Some(read_u32(value_data, 0));
-            }
+        ATTID_USER_ACCOUNT_CONTROL if value_data.len() >= 4 => {
+            obj.uac = Some(read_u32(value_data, 0));
         }
         ATTID_UNICODE_PWD => match decrypt_replicated_secret(value_data, session_key) {
             Ok(decrypted) => {

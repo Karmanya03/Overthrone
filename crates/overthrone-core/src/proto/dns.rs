@@ -6,14 +6,12 @@
 
 use crate::error::{OverthroneError, Result};
 use hickory_resolver::Resolver;
+use hickory_resolver::TokioResolver;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::proto::xfer::Protocol;
-use std::net::{IpAddr, SocketAddr};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::RData;
+use std::net::IpAddr;
 use tracing::{debug, info, warn};
-
-/// Type alias for the Tokio-based resolver
-type TokioResolver = Resolver<TokioConnectionProvider>;
 
 // ═══════════════════════════════════════════════════════════
 //  Well-known AD SRV service prefixes
@@ -54,11 +52,15 @@ pub struct DnsResolver {
 impl DnsResolver {
     /// Build a resolver using the system's default DNS configuration.
     pub fn system() -> Result<Self> {
-        let resolver = Resolver::builder_with_config(
+        let resolver: TokioResolver = Resolver::builder_with_config(
             ResolverConfig::default(),
-            TokioConnectionProvider::default(),
+            TokioRuntimeProvider::default(),
         )
-        .build();
+        .build()
+        .map_err(|e| OverthroneError::Dns {
+            target: "system resolver".to_string(),
+            reason: e.to_string(),
+        })?;
         Ok(Self {
             resolver,
             server: None,
@@ -71,13 +73,17 @@ impl DnsResolver {
             target: server_ip.to_string(),
             reason: "Invalid nameserver IP address".to_string(),
         })?;
-        let socket = SocketAddr::new(ip, 53);
-        let mut config = ResolverConfig::new();
-        config.add_name_server(NameServerConfig::new(socket, Protocol::Udp));
-        config.add_name_server(NameServerConfig::new(socket, Protocol::Tcp));
+        let mut config = ResolverConfig::default();
+        config.add_name_server(NameServerConfig::udp(ip));
+        config.add_name_server(NameServerConfig::tcp(ip));
 
-        let resolver =
-            Resolver::builder_with_config(config, TokioConnectionProvider::default()).build();
+        let resolver: TokioResolver =
+            Resolver::builder_with_config(config, TokioRuntimeProvider::default())
+                .build()
+                .map_err(|e| OverthroneError::Dns {
+                    target: server_ip.to_string(),
+                    reason: e.to_string(),
+                })?;
         Ok(Self {
             resolver,
             server: Some(server_ip.to_string()),
@@ -107,15 +113,14 @@ impl DnsResolver {
                 })?;
 
         let mut results = Vec::new();
-        for record in srv_response.iter() {
-            let hostname = record
-                .target()
-                .to_string()
-                .trim_end_matches('.')
-                .to_string();
+        for record in srv_response.answers() {
+            let RData::SRV(srv) = &record.data else {
+                continue;
+            };
+            let hostname = srv.target.to_string().trim_end_matches('.').to_string();
 
             let ips = match self.resolver.lookup_ip(&hostname).await {
-                Ok(resp) => resp.iter().map(|a: IpAddr| a.to_string()).collect(),
+                Ok(resp) => resp.iter().map(|a| a.to_string()).collect(),
                 Err(e) => {
                     warn!("Failed to resolve SRV target {hostname}: {e}");
                     Vec::new()
@@ -124,9 +129,9 @@ impl DnsResolver {
 
             results.push(SrvRecord {
                 hostname,
-                port: record.port(),
-                priority: record.priority(),
-                weight: record.weight(),
+                port: srv.port,
+                priority: srv.priority,
+                weight: srv.weight,
                 ips,
             });
         }
@@ -231,9 +236,12 @@ impl DnsResolver {
                 })?;
 
         let hostname = response
+            .answers()
             .iter()
-            .next()
-            .map(|name| name.to_string().trim_end_matches('.').to_string())
+            .find_map(|record| match &record.data {
+                RData::PTR(ptr) => Some(ptr.to_string().trim_end_matches('.').to_string()),
+                _ => None,
+            })
             .ok_or_else(|| OverthroneError::Dns {
                 target: ip.to_string(),
                 reason: "No PTR record found".to_string(),
@@ -325,11 +333,13 @@ impl DnsResolver {
 /// Build a resolver using default system config (legacy helper).
 #[allow(dead_code)] // Legacy helper kept for backward compat
 fn build_resolver() -> Result<TokioResolver> {
-    let resolver = Resolver::builder_with_config(
-        ResolverConfig::default(),
-        TokioConnectionProvider::default(),
-    )
-    .build();
+    let resolver: TokioResolver =
+        Resolver::builder_with_config(ResolverConfig::default(), TokioRuntimeProvider::default())
+            .build()
+            .map_err(|e| OverthroneError::Dns {
+                target: "system resolver".to_string(),
+                reason: e.to_string(),
+            })?;
     Ok(resolver)
 }
 

@@ -319,7 +319,7 @@ enum Commands {
         action: NtlmAction,
     },
 
-    /// ADCS certificate abuse — ESC1-ESC8 attacks
+    /// ADCS certificate abuse — ESC1-ESC13 attacks
     #[command(alias = "certify")]
     Adcs {
         #[command(subcommand)]

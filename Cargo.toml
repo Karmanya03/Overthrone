@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.31"
 edition = "2024"
 authors = ["Karmanya03"]
 license = "MIT"
@@ -23,12 +23,12 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # Async Runtime
-tokio = { version = "1.50", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.9.8"
+toml = "1.1.2"
 
 # Error Handling
 thiserror = "2.0"
@@ -36,11 +36,11 @@ anyhow = "1.0.102"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "color", "env", "wrap_help"] }
-clap_complete = "4.5"
+clap = { version = "4.6.1", features = ["derive", "color", "env", "wrap_help"] }
+clap_complete = "4.6.2"
 
 # LDAP — use rustls instead of native-tls to avoid the native-tls 0.2.17
 # Protocol::Tlsv13 non-exhaustive match bug on Linux/OpenSSL.
@@ -54,12 +54,12 @@ petgraph = { version = "0.8.3", features = ["serde"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 
 # UUID
-uuid = { version = "1.22.0", features = ["v4", "serde"] }
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
 
 # Terminal Output
-colored = "3.0"
+colored = "3.1"
 indicatif = "0.18"
-console = "0.16"
+console = "0.16.3"
 
 # Crypto - STABLE VERSIONS
 aes = "0.8"
@@ -69,7 +69,7 @@ hmac = "0.12"
 md-5 = "0.10"
 md4 = "0.10"
 sha2 = "0.10"
-rand = "0.10"
+rand = "0.10.1"
 base64 = "0.22"
 hex = "0.4"
 digest = "0.10"
@@ -78,23 +78,23 @@ rc4 = "0.1"
 pbkdf2 = "0.12"
 
 # Networking
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "cookies"] }
-hickory-resolver = "0.25"
+reqwest = { version = "0.13.2", features = ["json", "rustls", "cookies", "form"] }
+hickory-resolver = "0.26.0"
 
 # ASN.1 / Kerberos
-rasn = "0.28.8"
+rasn = "0.28.12"
 kerberos_asn1 = "0.2"
 kerberos_crypto = "0.3"
 
 # Byte Handling
-bytes = "1.9"
+bytes = "1.11"
 byteorder = "1.5"
 
 # Async Utilities
 futures = "0.3"
 
 # Parallel Processing
-rayon = "1.10"
+rayon = "1.12.0"
 
 # Compression (for embedded wordlist)
 zstd = "0.13"
@@ -104,7 +104,7 @@ directories = "6.0"
 
 # Testing
 tokio-test = "0.4"
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 pretty_assertions = "1.4"
 
 # NOTE: sspi git patch removed — Devolutions master branch pulls in

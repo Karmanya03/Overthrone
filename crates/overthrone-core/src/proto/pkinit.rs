@@ -1,8 +1,8 @@
 use crate::error::{OverthroneError, Result};
 use base64::Engine;
-use rand::rngs::OsRng;
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+use rsa::rand_core::OsRng;
 use rsa::signature::{RandomizedSigner, SignatureEncoding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use sha2::{Digest, Sha256};
