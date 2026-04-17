@@ -2214,7 +2214,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             victim,
             original_upn,
             ldap_url,
-            dc,
+            target_dc,
             ldap_user,
             ldap_pass,
             ldap_domain,
@@ -2233,7 +2233,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             // Determine whether we have a full live credential set for automatic LDAP UPN poisoning
             let live_ldap = match (
-                dc.as_deref(),
+                target_dc.as_deref(),
                 ldap_user.as_deref(),
                 ldap_pass.as_deref(),
                 ldap_domain.as_deref(),
@@ -2304,7 +2304,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 );
                 println!("{}", restore_cmd.dimmed());
                 println!(
-                    "  {} Tip: supply --dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn for fully automated mode",
+                    "  {} Tip: supply --target-dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn for fully automated mode",
                     "i".dimmed()
                 );
                 exploiter.exploit(&config).await.map(|mut r| {
@@ -2342,7 +2342,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             victim,
             victim_dn,
             original_upn,
-            dc,
+            target_dc,
             ldap_user,
             ldap_pass,
             ldap_domain,
@@ -2367,7 +2367,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             // Determine whether we have enough for a Variant B live run
             let live_ldap_b = match (
                 &esc_variant,
-                dc.as_deref(),
+                target_dc.as_deref(),
                 ldap_user.as_deref(),
                 ldap_pass.as_deref(),
                 ldap_domain.as_deref(),
@@ -2440,7 +2440,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 // ─ STANDARD MODE: Variant A always works; Variant B without creds prints a hint ─
                 if esc_variant == overthrone_core::adcs::Esc10Variant::UPNMappingEnabled {
                     println!(
-                        "  {} Tip: supply --dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn/--original-upn for fully automated Variant B",
+                        "  {} Tip: supply --target-dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn/--original-upn for fully automated Variant B",
                         "i".dimmed()
                     );
                 }

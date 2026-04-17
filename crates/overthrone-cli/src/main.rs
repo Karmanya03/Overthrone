@@ -107,8 +107,6 @@ enum Commands {
 
     /// Full AD enumeration via reaper modules
     Reaper {
-        #[arg(long, env = "OT_DC_IP", alias = "dc", alias = "dc-host")]
-        dc_ip: Option<String>,
         #[arg(long, short, value_delimiter = ',')]
         modules: Vec<String>,
         #[arg(long, default_value = "500")]
@@ -228,8 +226,8 @@ enum Commands {
         #[arg(long, short, value_delimiter = ',')]
         checks: Vec<String>,
         /// Domain controller to test connectivity against
-        #[arg(long)]
-        dc: Option<String>,
+        #[arg(long = "target-dc")]
+        target_dc: Option<String>,
     },
 
     /// Generate engagement report (Markdown, PDF, JSON)
@@ -624,7 +622,7 @@ enum SmbAction {
     Get {
         #[arg(short, long)]
         target: String,
-        #[arg(short, long)]
+        #[arg(short = 'P', long)]
         path: String,
     },
     Put {
@@ -645,13 +643,13 @@ enum SmbAction {
 enum GraphAction {
     Build,
     Path {
-        #[arg(short, long)]
+        #[arg(long)]
         from: String,
         #[arg(short, long)]
         to: String,
     },
     PathToDa {
-        #[arg(short, long)]
+        #[arg(long)]
         from: String,
     },
     Stats,
@@ -739,7 +737,7 @@ enum NtlmAction {
         #[arg(short, long, default_value = "0.0.0.0")]
         interface: String,
         /// Port to listen on
-        #[arg(short, long, default_value = "445")]
+        #[arg(short = 'P', long, default_value = "445")]
         port: u16,
         /// Relay-only mode: skip poisoner/responder, use pre-captured hashes
         #[arg(long)]
@@ -751,7 +749,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// Listen port
-        #[arg(short, long, default_value = "445")]
+        #[arg(short = 'P', long, default_value = "445")]
         port: u16,
         /// Command to execute on successful relay
         #[arg(short, long)]
@@ -766,7 +764,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// SMB port
-        #[arg(short, long, default_value = "445")]
+        #[arg(short = 'P', long, default_value = "445")]
         port: u16,
         /// Command to execute
         #[arg(short, long)]
@@ -778,7 +776,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// HTTP port
-        #[arg(short, long, default_value = "80")]
+        #[arg(short = 'P', long, default_value = "80")]
         port: u16,
         /// Command to execute via WinRM
         #[arg(short, long)]
@@ -804,7 +802,7 @@ enum AdcsAction {
         ca: String,
         #[arg(short, long, required = true)]
         template: String,
-        #[arg(short, long, required = true)]
+        #[arg(short = 'U', long, required = true)]
         target_user: String,
         #[arg(short, long, default_value = "esc1_cert.pfx")]
         output: String,
@@ -826,7 +824,7 @@ enum AdcsAction {
         agent_template: String,
         #[arg(short, long, required = true)]
         target_template: String,
-        #[arg(short, long, required = true)]
+        #[arg(short = 'U', long, required = true)]
         target_user: String,
     },
     /// ESC4 — Vulnerable certificate template ACLs
@@ -855,7 +853,7 @@ enum AdcsAction {
     },
     /// ESC8 — ADCS Web Enrollment relay
     Esc8 {
-        #[arg(short, long, required = true)]
+        #[arg(short = 'w', long, required = true)]
         url: String,
         #[arg(short, long, required = true)]
         target_user: String,
@@ -872,18 +870,18 @@ enum AdcsAction {
         #[arg(short = 'T', long, required = true)]
         target_upn: String,
         /// Victim account whose UPN will be temporarily modified
-        #[arg(short, long, required = true)]
+        #[arg(short = 'V', long, required = true)]
         victim: String,
         /// Original UPN of the victim account (for restoration)
-        #[arg(short, long, required = true)]
+        #[arg(short = 'R', long, required = true)]
         original_upn: String,
         /// LDAP URL (for UPN modification commands, e.g. ldap://dc01.corp.local)
         #[arg(short, long, default_value = "ldap://dc01.corp.local")]
         ldap_url: String,
         /// [LIVE] DC IP/hostname — when provided with ldap-user/ldap-pass/ldap-domain/victim-dn
         /// enables fully automated UPN poisoning via exploit_with_ldap()
-        #[arg(long)]
-        dc: Option<String>,
+        #[arg(long = "target-dc")]
+        target_dc: Option<String>,
         /// [LIVE] LDAP bind username for live UPN modification
         #[arg(long)]
         ldap_user: Option<String>,
@@ -927,8 +925,8 @@ enum AdcsAction {
         #[arg(long)]
         original_upn: Option<String>,
         /// [Variant B / LIVE] DC IP/hostname for LDAP
-        #[arg(long)]
-        dc: Option<String>,
+        #[arg(long = "target-dc")]
+        target_dc: Option<String>,
         /// [Variant B / LIVE] LDAP bind username
         #[arg(long)]
         ldap_user: Option<String>,
@@ -976,7 +974,7 @@ enum AdcsAction {
         #[arg(short = 'N', long, required = true)]
         ca_name: String,
         /// Privileged account on the CA server
-        #[arg(short, long, default_value = "Administrator")]
+        #[arg(short = 'U', long, default_value = "Administrator")]
         operator: String,
         /// Path on the CA server to write the backup
         #[arg(short, long, default_value = r"C:\Windows\Temp\cabackup")]
@@ -991,7 +989,7 @@ enum AdcsAction {
         #[arg(short, long, required = true)]
         template: String,
         /// The issuance policy OID value linked to a privileged group
-        #[arg(short, long, required = true)]
+        #[arg(short = 'P', long, required = true)]
         policy_oid: String,
         /// DN of the privileged group linked to the OID
         #[arg(short = 'G', long, required = true)]
@@ -1011,7 +1009,7 @@ enum AdcsAction {
         template: String,
         #[arg(short, long)]
         subject: Option<String>,
-        #[arg(short = 'A', long)]
+        #[arg(short = 'S', long)]
         san: Option<String>,
         #[arg(short, long, default_value = "cert.pfx")]
         output: String,
@@ -1048,7 +1046,7 @@ enum SccmAction {
         #[arg(short, long, required = true)]
         app_name: String,
         /// Payload path
-        #[arg(short, long, required = true)]
+        #[arg(short = 'P', long, required = true)]
         payload: String,
     },
 }
@@ -1097,7 +1095,7 @@ enum MssqlAction {
         target: String,
         #[arg(short, long, required = true)]
         query: String,
-        #[arg(short, long, default_value = "master")]
+        #[arg(short = 'D', long, default_value = "master")]
         database: String,
     },
     /// Execute command via xp_cmdshell
@@ -1206,7 +1204,7 @@ enum C2Action {
         /// Command to execute
         command: String,
         /// Use PowerShell
-        #[arg(short = 'p', long)]
+        #[arg(short = 'P', long)]
         powershell: bool,
     },
     /// Deploy an implant to a target
@@ -1390,10 +1388,9 @@ async fn async_main() {
             }
         },
         Commands::Reaper {
-            ref dc_ip,
             ref modules,
             page_size,
-        } => cmd_reaper(&cli, dc_ip.clone(), modules.clone(), page_size).await,
+        } => cmd_reaper(&cli, modules.clone(), page_size).await,
         Commands::Enum {
             ref target,
             ref filter,
@@ -1455,9 +1452,10 @@ async fn async_main() {
             ref target,
             ref source,
         } => commands_impl::cmd_dump(&cli, target, source.clone()).await,
-        Commands::Doctor { ref checks, ref dc } => {
-            commands_impl::cmd_doctor(&cli, checks.clone(), dc.as_deref()).await
-        }
+        Commands::Doctor {
+            ref checks,
+            ref target_dc,
+        } => commands_impl::cmd_doctor(&cli, checks.clone(), target_dc.as_deref()).await,
         Commands::Report {
             ref input,
             ref output,
@@ -1658,16 +1656,16 @@ fn make_reaper_config(
 // ──────────────────────────────────────────────────────────
 
 // cmd_reaper
-async fn cmd_reaper(cli: &Cli, dc_ip: Option<String>, modules: Vec<String>, page_size: u32) -> i32 {
+async fn cmd_reaper(cli: &Cli, modules: Vec<String>, page_size: u32) -> i32 {
     let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
     };
 
-    let dc = match dc_ip.or_else(|| cli.dc_host.clone()) {
+    let dc = match cli.dc_host.clone() {
         Some(d) => d,
         None => {
-            banner::print_fail("--dc-ip or --dc-host is required");
+            banner::print_fail("--dc-host is required");
             return 1;
         }
     };
