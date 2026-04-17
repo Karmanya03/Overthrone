@@ -670,7 +670,7 @@ impl AdaptiveEngine {
             }
 
             // Re-sort by priority
-            plan.steps.sort_by(|a, b| b.priority.cmp(&a.priority));
+            plan.steps.sort_by_key(|b| std::cmp::Reverse(b.priority));
         }
     }
 
