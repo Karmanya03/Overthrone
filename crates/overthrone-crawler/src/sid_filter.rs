@@ -189,7 +189,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
     }
 
     // Sort: CRITICAL first
-    findings.sort_by(|a, b| risk_priority(&a.risk_level).cmp(&risk_priority(&b.risk_level)));
+    findings.sort_by_key(|a| risk_priority(&a.risk_level));
 
     info!(
         "[sid_filter] {} findings ({} critical, {} ok)",

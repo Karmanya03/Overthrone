@@ -191,7 +191,7 @@ pub fn build_mssql_chains(source_domain: &str, instances: &[MssqlInstance]) -> V
     }
 
     // Sort: cross-domain chains first
-    chains.sort_by(|a, b| b.crosses_domain.cmp(&a.crosses_domain));
+    chains.sort_by_key(|b| std::cmp::Reverse(b.crosses_domain));
 
     info!(
         "[mssql_links] Found {} potential MSSQL chains ({} cross-domain)",

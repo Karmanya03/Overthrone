@@ -187,7 +187,7 @@ pub fn analyze_foreign_memberships(
     }
 
     // Sort: privileged first
-    findings.sort_by(|a, b| b.is_privileged_group.cmp(&a.is_privileged_group));
+    findings.sort_by_key(|b| std::cmp::Reverse(b.is_privileged_group));
 
     info!(
         "[foreign] Found {} foreign memberships ({} privileged)",
