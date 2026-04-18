@@ -18,14 +18,14 @@ name = "ovt"
 path = "src/ovt_main.rs"
 
 [dependencies]
-overthrone-core = { path = "../overthrone-core" }
-overthrone-reaper = { path = "../overthrone-reaper" }
-overthrone-hunter = { path = "../overthrone-hunter" }
-overthrone-pilot = { path = "../overthrone-pilot", features = ["qlearn"] }
-overthrone-crawler = { path = "../overthrone-crawler" }
-overthrone-forge = { path = "../overthrone-forge" }
-overthrone-scribe = { path = "../overthrone-scribe" }
-overthrone-relay = { path = "../overthrone-relay" }
+overthrone-core = { version = "0.1.31", path = "../overthrone-core" }
+overthrone-reaper = { version = "0.1.31", path = "../overthrone-reaper" }
+overthrone-hunter = { version = "0.1.31", path = "../overthrone-hunter" }
+overthrone-pilot = { version = "0.1.31", path = "../overthrone-pilot", features = ["qlearn"] }
+overthrone-crawler = { version = "0.1.31", path = "../overthrone-crawler" }
+overthrone-forge = { version = "0.1.31", path = "../overthrone-forge" }
+overthrone-scribe = { version = "0.1.31", path = "../overthrone-scribe" }
+overthrone-relay = { version = "0.1.31", path = "../overthrone-relay" }
 clap.workspace = true
 clap_complete.workspace = true
 ratatui = "0.29"
