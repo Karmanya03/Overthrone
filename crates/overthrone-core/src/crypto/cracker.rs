@@ -15,6 +15,7 @@
 
 use crate::error::{OverthroneError, Result};
 use rayon::prelude::*;
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, info, warn};
@@ -23,15 +24,8 @@ use tracing::{debug, info, warn};
 // Embedded Wordlist (Top 10K + common passwords)
 // ═══════════════════════════════════════════════════════════
 
-/// Compressed top-10K password wordlist with common variations.
-/// Generated from seclists Pwdb-Top10K + rockyou.txt top occurrences.
-/// Compressed with zstd level 19: 90KB → 40KB (44.5% ratio).
-///
-/// To regenerate: `zstd -19 wordlist.txt -o wordlist.txt.zst`
-static WORDLIST_ZST: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../assets/wordlist_top10k.txt.zst"
-));
+/// Relative path to the shared compressed top-10K password wordlist.
+const WORDLIST_REL_PATH: &str = "../../assets/wordlist_top10k.txt.zst";
 
 /// Fallback minimal wordlist if decompression fails
 const FALLBACK_WORDLIST: &[&str] = &[
@@ -69,9 +63,23 @@ const FALLBACK_WORDLIST: &[&str] = &[
 
 /// Decompress and return the embedded wordlist
 pub fn get_embedded_wordlist() -> Vec<String> {
-    decompress_wordlist(WORDLIST_ZST).unwrap_or_else(|_| {
-        // Fallback to minimal built-in list
-        FALLBACK_WORDLIST.iter().map(|s| s.to_string()).collect()
+    load_wordlist_bytes()
+        .and_then(|bytes| decompress_wordlist(&bytes))
+        .unwrap_or_else(|e| {
+            warn!("Falling back to minimal built-in wordlist: {}", e);
+            // Fallback to minimal built-in list
+            FALLBACK_WORDLIST.iter().map(|s| s.to_string()).collect()
+        })
+}
+
+fn load_wordlist_bytes() -> Result<Vec<u8>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(WORDLIST_REL_PATH);
+    std::fs::read(&path).map_err(|e| {
+        OverthroneError::custom(format!(
+            "Failed to read wordlist at {}: {}",
+            path.display(),
+            e
+        ))
     })
 }
 
