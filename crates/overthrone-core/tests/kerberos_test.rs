@@ -148,13 +148,19 @@ fn test_enctype_to_from_roundtrip() {
 #[test]
 fn test_krb_err_string_is_non_empty() {
     // Every defined code should produce a non-empty string
-    for code in [0, 6, 7, 12, 14, 17, 18, 24, 25, 31, 37, 41, 68] {
+    for code in [0, 6, 7, 12, 14, 17, 18, 24, 25, 31, 36, 37, 41, 68] {
         let s = krb_error_to_string(code);
         assert!(
             !s.is_empty(),
             "krb_error_to_string({code}) must not be empty"
         );
     }
+}
+
+#[test]
+fn test_krb_err_36_mentions_ticket_mismatch() {
+    let s = krb_error_to_string(36).to_lowercase();
+    assert!(s.contains("ticket") || s.contains("match"));
 }
 
 #[test]

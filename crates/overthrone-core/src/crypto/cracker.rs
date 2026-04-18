@@ -400,46 +400,40 @@ pub enum HashType {
 
 impl HashType {
     /// Parse an AS-REP hash string (hashcat format)
-    /// Format: $krb5asrep${etype}${user}@{domain}:{cipher_hex}
+    /// Format: $krb5asrep${etype}${user}@{domain}:{checksum_hex}${edata2_hex}
     pub fn parse_asrep(hash_str: &str) -> Result<Self> {
-        let parts: Vec<&str> = hash_str.split('$').collect();
-        if parts.len() < 4 || !hash_str.starts_with("$krb5asrep$") {
-            return Err(OverthroneError::custom("Invalid AS-REP hash format"));
-        }
-
-        // Parse: $krb5asrep${etype}${user}@{domain}:{cipher}
-        let inner = &parts[2..].join("$");
-        let main_parts: Vec<&str> = inner.split(':').collect();
-        if main_parts.len() != 2 {
-            return Err(OverthroneError::custom("Invalid AS-REP hash format"));
-        }
-
-        let user_domain = main_parts[0];
-        let cipher_hex = main_parts[1];
-
-        // Extract etype and user@domain
-        let first_dollar = user_domain.find('$').unwrap_or(0);
-        let (etype_str, user_domain_part) = if first_dollar > 0 {
-            user_domain.split_at(first_dollar)
-        } else {
-            ("23", user_domain) // Default to RC4
-        };
+        let rest = hash_str
+            .strip_prefix("$krb5asrep$")
+            .ok_or_else(|| OverthroneError::custom("Invalid AS-REP hash format"))?;
+        let (etype_str, principal_and_cipher) = rest
+            .split_once('$')
+            .ok_or_else(|| OverthroneError::custom("Invalid AS-REP hash format"))?;
+        let (user_domain, cipher_parts) = principal_and_cipher
+            .split_once(':')
+            .ok_or_else(|| OverthroneError::custom("Invalid AS-REP hash format"))?;
 
         let etype: i32 = etype_str.parse().unwrap_or(23);
-
-        // Parse user@domain
-        let ud_parts: Vec<&str> = user_domain_part
-            .trim_start_matches('$')
-            .split('@')
-            .collect();
-        let (username, domain) = if ud_parts.len() == 2 {
-            (ud_parts[0].to_string(), ud_parts[1].to_string())
-        } else {
-            (ud_parts[0].to_string(), String::new())
+        let (username, domain) = match user_domain.split_once('@') {
+            Some((user, realm)) => (user.to_string(), realm.to_string()),
+            None => (user_domain.to_string(), String::new()),
         };
 
-        let cipher = hex::decode(cipher_hex)
-            .map_err(|e| OverthroneError::custom(format!("Invalid cipher hex: {}", e)))?;
+        let (checksum_hex, edata2_hex) = match cipher_parts.split_once('$') {
+            Some((checksum, edata2)) => (checksum, edata2),
+            None => ("", cipher_parts),
+        };
+
+        let mut cipher = Vec::new();
+        if !checksum_hex.is_empty() {
+            cipher
+                .extend(hex::decode(checksum_hex).map_err(|e| {
+                    OverthroneError::custom(format!("Invalid checksum hex: {}", e))
+                })?);
+        }
+        cipher.extend(
+            hex::decode(edata2_hex)
+                .map_err(|e| OverthroneError::custom(format!("Invalid cipher hex: {}", e)))?,
+        );
 
         Ok(HashType::AsRep {
             username,
@@ -450,37 +444,51 @@ impl HashType {
     }
 
     /// Parse a Kerberoast hash string (hashcat format)
-    /// Format: $krb5tgs${etype}${user}${domain}${spn}*${cipher}
+    /// Format: $krb5tgs${etype}$*{user}${domain}${spn}*${checksum_hex}${edata2_hex}
     pub fn parse_kerberoast(hash_str: &str) -> Result<Self> {
-        if !hash_str.starts_with("$krb5tgs$") {
-            return Err(OverthroneError::custom("Invalid Kerberoast hash format"));
+        let rest = hash_str
+            .strip_prefix("$krb5tgs$")
+            .ok_or_else(|| OverthroneError::custom("Invalid Kerberoast hash format"))?;
+        let (etype_str, principal_and_cipher) = rest
+            .split_once('$')
+            .ok_or_else(|| OverthroneError::custom("Invalid Kerberoast hash format"))?;
+
+        let etype: i32 = etype_str.parse().unwrap_or(23);
+        let principal_and_cipher = principal_and_cipher.trim_start_matches('*');
+        let (principal_block, cipher_block) = principal_and_cipher
+            .split_once("*$")
+            .ok_or_else(|| OverthroneError::custom("Invalid Kerberoast hash format"))?;
+
+        let mut principal_parts = principal_block.split('$');
+        let username = principal_parts
+            .next()
+            .ok_or_else(|| OverthroneError::custom("Missing Kerberoast username"))?
+            .to_string();
+        let domain = principal_parts
+            .next()
+            .ok_or_else(|| OverthroneError::custom("Missing Kerberoast domain"))?
+            .to_string();
+        let spn = principal_parts.collect::<Vec<_>>().join("$");
+        if spn.is_empty() {
+            return Err(OverthroneError::custom("Missing Kerberoast SPN"));
         }
 
-        // Simplified parsing - hashcat format varies by etype
-        let parts: Vec<&str> = hash_str.split('$').collect();
-        if parts.len() < 5 {
-            return Err(OverthroneError::custom("Invalid Kerberoast hash format"));
-        }
-
-        let etype: i32 = parts[2].parse().unwrap_or(23);
-
-        // Find the cipher (after the last $ or *)
-        let cipher_start = hash_str.rfind('*').or_else(|| hash_str.rfind('$'));
-        let cipher_hex = if let Some(pos) = cipher_start {
-            &hash_str[pos + 1..]
-        } else {
-            return Err(OverthroneError::custom(
-                "Cannot find cipher in Kerberoast hash",
-            ));
+        let (checksum_hex, edata2_hex) = match cipher_block.split_once('$') {
+            Some((checksum, edata2)) => (checksum, edata2),
+            None => ("", cipher_block),
         };
 
-        let cipher = hex::decode(cipher_hex)
-            .map_err(|e| OverthroneError::custom(format!("Invalid cipher hex: {}", e)))?;
-
-        // Extract user/domain/spn from hash string (simplified)
-        let username = parts.get(3).unwrap_or(&"unknown").to_string();
-        let domain = parts.get(4).unwrap_or(&"unknown").to_string();
-        let spn = parts.get(5).unwrap_or(&"unknown").to_string();
+        let mut cipher = Vec::new();
+        if !checksum_hex.is_empty() {
+            cipher
+                .extend(hex::decode(checksum_hex).map_err(|e| {
+                    OverthroneError::custom(format!("Invalid checksum hex: {}", e))
+                })?);
+        }
+        cipher.extend(
+            hex::decode(edata2_hex)
+                .map_err(|e| OverthroneError::custom(format!("Invalid cipher hex: {}", e)))?,
+        );
 
         Ok(HashType::Kerberoast {
             username,
@@ -1093,12 +1101,15 @@ fn write_hash_file(hash: &HashType) -> Result<std::path::PathBuf> {
             etype,
             cipher,
         } => {
+            let checksum_len = if *etype == 23 { 16 } else { 12 };
+            let (checksum, edata2) = cipher.split_at(std::cmp::min(checksum_len, cipher.len()));
             format!(
-                "$krb5asrep${}${}@{}:{}",
-                etype,
-                username,
-                domain,
-                hex::encode(cipher)
+                "$krb5asrep${etype}${username}@{domain}:{checksum}${edata2}",
+                etype = etype,
+                username = username,
+                domain = domain,
+                checksum = hex::encode(checksum),
+                edata2 = hex::encode(edata2),
             )
         }
         HashType::Kerberoast {
@@ -1108,13 +1119,16 @@ fn write_hash_file(hash: &HashType) -> Result<std::path::PathBuf> {
             etype,
             cipher,
         } => {
+            let checksum_len = if *etype == 23 { 16 } else { 12 };
+            let (checksum, edata2) = cipher.split_at(std::cmp::min(checksum_len, cipher.len()));
             format!(
-                "$krb5tgs${}${}${}${}*${}",
-                etype,
-                username,
-                domain,
-                spn,
-                hex::encode(cipher)
+                "$krb5tgs${etype}$*{username}${domain}${spn}*${checksum}${edata2}",
+                etype = etype,
+                username = username,
+                domain = domain,
+                spn = spn,
+                checksum = hex::encode(checksum),
+                edata2 = hex::encode(edata2),
             )
         }
         HashType::Ntlm { hash } => hex::encode(hash),
@@ -1251,6 +1265,54 @@ mod tests {
                         0x8e, 0x54, 0x9b, 0x63
                     ]
                 );
+            }
+            _ => panic!("Wrong hash type"),
+        }
+    }
+
+    #[test]
+    fn test_asrep_hashcat_format_parsing() {
+        let hash = HashType::parse_asrep(
+            "$krb5asrep$23$alice@CORP.LOCAL:00112233445566778899aabbccddeeff$deadbeef",
+        )
+        .unwrap();
+
+        match hash {
+            HashType::AsRep {
+                username,
+                domain,
+                etype,
+                cipher,
+            } => {
+                assert_eq!(username, "alice");
+                assert_eq!(domain, "CORP.LOCAL");
+                assert_eq!(etype, 23);
+                assert_eq!(cipher.len(), 20);
+            }
+            _ => panic!("Wrong hash type"),
+        }
+    }
+
+    #[test]
+    fn test_kerberoast_hashcat_format_parsing() {
+        let hash = HashType::parse_kerberoast(
+            "$krb5tgs$23$*alice$CORP.LOCAL$cifs/dc01.corp.local*$00112233445566778899aabbccddeeff$deadbeef",
+        )
+        .unwrap();
+
+        match hash {
+            HashType::Kerberoast {
+                username,
+                domain,
+                spn,
+                etype,
+                cipher,
+            } => {
+                assert_eq!(username, "alice");
+                assert_eq!(domain, "CORP.LOCAL");
+                assert_eq!(spn, "cifs/dc01.corp.local");
+                assert_eq!(etype, 23);
+                assert_eq!(cipher.len(), 20);
             }
             _ => panic!("Wrong hash type"),
         }

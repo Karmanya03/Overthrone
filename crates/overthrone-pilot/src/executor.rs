@@ -19,6 +19,7 @@ use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
 use overthrone_hunter::constrained::ConstrainedConfig;
 use overthrone_hunter::rbcd::RbcdConfig;
 use overthrone_hunter::unconstrained::UnconstrainedConfig;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 // ═══════════════════════════════════════════════════════════
@@ -792,6 +793,7 @@ async fn exec_kerberoast(
     }
 
     let mut hash_count = 0;
+    let mut error_counts: HashMap<String, usize> = HashMap::new();
     for account in &targets {
         // Look up real SPNs from LDAP enumeration
         let spns = match state.spn_map.get(account) {
@@ -822,6 +824,8 @@ async fn exec_kerberoast(
                     break; // One hash per account is sufficient
                 }
                 Err(e) => {
+                    let error_text = e.to_string();
+                    *error_counts.entry(error_text.clone()).or_insert(0) += 1;
                     debug!("{} {} {} {}", "  ✗".dimmed(), account, spn, e);
                 }
             }
@@ -856,16 +860,46 @@ async fn exec_kerberoast(
         }
     }
 
-    let msg = format!(
-        "Kerberoast: {} hashes from {} targets",
-        hash_count,
-        targets.len()
-    );
+    let msg = if hash_count > 0 {
+        format!(
+            "Kerberoast: {} hashes from {} targets",
+            hash_count,
+            targets.len()
+        )
+    } else if let Some(summary) = dominant_error_summary(&error_counts) {
+        format!(
+            "Kerberoast: 0 hashes from {} targets ({})",
+            targets.len(),
+            summary
+        )
+    } else {
+        format!(
+            "Kerberoast: {} hashes from {} targets",
+            hash_count,
+            targets.len()
+        )
+    };
     StepResult {
         success: hash_count > 0,
         output: msg,
         new_credentials: 0,
         new_admin_hosts: 0,
+    }
+}
+
+fn dominant_error_summary(error_counts: &HashMap<String, usize>) -> Option<String> {
+    error_counts
+        .iter()
+        .max_by_key(|(_, count)| **count)
+        .map(|(error, count)| format!("dominant error x{}: {}", count, truncate_error(error)))
+}
+
+fn truncate_error(error: &str) -> String {
+    const MAX_LEN: usize = 120;
+    if error.len() <= MAX_LEN {
+        error.to_string()
+    } else {
+        format!("{}...", &error[..MAX_LEN])
     }
 }
 
@@ -885,6 +919,7 @@ async fn exec_asrep_roast(
     }
 
     let mut hash_count = 0;
+    let mut error_counts: HashMap<String, usize> = HashMap::new();
     for user in &targets {
         match kerberos::asrep_roast(&ctx.dc_ip, &ctx.domain, user).await {
             Ok(hash) => {
@@ -893,6 +928,8 @@ async fn exec_asrep_roast(
                 hash_count += 1;
             }
             Err(e) => {
+                let error_text = e.to_string();
+                *error_counts.entry(error_text).or_insert(0) += 1;
                 debug!("{} {} {}", "  ✗".dimmed(), user, e);
             }
         }
@@ -926,11 +963,25 @@ async fn exec_asrep_roast(
         }
     }
 
-    let msg = format!(
-        "AS-REP Roast: {} hashes from {} targets",
-        hash_count,
-        targets.len()
-    );
+    let msg = if hash_count > 0 {
+        format!(
+            "AS-REP Roast: {} hashes from {} targets",
+            hash_count,
+            targets.len()
+        )
+    } else if let Some(summary) = dominant_error_summary(&error_counts) {
+        format!(
+            "AS-REP Roast: 0 hashes from {} targets ({})",
+            targets.len(),
+            summary
+        )
+    } else {
+        format!(
+            "AS-REP Roast: {} hashes from {} targets",
+            hash_count,
+            targets.len()
+        )
+    };
     StepResult {
         success: hash_count > 0,
         output: msg,

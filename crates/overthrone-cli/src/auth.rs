@@ -69,9 +69,12 @@ impl Credentials {
                 AuthData::Password(pass)
             }
         };
+        let normalized_username =
+            overthrone_core::proto::kerberos::normalize_username(username).to_string();
+
         Ok(Credentials {
             domain: domain.to_string(),
-            username: username.to_string(),
+            username: normalized_username,
             auth,
         })
     }

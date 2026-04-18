@@ -11,7 +11,7 @@ use petgraph::Direction;
 use petgraph::algo::dijkstra;
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use serde::{Deserialize, Serialize};
-use serde_json;
+use serde_json::{self, Value};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 // use hashbrown::HashMap as HashBrownMap;
@@ -256,6 +256,44 @@ pub struct GraphStats {
     pub edge_type_counts: HashMap<String, usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ExportGraphDocument {
+    #[serde(default)]
+    metadata: serde_json::Map<String, Value>,
+    #[serde(default)]
+    nodes: Vec<ExportGraphNode>,
+    #[serde(default)]
+    edges: Vec<ExportGraphEdge>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportGraphNode {
+    id: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(rename = "type")]
+    node_type: String,
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default, rename = "dn")]
+    distinguished_name: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    properties: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportGraphEdge {
+    source: String,
+    target: String,
+    relationship: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Attack Graph
 // ═══════════════════════════════════════════════════════════
@@ -290,13 +328,18 @@ impl AttackGraph {
 
     /// Load an AttackGraph from a JSON file.
     pub fn from_json_file(path: &str) -> Result<Self> {
-        let file = std::fs::File::open(path).map_err(|e| {
+        let json = std::fs::read_to_string(path).map_err(|e| {
             OverthroneError::Graph(format!("Failed to open graph file {path}: {e}"))
         })?;
-        let reader = std::io::BufReader::new(file);
-        let graph: Self = serde_json::from_reader(reader)
+
+        if let Ok(graph) = serde_json::from_str::<Self>(&json) {
+            return Ok(graph);
+        }
+
+        let exported: ExportGraphDocument = serde_json::from_str(&json)
             .map_err(|e| OverthroneError::Graph(format!("Failed to parse graph JSON: {e}")))?;
-        Ok(graph)
+
+        Self::from_export_document(exported)
     }
 
     pub fn node_count(&self) -> usize {
@@ -369,20 +412,51 @@ impl AttackGraph {
 
     /// Resolve a node by name (case-insensitive, tries key then DN then prefix)
     pub fn find_node(&self, name: &str) -> Option<NodeIndex> {
-        let upper = name.to_uppercase();
+        let mut lookup_keys = vec![name.to_uppercase()];
 
-        if let Some(&idx) = self.node_index.get(&upper) {
-            return Some(idx);
-        }
-        if let Some(&idx) = self.dn_index.get(&upper) {
-            return Some(idx);
+        if let Some((_, username)) = name.rsplit_once('\\') {
+            let normalized = username.to_uppercase();
+            if !lookup_keys.contains(&normalized) {
+                lookup_keys.push(normalized.clone());
+            }
+
+            if let Some(domain) = self.metadata.get("domain") {
+                let principal_key = node_key(username, domain);
+                if !lookup_keys.contains(&principal_key) {
+                    lookup_keys.push(principal_key);
+                }
+            }
         }
 
-        // Fuzzy prefix match
-        self.node_index
-            .iter()
-            .find(|(k, _idx): &(&String, &NodeIndex)| k.starts_with(&upper))
-            .map(|(_, &idx)| idx)
+        if !name.contains('@')
+            && let Some(domain) = self.metadata.get("domain")
+        {
+            let principal_key = node_key(name, domain);
+            if !lookup_keys.contains(&principal_key) {
+                lookup_keys.push(principal_key);
+            }
+        }
+
+        for key in &lookup_keys {
+            if let Some(&idx) = self.node_index.get(key) {
+                return Some(idx);
+            }
+            if let Some(&idx) = self.dn_index.get(key) {
+                return Some(idx);
+            }
+        }
+
+        for key in &lookup_keys {
+            if let Some((_, &idx)) = self
+                .node_index
+                .iter()
+                .find(|(k, _idx): &(&String, &NodeIndex)| k.starts_with(key))
+            {
+                return Some(idx);
+            }
+        }
+
+        None
     }
 
     pub fn get_node(&self, idx: NodeIndex) -> Option<&AdNode> {
@@ -395,6 +469,10 @@ impl AttackGraph {
     /// Primary entry point for populating the graph.
     pub fn ingest_enumeration(&mut self, data: &DomainEnumeration) {
         info!("Ingesting enumeration for domain: {}", data.domain);
+        self.metadata
+            .insert("domain".to_string(), data.domain.clone());
+        self.metadata
+            .insert("base_dn".to_string(), data.base_dn.clone());
 
         // 1. Domain node
         self.add_node(AdNode {
@@ -1054,15 +1132,25 @@ impl AttackGraph {
         }
 
         let stats = self.stats();
+        let mut metadata = serde_json::Map::new();
+        for (key, value) in &self.metadata {
+            metadata.insert(key.clone(), Value::String(value.clone()));
+        }
+        metadata.insert(
+            "total_nodes".to_string(),
+            serde_json::json!(stats.total_nodes),
+        );
+        metadata.insert(
+            "total_edges".to_string(),
+            serde_json::json!(stats.total_edges),
+        );
+        metadata.insert("users".to_string(), serde_json::json!(stats.users));
+        metadata.insert("computers".to_string(), serde_json::json!(stats.computers));
+        metadata.insert("groups".to_string(), serde_json::json!(stats.groups));
+        metadata.insert("domains".to_string(), serde_json::json!(stats.domains));
+
         serde_json::to_string_pretty(&serde_json::json!({
-            "metadata": {
-                "total_nodes": stats.total_nodes,
-                "total_edges": stats.total_edges,
-                "users": stats.users,
-                "computers": stats.computers,
-                "groups": stats.groups,
-                "domains": stats.domains,
-            },
+            "metadata": metadata,
             "nodes": nodes,
             "edges": edges,
         }))
@@ -1229,6 +1317,77 @@ impl AttackGraph {
         .map_err(|e| OverthroneError::Graph(format!("BloodHound export failed: {e}")))
     }
 
+    fn from_export_document(exported: ExportGraphDocument) -> Result<Self> {
+        let mut graph = Self::new();
+
+        for (key, value) in &exported.metadata {
+            if let Some(string_value) = json_scalar_to_string(value) {
+                graph.metadata.insert(key.clone(), string_value);
+            }
+        }
+
+        for node in exported.nodes {
+            let (id_name, id_domain) = split_graph_node_id(&node.id);
+            let name = node.label.unwrap_or(id_name);
+            let domain = node
+                .domain
+                .or(id_domain)
+                .or_else(|| graph.metadata.get("domain").cloned())
+                .unwrap_or_else(|| name.clone());
+
+            graph.add_node(AdNode {
+                name,
+                node_type: parse_node_type(&node.node_type)?,
+                domain,
+                distinguished_name: node.distinguished_name,
+                enabled: node.enabled,
+                properties: node.properties,
+            });
+        }
+
+        for edge in exported.edges {
+            let (source_name, source_domain) = split_graph_node_id(&edge.source);
+            let (target_name, target_domain) = split_graph_node_id(&edge.target);
+
+            let source_domain = source_domain
+                .or_else(|| graph.metadata.get("domain").cloned())
+                .ok_or_else(|| {
+                    OverthroneError::Graph(format!(
+                        "Graph edge '{}' is missing a source domain",
+                        edge.source
+                    ))
+                })?;
+            let target_domain = target_domain
+                .or_else(|| graph.metadata.get("domain").cloned())
+                .ok_or_else(|| {
+                    OverthroneError::Graph(format!(
+                        "Graph edge '{}' is missing a target domain",
+                        edge.target
+                    ))
+                })?;
+
+            graph.add_edge_by_name(
+                &source_name,
+                &source_domain,
+                &target_name,
+                &target_domain,
+                parse_edge_type(&edge.relationship),
+            );
+        }
+
+        if !graph.metadata.contains_key("domain") {
+            let inferred_domain = graph
+                .nodes_of_type(NodeType::Domain)
+                .next()
+                .map(|(_, node)| node.domain.clone());
+            if let Some(domain) = inferred_domain {
+                graph.metadata.insert("domain".to_string(), domain);
+            }
+        }
+
+        Ok(graph)
+    }
+
     /// Get an iterator over all nodes in the graph.
     pub fn nodes(&self) -> impl Iterator<Item = (NodeIndex, &AdNode)> {
         self.graph
@@ -1389,6 +1548,74 @@ impl AttackGraph {
 
 fn node_key(name: &str, domain: &str) -> String {
     format!("{}@{}", name.to_uppercase(), domain.to_uppercase())
+}
+
+fn split_graph_node_id(id: &str) -> (String, Option<String>) {
+    if let Some((name, domain)) = id.rsplit_once('@') {
+        (name.to_string(), Some(domain.to_string()))
+    } else {
+        (id.to_string(), None)
+    }
+}
+
+fn parse_node_type(raw: &str) -> Result<NodeType> {
+    match raw.to_ascii_lowercase().as_str() {
+        "user" => Ok(NodeType::User),
+        "computer" => Ok(NodeType::Computer),
+        "group" => Ok(NodeType::Group),
+        "domain" => Ok(NodeType::Domain),
+        "gpo" => Ok(NodeType::Gpo),
+        "ou" => Ok(NodeType::Ou),
+        other => Err(OverthroneError::Graph(format!(
+            "Unsupported graph node type '{other}'"
+        ))),
+    }
+}
+
+fn parse_edge_type(raw: &str) -> EdgeType {
+    match raw.to_ascii_lowercase().as_str() {
+        "memberof" => EdgeType::MemberOf,
+        "adminto" => EdgeType::AdminTo,
+        "hassession" => EdgeType::HasSession,
+        "canrdp" => EdgeType::CanRDP,
+        "canpsremote" => EdgeType::CanPSRemote,
+        "executedcom" => EdgeType::ExecuteDCOM,
+        "sqladmin" => EdgeType::SQLAdmin,
+        "genericall" => EdgeType::GenericAll,
+        "genericwrite" => EdgeType::GenericWrite,
+        "writeowner" => EdgeType::WriteOwner,
+        "writedacl" => EdgeType::WriteDacl,
+        "forcechangepassword" => EdgeType::ForceChangePassword,
+        "addmembers" => EdgeType::AddMembers,
+        "addself" => EdgeType::AddSelf,
+        "readlapspassword" => EdgeType::ReadLapsPassword,
+        "readgmsapassword" => EdgeType::ReadGmsaPassword,
+        "allowedtodelegate" => EdgeType::AllowedToDelegate,
+        "allowedtoact" => EdgeType::AllowedToAct,
+        "hassidhistory" => EdgeType::HasSidHistory,
+        "dcsync" => EdgeType::DcSync,
+        "getchanges" => EdgeType::GetChanges,
+        "getchangesall" => EdgeType::GetChangesAll,
+        "trustedby" => EdgeType::TrustedBy,
+        "hasspn" => EdgeType::HasSpn,
+        "dontreqpreauth" => EdgeType::DontReqPreauth,
+        "gpolink" => EdgeType::GpoLink,
+        "contains" => EdgeType::Contains,
+        "owns" => EdgeType::Owns,
+        other if other.starts_with("custom(") && raw.ends_with(')') => {
+            EdgeType::Custom(raw[7..raw.len() - 1].to_string())
+        }
+        _ => EdgeType::Custom(raw.to_string()),
+    }
+}
+
+fn json_scalar_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
 }
 
 /// Extract the CN (Common Name) from an AD Distinguished Name.
@@ -1672,6 +1899,26 @@ mod tests {
     }
 
     #[test]
+    fn test_from_export_json_roundtrip() {
+        let mut g = build_test_graph();
+        g.metadata.insert("domain".into(), "corp.local".into());
+
+        let json = g.export_json().unwrap();
+        let path = std::env::temp_dir().join("overthrone_graph_export_roundtrip.json");
+        std::fs::write(&path, json).unwrap();
+
+        let loaded = AttackGraph::from_json_file(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.node_count(), g.node_count());
+        assert_eq!(loaded.edge_count(), g.edge_count());
+        assert_eq!(
+            loaded.metadata().get("domain"),
+            Some(&"corp.local".to_string())
+        );
+    }
+
+    #[test]
     fn test_export_bloodhound() {
         let g = build_test_graph();
         let json = g.export_bloodhound().unwrap();
@@ -1715,6 +1962,14 @@ mod tests {
     fn test_node_key_case() {
         assert_eq!(node_key("jdoe", "corp.local"), "JDOE@CORP.LOCAL");
         assert_eq!(node_key("JDOE", "CORP.LOCAL"), "JDOE@CORP.LOCAL");
+    }
+
+    #[test]
+    fn test_find_node_accepts_downlevel_username() {
+        let mut g = build_test_graph();
+        g.metadata.insert("domain".into(), "corp.local".into());
+
+        assert_eq!(g.find_node("CORP\\jdoe"), g.find_node("jdoe@corp.local"));
     }
 
     #[test]

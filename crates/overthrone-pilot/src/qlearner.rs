@@ -28,7 +28,7 @@ use crate::adaptive::{
     AdaptiveDecision, AdaptiveEngine, AdaptiveSummary, FailureClass, StepModification,
 };
 use crate::goals::{AttackGoal, EngagementState};
-use crate::planner::{AttackPlan, PlanStep, StepResult};
+use crate::planner::{AttackPlan, PlanStep, PlannedAction, StepResult};
 
 // ═══════════════════════════════════════════════════════════
 // Constants
@@ -112,6 +112,9 @@ pub struct EngagementStateKey {
     pub consec_failures: u8,
     /// Current attack stage index (0-5)
     pub current_stage: u8,
+    /// Current action family index
+    #[serde(default)]
+    pub current_action: u8,
     /// Whether stealth mode is active
     pub stealth: bool,
     /// Index of the last failure class (0-6)
@@ -149,6 +152,7 @@ impl EngagementStateKey {
             users_bucket: bucket_users(user_count),
             consec_failures: bucket_failures(consecutive_failures),
             current_stage: step.stage as u8,
+            current_action: action_family_index(&step.action),
             stealth,
             last_failure: failure_class_index(&failure_class),
         }
@@ -165,6 +169,63 @@ fn failure_class_index(fc: &FailureClass) -> u8 {
         FailureClass::Detected => 4,
         FailureClass::Timeout => 5,
         FailureClass::Unknown => 6,
+    }
+}
+
+fn action_family_index(action: &PlannedAction) -> u8 {
+    match action {
+        PlannedAction::EnumerateUsers
+        | PlannedAction::EnumerateComputers
+        | PlannedAction::EnumerateGroups
+        | PlannedAction::EnumerateTrusts
+        | PlannedAction::EnumerateGpos => 0,
+        PlannedAction::EnumerateShares { .. } => 1,
+        PlannedAction::CheckAdminAccess { .. } => 2,
+        PlannedAction::Kerberoast { .. } => 3,
+        PlannedAction::AsRepRoast { .. } => 4,
+        PlannedAction::ConstrainedDelegation { .. }
+        | PlannedAction::UnconstrainedDelegation { .. }
+        | PlannedAction::RbcdAttack { .. } => 5,
+        PlannedAction::PasswordSpray { .. } => 6,
+        PlannedAction::CrackHashes { .. } => 7,
+        PlannedAction::ExecCommand { .. }
+        | PlannedAction::PsExec { .. }
+        | PlannedAction::SmbExec { .. }
+        | PlannedAction::WmiExec { .. }
+        | PlannedAction::WinRmExec { .. } => 8,
+        PlannedAction::DumpSam { .. }
+        | PlannedAction::DumpLsa { .. }
+        | PlannedAction::DumpNtds { .. }
+        | PlannedAction::DumpDcc2 { .. }
+        | PlannedAction::DcsSync { .. } => 9,
+        PlannedAction::Coerce { .. } => 10,
+        PlannedAction::AdcsEnumerate
+        | PlannedAction::AdcsEsc1 { .. }
+        | PlannedAction::AdcsEsc4 { .. }
+        | PlannedAction::AdcsEsc6 { .. } => 11,
+        PlannedAction::ForgeGoldenTicket { .. } | PlannedAction::ForgeSilverTicket { .. } => 12,
+        PlannedAction::RunPlaybook { .. } => 13,
+        PlannedAction::Sleep { .. } | PlannedAction::Checkpoint { .. } => 14,
+    }
+}
+
+fn action_family_label(index: u8) -> &'static str {
+    match index {
+        0 => "ldap-enum",
+        1 => "share-enum",
+        2 => "admin-check",
+        3 => "kerberoast",
+        4 => "asrep",
+        5 => "delegation",
+        6 => "spray",
+        7 => "crack",
+        8 => "exec",
+        9 => "dump",
+        10 => "coerce",
+        11 => "adcs",
+        12 => "forge",
+        13 => "playbook",
+        _ => "utility",
     }
 }
 
@@ -467,6 +528,7 @@ impl AdaptiveQLearner {
             users_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
+            current_action: 0,
             stealth,
             last_failure: 6, // Unknown
         };
@@ -868,8 +930,9 @@ impl AdaptiveQLearner {
             _ => "none",
         };
         format!(
-            "stage={} creds={} da={} admins={} kerb={} asrep={} users={} fail={}/{} stealth={} ε={:.3}",
+            "stage={} action={} creds={} da={} admins={} kerb={} asrep={} users={} fail={}/{} stealth={} ε={:.3}",
             stage_name,
+            action_family_label(key.current_action),
             key.cred_bucket,
             if key.has_domain_admin { "Y" } else { "N" },
             key.admin_hosts_bucket,
@@ -1015,6 +1078,7 @@ mod tests {
         assert!(!key.has_domain_admin);
         assert!(!key.has_any_admin);
         assert_eq!(key.current_stage, 0); // Enumerate
+        assert_eq!(key.current_action, 0); // ldap-enum
     }
 
     #[test]
@@ -1030,6 +1094,7 @@ mod tests {
             users_bucket: 1,
             consec_failures: 0,
             current_stage: 0,
+            current_action: 0,
             stealth: false,
             last_failure: 6,
         };
@@ -1065,6 +1130,7 @@ mod tests {
             users_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
+            current_action: 0,
             stealth: false,
             last_failure: 6,
         };
@@ -1124,6 +1190,7 @@ mod tests {
             users_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
+            current_action: 0,
             stealth: false,
             last_failure: 0,
         };

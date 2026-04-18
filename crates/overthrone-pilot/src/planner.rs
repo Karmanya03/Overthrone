@@ -375,7 +375,10 @@ impl Planner {
         // ── Phase 2: Kerberos Attacks (low noise, high reward) ──
         let recon_dep = steps.first().map(|s| s.id.clone()).unwrap_or_default();
 
-        if state.kerberoastable.is_empty() && !failed_actions.contains(&"kerberoast".to_string()) {
+        if !failed_actions.contains(&"kerberoast".to_string())
+            && state.roast_hashes.is_empty()
+            && (state.users.is_empty() || !state.kerberoastable.is_empty())
+        {
             let kerb_id = next_id();
             steps.push(PlanStep {
                 id: kerb_id.clone(),
@@ -396,7 +399,10 @@ impl Planner {
             });
         }
 
-        if state.asrep_roastable.is_empty() && !failed_actions.contains(&"asreproast".to_string()) {
+        if !failed_actions.contains(&"asreproast".to_string())
+            && state.roast_hashes.is_empty()
+            && (state.users.is_empty() || !state.asrep_roastable.is_empty())
+        {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "AS-REP Roast — extract hashes for no-preauth accounts".to_string(),

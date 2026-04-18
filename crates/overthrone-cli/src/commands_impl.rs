@@ -41,7 +41,7 @@ fn emit_json(cli: &Cli, value: serde_json::Value) -> i32 {
 /// Return true when the caller requested JSON output.
 #[inline]
 fn wants_json(cli: &Cli) -> bool {
-    matches!(cli.output, OutputFormat::Json)
+    matches!(cli.stdout_format, OutputFormat::Json)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -322,6 +322,18 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
             return 1;
         }
     };
+
+    if let Some(parent) = std::path::Path::new(output).parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        banner::print_fail(&format!(
+            "Failed to create output directory {}: {}",
+            parent.display(),
+            e
+        ));
+        return 1;
+    }
 
     match format {
         ReportFormat::Markdown => {

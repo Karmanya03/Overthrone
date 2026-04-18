@@ -11,6 +11,7 @@ use crate::goals::{AttackGoal, EngagementState};
 use crate::planner::{AttackPlan, PlanStep, PlannedAction, StepResult};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -196,6 +197,8 @@ pub struct AdaptiveEngine {
     consecutive_failures: u32,
     /// Max consecutive failures before triggering re-plan
     failure_threshold: u32,
+    /// Repeated failure memory keyed by action + failure signature
+    failure_signatures: HashMap<String, u32>,
 }
 
 impl AdaptiveEngine {
@@ -210,6 +213,7 @@ impl AdaptiveEngine {
             blocked_methods: Vec::new(),
             consecutive_failures: 0,
             failure_threshold: 3,
+            failure_signatures: HashMap::new(),
         }
     }
 
@@ -274,15 +278,21 @@ impl AdaptiveEngine {
         // ── Failure path ──
         self.consecutive_failures += 1;
         let failure = FailureClass::classify(&result.output);
+        let repeat_count = self.record_failure_signature(step, result, &failure);
 
         warn!(
-            "  {} Step failed [{}]: {} (attempt {}/{})",
+            "  {} Step failed [{}]: {} (attempt {}/{}, repeat #{})",
             "⚠".yellow(),
             failure.label().red(),
             step.description,
             step.retries + 1,
-            step.max_retries
+            step.max_retries,
+            repeat_count,
         );
+
+        if let Some(decision) = self.handle_repeated_failure(step, state, &failure, repeat_count) {
+            return decision;
+        }
 
         // Classify and decide
         match failure {
@@ -382,7 +392,8 @@ impl AdaptiveEngine {
 
     fn handle_not_found(&mut self, step: &PlanStep) -> AdaptiveDecision {
         // Target doesn't exist — skip, don't retry
-        self.blacklisted_actions.push(step.id.clone());
+        self.remember_failed_action(&step.id);
+        self.remember_failed_action(&self.action_identifier(&step.action));
         AdaptiveDecision::Skip {
             reason: "Target not found — skipping".to_string(),
         }
@@ -402,6 +413,7 @@ impl AdaptiveEngine {
             let method = self.extract_method_name(&step.action);
             self.blocked_methods.push((host, method));
         }
+        self.remember_failed_action(&self.action_identifier(&step.action));
 
         if self.stealth {
             // In stealth mode, try a quieter alternative
@@ -486,6 +498,143 @@ impl AdaptiveEngine {
 
         AdaptiveDecision::Replan {
             reason: reason.to_string(),
+        }
+    }
+
+    fn record_failure_signature(
+        &mut self,
+        step: &PlanStep,
+        result: &StepResult,
+        failure: &FailureClass,
+    ) -> u32 {
+        let mut signature = format!(
+            "{}|{}|{}",
+            self.action_identifier(&step.action),
+            failure.label(),
+            normalize_failure_output(&result.output)
+        );
+
+        if let Some(target) = self.extract_target(&step.action) {
+            signature.push('|');
+            signature.push_str(&target.to_lowercase());
+        }
+
+        let entry = self.failure_signatures.entry(signature).or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    fn handle_repeated_failure(
+        &mut self,
+        step: &PlanStep,
+        state: &EngagementState,
+        failure: &FailureClass,
+        repeat_count: u32,
+    ) -> Option<AdaptiveDecision> {
+        if repeat_count < 2 {
+            return None;
+        }
+
+        let action_id = self.action_identifier(&step.action);
+
+        if matches!(failure, FailureClass::NetworkError | FailureClass::Timeout)
+            && step.retries < step.max_retries
+        {
+            return None;
+        }
+
+        if repeat_count == 2
+            && matches!(failure, FailureClass::AccessDenied | FailureClass::Unknown)
+            && state.credentials.len() > 1
+        {
+            info!(
+                "  {} Repeated failure on {} — rotating credentials before retry",
+                "↻".cyan(),
+                action_id
+            );
+            return Some(AdaptiveDecision::Retry {
+                delay_secs: 2,
+                modify: Some(StepModification::SwapCredentials),
+            });
+        }
+
+        if repeat_count == 2
+            && matches!(
+                failure,
+                FailureClass::AccessDenied | FailureClass::Detected | FailureClass::Unknown
+            )
+        {
+            if let Some(alt) = self.find_lower_priv_alternative(&step.action) {
+                info!(
+                    "  {} Repeated failure on {} — pivoting to an alternate technique",
+                    "↻".cyan(),
+                    action_id
+                );
+                return Some(AdaptiveDecision::Substitute { replacement: alt });
+            }
+
+            if let Some(alt) = self.find_stealthier_alternative(&step.action) {
+                info!(
+                    "  {} Repeated failure on {} — trying a quieter alternative",
+                    "↻".cyan(),
+                    action_id
+                );
+                return Some(AdaptiveDecision::Substitute { replacement: alt });
+            }
+        }
+
+        let should_blacklist_family = matches!(
+            step.action,
+            PlannedAction::Kerberoast { .. }
+                | PlannedAction::AsRepRoast { .. }
+                | PlannedAction::PasswordSpray { .. }
+                | PlannedAction::AdcsEnumerate
+                | PlannedAction::AdcsEsc1 { .. }
+                | PlannedAction::AdcsEsc4 { .. }
+                | PlannedAction::AdcsEsc6 { .. }
+                | PlannedAction::EnumerateShares { .. }
+                | PlannedAction::CheckAdminAccess { .. }
+        ) || repeat_count >= 3;
+
+        if should_blacklist_family {
+            self.remember_failed_action(&action_id);
+            return Some(self.trigger_replan(&format!(
+                "repeated {} failures on {} — pivoting to a different technique",
+                failure.label().to_lowercase(),
+                action_id.replace('_', " ")
+            )));
+        }
+
+        None
+    }
+
+    fn remember_failed_action(&mut self, action: &str) {
+        if !self
+            .blacklisted_actions
+            .iter()
+            .any(|existing| existing == action)
+        {
+            self.blacklisted_actions.push(action.to_string());
+        }
+    }
+
+    fn action_identifier(&self, action: &PlannedAction) -> String {
+        match action {
+            PlannedAction::EnumerateUsers => "enumerate_users".to_string(),
+            PlannedAction::EnumerateComputers => "enumerate_computers".to_string(),
+            PlannedAction::EnumerateGroups => "enumerate_groups".to_string(),
+            PlannedAction::EnumerateTrusts => "enumerate_trusts".to_string(),
+            PlannedAction::EnumerateGpos => "enumerate_gpos".to_string(),
+            PlannedAction::EnumerateShares { .. } => "enumerate_shares".to_string(),
+            PlannedAction::CheckAdminAccess { .. } => "check_admin_access".to_string(),
+            PlannedAction::AsRepRoast { .. } => "asreproast".to_string(),
+            PlannedAction::Kerberoast { .. } => "kerberoast".to_string(),
+            PlannedAction::PasswordSpray { .. } => "password_spray".to_string(),
+            PlannedAction::AdcsEnumerate => "adcs_enum".to_string(),
+            PlannedAction::AdcsEsc1 { .. } => "adcs_esc1".to_string(),
+            PlannedAction::AdcsEsc4 { .. } => "adcs_esc4".to_string(),
+            PlannedAction::AdcsEsc6 { .. } => "adcs_esc6".to_string(),
+            _ => self.extract_method_name(action),
         }
     }
 
@@ -637,8 +786,11 @@ impl AdaptiveEngine {
                 }
             }
 
-            // Remove already-blacklisted steps
-            if self.blacklisted_actions.contains(&step.id) {
+            // Remove already-blacklisted steps or action families
+            let action_id = self.action_identifier(&step.action);
+            if self.blacklisted_actions.contains(&step.id)
+                || self.blacklisted_actions.contains(&action_id)
+            {
                 debug!(
                     "  {} Pruned step (blacklisted): {}",
                     "✂".dimmed(),
@@ -683,6 +835,21 @@ impl AdaptiveEngine {
             blacklisted_actions: self.blacklisted_actions.clone(),
         }
     }
+}
+
+fn normalize_failure_output(output: &str) -> String {
+    let collapsed = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
+        .chars()
+        .take(160)
+        .map(|c| {
+            if c.is_ascii_digit() {
+                '#'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
 }
 
 /// Summary of all adaptive decisions for reporting

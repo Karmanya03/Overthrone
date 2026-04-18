@@ -83,8 +83,13 @@ struct Cli {
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
-    #[arg(short, long, global = true, value_enum, default_value = "text")]
-    output: OutputFormat,
+    #[arg(
+        long = "output-format",
+        global = true,
+        value_enum,
+        default_value = "text"
+    )]
+    stdout_format: OutputFormat,
 
     #[arg(short = 'O', long, global = true)]
     outfile: Option<String>,
