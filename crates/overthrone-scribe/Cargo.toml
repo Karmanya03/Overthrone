@@ -7,8 +7,8 @@ license.workspace = true
 description = "Pentest report generator — Markdown, PDF, MITRE ATT&CK mapping, mitigations, narrative"
 
 [dependencies]
-overthrone-core = { path = "../overthrone-core" }
-overthrone-pilot = { path = "../overthrone-pilot" }
+overthrone-core = { version = "0.1.31", path = "../overthrone-core" }
+overthrone-pilot = { version = "0.1.31", path = "../overthrone-pilot" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

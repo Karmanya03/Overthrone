@@ -36,7 +36,7 @@ pnet_packet = "0.35.0"
 pnet_transport = "0.35.0"
 
 # Core dependencies
-overthrone-core = { path = "../overthrone-core" }
+overthrone-core = { version = "0.1.31", path = "../overthrone-core" }
 async-trait = "0.1"
 
 # Crypto — use workspace versions

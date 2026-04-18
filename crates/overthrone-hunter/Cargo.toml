@@ -7,7 +7,7 @@ license.workspace = true
 description = "Kerberos attack toolkit — AS-REP roasting, Kerberoasting, delegation abuse, coercion, RBCD, ticket operations"
 
 [dependencies]
-overthrone-core = { path = "../overthrone-core" }
+overthrone-core = { version = "0.1.31", path = "../overthrone-core" }
 ldap3.workspace = true
 tokio.workspace = true
 serde.workspace = true

@@ -7,8 +7,8 @@ license.workspace = true
 description = "AD trust traversal & cross-domain escalation engine"
 
 [dependencies]
-overthrone-core = { path = "../overthrone-core" }
-overthrone-reaper = { path = "../overthrone-reaper" }
+overthrone-core = { version = "0.1.31", path = "../overthrone-core" }
+overthrone-reaper = { version = "0.1.31", path = "../overthrone-reaper" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
