@@ -61,7 +61,7 @@ This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is no
 
 > **Shorthand:** Every command works with both `overthrone` and `ovt`. Because life is too short to type 10 characters when 3 will do. `ovt auto-pwn` = `overthrone auto-pwn`. Same war crimes against Active Directory, fewer keystrokes.
 
-\*The binary is statically linked with ~35 Rust crates (Tokio, ldap3, kerberos\_asn1, etc.) — no Python, no .NET, no JVM. On Linux you need `smbclient` for some legacy SMB paths; most features use the built-in pure-Rust SMB2 client.
+\*The binary is statically linked with ~35 Rust crates (Tokio, ldap3, kerberos\_asn1, etc.) - no Python, no .NET, no JVM. On Linux you need `smbclient` for some legacy SMB paths; most features use the built-in pure-Rust SMB2 client.
 
 ### The Kill Chain
 
@@ -127,7 +127,7 @@ overthrone/
 
 Here's what's inside the box. Every module. Every protocol. Every hilarious amount of Rust the borrow checker screamed at us about. The table below is the **complete inventory** of what each crate actually does - no marketing fluff, no "coming soon" handwaving.
 
-| Crate | Codename | What It Does | The Honest Truth |
+| Crate | Codename | What It Does | The Implementation |
 |---|---|---|---|
 | `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC13), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto has been battle-hardened with 66 passing tests. All 13 ADCS ESC vectors are implemented. 222 unit tests. Zero clippy warnings. The borrow checker needed therapy after this one. |
 | `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
@@ -186,7 +186,7 @@ overthrone-cli      ████████████████████
 
 Every project has a backlog. Ours just got a whole lot smaller. Split into two honest tables: what's shipped, and what's genuinely still on the stove. No marketing spin. The shipped table is longer. We're proud.
 
-### ✅ Shipped — Graduated from Backlog
+### ✅ Shipped - Graduated from Backlog
 
 The items below used to be `todo!()`. They are now real code. Some of them took longer than we'd like to admit. All of them work.
 
@@ -197,24 +197,24 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **Cross-domain TGT referral** | `core/src/proto/kerberos.rs` | 2-hop referral loop in `request_tgt()`. Follows `KDC_ERR_WRONG_REALM` redirects to the right KDC via DNS SRV. Cross-forest attacks no longer require manual realm wrangling. |
 | **WmiExec Linux guard** | `core/src/exec/wmiexec.rs` | `#[cfg(not(windows))]` returns a clear error instead of silently failing or panicking. `auto_exec()` skips WmiExec entirely on Linux. Use PsExec. It's fine. |
 | **Clock skew check in `ovt doctor`** | `cli/src/commands/doctor.rs` | Anonymous LDAP bind to RootDSE, reads `currentTime`, diffs against local clock. Fails loud if drift > 5 min (Kerberos will reject you before you even start). |
-| **ADCS ESC1 + ESC6** | `core/src/adcs/esc{1,6}.rs` | Full exploiters — SAN UPN abuse, CSR, enrollment, hash extraction, EDITF flag abuse. Iron Man has joined the MCU. |
-| **LDAP signing bypass** | `relay/src/relay.rs` | CVE-2019-1040 "Drop the MIC" — strips SIGN/SEAL/ALWAYS_SIGN from CHALLENGE before victim sees it, zeroes MIC in AUTHENTICATE. Post-relay LDAP operations (add-to-group, search, modify) work on the relayed session. 7 new unit tests. The LDAP server said "please sign your messages" and we said "no." |
+| **ADCS ESC1 + ESC6** | `core/src/adcs/esc{1,6}.rs` | Full exploiters - SAN UPN abuse, CSR, enrollment, hash extraction, EDITF flag abuse. Iron Man has joined the MCU. |
+| **LDAP signing bypass** | `relay/src/relay.rs` | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL/ALWAYS_SIGN from CHALLENGE before victim sees it, zeroes MIC in AUTHENTICATE. Post-relay LDAP operations (add-to-group, search, modify) work on the relayed session. 7 new unit tests. The LDAP server said "please sign your messages" and we said "no." |
 | **WASM plugin system** | `core/src/plugin/loader.rs` | State persistence, manifest section parsing, `allocate()` export support, `fn_free` fallback. Your WASM plugins have long-term memory now. They remember their first day at work. |
-| **CLI PDF + C2 + TUI wiring** | `cli/src/commands_impl.rs`, `tui/runner.rs` | PDF reports, C2 implant deploy, TUI crawler — all actually call real code now. The three crates went to couples therapy. It worked. |
+| **CLI PDF + C2 + TUI wiring** | `cli/src/commands_impl.rs`, `tui/runner.rs` | PDF reports, C2 implant deploy, TUI crawler - all actually call real code now. The three crates went to couples therapy. It worked. |
 | **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | `WSManReceiveShellOutput` loop collects real output. Schrödinger's remote execution has been resolved. The command ran AND we know what it said. |
 | **Session resume + TOML config** | `cli/src/main.rs`, `pilot/src/runner.rs` | `--resume <file>` picks up mid-chain. `--config <file>` loads DC, domain, auth, stealth, jitter from TOML. No more repeating 14 flags every run. |
 | **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. Knows which creds are worth more than others. |
 | **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. The audit trail explains why it chickened out. |
 | **JSON output + shell completions** | `cli/src/commands_impl.rs`, `main.rs` | `--output json` on `dump`/`rid`/`laps`/`gpp`/`scan`. `ovt completions <shell>` for bash, fish, zsh, powershell, elvish. Quality-of-life was underrated. |
 
-### ❌ Still Pending — Honest About It
+### ❌ Still Pending
 
 No sugarcoating. These are genuinely not done.
 
 | What | Why It Matters | Status | Notes |
 |---|---|---|---|
 | **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ❌ Not yet | 292 unit tests pass. Property-based tests pass. Nobody has run this against GOAD or a real lab yet. That's the next milestone. The bravery check is scheduled. |
-| **LDAP signing “Require” mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn’t enough — the server demands signed LDAP messages for every operation. | ⚠️ Partial | The bypass works when policy is "Negotiate" (common in many environments). When it’s "Require", we’d need the session key to sign messages — which we can’t derive in a relay scenario (we don’t know the victim’s NT hash). `ovt doctor` tells you which mode the DC is using. |
+| **LDAP signing “Require” mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn’t enough - the server demands signed LDAP messages for every operation. | ⚠️ Partial | The bypass works when policy is "Negotiate" (common in many environments). When it’s "Require", we’d need the session key to sign messages - which we can’t derive in a relay scenario (we don’t know the victim’s NT hash). `ovt doctor` tells you which mode the DC is using. |
 | **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ⚠️ Windows only | Use `--method psexec` or `--method smbexec` on Linux. They work everywhere. WmiExec is a Windows-only creature and it knows it. |
 
 ## Does It Actually Work?
@@ -231,14 +231,14 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **SMB2 client** | ✅ | ✅ | ✅ | ✅ | 1669-line pure Rust SMB2 - negotiate, session setup, share enum, file read/write, admin check. No libsmbclient, no Python. |
 | **Remote exec - PsExec** | ✅ | ✅ | ✅ | ✅ | Real `svcctl` named pipe. Creates → starts → reads → deletes the service. 543 lines of legit service control manager abuse. |
 | **Remote exec - SmbExec** | ✅ | ✅ | ✅ | ✅ | Temp service + cmd.exe redirect → output via C$ share. Quieter than PsExec. |
-| **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via DCOM over SMB (⚠️ Windows only — use PsExec/SmbExec on Linux). WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
+| **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via DCOM over SMB (⚠️ Windows only - use PsExec/SmbExec on Linux). WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
 | **DCSync** | ✅ | ✅ | ⚠️ | ✅ | MS-DRSR `DRSGetNCChanges` over named pipe. Asks the DC to replicate hashes. The DC complies. WS 2025 tightened some defaults - use `--stealth`. |
 | **Golden Ticket** | ✅ | ✅ | ⚠️ | ✅ | Full PAC construction with `KERB_VALIDATION_INFO`, server + KDC checksums. Needs krbtgt hash. WS 2025 may need `FAST` armor depending on config. |
 | **Silver Ticket** | ✅ | ✅ | ✅ | ✅ | Forge a TGS for any service. No DC contact at all. Quieter than Golden, harder to detect. |
 | **Attack graph + path to DA** | ✅ | ✅ | ✅ | ✅ | Reverse Dijkstra from DA back to you. Shows the exact sequence of moves to go from zero to domain admin. Usually 3 hops. Always embarrassing for someone. |
 | **ADCS ESC1-ESC8** | ✅ | ✅ | ⚠️ | ✅ | Core certificate abuse chain (SAN/EA/template/CA ACL/web relay). WS 2025 ships tighter defaults (EPA/strong mapping), so validate first with `ovt adcs enum`. |
 | **ADCS ESC9-ESC13** | ✅ | ✅ | ⚠️ | ✅ | Advanced mapping/policy/CA key abuse paths are implemented (some are operator-guided depending on privileges and CA hardening). |
-| **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB). Includes LDAP signing bypass via CVE-2019-1040 "Drop the MIC" technique — strips SIGN/SEAL flags from challenge + zeroes MIC in AUTHENTICATE. Works when DC LDAP signing policy is "Negotiate" (default on many configs). WS 2022+ with signing set to "Require" will still block relay. Run `ovt doctor` first. |
+| **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB). Includes LDAP signing bypass via CVE-2019-1040 "Drop the MIC" technique - strips SIGN/SEAL flags from challenge + zeroes MIC in AUTHENTICATE. Works when DC LDAP signing policy is "Negotiate" (default on many configs). WS 2022+ with signing set to "Require" will still block relay. Run `ovt doctor` first. |
 | **LAPS (v1 + v2)** | ✅ | ✅ | ✅ | ✅ | LAPS v1 reads `ms-Mcs-AdmPwd` in plaintext. LAPS v2 decrypts `msLAPS-EncryptedPassword` via DPAPI/AES-256-GCM. Both work. |
 | **GPP decrypt** | ✅ | ✅ | ✅ | ✅ | Microsoft literally shipped the AES key in their documentation. We use it. `cpassword` → plaintext, every time. Thanks, Microsoft. |
 | **RID cycling** | ✅ | ✅ | ✅ | ✅ | Enumerate users by RID even without valid creds (`--null-session`). Still works on misconfigured/legacy hosts. |
@@ -255,7 +255,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 30+ commands across recon, Kerberos, lateral movement, persistence, and more. Every command works as both `overthrone <cmd>` and `ovt <cmd>`.
 
-> **[Full Command Reference →](COMMAND-LIST.md)** — detailed usage, flags, and examples for every command.
+> **[Full Command Reference →](COMMAND-LIST.md)** - detailed usage, flags, and examples for every command.
 
 **Quick taste:**
 
@@ -304,7 +304,7 @@ The crate with zero stubs. The only crate that did all its homework. If overthro
 |---|---|---|
 | **Kerberoasting** | Request TGS tickets for SPN accounts, crack offline with embedded wordlist or hashcat. The DC hands you encrypted tickets and says "good luck cracking these" and hashcat says "lol." | ✅ Full |
 | **AS-REP Roasting** | Request AS-REP for accounts without pre-auth. Someone unchecked "Do not require Kerberos preauthentication." That single checkbox has caused more breaches than we can count. | ✅ Full |
-| **Kerberos User Enumeration** | Zero-knowledge username discovery via AS-REQ probes. No credentials needed — the KDC error code reveals whether each account exists (`KDC_ERR_C_PRINCIPAL_UNKNOWN` = not found, `KDC_ERR_PREAUTH_REQUIRED` = valid). Automatically captures AS-REP hashes for any no-preauth accounts found during enumeration. Bring your own wordlist (SecLists, etc). | ✅ Full |
+| **Kerberos User Enumeration** | Zero-knowledge username discovery via AS-REQ probes. No credentials needed - the KDC error code reveals whether each account exists (`KDC_ERR_C_PRINCIPAL_UNKNOWN` = not found, `KDC_ERR_PREAUTH_REQUIRED` = valid). Automatically captures AS-REP hashes for any no-preauth accounts found during enumeration. Bring your own wordlist (SecLists, etc). | ✅ Full |
 | **Auth Coercion** | PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce - force machines to authenticate to you. The DC does this willingly. Microsoft considers this "working as intended." | ✅ Full (5 techniques) |
 | **RBCD Abuse** | Create machine account + modify msDS-AllowedToActOnBehalfOfOtherIdentity + S4U2Self/S4U2Proxy chain. The attack with the longest name and the shortest time-to-DA. | ✅ Full |
 | **Constrained Delegation** | S4U2Self + S4U2Proxy to impersonate users to specific services. Microsoft: "You can only impersonate to these services." Attackers: "What about these other services?" | ✅ Full |
@@ -334,7 +334,7 @@ Born complete. Zero stubs. The prodigy crate that showed up on day one and said 
 | Feature | Details | Status |
 |---|---|---|
 | **NTLM Relay Engine** | Full relay - capture NTLM auth from one protocol, replay to another. SMB → LDAP, HTTP → SMB, mix and match like a deadly cocktail. | ✅ Full |
-| **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" — strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). Works when DC signing policy is "Negotiate." | ✅ Full |
+| **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). Works when DC signing policy is "Negotiate." | ✅ Full |
 | **LLMNR/NBT-NS/mDNS Poisoner** | Respond to broadcast name resolution. "Who is FILESERVER?" "Me. I'm FILESERVER now." Identity theft, but for computers. | ✅ Full |
 | **Network Poisoner** | Decides when to poison, what to poison, and how aggressively - while avoiding detection. Subtlety is an art form. | ✅ Full |
 | **ADCS Relay (ESC8)** | Relay NTLM auth to AD Certificate Services web enrollment. Get a certificate as the victim. Certificates: the new hashes. | ✅ Full |
@@ -387,7 +387,7 @@ Six lateral movement methods. All implemented. The `todo!()` trio graduated.
 | **AtExec** | ATSVC over SMB | ✅ Full | Scheduled task creation via named pipe. "Task Scheduler is a feature, not a vulnerability." |
 | **PsExec** | DCE/RPC + SMB | ✅ Full | Real DCE/RPC bind packet building, service creation, payload upload to ADMIN$, execution, cleanup. The sports car now has a steering wheel. |
 | **SmbExec** | SCM over SMB | ✅ Full | Service-based command execution via SMB named pipes. Clean, simple, effective. |
-| **WmiExec** | DCOM/WMI | ✅ Full (Windows) | WMI-based semi-interactive command execution with output retrieval via SMB. ⚠️ Windows only — returns a clear error on Linux/macOS. |
+| **WmiExec** | DCOM/WMI | ✅ Full (Windows) | WMI-based semi-interactive command execution with output retrieval via SMB. ⚠️ Windows only - returns a clear error on Linux/macOS. |
 
 ### C2 Framework Integration (overthrone-core)
 
@@ -599,7 +599,7 @@ brew install samba
 
 ## Wordlists
 
-Overthrone does **not** bundle wordlists — bring your own. `--userlist` inputs and cracking `--wordlist` inputs accept any path on your system.
+Overthrone does **not** bundle wordlists - bring your own. `--userlist` inputs and cracking `--wordlist` inputs accept any path on your system.
 
 ### Recommended: SecLists
 
@@ -617,7 +617,7 @@ git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
 ### Username Lists
 
 ```bash
-# Zero-knowledge user enumeration — massive list, slow but thorough
+# Zero-knowledge user enumeration - massive list, slow but thorough
 /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt
 
 # Faster: statistically likely first.last / f.last / flast formats
@@ -632,13 +632,13 @@ git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
 ### Password Lists
 
 ```bash
-# Top 1000 — use for spraying (fast, stays under lockout threshold)
+# Top 1000 - use for spraying (fast, stays under lockout threshold)
 /usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000.txt
 
-# Seasonal passwords — highest hit rate in enterprise AD
+# Seasonal passwords - highest hit rate in enterprise AD
 /usr/share/seclists/Passwords/Seasonal/
 
-# RockYou — offline cracking of captured hashes
+# RockYou - offline cracking of captured hashes
 /usr/share/wordlists/rockyou.txt
 
 # Leaked AD passwords (actual corporate breach data)
@@ -648,7 +648,7 @@ git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
 ### Zero-Knowledge Kill Chain Example
 
 ```bash
-# 1. Enumerate valid usernames — no credentials needed
+# 1. Enumerate valid usernames - no credentials needed
 ovt kerberos user-enum -H 192.168.57.11 -d north.sevenkingdoms.local \
   --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
   --output ./loot/valid_users.txt \
@@ -726,9 +726,9 @@ ovt graph stats                                           # node/edge counts
 ovt graph export --output graph.json                     # save it
 ovt graph export --output bloodhound.json --bloodhound   # BloodHound format
 
-# Step 3 (zero-knowledge): Enumerate valid usernames — no creds needed
+# Step 3 (zero-knowledge): Enumerate valid usernames - no creds needed
 # Uses Kerberos error codes to determine if each username exists.
-# Bring your own wordlist — see the Wordlists section below.
+# Bring your own wordlist - see the Wordlists section below.
 ovt kerberos user-enum -H 10.10.10.1 -d corp.local \
   --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
   --output ./loot/valid_users.txt \
@@ -744,7 +744,7 @@ ovt kerberos asrep-roast -H 10.10.10.1 -d corp.local -U ./loot/valid_users.txt -
 ovt crack --file ./loot/kerberoast_hashes.txt --mode thorough
 
 # Note: any no-preauth accounts found during user-enum automatically save
-# their AS-REP hashes to ./loot/userenum_asrep_hashes.txt — free hashes.
+# their AS-REP hashes to ./loot/userenum_asrep_hashes.txt - free hashes.
 
 # Step 5: Spray (respect the lockout policy)
 ovt spray -H 10.10.10.1 -d corp.local --password 'Winter2026!' --userlist ./loot/valid_users.txt
