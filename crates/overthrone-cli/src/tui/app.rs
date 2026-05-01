@@ -1,42 +1,36 @@
 use overthrone_core::graph::{AttackGraph, EdgeId, EdgeRef, NodeId, NodeType};
+use overthrone_reaper::acls::AclFinding;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Application state for the TUI
 pub struct App {
-    /// Shared attack graph (updated by crawler thread)
     pub graph: Arc<Mutex<AttackGraph>>,
-    /// Currently selected node
     pub selected_node: Option<NodeId>,
-    /// Camera offset for graph panning
+    pub highlighted_path: Vec<EdgeId>,
+    pub filter_text: String,
+    pub filter_active: bool,
     pub camera_x: f64,
     pub camera_y: f64,
-    /// Zoom level (1.0 = default)
     pub zoom: f64,
-    /// Active tab
     pub active_tab: Tab,
-    /// Log messages buffer
     pub logs: Vec<LogEntry>,
-    /// Max log lines to keep
     pub max_logs: usize,
-    /// Whether the app should quit
     pub should_quit: bool,
-    /// Node positions (force-directed layout)
     pub layout: HashMap<NodeId, (f64, f64)>,
-    /// Search/filter text
-    pub filter_text: String,
-    /// Is filter input active
-    pub filter_active: bool,
-    /// Stats snapshot
     pub stats: GraphStats,
-    /// Selected attack path (highlighted edges)
-    pub highlighted_path: Vec<EdgeId>,
+    #[allow(dead_code)]
     pub acl_scroll: Option<usize>,
+    #[allow(dead_code)]
     pub path_scroll: Option<usize>,
+    #[allow(dead_code)]
     pub graph_scroll: Option<usize>,
+    #[allow(dead_code)]
     pub detail_scroll: Option<usize>,
+    #[allow(dead_code)]
     pub current_path: Option<overthrone_core::graph::AttackPath>,
-    pub acl_findings: Option<Vec<overthrone_reaper::acls::AclFinding>>,
+    #[allow(dead_code)]
+    pub acl_findings: Option<Vec<AclFinding>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

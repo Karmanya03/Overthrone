@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 fn relationship_name(raw: &str) -> String {
     let cleaned = raw
         .trim()

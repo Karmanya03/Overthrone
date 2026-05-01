@@ -82,6 +82,7 @@ pub fn edge_color(edge_type: &EdgeType, highlighted: bool) -> Color {
 }
 
 /// Severity-mapped colour for ACL finding rows (1 = most severe).
+#[allow(dead_code)]
 fn severity_color(severity: u8) -> Color {
     match severity {
         1 => Color::Red,
@@ -615,6 +616,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
 // ─── ACL findings panel ───────────────────────────────────────────────────────
 
 /// Render the full ACL findings list in a scrollable panel.
+#[allow(dead_code)]
 pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
     let scroll = app.acl_scroll.unwrap_or(0);
 
@@ -678,6 +680,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
 // ─── Attack-path panel ────────────────────────────────────────────────────────
 
 /// Render the current computed attack path.
+#[allow(dead_code)]
 pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
     let scroll = app.path_scroll.unwrap_or(0);
     let mut lines: Vec<Line> = Vec::new();
@@ -801,6 +804,7 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
 // ─── Legend overlay ───────────────────────────────────────────────────────────
 
 /// Render a colour-coded edge-type legend in the given area.
+#[allow(dead_code)]
 pub fn render_legend(f: &mut Frame, area: Rect) {
     let entries: &[(&str, Color, &str)] = &[
         ("AdminTo", Color::Red, "Local admin access"),
