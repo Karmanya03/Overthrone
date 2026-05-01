@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EdgeType {
@@ -15,12 +15,14 @@ pub enum EdgeType {
     CanRDP,
     CanPSRemote,
     ExecuteDCOM,
+    SQLAdmin,
     
     // ACL-based edges (traversable in graph)
     GenericAll,
     GenericWrite,
     WriteDacl,
     WriteOwner,
+    AddSelf,
     ForceChangePassword,
     AddMember,        // Alias: AddMembers
     AllExtendedRights,
@@ -39,12 +41,44 @@ pub enum EdgeType {
     AllowedToDelegate,
     AllowedToAct,
     
+    // Marker edges
+    HasSidHistory,
+    DcSync,
+    GetChanges,
+    GetChangesAll,
+    
     // Kerberos attack surfaces
     HasSPN,
     DontReqPreauth,
     
     // ADCS
     EnrollOnBehalfOf,
+    
+    // Attribute-level WriteProperty edges
+    WriteSPN,
+    WriteAllowedToDelegateTo,
+    AddAllowedToAct,
+    WriteAccountRestrictions,
+    WriteLogonScript,
+    WriteProfilePath,
+    WriteScriptPath,
+    WriteDnsHostName,
+    WriteServicePrincipalName,
+    WriteKeyCredentialLink,
+    WriteMsDsKeyCredentialLink,
+    WriteAltSecurityIdentities,
+    WriteUserParameters,
+    WritePwdProperties,
+    WriteLockoutThreshold,
+    WriteMinPwdLength,
+    WritePwdHistoryLength,
+    WritePwdComplexity,
+    WritePwdReversibleEncryption,
+    WritePwdAge,
+    WriteLockoutDuration,
+    WriteLockoutObservationWindow,
+    WriteGPLink,
+    AddKeyCredentialLink,
     
     // Custom/extended edge type
     Custom(String),
@@ -53,6 +87,7 @@ pub enum EdgeType {
 impl EdgeType {
     /// Check if this edge type is traversable in attack path finding.
     /// ACL-based edges are all traversable and should be followed.
+    /// Marker edges (HasSpn, DontReqPreauth, HasSidHistory, etc.) are NOT traversable.
     pub fn is_traversable(&self) -> bool {
         matches!(
             self,
@@ -66,11 +101,36 @@ impl EdgeType {
                 | EdgeType::ForceChangePassword
                 | EdgeType::AddMember
                 | EdgeType::AllExtendedRights
+                | EdgeType::AddSelf
                 | EdgeType::Owns
                 | EdgeType::ReadLapsPassword
                 | EdgeType::ReadGmsaPassword
                 | EdgeType::AllowedToDelegate
                 | EdgeType::AllowedToAct
+                | EdgeType::WriteSPN
+                | EdgeType::WriteAllowedToDelegateTo
+                | EdgeType::AddAllowedToAct
+                | EdgeType::WriteAccountRestrictions
+                | EdgeType::WriteLogonScript
+                | EdgeType::WriteProfilePath
+                | EdgeType::WriteScriptPath
+                | EdgeType::WriteDnsHostName
+                | EdgeType::WriteServicePrincipalName
+                | EdgeType::WriteKeyCredentialLink
+                | EdgeType::WriteMsDsKeyCredentialLink
+                | EdgeType::WriteAltSecurityIdentities
+                | EdgeType::WriteUserParameters
+                | EdgeType::WritePwdProperties
+                | EdgeType::WriteLockoutThreshold
+                | EdgeType::WriteMinPwdLength
+                | EdgeType::WritePwdHistoryLength
+                | EdgeType::WritePwdComplexity
+                | EdgeType::WritePwdReversibleEncryption
+                | EdgeType::WritePwdAge
+                | EdgeType::WriteLockoutDuration
+                | EdgeType::WriteLockoutObservationWindow
+                | EdgeType::WriteGPLink
+                | EdgeType::AddKeyCredentialLink
         )
     }
     
@@ -96,6 +156,7 @@ impl EdgeType {
             EdgeType::ForceChangePassword => 4,
             EdgeType::AddMember => 4,
             EdgeType::AllExtendedRights => 4,
+            EdgeType::AddSelf => 4,
             
             // Password reading
             EdgeType::ReadLapsPassword => 3,
@@ -104,6 +165,32 @@ impl EdgeType {
             // Delegation
             EdgeType::AllowedToDelegate => 3,
             EdgeType::AllowedToAct => 4,
+            
+            // Attribute-level write properties
+            EdgeType::WriteSPN => 2,
+            EdgeType::WriteAllowedToDelegateTo => 1,
+            EdgeType::AddAllowedToAct => 1,
+            EdgeType::WriteAccountRestrictions => 1,
+            EdgeType::WriteLogonScript => 3,
+            EdgeType::WriteProfilePath => 3,
+            EdgeType::WriteScriptPath => 2,
+            EdgeType::WriteDnsHostName => 2,
+            EdgeType::WriteServicePrincipalName => 2,
+            EdgeType::WriteKeyCredentialLink => 2,
+            EdgeType::WriteMsDsKeyCredentialLink => 2,
+            EdgeType::WriteAltSecurityIdentities => 1,
+            EdgeType::WriteUserParameters => 2,
+            EdgeType::WritePwdProperties => 1,
+            EdgeType::WriteLockoutThreshold => 1,
+            EdgeType::WriteMinPwdLength => 1,
+            EdgeType::WritePwdHistoryLength => 1,
+            EdgeType::WritePwdComplexity => 1,
+            EdgeType::WritePwdReversibleEncryption => 1,
+            EdgeType::WritePwdAge => 1,
+            EdgeType::WriteLockoutDuration => 1,
+            EdgeType::WriteLockoutObservationWindow => 1,
+            EdgeType::WriteGPLink => 3,
+            EdgeType::AddKeyCredentialLink => 2,
             
             // Remote access
             EdgeType::CanRDP => 5,
@@ -116,6 +203,12 @@ impl EdgeType {
             
             // Trust
             EdgeType::TrustedBy => 3,
+            
+            // Marker edges
+            EdgeType::HasSidHistory => 2,
+            EdgeType::DcSync => 1,
+            EdgeType::GetChanges => 2,
+            EdgeType::GetChangesAll => 2,
             
             // Kerberos attack surfaces
             EdgeType::HasSPN => 3,

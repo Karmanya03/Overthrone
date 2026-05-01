@@ -16,6 +16,33 @@ pub enum DangerousRight {
     ReadLapsPassword,
     ReadGmsaPassword,
     DcSync,
+    // ── Attribute-level WriteProperty edges ──────────────────────────────────────
+    WriteSPN,
+    WriteAllowedToDelegateTo,
+    AddAllowedToAct,
+    WriteAccountRestrictions,
+    WriteLogonScript,
+    WriteProfilePath,
+    WriteScriptPath,
+    WriteDnsHostName,
+    WriteServicePrincipalName,
+    WriteKeyCredentialLink,
+    WriteMsDsKeyCredentialLink,
+    WriteAltSecurityIdentities,
+    WriteUserParameters,
+    WritePwdProperties,
+    WriteLockoutThreshold,
+    WriteMinPwdLength,
+    WritePwdHistoryLength,
+    WritePwdComplexity,
+    WritePwdReversibleEncryption,
+    WritePwdAge,
+    WriteLockoutDuration,
+    WriteLockoutObservationWindow,
+    WriteGPLink,
+    AddKeyCredentialLink,
+    // ── Generic catch-all ───────────────────────────────────────────────────────
+    WriteProperty { attribute: String, guid: String },
     Custom(String),
 }
 
@@ -45,6 +72,199 @@ const GUID_REPLICATING_DIRECTORY_CHANGES: &str = "1131f6aa-9c07-11d1-f79f-00c04f
 const GUID_REPLICATING_DIRECTORY_CHANGES_ALL: &str = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_MEMBER: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
 const GUID_MS_MCS_ADMPWD: &str = "faa13209-962c-4e55-8cfe-1b99ae3f1169";
+
+/// Attribute GUID → (attribute_name, edge_type, cost, traversable, abuse_notes)
+fn attribute_guid_info(
+    guid: &str,
+) -> Option<(&'static str, &'static str, u32, bool, &'static str)> {
+    match guid.to_lowercase().as_str() {
+        // ── Service Principal Name (Kerberoasting) ───────────────────────────────
+        g if g == "f3a64788-5306-11d1-a9c5-0000f80367c1" => Some((
+            "servicePrincipalName",
+            "WriteSPN",
+            2,
+            true,
+            "Write SPN → targeted Kerberoast (crack TGS offline)",
+        )),
+        // ── Key Credentials (Shadow Credentials / Whisker) ─────────────────────
+        g if g == "5b84175e-4d8d-4f50-9c68-0e1565f643c7" => Some((
+            "msDS-KeyCredentialLink",
+            "AddKeyCredentialLink",
+            2,
+            true,
+            "Add keyCredentialLink → Shadow Credentials (PKINIT) → getTGT",
+        )),
+        // ── RBCD ───────────────────────────────────────────────────────────────
+        g if g == "bf967a8a-0de6-11d0-a285-00aa003049e2" => Some((
+            "msDS-AllowedToActOnBehalfOfOtherIdentity",
+            "AddAllowedToAct",
+            1,
+            true,
+            "Write RBCD attribute → RBCD attack → getTGT for target",
+        )),
+        g if g == "bf967a9c-0de6-11d0-a285-00aa003049e2" => Some((
+            "msDS-AllowedToDelegateTo",
+            "WriteAllowedToDelegateTo",
+            1,
+            true,
+            "Write constrained delegation SPN → abuse S4U2Self → getTGT",
+        )),
+        // ── Account restrictions / UAC ─────────────────────────────────────────
+        g if g == "bf9679ac-0de6-11d0-a285-00aa003049e2" => Some((
+            "userAccountControl",
+            "WriteAccountRestrictions",
+            1,
+            true,
+            "Flip DONT_REQ_PREAUTH → AS-REP roast; enable/disable; unlock",
+        )),
+        // ── Logon script / profile / GPO ───────────────────────────────────────
+        g if g == "bf967a0c-0de6-11d0-a285-00aa003049e2" => Some((
+            "scriptPath",
+            "WriteLogonScript",
+            3,
+            true,
+            "Write logon script → command execution on next logon",
+        )),
+        g if g == "bf967a0e-0de6-11d0-a285-00aa003049e2" => Some((
+            "profilePath",
+            "WriteProfilePath",
+            3,
+            true,
+            "Write profile path → UNC redirect / relay / command execution",
+        )),
+        g if g == "bf967a1a-0de6-11d0-a285-00aa003049e2" => Some((
+            "gPLink",
+            "WriteGPLink",
+            3,
+            true,
+            "Write gPLink → link malicious GPO → immediate exec on refresh",
+        )),
+        g if g == "bf967a1c-0de6-11d0-a285-00aa003049e2" => Some((
+            "gPCFileSysPath",
+            "WriteGPLink",
+            3,
+            true,
+            "Write GPO fileSysPath → plant malicious scripts / scheduled tasks",
+        )),
+        // ── DNS / host / parameters ───────────────────────────────────────────
+        g if g == "bf967a20-0de6-11d0-a285-00aa003049e2" => Some((
+            "dNSHostName",
+            "WriteDnsHostName",
+            2,
+            true,
+            "Write dnsHostName → Kerberos PKINIT auth bypass / silver ticket abuse",
+        )),
+        g if g == "bf967a21-0de6-11d0-a285-00aa003049e2" => Some((
+            "userParameters",
+            "WriteUserParameters",
+            2,
+            true,
+            "Write userParameters → RDP desktop shadowing / COM hijack",
+        )),
+        // ── Password / lockout policy ─────────────────────────────────────────
+        g if g == "domainDNS" => Some((
+            "lockoutThreshold",
+            "WriteLockoutThreshold",
+            1,
+            true,
+            "Write domain lockout threshold → disable lockout for spraying",
+        )),
+        g if g == "domainDNS" => Some((
+            "minPwdLength",
+            "WriteMinPwdLength",
+            1,
+            true,
+            "Write minPwdLength → weaken password policy",
+        )),
+        g if g == "domainDNS" => Some((
+            "pwdHistoryLength",
+            "WritePwdHistoryLength",
+            1,
+            true,
+            "Write pwdHistoryLength → allow password reuse",
+        )),
+        g if g == "domainDNS" => Some((
+            "pwdComplexity",
+            "WritePwdComplexity",
+            1,
+            true,
+            "Disable complexity → easier password guessing",
+        )),
+        g if g == "domainDNS" => Some((
+            "pwdReversibleEncryption",
+            "WritePwdReversibleEncryption",
+            1,
+            true,
+            "Enable reversible encryption → extract plaintext passwords",
+        )),
+        g if g == "domainDNS" => Some((
+            "maxPwdAge",
+            "WritePwdAge",
+            1,
+            true,
+            "Write maxPwdAge → force rotation or disable expiration",
+        )),
+        g if g == "domainDNS" => Some((
+            "lockoutDuration",
+            "WriteLockoutDuration",
+            1,
+            true,
+            "Write lockoutDuration → control lockout window",
+        )),
+        g if g == "domainDNS" => Some((
+            "lockoutObservationWindow",
+            "WriteLockoutObservationWindow",
+            1,
+            true,
+            "Write lockoutObservationWindow → manipulate lockout counters",
+        )),
+        // ── Additional high-value attributes ──────────────────────────────────
+        g if g == "bf967a06-0de6-11d0-a285-00aa003049e2" => Some((
+            "personalTerminal",
+            "WriteUserParameters",
+            2,
+            true,
+            "Write personalTerminal → RDP shadowing abuse",
+        )),
+        g if g == "bf967a08-0de6-11d0-a285-00aa003049e2" => Some((
+            "terminalServer",
+            "WriteUserParameters",
+            2,
+            true,
+            "Write terminalServer → RDP / ICA hijack",
+        )),
+        g if g == "bf967a0a-0de6-11d0-a285-00aa003049e2" => Some((
+            "url",
+            "WriteUserParameters",
+            1,
+            true,
+            "Write url → phishing / drive-by",
+        )),
+        g if g == "bf967a08-0de6-11d0-a285-00aa003049e2" => Some((
+            "userSMIMECertificate",
+            "WriteAltSecurityIdentities",
+            1,
+            true,
+            "Write SMIME cert → email spoofing / trust abuse",
+        )),
+        g if g == "bf967a22-0de6-11d0-a285-00aa003049e2" => Some((
+            "altSecurityIdentities",
+            "WriteAltSecurityIdentities",
+            1,
+            true,
+            "Write altSecurityIdentities → SAML / cert-based auth bypass",
+        )),
+        // ── msDS-GroupMSAMembership (gMSA) ────────────────────────────────────
+        g if g == "f3f5d1d9-9c68-4e50-b8c5-6e1d3d3e3e3e" => Some((
+            "msDS-GroupMSAMembership",
+            "ReadGmsaPassword",
+            2,
+            true,
+            "Read gMSA password → lateral movement as gMSA",
+        )),
+        _ => None,
+    }
+}
 
 pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFinding>> {
     info!("[acls] Querying {} for dangerous ACLs", config.dc_ip);
@@ -295,7 +515,52 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
         match object_guid.as_str() {
             g if g == GUID_MEMBER => DangerousRight::AddMembers,
             g if g.contains(GUID_MS_MCS_ADMPWD) => DangerousRight::ReadLapsPassword,
-            _ => return None,
+            _ => {
+                // Check comprehensive attribute mapping
+                if let Some((_attr_name, edge_type, _cost, _traversable, _notes)) =
+                    attribute_guid_info(&object_guid)
+                {
+                    match edge_type {
+                        "WriteSPN" => DangerousRight::WriteSPN,
+                        "WriteAllowedToDelegateTo" => DangerousRight::WriteAllowedToDelegateTo,
+                        "AddAllowedToAct" => DangerousRight::AddAllowedToAct,
+                        "WriteAccountRestrictions" => DangerousRight::WriteAccountRestrictions,
+                        "WriteLogonScript" => DangerousRight::WriteLogonScript,
+                        "WriteProfilePath" => DangerousRight::WriteProfilePath,
+                        "WriteScriptPath" => DangerousRight::WriteScriptPath,
+                        "WriteDnsHostName" => DangerousRight::WriteDnsHostName,
+                        "WriteServicePrincipalName" => DangerousRight::WriteServicePrincipalName,
+                        "WriteKeyCredentialLink" => DangerousRight::WriteKeyCredentialLink,
+                        "WriteMsDsKeyCredentialLink" => DangerousRight::WriteMsDsKeyCredentialLink,
+                        "WriteAltSecurityIdentities" => DangerousRight::WriteAltSecurityIdentities,
+                        "WriteUserParameters" => DangerousRight::WriteUserParameters,
+                        "WritePwdProperties" => DangerousRight::WritePwdProperties,
+                        "WriteLockoutThreshold" => DangerousRight::WriteLockoutThreshold,
+                        "WriteMinPwdLength" => DangerousRight::WriteMinPwdLength,
+                        "WritePwdHistoryLength" => DangerousRight::WritePwdHistoryLength,
+                        "WritePwdComplexity" => DangerousRight::WritePwdComplexity,
+                        "WritePwdReversibleEncryption" => {
+                            DangerousRight::WritePwdReversibleEncryption
+                        }
+                        "WritePwdAge" => DangerousRight::WritePwdAge,
+                        "WriteLockoutDuration" => DangerousRight::WriteLockoutDuration,
+                        "WriteLockoutObservationWindow" => {
+                            DangerousRight::WriteLockoutObservationWindow
+                        }
+                        "WriteGPLink" => DangerousRight::WriteGPLink,
+                        "AddKeyCredentialLink" => DangerousRight::AddKeyCredentialLink,
+                        _ => DangerousRight::WriteProperty {
+                            attribute: object_guid.clone(),
+                            guid: object_guid.clone(),
+                        },
+                    }
+                } else {
+                    DangerousRight::WriteProperty {
+                        attribute: object_guid.clone(),
+                        guid: object_guid.clone(),
+                    }
+                }
+            }
         }
     } else {
         return None;

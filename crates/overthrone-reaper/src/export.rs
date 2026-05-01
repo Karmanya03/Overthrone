@@ -1,5 +1,6 @@
 //! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
 
+use crate::acls::DangerousRight;
 use crate::runner::ReaperResult;
 use overthrone_core::error::Result;
 use serde_json::{Value, json};
@@ -105,6 +106,100 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
     let dir = base.parent().unwrap_or(Path::new("."));
     let timestamp = chrono::Utc::now().timestamp();
 
+    // ── ACL findings distribution ───────────────────────────────────────────────
+    fn right_to_bloodhound_name(right: &DangerousRight) -> String {
+        match right {
+            DangerousRight::GenericAll => "GenericAll".to_string(),
+            DangerousRight::GenericWrite => "GenericWrite".to_string(),
+            DangerousRight::WriteDacl => "WriteDacl".to_string(),
+            DangerousRight::WriteOwner => "WriteOwner".to_string(),
+            DangerousRight::ForceChangePassword => "ForceChangePassword".to_string(),
+            DangerousRight::AddMembers => "AddMembers".to_string(),
+            DangerousRight::ReadLapsPassword => "ReadLapsPassword".to_string(),
+            DangerousRight::ReadGmsaPassword => "ReadGmsaPassword".to_string(),
+            DangerousRight::DcSync => "DcSync".to_string(),
+            DangerousRight::WriteSPN => "WriteSPN".to_string(),
+            DangerousRight::WriteAllowedToDelegateTo => "WriteAllowedToDelegateTo".to_string(),
+            DangerousRight::AddAllowedToAct => "AddAllowedToAct".to_string(),
+            DangerousRight::WriteAccountRestrictions => "WriteAccountRestrictions".to_string(),
+            DangerousRight::WriteLogonScript => "WriteLogonScript".to_string(),
+            DangerousRight::WriteProfilePath => "WriteProfilePath".to_string(),
+            DangerousRight::WriteScriptPath => "WriteScriptPath".to_string(),
+            DangerousRight::WriteDnsHostName => "WriteDnsHostName".to_string(),
+            DangerousRight::WriteServicePrincipalName => "WriteServicePrincipalName".to_string(),
+            DangerousRight::WriteKeyCredentialLink => "WriteKeyCredentialLink".to_string(),
+            DangerousRight::WriteMsDsKeyCredentialLink => "WriteMsDsKeyCredentialLink".to_string(),
+            DangerousRight::WriteAltSecurityIdentities => "WriteAltSecurityIdentities".to_string(),
+            DangerousRight::WriteUserParameters => "WriteUserParameters".to_string(),
+            DangerousRight::WritePwdProperties => "WritePwdProperties".to_string(),
+            DangerousRight::WriteLockoutThreshold => "WriteLockoutThreshold".to_string(),
+            DangerousRight::WriteMinPwdLength => "WriteMinPwdLength".to_string(),
+            DangerousRight::WritePwdHistoryLength => "WritePwdHistoryLength".to_string(),
+            DangerousRight::WritePwdComplexity => "WritePwdComplexity".to_string(),
+            DangerousRight::WritePwdReversibleEncryption => {
+                "WritePwdReversibleEncryption".to_string()
+            }
+            DangerousRight::WritePwdAge => "WritePwdAge".to_string(),
+            DangerousRight::WriteLockoutDuration => "WriteLockoutDuration".to_string(),
+            DangerousRight::WriteLockoutObservationWindow => {
+                "WriteLockoutObservationWindow".to_string()
+            }
+            DangerousRight::WriteGPLink => "WriteGPLink".to_string(),
+            DangerousRight::AddKeyCredentialLink => "AddKeyCredentialLink".to_string(),
+            DangerousRight::WriteProperty { attribute, guid: _ } => attribute.clone(),
+            DangerousRight::Custom(s) => s.clone(),
+        }
+    }
+
+    let mut user_aces: Vec<Value> = Vec::new();
+    let mut computer_aces: Vec<Value> = Vec::new();
+    let mut group_aces: Vec<Value> = Vec::new();
+    let mut ou_aces: Vec<Value> = Vec::new();
+    let mut gpo_aces: Vec<Value> = Vec::new();
+    let mut domain_aces: Vec<Value> = Vec::new();
+
+    for finding in &result.acl_findings {
+        let ace = json!({
+            "PrincipalSID": finding.principal_sid.clone().unwrap_or_else(|| finding.principal.clone()),
+            "PrincipalType": "Unknown",
+            "RightName": right_to_bloodhound_name(&finding.right),
+            "IsInherited": finding.is_inherited,
+        });
+
+        let target_lower = finding.target_dn.to_lowercase();
+        if target_lower.contains("ou=") && !target_lower.contains("cn=users") {
+            ou_aces.push(ace);
+        } else if target_lower.contains("cn=users")
+            || result
+                .users
+                .iter()
+                .any(|u| u.sam_account_name.eq_ignore_ascii_case(&finding.target))
+        {
+            user_aces.push(ace);
+        } else if result
+            .computers
+            .iter()
+            .any(|c| c.sam_account_name.eq_ignore_ascii_case(&finding.target))
+        {
+            computer_aces.push(ace);
+        } else if result
+            .groups
+            .iter()
+            .any(|g| g.sam_account_name.eq_ignore_ascii_case(&finding.target))
+        {
+            group_aces.push(ace);
+        } else if result.gpos.iter().any(|g| {
+            g.display_name.eq_ignore_ascii_case(&finding.target)
+                || g.gpc_file_sys_path
+                    .as_ref()
+                    .map_or(false, |p| p.eq_ignore_ascii_case(&finding.target))
+        }) {
+            gpo_aces.push(ace);
+        } else {
+            domain_aces.push(ace);
+        }
+    }
+
     // ── Users ──
     if !result.users.is_empty() {
         let users_json: Vec<Value> = result
@@ -113,6 +208,16 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             .map(|u| {
                 let domain_upper = result.domain.to_uppercase();
                 let object_id = u.sid.clone().unwrap_or_default();
+                let user_aces_for_this_user: Vec<Value> = user_aces
+                    .iter()
+                    .filter(|a| {
+                        a["PrincipalSID"].as_str().map_or(false, |sid| {
+                            u.sid.as_deref() == Some(sid)
+                                || u.sam_account_name.eq_ignore_ascii_case(sid)
+                        })
+                    })
+                    .cloned()
+                    .collect();
                 json!({
                     "ObjectIdentifier": object_id,
                     "Properties": {
@@ -144,7 +249,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                         "hasrbcd": u.has_rbcd,
                     },
                     "MemberOf": u.member_of,
-                    "Aces": [],
+                    "Aces": user_aces_for_this_user,
                     "SPNTargets": [],
                     "HasSIDHistory": [],
                 })
@@ -174,10 +279,21 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             .map(|c| {
                 let domain_upper = result.domain.to_uppercase();
                 let object_id = c.sid.clone().unwrap_or_default();
+                let computer_aces_for_this: Vec<Value> = computer_aces
+                    .iter()
+                    .filter(|a| {
+                        a["PrincipalSID"].as_str().map_or(false, |sid| {
+                            c.sid.as_deref() == Some(sid)
+                                || c.sam_account_name.eq_ignore_ascii_case(sid)
+                        })
+                    })
+                    .cloned()
+                    .collect();
                 json!({
                     "ObjectIdentifier": object_id,
                     "Properties": {
-                        "name": format!("{}@{}",
+                        "name": format!(
+                            "{}@{}",
                             c.dns_hostname.as_deref().unwrap_or(&c.sam_account_name).to_uppercase(),
                             domain_upper
                         ),
@@ -196,7 +312,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                     "AllowedToAct": [],
                     "Sessions": { "Results": [], "Collected": false },
                     "LocalAdmins": { "Results": [], "Collected": false },
-                    "Aces": [],
+                    "Aces": computer_aces_for_this,
                 })
             })
             .collect();
@@ -221,6 +337,13 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         let groups_json: Vec<Value> = result.groups.iter().map(|g| {
             let domain_upper = result.domain.to_uppercase();
             let object_id = g.sid.clone().unwrap_or_default();
+            let group_aces_for_this: Vec<Value> = group_aces
+                .iter()
+                .filter(|a| a["PrincipalSID"].as_str().map_or(false, |sid| {
+                    g.sid.as_deref() == Some(sid) || g.sam_account_name.eq_ignore_ascii_case(sid)
+                }))
+                .cloned()
+                .collect();
             json!({
                 "ObjectIdentifier": object_id,
                 "Properties": {
@@ -232,7 +355,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                     "highvalue": g.is_privileged(),
                 },
                 "Members": g.members.iter().map(|m| json!({ "MemberId": m, "MemberType": "Base" })).collect::<Vec<_>>(),
-                "Aces": [],
+                "Aces": group_aces_for_this,
             })
         }).collect();
 
@@ -251,14 +374,93 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         info!("[export] BloodHound groups → {}", path.display());
     }
 
+    // ── OUs ──
+    if !result.ous.is_empty() {
+        let ous_json: Vec<Value> = result
+            .ous
+            .iter()
+            .map(|ou| {
+                let ou_aces_for_this: Vec<Value> = ou_aces
+                    .iter()
+                    .filter(|a| {
+                        a["PrincipalSID"]
+                            .as_str()
+                            .map_or(false, |sid| ou.distinguished_name.eq_ignore_ascii_case(sid))
+                    })
+                    .cloned()
+                    .collect();
+                json!({
+                    "ObjectIdentifier": ou.distinguished_name,
+                    "Properties": {
+                        "name": ou.name,
+                        "domain": result.domain.to_uppercase(),
+                        "highvalue": false,
+                    },
+                    "Aces": ou_aces_for_this,
+                    "ChildObjects": [],
+                    "Links": [],
+                })
+            })
+            .collect();
+
+        let output = json!({
+            "meta": {
+                "methods": 0,
+                "type": "ous",
+                "count": ous_json.len(),
+                "version": 5
+            },
+            "data": ous_json
+        });
+
+        let path = dir.join(format!("{}_ous.json", timestamp));
+        tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
+        info!("[export] BloodHound OUs → {}", path.display());
+    }
+
+    // ── GPOs ──
+    if !result.gpos.is_empty() {
+        let gpos_json: Vec<Value> = result.gpos.iter().map(|g| {
+            let gpo_aces_for_this: Vec<Value> = gpo_aces
+                .iter()
+                .filter(|a| a["PrincipalSID"].as_str().map_or(false, |sid| {
+                    g.display_name.eq_ignore_ascii_case(sid) ||
+                    g.gpc_file_sys_path.as_ref().map_or(false, |p| p.eq_ignore_ascii_case(sid))
+                }))
+                .cloned()
+                .collect();
+            json!({
+                "ObjectIdentifier": if !g.distinguished_name.is_empty() { g.distinguished_name.clone() } else { g.display_name.clone() },
+                "Properties": {
+                    "name": g.display_name,
+                    "domain": result.domain.to_uppercase(),
+                    "highvalue": false,
+                },
+                "Aces": gpo_aces_for_this,
+                "ChildObjects": [],
+                "Links": [],
+            })
+        }).collect();
+
+        let output = json!({
+            "meta": {
+                "methods": 0,
+                "type": "gpos",
+                "count": gpos_json.len(),
+                "version": 5
+            },
+            "data": gpos_json
+        });
+
+        let path = dir.join(format!("{}_gpos.json", timestamp));
+        tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
+        info!("[export] BloodHound GPOs → {}", path.display());
+    }
+
     // ── Domains ──
     let domain_upper = result.domain.to_uppercase();
 
     // Derive domain SID from an enumerated object's SID (strip the last RID component).
-    // A Windows SID has the form S-1-5-21-<sub1>-<sub2>-<sub3>-<RID>.
-    // The domain SID is everything except the last component.
-    // If no object SID is available, omit the ObjectIdentifier rather than emitting
-    // a syntactically invalid fake SID.
     let domain_sid: Option<String> = result
         .users
         .iter()
@@ -266,7 +468,6 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         .chain(result.computers.iter().filter_map(|c| c.sid.as_deref()))
         .find_map(|sid| {
             let parts: Vec<&str> = sid.splitn(8, '-').collect();
-            // SID: S-1-5-21-<A>-<B>-<C>-<RID> → 8 components; domain = first 7
             if parts.len() >= 7 {
                 Some(parts[..parts.len() - 1].join("-"))
             } else {
@@ -276,8 +477,6 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
     let domain_object_id = domain_sid.as_deref().unwrap_or("UNKNOWN");
 
-    // Map msDS-Behavior-Version integer to BloodHound functional level string.
-    // https://docs.microsoft.com/en-us/windows/win32/adschema/a-msds-behavior-version
     let functional_level = match result.functional_level {
         Some(0) => "2000",
         Some(1) => "2003Mixed",
@@ -322,7 +521,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 "IsTransitive": t.transitive,
                 "SidFilteringEnabled": t.sid_filtering_enabled,
             })).collect::<Vec<_>>(),
-            "Aces": [],
+            "Aces": domain_aces,
             "Links": [],
             "ChildObjects": [],
         }]
