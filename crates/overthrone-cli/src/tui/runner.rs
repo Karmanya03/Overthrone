@@ -130,6 +130,7 @@ pub async fn run_tui_with_crawler(
             ous: Vec::new(),
             gpos: Vec::new(),
             trusts: Vec::new(),
+            policy: None,
             spn_accounts: Vec::new(),
             delegations: Vec::new(),
             acl_findings: Vec::new(),

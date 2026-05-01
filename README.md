@@ -31,6 +31,7 @@
   <img src="https://img.shields.io/badge/python-not_needed-ff4444?style=flat-square" alt="no python" />
   <img src="https://img.shields.io/badge/.NET-not_needed-ff4444?style=flat-square" alt="no dotnet" />
   <img src="https://img.shields.io/badge/wine-not_needed-ff4444?style=flat-square" alt="no wine" />
+  <img src="https://img.shields.io/badge/neo4j-not_needed-ff4444?style=flat-square" alt="no neo4j" />
   <img src="https://img.shields.io/badge/impacket-not_needed-ff4444?style=flat-square" alt="no impacket" />
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
 </p>
@@ -137,7 +138,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 | `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (compiled by default), goal-based planning ("get DA" → resolve path), YAML playbook engine, interactive wizard mode, full auto-pwn orchestration connecting enum → graph → exploit → persist → report, **live kill-chain pipeline visualization**, per-step Q-state/decision/reward readout, 9-section final report with credential tables and loot summaries | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments, and actually tells you what it's doing instead of running in mysterious silence. Every step prints its stage, noise level, priority, and result. The Q-learner shows its state, which action it picked, whether it's exploring or exploiting, and the reward it got. The final report has a kill-chain completion visual, per-stage stats, credential tables, admin host lists, loot summaries, and a full audit trail. It plans, it adapts, it executes, it explains itself, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND writes a detailed trip report with expense breakdowns. |
 | `overthrone-relay` | The Interceptor | NTLM relay engine (SMB→LDAP, HTTP→SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8) | Born complete. Zero stubs since day one. Responder.py walked so this crate could sprint. In Rust. Without the GIL. The overachiever sibling of overthrone-hunter. |
 | `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
-| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now - PDF reports, TUI crawler, C2 implant deployment. The banner ASCII art is *chef's kiss*. |
+| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now - PDF reports, TUI crawler, C2 implant deployment, and a zero-Neo4j graph viewer. The banner ASCII art is *chef's kiss*. |
 
 ### The Crate Report Card
 
@@ -264,6 +265,8 @@ ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS           # Full AI killchain
 ovt auto-pwn --config ./eng.toml --resume session.json  # Resume with config
 ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER      # Guided mode
 ovt enum all -H DC -d DOMAIN -u USER -p PASS            # Enumerate everything
+ovt enum policy -H DC -d DOMAIN -u USER -p PASS         # Lockout/password policy
+ovt enum laps -H DC -d DOMAIN -u USER -p PASS           # Readable LAPS secrets
 ovt kerberos user-enum -H DC -d DOMAIN --userlist users.txt   # Zero-knowledge user enum
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
@@ -290,6 +293,7 @@ The "ask nicely and receive everything" phase. Active Directory is the most over
 | **ACL analysis** | GenericAll, WriteDACL, WriteOwner - the holy trinity of "this service account can do WHAT?" | ✅ Done |
 | **Delegation discovery** | Unconstrained, constrained, resource-based. Delegation is AD's way of saying "I trust this computer to impersonate anyone." | ✅ Done |
 | **Password policy** | Lockout thresholds, complexity requirements, history. Know the rules before you break them. | ✅ Done |
+| **Account telemetry** | `badPwdCount`, `badPwdTime`, `lockoutTime`, logon count, password timestamps, and account expiry. This is what makes safe spray planning possible instead of vibes-based credential roulette. | ✅ Done |
 | **LAPS discovery** | LAPS v1 (plaintext ms-Mcs-AdmPwd) and LAPS v2 - including the encrypted variant (msLAPS-EncryptedPassword) via DPAPI/AES-256-GCM decryption. The DPAPI module finally exists. Hallelujah. | ✅ Full (v1 + v2 encrypted) |
 | **GPP Passwords** | Fetches GPP XML from SYSVOL over SMB, decrypts cpassword values. Microsoft published the AES key. In their documentation. On purpose. | ✅ Done |
 | **MSSQL Enumeration** | MSSQL instances, linked servers, xp_cmdshell. SQL Server: because every network needs a database with `sa:sa` credentials. | ✅ Full TDS client |
@@ -314,7 +318,7 @@ The crate with zero stubs. The only crate that did all its homework. If overthro
 
 ### Attack Graph (overthrone-core)
 
-BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship in the domain and finds the shortest path to making the blue team update their resumes.
+BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship in the domain, imports BloodHound JSON locally, visualizes it in a native Rust TUI, and finds the shortest path to making the blue team update their resumes.
 
 | Feature | Details | Status |
 |---|---|---|
@@ -325,7 +329,22 @@ BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship
 | **Kerberoast reachability** | "From user X, which Kerberoastable accounts can I reach, and how?" - it's a shopping list for your GPU. | ✅ Full |
 | **Delegation reachability** | "From user X, which unconstrained delegation machines are reachable?" (Spoiler: it's the print server.) | ✅ Full |
 | **JSON export** | Full graph export for D3.js, Cytoscape, or your visualization tool of choice. Clients love graphs that look like conspiracy boards. | ✅ Full |
+| **Local BloodHound viewer** | `ovt graph view` opens a Rust-native interactive visualizer for Overthrone exports and BloodHound v4/CE JSON collections. It supports pan/zoom, search, relationship filters, high-value/owned filters, edge lists, raw object details, and path highlighting without Neo4j. | ✅ Full |
 | **Degree centrality** | Find the nodes with the most connections. Either Domain Admins or the intern's test account that somehow has GenericAll on everything. | ✅ Full |
+
+#### Local BloodHound Viewer Quickstart
+
+```bash
+# Build an Overthrone graph from LDAP and open it locally
+ovt graph build -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+ovt graph view --file attack_graph.json
+
+# Or import existing BloodHound v4/CE collection JSON without Neo4j
+ovt graph view -i ./bloodhound-json/
+ovt graph view -i users.json -i groups.json -i computers.json -i domains.json
+```
+
+The viewer is a native Rust TUI. It parses Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use arrows/HJKL to pan, `+`/`-` to zoom, `/` to search, `n`/`N` to cycle matches, `f` to filter relationship families, `Tab`/`Shift-Tab` to select nodes, `Enter` for details, `p` for path-to-high-value, `r` for raw JSON/properties, and `q` to quit.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -434,10 +453,11 @@ The "I'll hack it myself" engine. Now with machine learning.
 | **Attack Planner** | ✅ Plans multi-step attack chains from enumeration data |
 | **Step Executor** | ✅ Executes each planned step by calling Hunter/Forge/Reaper. 90KB of execution logic. |
 | **Adaptive Strategy** | ✅ Adjusts plan on-the-fly based on what succeeds and fails |
-| **Q-Learning AI** | ✅ Reinforcement learning engine (compiled by default) - ε-greedy policy with decay (0.3→0.05), learns optimal attack sequences across engagements via state-action reward tables. Shows state, decision, Q-value, and reward at every step. |
+| **Policy-Aware Planning** | ✅ Pulls password policy, badPwdCount/badPwdTime/lockoutTime, GPOs, delegation/RBCD, and readable LAPS before choosing attacks. Password spray uses one policy-compatible candidate and skips accounts near lockout. |
+| **Q-Learning AI** | ✅ Reinforcement learning engine (compiled by default) - ε-greedy policy with decay (0.3→0.05), learns optimal attack sequences across engagements via state-action reward tables. State now includes policy, lockout risk, LAPS, delegation, GPO, creds, admin hosts, roasting targets, stage, action family, stealth, and failure class. Shows state, decision, Q-value, rationale, and reward at every step. |
 | **Goal System** | ✅ Target DA, Enterprise Admin, specific user, specific host |
 | **Playbooks** | ✅ Pre-built YAML attack sequences for common scenarios |
-| **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist |
+| **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist and the same Q-learner state/decision/reward loop as auto-pwn. |
 | **Session Resume** | ✅ `--resume <file>` reloads serialized `EngagementState` from a previous run. VPN dropped? Pick up mid-chain from the exact step where you left off. |
 | **TOML Config** | ✅ `--config <file>` loads engagement params from a TOML file. Set DC, domain, auth, targets, adaptive mode, jitter, and more without repeating flags every run. |
 | **Credential Vault** | ✅ Thread-safe in-process credential store (`CredStore`) with privilege ranking. Discovered credentials are ranked DA > Enterprise Admin > Local Admin > Service > Domain User and surfaced in the final report. |
@@ -710,7 +730,7 @@ ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
 ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --dry-run
 ```
 
-That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
+That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The spray planner now respects lockout policy and skips users already near/at lockout instead of face-planting into `KDC_ERR_CLIENT_REVOKED`. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
 
 ### Manual Mode
 
@@ -725,6 +745,13 @@ ovt graph path --from jsmith --to "Domain Admins"         # shortest path
 ovt graph stats                                           # node/edge counts
 ovt graph export --output graph.json                     # save it
 ovt graph export --output bloodhound.json --bloodhound   # BloodHound format
+ovt graph view --file graph.json                         # local Rust visualizer
+ovt graph view -i ./bloodhound-json/                     # import BloodHound JSON directory
+ovt graph view -i users.json -i groups.json -i computers.json
+
+# Viewer controls: arrows/HJKL pan, +/- zoom, / search, n/N next/previous,
+# f filters, Tab/Shift-Tab select, Enter details, p path to high-value/DA,
+# r raw JSON/properties, q quit. No Neo4j, no browser, no JVM.
 
 # Step 3 (zero-knowledge): Enumerate valid usernames - no creds needed
 # Uses Kerberos error codes to determine if each username exists.
@@ -812,7 +839,7 @@ ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 A: With explicit written authorization - absolutely. Without it - absolutely not. The difference between a pentester and a criminal is a signed document and a really good PowerPoint presentation.
 
 **Q: How is this different from BloodHound?**
-A: BloodHound shows you the path. Overthrone walks it. (And then forges a Golden Ticket at the end, cleans up, and generates a PDF about it.)
+A: BloodHound shows you the path. Overthrone now shows it locally too: `ovt graph view` imports BloodHound/Overthrone JSON and gives you a Rust-native interactive graph with no Neo4j. Then Overthrone can walk the path, exploit it, clean up, and generate the PDF.
 
 **Q: How is this different from Impacket?**
 A: Impacket is a legendary Python protocol library. Overthrone reimplements the same protocols in Rust with a unified framework, autonomous planning, and integrated reporting. Impacket is the toolbox. Overthrone is the factory. Also, no `pip install` failures at 2 AM.

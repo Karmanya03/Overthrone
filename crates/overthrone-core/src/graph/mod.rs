@@ -280,7 +280,7 @@ struct ExportGraphNode {
     #[serde(default = "default_true")]
     enabled: bool,
     #[serde(default)]
-    properties: HashMap<String, String>,
+    properties: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1341,7 +1341,7 @@ impl AttackGraph {
                 domain,
                 distinguished_name: node.distinguished_name,
                 enabled: node.enabled,
-                properties: node.properties,
+                properties: stringify_json_map(node.properties),
             });
         }
 
@@ -1615,6 +1615,22 @@ fn json_scalar_to_string(value: &Value) -> Option<String> {
         Value::Number(n) => Some(n.to_string()),
         Value::Bool(b) => Some(b.to_string()),
         _ => None,
+    }
+}
+
+fn stringify_json_map(map: serde_json::Map<String, Value>) -> HashMap<String, String> {
+    map.into_iter()
+        .map(|(key, value)| (key, json_value_to_string(value)))
+        .collect()
+}
+
+fn json_value_to_string(value: Value) -> String {
+    match value {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => String::new(),
+        Value::Array(_) | Value::Object(_) => serde_json::to_string(&value).unwrap_or_default(),
     }
 }
 
@@ -1915,6 +1931,41 @@ mod tests {
         assert_eq!(
             loaded.metadata().get("domain"),
             Some(&"corp.local".to_string())
+        );
+    }
+
+    #[test]
+    fn test_from_export_json_accepts_non_string_properties() {
+        let json = r#"{
+            "metadata": {"domain": "corp.local", "version": 2},
+            "nodes": [{
+                "id": "jdoe@corp.local",
+                "label": "jdoe",
+                "type": "User",
+                "enabled": true,
+                "properties": {
+                    "badpwdcount": 2,
+                    "enabled": true,
+                    "tags": ["owned", "lab"],
+                    "notes": {"source": "bloodhound"}
+                }
+            }],
+            "edges": []
+        }"#;
+        let path = std::env::temp_dir().join("overthrone_graph_non_string_properties.json");
+        std::fs::write(&path, json).unwrap();
+
+        let loaded = AttackGraph::from_json_file(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let node = loaded.find_node("jdoe@corp.local").unwrap();
+        let props = &loaded.get_node(node).unwrap().properties;
+
+        assert_eq!(props.get("badpwdcount"), Some(&"2".to_string()));
+        assert_eq!(props.get("enabled"), Some(&"true".to_string()));
+        assert_eq!(props.get("tags"), Some(&r#"["owned","lab"]"#.to_string()));
+        assert_eq!(
+            props.get("notes"),
+            Some(&r#"{"source":"bloodhound"}"#.to_string())
         );
     }
 

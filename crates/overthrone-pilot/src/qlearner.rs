@@ -108,6 +108,21 @@ pub struct EngagementStateKey {
     pub asrep_bucket: u8,
     /// Discovered user bucket: 0, 1=1-50, 2=51-500, 3=500+
     pub users_bucket: u8,
+    /// Password policy known: 0=no, 1=yes
+    #[serde(default)]
+    pub policy_bucket: u8,
+    /// Users near/at lockout bucket: 0, 1=1-5, 2=6+
+    #[serde(default)]
+    pub lockout_risk_bucket: u8,
+    /// Readable LAPS credential bucket: 0, 1=1-5, 2=6+
+    #[serde(default)]
+    pub laps_bucket: u8,
+    /// Delegation finding bucket: 0, 1=1-5, 2=6+
+    #[serde(default)]
+    pub delegation_bucket: u8,
+    /// GPO detail bucket: 0, 1=1-5, 2=6+
+    #[serde(default)]
+    pub gpo_bucket: u8,
     /// Consecutive failure bucket: 0, 1=1-2, 2=3+
     pub consec_failures: u8,
     /// Current attack stage index (0-5)
@@ -150,6 +165,11 @@ impl EngagementStateKey {
             kerberoastable_bucket: bucket_small(kerberoastable_count),
             asrep_bucket: bucket_small(asrep_count),
             users_bucket: bucket_users(user_count),
+            policy_bucket: u8::from(state.password_policy.is_some()),
+            lockout_risk_bucket: bucket_small(state.users_near_lockout()),
+            laps_bucket: bucket_small(state.readable_laps_count()),
+            delegation_bucket: bucket_small(state.delegation_count()),
+            gpo_bucket: bucket_small(state.gpo_details.len().max(state.gpos.len())),
             consec_failures: bucket_failures(consecutive_failures),
             current_stage: step.stage as u8,
             current_action: action_family_index(&step.action),
@@ -178,7 +198,10 @@ fn action_family_index(action: &PlannedAction) -> u8 {
         | PlannedAction::EnumerateComputers
         | PlannedAction::EnumerateGroups
         | PlannedAction::EnumerateTrusts
-        | PlannedAction::EnumerateGpos => 0,
+        | PlannedAction::EnumerateGpos
+        | PlannedAction::EnumeratePasswordPolicy
+        | PlannedAction::EnumerateDelegations
+        | PlannedAction::EnumerateLaps => 0,
         PlannedAction::EnumerateShares { .. } => 1,
         PlannedAction::CheckAdminAccess { .. } => 2,
         PlannedAction::Kerberoast { .. } => 3,
@@ -526,6 +549,11 @@ impl AdaptiveQLearner {
             kerberoastable_bucket: 0,
             asrep_bucket: 0,
             users_bucket: 0,
+            policy_bucket: 0,
+            lockout_risk_bucket: 0,
+            laps_bucket: 0,
+            delegation_bucket: 0,
+            gpo_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
             current_action: 0,
@@ -816,6 +844,16 @@ impl AdaptiveQLearner {
             if result.new_credentials > 0 && result.new_admin_hosts > 0 {
                 reward += REWARD_DA_EQUIVALENT;
             }
+
+            let output = result.output.to_ascii_lowercase();
+            if output.contains("password policy")
+                || output.contains("lockout")
+                || output.contains("delegation enum")
+                || output.contains("laps enum")
+                || output.contains("gpo")
+            {
+                reward += 2.0;
+            }
         } else {
             let failure_class = FailureClass::classify(&result.output);
             if failure_class == FailureClass::Detected {
@@ -944,12 +982,36 @@ impl AdaptiveQLearner {
             if key.stealth { "Y" } else { "N" },
             epsilon,
         )
+        .replace(
+            " fail=",
+            &format!(
+                " policy={} lockout={} laps={} deleg={} gpo={} fail=",
+                key.policy_bucket,
+                key.lockout_risk_bucket,
+                key.laps_bucket,
+                key.delegation_bucket,
+                key.gpo_bucket
+            ),
+        )
     }
 
     /// Format a Q-learner decision for terminal display.
     pub fn format_decision(action: &AdaptiveAction, q_value: f64, exploring: bool) -> String {
         let mode = if exploring { "exploring" } else { "exploiting" };
-        format!("{:?}  Q={:+.2}  ({})", action, q_value, mode)
+        let rationale = match action {
+            AdaptiveAction::Continue => "continue path",
+            AdaptiveAction::RetryPlain => "retry once",
+            AdaptiveAction::RetrySwapCreds => "rotate creds",
+            AdaptiveAction::RetryExtendTimeout => "network/LDAP patience",
+            AdaptiveAction::RetryReduceNoise => "reduce noise",
+            AdaptiveAction::RetryAltMethod => "alternate method",
+            AdaptiveAction::SubstituteLowerPriv => "lower-priv pivot",
+            AdaptiveAction::SubstituteStealthier => "quieter TTP",
+            AdaptiveAction::Skip => "avoid stale path",
+            AdaptiveAction::Replan => "re-score with new intel",
+            AdaptiveAction::Abort => "stop unsafe loop",
+        };
+        format!("{:?}  Q={:+.2}  ({}, {})", action, q_value, mode, rationale)
     }
 
     /// Build a Q-learner session summary string for the final report.
@@ -1092,6 +1154,11 @@ mod tests {
             kerberoastable_bucket: 0,
             asrep_bucket: 0,
             users_bucket: 1,
+            policy_bucket: 0,
+            lockout_risk_bucket: 0,
+            laps_bucket: 0,
+            delegation_bucket: 0,
+            gpo_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
             current_action: 0,
@@ -1128,6 +1195,11 @@ mod tests {
             kerberoastable_bucket: 0,
             asrep_bucket: 0,
             users_bucket: 0,
+            policy_bucket: 0,
+            lockout_risk_bucket: 0,
+            laps_bucket: 0,
+            delegation_bucket: 0,
+            gpo_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
             current_action: 0,
@@ -1188,6 +1260,11 @@ mod tests {
             kerberoastable_bucket: 0,
             asrep_bucket: 0,
             users_bucket: 0,
+            policy_bucket: 0,
+            lockout_risk_bucket: 0,
+            laps_bucket: 0,
+            delegation_bucket: 0,
+            gpo_bucket: 0,
             consec_failures: 0,
             current_stage: 0,
             current_action: 0,

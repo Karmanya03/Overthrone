@@ -19,6 +19,8 @@ use crate::adaptive::{AdaptiveDecision, AdaptiveEngine};
 use crate::executor::{self, ExecContext};
 use crate::goals::{AttackGoal, CompromisedCred, EngagementState, SecretType};
 use crate::planner::{PlanStep, Planner};
+#[cfg(feature = "qlearn")]
+use crate::qlearner::{AdaptiveMode, AdaptiveQLearner, EngagementStateKey, decision_to_action};
 use crate::runner::{AutoPwnConfig, AutoPwnConfigSnapshot, AutoPwnResult, Stage};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
@@ -165,6 +167,22 @@ impl WizardSession {
         let goal = self.config.goal();
         let planner = Planner::new(self.config.stealth);
         let mut adaptive = AdaptiveEngine::new(self.config.stealth);
+        #[cfg(feature = "qlearn")]
+        let mut qlearner: Option<AdaptiveQLearner> = match self.config.adaptive_mode {
+            AdaptiveMode::QLearning | AdaptiveMode::Hybrid => {
+                let ql =
+                    AdaptiveQLearner::load(self.config.stealth, self.config.q_table_path.clone());
+                println!(
+                    "  {} Wizard Q-learner loaded (mode={:?}, states={}, ε={:.3})",
+                    "QL".bold().magenta(),
+                    self.config.adaptive_mode,
+                    ql.q_table_size(),
+                    ql.epsilon()
+                );
+                Some(ql)
+            }
+            AdaptiveMode::Heuristic => None,
+        };
         let mut ctx = self.config.exec_context();
 
         let mut steps_executed = 0usize;
@@ -244,7 +262,71 @@ impl WizardSession {
                 step.executed = true;
                 step.result = Some(result.clone());
 
+                #[cfg(feature = "qlearn")]
+                let pre_state_key = qlearner.as_ref().map(|ql| {
+                    EngagementStateKey::encode(
+                        &self.state,
+                        &step,
+                        &result,
+                        self.config.stealth,
+                        ql.consecutive_failures(),
+                    )
+                });
+
+                #[cfg(feature = "qlearn")]
+                if let (Some(ql), Some(key)) = (&qlearner, &pre_state_key) {
+                    println!(
+                        "  {}  {} state={{{}}}",
+                        "│".dimmed(),
+                        "[QL]".magenta().bold(),
+                        AdaptiveQLearner::format_state_snapshot(key, ql.epsilon()).dimmed(),
+                    );
+                }
+
+                #[cfg(feature = "qlearn")]
+                let decision = if let Some(ref mut ql) = qlearner {
+                    ql.evaluate(&step, &result, &self.state, &goal)
+                } else {
+                    adaptive.evaluate(&step, &result, &self.state, &goal)
+                };
+                #[cfg(not(feature = "qlearn"))]
                 let decision = adaptive.evaluate(&step, &result, &self.state, &goal);
+
+                #[cfg(feature = "qlearn")]
+                if let Some(ref ql) = qlearner
+                    && let Some((action, q_val, exploring)) = ql.last_decision_meta()
+                {
+                    println!(
+                        "  {}  {} -> {}",
+                        "│".dimmed(),
+                        "[QL]".magenta().bold(),
+                        AdaptiveQLearner::format_decision(action, *q_val, *exploring).cyan(),
+                    );
+                }
+
+                #[cfg(feature = "qlearn")]
+                if let (Some(ql), Some(pre_key)) = (&mut qlearner, &pre_state_key) {
+                    let goal_achieved = self.state.evaluate_goal(&goal).is_success();
+                    let reward =
+                        AdaptiveQLearner::compute_reward(&result, goal_achieved, &decision);
+                    let action = decision_to_action(&decision);
+                    let post_key = EngagementStateKey::encode(
+                        &self.state,
+                        &step,
+                        &result,
+                        self.config.stealth,
+                        ql.consecutive_failures(),
+                    );
+                    ql.record_outcome(pre_key, &action, reward, &post_key);
+                    println!(
+                        "  {}  {} reward={:+.1} table={} states",
+                        "│".dimmed(),
+                        "[QL]".magenta().bold(),
+                        reward,
+                        ql.q_table_size(),
+                    );
+                }
+
                 match decision {
                     AdaptiveDecision::Replan { reason } => {
                         warn!("  🔄 Re-planning: {}", reason);
@@ -254,6 +336,13 @@ impl WizardSession {
                     AdaptiveDecision::Abort { reason } => {
                         error!("  ✗ Aborting: {}", reason);
                         pb.finish_with_message("Aborted".to_string());
+                        #[cfg(feature = "qlearn")]
+                        if let Some(ref mut ql) = qlearner {
+                            ql.end_episode();
+                            if let Err(e) = ql.save() {
+                                warn!("Wizard Q-learner save failed: {e}");
+                            }
+                        }
                         return self
                             .finalize(
                                 goal,
@@ -316,6 +405,14 @@ impl WizardSession {
             }
         }
 
+        #[cfg(feature = "qlearn")]
+        if let Some(ref mut ql) = qlearner {
+            ql.end_episode();
+            if let Err(e) = ql.save() {
+                warn!("Wizard Q-learner save failed: {e}");
+            }
+        }
+
         self.finalize(
             goal,
             wall_start,
@@ -372,6 +469,37 @@ impl WizardSession {
                     } else {
                         "Ready to roast"
                     }),
+                ]);
+                table.add_row(vec![
+                    Cell::new("Password Policy").fg(TableColor::Cyan),
+                    Cell::new(if self.state.password_policy.is_some() {
+                        "known"
+                    } else {
+                        "unknown"
+                    }),
+                    Cell::new(self.state.spray_risk_summary()).fg(TableColor::Yellow),
+                ]);
+                table.add_row(vec![
+                    Cell::new("GPOs").fg(TableColor::Cyan),
+                    Cell::new(self.state.gpo_details.len().max(self.state.gpos.len())),
+                    Cell::new(format!(
+                        "{} changed/linked policies tracked",
+                        self.state.gpo_details.len()
+                    )),
+                ]);
+                table.add_row(vec![
+                    Cell::new("LAPS").fg(TableColor::Cyan),
+                    Cell::new(self.state.readable_laps_count()).fg(TableColor::Green),
+                    Cell::new("Readable local admin passwords"),
+                ]);
+                table.add_row(vec![
+                    Cell::new("Delegations").fg(TableColor::Cyan),
+                    Cell::new(self.state.delegation_count()).fg(TableColor::Yellow),
+                    Cell::new(format!(
+                        "{} constrained / {} RBCD",
+                        self.state.constrained_delegation.len(),
+                        self.state.rbcd_targets.len()
+                    )),
                 ]);
                 table.add_row(vec![
                     Cell::new("Unconstrained Deleg").fg(TableColor::Cyan),

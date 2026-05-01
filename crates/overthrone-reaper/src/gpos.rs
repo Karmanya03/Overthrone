@@ -12,6 +12,9 @@ pub struct GpoEntry {
     pub gpc_file_sys_path: Option<String>,
     pub flags: u32,
     pub version: u32,
+    pub when_changed: Option<String>,
+    pub user_settings_disabled: bool,
+    pub computer_settings_disabled: bool,
 }
 
 pub fn gpo_filter() -> String {
@@ -73,6 +76,11 @@ pub async fn enumerate_gpos(config: &ReaperConfig) -> Result<Vec<GpoEntry>> {
             .get("gPCFileSysPath")
             .and_then(|v| v.first())
             .cloned();
+        let when_changed = entry
+            .attrs
+            .get("whenChanged")
+            .and_then(|v| v.first())
+            .cloned();
 
         info!(
             "[gpos]  {} → {}",
@@ -86,6 +94,9 @@ pub async fn enumerate_gpos(config: &ReaperConfig) -> Result<Vec<GpoEntry>> {
             gpc_file_sys_path: gpc_path,
             flags,
             version,
+            when_changed,
+            user_settings_disabled: flags & 0x1 != 0,
+            computer_settings_disabled: flags & 0x2 != 0,
         });
     }
 

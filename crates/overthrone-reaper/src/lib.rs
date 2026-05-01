@@ -15,6 +15,7 @@ pub mod groups;
 pub mod laps;
 pub mod mssql;
 pub mod ous;
+pub mod policy;
 pub mod runner;
 pub mod spns;
 pub mod trusts;

@@ -36,6 +36,11 @@ pub enum AttackGoal {
     },
 }
 
+fn non_zero_windows_time(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed != "0" && trimmed != "never"
+}
+
 impl AttackGoal {
     /// Human-readable description of the goal
     pub fn describe(&self) -> String {
@@ -185,6 +190,15 @@ pub struct EngagementState {
     pub trusts: Vec<String>,
     /// Discovered GPOs
     pub gpos: Vec<String>,
+    /// Parsed GPO details useful for planning and reporting
+    #[serde(default)]
+    pub gpo_details: Vec<GpoInfo>,
+    /// Domain password/lockout policy
+    #[serde(default)]
+    pub password_policy: Option<PasswordPolicyInfo>,
+    /// LAPS passwords readable by the current credential
+    #[serde(default)]
+    pub laps: Vec<LapsInfo>,
 
     /// Delegation findings
     pub constrained_delegation: Vec<DelegationInfo>,
@@ -211,6 +225,20 @@ pub struct DiscoveredUser {
     pub dont_req_preauth: bool,
     pub enabled: bool,
     pub description: Option<String>,
+    #[serde(default)]
+    pub bad_pwd_count: Option<u32>,
+    #[serde(default)]
+    pub bad_pwd_time: Option<String>,
+    #[serde(default)]
+    pub lockout_time: Option<String>,
+    #[serde(default)]
+    pub logon_count: Option<u32>,
+    #[serde(default)]
+    pub pwd_last_set: Option<String>,
+    #[serde(default)]
+    pub last_logon_timestamp: Option<String>,
+    #[serde(default)]
+    pub user_principal_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +290,43 @@ pub struct DelegationInfo {
     pub protocol_transition: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PasswordPolicyInfo {
+    pub min_password_length: Option<u32>,
+    pub lockout_threshold: Option<u32>,
+    pub lockout_duration: Option<String>,
+    pub lockout_observation_window: Option<String>,
+    pub max_password_age: Option<String>,
+    pub min_password_age: Option<String>,
+    pub password_history_length: Option<u32>,
+    pub password_complexity_enabled: bool,
+    pub reversible_encryption_enabled: bool,
+    pub fine_grained_policy_count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GpoInfo {
+    pub name: String,
+    pub distinguished_name: Option<String>,
+    pub sysvol_path: Option<String>,
+    pub flags: Option<u32>,
+    pub version: Option<u32>,
+    pub when_changed: Option<String>,
+    pub user_settings_disabled: bool,
+    pub computer_settings_disabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LapsInfo {
+    pub computer_name: String,
+    pub dns_name: Option<String>,
+    pub username: String,
+    pub password: Option<String>,
+    pub expiration: Option<String>,
+    pub source: String,
+    pub readable: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LootItem {
     pub loot_type: String,
@@ -296,6 +361,10 @@ pub struct StateStats {
     pub da_user: Option<String>,
     pub actions_logged: usize,
     pub loot_items: usize,
+    pub locked_or_near_lockout: usize,
+    pub readable_laps: usize,
+    pub delegation_findings: usize,
+    pub password_policy_known: bool,
 }
 
 impl std::fmt::Display for StateStats {
@@ -325,7 +394,39 @@ impl std::fmt::Display for StateStats {
             f,
             "Actions: {} | Loot: {}",
             self.actions_logged, self.loot_items
+        )?;
+        writeln!(
+            f,
+            "Policy: {} | LAPS: {} | Delegation findings: {} | Lockout-risk users: {}",
+            if self.password_policy_known {
+                "known"
+            } else {
+                "unknown"
+            },
+            self.readable_laps,
+            self.delegation_findings,
+            self.locked_or_near_lockout
         )
+    }
+}
+
+impl DiscoveredUser {
+    pub fn is_locked_out(&self) -> bool {
+        self.lockout_time
+            .as_deref()
+            .map(non_zero_windows_time)
+            .unwrap_or(false)
+    }
+
+    pub fn is_near_lockout(&self, threshold: Option<u32>) -> bool {
+        match (self.bad_pwd_count, threshold) {
+            (Some(count), Some(threshold)) if threshold > 0 => count + 1 >= threshold,
+            _ => false,
+        }
+    }
+
+    pub fn can_be_sprayed(&self, threshold: Option<u32>) -> bool {
+        self.enabled && !self.is_locked_out() && !self.is_near_lockout(threshold)
     }
 }
 
@@ -389,7 +490,63 @@ impl EngagementState {
             da_user: self.da_user.clone(),
             actions_logged: self.action_log.len(),
             loot_items: self.loot.len(),
+            locked_or_near_lockout: self.users_near_lockout(),
+            readable_laps: self.readable_laps_count(),
+            delegation_findings: self.delegation_count(),
+            password_policy_known: self.password_policy.is_some(),
         }
+    }
+
+    pub fn lockout_threshold(&self) -> Option<u32> {
+        self.password_policy
+            .as_ref()
+            .and_then(|policy| policy.lockout_threshold)
+            .filter(|threshold| *threshold > 0)
+    }
+
+    pub fn users_near_lockout(&self) -> usize {
+        let threshold = self.lockout_threshold();
+        self.users
+            .iter()
+            .filter(|user| user.is_locked_out() || user.is_near_lockout(threshold))
+            .count()
+    }
+
+    pub fn safe_spray_candidates(&self) -> Vec<String> {
+        let threshold = self.lockout_threshold();
+        self.users
+            .iter()
+            .filter(|user| user.can_be_sprayed(threshold))
+            .map(|user| user.sam_account_name.clone())
+            .collect()
+    }
+
+    pub fn spray_risk_summary(&self) -> String {
+        let threshold = self.lockout_threshold();
+        let safe = self
+            .users
+            .iter()
+            .filter(|user| user.can_be_sprayed(threshold))
+            .count();
+        let risky = self.users.len().saturating_sub(safe);
+        match threshold {
+            Some(threshold) => {
+                format!("{safe} safe users, {risky} skipped near/at lockout, threshold={threshold}")
+            }
+            None => {
+                format!("{safe} safe users, {risky} skipped locked/disabled, threshold=unknown")
+            }
+        }
+    }
+
+    pub fn readable_laps_count(&self) -> usize {
+        self.laps.iter().filter(|entry| entry.readable).count()
+    }
+
+    pub fn delegation_count(&self) -> usize {
+        self.constrained_delegation.len()
+            + self.unconstrained_delegation.len()
+            + self.rbcd_targets.len()
     }
 
     /// Log an action to the audit trail
@@ -532,6 +689,20 @@ impl EngagementState {
             }
         );
         println!("  Actions:     {}", self.action_log.len());
+        println!(
+            "  Policy:      {} | LAPS: {} | Delegation: {}",
+            if self.password_policy.is_some() {
+                "known"
+            } else {
+                "unknown"
+            },
+            self.readable_laps_count(),
+            self.delegation_count()
+        );
+        println!(
+            "  Spray Guard: {}",
+            self.spray_risk_summary().bright_black()
+        );
         println!("{}\n", "════════════════════════".cyan());
     }
 }

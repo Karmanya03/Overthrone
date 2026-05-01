@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::{
-    acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, spns, trusts, users,
+    acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, policy, spns, trusts, users,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +77,7 @@ pub struct ReaperResult {
     pub ous: Vec<ous::OuEntry>,
     pub gpos: Vec<gpos::GpoEntry>,
     pub trusts: Vec<trusts::TrustEntry>,
+    pub policy: Option<policy::PolicyResult>,
     pub spn_accounts: Vec<spns::SpnAccount>,
     pub delegations: Vec<delegations::DelegationEntry>,
     pub acl_findings: Vec<acls::AclFinding>,
@@ -92,6 +93,7 @@ const MODULES: &[&str] = &[
     "ous",
     "gpos",
     "trusts",
+    "policy",
     "spns",
     "delegations",
     "acls",
@@ -133,6 +135,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
         ous: Vec::new(),
         gpos: Vec::new(),
         trusts: Vec::new(),
+        policy: None,
         spn_accounts: Vec::new(),
         delegations: Vec::new(),
         acl_findings: Vec::new(),
@@ -221,6 +224,34 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     run_module!("ous", ous::enumerate_ous, ous);
     run_module!("gpos", gpos::enumerate_gpos, gpos);
     run_module!("trusts", trusts::enumerate_trusts, trusts);
+    if config.should_run("policy") {
+        pb.set_message("policy...");
+        match policy::enumerate_policies(config).await {
+            Ok(data) => {
+                let count = data.entry_count();
+                result.policy = Some(data);
+                let count_str = count.to_string();
+                pb.println(format!(
+                    "  {} {} â†’ {} found",
+                    "âœ“".green().bold(),
+                    "policy".bright_white(),
+                    count_str.as_str().bright_green()
+                ));
+                info!("[reaper] policy â†’ {count} entries");
+            }
+            Err(e) => {
+                let err_str = format!("{e}");
+                pb.println(format!(
+                    "  {} {} â†’ {}",
+                    "âœ—".red().bold(),
+                    "policy".bright_white(),
+                    err_str.as_str().red()
+                ));
+                warn!("[reaper] policy failed: {e}");
+            }
+        }
+        pb.inc(1);
+    }
     run_module!("spns", spns::enumerate_spn_accounts, spn_accounts);
     run_module!(
         "delegations",

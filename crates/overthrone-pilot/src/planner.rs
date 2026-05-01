@@ -60,6 +60,9 @@ pub enum PlannedAction {
     EnumerateGroups,
     EnumerateTrusts,
     EnumerateGpos,
+    EnumeratePasswordPolicy,
+    EnumerateDelegations,
+    EnumerateLaps,
     EnumerateShares {
         target: String,
     },
@@ -314,6 +317,24 @@ impl Planner {
         // ── Phase 1b: Extended Recon (trusts, GPOs, shares) ──
         // These give the planner and Q-learner richer state for decision-making.
 
+        if state.password_policy.is_none()
+            && !failed_actions.contains(&"enumerate_password_policy".to_string())
+        {
+            steps.push(PlanStep {
+                id: next_id(),
+                description: "Enumerate password and lockout policy".to_string(),
+                stage: Stage::Enumerate,
+                action: PlannedAction::EnumeratePasswordPolicy,
+                priority: 101,
+                noise: NoiseLevel::Silent,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
+
         if state.trusts.is_empty() && !failed_actions.contains(&"enumerate_trusts".to_string()) {
             steps.push(PlanStep {
                 id: next_id(),
@@ -337,6 +358,40 @@ impl Planner {
                 stage: Stage::Enumerate,
                 action: PlannedAction::EnumerateGpos,
                 priority: 96,
+                noise: NoiseLevel::Silent,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
+
+        if state.delegation_count() == 0
+            && !failed_actions.contains(&"enumerate_delegations".to_string())
+        {
+            steps.push(PlanStep {
+                id: next_id(),
+                description: "Enumerate Kerberos delegation and RBCD settings".to_string(),
+                stage: Stage::Enumerate,
+                action: PlannedAction::EnumerateDelegations,
+                priority: 94,
+                noise: NoiseLevel::Silent,
+                depends_on: vec![],
+                executed: false,
+                result: None,
+                retries: 0,
+                max_retries: 1,
+            });
+        }
+
+        if state.laps.is_empty() && !failed_actions.contains(&"enumerate_laps".to_string()) {
+            steps.push(PlanStep {
+                id: next_id(),
+                description: "Enumerate readable LAPS passwords".to_string(),
+                stage: Stage::Enumerate,
+                action: PlannedAction::EnumerateLaps,
+                priority: 93,
                 noise: NoiseLevel::Silent,
                 depends_on: vec![],
                 executed: false,
@@ -450,18 +505,14 @@ impl Planner {
             && !self.stealth
         // spraying is noisy, skip in stealth mode
         {
-            let users: Vec<String> = state
-                .users
-                .iter()
-                .filter(|u| u.enabled)
-                .map(|u| u.sam_account_name.clone())
-                .collect();
+            let users = state.safe_spray_candidates();
             if !users.is_empty() {
                 steps.push(PlanStep {
                     id: next_id(),
                     description: format!(
-                        "Password spray {} users (seasonal/common passwords)",
-                        users.len()
+                        "Password spray {} lockout-safe users ({})",
+                        users.len(),
+                        state.spray_risk_summary()
                     ),
                     stage: Stage::Attack,
                     action: PlannedAction::PasswordSpray {
@@ -572,27 +623,58 @@ impl Planner {
 
         // ── Phase 3: Delegation Abuse ──
         if !failed_actions.contains(&"constrained_delegation".to_string()) {
-            steps.push(PlanStep {
-                id: next_id(),
-                description: "Enumerate & abuse constrained delegation".to_string(),
-                stage: Stage::Attack,
-                action: PlannedAction::ConstrainedDelegation {
-                    account: String::new(),
-                    target_spn: String::new(),
-                    impersonate: "Administrator".to_string(),
-                },
-                priority: 85,
-                noise: NoiseLevel::Low,
-                depends_on: if recon_dep.is_empty() {
-                    vec![]
-                } else {
-                    vec![recon_dep.clone()]
-                },
-                executed: false,
-                result: None,
-                retries: 0,
-                max_retries: 1,
-            });
+            for delegation in &state.constrained_delegation {
+                let target_spn = delegation.targets.first().cloned().unwrap_or_default();
+                if delegation.account.is_empty() || target_spn.is_empty() {
+                    continue;
+                }
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: format!(
+                        "Abuse constrained delegation: {} -> {}",
+                        delegation.account, target_spn
+                    ),
+                    stage: Stage::Attack,
+                    action: PlannedAction::ConstrainedDelegation {
+                        account: delegation.account.clone(),
+                        target_spn,
+                        impersonate: "Administrator".to_string(),
+                    },
+                    priority: 85,
+                    noise: NoiseLevel::Low,
+                    depends_on: if recon_dep.is_empty() {
+                        vec![]
+                    } else {
+                        vec![recon_dep.clone()]
+                    },
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+        }
+
+        if !failed_actions.contains(&"unconstrained_delegation".to_string()) {
+            for target_host in &state.unconstrained_delegation {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: format!(
+                        "Prepare unconstrained delegation capture on {target_host}"
+                    ),
+                    stage: Stage::Attack,
+                    action: PlannedAction::UnconstrainedDelegation {
+                        target_host: target_host.clone(),
+                    },
+                    priority: 84,
+                    noise: NoiseLevel::Low,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
         }
 
         // ── Phase 4: Admin Access Check ──

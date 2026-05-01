@@ -3,6 +3,7 @@
 mod auth;
 mod autopwn;
 mod banner;
+mod bloodhound_viewer;
 mod commands;
 mod commands_impl;
 mod interactive_shell;
@@ -241,7 +242,13 @@ enum Commands {
         #[arg(long, default_value = "engagement.json")]
         input: String,
         /// Output report file
-        #[arg(short, long, default_value = "report.md")]
+        #[arg(
+            id = "report_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "report.md"
+        )]
         output: String,
         /// Report format
         #[arg(short = 'F', long, value_enum, default_value = "markdown")]
@@ -424,7 +431,12 @@ enum Commands {
         #[arg(value_enum)]
         shell: CompletionShell,
         /// Write completions to file instead of stdout
-        #[arg(short, long)]
+        #[arg(
+            id = "completions_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT"
+        )]
         output: Option<String>,
     },
 }
@@ -527,7 +539,13 @@ enum ForgeAction {
         #[arg(long)]
         krbtgt_hash: String,
         /// Output file for the ticket
-        #[arg(short, long, default_value = "golden.kirbi")]
+        #[arg(
+            id = "forge_golden_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "golden.kirbi"
+        )]
         output: String,
     },
     /// Forge a Silver Ticket (TGS using service account hash)
@@ -548,7 +566,13 @@ enum ForgeAction {
         #[arg(long)]
         service_hash: String,
         /// Output file for the ticket
-        #[arg(short, long, default_value = "silver.kirbi")]
+        #[arg(
+            id = "forge_silver_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "silver.kirbi"
+        )]
         output: String,
     },
 }
@@ -567,6 +591,8 @@ enum EnumTarget {
     Asrep,
     Delegations,
     Gpos,
+    Laps,
+    Policy,
     All,
 }
 
@@ -591,7 +617,12 @@ enum KerberosAction {
         #[arg(short = 'U', long)]
         userlist: String,
         /// Output file for discovered valid usernames
-        #[arg(short, long)]
+        #[arg(
+            id = "kerberos_user_enum_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT"
+        )]
         output: Option<String>,
         /// Delay between probes in milliseconds (evasion)
         #[arg(long, default_value = "0")]
@@ -647,6 +678,13 @@ enum SmbAction {
 #[derive(Subcommand, Clone)]
 enum GraphAction {
     Build,
+    /// Launch the local Rust BloodHound-style graph visualizer.
+    #[command(alias = "visual", alias = "ui", alias = "viz")]
+    View {
+        /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
+        #[arg(short = 'i', long = "input")]
+        input: Vec<String>,
+    },
     Path {
         #[arg(long)]
         from: String,
@@ -659,7 +697,13 @@ enum GraphAction {
     },
     Stats,
     Export {
-        #[arg(short, long, default_value = "graph.json")]
+        #[arg(
+            id = "graph_export_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "graph.json"
+        )]
         output: String,
         /// Export in BloodHound-compatible format
         #[arg(short = 'B', long)]
@@ -809,7 +853,13 @@ enum AdcsAction {
         template: String,
         #[arg(short = 'U', long, required = true)]
         target_user: String,
-        #[arg(short, long, default_value = "esc1_cert.pfx")]
+        #[arg(
+            id = "adcs_esc1_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc1_cert.pfx"
+        )]
         output: String,
     },
     /// ESC2 — Web Enrollment with any template
@@ -818,7 +868,13 @@ enum AdcsAction {
         ca: String,
         #[arg(short, long, required = true)]
         template: String,
-        #[arg(short, long, default_value = "esc2_cert.pfx")]
+        #[arg(
+            id = "adcs_esc2_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc2_cert.pfx"
+        )]
         output: String,
     },
     /// ESC3 — Enrollment Agent abuse
@@ -903,7 +959,13 @@ enum AdcsAction {
         #[arg(long)]
         ldaps: bool,
         /// Output PFX file path
-        #[arg(short, long, default_value = "esc9_cert.pfx")]
+        #[arg(
+            id = "adcs_esc9_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc9_cert.pfx"
+        )]
         output: String,
     },
     /// ESC10 — Weak Certificate Mapping (StrongCertificateBindingEnforcement / CertificateMappingMethods)
@@ -945,7 +1007,13 @@ enum AdcsAction {
         #[arg(long)]
         ldaps: bool,
         /// Output PFX file path
-        #[arg(short, long, default_value = "esc10_cert.pfx")]
+        #[arg(
+            id = "adcs_esc10_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc10_cert.pfx"
+        )]
         output: String,
     },
     /// ESC11 — Relay NTLM to ICPR (ICertPassage; IF_ENFORCEENCRYPTICERTREQUEST disabled)
@@ -1003,7 +1071,13 @@ enum AdcsAction {
         #[arg(short, long, default_value = "overthrone-esc13")]
         subject: String,
         /// Output PFX file path
-        #[arg(short, long, default_value = "esc13_cert.pfx")]
+        #[arg(
+            id = "adcs_esc13_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc13_cert.pfx"
+        )]
         output: String,
     },
     /// Request a certificate
@@ -1016,7 +1090,13 @@ enum AdcsAction {
         subject: Option<String>,
         #[arg(short = 'S', long)]
         san: Option<String>,
-        #[arg(short, long, default_value = "cert.pfx")]
+        #[arg(
+            id = "adcs_request_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "cert.pfx"
+        )]
         output: String,
     },
 }
@@ -2195,7 +2275,8 @@ async fn cmd_enum(
         Ok(d) => d,
         Err(e) => return e,
     };
-    let config = match make_reaper_config(cli, creds, dc, vec![], 500) {
+    let modules = enum_target_modules(&target);
+    let config = match make_reaper_config(cli, creds, dc, modules, 500) {
         Ok(c) => c,
         Err(e) => return e,
     };
@@ -2212,6 +2293,10 @@ async fn cmd_enum(
         ),
         EnumTarget::Delegations => println!("{}", "Enumerating delegations...".bright_black()),
         EnumTarget::Gpos => println!("{}", "Enumerating GPOs...".bright_black()),
+        EnumTarget::Laps => println!("{}", "Enumerating LAPS-readable secrets...".bright_black()),
+        EnumTarget::Policy => {
+            println!("{}", "Enumerating password/domain policy...".bright_black())
+        }
         EnumTarget::All => println!("{}", "Enumerating all objects...".bright_black()),
     }
 
@@ -2225,6 +2310,24 @@ async fn cmd_enum(
             1
         }
     }
+}
+
+fn enum_target_modules(target: &EnumTarget) -> Vec<String> {
+    let modules: &[&str] = match target {
+        EnumTarget::Users => &["users"],
+        EnumTarget::Computers => &["computers"],
+        EnumTarget::Groups => &["groups"],
+        EnumTarget::Trusts => &["trusts"],
+        EnumTarget::Spns => &["spns"],
+        EnumTarget::Asrep => &["users"],
+        EnumTarget::Delegations => &["delegations"],
+        EnumTarget::Gpos => &["gpos"],
+        EnumTarget::Laps => &["laps"],
+        EnumTarget::Policy => &["policy"],
+        EnumTarget::All => &[],
+    };
+
+    modules.iter().map(|module| (*module).to_string()).collect()
 }
 
 // cmd_kerberos
@@ -2989,6 +3092,25 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             banner::print_success(&format!("Attack graph saved to {}", output_path));
         }
 
+        GraphAction::View { input } => {
+            let mut sources = input;
+            if sources.is_empty() {
+                sources.push(graph_file.unwrap_or(default_path).to_string());
+            }
+
+            match tokio::task::spawn_blocking(move || bloodhound_viewer::run(&sources)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    banner::print_fail(&format!("Graph visualizer failed: {}", e));
+                    return 1;
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Graph visualizer thread failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+
         GraphAction::Path { from, to } => {
             let path = graph_file.unwrap_or(default_path);
             let graph = match AttackGraph::from_json_file(path) {
@@ -3697,4 +3819,72 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod cli_parse_tests {
+    use super::*;
+
+    #[test]
+    fn report_output_flag_keeps_string_type_and_public_name() {
+        let cli = Cli::try_parse_from([
+            "ovt",
+            "report",
+            "--input",
+            "engagement.json",
+            "--output",
+            "owner-report.md",
+            "--format",
+            "markdown",
+        ])
+        .expect("report command should parse --output without clap type mismatch");
+
+        match *cli.command {
+            Commands::Report {
+                ref input,
+                ref output,
+                format: ReportFormat::Markdown,
+            } => {
+                assert_eq!(input, "engagement.json");
+                assert_eq!(output, "owner-report.md");
+            }
+            _ => panic!("expected parsed report command"),
+        }
+    }
+
+    #[test]
+    fn kerberos_user_enum_output_flag_keeps_optional_type_and_public_name() {
+        let cli = Cli::try_parse_from([
+            "ovt",
+            "kerberos",
+            "user-enum",
+            "-H",
+            "127.0.0.1",
+            "-d",
+            "example.local",
+            "-U",
+            "users.txt",
+            "--output",
+            "valid-users.txt",
+            "--delay",
+            "10",
+        ])
+        .expect("kerberos user-enum should parse --output without clap type mismatch");
+
+        match *cli.command {
+            Commands::Kerberos {
+                action:
+                    KerberosAction::UserEnum {
+                        ref userlist,
+                        ref output,
+                        delay,
+                    },
+            } => {
+                assert_eq!(userlist, "users.txt");
+                assert_eq!(output.as_deref(), Some("valid-users.txt"));
+                assert_eq!(delay, 10);
+            }
+            _ => panic!("expected parsed kerberos user-enum command"),
+        }
+    }
 }

@@ -1,4 +1,4 @@
-﻿//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
+//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
 
 use crate::runner::ReaperResult;
 use overthrone_core::error::Result;
@@ -53,17 +53,21 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
     if !result.users.is_empty() {
         let path = dir.join(format!("{stem}_users.csv"));
         let mut lines = vec![
-            "sAMAccountName,enabled,adminCount,kerberoastable,asrepRoastable,memberOf_count"
+            "sAMAccountName,enabled,adminCount,kerberoastable,asrepRoastable,badPwdCount,badPwdTime,lockoutTime,logonCount,memberOf_count"
                 .to_string(),
         ];
         for u in &result.users {
             lines.push(format!(
-                "{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{}",
                 u.sam_account_name,
                 u.enabled,
                 u.admin_count,
                 u.is_kerberoastable(),
                 u.is_asrep_roastable(),
+                u.bad_pwd_count.map(|v| v.to_string()).unwrap_or_default(),
+                u.bad_pwd_time.as_deref().unwrap_or(""),
+                u.lockout_time.as_deref().unwrap_or(""),
+                u.logon_count.map(|v| v.to_string()).unwrap_or_default(),
                 u.member_of.len(),
             ));
         }
@@ -125,6 +129,13 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                         "pwdneverexpires": u.password_never_expires,
                         "lastlogontimestamp": u.last_logon,
                         "pwdlastset": u.last_password_change,
+                        "badpwdcount": u.bad_pwd_count,
+                        "badpwdtime": u.bad_pwd_time,
+                        "lockouttime": u.lockout_time,
+                        "accountexpires": u.account_expires,
+                        "logoncount": u.logon_count,
+                        "whencreated": u.when_created,
+                        "whenchanged": u.when_changed,
                         "serviceprincipalnames": u.service_principal_names,
                         "highvalue": u.is_high_value(),
                         "allowedtodelegate": u.allowed_to_delegate_to,
@@ -278,6 +289,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         Some(7) => "2016",
         _ => "Unknown",
     };
+    let domain_policy = result
+        .policy
+        .as_ref()
+        .and_then(|p| p.domain_policy.as_ref());
 
     let domain_json = json!({
         "meta": {
@@ -292,6 +307,13 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 "name": domain_upper,
                 "domain": domain_upper,
                 "functionallevel": functional_level,
+                "minpwdlength": domain_policy.and_then(|p| p.min_password_length),
+                "lockoutthreshold": domain_policy.and_then(|p| p.lockout_threshold),
+                "lockoutduration": domain_policy.and_then(|p| p.lockout_duration.clone()),
+                "lockoutobservationwindow": domain_policy.and_then(|p| p.lockout_observation_window.clone()),
+                "pwdhistorylength": domain_policy.and_then(|p| p.password_history_length),
+                "pwdcomplexity": domain_policy.map(|p| p.password_complexity_enabled),
+                "reversibleencryption": domain_policy.map(|p| p.reversible_encryption_enabled),
             },
             "Trusts": result.trusts.iter().map(|t| json!({
                 "TargetDomainName": t.target_domain.to_uppercase(),

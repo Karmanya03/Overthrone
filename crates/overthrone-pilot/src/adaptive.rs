@@ -49,6 +49,11 @@ impl FailureClass {
             || lower.contains("kdc_err_preauth_failed")
             || lower.contains("status_logon_failure")
             || lower.contains("invalid credentials")
+            || lower.contains("account locked")
+            || lower.contains("locked out")
+            || lower.contains("lockout")
+            || lower.contains("status_account_locked_out")
+            || lower.contains("kdc_err_client_revoked")
         {
             return Self::AuthFailure;
         }
@@ -593,6 +598,9 @@ impl AdaptiveEngine {
                 | PlannedAction::AdcsEsc4 { .. }
                 | PlannedAction::AdcsEsc6 { .. }
                 | PlannedAction::EnumerateShares { .. }
+                | PlannedAction::EnumeratePasswordPolicy
+                | PlannedAction::EnumerateDelegations
+                | PlannedAction::EnumerateLaps
                 | PlannedAction::CheckAdminAccess { .. }
         ) || repeat_count >= 3;
 
@@ -625,6 +633,9 @@ impl AdaptiveEngine {
             PlannedAction::EnumerateGroups => "enumerate_groups".to_string(),
             PlannedAction::EnumerateTrusts => "enumerate_trusts".to_string(),
             PlannedAction::EnumerateGpos => "enumerate_gpos".to_string(),
+            PlannedAction::EnumeratePasswordPolicy => "enumerate_password_policy".to_string(),
+            PlannedAction::EnumerateDelegations => "enumerate_delegations".to_string(),
+            PlannedAction::EnumerateLaps => "enumerate_laps".to_string(),
             PlannedAction::EnumerateShares { .. } => "enumerate_shares".to_string(),
             PlannedAction::CheckAdminAccess { .. } => "check_admin_access".to_string(),
             PlannedAction::AsRepRoast { .. } => "asreproast".to_string(),
