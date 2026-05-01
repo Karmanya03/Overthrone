@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use tracing::{debug, info, warn};
 // use hashbrown::HashMap as HashBrownMap;
 
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 //  Type Aliases
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 
 /// Node identifier in the attack graph
 pub type NodeId = NodeIndex;
@@ -29,9 +29,9 @@ pub type EdgeId = EdgeIndex;
 // Re-export EdgeRef trait for use in TUI and other modules
 pub use petgraph::visit::EdgeRef;
 
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 //  Node & Edge Types
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 
 /// Type of an AD object in the graph
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,6 +42,7 @@ pub enum NodeType {
     Domain,
     Gpo,
     Ou,
+    CertTemplate,
 }
 
 impl std::fmt::Display for NodeType {
@@ -53,6 +54,7 @@ impl std::fmt::Display for NodeType {
             Self::Domain => write!(f, "Domain"),
             Self::Gpo => write!(f, "GPO"),
             Self::Ou => write!(f, "OU"),
+            Self::CertTemplate => write!(f, "CertTemplate"),
         }
     }
 }
@@ -78,10 +80,10 @@ impl std::fmt::Display for AdNode {
 /// Relationship (edge) types modeled after BloodHound
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EdgeType {
-    // ── Group Membership ──
+    // -- Group Membership --
     MemberOf,
 
-    // ── Local Admin / Sessions ──
+    // -- Local Admin / Sessions --
     AdminTo,
     HasSession,
     CanRDP,
@@ -89,7 +91,7 @@ pub enum EdgeType {
     ExecuteDCOM,
     SQLAdmin,
 
-    // ── ACL-Based ──
+    // -- ACL-Based --
     GenericAll,
     GenericWrite,
     WriteOwner,
@@ -100,28 +102,28 @@ pub enum EdgeType {
     ReadLapsPassword,
     ReadGmsaPassword,
 
-    // ── Kerberos Delegation ──
+    // -- Kerberos Delegation --
     AllowedToDelegate,
     AllowedToAct,
     HasSidHistory,
 
-    // ── DCSync / Replication ──
+    // -- DCSync / Replication --
     DcSync,
     GetChanges,
     GetChangesAll,
 
-    // ── Domain Trust ──
+    // -- Domain Trust --
     TrustedBy,
 
-    // ── Kerberoasting / AS-REP ──
+    // -- Kerberoasting / AS-REP --
     HasSpn,
     DontReqPreauth,
 
-    // ── GPO ──
+    // -- GPO --
     GpoLink,
     Contains,
 
-    // ── Generic ──
+    // -- Generic --
     Owns,
     Custom(String),
 }
@@ -198,9 +200,9 @@ impl std::fmt::Display for EdgeType {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 //  Attack Path Results
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 
 /// A single hop in an attack path
 #[derive(Debug, Clone, Serialize)]
@@ -227,7 +229,7 @@ impl std::fmt::Display for AttackPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
-            "Attack Path: {} → {} (cost: {}, hops: {})",
+            "Attack Path: {} -> {} (cost: {}, hops: {})",
             self.source, self.target, self.total_cost, self.hop_count
         )?;
         for (i, hop) in self.hops.iter().enumerate() {
@@ -252,7 +254,10 @@ pub struct GraphStats {
     pub users: usize,
     pub computers: usize,
     pub groups: usize,
+    pub gpos: usize,
+    pub ous: usize,
     pub domains: usize,
+    pub cert_templates: usize,
     pub edge_type_counts: HashMap<String, usize>,
 }
 
@@ -294,17 +299,17 @@ fn default_true() -> bool {
     true
 }
 
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 //  Attack Graph
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 
 /// The core attack path graph engine
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttackGraph {
     graph: DiGraph<AdNode, EdgeType>,
-    /// Maps "NAME@DOMAIN" (uppercase) → NodeIndex for fast lookup
+    /// Maps "NAME@DOMAIN" (uppercase) -> NodeIndex for fast lookup
     node_index: HashMap<String, NodeIndex>,
-    /// Maps DN (uppercase) → NodeIndex for DN-based edge resolution
+    /// Maps DN (uppercase) -> NodeIndex for DN-based edge resolution
     dn_index: HashMap<String, NodeIndex>,
     /// Domain/config metadata (lockout thresholds, password policies, etc.)
     metadata: HashMap<String, String>,
@@ -349,7 +354,7 @@ impl AttackGraph {
         self.graph.edge_count()
     }
 
-    // ── Node Management ──────────────────────────────────
+    // -- Node Management ----------------------------------
 
     /// Add a node. Returns existing index if already present.
     pub fn add_node(&mut self, node: AdNode) -> NodeIndex {
@@ -463,7 +468,7 @@ impl AttackGraph {
         self.graph.node_weight(idx)
     }
 
-    // ── Ingest from LDAP Enumeration ─────────────────────
+    // -- Ingest from LDAP Enumeration ---------------------
 
     /// Build the attack graph from a full domain enumeration.
     /// Primary entry point for populating the graph.
@@ -484,7 +489,7 @@ impl AttackGraph {
             properties: HashMap::new(),
         });
 
-        // 2. Users → 3. Computers → 4. Groups
+        // 2. Users -> 3. Computers -> 4. Groups
         for user in &data.users {
             self.ingest_user(user, &data.domain);
         }
@@ -536,8 +541,8 @@ impl AttackGraph {
     fn ingest_user(&mut self, user: &AdUser, domain: &str) {
         let mut properties = HashMap::new();
         properties.insert("sam_account_name".into(), user.sam_account_name.clone());
-        // ✅ REMOVED: user.sid (doesn't exist)
-        // ✅ REMOVED: user.display_name (doesn't exist)
+        // NOTE: REMOVED: user.sid (doesn't exist)
+        // NOTE: REMOVED: user.display_name (doesn't exist)
         if let Some(ref upn) = user.user_principal_name {
             properties.insert("upn".into(), upn.clone());
         }
@@ -576,7 +581,7 @@ impl AttackGraph {
     fn ingest_computer(&mut self, computer: &AdComputer, domain: &str) {
         let mut properties = HashMap::new();
         properties.insert("sam_account_name".into(), computer.sam_account_name.clone());
-        // ✅ REMOVED: computer.sid (doesn't exist)
+        // NOTE: REMOVED: computer.sid (doesn't exist)
         if let Some(ref hostname) = computer.dns_hostname {
             properties.insert("dns_hostname".into(), hostname.clone());
         }
@@ -602,7 +607,7 @@ impl AttackGraph {
             node_type: NodeType::Computer,
             domain: domain.to_string(),
             distinguished_name: Some(computer.distinguished_name.clone()),
-            // ✅ FIX: derive enabled from UAC (bit 0x2 = ACCOUNTDISABLE)
+            // NOTE: FIX: derive enabled from UAC (bit 0x2 = ACCOUNTDISABLE)
             enabled: (computer.user_account_control & 0x0002) == 0,
             properties,
         });
@@ -615,7 +620,7 @@ impl AttackGraph {
     fn ingest_group(&mut self, group: &AdGroup, domain: &str) {
         let mut properties = HashMap::new();
         properties.insert("sam_account_name".into(), group.sam_account_name.clone());
-        // ✅ REMOVED: group.sid (doesn't exist)
+        // NOTE: REMOVED: group.sid (doesn't exist)
         if let Some(ref desc) = group.description {
             properties.insert("description".into(), desc.clone());
         }
@@ -636,7 +641,7 @@ impl AttackGraph {
     }
 
     fn ingest_trust(&mut self, trust: &AdTrust, source_domain: &str) {
-        // ✅ FIX: trust_partner, not target_domain_name
+        // NOTE: FIX: trust_partner, not target_domain_name
         let target = &trust.trust_partner;
 
         let mut properties = HashMap::new();
@@ -660,10 +665,10 @@ impl AttackGraph {
             properties,
         });
 
-        // ✅ FIX: Match on TrustDirection enum, not integers
+        // NOTE: FIX: Match on TrustDirection enum, not integers
         match &trust.trust_direction {
             TrustDirection::Inbound => {
-                // Inbound — the foreign domain trusts us (they → us)
+                // Inbound -- the foreign domain trusts us (they -> us)
                 self.add_edge_by_name(
                     target,
                     target,
@@ -673,7 +678,7 @@ impl AttackGraph {
                 );
             }
             TrustDirection::Outbound => {
-                // Outbound — we trust them (us → they)
+                // Outbound -- we trust them (us -> they)
                 self.add_edge_by_name(
                     source_domain,
                     source_domain,
@@ -707,7 +712,7 @@ impl AttackGraph {
         }
 
         debug!(
-            "Ingested trust: {} → {} (direction={})",
+            "Ingested trust: {} -> {} (direction={})",
             source_domain, target, trust.trust_direction
         );
     }
@@ -715,7 +720,7 @@ impl AttackGraph {
     fn resolve_memberships(&mut self, users: &[AdUser], groups: &[AdGroup], domain: &str) {
         let mut edge_count = 0usize;
 
-        // User → Group (MemberOf) via user.member_of DNs
+        // User -> Group (MemberOf) via user.member_of DNs
         for user in users {
             for group_dn in &user.member_of {
                 if self.add_edge_by_dn(&user.distinguished_name, group_dn, EdgeType::MemberOf) {
@@ -737,7 +742,7 @@ impl AttackGraph {
             }
         }
 
-        // Group → Group (nested group membership) via group.member_of DNs
+        // Group -> Group (nested group membership) via group.member_of DNs
         for group in groups {
             for parent_dn in &group.member_of {
                 if self.add_edge_by_dn(&group.distinguished_name, parent_dn, EdgeType::MemberOf) {
@@ -765,7 +770,7 @@ impl AttackGraph {
         // Constrained delegation from users
         for user in users {
             for spn_target in &user.allowed_to_delegate_to {
-                // SPN format is typically "service/hostname" — extract the hostname
+                // SPN format is typically "service/hostname" -- extract the hostname
                 let target_host = spn_target
                     .split('/')
                     .nth(1)
@@ -829,7 +834,7 @@ impl AttackGraph {
                 }
             }
 
-            // Unconstrained delegation → AllowedToAct edge to the domain itself
+            // Unconstrained delegation -> AllowedToAct edge to the domain itself
             if computer.unconstrained_delegation {
                 self.add_edge_by_name(
                     &computer.sam_account_name,
@@ -845,7 +850,7 @@ impl AttackGraph {
         debug!("Resolved {} delegation edges", edge_count);
     }
 
-    // ── Manual Edge Ingestion ─────────────────────────────
+    // -- Manual Edge Ingestion -----------------------------
 
     /// Add a session edge: user has an active session on the computer
     pub fn add_session(&mut self, username: &str, computer: &str, domain: &str) {
@@ -862,7 +867,7 @@ impl AttackGraph {
         self.add_edge_by_name(source, domain, target, domain, edge_type);
     }
 
-    // ── Shortest Path Queries ─────────────────────────────
+    // -- Shortest Path Queries -----------------------------
 
     /// Find the shortest attack path between two nodes.
     /// Uses Dijkstra with edge-type-based costs.
@@ -953,7 +958,7 @@ impl AttackGraph {
         Ok(path)
     }
 
-    // ── High-Value Target Queries ─────────────────────────
+    // -- High-Value Target Queries -------------------------
 
     /// Find shortest paths from compromised node to ALL Domain Admin members
     pub fn paths_to_da(&self, from: &str, domain: &str) -> Vec<AttackPath> {
@@ -995,7 +1000,7 @@ impl AttackGraph {
             None => return Vec::new(),
         };
 
-        // Dijkstra from source — finds all reachable nodes with costs
+        // Dijkstra from source -- finds all reachable nodes with costs
         let pet_costs = dijkstra(&self.graph, src_idx, None, |e| e.weight().default_cost());
         let costs: std::collections::HashMap<_, _> = pet_costs.into_iter().collect();
 
@@ -1043,7 +1048,7 @@ impl AttackGraph {
         unconstrained
     }
 
-    // ── Graph Analytics & Export ──────────────────────────
+    // -- Graph Analytics & Export --------------------------
 
     /// Graph statistics
     pub fn stats(&self) -> GraphStats {
@@ -1052,14 +1057,24 @@ impl AttackGraph {
             *edge_counts.entry(format!("{edge}")).or_insert(0) += 1;
         }
 
-        let (mut users, mut computers, mut groups, mut domains) = (0, 0, 0, 0);
+        let (
+            mut users,
+            mut computers,
+            mut groups,
+            mut gpos,
+            mut ous,
+            mut domains,
+            mut cert_templates,
+        ) = (0, 0, 0, 0, 0, 0, 0);
         for node in self.graph.node_weights() {
             match node.node_type {
                 NodeType::User => users += 1,
                 NodeType::Computer => computers += 1,
                 NodeType::Group => groups += 1,
+                NodeType::Gpo => gpos += 1,
+                NodeType::Ou => ous += 1,
                 NodeType::Domain => domains += 1,
-                _ => {}
+                NodeType::CertTemplate => cert_templates += 1,
             }
         }
 
@@ -1069,7 +1084,10 @@ impl AttackGraph {
             users,
             computers,
             groups,
+            gpos,
+            ous,
             domains,
+            cert_templates,
             edge_type_counts: edge_counts,
         }
     }
@@ -1227,6 +1245,9 @@ impl AttackGraph {
                         "Name": node.name,
                         "Domain": node.domain,
                     }));
+                }
+                NodeType::CertTemplate => {
+                    // Cert templates are not exported to BloodHound format
                 }
             }
         }
@@ -1400,7 +1421,7 @@ impl AttackGraph {
         &self.metadata
     }
 
-    // ── Additional methods for TUI support ──────────────────
+    // -- Additional methods for TUI support ------------------
 
     /// Get all edges in the graph
     pub fn edges(&self) -> impl Iterator<Item = petgraph::graph::EdgeReference<'_, EdgeType>> + '_ {
@@ -1466,9 +1487,9 @@ impl AttackGraph {
 
     /// Find shortest paths to a target from all reachable nodes (reverse Dijkstra).
     ///
-    /// Instead of running N separate forward Dijkstras (O(N × E log V)),
+    /// Instead of running N separate forward Dijkstras (O(N * E log V)),
     /// we reverse all edges and run a single Dijkstra from the target outward.
-    /// This gives us O(E log V) — the same cost as a single shortest-path query.
+    /// This gives us O(E log V) -- the same cost as a single shortest-path query.
     pub fn shortest_paths_to(&self, target: NodeIndex, limit: usize) -> Vec<Vec<EdgeIndex>> {
         // Build a reversed view: transpose all edges
         let reversed = petgraph::visit::Reversed(&self.graph);
@@ -1495,7 +1516,7 @@ impl AttackGraph {
         reachable.sort_by_key(|&(_, cost)| cost);
         reachable.truncate(limit);
 
-        // For each reachable source, reconstruct the forward path (source → target)
+        // For each reachable source, reconstruct the forward path (source -> target)
         let mut paths = Vec::with_capacity(reachable.len());
         for (source_idx, _cost) in &reachable {
             let mut edge_path = Vec::new();
@@ -1566,6 +1587,7 @@ fn parse_node_type(raw: &str) -> Result<NodeType> {
         "domain" => Ok(NodeType::Domain),
         "gpo" => Ok(NodeType::Gpo),
         "ou" => Ok(NodeType::Ou),
+        "certtemplate" | "cert_template" => Ok(NodeType::CertTemplate),
         other => Err(OverthroneError::Graph(format!(
             "Unsupported graph node type '{other}'"
         ))),
@@ -1636,7 +1658,7 @@ fn json_value_to_string(value: Value) -> String {
 
 /// Extract the CN (Common Name) from an AD Distinguished Name.
 ///
-/// Example: `"CN=Domain Admins,CN=Users,DC=corp,DC=local"` → `"Domain Admins"`
+/// Example: `"CN=Domain Admins,CN=Users,DC=corp,DC=local"` -> `"Domain Admins"`
 ///
 /// Returns `None` if no CN= component is found.
 fn extract_cn(dn: &str) -> Option<String> {
@@ -1649,9 +1671,9 @@ fn extract_cn(dn: &str) -> Option<String> {
     None
 }
 
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 //  Unit Tests
-// ═══════════════════════════════════════════════════════════
+// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -2046,5 +2068,43 @@ mod tests {
         let g2: AttackGraph = serde_json::from_str(&json).unwrap();
         assert_eq!(g2.node_count(), g.node_count());
         assert_eq!(g2.edge_count(), g.edge_count());
+    }
+
+    #[test]
+    fn test_new_acl_edge_types() {
+        let mut g = AttackGraph::new();
+        let u1 = g.add_node(AdNode {
+            name: "attacker".to_string(),
+            node_type: NodeType::User,
+            domain: "corp.local".to_string(),
+            distinguished_name: None,
+            enabled: true,
+            properties: std::collections::HashMap::new(),
+        });
+        let u2 = g.add_node(AdNode {
+            name: "victim".to_string(),
+            node_type: NodeType::User,
+            domain: "corp.local".to_string(),
+            distinguished_name: None,
+            enabled: true,
+            properties: std::collections::HashMap::new(),
+        });
+
+        // Add some of the new ACL edges
+        g.graph.add_edge(u1, u2, EdgeType::WriteDacl);
+        g.graph.add_edge(u1, u2, EdgeType::GenericAll);
+        g.graph.add_edge(u1, u2, EdgeType::ForceChangePassword);
+
+        assert_eq!(g.edge_count(), 3);
+
+        let mut edges = g
+            .edges_from(u1)
+            .map(|e| e.weight().clone())
+            .collect::<Vec<_>>();
+        edges.sort_by_key(|e| format!("{:?}", e));
+
+        assert!(edges.contains(&EdgeType::WriteDacl));
+        assert!(edges.contains(&EdgeType::GenericAll));
+        assert!(edges.contains(&EdgeType::ForceChangePassword));
     }
 }

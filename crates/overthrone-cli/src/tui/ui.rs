@@ -105,6 +105,7 @@ fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
             NodeType::Domain => Color::Magenta,
             NodeType::Gpo => Color::Cyan,
             NodeType::Ou => Color::Gray,
+            NodeType::CertTemplate => Color::LightMagenta,
         };
 
         let outbound = graph.edges_from(node_id).count();

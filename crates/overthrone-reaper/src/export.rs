@@ -113,11 +113,17 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             DangerousRight::GenericWrite => "GenericWrite".to_string(),
             DangerousRight::WriteDacl => "WriteDacl".to_string(),
             DangerousRight::WriteOwner => "WriteOwner".to_string(),
+            DangerousRight::Owns => "Owns".to_string(),
+            DangerousRight::AllExtendedRights => "AllExtendedRights".to_string(),
+            DangerousRight::CreateChild => "CreateChild".to_string(),
+            DangerousRight::WriteSelf => "WriteSelf".to_string(),
             DangerousRight::ForceChangePassword => "ForceChangePassword".to_string(),
-            DangerousRight::AddMembers => "AddMembers".to_string(),
-            DangerousRight::ReadLapsPassword => "ReadLapsPassword".to_string(),
-            DangerousRight::ReadGmsaPassword => "ReadGmsaPassword".to_string(),
             DangerousRight::DcSync => "DcSync".to_string(),
+            DangerousRight::ReadLapsPassword => "ReadLapsPassword".to_string(),
+            DangerousRight::ReadLapsPasswordExpiry => "ReadLapsPasswordExpiry".to_string(),
+            DangerousRight::ReadGmsaPassword => "ReadGmsaPassword".to_string(),
+            DangerousRight::AddMembers => "AddMembers".to_string(),
+            DangerousRight::AddSelf => "AddSelf".to_string(),
             DangerousRight::WriteSPN => "WriteSPN".to_string(),
             DangerousRight::WriteAllowedToDelegateTo => "WriteAllowedToDelegateTo".to_string(),
             DangerousRight::AddAllowedToAct => "AddAllowedToAct".to_string(),
@@ -146,6 +152,8 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             }
             DangerousRight::WriteGPLink => "WriteGPLink".to_string(),
             DangerousRight::AddKeyCredentialLink => "AddKeyCredentialLink".to_string(),
+            DangerousRight::WriteUserCertificate => "WriteUserCertificate".to_string(),
+            DangerousRight::EnrollCertificate => "EnrollCertificate".to_string(),
             DangerousRight::WriteProperty { attribute, guid: _ } => attribute.clone(),
             DangerousRight::Custom(s) => s.clone(),
         }
@@ -192,7 +200,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             g.display_name.eq_ignore_ascii_case(&finding.target)
                 || g.gpc_file_sys_path
                     .as_ref()
-                    .map_or(false, |p| p.eq_ignore_ascii_case(&finding.target))
+                    .is_some_and(|p| p.eq_ignore_ascii_case(&finding.target))
         }) {
             gpo_aces.push(ace);
         } else {
@@ -211,7 +219,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 let user_aces_for_this_user: Vec<Value> = user_aces
                     .iter()
                     .filter(|a| {
-                        a["PrincipalSID"].as_str().map_or(false, |sid| {
+                        a["PrincipalSID"].as_str().is_some_and(|sid| {
                             u.sid.as_deref() == Some(sid)
                                 || u.sam_account_name.eq_ignore_ascii_case(sid)
                         })
@@ -282,7 +290,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                 let computer_aces_for_this: Vec<Value> = computer_aces
                     .iter()
                     .filter(|a| {
-                        a["PrincipalSID"].as_str().map_or(false, |sid| {
+                        a["PrincipalSID"].as_str().is_some_and(|sid| {
                             c.sid.as_deref() == Some(sid)
                                 || c.sam_account_name.eq_ignore_ascii_case(sid)
                         })
@@ -339,7 +347,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
             let object_id = g.sid.clone().unwrap_or_default();
             let group_aces_for_this: Vec<Value> = group_aces
                 .iter()
-                .filter(|a| a["PrincipalSID"].as_str().map_or(false, |sid| {
+                .filter(|a| a["PrincipalSID"].as_str().is_some_and(|sid| {
                     g.sid.as_deref() == Some(sid) || g.sam_account_name.eq_ignore_ascii_case(sid)
                 }))
                 .cloned()
@@ -385,7 +393,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
                     .filter(|a| {
                         a["PrincipalSID"]
                             .as_str()
-                            .map_or(false, |sid| ou.distinguished_name.eq_ignore_ascii_case(sid))
+                            .is_some_and(|sid| ou.distinguished_name.eq_ignore_ascii_case(sid))
                     })
                     .cloned()
                     .collect();
@@ -423,9 +431,9 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         let gpos_json: Vec<Value> = result.gpos.iter().map(|g| {
             let gpo_aces_for_this: Vec<Value> = gpo_aces
                 .iter()
-                .filter(|a| a["PrincipalSID"].as_str().map_or(false, |sid| {
+                .filter(|a| a["PrincipalSID"].as_str().is_some_and(|sid| {
                     g.display_name.eq_ignore_ascii_case(sid) ||
-                    g.gpc_file_sys_path.as_ref().map_or(false, |p| p.eq_ignore_ascii_case(sid))
+                    g.gpc_file_sys_path.as_ref().is_some_and(|p| p.eq_ignore_ascii_case(sid))
                 }))
                 .cloned()
                 .collect();

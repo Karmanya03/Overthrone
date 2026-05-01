@@ -39,29 +39,51 @@ fn relationship_name(raw: &str) -> String {
         "writeallowedtodelegateto" => "WriteAllowedToDelegateTo",
         "addallowedtoact" => "AddAllowedToAct",
         "writeaccountrestrictions" => "WriteAccountRestrictions",
-        "writelogonScript" => "WriteLogonScript",
+        "writelogonscript" => "WriteLogonScript",
         "writeprofilepath" => "WriteProfilePath",
         "writescriptpath" => "WriteScriptPath",
         "writednshostname" => "WriteDnsHostName",
         "writeserviceprincipalname" => "WriteServicePrincipalName",
-        "writekeycredentialLink" => "WriteKeyCredentialLink",
-        "writemsdskeycredentialLink" => "WriteMsDsKeyCredentialLink",
-        "writealtsecurityidentities" => "WriteAltSecurityIdentities",
-        "writeuserparameters" => "WriteUserParameters",
-        "writepwdproperties" => "WritePwdProperties",
-        "writelockoutthreshold" => "WriteLockoutThreshold",
-        "writeminpwdlength" => "WriteMinPwdLength",
-        "writepwdhistorylength" => "WritePwdHistoryLength",
-        "writepwdcomplexity" => "WritePwdComplexity",
-        "writepwdreversibleencryption" => "WritePwdReversibleEncryption",
-        "writepwdage" => "WritePwdAge",
-        "writelockoutduration" => "WriteLockoutDuration",
-        "writelockoutobservationwindow" => "WriteLockoutObservationWindow",
-        "writegplink" => "WriteGPLink",
-        "addkeycredentialLink" => "AddKeyCredentialLink",
+        "writekeycredentiallink" => "WriteKeyCredentialLink",
+        "writemsdskeycredentiallink" => "WriteMsDsKeyCredentialLink",
+        "addkeycredentiallink" => "AddKeyCredentialLink",
         "writeproperty" => "WriteProperty",
         "" => "Relationship",
-        _ => cleaned,
+        _ => &cleaned,
     }
     .to_string()
+}
+
+/// Load and display BloodHound-compatible graph data from source files.
+///
+/// This is a placeholder viewer that loads graph JSON files and prints
+/// summary statistics. A full TUI viewer is available via the `tui` module.
+pub fn run(sources: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use overthrone_core::graph::AttackGraph;
+
+    for source in sources {
+        println!("Loading graph from: {}", source);
+        let graph = AttackGraph::from_json_file(source)
+            .map_err(|e| format!("Failed to load {}: {}", source, e))?;
+
+        let stats = graph.stats();
+        println!(
+            "  Nodes: {} (Users: {}, Computers: {}, Groups: {}, Domains: {})",
+            stats.total_nodes, stats.users, stats.computers, stats.groups, stats.domains
+        );
+        println!("  Edges: {}", stats.total_edges);
+
+        for (edge_type, count) in &stats.edge_type_counts {
+            println!("    {}: {}", edge_type, count);
+        }
+
+        let hvt = graph.high_value_targets(5);
+        if !hvt.is_empty() {
+            println!("  High-Value Targets:");
+            for (name, node_type, degree) in &hvt {
+                println!("    {} ({:?}) - degree {}", name, node_type, degree);
+            }
+        }
+    }
+    Ok(())
 }

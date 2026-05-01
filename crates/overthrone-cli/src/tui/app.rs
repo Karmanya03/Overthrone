@@ -31,6 +31,12 @@ pub struct App {
     pub stats: GraphStats,
     /// Selected attack path (highlighted edges)
     pub highlighted_path: Vec<EdgeId>,
+    pub acl_scroll: Option<usize>,
+    pub path_scroll: Option<usize>,
+    pub graph_scroll: Option<usize>,
+    pub detail_scroll: Option<usize>,
+    pub current_path: Option<overthrone_core::graph::AttackPath>,
+    pub acl_findings: Option<Vec<overthrone_reaper::acls::AclFinding>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,6 +89,8 @@ pub struct GraphStats {
     pub users: usize,
     pub computers: usize,
     pub groups: usize,
+    pub gpos: usize,
+    pub ous: usize,
     pub edges: usize,
     pub attack_paths: usize,
     pub domains: usize,
@@ -106,6 +114,12 @@ impl App {
             filter_active: false,
             stats: GraphStats::default(),
             highlighted_path: Vec::new(),
+            acl_scroll: None,
+            path_scroll: None,
+            graph_scroll: None,
+            detail_scroll: None,
+            current_path: None,
+            acl_findings: None,
         }
     }
 
@@ -201,6 +215,8 @@ impl App {
             users: graph.nodes_of_type(NodeType::User).count(),
             computers: graph.nodes_of_type(NodeType::Computer).count(),
             groups: graph.nodes_of_type(NodeType::Group).count(),
+            gpos: graph.nodes_of_type(NodeType::Gpo).count(),
+            ous: graph.nodes_of_type(NodeType::Ou).count(),
             edges: graph.edge_count(),
             attack_paths: graph.attack_path_count(),
             domains: graph.domain_count(),
