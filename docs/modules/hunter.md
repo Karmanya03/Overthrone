@@ -1,4 +1,4 @@
-﻿# Hunter Module
+# Hunter Module
 
 Finding the attackable misconfigurations. The "what can we actually exploit" module.
 

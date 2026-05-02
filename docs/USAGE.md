@@ -1,4 +1,4 @@
-﻿# Usage Guide
+# Usage Guide
 
 So you want to overthrow a domain. Good for you. This guide covers all the commands, shortcuts, and practical examples you need to go from zero to Domain Admin.
 

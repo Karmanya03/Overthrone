@@ -1,4 +1,4 @@
-﻿# Architecture Overview
+# Architecture Overview
 
 Overthrone is a Rust workspace with 8 crates organized around the AD attack lifecycle. Each crate handles one phase of making sysadmins regret their GPO configurations.
 

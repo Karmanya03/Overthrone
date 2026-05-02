@@ -1,4 +1,4 @@
-﻿# Forge Module
+# Forge Module
 
 Persistence and ticket forging. Take the throne and weld it to your head.
 

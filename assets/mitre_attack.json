@@ -1,4 +1,4 @@
-﻿{
+{
   "techniques": {
     "T1558.003": "Kerberoasting",
     "T1558.004": "AS-REP Roasting",

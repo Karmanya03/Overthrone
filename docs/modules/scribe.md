@@ -1,4 +1,4 @@
-﻿# Scribe Module
+# Scribe Module
 
 Reporting. The difference between a pentest and a crime is documentation.
 

@@ -1,4 +1,4 @@
-﻿[general]
+[general]
 threads = 10
 timeout_secs = 30
 output_format = "json"

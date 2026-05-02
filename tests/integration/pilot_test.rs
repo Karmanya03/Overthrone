@@ -1,4 +1,4 @@
-﻿//! Integration tests for overthrone-pilot — attack execution engine.
+//! Integration tests for overthrone-pilot — attack execution engine.
 //!
 //! Tests attack path logic, privilege escalation chains, and
 //! decision-making offline using fixture data.

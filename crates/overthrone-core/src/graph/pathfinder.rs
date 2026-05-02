@@ -1,4 +1,4 @@
-﻿//! Shortest path and all-paths computation using petgraph.
+//! Shortest path and all-paths computation using petgraph.
 //!
 //! Convenience wrappers around `AttackGraph` methods for common
 //! attack path queries.

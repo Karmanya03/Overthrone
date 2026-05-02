@@ -1,4 +1,4 @@
-﻿//! Integration tests for overthrone-scribe — report generation engine.
+//! Integration tests for overthrone-scribe — report generation engine.
 //!
 //! Tests report data structures, formatting, and output generation offline.
 

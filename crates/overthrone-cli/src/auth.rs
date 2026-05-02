@@ -1,4 +1,4 @@
-﻿//! Credential management and authentication helpers for the CLI.
+//! Credential management and authentication helpers for the CLI.
 use clap::ValueEnum;
 use std::io::{self, Write};
 

@@ -1,4 +1,4 @@
-﻿//! Automated attack chain — wired to overthrone-pilot's Planner + Executor.
+//! Automated attack chain — wired to overthrone-pilot's Planner + Executor.
 
 use crate::auth::Credentials;
 use crate::banner;

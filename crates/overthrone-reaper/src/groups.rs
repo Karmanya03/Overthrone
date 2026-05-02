@@ -1,4 +1,4 @@
-﻿//! Domain group enumeration via LDAP.
+//! Domain group enumeration via LDAP.
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;

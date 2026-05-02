@@ -1,4 +1,4 @@
-﻿//! Domain computer enumeration via LDAP.
+//! Domain computer enumeration via LDAP.
 
 use crate::runner::ReaperConfig;
 use crate::users::{UAC_DISABLED, UAC_TRUSTED_FOR_DELEGATION, UAC_TRUSTED_TO_AUTH_FOR_DELEGATION};

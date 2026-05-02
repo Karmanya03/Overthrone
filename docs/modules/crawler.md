@@ -1,4 +1,4 @@
-﻿# Crawler Module
+# Crawler Module
 
 Lateral movement. Why stay on one box when you can be everywhere?
 

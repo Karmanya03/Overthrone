@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "overthrone-scribe"
 version.workspace = true
 edition.workspace = true

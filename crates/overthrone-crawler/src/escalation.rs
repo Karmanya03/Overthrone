@@ -1,4 +1,4 @@
-﻿//! Cross-domain privilege escalation path detection.
+//! Cross-domain privilege escalation path detection.
 //!
 //! Combines trust graph analysis with reaper data to identify
 //! concrete escalation paths across trust boundaries.

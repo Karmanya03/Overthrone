@@ -1,4 +1,4 @@
-﻿//! Domain user enumeration via LDAP.
+//! Domain user enumeration via LDAP.
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;

@@ -1,4 +1,4 @@
-﻿//! Integration tests for SMB/network crawler functionality.
+//! Integration tests for SMB/network crawler functionality.
 //!
 //! All tests are offline and use fixture data. Tests that require
 //! a live SMB connection are gated behind `#[ignore]` and the

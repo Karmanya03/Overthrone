@@ -1,4 +1,4 @@
-﻿//! Kerberos ticket operations — request TGT/TGS, import/export kirbi/ccache,
+//! Kerberos ticket operations — request TGT/TGS, import/export kirbi/ccache,
 //! convert between formats, inspect ticket contents, and manage ticket cache.
 //!
 //! Supports:

@@ -1,4 +1,4 @@
-﻿//! overthrone-reaper — Active Directory enumeration engine.
+//! overthrone-reaper — Active Directory enumeration engine.
 //!
 //! Queries LDAP to enumerate users, groups, computers, OUs, GPOs,
 //! ACLs, SPNs, delegations, trusts, LAPS, and MSSQL SPNs.

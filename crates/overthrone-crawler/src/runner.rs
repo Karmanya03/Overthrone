@@ -1,4 +1,4 @@
-﻿//! Top-level orchestrator for the crawler pipeline.
+//! Top-level orchestrator for the crawler pipeline.
 //! Takes ReaperResult data and runs analysis modules.
 
 use colored::Colorize;

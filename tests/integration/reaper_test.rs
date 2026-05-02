@@ -1,4 +1,4 @@
-﻿//! Integration tests for overthrone-reaper — LDAP enumeration engine.
+//! Integration tests for overthrone-reaper — LDAP enumeration engine.
 //!
 //! These tests run entirely offline using fixture data.
 //! No live DC/LDAP connection required.

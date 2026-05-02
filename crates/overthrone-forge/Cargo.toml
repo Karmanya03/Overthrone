@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "overthrone-forge"
 version.workspace = true
 edition.workspace = true

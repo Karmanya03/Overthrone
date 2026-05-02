@@ -1,4 +1,4 @@
-﻿# Pilot Module
+# Pilot Module
 
 The autopilot. Because sometimes you want to point and click "pwn domain."
 

@@ -1,4 +1,4 @@
-﻿//! Mitigation recommendations — Maps finding types to specific,
+//! Mitigation recommendations — Maps finding types to specific,
 //! actionable remediation steps with priority and effort estimates.
 
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-﻿pub mod adcs;
+pub mod adcs;
 pub mod c2; // ← Export C2 module
 pub mod config;
 pub mod cred_store;

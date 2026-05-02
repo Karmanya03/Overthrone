@@ -1,4 +1,4 @@
-﻿# Reaper Module
+# Reaper Module
 
 LDAP enumeration on overdrive. BloodHound's data collector without the .NET dependency.
 

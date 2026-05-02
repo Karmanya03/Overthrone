@@ -1,4 +1,4 @@
-﻿# Contributing to Overthrone
+# Contributing to Overthrone
 
 Thank you for your interest in contributing to Overthrone! This guide covers everything
 you need to get started.

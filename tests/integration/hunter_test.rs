@@ -1,4 +1,4 @@
-﻿//! Integration tests for credential hunting — GPP decryption, LAPS parsing,
+//! Integration tests for credential hunting — GPP decryption, LAPS parsing,
 //! description scraping, and Kerberoastable user detection.
 //!
 //! All tests run offline using fixture data.

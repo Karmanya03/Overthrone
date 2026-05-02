@@ -1,4 +1,4 @@
-﻿//! Integration tests for overthrone-forge — Kerberos ticket operations.
+//! Integration tests for overthrone-forge — Kerberos ticket operations.
 //!
 //! Tests ticket structures, SPN parsing, and crypto primitives offline.
 

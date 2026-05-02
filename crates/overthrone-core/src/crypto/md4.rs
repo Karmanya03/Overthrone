@@ -1,4 +1,4 @@
-﻿//! MD4 hash for NTLM password hashing.
+//! MD4 hash for NTLM password hashing.
 //!
 //! Centralised NTLM hash computation used throughout the codebase.
 //! The NTLM hash is `MD4(UTF-16LE(password))`.

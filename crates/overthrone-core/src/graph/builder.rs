@@ -1,4 +1,4 @@
-﻿//! Graph construction from reaper enumeration data.
+//! Graph construction from reaper enumeration data.
 //!
 //! Converts `ReaperResult` (from the reaper crate) into core LDAP types
 //! and feeds them into `AttackGraph::ingest_enumeration`.

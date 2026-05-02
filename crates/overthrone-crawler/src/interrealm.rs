@@ -1,4 +1,4 @@
-﻿//! Cross-forest trust abuse: SID History injection + Inter-realm TGT forging
+//! Cross-forest trust abuse: SID History injection + Inter-realm TGT forging
 //!
 //! Attack chain:
 //!   1. Enumerate trust relationships (foreign.rs)
