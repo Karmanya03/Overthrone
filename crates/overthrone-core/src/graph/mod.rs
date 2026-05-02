@@ -347,6 +347,92 @@ impl AttackGraph {
         Self::from_export_document(exported)
     }
 
+    /// Load an AttackGraph from a JSON file or directory containing JSON files.
+    /// If the path is a directory, all .json files within it are loaded and merged.
+    pub fn from_json_path(path: &str) -> Result<Self> {
+        let path_obj = std::path::Path::new(path);
+        if path_obj.is_dir() {
+            // Find all JSON files in the directory
+            let mut json_files: Vec<_> = std::fs::read_dir(path_obj)
+                .map_err(|e| OverthroneError::Graph(format!("Failed to read directory {path}: {e}")))?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|p| p.extension().map(|ext| ext == "json").unwrap_or(false))
+                .collect();
+            json_files.sort();
+
+            if json_files.is_empty() {
+                return Err(OverthroneError::Graph(
+                    format!("No JSON files found in directory {path}")
+                ));
+            }
+
+            let mut merged_graph = None;
+            for file_path in json_files {
+                let file_str = file_path.to_string_lossy();
+                let graph = Self::from_json_file(&file_str)?;
+                match merged_graph {
+                    None => merged_graph = Some(graph),
+                    Some(ref mut base) => base.merge(graph)?,
+                }
+            }
+
+            merged_graph.ok_or_else(|| {
+                OverthroneError::Graph(format!("Failed to load any graphs from directory {path}"))
+            })
+        } else {
+            Self::from_json_file(path)
+        }
+    }
+
+    /// Merge another AttackGraph into this one, combining nodes and edges.
+    /// Duplicate nodes (same name@domain) are not re-added, but edges are combined.
+    pub fn merge(&mut self, other: Self) -> Result<()> {
+        // Map from other node indices to this graph's node indices
+        let mut node_map = std::collections::HashMap::new();
+
+        // Add all nodes from the other graph
+        for (other_idx, other_node) in other.nodes() {
+            let key = node_key(&other_node.name, &other_node.domain);
+            let this_idx = if let Some(&existing_idx) = self.node_index.get(&key) {
+                // Node already exists, merge properties (prefer non-empty values)
+                let existing = self.graph.node_weight_mut(existing_idx).unwrap();
+                for (k, v) in &other_node.properties {
+                    if !v.is_empty() && !existing.properties.contains_key::<String>(k) {
+                        existing.properties.insert(k.clone(), v.clone());
+                    }
+                }
+                existing_idx
+            } else {
+                // Add new node
+                let new_idx = self.add_node(other_node.clone());
+                new_idx
+            };
+            node_map.insert(other_idx, this_idx);
+        }
+
+        // Add all edges from the other graph
+        for edge in other.graph.edge_references() {
+            let source_idx = node_map[&edge.source()];
+            let target_idx = node_map[&edge.target()];
+            let edge_type = edge.weight().clone();
+
+            // Check if edge already exists
+            if !self.graph.contains_edge(source_idx, target_idx) {
+                self.graph.add_edge(source_idx, target_idx, edge_type);
+            }
+        }
+
+        // Merge metadata (prefer non-empty values)
+        for (k, v) in other.metadata {
+            if !v.is_empty() && !self.metadata.contains_key(&k) {
+                self.metadata.insert(k, v);
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
     }

@@ -3113,7 +3113,7 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 
         GraphAction::Path { from, to } => {
             let path = graph_file.unwrap_or(default_path);
-            let graph = match AttackGraph::from_json_file(path) {
+            let graph = match AttackGraph::from_json_path(path) {
                 Ok(g) => g,
                 Err(e) => {
                     banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
@@ -3147,7 +3147,7 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 
         GraphAction::PathToDa { from } => {
             let path = graph_file.unwrap_or(default_path);
-            let graph = match AttackGraph::from_json_file(path) {
+            let graph = match AttackGraph::from_json_path(path) {
                 Ok(g) => g,
                 Err(e) => {
                     banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
@@ -3198,50 +3198,46 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 
         GraphAction::Stats => {
             let path = graph_file.unwrap_or(default_path);
-            let graph = match AttackGraph::from_json_file(path) {
+            let graph = match AttackGraph::from_json_path(path) {
                 Ok(g) => g,
                 Err(e) => {
                     banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
+                    banner::print_info("Run 'overthrone graph build' first, or use --file <path>");
                     return 1;
                 }
             };
 
             let stats = graph.stats();
             println!();
-            println!("  {} {}", "Nodes:".bold(), stats.total_nodes);
-            println!("    Users:     {}", stats.users.to_string().cyan());
-            println!("    Computers: {}", stats.computers.to_string().cyan());
-            println!("    Groups:    {}", stats.groups.to_string().cyan());
-            println!("    Domains:   {}", stats.domains.to_string().cyan());
-            println!("  {} {}", "Edges:".bold(), stats.total_edges);
-            for (edge_type, count) in &stats.edge_type_counts {
-                println!("    {}: {}", edge_type, count.to_string().cyan());
-            }
+            println!("  === Graph Statistics ===");
+            println!("  Total nodes: {}", stats.total_nodes);
+            println!("  Users: {}", stats.users);
+            println!("  Computers: {}", stats.computers);
+            println!("  Groups: {}", stats.groups);
+            println!("  Domains: {}", stats.domains);
+            println!("  GPOs: {}", stats.gpos);
+            println!("  OUs: {}", stats.ous);
+            println!("  Cert Templates: {}", stats.cert_templates);
+            println!("  Total edges: {}", stats.total_edges);
 
-            // High-value targets
             let hvt = graph.high_value_targets(10);
             if !hvt.is_empty() {
                 println!();
-                println!("  {} High-Value Targets (top 10):", "🎯".bright_black());
-                for (name, node_type, inbound) in &hvt {
-                    println!(
-                        "    {} ({:?}) — {} inbound edges",
-                        name.yellow(),
-                        node_type,
-                        inbound
-                    );
+                println!("  High-Value Targets:");
+                for (name, node_type, degree) in &hvt {
+                    println!("    {} ({:?}) - degree {}", name, node_type, degree);
                 }
             }
-
-            banner::print_success("Statistics generated");
+            banner::print_success("Graph statistics displayed");
         }
 
         GraphAction::Export { output, bloodhound } => {
             let path = graph_file.unwrap_or(default_path);
-            let graph = match AttackGraph::from_json_file(path) {
+            let graph = match AttackGraph::from_json_path(path) {
                 Ok(g) => g,
                 Err(e) => {
                     banner::print_fail(&format!("Failed to load graph from {}: {}", path, e));
+                    banner::print_info("Run 'overthrone graph build' first, or use --file <path>");
                     return 1;
                 }
             };
