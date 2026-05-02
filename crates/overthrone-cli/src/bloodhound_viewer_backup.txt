@@ -7,7 +7,7 @@
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        KeyModifiers,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -34,37 +34,8 @@ const EDGE_KEYS: &[&str] = &[
     "MemberOf",
     "Members",
     "Aces",
-    "AdminTo",
-    "HasSession",
-    "CanRDP",
-    "CanPSRemote",
-    "ExecuteDCOM",
-    "SQLAdmin",
-    "GenericAll",
-    "GenericWrite",
-    "WriteOwner",
-    "WriteDacl",
-    "ForceChangePassword",
-    "AddMembers",
-    "AddSelf",
-    "AllExtendedRights",
-    "CreateChild",
-    "WriteSelf",
-    "ReadLapsPassword",
-    "ReadLapsPasswordExpiry",
-    "ReadGmsaPassword",
     "AllowedToDelegate",
     "AllowedToAct",
-    "HasSidHistory",
-    "DcSync",
-    "GetChanges",
-    "GetChangesAll",
-    "TrustedBy",
-    "HasSpn",
-    "DontReqPreauth",
-    "GpoLink",
-    "Contains",
-    "Owns",
     "Sessions",
     "LocalAdmins",
     "RemoteDesktopUsers",
@@ -82,33 +53,6 @@ const EDGE_KEYS: &[&str] = &[
     "HasSIDHistory",
     "SPNTargets",
     "GPOChanges",
-    "WriteSPN",
-    "WriteAllowedToDelegateTo",
-    "AddAllowedToAct",
-    "WriteAccountRestrictions",
-    "WriteLogonScript",
-    "WriteProfilePath",
-    "WriteScriptPath",
-    "WriteDnsHostName",
-    "WriteServicePrincipalName",
-    "WriteKeyCredentialLink",
-    "WriteMsDsKeyCredentialLink",
-    "AddKeyCredentialLink",
-    "WriteAltSecurityIdentities",
-    "WriteUserParameters",
-    "WritePwdProperties",
-    "WriteLockoutThreshold",
-    "WriteMinPwdLength",
-    "WritePwdHistoryLength",
-    "WritePwdComplexity",
-    "WritePwdReversibleEncryption",
-    "WritePwdAge",
-    "WriteLockoutDuration",
-    "WriteLockoutObservationWindow",
-    "WriteGPLink",
-    "WriteUserCertificate",
-    "EnrollCertificate",
-    "WriteProperty",
 ];
 
 #[derive(Debug, Clone)]
@@ -148,7 +92,6 @@ struct GraphStats {
     computers: usize,
     groups: usize,
     domains: usize,
-    cert_templates: usize,
     high_value: usize,
     owned: usize,
 }
@@ -544,12 +487,6 @@ impl GraphBuilder {
                         );
                     }
                 }
-                "adminto" => self.add_targets_as_edges(value, current_id, "AdminTo", false),
-                "hassession" => self.add_targets_as_edges(value, current_id, "HasSession", false),
-                "canrdp" => self.add_targets_as_edges(value, current_id, "CanRDP", false),
-                "canpsremote" => self.add_targets_as_edges(value, current_id, "CanPSRemote", false),
-                "executedcom" => self.add_targets_as_edges(value, current_id, "ExecuteDCOM", false),
-                "sqladmin" => self.add_targets_as_edges(value, current_id, "SQLAdmin", false),
                 "localadmins" => self.add_targets_as_edges(value, current_id, "AdminTo", true),
                 "remotedesktopusers" | "rdpusers" => {
                     self.add_targets_as_edges(value, current_id, "CanRDP", true)
@@ -782,7 +719,6 @@ impl GraphBuilder {
                 "Computer" => stats.computers += 1,
                 "Group" => stats.groups += 1,
                 "Domain" => stats.domains += 1,
-                "CertTemplate" => stats.cert_templates += 1,
                 _ => {}
             }
             if node.high_value {
@@ -1033,7 +969,6 @@ fn normalize_kind(raw: &str) -> String {
         "gpo" => "GPO".to_string(),
         "ou" => "OU".to_string(),
         "container" => "Container".to_string(),
-        "certtemplate" | "certificatetemplate" | "template" => "CertTemplate".to_string(),
         "unknown" | "" => "Unknown".to_string(),
         other => {
             let mut chars = other.chars();
@@ -1067,16 +1002,10 @@ fn relationship_name(raw: &str) -> String {
         "forcechangepassword" => "ForceChangePassword",
         "addmembers" => "AddMembers",
         "addself" => "AddSelf",
-        "allextendedrights" => "AllExtendedRights",
-        "createchild" => "CreateChild",
-        "writeself" => "WriteSelf",
         "readlapspassword" => "ReadLapsPassword",
-        "readlapspasswordexpiry" | "readlapsencryptedpassword" => "ReadLapsPasswordExpiry",
         "readgmsapassword" => "ReadGmsaPassword",
         "allowedtodelegate" => "AllowedToDelegate",
-        "writeallowedtodelegateto" => "WriteAllowedToDelegateTo",
         "allowedtoact" => "AllowedToAct",
-        "addallowedtoact" => "AddAllowedToAct",
         "hassidhistory" => "HasSidHistory",
         "dcsync" => "DcSync",
         "getchanges" => "GetChanges",
@@ -1087,31 +1016,6 @@ fn relationship_name(raw: &str) -> String {
         "gpolink" | "links" | "gpochanges" => "GpoLink",
         "contains" | "childobjects" => "Contains",
         "owns" => "Owns",
-        "writespn" => "WriteSPN",
-        "writeaccountrestrictions" => "WriteAccountRestrictions",
-        "writelogonscript" => "WriteLogonScript",
-        "writeprofilepath" => "WriteProfilePath",
-        "writescriptpath" => "WriteScriptPath",
-        "writednshostname" => "WriteDnsHostName",
-        "writeserviceprincipalname" => "WriteServicePrincipalName",
-        "writekeycredentiallink" => "WriteKeyCredentialLink",
-        "writemsdskeycredentiallink" => "WriteMsDsKeyCredentialLink",
-        "addkeycredentiallink" => "AddKeyCredentialLink",
-        "writealtsecurityidentities" => "WriteAltSecurityIdentities",
-        "writeuserparameters" => "WriteUserParameters",
-        "writepwdproperties" => "WritePwdProperties",
-        "writelockoutthreshold" => "WriteLockoutThreshold",
-        "writeminpwdlength" => "WriteMinPwdLength",
-        "writepwdhistorylength" => "WritePwdHistoryLength",
-        "writepwdcomplexity" => "WritePwdComplexity",
-        "writepwdreversibleencryption" => "WritePwdReversibleEncryption",
-        "writepwdage" => "WritePwdAge",
-        "writelockoutduration" => "WriteLockoutDuration",
-        "writelockoutobservationwindow" => "WriteLockoutObservationWindow",
-        "writegplink" => "WriteGPLink",
-        "writeusercertificate" => "WriteUserCertificate",
-        "enrollcertificate" => "EnrollCertificate",
-        "writeproperty" => "WriteProperty",
         "" => "Relationship",
         _ => return cleaned,
     }
@@ -1124,21 +1028,6 @@ fn is_high_value(node: &VisualNode) -> bool {
     let label_or_id = format!("{label} {id}");
 
     if node.kind == "Domain" {
-        return true;
-    }
-
-    if node.kind == "CertTemplate"
-        && (label_or_id.contains("ESC")
-            || property_truthy(
-                &node.properties,
-                &[
-                    "vulnerable",
-                    "enabled",
-                    "enrolleesuppliessubject",
-                    "clientauth",
-                ],
-            ))
-    {
         return true;
     }
 
@@ -1351,11 +1240,8 @@ struct ViewerApp {
     relationship_filter: Option<usize>,
     high_value_only: bool,
     owned_only: bool,
-    attack_edges_only: bool,
-    neighborhood_only: bool,
     show_help: bool,
     details_scroll: u16,
-    last_drag: Option<(u16, u16)>,
     path_nodes: Vec<usize>,
     path_edges: Vec<usize>,
     status: String,
@@ -1386,11 +1272,8 @@ impl ViewerApp {
             relationship_filter: None,
             high_value_only: false,
             owned_only: false,
-            attack_edges_only: false,
-            neighborhood_only: false,
             show_help: false,
             details_scroll: 0,
-            last_drag: None,
             path_nodes: Vec::new(),
             path_edges: Vec::new(),
             status: "Loaded graph. Press ? for keys, / to search, q to quit.".to_string(),
@@ -1435,31 +1318,12 @@ impl ViewerApp {
                 self.zoom = 1.0;
                 self.center_on_selection();
             }
-            KeyCode::Home => {
+            KeyCode::Char('g') => {
                 self.camera_x = 0.0;
                 self.camera_y = 0.0;
                 self.zoom = 1.0;
             }
             KeyCode::Char('r') => self.cycle_relationship_filter(),
-            KeyCode::Char('a') => {
-                self.attack_edges_only = !self.attack_edges_only;
-                self.ensure_selected_node_visible();
-                self.status = if self.attack_edges_only {
-                    "Attack-edge lens on: hiding low-signal membership/container markers."
-                        .to_string()
-                } else {
-                    "Attack-edge lens off: showing every visible relationship.".to_string()
-                };
-            }
-            KeyCode::Char('g') => {
-                self.neighborhood_only = !self.neighborhood_only;
-                self.ensure_selected_node_visible();
-                self.status = if self.neighborhood_only {
-                    "Neighborhood lens on: selected object plus direct edges only.".to_string()
-                } else {
-                    "Neighborhood lens off: showing the whole filtered graph.".to_string()
-                };
-            }
             KeyCode::Char('v') => {
                 self.high_value_only = !self.high_value_only;
                 self.ensure_selected_node_visible();
@@ -1472,8 +1336,6 @@ impl ViewerApp {
                 self.search_text.clear();
                 self.high_value_only = false;
                 self.owned_only = false;
-                self.attack_edges_only = false;
-                self.neighborhood_only = false;
                 self.relationship_filter = None;
                 self.status = "Cleared graph filters.".to_string();
             }
@@ -1489,164 +1351,6 @@ impl ViewerApp {
             KeyCode::PageDown => self.details_scroll = self.details_scroll.saturating_add(8),
             _ => {}
         }
-    }
-
-    fn handle_mouse(&mut self, mouse: MouseEvent, terminal_area: Rect) {
-        if self.search_mode {
-            return;
-        }
-
-        let areas = compute_ui_areas(terminal_area);
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if rect_contains(areas.graph, mouse.column, mouse.row) {
-                    self.zoom = (self.zoom * 1.12).min(8.0);
-                    self.focus = Focus::Graph;
-                } else if rect_contains(areas.details, mouse.column, mouse.row) {
-                    self.details_scroll = self.details_scroll.saturating_sub(3);
-                    self.focus = Focus::Details;
-                } else {
-                    self.move_active(-1);
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if rect_contains(areas.graph, mouse.column, mouse.row) {
-                    self.zoom = (self.zoom / 1.12).max(0.15);
-                    self.focus = Focus::Graph;
-                } else if rect_contains(areas.details, mouse.column, mouse.row) {
-                    self.details_scroll = self.details_scroll.saturating_add(3);
-                    self.focus = Focus::Details;
-                } else {
-                    self.move_active(1);
-                }
-            }
-            MouseEventKind::Down(MouseButton::Left) => {
-                self.last_drag = Some((mouse.column, mouse.row));
-                if rect_contains(areas.graph, mouse.column, mouse.row) {
-                    self.focus = Focus::Graph;
-                    if let Some(idx) = self.node_at_mouse(mouse.column, mouse.row, areas.graph) {
-                        self.selected_node = Some(idx);
-                        self.refresh_path();
-                        self.status = format!("Selected {}", self.graph.nodes[idx].label);
-                    }
-                } else if rect_contains(areas.nodes, mouse.column, mouse.row) {
-                    self.focus = Focus::Nodes;
-                    self.select_node_row(mouse.row, areas.nodes);
-                } else if rect_contains(areas.edges, mouse.column, mouse.row) {
-                    self.focus = Focus::Edges;
-                    self.select_edge_row(mouse.row, areas.edges);
-                } else if rect_contains(areas.details, mouse.column, mouse.row) {
-                    self.focus = Focus::Details;
-                }
-            }
-            MouseEventKind::Down(MouseButton::Right) => {
-                if rect_contains(areas.graph, mouse.column, mouse.row) {
-                    self.focus = Focus::Graph;
-                    if let Some(idx) = self.node_at_mouse(mouse.column, mouse.row, areas.graph) {
-                        self.selected_node = Some(idx);
-                        self.center_on_selection();
-                        self.refresh_path();
-                        self.status = format!(
-                            "Centered {} and refreshed high-value path.",
-                            self.graph.nodes[idx].label
-                        );
-                    }
-                }
-            }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                if self.focus == Focus::Graph
-                    && rect_contains(areas.graph, mouse.column, mouse.row)
-                    && let Some((last_x, last_y)) = self.last_drag
-                {
-                    self.pan_by_mouse_delta(
-                        mouse.column as i32 - last_x as i32,
-                        mouse.row as i32 - last_y as i32,
-                        areas.graph,
-                    );
-                    self.last_drag = Some((mouse.column, mouse.row));
-                }
-            }
-            MouseEventKind::Up(_) => self.last_drag = None,
-            _ => {}
-        }
-    }
-
-    fn select_node_row(&mut self, row: u16, area: Rect) {
-        let inner = inner_rect(area);
-        if !rect_contains(inner, area.x.saturating_add(1), row) || row < inner.y {
-            return;
-        }
-        let pos = (row - inner.y) as usize;
-        let nodes = self.filtered_nodes();
-        if let Some(idx) = nodes.get(pos).copied() {
-            self.selected_node = Some(idx);
-            self.refresh_path();
-            self.status = format!("Selected {}", self.graph.nodes[idx].label);
-        }
-    }
-
-    fn select_edge_row(&mut self, row: u16, area: Rect) {
-        let inner = inner_rect(area);
-        if !rect_contains(inner, area.x.saturating_add(1), row) || row < inner.y {
-            return;
-        }
-        let pos = (row - inner.y) as usize;
-        let edges = self.panel_edges();
-        if let Some(idx) = edges.get(pos).copied() {
-            self.selected_edge = Some(idx);
-            let edge = &self.graph.edges[idx];
-            self.selected_node = Some(edge.source);
-            self.status = format!(
-                "Selected edge {} -> {} ({})",
-                self.graph.nodes[edge.source].label,
-                self.graph.nodes[edge.target].label,
-                edge.relationship
-            );
-        }
-    }
-
-    fn node_at_mouse(&self, column: u16, row: u16, graph_area: Rect) -> Option<usize> {
-        let world = self.mouse_to_world(column, row, graph_area)?;
-        let threshold = (3.0 / self.zoom.max(0.35)).max(0.85);
-        self.graph
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| self.node_visible(*idx))
-            .filter_map(|(idx, _)| {
-                let point = self.layout[idx];
-                let distance = ((point.x - world.x).powi(2) + (point.y - world.y).powi(2)).sqrt();
-                (distance <= threshold).then_some((idx, distance))
-            })
-            .min_by(|(_, left), (_, right)| left.partial_cmp(right).unwrap_or(Ordering::Equal))
-            .map(|(idx, _)| idx)
-    }
-
-    fn mouse_to_world(&self, column: u16, row: u16, graph_area: Rect) -> Option<Point> {
-        let inner = inner_rect(graph_area);
-        if !rect_contains(inner, column, row) {
-            return None;
-        }
-        let width = inner.width.max(1) as f64;
-        let height = inner.height.max(1) as f64;
-        let x_span = (graph_area.width.max(20) as f64) / (2.0 * self.zoom);
-        let y_span = (graph_area.height.max(10) as f64) / self.zoom;
-        let x_ratio = (column.saturating_sub(inner.x) as f64) / width;
-        let y_ratio = (row.saturating_sub(inner.y) as f64) / height;
-        Some(Point {
-            x: self.camera_x - x_span + (2.0 * x_span * x_ratio),
-            y: self.camera_y + y_span - (2.0 * y_span * y_ratio),
-        })
-    }
-
-    fn pan_by_mouse_delta(&mut self, dx: i32, dy: i32, graph_area: Rect) {
-        let inner = inner_rect(graph_area);
-        let x_span = (graph_area.width.max(20) as f64) / (2.0 * self.zoom);
-        let y_span = (graph_area.height.max(10) as f64) / self.zoom;
-        let world_per_col = (2.0 * x_span) / inner.width.max(1) as f64;
-        let world_per_row = (2.0 * y_span) / inner.height.max(1) as f64;
-        self.camera_x -= dx as f64 * world_per_col;
-        self.camera_y += dy as f64 * world_per_row;
     }
 
     fn handle_search_key(&mut self, key: KeyEvent) {
@@ -1804,9 +1508,6 @@ impl ViewerApp {
         let Some(node) = self.graph.nodes.get(idx) else {
             return false;
         };
-        if self.neighborhood_only && !self.node_in_selected_neighborhood(idx) {
-            return false;
-        }
         if self.high_value_only && !node.high_value {
             return false;
         }
@@ -1816,40 +1517,10 @@ impl ViewerApp {
         true
     }
 
-    fn node_in_selected_neighborhood(&self, idx: usize) -> bool {
-        let Some(selected) = self.selected_node else {
-            return true;
-        };
-        if idx == selected || self.path_nodes.contains(&idx) {
-            return true;
-        }
-        self.graph.outgoing[selected]
-            .iter()
-            .chain(self.graph.incoming[selected].iter())
-            .any(|edge_idx| {
-                let edge = &self.graph.edges[*edge_idx];
-                edge.source == idx || edge.target == idx
-            })
-    }
-
     fn edge_visible(&self, idx: usize) -> bool {
         let Some(edge) = self.graph.edges.get(idx) else {
             return false;
         };
-        if self.attack_edges_only
-            && !self.path_edges.contains(&idx)
-            && !relationship_is_attack_edge(&edge.relationship)
-        {
-            return false;
-        }
-        if self.neighborhood_only
-            && let Some(selected) = self.selected_node
-            && edge.source != selected
-            && edge.target != selected
-            && !self.path_edges.contains(&idx)
-        {
-            return false;
-        }
         if let Some(rel_idx) = self.relationship_filter
             && self.graph.relationships.get(rel_idx) != Some(&edge.relationship)
             && !self.path_edges.contains(&idx)
@@ -1964,15 +1635,10 @@ pub fn run(sources: &[String]) -> io::Result<()> {
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut ViewerApp) -> io::Result<()> {
     while !app.should_quit {
         terminal.draw(|frame| draw(frame, app))?;
-        if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(key) => app.handle_key(key),
-                Event::Mouse(mouse) => {
-                    let size = terminal.size()?;
-                    app.handle_mouse(mouse, Rect::new(0, 0, size.width, size.height));
-                }
-                _ => {}
-            }
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            app.handle_key(key);
         }
     }
     Ok(())
@@ -1980,62 +1646,6 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut ViewerApp) -> io::
 
 fn io_other(message: String) -> io::Error {
     io::Error::other(message)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UiAreas {
-    graph: Rect,
-    nodes: Rect,
-    edges: Rect,
-    details: Rect,
-}
-
-fn compute_ui_areas(area: Rect) -> UiAreas {
-    let root = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(12),
-            Constraint::Length(2),
-        ])
-        .split(area);
-
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(root[1]);
-
-    let side = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(32),
-            Constraint::Percentage(28),
-            Constraint::Percentage(40),
-        ])
-        .split(columns[1]);
-
-    UiAreas {
-        graph: columns[0],
-        nodes: side[0],
-        edges: side[1],
-        details: side[2],
-    }
-}
-
-fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
-    column >= area.x
-        && column < area.x.saturating_add(area.width)
-        && row >= area.y
-        && row < area.y.saturating_add(area.height)
-}
-
-fn inner_rect(area: Rect) -> Rect {
-    Rect::new(
-        area.x.saturating_add(1),
-        area.y.saturating_add(1),
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    )
 }
 
 fn draw(frame: &mut Frame, app: &mut ViewerApp) {
@@ -2068,20 +1678,6 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &ViewerApp) {
         .and_then(|idx| app.graph.relationships.get(idx))
         .cloned()
         .unwrap_or_else(|| "all".to_string());
-    let lenses = format!(
-        "{}{}",
-        if app.attack_edges_only { " attack" } else { "" },
-        if app.neighborhood_only {
-            " neighborhood"
-        } else {
-            ""
-        }
-    );
-    let lenses = if lenses.is_empty() {
-        " lenses all".to_string()
-    } else {
-        format!(" lenses{}", lenses)
-    };
 
     let line = Line::from(vec![
         Span::styled(
@@ -2091,14 +1687,13 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
-            "nodes {}  edges {}  users {}  computers {}  groups {}  domains {}  certtpl {}  ",
+            "nodes {}  edges {}  users {}  computers {}  groups {}  domains {}  ",
             app.graph.stats.nodes,
             app.graph.stats.edges,
             app.graph.stats.users,
             app.graph.stats.computers,
             app.graph.stats.groups,
             app.graph.stats.domains,
-            app.graph.stats.cert_templates,
         )),
         Span::styled(
             format!(
@@ -2108,7 +1703,6 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &ViewerApp) {
             Style::default().fg(Color::Yellow),
         ),
         Span::styled(format!("rel {filter}"), Style::default().fg(Color::Cyan)),
-        Span::styled(lenses, Style::default().fg(Color::LightMagenta)),
     ]);
 
     let header = Paragraph::new(vec![line, Line::from(source)]).block(
@@ -2178,24 +1772,6 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                     y2: target.y,
                     color: edge_color(&edge.relationship, app.path_edges.contains(&idx)),
                 });
-                if app.path_edges.contains(&idx)
-                    || app.selected_edge == Some(idx)
-                    || (app.neighborhood_only
-                        && app.selected_node.is_some_and(|selected| {
-                            edge.source == selected || edge.target == selected
-                        }))
-                    || app.zoom >= 1.45
-                {
-                    let (risk, risk_color) = relationship_risk(&edge.relationship);
-                    ctx.print(
-                        (source.x + target.x) / 2.0,
-                        (source.y + target.y) / 2.0,
-                        Span::styled(
-                            format!("{} [{}]", truncate_label(&edge.relationship, 18), risk),
-                            Style::default().fg(risk_color),
-                        ),
-                    );
-                }
             }
 
             for (idx, node) in app.graph.nodes.iter().enumerate() {
@@ -2210,17 +1786,9 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                     coords: &[(point.x, point.y)],
                     color,
                 });
-                ctx.print(
-                    point.x,
-                    point.y,
-                    Span::styled(
-                        node_glyph(&node.kind),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                );
                 if selected || node.high_value || app.zoom >= 0.65 {
                     ctx.print(
-                        point.x + 1.8,
+                        point.x + 1.2,
                         point.y + 0.6,
                         Span::styled(
                             format!(
@@ -2324,7 +1892,6 @@ fn draw_edges(frame: &mut Frame, area: Rect, app: &ViewerApp) {
             } else {
                 " "
             };
-            let (risk, risk_color) = relationship_risk(&edge.relationship);
             ListItem::new(Line::from(vec![
                 Span::styled(marker, Style::default().fg(Color::LightRed)),
                 Span::raw(" "),
@@ -2332,8 +1899,6 @@ fn draw_edges(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                     &edge.relationship,
                     Style::default().fg(edge_color(&edge.relationship, false)),
                 ),
-                Span::raw(" "),
-                Span::styled(format!("[{risk}]"), Style::default().fg(risk_color)),
                 Span::raw("  "),
                 Span::raw(truncate_label(&source.label, 18)),
                 Span::raw(" -> "),
@@ -2425,18 +1990,6 @@ fn node_detail_lines(app: &ViewerApp, node_idx: usize, node: &VisualNode) -> Vec
         Line::from(""),
     ];
 
-    let insights = node_insight_lines(node);
-    if !insights.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Operator notes:",
-            Style::default()
-                .fg(Color::LightMagenta)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.extend(insights);
-        lines.push(Line::from(""));
-    }
-
     if !app.path_edges.is_empty() {
         lines.push(Line::from(Span::styled(
             "Shortest visible path to high-value:",
@@ -2463,10 +2016,9 @@ fn node_detail_lines(app: &ViewerApp, node_idx: usize, node: &VisualNode) -> Vec
     for edge_idx in app.graph.outgoing[node_idx].iter().take(20) {
         let edge = &app.graph.edges[*edge_idx];
         let target = &app.graph.nodes[edge.target];
-        let (risk, _) = relationship_risk(&edge.relationship);
         lines.push(Line::from(format!(
-            "  {} [{}] -> {}",
-            edge.relationship, risk, target.label
+            "  {} -> {}",
+            edge.relationship, target.label
         )));
     }
 
@@ -2480,10 +2032,9 @@ fn node_detail_lines(app: &ViewerApp, node_idx: usize, node: &VisualNode) -> Vec
     for edge_idx in app.graph.incoming[node_idx].iter().take(20) {
         let edge = &app.graph.edges[*edge_idx];
         let source = &app.graph.nodes[edge.source];
-        let (risk, _) = relationship_risk(&edge.relationship);
         lines.push(Line::from(format!(
-            "  {} -> {} [{}]",
-            source.label, edge.relationship, risk
+            "  {} -> {}",
+            source.label, edge.relationship
         )));
     }
 
@@ -2516,95 +2067,9 @@ fn node_detail_lines(app: &ViewerApp, node_idx: usize, node: &VisualNode) -> Vec
     lines
 }
 
-fn node_insight_lines(node: &VisualNode) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    if node.high_value {
-        out.push(Line::from(
-            "  * High-value object: prioritize path review and blast-radius notes.",
-        ));
-    }
-    if node.owned {
-        out.push(Line::from(
-            "  * Owned/controlled: good source for path-to-high-value analysis.",
-        ));
-    }
-    if property_truthy(&node.properties, &["admincount", "AdminCount"]) {
-        out.push(Line::from(
-            "  * adminCount=1: protected-account/adminSDHolder-adjacent object.",
-        ));
-    }
-    if property_present(&node.properties, &["serviceprincipalnames", "spn", "SPNs"]) {
-        out.push(Line::from(
-            "  * SPN-bearing object: Kerberoast/targeted SPN paths may matter.",
-        ));
-    }
-    if property_truthy(
-        &node.properties,
-        &["dontreqpreauth", "DoesNotRequirePreAuth"],
-    ) {
-        out.push(Line::from("  * Pre-auth disabled: AS-REP roast marker."));
-    }
-    if let Some(bad_pwd) = property_value(&node.properties, &["badpwdcount", "badPwdCount"]) {
-        out.push(Line::from(format!(
-            "  * badPwdCount={bad_pwd}: spray planner should treat this account carefully."
-        )));
-    }
-    if property_non_zero(&node.properties, &["lockouttime", "lockoutTime"]) {
-        out.push(Line::from(
-            "  * lockoutTime is set: account may be locked or recently locked.",
-        ));
-    }
-    if property_present(
-        &node.properties,
-        &[
-            "ms-Mcs-AdmPwd",
-            "msLAPS-Password",
-            "msLAPS-EncryptedPassword",
-        ],
-    ) {
-        out.push(Line::from(
-            "  * LAPS material present in properties: check read/decrypt rights and freshness.",
-        ));
-    }
-    out
-}
-
-fn property_value<'a>(properties: &'a BTreeMap<String, String>, keys: &[&str]) -> Option<&'a str> {
-    keys.iter().find_map(|wanted| {
-        properties
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(wanted))
-            .map(|(_, value)| value.as_str())
-    })
-}
-
-fn property_present(properties: &BTreeMap<String, String>, keys: &[&str]) -> bool {
-    property_value(properties, keys).is_some_and(|value| {
-        let trimmed = value.trim();
-        !trimmed.is_empty() && trimmed != "[]" && trimmed != "null"
-    })
-}
-
-fn property_truthy(properties: &BTreeMap<String, String>, keys: &[&str]) -> bool {
-    property_value(properties, keys).is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "y"
-        )
-    })
-}
-
-fn property_non_zero(properties: &BTreeMap<String, String>, keys: &[&str]) -> bool {
-    property_value(properties, keys).is_some_and(|value| {
-        let trimmed = value.trim();
-        !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("never")
-    })
-}
-
 fn edge_detail_lines(app: &ViewerApp, edge_idx: usize, edge: &VisualEdge) -> Vec<Line<'static>> {
     let source = &app.graph.nodes[edge.source];
     let target = &app.graph.nodes[edge.target];
-    let (risk, risk_color) = relationship_risk(&edge.relationship);
     let mut lines = vec![
         Line::from(Span::styled(
             format!("{} edge #{}", edge.relationship, edge_idx),
@@ -2614,14 +2079,6 @@ fn edge_detail_lines(app: &ViewerApp, edge_idx: usize, edge: &VisualEdge) -> Vec
         )),
         Line::from(format!("Source: {} ({})", source.label, source.kind)),
         Line::from(format!("Target: {} ({})", target.label, target.kind)),
-        Line::from(vec![
-            Span::raw("Risk/Lens: "),
-            Span::styled(
-                risk,
-                Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(format!("Impact: {}", relationship_hint(&edge.relationship))),
         Line::from(format!(
             "Traversable: {}",
             VisualGraph::edge_traversable(edge)
@@ -2666,7 +2123,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ViewerApp) {
         format!("SEARCH: {}", app.search_text)
     } else {
         format!(
-            "focus={}  keys: Tab focus | arrows/jkhl move | +/- zoom | mouse click/drag/wheel | / search | r rel | a attack | g neighborhood | c clear | ? help | q quit",
+            "focus={}  keys: Tab focus | arrows/jkhl move | +/- zoom | / search | r rel | v high | o owned | c clear | ? help | q quit",
             app.focus.label()
         )
     };
@@ -2698,19 +2155,12 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("Navigation"),
         Line::from("  Tab / Shift+Tab  switch graph, node, edge, and detail panes"),
         Line::from("  arrows or hjkl    pan graph or move through selected pane"),
-        Line::from("  mouse             click nodes/list rows, drag graph, wheel zoom/scroll"),
         Line::from("  +/-               zoom graph"),
-        Line::from("  0                 center selected node"),
-        Line::from("  Home              reset camera to graph origin"),
         Line::from("  Enter             center selected node and refresh high-value path"),
         Line::from(""),
         Line::from("Analysis"),
         Line::from("  /                 search all node labels, ids, domains, and properties"),
         Line::from("  r                 cycle relationship filter"),
-        Line::from(
-            "  a                 attack-edge lens: hide low-signal membership/container noise",
-        ),
-        Line::from("  g                 neighborhood lens: selected node plus direct edges"),
         Line::from("  v                 show only high-value objects"),
         Line::from("  o                 show only owned/compromised objects"),
         Line::from("  c                 clear filters"),
@@ -2719,10 +2169,6 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("  U user  C computer  G group  D domain  P GPO  O OU  * high-value  ! owned"),
         Line::from(
             "  Bright red edges are the shortest path from the selected node to a high-value target.",
-        ),
-        Line::from("  Edge list tags: critical/high/medium/context/roast-marker/policy-control."),
-        Line::from(
-            "  Details pane adds ACL impact hints, LAPS/gMSA/SPN markers, and lockout telemetry.",
         ),
         Line::from(""),
         Line::from("Press ? to close this help."),
@@ -2774,7 +2220,6 @@ fn node_glyph(kind: &str) -> &'static str {
         "GPO" => "P",
         "OU" => "O",
         "Container" => "N",
-        "CertTemplate" => "T",
         _ => "?",
     }
 }
@@ -2786,7 +2231,6 @@ fn kind_color(kind: &str) -> Color {
         "Group" => Color::Yellow,
         "Domain" => Color::Magenta,
         "GPO" => Color::Cyan,
-        "CertTemplate" => Color::LightMagenta,
         "OU" | "Container" => Color::Gray,
         _ => Color::White,
     }
@@ -2814,165 +2258,14 @@ fn edge_color(relationship: &str, highlighted: bool) -> Color {
     }
     match relationship.to_ascii_lowercase().as_str() {
         "memberof" | "contains" => Color::DarkGray,
-        "adminto"
-        | "genericall"
-        | "dcsync"
-        | "forcechangepassword"
-        | "allextendedrights"
-        | "addallowedtoact" => Color::Red,
-        "genericwrite"
-        | "writedacl"
-        | "writeowner"
-        | "owns"
-        | "writekeycredentiallink"
-        | "writemsdskeycredentiallink"
-        | "addkeycredentiallink"
-        | "writespn"
-        | "writeallowedtodelegateto"
-        | "writeaccountrestrictions"
-        | "writegplink"
-        | "writeusercertificate" => Color::LightRed,
+        "adminto" | "genericall" | "dcsync" | "forcechangepassword" => Color::Red,
+        "genericwrite" | "writedacl" | "writeowner" | "owns" => Color::LightRed,
         "hassession" => Color::Yellow,
-        "canrdp" | "canpsremote" | "executedcom" | "sqladmin" => Color::Cyan,
+        "canrdp" | "canpsremote" | "executedcom" => Color::Cyan,
         "allowedtodelegate" | "allowedtoact" => Color::Blue,
-        "readlapspassword" | "readlapspasswordexpiry" | "readgmsapassword" => Color::Magenta,
-        "addmembers" | "addself" | "writeself" | "createchild" => Color::Yellow,
-        rel if rel.starts_with("writepwd") || rel.starts_with("writelockout") => {
-            Color::LightMagenta
-        }
         "trustedby" => Color::Magenta,
         "gpolink" => Color::LightBlue,
         _ => Color::Gray,
-    }
-}
-
-fn relationship_is_attack_edge(relationship: &str) -> bool {
-    !matches!(
-        relationship.to_ascii_lowercase().as_str(),
-        "memberof" | "contains" | "gpolink" | "hasspn" | "dontreqpreauth"
-    )
-}
-
-fn relationship_risk(relationship: &str) -> (&'static str, Color) {
-    match relationship.to_ascii_lowercase().as_str() {
-        "adminto"
-        | "genericall"
-        | "dcsync"
-        | "forcechangepassword"
-        | "allextendedrights"
-        | "addallowedtoact"
-        | "allowedtoact" => ("critical", Color::Red),
-        "genericwrite"
-        | "writedacl"
-        | "writeowner"
-        | "owns"
-        | "writekeycredentiallink"
-        | "writemsdskeycredentiallink"
-        | "addkeycredentiallink"
-        | "writespn"
-        | "writeallowedtodelegateto"
-        | "allowedtodelegate"
-        | "writeaccountrestrictions"
-        | "writegplink"
-        | "writeusercertificate" => ("high", Color::LightRed),
-        "readlapspassword"
-        | "readlapspasswordexpiry"
-        | "readgmsapassword"
-        | "addmembers"
-        | "addself"
-        | "writeself"
-        | "createchild"
-        | "canrdp"
-        | "canpsremote"
-        | "executedcom"
-        | "sqladmin" => ("medium", Color::Yellow),
-        "memberof" | "contains" | "gpolink" => ("context", Color::DarkGray),
-        "hasspn" | "dontreqpreauth" => ("roast marker", Color::Cyan),
-        rel if rel.starts_with("writepwd") || rel.starts_with("writelockout") => {
-            ("policy control", Color::LightMagenta)
-        }
-        _ => ("review", Color::Gray),
-    }
-}
-
-fn relationship_hint(relationship: &str) -> &'static str {
-    match relationship.to_ascii_lowercase().as_str() {
-        "genericall" => {
-            "Full control over the object: password reset, membership, DACL, ownership."
-        }
-        "genericwrite" => {
-            "Write non-protected attributes: SPN, KeyCredentialLink, scripts, delegation pivots."
-        }
-        "writedacl" => {
-            "Can modify the DACL; common path is granting controlled principal stronger rights."
-        }
-        "writeowner" | "owns" => "Ownership can become DACL control, then stronger object control.",
-        "forcechangepassword" => {
-            "Can reset the target account password without knowing the old password."
-        }
-        "addmembers" => "Can add a controlled principal to the target group.",
-        "addself" | "writeself" => "Validated self-write, often enough to add self to a group.",
-        "allextendedrights" => {
-            "Broad extended rights: may include password reset, replication, LAPS/gMSA reads."
-        }
-        "createchild" => {
-            "Can create child objects in a container/OU; useful for computer/GPO setup paths."
-        }
-        "dcsync" | "getchangesall" => {
-            "Replication-class right: can read directory secrets when combined correctly."
-        }
-        "getchanges" => {
-            "Partial replication right; often needs GetChangesAll for full credential replication."
-        }
-        "readlapspassword" => "Can read legacy or Windows LAPS local admin secret where exposed.",
-        "readlapspasswordexpiry" => {
-            "Windows LAPS encrypted-password path; check decryptability and key access."
-        }
-        "readgmsapassword" => {
-            "Can read gMSA password material and derive service-account credentials."
-        }
-        "allowedtodelegate" => {
-            "Constrained delegation path via S4U when target service and SPNs line up."
-        }
-        "allowedtoact" | "addallowedtoact" => {
-            "RBCD path: abuse resource-based delegation to impersonate to target."
-        }
-        "writeallowedtodelegateto" => "Can alter constrained delegation target SPNs.",
-        "writespn" | "writeserviceprincipalname" => {
-            "Can set SPN for targeted Kerberoasting or service identity abuse."
-        }
-        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => {
-            "Shadow Credentials path: add key material then authenticate with PKINIT."
-        }
-        "writeaccountrestrictions" => {
-            "Can alter auth/account flags such as preauth, delegation, lockout behavior."
-        }
-        "writealtsecurityidentities" => "Certificate mapping path via altSecurityIdentities.",
-        "writegplink" => "Can link a GPO to scope; impact depends on GPO content and inheritance.",
-        "writeusercertificate" | "enrollcertificate" => {
-            "Certificate abuse surface; review template and mapping rules."
-        }
-        "adminto" => "Local admin on target computer.",
-        "hassession" => {
-            "User session on a computer; useful for credential/material access planning."
-        }
-        "canrdp" => "Interactive remote desktop access is available.",
-        "canpsremote" => "PowerShell remoting access is available.",
-        "executedcom" => "DCOM execution path is available.",
-        "sqladmin" => {
-            "SQL administrative path; may lead to command execution or credential material."
-        }
-        rel if rel.starts_with("writepwd") || rel.starts_with("writelockout") => {
-            "Domain policy control: affects spray safety, lockout behavior, and password hygiene."
-        }
-        "hasspn" => "Kerberoast marker: account has SPNs.",
-        "dontreqpreauth" => {
-            "AS-REP roast marker: account does not require Kerberos pre-authentication."
-        }
-        "memberof" => "Group membership edge.",
-        "contains" => "Container/OU/domain hierarchy edge.",
-        "gpolink" => "GPO link edge; review enforced/inheritance details.",
-        _ => "Custom relationship. Inspect raw properties and source collector semantics.",
     }
 }
 
@@ -3046,39 +2339,5 @@ mod tests {
         let start = graph.nodes.iter().position(|node| node.id == "u").unwrap();
         let path = graph.shortest_path_to_high_value(start).unwrap();
         assert_eq!(path.1.len(), 1);
-    }
-
-    #[test]
-    fn maps_new_acl_relationships_and_attack_lens() {
-        assert_eq!(relationship_name("WriteSPN"), "WriteSPN");
-        assert_eq!(
-            relationship_name("Write-KeyCredentialLink"),
-            "WriteKeyCredentialLink"
-        );
-        assert_eq!(relationship_name("AddAllowedToAct"), "AddAllowedToAct");
-        assert_eq!(
-            relationship_name("ReadLapsPasswordExpiry"),
-            "ReadLapsPasswordExpiry"
-        );
-        assert!(relationship_is_attack_edge("WriteSPN"));
-        assert!(!relationship_is_attack_edge("MemberOf"));
-        assert!(relationship_hint("WritePwdComplexity").contains("Domain policy"));
-    }
-
-    #[test]
-    fn cert_templates_are_counted_and_high_value_when_vulnerable() {
-        let graph = build_from(json!({
-            "nodes": [{
-                "id": "ESC1-User@corp.local",
-                "label": "ESC1-User",
-                "type": "CertTemplate",
-                "properties": {"vulnerable": true}
-            }],
-            "edges": []
-        }));
-
-        assert_eq!(graph.stats.cert_templates, 1);
-        assert!(graph.nodes[0].high_value);
-        assert_eq!(node_glyph(&graph.nodes[0].kind), "T");
     }
 }
