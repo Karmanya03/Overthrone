@@ -1539,7 +1539,9 @@ impl ViewerApp {
                     self.focus = Focus::Details;
                 }
             }
-            MouseEventKind::Down(MouseButton::Right) if rect_contains(areas.graph, mouse.column, mouse.row) => {
+            MouseEventKind::Down(MouseButton::Right)
+                if rect_contains(areas.graph, mouse.column, mouse.row) =>
+            {
                 self.focus = Focus::Graph;
                 if let Some(idx) = self.node_at_mouse(mouse.column, mouse.row, areas.graph) {
                     self.selected_node = Some(idx);
