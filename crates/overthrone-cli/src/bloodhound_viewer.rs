@@ -80,7 +80,11 @@ pub fn run(sources: &[String]) -> Result<(), Box<dyn std::error::Error + Send + 
                 continue;
             }
 
-            println!("Loading {} JSON file(s) from directory: {}", json_files.len(), source);
+            println!(
+                "Loading {} JSON file(s) from directory: {}",
+                json_files.len(),
+                source
+            );
 
             for file_path in json_files {
                 let file_str = file_path.to_string_lossy();
@@ -91,7 +95,8 @@ pub fn run(sources: &[String]) -> Result<(), Box<dyn std::error::Error + Send + 
 
                 match merged_graph {
                     None => merged_graph = Some(graph),
-                    Some(ref mut base) => base.merge(graph)
+                    Some(ref mut base) => base
+                        .merge(graph)
                         .map_err(|e| format!("Failed to merge graph from {}: {}", file_str, e))?,
                 }
             }
@@ -104,7 +109,8 @@ pub fn run(sources: &[String]) -> Result<(), Box<dyn std::error::Error + Send + 
 
             match merged_graph {
                 None => merged_graph = Some(graph),
-                Some(ref mut base) => base.merge(graph)
+                Some(ref mut base) => base
+                    .merge(graph)
                     .map_err(|e| format!("Failed to merge graph from {}: {}", source, e))?,
             }
         }

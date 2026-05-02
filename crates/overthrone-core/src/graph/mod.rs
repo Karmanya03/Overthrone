@@ -354,7 +354,9 @@ impl AttackGraph {
         if path_obj.is_dir() {
             // Find all JSON files in the directory
             let mut json_files: Vec<_> = std::fs::read_dir(path_obj)
-                .map_err(|e| OverthroneError::Graph(format!("Failed to read directory {path}: {e}")))?
+                .map_err(|e| {
+                    OverthroneError::Graph(format!("Failed to read directory {path}: {e}"))
+                })?
                 .filter_map(|entry| entry.ok())
                 .map(|entry| entry.path())
                 .filter(|p| p.extension().map(|ext| ext == "json").unwrap_or(false))
@@ -362,9 +364,9 @@ impl AttackGraph {
             json_files.sort();
 
             if json_files.is_empty() {
-                return Err(OverthroneError::Graph(
-                    format!("No JSON files found in directory {path}")
-                ));
+                return Err(OverthroneError::Graph(format!(
+                    "No JSON files found in directory {path}"
+                )));
             }
 
             let mut merged_graph = None;
@@ -405,8 +407,7 @@ impl AttackGraph {
                 existing_idx
             } else {
                 // Add new node
-                let new_idx = self.add_node(other_node.clone());
-                new_idx
+                self.add_node(other_node.clone())
             };
             node_map.insert(other_idx, this_idx);
         }
