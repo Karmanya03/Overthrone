@@ -863,6 +863,9 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
     for source in sources {
         let path = PathBuf::from(source);
+        if !path.exists() {
+            return Err(format!("source file does not exist: {}", path.display()));
+        }
         if path.is_dir() {
             let mut entries = fs::read_dir(&path)
                 .map_err(|e| format!("failed to read directory {}: {e}", path.display()))?
@@ -1377,7 +1380,7 @@ impl ViewerApp {
             .or_else(|| graph.nodes.iter().position(|node| node.high_value))
             .or_else(|| (!graph.nodes.is_empty()).then_some(0));
 
-        let status = if app.graph.nodes.is_empty() {
+        let status = if graph.nodes.is_empty() {
             "Warning: 0 nodes loaded -- check that your JSON files are valid BloodHound/Overthrone exports. Press ? for help, q to quit.".to_string()
         } else {
             "Loaded graph. Press ? for keys, / to search, q to quit.".to_string()
@@ -2072,7 +2075,24 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &ViewerApp) {
     let source = if app.graph.sources.len() == 1 {
         app.graph.sources[0].clone()
     } else {
-        format!("{} JSON files", app.graph.sources.len())
+        let max_display = 2;
+        let mut displayed = Vec::new();
+        for (i, src) in app.graph.sources.iter().enumerate() {
+            if i >= max_display {
+                break;
+            }
+            let filename = Path::new(src)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| src.clone());
+            displayed.push(filename);
+        }
+        let remaining = app.graph.sources.len() - displayed.len();
+        let mut result = displayed.join(", ");
+        if remaining > 0 {
+            result.push_str(&format!(" ... (and {} more)", remaining));
+        }
+        result
     };
     let filter = app
         .relationship_filter

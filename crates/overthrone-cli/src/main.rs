@@ -3105,7 +3105,23 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                     ));
                     return 1;
                 }
+                // If using default fallback, warn the user
+                if graph_file.is_none() {
+                    banner::print_info(&format!("Using default graph file: {}", resolved_path));
+                }
                 sources.push(resolved_path.to_string());
+            }
+
+            // Validate that all source files exist before launching the TUI
+            for source in &sources {
+                if !std::path::Path::new(source).exists() {
+                    banner::print_fail(&format!("File not found: {}", source));
+                    banner::print_info(
+                        "Use --input or --file to specify a valid BloodHound JSON file.",
+                    );
+                    return 1;
+                }
+            }
             }
 
             match tokio::task::spawn_blocking(move || bloodhound_viewer::run(&sources)).await {
