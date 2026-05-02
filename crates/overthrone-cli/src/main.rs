@@ -3122,7 +3122,6 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                     return 1;
                 }
             }
-            }
 
             match tokio::task::spawn_blocking(move || bloodhound_viewer::run(&sources)).await {
                 Ok(Ok(())) => {}

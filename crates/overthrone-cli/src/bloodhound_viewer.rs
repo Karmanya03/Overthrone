@@ -881,10 +881,7 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
             entries.sort();
             paths.extend(entries);
         } else if !path.exists() {
-            return Err(format!(
-                "source file does not exist: {}",
-                path.display()
-            ));
+            return Err(format!("source file does not exist: {}", path.display()));
         } else {
             paths.push(path);
         }
