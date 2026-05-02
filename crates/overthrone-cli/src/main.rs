@@ -3095,7 +3095,17 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
         GraphAction::View { input } => {
             let mut sources = input;
             if sources.is_empty() {
-                sources.push(graph_file.unwrap_or(default_path).to_string());
+                let resolved_path = graph_file.unwrap_or(default_path);
+                let path_obj = std::path::Path::new(resolved_path);
+
+                if !path_obj.exists() {
+                    banner::print_fail(&format!(
+                        "Graph file not found: {}\n\nUsage:\n  overthrone graph view --input <FILE or DIR>\n  overthrone graph --file <FILE> view",
+                        resolved_path
+                    ));
+                    return 1;
+                }
+                sources.push(resolved_path.to_string());
             }
 
             match tokio::task::spawn_blocking(move || bloodhound_viewer::run(&sources)).await {

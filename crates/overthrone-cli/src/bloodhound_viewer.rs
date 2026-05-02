@@ -877,6 +877,11 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
                 .collect::<Vec<_>>();
             entries.sort();
             paths.extend(entries);
+        } else if !path.exists() {
+            return Err(format!(
+                "source file does not exist: {}",
+                path.display()
+            ));
         } else {
             paths.push(path);
         }
@@ -1372,6 +1377,12 @@ impl ViewerApp {
             .or_else(|| graph.nodes.iter().position(|node| node.high_value))
             .or_else(|| (!graph.nodes.is_empty()).then_some(0));
 
+        let status = if app.graph.nodes.is_empty() {
+            "Warning: 0 nodes loaded -- check that your JSON files are valid BloodHound/Overthrone exports. Press ? for help, q to quit.".to_string()
+        } else {
+            "Loaded graph. Press ? for keys, / to search, q to quit.".to_string()
+        };
+
         let mut app = Self {
             graph,
             layout,
@@ -1393,7 +1404,7 @@ impl ViewerApp {
             last_drag: None,
             path_nodes: Vec::new(),
             path_edges: Vec::new(),
-            status: "Loaded graph. Press ? for keys, / to search, q to quit.".to_string(),
+            status,
             should_quit: false,
         };
         app.center_on_selection();
