@@ -78,7 +78,6 @@ engagement.json
 *.system
 *.security
 *.dmp
-*secretsdump*
 *hashdump*
 *.kirbi
 *.ccache
