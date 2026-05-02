@@ -8,8 +8,8 @@ description = "Autonomous attack orchestration — goal-driven planning, playboo
 
 [dependencies]
 overthrone-core   = { version = "0.1.4", path = "../overthrone-core" }
-overthrone-hunter = { version = "0.1.4", path = "../overthrone-hunter" }
-overthrone-crawler = { version = "0.1.4", path = "../overthrone-crawler" }
+overthrone-hunter = { version = "0.1.41", path = "../overthrone-hunter" }
+overthrone-crawler = { version = "0.1.41", path = "../overthrone-crawler" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

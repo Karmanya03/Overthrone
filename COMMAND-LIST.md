@@ -331,6 +331,10 @@ Build, query, and export the attack relationship graph. BloodHound vibes, zero N
 # Build the graph from enumeration data
 ovt graph build -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
+# Launch interactive TUI with live attack graph visualization
+ovt graph view --file attack_graph.json
+ovt graph view -i ./bloodhound-json/
+
 # Find shortest path between two nodes
 ovt graph path --from jsmith --to "Domain Admins"
 
@@ -853,3 +857,4 @@ ovt doctor                                              # Health check
 ovt report -o report.pdf --format pdf                   # Generate report
 ovt tui --domain DOMAIN                                 # Launch TUI
 ```
+
