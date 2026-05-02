@@ -1539,18 +1539,16 @@ impl ViewerApp {
                     self.focus = Focus::Details;
                 }
             }
-            MouseEventKind::Down(MouseButton::Right) => {
-                if rect_contains(areas.graph, mouse.column, mouse.row) {
-                    self.focus = Focus::Graph;
-                    if let Some(idx) = self.node_at_mouse(mouse.column, mouse.row, areas.graph) {
-                        self.selected_node = Some(idx);
-                        self.center_on_selection();
-                        self.refresh_path();
-                        self.status = format!(
-                            "Centered {} and refreshed high-value path.",
-                            self.graph.nodes[idx].label
-                        );
-                    }
+            MouseEventKind::Down(MouseButton::Right) if rect_contains(areas.graph, mouse.column, mouse.row) => {
+                self.focus = Focus::Graph;
+                if let Some(idx) = self.node_at_mouse(mouse.column, mouse.row, areas.graph) {
+                    self.selected_node = Some(idx);
+                    self.center_on_selection();
+                    self.refresh_path();
+                    self.status = format!(
+                        "Centered {} and refreshed high-value path.",
+                        self.graph.nodes[idx].label
+                    );
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
