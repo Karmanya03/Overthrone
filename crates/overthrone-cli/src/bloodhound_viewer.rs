@@ -2206,24 +2206,6 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                     y2: target.y,
                     color: edge_color(&edge.relationship, app.path_edges.contains(&idx)),
                 });
-                if app.path_edges.contains(&idx)
-                    || app.selected_edge == Some(idx)
-                    || (app.neighborhood_only
-                        && app.selected_node.is_some_and(|selected| {
-                            edge.source == selected || edge.target == selected
-                        }))
-                    || app.zoom >= 1.45
-                {
-                    let (risk, risk_color) = relationship_risk(&edge.relationship);
-                    ctx.print(
-                        (source.x + target.x) / 2.0,
-                        (source.y + target.y) / 2.0,
-                        Span::styled(
-                            format!("{} [{}]", truncate_label(&edge.relationship, 18), risk),
-                            Style::default().fg(risk_color),
-                        ),
-                    );
-                }
             }
 
             for (idx, node) in app.graph.nodes.iter().enumerate() {
