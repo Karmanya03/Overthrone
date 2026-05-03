@@ -13,6 +13,7 @@
 //!    Custom/MemberOf/Contains arms now return `None`
 //!  • `let Some(x) = ... else { ... }` let-else replaced with explicit `match` to
 //!    avoid indentation-mismatch false positives from rust-analyzer
+//!  • Severity-coloured ACL findings summary in the graph overview panel
 //!
 //! New features:
 //!  • `render_acl_findings` — scrollable ACL findings panel
@@ -22,13 +23,15 @@
 //!    `app.acl_scroll`, `app.path_scroll`
 //!  • `node_color()` helper covering GPO / OU / CertTemplate node types
 //!  • `edge_color_by_name()` for statistics view
-//!  • Severity-coloured ACL findings summary in the graph overview panel
+//!  • Visual graph canvas with clean node/edge rendering
+//!  • Node type visibility toggles (users/computers/groups/etc.)
 
 use crate::tui::app::App;
-use overthrone_core::graph::{EdgeRef, EdgeType, NodeType};
+use overthrone_core::graph::{EdgeRef, EdgeType, NodeId, NodeType};
 use ratatui::prelude::*;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use std::collections::HashMap;
 
 // ─── Colour helpers ───────────────────────────────────────────────────────────
 
@@ -100,7 +103,7 @@ pub fn node_color(node_type: &NodeType) -> Color {
         NodeType::Computer => Color::Blue,
         NodeType::Group => Color::Yellow,
         NodeType::Domain => Color::Magenta,
-        NodeType::Gpo => Color::Blue,
+        NodeType::Gpo => Color::Cyan,
         NodeType::Ou => Color::LightBlue,
         NodeType::CertTemplate => Color::LightMagenta,
     }
@@ -199,11 +202,37 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
 /// deadlock when the background collector thread contends the same lock.
 pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
     // Collect stats under the lock, then drop it immediately.
-    let (stats, hv_targets) = {
+    let (stats, hv_targets, _nodes, _edges) = {
         let graph = app.graph.lock().unwrap();
         let stats = graph.stats();
         let hv = graph.high_value_targets(8);
-        (stats, hv)
+        // Clone node positions for rendering
+        let layout_snapshot: HashMap<NodeId, (f64, f64)> = app.layout.clone();
+        // Collect visible nodes and edges
+        let nodes: Vec<_> = graph
+            .nodes()
+            .filter(|(idx, node)| is_node_visible(node, *idx, &layout_snapshot, app))
+            .map(|(idx, node)| (idx, node.clone()))
+            .collect();
+        let edges: Vec<_> = graph
+            .edges()
+            .filter(|edge| {
+                let source_idx = edge.source();
+                let target_idx = edge.target();
+                let source_visible = nodes.iter().any(|(idx, _)| *idx == source_idx);
+                let target_visible = nodes.iter().any(|(idx, _)| *idx == target_idx);
+                source_visible && target_visible
+            })
+            .map(|edge| {
+                (
+                    edge.source(),
+                    edge.target(),
+                    edge.weight().clone(),
+                    edge.id(),
+                )
+            })
+            .collect();
+        (stats, hv, nodes, edges)
     };
 
     let scroll = app.graph_scroll.unwrap_or(0);
@@ -218,7 +247,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
     )]));
     lines.push(Line::from(""));
 
-    // Node counts
+    // Node Counts
     lines.push(Line::from(Span::styled(
         " Node Counts",
         Style::default()
@@ -270,6 +299,71 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
             format!(" {}", stats.total_edges),
             Style::default().fg(Color::White),
         ),
+    ]));
+    lines.push(Line::from(""));
+
+    // Visibility toggles
+    lines.push(Line::from(Span::styled(
+        " Visibility Toggles",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::UNDERLINED),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  [u] ",
+            Style::default().fg(if app.show_users {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(if app.show_users {
+            "Users    "
+        } else {
+            "Users (hidden) "
+        }),
+        Span::styled(
+            "  [c] ",
+            Style::default().fg(if app.show_computers {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(if app.show_computers {
+            "Computers"
+        } else {
+            "Computers(hidden)"
+        }),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  [g] ",
+            Style::default().fg(if app.show_groups {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(if app.show_groups {
+            "Groups   "
+        } else {
+            "Groups (hidden) "
+        }),
+        Span::styled(
+            "  [d] ",
+            Style::default().fg(if app.show_domains {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(if app.show_domains {
+            "Domains  "
+        } else {
+            "Domains (hidden) "
+        }),
     ]));
     lines.push(Line::from(""));
 
@@ -373,6 +467,40 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
         .wrap(Wrap { trim: false });
 
     f.render_widget(widget, area);
+}
+
+/// Check if a node should be visible based on current filters
+fn is_node_visible(
+    node: &overthrone_core::graph::AdNode,
+    _idx: NodeId,
+    _layout: &HashMap<NodeId, (f64, f64)>,
+    app: &App,
+) -> bool {
+    // Check node type visibility
+    match node.node_type {
+        NodeType::User if !app.show_users => return false,
+        NodeType::Computer if !app.show_computers => return false,
+        NodeType::Group if !app.show_groups => return false,
+        NodeType::Domain if !app.show_domains => return false,
+        NodeType::Gpo if !app.show_gpos => return false,
+        NodeType::Ou if !app.show_ous => return false,
+        _ => {}
+    }
+    // Check search filter
+    if !app.filter_text.is_empty() {
+        let needle = app.filter_text.to_ascii_lowercase();
+        if !node.name.to_ascii_lowercase().contains(&needle)
+            && !node.domain.to_ascii_lowercase().contains(&needle)
+            && !node
+                .node_type
+                .to_string()
+                .to_ascii_lowercase()
+                .contains(&needle)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 // ─── Node detail panel ────────────────────────────────────────────────────────
@@ -580,6 +708,76 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     Style::default().fg(color).add_modifier(modifier),
                 ),
             ]));
+        }
+    }
+
+    // ── MemberOf details (clear grouping) ──────────────────────────────────────
+    let member_of_out: Vec<_> = outbound
+        .iter()
+        .filter(|e| *e.weight() == EdgeType::MemberOf)
+        .collect();
+    let member_of_in: Vec<_> = inbound
+        .iter()
+        .filter(|e| *e.weight() == EdgeType::MemberOf)
+        .collect();
+
+    if !member_of_out.is_empty() || !member_of_in.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  MemberOf Relationships",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::UNDERLINED),
+        )));
+
+        if !member_of_out.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "    Member Of:",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            for edge in &member_of_out {
+                if let Some(target) = graph.get_node(edge.target()) {
+                    lines.push(Line::from(vec![
+                        Span::raw("      → "),
+                        Span::styled(
+                            target.name.clone(),
+                            Style::default().fg(node_color(&target.node_type)),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("[{:?}]", target.node_type),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
+        }
+
+        if !member_of_in.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "    Members:",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            for edge in &member_of_in {
+                if let Some(src) = graph.get_node(edge.source()) {
+                    lines.push(Line::from(vec![
+                        Span::raw("      ← "),
+                        Span::styled(
+                            src.name.clone(),
+                            Style::default().fg(node_color(&src.node_type)),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("[{:?}]", src.node_type),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
         }
     }
 

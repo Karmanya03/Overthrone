@@ -31,6 +31,13 @@ pub struct App {
     pub current_path: Option<overthrone_core::graph::AttackPath>,
     #[allow(dead_code)]
     pub acl_findings: Option<Vec<AclFinding>>,
+    // Visibility toggles for graph nodes
+    pub show_users: bool,
+    pub show_computers: bool,
+    pub show_groups: bool,
+    pub show_domains: bool,
+    pub show_gpos: bool,
+    pub show_ous: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -114,6 +121,13 @@ impl App {
             detail_scroll: None,
             current_path: None,
             acl_findings: None,
+            // Default: show all node types
+            show_users: true,
+            show_computers: true,
+            show_groups: true,
+            show_domains: true,
+            show_gpos: true,
+            show_ous: true,
         }
     }
 

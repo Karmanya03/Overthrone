@@ -85,6 +85,16 @@ impl EventLoop {
                 // Select node under cursor (handled by graph_view)
             }
 
+            // Graph visibility toggles
+            KeyCode::Char('u') | KeyCode::Char('U') => app.show_users = !app.show_users,
+            KeyCode::Char('c') | KeyCode::Char('C') => app.show_computers = !app.show_computers,
+            KeyCode::Char('g') | KeyCode::Char('G') => app.show_groups = !app.show_groups,
+            KeyCode::Char('d') | KeyCode::Char('D') => app.show_domains = !app.show_domains,
+            KeyCode::Char('p') | KeyCode::Char('P') => app.show_gpos = !app.show_gpos,
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                app.show_ous = !app.show_ous;
+            }
+
             _ => {}
         }
     }

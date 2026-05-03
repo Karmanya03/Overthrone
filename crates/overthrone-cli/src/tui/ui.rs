@@ -40,7 +40,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(format!(
-                    " 👑 OVERTHRONE — {} nodes | {} edges | {} paths ",
+                    " 👑 OVERTHRONE — {} nodes | {} edges | {} paths | vis: u/c/g/d/p/o ",
                     app.stats.total_nodes, app.stats.edges, app.stats.attack_paths
                 ))
                 .borders(Borders::ALL)
@@ -458,7 +458,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" reset view"),
+        Span::raw(" reset view  "),
         // Filter indicator
         if app.filter_active {
             Span::styled(
@@ -468,6 +468,43 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         } else {
             Span::raw("")
         },
+        // Visibility toggle indicators
+        Span::raw("  |  "),
+        Span::styled(
+            format!("u:{}", if app.show_users { "✓" } else { "✗" }),
+            Style::default().fg(if app.show_users {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("c:{}", if app.show_computers { "✓" } else { "✗" }),
+            Style::default().fg(if app.show_computers {
+                Color::Blue
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("g:{}", if app.show_groups { "✓" } else { "✗" }),
+            Style::default().fg(if app.show_groups {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("d:{}", if app.show_domains { "✓" } else { "✗" }),
+            Style::default().fg(if app.show_domains {
+                Color::Magenta
+            } else {
+                Color::DarkGray
+            }),
+        ),
     ];
 
     let status_bar =
