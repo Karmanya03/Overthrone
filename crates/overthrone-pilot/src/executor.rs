@@ -2302,10 +2302,20 @@ async fn exec_password_spray(
     } else {
         password.to_string()
     };
+    if !state.spray_guard_allows_attempts() {
+        let msg = format!("Spray skipped: {}", state.spray_risk_summary());
+        return StepResult {
+            success: true,
+            output: msg,
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        };
+    }
+
     let safe_users: HashSet<String> = state.safe_spray_candidates().into_iter().collect();
     let target_users: Vec<String> = users
         .iter()
-        .filter(|user| safe_users.is_empty() || safe_users.contains(*user))
+        .filter(|user| safe_users.contains(*user))
         .cloned()
         .collect();
     if target_users.is_empty() {

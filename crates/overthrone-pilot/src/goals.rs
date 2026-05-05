@@ -521,6 +521,11 @@ impl EngagementState {
             .collect()
     }
 
+    pub fn spray_guard_allows_attempts(&self) -> bool {
+        matches!(self.lockout_threshold(), Some(threshold) if threshold > 1)
+            && !self.safe_spray_candidates().is_empty()
+    }
+
     pub fn spray_risk_summary(&self) -> String {
         let threshold = self.lockout_threshold();
         let safe = self
@@ -533,9 +538,7 @@ impl EngagementState {
             Some(threshold) => {
                 format!("{safe} safe users, {risky} skipped near/at lockout, threshold={threshold}")
             }
-            None => {
-                format!("{safe} safe users, {risky} skipped locked/disabled, threshold=unknown")
-            }
+            None => "spray disabled until password/lockout policy is known".to_string(),
         }
     }
 

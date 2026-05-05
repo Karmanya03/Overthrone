@@ -502,6 +502,7 @@ impl Planner {
         if !state.users.is_empty()
             && state.credentials.len() <= 1
             && !failed_actions.contains(&"password_spray".to_string())
+            && state.spray_guard_allows_attempts()
             && !self.stealth
         // spraying is noisy, skip in stealth mode
         {

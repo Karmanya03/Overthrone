@@ -112,26 +112,26 @@ const EDGE_KEYS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone)]
-struct VisualNode {
-    id: String,
-    label: String,
-    kind: String,
-    domain: Option<String>,
-    distinguished_name: Option<String>,
-    enabled: Option<bool>,
-    high_value: bool,
-    owned: bool,
-    properties: BTreeMap<String, String>,
-    raw: Value,
+pub(crate) struct VisualNode {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) kind: String,
+    pub(crate) domain: Option<String>,
+    pub(crate) distinguished_name: Option<String>,
+    pub(crate) enabled: Option<bool>,
+    pub(crate) high_value: bool,
+    pub(crate) owned: bool,
+    pub(crate) properties: BTreeMap<String, String>,
+    pub(crate) raw: Value,
 }
 
 #[derive(Debug, Clone)]
-struct VisualEdge {
-    source: usize,
-    target: usize,
-    relationship: String,
-    properties: BTreeMap<String, String>,
-    raw: Value,
+pub(crate) struct VisualEdge {
+    pub(crate) source: usize,
+    pub(crate) target: usize,
+    pub(crate) relationship: String,
+    pub(crate) properties: BTreeMap<String, String>,
+    pub(crate) raw: Value,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -141,31 +141,31 @@ struct Point {
 }
 
 #[derive(Debug, Clone, Default)]
-struct GraphStats {
-    nodes: usize,
-    edges: usize,
-    users: usize,
-    computers: usize,
-    groups: usize,
-    domains: usize,
-    cert_templates: usize,
-    high_value: usize,
-    owned: usize,
+pub(crate) struct GraphStats {
+    pub(crate) nodes: usize,
+    pub(crate) edges: usize,
+    pub(crate) users: usize,
+    pub(crate) computers: usize,
+    pub(crate) groups: usize,
+    pub(crate) domains: usize,
+    pub(crate) cert_templates: usize,
+    pub(crate) high_value: usize,
+    pub(crate) owned: usize,
 }
 
 #[derive(Debug, Clone)]
-struct VisualGraph {
-    sources: Vec<String>,
-    nodes: Vec<VisualNode>,
-    edges: Vec<VisualEdge>,
-    outgoing: Vec<Vec<usize>>,
-    incoming: Vec<Vec<usize>>,
-    relationships: Vec<String>,
-    stats: GraphStats,
+pub(crate) struct VisualGraph {
+    pub(crate) sources: Vec<String>,
+    pub(crate) nodes: Vec<VisualNode>,
+    pub(crate) edges: Vec<VisualEdge>,
+    pub(crate) outgoing: Vec<Vec<usize>>,
+    pub(crate) incoming: Vec<Vec<usize>>,
+    pub(crate) relationships: Vec<String>,
+    pub(crate) stats: GraphStats,
 }
 
 impl VisualGraph {
-    fn from_sources(sources: &[String]) -> Result<Self, String> {
+    pub(crate) fn from_sources(sources: &[String]) -> Result<Self, String> {
         let expanded = expand_sources(sources)?;
         if expanded.is_empty() {
             return Err("no JSON files matched the provided input".to_string());
@@ -183,18 +183,21 @@ impl VisualGraph {
         builder.finish()
     }
 
-    fn node_degree(&self, idx: usize) -> usize {
+    pub(crate) fn node_degree(&self, idx: usize) -> usize {
         self.outgoing.get(idx).map_or(0, Vec::len) + self.incoming.get(idx).map_or(0, Vec::len)
     }
 
-    fn edge_traversable(edge: &VisualEdge) -> bool {
+    pub(crate) fn edge_traversable(edge: &VisualEdge) -> bool {
         !matches!(
             edge.relationship.to_ascii_lowercase().as_str(),
             "hasspn" | "dontreqpreauth" | "spntargets"
         )
     }
 
-    fn shortest_path_to_high_value(&self, start: usize) -> Option<(Vec<usize>, Vec<usize>)> {
+    pub(crate) fn shortest_path_to_high_value(
+        &self,
+        start: usize,
+    ) -> Option<(Vec<usize>, Vec<usize>)> {
         if start >= self.nodes.len() {
             return None;
         }
@@ -1196,7 +1199,7 @@ fn truncate_owned(mut s: String, max: usize) -> String {
     s
 }
 
-fn truncate_label(s: &str, max: usize) -> String {
+pub(crate) fn truncate_label(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
@@ -1225,15 +1228,29 @@ fn compute_layout(graph: &VisualGraph) -> Vec<Point> {
         *totals.entry(node.kind.as_str()).or_default() += 1;
     }
 
+    let spread = ((n as f64).sqrt() / 3.0).clamp(1.15, 7.5);
     let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut points = Vec::with_capacity(n);
     for node in &graph.nodes {
         let total = *totals.get(node.kind.as_str()).unwrap_or(&n).max(&1);
         let idx = seen.entry(node.kind.as_str()).or_default();
         let base_angle = (*idx as f64 / total as f64) * TAU;
-        let jitter = (stable_hash(&node.id) % 1000) as f64 / 1000.0 * 0.22;
-        let radius =
-            kind_radius(&node.kind) + ((stable_hash(&node.label) % 100) as f64 / 100.0) * 12.0;
+        let jitter = (stable_hash(&node.id) % 1000) as f64 / 1000.0 * 0.30;
+        let domain_lane = node
+            .domain
+            .as_ref()
+            .map(|domain| (stable_hash(domain) % 17) as f64 - 8.0)
+            .unwrap_or(0.0);
+        let ownership_bias = if node.owned {
+            -10.0
+        } else if node.high_value {
+            -6.0
+        } else {
+            0.0
+        };
+        let radius = (kind_radius(&node.kind) + ownership_bias) * spread
+            + domain_lane * 2.4
+            + ((stable_hash(&node.label) % 100) as f64 / 100.0) * 18.0;
         points.push(Point {
             x: (base_angle + jitter).cos() * radius,
             y: (base_angle + jitter).sin() * radius,
@@ -1241,12 +1258,12 @@ fn compute_layout(graph: &VisualGraph) -> Vec<Point> {
         *idx += 1;
     }
 
-    let iterations = if n <= 150 {
-        180
-    } else if n <= 700 {
-        90
+    let iterations = if n <= 180 {
+        220
+    } else if n <= 800 {
+        120
     } else {
-        35
+        55
     };
 
     for iter in 0..iterations {
@@ -1261,11 +1278,11 @@ fn compute_layout(graph: &VisualGraph) -> Vec<Point> {
             let dy = points[target].y - points[source].y;
             let dist = (dx * dx + dy * dy).sqrt().max(0.1);
             let desired = if graph.nodes[source].kind == graph.nodes[target].kind {
-                18.0
+                34.0 * spread.sqrt()
             } else {
-                26.0
+                48.0 * spread.sqrt()
             };
-            let force = (dist - desired) * 0.0028 * alpha;
+            let force = (dist - desired) * 0.0038 * alpha;
             let fx = dx / dist * force;
             let fy = dy / dist * force;
             points[source].x += fx;
@@ -1274,16 +1291,23 @@ fn compute_layout(graph: &VisualGraph) -> Vec<Point> {
             points[target].y -= fy;
         }
 
-        if n <= 450 && iter % 3 == 0 {
+        let repulsion_step = if n <= 250 {
+            1
+        } else if n <= 800 {
+            2
+        } else {
+            4
+        };
+        if iter % repulsion_step == 0 {
             for i in 0..n {
                 for j in (i + 1)..n {
                     let dx = points[j].x - points[i].x;
                     let dy = points[j].y - points[i].y;
                     let dist2 = (dx * dx + dy * dy).max(0.1);
-                    if dist2 > 900.0 {
+                    if dist2 > 1450.0 * spread {
                         continue;
                     }
-                    let force = 2.2 / dist2 * alpha;
+                    let force = (14.0 / dist2) * alpha * spread.sqrt();
                     points[i].x -= dx * force;
                     points[i].y -= dy * force;
                     points[j].x += dx * force;
@@ -1938,7 +1962,7 @@ impl ViewerApp {
     }
 }
 
-fn wrap_index(pos: usize, delta: isize, len: usize) -> usize {
+pub(crate) fn wrap_index(pos: usize, delta: isize, len: usize) -> usize {
     if len == 0 {
         return 0;
     }
@@ -1989,7 +2013,7 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut ViewerApp) -> io::
     Ok(())
 }
 
-fn io_other(message: String) -> io::Error {
+pub(crate) fn io_other(message: String) -> io::Error {
     io::Error::other(message)
 }
 
@@ -2228,20 +2252,6 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                 );
-                if selected || node.high_value || app.zoom >= 0.65 {
-                    ctx.print(
-                        point.x + 1.8,
-                        point.y + 0.6,
-                        Span::styled(
-                            format!(
-                                "{} {}",
-                                node_glyph(&node.kind),
-                                truncate_label(&node.label, 18)
-                            ),
-                            Style::default().fg(color),
-                        ),
-                    );
-                }
             }
         });
 
@@ -2526,7 +2536,7 @@ fn node_detail_lines(app: &ViewerApp, node_idx: usize, node: &VisualNode) -> Vec
     lines
 }
 
-fn node_insight_lines(node: &VisualNode) -> Vec<Line<'static>> {
+pub(crate) fn node_insight_lines(node: &VisualNode) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     if node.high_value {
         out.push(Line::from(
@@ -2728,6 +2738,9 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("Legend"),
         Line::from("  U user  C computer  G group  D domain  P GPO  O OU  * high-value  ! owned"),
         Line::from(
+            "  The canvas stays label-free; object names live in the node and detail panes.",
+        ),
+        Line::from(
             "  Bright red edges are the shortest path from the selected node to a high-value target.",
         ),
         Line::from("  Edge list tags: critical/high/medium/context/roast-marker/policy-control."),
@@ -2775,7 +2788,7 @@ fn focus_border(active: bool) -> Style {
     }
 }
 
-fn node_glyph(kind: &str) -> &'static str {
+pub(crate) fn node_glyph(kind: &str) -> &'static str {
     match kind {
         "User" => "U",
         "Computer" => "C",
@@ -2789,7 +2802,7 @@ fn node_glyph(kind: &str) -> &'static str {
     }
 }
 
-fn kind_color(kind: &str) -> Color {
+pub(crate) fn kind_color(kind: &str) -> Color {
     match kind {
         "User" => Color::Green,
         "Computer" => Color::Blue,
@@ -2818,7 +2831,7 @@ fn node_color(node: &VisualNode, selected: bool, on_path: bool) -> Color {
     kind_color(&node.kind)
 }
 
-fn edge_color(relationship: &str, highlighted: bool) -> Color {
+pub(crate) fn edge_color(relationship: &str, highlighted: bool) -> Color {
     if highlighted {
         return Color::LightRed;
     }
@@ -2856,14 +2869,14 @@ fn edge_color(relationship: &str, highlighted: bool) -> Color {
     }
 }
 
-fn relationship_is_attack_edge(relationship: &str) -> bool {
+pub(crate) fn relationship_is_attack_edge(relationship: &str) -> bool {
     !matches!(
         relationship.to_ascii_lowercase().as_str(),
         "memberof" | "contains" | "gpolink" | "hasspn" | "dontreqpreauth"
     )
 }
 
-fn relationship_risk(relationship: &str) -> (&'static str, Color) {
+pub(crate) fn relationship_risk(relationship: &str) -> (&'static str, Color) {
     match relationship.to_ascii_lowercase().as_str() {
         "adminto"
         | "genericall"
@@ -2905,7 +2918,7 @@ fn relationship_risk(relationship: &str) -> (&'static str, Color) {
     }
 }
 
-fn relationship_hint(relationship: &str) -> &'static str {
+pub(crate) fn relationship_hint(relationship: &str) -> &'static str {
     match relationship.to_ascii_lowercase().as_str() {
         "genericall" => {
             "Full control over the object: password reset, membership, DACL, ownership."

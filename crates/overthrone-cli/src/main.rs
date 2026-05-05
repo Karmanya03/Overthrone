@@ -9,6 +9,7 @@ mod commands_impl;
 mod interactive_shell;
 mod ovt_config;
 mod session_store;
+mod tree_viewer;
 mod tui;
 
 use auth::{AuthMethod, Credentials};
@@ -583,6 +584,12 @@ enum ForgeAction {
 
 #[derive(Clone, clap::ValueEnum)]
 enum EnumTarget {
+    /// No-credential AD service triage plus anonymous LDAP RootDSE probe
+    Pre,
+    /// Anonymous LDAP RootDSE probe without username, password, or domain
+    Anonymous,
+    /// Null-session RID cycling through MS-SAMR where the target permits it
+    NullSession,
     Users,
     Computers,
     Groups,
@@ -681,6 +688,13 @@ enum GraphAction {
     /// Launch the local Rust BloodHound-style graph visualizer.
     #[command(alias = "visual", alias = "ui", alias = "viz")]
     View {
+        /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
+        #[arg(short = 'i', long = "input")]
+        input: Vec<String>,
+    },
+    /// Launch the local Rust BloodHound-style interactive tree explorer.
+    #[command(alias = "hierarchy", alias = "explore")]
+    Tree {
         /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
@@ -2267,6 +2281,13 @@ async fn cmd_enum(
     _include_disabled: bool,
 ) -> i32 {
     banner::print_module_banner("ENUMERATION");
+    if matches!(
+        target,
+        EnumTarget::Pre | EnumTarget::Anonymous | EnumTarget::NullSession
+    ) {
+        return cmd_pre_enum(cli, target).await;
+    }
+
     let creds = match require_creds(cli) {
         Ok(c) => c,
         Err(e) => return e,
@@ -2282,6 +2303,7 @@ async fn cmd_enum(
     };
 
     match target {
+        EnumTarget::Pre | EnumTarget::Anonymous | EnumTarget::NullSession => unreachable!(),
         EnumTarget::Users => println!("{}", "Enumerating users...".bright_black()),
         EnumTarget::Computers => println!("{}", "Enumerating computers...".bright_black()),
         EnumTarget::Groups => println!("{}", "Enumerating groups...".bright_black()),
@@ -2312,8 +2334,178 @@ async fn cmd_enum(
     }
 }
 
+async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    match target {
+        EnumTarget::Pre => {
+            println!(
+                "{}",
+                "Running no-credential AD service triage...".bright_black()
+            );
+            let mut ldap_open = false;
+            match overthrone_core::scan::quick_scan(&dc).await {
+                Ok(mut results) => {
+                    results.sort_by_key(|result| result.port);
+                    for result in &results {
+                        let status = if result.open {
+                            ldap_open |= result.port == 389;
+                            "open".green()
+                        } else {
+                            "closed".bright_black()
+                        };
+                        println!(
+                            "  {} {:>5}/tcp {:<7} {}",
+                            "▸".bright_black(),
+                            result.port,
+                            status,
+                            ad_port_label(result.port)
+                        );
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Pre-enum port triage failed: {}", e));
+                    return 1;
+                }
+            }
+
+            if ldap_open {
+                let _ = anonymous_ldap_probe(&dc).await;
+            } else {
+                banner::print_info("LDAP/389 is not open; skipping anonymous RootDSE probe.");
+            }
+
+            banner::print_success("Pre-enum triage completed");
+            0
+        }
+        EnumTarget::Anonymous => match anonymous_ldap_probe(&dc).await {
+            Ok(_) => 0,
+            Err(e) => {
+                banner::print_fail(&format!("Anonymous LDAP probe failed: {}", e));
+                1
+            }
+        },
+        EnumTarget::NullSession => {
+            banner::print_info(
+                "Attempting null-session RID cycling with default RID range 500-1100.",
+            );
+            commands_impl::cmd_rid(cli, 500, 1100, true).await
+        }
+        _ => unreachable!(),
+    }
+}
+
+async fn anonymous_ldap_probe(dc: &str) -> std::result::Result<bool, String> {
+    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+
+    let url = format!("ldap://{}:389", dc);
+    let settings = LdapConnSettings::new().set_conn_timeout(std::time::Duration::from_secs(5));
+    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
+        .await
+        .map_err(|e| format!("connect to {url} failed: {e}"))?;
+    drive!(conn);
+
+    let bind = ldap
+        .simple_bind("", "")
+        .await
+        .map_err(|e| format!("anonymous bind request failed: {e}"))?;
+    if bind.rc != 0 {
+        banner::print_info(&format!(
+            "Anonymous LDAP bind rejected by {} (rc={} {}).",
+            dc,
+            bind.rc,
+            ldap_result_label(bind.rc)
+        ));
+        let _ = ldap.unbind().await;
+        return Ok(false);
+    }
+
+    banner::print_success(&format!("Anonymous LDAP bind allowed on {}", dc));
+    let attrs = vec![
+        "defaultNamingContext",
+        "configurationNamingContext",
+        "rootDomainNamingContext",
+        "dnsHostName",
+        "ldapServiceName",
+        "domainFunctionality",
+        "forestFunctionality",
+        "domainControllerFunctionality",
+        "supportedLDAPVersion",
+        "supportedSASLMechanisms",
+    ];
+    let (entries, _) = ldap
+        .search("", Scope::Base, "(objectClass=*)", attrs)
+        .await
+        .map_err(|e| format!("RootDSE search failed: {e}"))?
+        .success()
+        .map_err(|e| format!("RootDSE search rejected: {e}"))?;
+
+    for entry in entries {
+        let entry = SearchEntry::construct(entry);
+        println!("  {}", "RootDSE".bright_black());
+        for attr in [
+            "defaultNamingContext",
+            "configurationNamingContext",
+            "rootDomainNamingContext",
+            "dnsHostName",
+            "ldapServiceName",
+            "domainFunctionality",
+            "forestFunctionality",
+            "domainControllerFunctionality",
+            "supportedLDAPVersion",
+            "supportedSASLMechanisms",
+        ] {
+            if let Some(values) = entry.attrs.get(attr) {
+                println!("    {:<35} {}", attr, values.join(", "));
+            }
+        }
+    }
+
+    let _ = ldap.unbind().await;
+    Ok(true)
+}
+
+fn ad_port_label(port: u16) -> &'static str {
+    match port {
+        88 => "Kerberos",
+        135 => "RPC endpoint mapper",
+        139 => "NetBIOS session service",
+        389 => "LDAP",
+        445 => "SMB",
+        464 => "Kerberos password change",
+        636 => "LDAPS",
+        3268 => "Global Catalog LDAP",
+        3269 => "Global Catalog LDAPS",
+        3389 => "RDP",
+        5985 => "WinRM HTTP",
+        5986 => "WinRM HTTPS",
+        9389 => "AD Web Services",
+        _ => "unknown",
+    }
+}
+
+fn ldap_result_label(rc: u32) -> &'static str {
+    match rc {
+        0 => "success",
+        1 => "operationsError",
+        2 => "protocolError",
+        3 => "timeLimitExceeded",
+        4 => "sizeLimitExceeded",
+        8 => "strongAuthRequired",
+        32 => "noSuchObject",
+        49 => "invalidCredentials",
+        50 => "insufficientAccessRights",
+        53 => "unwillingToPerform",
+        _ => "see LDAP result code",
+    }
+}
+
 fn enum_target_modules(target: &EnumTarget) -> Vec<String> {
     let modules: &[&str] = match target {
+        EnumTarget::Pre | EnumTarget::Anonymous | EnumTarget::NullSession => &[],
         EnumTarget::Users => &["users"],
         EnumTarget::Computers => &["computers"],
         EnumTarget::Groups => &["groups"],
@@ -3131,6 +3323,48 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                 }
                 Err(e) => {
                     banner::print_fail(&format!("Graph visualizer thread failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+
+        GraphAction::Tree { input } => {
+            let mut sources = input;
+            if sources.is_empty() {
+                let resolved_path = graph_file.unwrap_or(default_path);
+                let path_obj = std::path::Path::new(resolved_path);
+
+                if !path_obj.exists() {
+                    banner::print_fail(&format!(
+                        "Graph file not found: {}\n\nUsage:\n  overthrone graph tree --input <FILE or DIR>\n  overthrone graph --file <FILE> tree",
+                        resolved_path
+                    ));
+                    return 1;
+                }
+                if graph_file.is_none() {
+                    banner::print_info(&format!("Using default graph file: {}", resolved_path));
+                }
+                sources.push(resolved_path.to_string());
+            }
+
+            for source in &sources {
+                if !std::path::Path::new(source).exists() {
+                    banner::print_fail(&format!("File not found: {}", source));
+                    banner::print_info(
+                        "Use --input or --file to specify a valid BloodHound JSON file.",
+                    );
+                    return 1;
+                }
+            }
+
+            match tokio::task::spawn_blocking(move || tree_viewer::run(&sources)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    banner::print_fail(&format!("Tree visualizer failed: {}", e));
+                    return 1;
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Tree visualizer thread failed: {}", e));
                     return 1;
                 }
             }
