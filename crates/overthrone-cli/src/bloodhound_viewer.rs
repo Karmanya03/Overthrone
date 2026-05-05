@@ -1664,8 +1664,9 @@ impl ViewerApp {
         }
         let width = inner.width.max(1) as f64;
         let height = inner.height.max(1) as f64;
-        let x_span = (graph_area.width.max(20) as f64) / (2.0 * self.zoom);
-        let y_span = (graph_area.height.max(10) as f64) / self.zoom;
+        let pad = (1.0 / self.zoom.max(0.2)).min(2.0);
+        let x_span = (inner.width.max(1) as f64) / (2.0 * self.zoom) + pad;
+        let y_span = (inner.height.max(1) as f64) / self.zoom + pad;
         let x_ratio = (column.saturating_sub(inner.x) as f64) / width;
         let y_ratio = (row.saturating_sub(inner.y) as f64) / height;
         Some(Point {
@@ -1676,8 +1677,9 @@ impl ViewerApp {
 
     fn pan_by_mouse_delta(&mut self, dx: i32, dy: i32, graph_area: Rect) {
         let inner = inner_rect(graph_area);
-        let x_span = (graph_area.width.max(20) as f64) / (2.0 * self.zoom);
-        let y_span = (graph_area.height.max(10) as f64) / self.zoom;
+        let pad = (1.0 / self.zoom.max(0.2)).min(2.0);
+        let x_span = (inner.width.max(1) as f64) / (2.0 * self.zoom) + pad;
+        let y_span = (inner.height.max(1) as f64) / self.zoom + pad;
         let world_per_col = (2.0 * x_span) / inner.width.max(1) as f64;
         let world_per_row = (2.0 * y_span) / inner.height.max(1) as f64;
         self.camera_x -= dx as f64 * world_per_col;
@@ -2194,8 +2196,10 @@ fn draw_main(frame: &mut Frame, area: Rect, app: &mut ViewerApp) {
 }
 
 fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
-    let x_span = (area.width.max(20) as f64) / (2.0 * app.zoom);
-    let y_span = (area.height.max(10) as f64) / app.zoom;
+    let inner = inner_rect(area);
+    let x_span = (inner.width.max(1) as f64) / (2.0 * app.zoom);
+    let y_span = (inner.height.max(1) as f64) / app.zoom;
+    let pad = (1.0 / app.zoom.max(0.2)).min(2.0);
     let title = format!(
         " Graph [{}] zoom {:.2}x path {} ",
         if app.focus == Focus::Graph {
@@ -2214,8 +2218,8 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                 .title(title)
                 .border_style(focus_border(app.focus == Focus::Graph)),
         )
-        .x_bounds([app.camera_x - x_span, app.camera_x + x_span])
-        .y_bounds([app.camera_y - y_span, app.camera_y + y_span])
+        .x_bounds([app.camera_x - x_span - pad, app.camera_x + x_span + pad])
+        .y_bounds([app.camera_y - y_span - pad, app.camera_y + y_span + pad])
         .paint(|ctx| {
             for (idx, edge) in app.graph.edges.iter().enumerate() {
                 if !app.edge_visible(idx) {
@@ -2252,6 +2256,20 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                 );
+                if selected || node.high_value || app.zoom >= 0.65 {
+                    ctx.print(
+                        point.x + 1.2,
+                        point.y + 0.6,
+                        Span::styled(
+                            format!(
+                                "{} {}",
+                                node_glyph(&node.kind),
+                                truncate_label(&node.label, 18)
+                            ),
+                            Style::default().fg(color),
+                        ),
+                    );
+                }
             }
         });
 

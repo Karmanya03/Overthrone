@@ -274,7 +274,7 @@ ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
 ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
-ovt graph gui -i ./bloodhound-json/                      # Browser graph GUI
+ovt graph gui -i ./graphs/                               # Browser graph GUI (attack_graph.json)
 ovt doctor                                                # Health check
 ovt completions bash                                      # Shell tab completion
 ```
@@ -332,7 +332,7 @@ BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship
 | **Kerberoast reachability** | "From user X, which Kerberoastable accounts can I reach, and how?" - it's a shopping list for your GPU. | ✅ Full |
 | **Delegation reachability** | "From user X, which unconstrained delegation machines are reachable?" (Spoiler: it's the print server.) | ✅ Full |
 | **JSON export** | Full graph export for D3.js, Cytoscape, or your visualization tool of choice. Clients love graphs that look like conspiracy boards. | ✅ Full |
-| **Local BloodHound viewer** | `ovt graph view` opens a Rust-native interactive visualizer for Overthrone exports and BloodHound v4/CE JSON collections. The canvas is label-free at every zoom level, with filter names, node names, relationship names, and risk notes kept in the surrounding panes where they stay readable. `ovt graph tree` adds a fully interactive domain -> object type -> object -> inbound/outbound relationship tree for BloodHound-style analysis without Neo4j. | ✅ Full |
+| **Local BloodHound viewer** | `ovt graph view` opens a Rust-native interactive visualizer for Overthrone exports and BloodHound v4/CE JSON collections. The canvas now shows compact node labels when you zoom in (and always for selected or high-value nodes), while full names and relationship details stay readable in the surrounding panes. `ovt graph tree` adds a fully interactive domain -> object type -> object -> inbound/outbound relationship tree for BloodHound-style analysis without Neo4j. | ✅ Full |
 | **Graph statistics** | ovt graph stats shows node/edge counts, breakdown by type, and high-value target rankings. Know your attack surface. | ✅ Full |
 | **Path finding** | ovt graph path finds shortest paths between any two nodes. ovt graph path-to-da finds all routes to Domain Admins. | ✅ Full |
 
@@ -356,13 +356,13 @@ ovt graph view -i users.json -i groups.json -i computers.json -i domains.json
 # Launch the browser-based GUI from an Overthrone graph export
 ovt graph gui --file attack_graph.json
 
-# Or point it at a BloodHound collection directory
-ovt graph gui -i ./bloodhound-json/
+# Or point it at a directory containing attack_graph.json
+ovt graph gui -i ./graphs/
 ```
 
-The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas with names in side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
+The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas that shows compact labels on zoom/selection while keeping full names in the side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
-The new browser GUI runs a local HTTP server, opens a tab automatically, and serves the graph UI from your machine. It uses the same input formats as `ovt graph view` and `ovt graph tree`, but renders as a proper web app with clickable nodes, a path finder, and live stats.
+The new browser GUI runs a local HTTP server, opens a tab automatically, and serves the graph UI from your machine. It expects an Overthrone graph export (attack_graph.json or a directory of Overthrone graph JSONs) and renders as a proper web app with clickable nodes, a path finder, and live stats.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 

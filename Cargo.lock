@@ -4038,6 +4038,7 @@ dependencies = [
  "overthrone-reaper",
  "overthrone-relay",
  "overthrone-scribe",
+ "overthrone-viewer",
  "pretty_assertions",
  "rand 0.10.1",
  "ratatui",
