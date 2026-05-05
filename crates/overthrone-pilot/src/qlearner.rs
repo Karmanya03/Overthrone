@@ -1006,7 +1006,7 @@ impl AdaptiveQLearner {
             AdaptiveAction::RetryReduceNoise => "reduce noise",
             AdaptiveAction::RetryAltMethod => "alternate method",
             AdaptiveAction::SubstituteLowerPriv => "lower-priv pivot",
-            AdaptiveAction::SubstituteStealthier => "quieter TTP",
+            AdaptiveAction::SubstituteStealthier => "lower-noise alternate",
             AdaptiveAction::Skip => "avoid stale path",
             AdaptiveAction::Replan => "re-score with new intel",
             AdaptiveAction::Abort => "stop unsafe loop",

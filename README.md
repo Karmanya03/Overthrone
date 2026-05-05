@@ -329,7 +329,7 @@ BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship
 | **Kerberoast reachability** | "From user X, which Kerberoastable accounts can I reach, and how?" - it's a shopping list for your GPU. | ✅ Full |
 | **Delegation reachability** | "From user X, which unconstrained delegation machines are reachable?" (Spoiler: it's the print server.) | ✅ Full |
 | **JSON export** | Full graph export for D3.js, Cytoscape, or your visualization tool of choice. Clients love graphs that look like conspiracy boards. | ✅ Full |
-| **Local BloodHound viewer** | `ovt graph view` opens a Rust-native interactive visualizer for Overthrone exports and BloodHound v4/CE JSON collections. It supports pan/zoom, search, relationship filters, high-value/owned filters, attack-edge lens, selected-neighborhood lens, edge risk tags, ACL impact hints, LAPS/gMSA/SPN/account-lockout notes, raw object details, and path highlighting without Neo4j. BloodHound shows the conspiracy board; this one adds sticky notes that explain why the conspiracy works. | ✅ Full |
+| **Local BloodHound viewer** | `ovt graph view` opens a Rust-native interactive visualizer for Overthrone exports and BloodHound v4/CE JSON collections. The canvas is label-free at every zoom level, with filter names, node names, relationship names, and risk notes kept in the surrounding panes where they stay readable. `ovt graph tree` adds a fully interactive domain -> object type -> object -> inbound/outbound relationship tree for BloodHound-style analysis without Neo4j. | ✅ Full |
 | **Graph statistics** | ovt graph stats shows node/edge counts, breakdown by type, and high-value target rankings. Know your attack surface. | ✅ Full |
 | **Path finding** | ovt graph path finds shortest paths between any two nodes. ovt graph path-to-da finds all routes to Domain Admins. | ✅ Full |
 
@@ -339,13 +339,15 @@ BloodHound rebuilt in Rust without the Neo4j dependency. Maps every relationship
 # Build an Overthrone graph from LDAP and open it locally
 ovt graph build -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 ovt graph view --file attack_graph.json
+ovt graph tree --file attack_graph.json
 
 # Or import existing BloodHound v4/CE collection JSON without Neo4j
 ovt graph view -i ./bloodhound-json/
+ovt graph tree -i ./bloodhound-json/
 ovt graph view -i users.json -i groups.json -i computers.json -i domains.json
 ```
 
-The viewer is a native Rust TUI. It parses Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use arrows/HJKL to pan or move through panes, mouse click/drag/wheel for node selection, graph panning, zooming, and list/detail scrolling, `+`/`-` to zoom, `/` to search, `r` to cycle relationship filters, `a` for attack-edge-only mode, `g` for selected-neighborhood mode, `v` for high-value only, `o` for owned only, `Tab`/`Shift-Tab` to move between graph/nodes/edges/details, `Enter` to center and refresh the high-value path, `c` to clear filters, `?` for help, and `q` to quit.
+The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas with names in side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -552,21 +554,21 @@ Grab the latest from [**Releases**](https://github.com/Karmanya03/Overthrone/rel
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.42/overthrone-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.42/overthrone-linux-x86_64) | x86_64 (musl, static) |
-| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.42/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.43/overthrone-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.43/overthrone-linux-x86_64) | x86_64 (musl, static) |
+| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.43/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick manual install:**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.42/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.43/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.42/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.43/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # Kali (you're probably already here)
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.42/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.43/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
 ```
 
 ### Build from source
@@ -737,6 +739,9 @@ That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, passwor
 
 ```bash
 # Step 1: Enumerate everything
+ovt enum pre -H 10.10.10.1
+ovt enum anonymous -H 10.10.10.1
+ovt enum null-session -H 10.10.10.1
 ovt enum all -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
 # Step 2: Build and query the attack graph
@@ -747,14 +752,15 @@ ovt graph stats                                           # node/edge counts
 ovt graph export --output graph.json                     # save it
 ovt graph export --output bloodhound.json --bloodhound   # BloodHound format
 ovt graph view --file graph.json                         # local Rust visualizer
+ovt graph tree --file graph.json                         # local Rust tree explorer
 ovt graph view -i ./bloodhound-json/                     # import BloodHound JSON directory
+ovt graph tree -i ./bloodhound-json/                     # GUI-style hierarchy
 ovt graph view -i users.json -i groups.json -i computers.json
 
-# Viewer controls: arrows/HJKL pan or move panes, mouse click/drag/wheel,
-# +/- zoom, / search,
-# r relationship filter, a attack-edge lens, g neighborhood lens,
-# v high-value, o owned, Tab/Shift-Tab panes, Enter center/path, c clear,
-# ? help, q quit. No Neo4j, no browser, no JVM.
+# Graph view keeps labels out of the canvas at every zoom level.
+# Tree view expands domain -> type -> object -> relationships.
+# Both are local Rust TUIs with search, filters, details, path hints, mouse support,
+# ? help, and q quit. No Neo4j, no browser, no JVM.
 
 # Step 3 (zero-knowledge): Enumerate valid usernames - no creds needed
 # Uses Kerberos error codes to determine if each username exists.

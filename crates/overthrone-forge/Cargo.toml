@@ -7,7 +7,7 @@ license.workspace = true
 description = "Kerberos ticket forging: Golden, Silver, Diamond, Skeleton, DSRM, DCSync, ACL backdoor"
 
 [dependencies]
-overthrone-core = { version = "0.1.42", path = "../overthrone-core" }
+overthrone-core = { version = "0.1.43", path = "../overthrone-core" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

