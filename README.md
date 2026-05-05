@@ -108,7 +108,7 @@ This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is no
 
 ## Architecture
 
-Overthrone is a Rust workspace with 9 crates, because monoliths are for cathedrals, not offensive tooling. Each crate handles one phase of making sysadmins regret their GPO configurations:
+Overthrone is a Rust workspace with 10 crates, because monoliths are for cathedrals, not offensive tooling. Each crate handles one phase of making sysadmins regret their GPO configurations:
 
 ```
 overthrone/
@@ -122,6 +122,7 @@ overthrone/
 ¦   +-- overthrone-relay      # NTLM relay - poisoning, responder, ADCS relay. The man-in-the-middle crate.
 ¦   +-- overthrone-scribe     # Reporting - turns carnage into compliance documents (Markdown, PDF, JSON)
 ¦   +-- overthrone-cli        # The CLI + TUI + interactive REPL shell - where you type things and thrones fall
+¦   +-- overthrone-viewer     # Browser-based graph GUI - local web server + D3 viewer, no Neo4j required
 ```
 
 ## The Crate Breakdown
@@ -139,6 +140,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 | `overthrone-relay` | The Interceptor | NTLM relay engine (SMB?LDAP, HTTP?SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8) | Born complete. Zero stubs since day one. Responder.py walked so this crate could sprint. In Rust. Without the GIL. The overachiever sibling of overthrone-hunter. |
 | `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
 | `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now - PDF reports, TUI crawler, C2 implant deployment, and a zero-Neo4j graph viewer. The banner ASCII art is *chef's kiss*. |
+| `overthrone-viewer` | The Window | Browser-based graph GUI served locally. D3 force graph, node search, path finder, detail panels, and stats. No Neo4j, no external DB, no hosted web app. | When you want BloodHound vibes in a browser tab, but still want everything to stay on your machine. |
 
 ### The Crate Report Card
 
@@ -272,6 +274,7 @@ ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
 ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
+ovt graph gui -i ./bloodhound-json/                      # Browser graph GUI
 ovt doctor                                                # Health check
 ovt completions bash                                      # Shell tab completion
 ```
@@ -347,7 +350,19 @@ ovt graph tree -i ./bloodhound-json/
 ovt graph view -i users.json -i groups.json -i computers.json -i domains.json
 ```
 
+#### Graph GUI (Browser) Quickstart
+
+```bash
+# Launch the browser-based GUI from an Overthrone graph export
+ovt graph gui --file attack_graph.json
+
+# Or point it at a BloodHound collection directory
+ovt graph gui -i ./bloodhound-json/
+```
+
 The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas with names in side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
+
+The new browser GUI runs a local HTTP server, opens a tab automatically, and serves the graph UI from your machine. It uses the same input formats as `ovt graph view` and `ovt graph tree`, but renders as a proper web app with clickable nodes, a path finder, and live stats.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 

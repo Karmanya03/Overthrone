@@ -1,0 +1,19 @@
+[package]
+name = "overthrone-viewer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BloodHound-style graph viewer for Overthrone"
+
+[dependencies]
+overthrone-core = { version = "0.1.43", path = "../overthrone-core" }
+petgraph.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+open = "5"

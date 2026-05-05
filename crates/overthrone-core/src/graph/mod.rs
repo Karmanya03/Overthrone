@@ -555,6 +555,11 @@ impl AttackGraph {
         self.graph.node_weight(idx)
     }
 
+    /// Get a reference to the underlying petgraph `DiGraph`.
+    pub fn graph(&self) -> &DiGraph<AdNode, EdgeType> {
+        &self.graph
+    }
+
     // -- Ingest from LDAP Enumeration ---------------------
 
     /// Build the attack graph from a full domain enumeration.

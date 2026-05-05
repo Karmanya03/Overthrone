@@ -351,6 +351,10 @@ ovt graph view -i ./bloodhound-json/
 ovt graph tree --file attack_graph.json
 ovt graph tree -i ./bloodhound-json/
 
+# Launch browser-based graph GUI (local web server)
+ovt graph gui --file attack_graph.json
+ovt graph gui -i ./bloodhound-json/
+
 # Find shortest path between two nodes
 ovt graph path --from jsmith --to "Domain Admins"
 
@@ -370,7 +374,7 @@ ovt graph export --output graph.json
 ovt graph export --output bloodhound.json --bloodhound
 ```
 
-`ovt graph view` renders the graph canvas without node or filter labels inside the graph area at any zoom level; labels stay in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes.
+`ovt graph view` renders the graph canvas without node or filter labels inside the graph area at any zoom level; labels stay in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local web server and opens a browser tab with a D3-powered graph UI, search, path finder, and live stats.
 
 ---
 

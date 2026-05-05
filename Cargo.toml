@@ -10,6 +10,7 @@ members = [
     "crates/overthrone-scribe",
     "crates/overthrone-cli",
     "crates/overthrone-relay",
+    "crates/overthrone-viewer",
 ]
 
 [workspace.package]
@@ -106,6 +107,10 @@ directories = "6.0"
 tokio-test = "0.4"
 tempfile = "3.27.0"
 pretty_assertions = "1.4"
+
+# HTTP Server (for GUI viewer)
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
 
 # NOTE: sspi git patch removed — Devolutions master branch pulls in
 # windows-future 0.3.2 which breaks on non-Windows targets.

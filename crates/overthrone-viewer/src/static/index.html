@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Overthrone Graph Viewer</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+/* ============================================================
+   BloodHound-Inspired Dark Theme
+   ============================================================ */
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-card: #1c2128;
+  --border: #30363d;
+  --border-bright: #484f58;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-red: #f85149;
+  --accent-orange: #d29922;
+  --accent-purple: #bc8cff;
+  --accent-cyan: #39d2c0;
+  --accent-pink: #f778ba;
+  --node-user: #58a6ff;
+  --node-computer: #3fb950;
+  --node-group: #d29922;
+  --node-domain: #f85149;
+  --node-gpo: #bc8cff;
+  --node-ou: #f778ba;
+  --node-cert: #39d2c0;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ============================================================
+   Layout
+   ============================================================ */
+#app {
+  display: flex;
+  height: 100vh;
+}
+
+/* Sidebar */
+#sidebar {
+  width: 320px;
+  min-width: 320px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+#sidebar-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#sidebar-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#sidebar-header h1 span.logo {
+  font-size: 22px;
+}
+
+.search-box {
+  margin-top: 12px;
+  position: relative;
+}
+
+.search-box input {
+  width: 100%;
+  padding: 8px 12px 8px 36px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+}
+
+.search-box input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.15);
+}
+
+.search-box::before {
+  content: "🔍";
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+}
+
+#search-results {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  display: none;
+  background: var(--bg-tertiary);
+}
+
+#search-results.active { display: block; }
+
+.search-result {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-result:hover { background: var(--bg-primary); }
+.search-result:last-child { border-bottom: none; }
+
+.search-result .badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+/* Stats Panel */
+#stats-panel {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+}
+
+.stat-card .value {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.stat-card .label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Attack Path Panel */
+#attack-path-panel {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#attack-path-panel h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.path-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.path-input input {
+  padding: 7px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.path-input input:focus {
+  border-color: var(--accent-red);
+}
+
+.path-input button {
+  padding: 7px 12px;
+  background: var(--accent-red);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.path-input button:hover { opacity: 0.9; }
+
+#path-result {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+#path-result .hop {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#path-result .hop:last-child { border-bottom: none; }
+
+#path-result .hop-edge {
+  color: var(--accent-red);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* Node Detail */
+#node-detail {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+#node-detail h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.detail-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.detail-card .detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.detail-card .detail-row .key {
+  color: var(--text-secondary);
+}
+
+.detail-card .detail-row .val {
+  font-weight: 500;
+  text-align: right;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#connection-list {
+  margin-top: 12px;
+}
+
+#connection-list .conn {
+  padding: 6px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#connection-list .conn:hover {
+  border-color: var(--accent-blue);
+}
+
+/* Legend */
+#legend {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+
+#legend h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* ============================================================
+   Graph Canvas
+   ============================================================ */
+#graph-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Graph elements */
+.link {
+  stroke-opacity: 0.4;
+  fill: none;
+}
+
+.link.highlighted {
+  stroke-opacity: 1;
+  stroke-width: 3px !important;
+}
+
+.node-circle {
+  stroke: #fff;
+  stroke-width: 1.5px;
+  cursor: pointer;
+  transition: r 0.15s;
+}
+
+.node-circle:hover {
+  filter: brightness(1.3);
+}
+
+.node-circle.selected {
+  stroke-width: 3px;
+  stroke: #fff;
+  filter: drop-shadow(0 0 6px rgba(255,255,255,0.5));
+}
+
+.node-circle.dimmed { opacity: 0.15; }
+.link.dimmed { opacity: 0.05; }
+
+.node-label {
+  font-size: 11px;
+  fill: var(--text-primary);
+  text-anchor: middle;
+  pointer-events: none;
+  font-weight: 500;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8), 0 0px 1px rgba(0,0,0,1);
+}
+
+.node-label.dimmed { opacity: 0.1; }
+
+.edge-label {
+  font-size: 9px;
+  fill: var(--text-muted);
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+/* Floating badge */
+#graph-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+/* Zoom controls */
+#zoom-controls {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#zoom-controls button {
+  width: 36px;
+  height: 36px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#zoom-controls button:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-bright);
+}
+
+/* Tooltip */
+#tooltip {
+  position: absolute;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  max-width: 300px;
+  display: none;
+}
+
+#tooltip .tt-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+#tooltip .tt-type {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1><span class="logo">🩸</span> Overthrone Viewer</h1>
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="Search nodes..." autocomplete="off">
+        <div id="search-results"></div>
+      </div>
+    </div>
+
+    <div id="stats-panel">
+      <div class="stats-grid" id="stats-grid"></div>
+    </div>
+
+    <div id="attack-path-panel">
+      <h3>🎯 Attack Path Finder</h3>
+      <div class="path-input">
+        <input type="text" id="path-from" placeholder="Source (e.g. jdoe@CORP.LOCAL)">
+        <input type="text" id="path-to" placeholder="Target (e.g. DC01$@CORP.LOCAL)">
+        <button onclick="findAttackPath()">Find Shortest Path</button>
+      </div>
+      <div id="path-result"></div>
+    </div>
+
+    <div id="node-detail"></div>
+
+    <div id="legend">
+      <h3>Node Types</h3>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-user)"></div>User</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-computer)"></div>Computer</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-group)"></div>Group</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-domain)"></div>Domain</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-gpo)"></div>GPO</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-ou)"></div>OU</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-cert)"></div>Cert Template</div>
+    </div>
+  </div>
+
+  <!-- Graph -->
+  <div id="graph-container">
+    <svg id="graph-svg"></svg>
+    <div id="graph-badge"></div>
+    <div id="zoom-controls">
+      <button onclick="zoomIn()">+</button>
+      <button onclick="zoomOut()">−</button>
+      <button onclick="zoomReset()">⟲</button>
+    </div>
+    <div id="tooltip"></div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  Constants
+// ============================================================
+const NODE_COLORS = {
+  User: '#58a6ff',
+  Computer: '#3fb950',
+  Group: '#d29922',
+  Domain: '#f85149',
+  GPO: '#bc8cff',
+  OU: '#f778ba',
+  CertTemplate: '#39d2c0',
+};
+
+const EDGE_COLORS = {
+  MemberOf: '#8b949e',
+  AdminTo: '#f85149',
+  HasSession: '#58a6ff',
+  DcSync: '#f85149',
+  GenericAll: '#d29922',
+  GenericWrite: '#d29922',
+  WriteOwner: '#d29922',
+  WriteDacl: '#d29922',
+  ForceChangePassword: '#d29922',
+  AddMembers: '#d29922',
+  AllowedToDelegate: '#bc8cff',
+  AllowedToAct: '#bc8cff',
+  TrustedBy: '#f778ba',
+  HasSpn: '#6e7681',
+  DontReqPreauth: '#6e7681',
+  CanRDP: '#39d2c0',
+  CanPSRemote: '#39d2c0',
+  ExecuteDCOM: '#39d2c0',
+  SQLAdmin: '#39d2c0',
+  GpoLink: '#bc8cff',
+  Contains: '#bc8cff',
+  Owns: '#f85149',
+};
+
+// ============================================================
+//  State
+// ============================================================
+let graphData = null;
+let simulation = null;
+let svg, g, linkGroup, nodeGroup, labelGroup, edgeLabelGroup;
+let zoomBehavior;
+let selectedNode = null;
+
+// ============================================================
+//  Init
+// ============================================================
+async function init() {
+  svg = d3.select('#graph-svg');
+  const container = document.getElementById('graph-container');
+
+  // Zoom
+  zoomBehavior = d3.zoom()
+    .scaleExtent([0.05, 8])
+    .on('zoom', (event) => {
+      g.attr('transform', event.transform);
+    });
+
+  svg.call(zoomBehavior);
+
+  // Main group
+  g = svg.append('g');
+  linkGroup = g.append('g').attr('class', 'links');
+  edgeLabelGroup = g.append('g').attr('class', 'edge-labels');
+  nodeGroup = g.append('g').attr('class', 'nodes');
+  labelGroup = g.append('g').attr('class', 'labels');
+
+  // Load data
+  const resp = await fetch('/api/graph');
+  graphData = await resp.json();
+
+  // Render stats
+  renderStats(graphData.stats);
+
+  // Render graph
+  renderGraph(graphData);
+
+  // Update badge
+  document.getElementById('graph-badge').textContent =
+    `${graphData.stats.total_nodes} nodes · ${graphData.stats.total_edges} edges`;
+}
+
+// ============================================================
+//  Render Stats
+// ============================================================
+function renderStats(stats) {
+  const grid = document.getElementById('stats-grid');
+  const items = [
+    { value: stats.users, label: 'Users', color: 'var(--node-user)' },
+    { value: stats.computers, label: 'Computers', color: 'var(--node-computer)' },
+    { value: stats.groups, label: 'Groups', color: 'var(--node-group)' },
+    { value: stats.domains, label: 'Domains', color: 'var(--node-domain)' },
+    { value: stats.gpos, label: 'GPOs', color: 'var(--node-gpo)' },
+    { value: stats.ous, label: 'OUs', color: 'var(--node-ou)' },
+  ];
+
+  grid.innerHTML = items.map(i => `
+    <div class="stat-card">
+      <div class="value" style="color:${i.color}">${i.value}</div>
+      <div class="label">${i.label}</div>
+    </div>
+  `).join('');
+}
+
+// ============================================================
+//  Render Graph (D3 Force)
+// ============================================================
+function renderGraph(data) {
+  const container = document.getElementById('graph-container');
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  // Scale node radius by total count
+  const baseRadius = Math.max(4, Math.min(12, 200 / Math.sqrt(data.nodes.length)));
+  const largeRadius = baseRadius * 2.2;
+
+  // Prepare nodes map
+  const nodesMap = {};
+  const nodes = data.nodes.map(n => {
+    const node = { ...n, radius: baseRadius };
+    nodesMap[n.id] = node;
+    return node;
+  });
+
+  // Make Domain nodes larger
+  nodes.forEach(n => {
+    if (n.type === 'Domain') n.radius = largeRadius;
+    if (n.type === 'Group') n.radius = baseRadius * 1.3;
+    if (n.type === 'Computer') n.radius = baseRadius * 1.1;
+  });
+
+  const links = data.edges.map(e => ({
+    source: e.source,
+    target: e.target,
+    relationship: e.relationship,
+    cost: e.cost,
+  }));
+
+  // Force simulation
+  simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(80).strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-200).distanceMax(500))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(d => d.radius + 4))
+    .force('x', d3.forceX(width / 2).strength(0.05))
+    .force('y', d3.forceY(height / 2).strength(0.05));
+
+  // Draw links
+  const linkSel = linkGroup.selectAll('line')
+    .data(links)
+    .join('line')
+    .attr('class', 'link')
+    .attr('stroke', d => EDGE_COLORS[d.relationship] || '#484f58')
+    .attr('stroke-width', d => d.relationship === 'MemberOf' ? 1.5 : 2)
+    .attr('marker-end', 'url(#arrow)')
+    .attr('stroke-dasharray', d => d.relationship === 'MemberOf' ? '4,2' : null);
+
+  // Arrow marker
+  svg.select('defs').remove();
+  const defs = svg.append('defs');
+  defs.append('marker')
+    .attr('id', 'arrow')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 18)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-4L8,0L0,4')
+    .attr('fill', '#484f58');
+
+  // Draw nodes
+  const nodeSel = nodeGroup.selectAll('circle')
+    .data(nodes)
+    .join('circle')
+    .attr('class', 'node-circle')
+    .attr('r', d => d.radius)
+    .attr('fill', d => NODE_COLORS[d.type] || '#8b949e')
+    .on('click', (event, d) => {
+      event.stopPropagation();
+      selectNode(d);
+    })
+    .on('mouseenter', (event, d) => showTooltip(event, d))
+    .on('mouseleave', hideTooltip)
+    .call(d3.drag()
+      .on('start', dragStarted)
+      .on('drag', dragged)
+      .on('end', dragEnded));
+
+  // Draw labels (only show for large enough nodes or groups)
+  const labelSel = labelGroup.selectAll('text')
+    .data(nodes)
+    .join('text')
+    .attr('class', 'node-label')
+    .attr('dy', d => d.radius + 14)
+    .text(d => d.label.length > 20 ? d.label.substring(0, 18) + '…' : d.label)
+    .style('font-size', d => d.type === 'Domain' ? '14px' : '11px')
+    .style('font-weight', d => d.type === 'Domain' ? '700' : '500');
+
+  // Tick
+  simulation.on('tick', () => {
+    linkSel
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+
+    nodeSel
+      .attr('cx', d => d.x)
+      .attr('cy', d => d.y);
+
+    labelSel
+      .attr('x', d => d.x)
+      .attr('y', d => d.y);
+  });
+
+  // Click background to deselect
+  svg.on('click', () => deselectAll());
+
+  // Store for highlighting
+  window._graphNodes = nodeSel;
+  window._graphLinks = linkSel;
+  window._graphLabels = labelSel;
+  window._nodesMap = nodesMap;
+}
+
+// ============================================================
+//  Drag
+// ============================================================
+function dragStarted(event, d) {
+  if (!event.active) simulation.alphaTarget(0.3).restart();
+  d.fx = d.x;
+  d.fy = d.y;
+}
+
+function dragged(event, d) {
+  d.fx = event.x;
+  d.fy = event.y;
+}
+
+function dragEnded(event, d) {
+  if (!event.active) simulation.alphaTarget(0);
+  d.fx = null;
+  d.fy = null;
+}
+
+// ============================================================
+//  Zoom
+// ============================================================
+function zoomIn() {
+  svg.transition().duration(300).call(zoomBehavior.scaleBy, 1.5);
+}
+
+function zoomOut() {
+  svg.transition().duration(300).call(zoomBehavior.scaleBy, 0.67);
+}
+
+function zoomReset() {
+  svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity);
+}
+
+// ============================================================
+//  Tooltip
+// ============================================================
+function showTooltip(event, d) {
+  const tt = document.getElementById('tooltip');
+  const color = NODE_COLORS[d.type] || '#8b949e';
+  tt.innerHTML = `
+    <div class="tt-name" style="color:${color}">${d.label}</div>
+    <div class="tt-type">${d.type} · ${d.domain}</div>
+    ${d.enabled === false ? '<div style="color:var(--accent-red);font-size:11px">Disabled</div>' : ''}
+  `;
+  tt.style.display = 'block';
+  tt.style.left = (event.pageX + 12) + 'px';
+  tt.style.top = (event.pageY - 20) + 'px';
+}
+
+function hideTooltip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+
+// ============================================================
+//  Node Selection + Highlighting
+// ============================================================
+function selectNode(d) {
+  selectedNode = d;
+
+  // Find connected nodes and edges
+  const connectedEdges = new Set();
+  const connectedNodes = new Set();
+  connectedNodes.add(d.id);
+
+  graphData.edges.forEach(e => {
+    if (e.source === d.id || e.source.id === d.id) {
+      connectedEdges.add(e);
+      connectedNodes.add(typeof e.target === 'object' ? e.target.id : e.target);
+    }
+    if (e.target === d.id || e.target.id === d.id) {
+      connectedEdges.add(e);
+      connectedNodes.add(typeof e.source === 'object' ? e.source.id : e.source);
+    }
+  });
+
+  // Dim everything
+  window._graphNodes.classed('dimmed', n => !connectedNodes.has(n.id));
+  window._graphLinks.classed('dimmed', e => !connectedEdges.has(e));
+  window._graphLinks.classed('highlighted', e => connectedEdges.has(e));
+  window._graphLabels.classed('dimmed', n => !connectedNodes.has(n.id));
+
+  // Selected marker
+  window._graphNodes.classed('selected', n => n.id === d.id);
+
+  // Show detail panel
+  showNodeDetail(d.id);
+}
+
+function deselectAll() {
+  selectedNode = null;
+  window._graphNodes.classed('dimmed', false).classed('selected', false);
+  window._graphLinks.classed('dimmed', false).classed('highlighted', false);
+  window._graphLabels.classed('dimmed', false);
+  document.getElementById('node-detail').innerHTML = '';
+}
+
+// ============================================================
+//  Node Detail Panel
+// ============================================================
+async function showNodeDetail(nodeId) {
+  const panel = document.getElementById('node-detail');
+  try {
+    const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}`);
+    if (!resp.ok) {
+      panel.innerHTML = '<h3>Node Detail</h3><p style="color:var(--text-muted)">Not found</p>';
+      return;
+    }
+    const detail = await resp.json();
+    const color = NODE_COLORS[detail.type] || '#8b949e';
+
+    let propsHtml = Object.entries(detail.properties || {}).map(([k, v]) => `
+      <div class="detail-row"><span class="key">${k}</span><span class="val" title="${v}">${v}</span></div>
+    `).join('');
+
+    let connHtml = (detail.connections || []).map(c => {
+      const edgeColor = EDGE_COLORS[c.relationship] || '#484f58';
+      const targetName = c.target.split('@')[0];
+      return `<div class="conn" onclick="highlightNode('${c.target}')">
+        <span style="color:${edgeColor};font-weight:600;font-size:11px">${c.relationship}</span>
+        <span>→ ${targetName}</span>
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <h3>Node Detail</h3>
+      <div class="detail-card">
+        <div class="detail-row"><span class="key">Name</span><span class="val" style="color:${color}">${detail.label}</span></div>
+        <div class="detail-row"><span class="key">Type</span><span class="val">${detail.type}</span></div>
+        <div class="detail-row"><span class="key">Domain</span><span class="val">${detail.domain}</span></div>
+        <div class="detail-row"><span class="key">Enabled</span><span class="val">${detail.enabled ? '✅' : '❌'}</span></div>
+        ${propsHtml}
+      </div>
+      <div id="connection-list">
+        <h3>Connections (${detail.connections.length})</h3>
+        ${connHtml}
+      </div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<h3>Node Detail</h3><p style="color:var(--accent-red)">${e.message}</p>`;
+  }
+}
+
+function highlightNode(nodeId) {
+  const node = window._nodesMap[nodeId];
+  if (node) {
+    selectNode(node);
+    // Pan to node
+    const container = document.getElementById('graph-container');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    svg.transition().duration(500).call(
+      zoomBehavior.transform,
+      d3.zoomIdentity.translate(width/2, height/2).scale(1.2).translate(-node.x, -node.y)
+    );
+  }
+}
+
+// ============================================================
+//  Search
+// ============================================================
+let searchTimeout;
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  const q = e.target.value.trim();
+  const results = document.getElementById('search-results');
+
+  if (q.length < 2) {
+    results.classList.remove('active');
+    return;
+  }
+
+  searchTimeout = setTimeout(async () => {
+    const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const items = await resp.json();
+
+    if (items.length === 0) {
+      results.innerHTML = '<div style="padding:8px 12px;color:var(--text-muted);font-size:13px">No results</div>';
+    } else {
+      results.innerHTML = items.map(item => {
+        const color = NODE_COLORS[item.type] || '#8b949e';
+        return `<div class="search-result" onclick="selectAndFocus('${item.id}')">
+          <span class="badge" style="background:${color}22;color:${color}">${item.type}</span>
+          <span>${item.label}</span>
+        </div>`;
+      }).join('');
+    }
+    results.classList.add('active');
+  }, 200);
+});
+
+function selectAndFocus(nodeId) {
+  document.getElementById('search-results').classList.remove('active');
+  document.getElementById('search-input').value = '';
+  highlightNode(nodeId);
+}
+
+// ============================================================
+//  Attack Path Finder
+// ============================================================
+async function findAttackPath() {
+  const from = document.getElementById('path-from').value.trim();
+  const to = document.getElementById('path-to').value.trim();
+  const resultDiv = document.getElementById('path-result');
+
+  if (!from || !to) {
+    resultDiv.innerHTML = '<p style="color:var(--accent-orange);font-size:12px">Enter source and target</p>';
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/path', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    });
+    const result = await resp.json();
+
+    if (!result.found) {
+      resultDiv.innerHTML = `<p style="color:var(--accent-red);font-size:12px">No path found from ${from} to ${to}</p>`;
+      return;
+    }
+
+    const hopsHtml = result.hops.map(hop => {
+      const edgeColor = EDGE_COLORS[hop.relationship] || '#f85149';
+      return `<div class="hop">
+        <span style="color:${NODE_COLORS[hop.source_type] || '#8b949e'}">${hop.source.split('@')[0]}</span>
+        <span class="hop-edge" style="color:${edgeColor}">──[${hop.relationship}]──▶</span>
+        <span style="color:${NODE_COLORS[hop.target_type] || '#8b949e'}">${hop.target.split('@')[0]}</span>
+        <span style="color:var(--text-muted);font-size:11px;margin-left:auto">(cost ${hop.cost})</span>
+      </div>`;
+    }).join('');
+
+    resultDiv.innerHTML = `
+      <div style="padding:8px 0;font-size:12px;color:var(--accent-red);font-weight:600">
+        ⚡ ${result.hop_count} hops · total cost: ${result.total_cost}
+      </div>
+      ${hopsHtml}
+    `;
+
+    // Highlight path in graph
+    highlightPath(result.hops);
+  } catch (e) {
+    resultDiv.innerHTML = `<p style="color:var(--accent-red);font-size:12px">${e.message}</p>`;
+  }
+}
+
+function highlightPath(hops) {
+  // Build set of edges in path
+  const pathEdges = new Set();
+  const pathNodes = new Set();
+
+  hops.forEach(hop => {
+    pathNodes.add(hop.source);
+    pathNodes.add(hop.target);
+  });
+
+  graphData.edges.forEach(e => {
+    const src = typeof e.source === 'object' ? e.source.id : e.source;
+    const tgt = typeof e.target === 'object' ? e.target.id : e.target;
+    hops.forEach(hop => {
+      if (src === hop.source && tgt === hop.target && e.relationship === hop.relationship) {
+        pathEdges.add(e);
+      }
+    });
+  });
+
+  // Dim everything else
+  window._graphNodes.classed('dimmed', n => !pathNodes.has(n.id));
+  window._graphLinks.classed('dimmed', e => !pathEdges.has(e));
+  window._graphLinks.classed('highlighted', e => pathEdges.has(e));
+  window._graphLabels.classed('dimmed', n => !pathNodes.has(n.id));
+}
+
+// ============================================================
+//  Keyboard
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    deselectAll();
+  }
+});
+
+// ============================================================
+//  Start
+// ============================================================
+init();
+</script>
+</body>
+</html>
