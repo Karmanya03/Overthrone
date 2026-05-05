@@ -213,12 +213,8 @@ async fn get_node_detail(
 ) -> Result<Json<NodeDetail>, StatusCode> {
     let graph = &state.graph;
 
-    let node_idx = graph
-        .find_node(&nid)
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let node = graph
-        .get_node(node_idx)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let node_idx = graph.find_node(&nid).ok_or(StatusCode::NOT_FOUND)?;
+    let node = graph.get_node(node_idx).ok_or(StatusCode::NOT_FOUND)?;
 
     let id = node_id(&node.name, &node.domain);
 
@@ -267,8 +263,7 @@ async fn search_nodes(
     let results: Vec<SearchResult> = graph
         .nodes()
         .filter(|(_, node)| {
-            node.name.to_uppercase().contains(&q)
-                || node.domain.to_uppercase().contains(&q)
+            node.name.to_uppercase().contains(&q) || node.domain.to_uppercase().contains(&q)
         })
         .take(50)
         .map(|(_, node)| SearchResult {
