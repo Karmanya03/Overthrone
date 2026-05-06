@@ -695,7 +695,7 @@ enum GraphAction {
     /// Launch the browser-based graph GUI.
     #[command(alias = "web", alias = "browser")]
     Gui {
-        /// Overthrone graph JSON file or a directory containing attack_graph.json.
+        /// Overthrone/BloodHound JSON files or directories (multiple inputs create separate graphs).
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
         /// Port to bind (0 selects a free port).
@@ -3339,45 +3339,31 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
         }
 
         GraphAction::Gui { input, port } => {
-            let mut sources = input;
-            let mut graph_path = if sources.is_empty() {
+            let sources = if input.is_empty() {
                 let resolved_path = graph_file.unwrap_or(default_path);
                 if graph_file.is_none() {
                     banner::print_info(&format!("Using default graph file: {}", resolved_path));
                 }
-                resolved_path.to_string()
+                vec![resolved_path.to_string()]
             } else {
-                sources.remove(0)
+                input
             };
 
-            if !sources.is_empty() {
-                banner::print_info("Graph GUI uses a single graph file; extra inputs ignored.");
-            }
-
-            let path_obj = std::path::Path::new(&graph_path);
-            if path_obj.is_dir() {
-                let candidate = path_obj.join(default_path);
-                if candidate.exists() {
-                    graph_path = candidate.to_string_lossy().to_string();
-                } else {
-                    banner::print_fail(&format!(
-                        "No {} found in directory: {}",
-                        default_path, graph_path
-                    ));
-                    banner::print_info("Use --file to point to an Overthrone graph JSON file.");
-                    return 1;
+            let mut missing = false;
+            for source in &sources {
+                if !std::path::Path::new(source).exists() {
+                    banner::print_fail(&format!("Graph source not found: {}", source));
+                    missing = true;
                 }
             }
-
-            if !std::path::Path::new(&graph_path).exists() {
-                banner::print_fail(&format!("File not found: {}", graph_path));
+            if missing {
                 banner::print_info(
-                    "Use --input or --file to specify a valid Overthrone graph JSON file.",
+                    "Use --input or --file to specify valid JSON files or directories.",
                 );
                 return 1;
             }
 
-            if let Err(e) = overthrone_viewer::launch(&graph_path, port).await {
+            if let Err(e) = overthrone_viewer::launch(&sources, port).await {
                 banner::print_fail(&format!("Graph GUI failed: {}", e));
                 return 1;
             }

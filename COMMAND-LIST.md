@@ -354,6 +354,10 @@ ovt graph tree -i ./bloodhound-json/
 # Launch browser-based graph GUI (local web server)
 ovt graph gui --file attack_graph.json
 ovt graph gui -i ./graphs/
+ovt graph gui -i ./graphs/engagement_a -i ./graphs/engagement_b
+
+# Directory inputs are expanded automatically (all JSON files become one graph)
+# Multiple -i inputs show up as selectable graphs in the GUI.
 
 # Find shortest path between two nodes
 ovt graph path --from jsmith --to "Domain Admins"

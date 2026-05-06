@@ -1841,6 +1841,10 @@ impl ViewerApp {
         let Some(node) = self.graph.nodes.get(idx) else {
             return false;
         };
+        // Path nodes are always visible regardless of filters
+        if self.path_nodes.contains(&idx) {
+            return true;
+        }
         if self.neighborhood_only && !self.node_in_selected_neighborhood(idx) {
             return false;
         }
@@ -2256,20 +2260,11 @@ fn draw_graph(frame: &mut Frame, area: Rect, app: &ViewerApp) {
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                 );
-                if selected || node.high_value || app.zoom >= 0.65 {
-                    ctx.print(
-                        point.x + 1.2,
-                        point.y + 0.6,
-                        Span::styled(
-                            format!(
-                                "{} {}",
-                                node_glyph(&node.kind),
-                                truncate_label(&node.label, 18)
-                            ),
-                            Style::default().fg(color),
-                        ),
-                    );
-                }
+                ctx.print(
+                    point.x + 1.2,
+                    point.y + 0.6,
+                    Span::styled(node.label.clone(), Style::default().fg(color)),
+                );
             }
         });
 
@@ -2755,9 +2750,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from("Legend"),
         Line::from("  U user  C computer  G group  D domain  P GPO  O OU  * high-value  ! owned"),
-        Line::from(
-            "  The canvas stays label-free; object names live in the node and detail panes.",
-        ),
+        Line::from("  Node labels show full names; zoom in for cleaner spacing."),
         Line::from(
             "  Bright red edges are the shortest path from the selected node to a high-value target.",
         ),
@@ -2854,7 +2847,7 @@ pub(crate) fn edge_color(relationship: &str, highlighted: bool) -> Color {
         return Color::LightRed;
     }
     match relationship.to_ascii_lowercase().as_str() {
-        "memberof" | "contains" => Color::DarkGray,
+        "memberof" | "contains" => Color::Gray,
         "adminto"
         | "genericall"
         | "dcsync"

@@ -4,12 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Overthrone Graph Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 /* ============================================================
    BloodHound-Inspired Dark Theme
    ============================================================ */
 :root {
+  --font-sans: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, monospace;
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
   --bg-tertiary: #21262d;
@@ -38,9 +43,12 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  background: var(--bg-primary);
+  background:
+    radial-gradient(1200px 600px at 15% -10%, #1b2230 0%, transparent 50%),
+    radial-gradient(900px 500px at 110% 10%, #1a2430 0%, transparent 45%),
+    var(--bg-primary);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   overflow: hidden;
   height: 100vh;
 }
@@ -109,6 +117,89 @@ body {
   top: 50%;
   transform: translateY(-50%);
   font-size: 14px;
+}
+
+.graph-select {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.graph-select label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+#graph-select {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+#graph-select:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px rgba(57,210,192,0.15);
+}
+
+#graph-meta-panel {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#graph-meta-panel h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+#graph-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meta-row span:last-child {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+#graph-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.meta-source {
+  padding: 4px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #search-results {
@@ -371,6 +462,20 @@ svg {
   filter: brightness(1.3);
 }
 
+.node-circle.high-value {
+  stroke: var(--accent-orange);
+  stroke-width: 3px;
+}
+
+.node-circle.owned {
+  stroke: var(--accent-green);
+  stroke-width: 3px;
+}
+
+.node-circle.high-value.owned {
+  stroke: var(--accent-cyan);
+}
+
 .node-circle.selected {
   stroke-width: 3px;
   stroke: #fff;
@@ -466,6 +571,30 @@ svg {
   color: var(--text-secondary);
 }
 
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.pill.high {
+  border-color: rgba(210,153,34,0.6);
+  color: var(--accent-orange);
+}
+
+.pill.owned {
+  border-color: rgba(63,185,80,0.6);
+  color: var(--accent-green);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -479,6 +608,10 @@ svg {
   <div id="sidebar">
     <div id="sidebar-header">
       <h1><span class="logo">🩸</span> Overthrone Viewer</h1>
+      <div class="graph-select" id="graph-select-wrap">
+        <label for="graph-select">Graph</label>
+        <select id="graph-select"></select>
+      </div>
       <div class="search-box">
         <input type="text" id="search-input" placeholder="Search nodes..." autocomplete="off">
         <div id="search-results"></div>
@@ -487,6 +620,15 @@ svg {
 
     <div id="stats-panel">
       <div class="stats-grid" id="stats-grid"></div>
+    </div>
+
+    <div id="graph-meta-panel">
+      <h3>Graph Sources</h3>
+      <div id="graph-meta">
+        <div class="meta-row"><span>Graph</span><span id="graph-label">-</span></div>
+        <div class="meta-row"><span>Sources</span><span id="graph-source-count">0</span></div>
+        <div id="graph-sources"></div>
+      </div>
     </div>
 
     <div id="attack-path-panel">
@@ -538,6 +680,8 @@ const NODE_COLORS = {
   GPO: '#bc8cff',
   OU: '#f778ba',
   CertTemplate: '#39d2c0',
+  Container: '#8b949e',
+  Unknown: '#6e7681',
 };
 
 const EDGE_COLORS = {
@@ -569,6 +713,8 @@ const EDGE_COLORS = {
 //  State
 // ============================================================
 let graphData = null;
+let graphList = [];
+let currentGraphId = null;
 let simulation = null;
 let svg, g, linkGroup, nodeGroup, labelGroup, edgeLabelGroup;
 let zoomBehavior;
@@ -597,19 +743,99 @@ async function init() {
   nodeGroup = g.append('g').attr('class', 'nodes');
   labelGroup = g.append('g').attr('class', 'labels');
 
-  // Load data
-  const resp = await fetch('/api/graph');
+  await loadGraphList();
+  if (currentGraphId) {
+    await loadGraph(currentGraphId);
+  }
+}
+
+async function loadGraphList() {
+  const resp = await fetch('/api/graphs');
+  graphList = await resp.json();
+
+  const select = document.getElementById('graph-select');
+  const wrapper = document.getElementById('graph-select-wrap');
+
+  if (!graphList.length) {
+    wrapper.style.display = 'none';
+    return;
+  }
+
+  select.innerHTML = graphList.map(graph =>
+    `<option value="${graph.id}">${graph.label} (${graph.stats.total_nodes} nodes)</option>`
+  ).join('');
+
+  wrapper.style.display = graphList.length > 1 ? 'flex' : 'none';
+
+  currentGraphId = graphList[0].id;
+  select.value = currentGraphId;
+  select.addEventListener('change', () => {
+    loadGraph(select.value);
+  });
+}
+
+async function loadGraph(graphId) {
+  if (!graphId) return;
+
+  currentGraphId = graphId;
+  const resp = await fetch(`/api/graph?graph=${encodeURIComponent(graphId)}`);
   graphData = await resp.json();
 
-  // Render stats
+  teardownGraph();
   renderStats(graphData.stats);
-
-  // Render graph
   renderGraph(graphData);
+  updateGraphMeta(graphData);
+  updateGraphBadge(graphData);
+  deselectAll();
+  document.getElementById('path-result').innerHTML = '';
+}
 
-  // Update badge
+function teardownGraph() {
+  if (simulation) {
+    simulation.stop();
+    simulation = null;
+  }
+  linkGroup.selectAll('*').remove();
+  edgeLabelGroup.selectAll('*').remove();
+  nodeGroup.selectAll('*').remove();
+  labelGroup.selectAll('*').remove();
+}
+
+function updateGraphBadge(data) {
   document.getElementById('graph-badge').textContent =
-    `${graphData.stats.total_nodes} nodes · ${graphData.stats.total_edges} edges`;
+    `${data.label} · ${data.stats.total_nodes} nodes · ${data.stats.total_edges} edges`;
+}
+
+function updateGraphMeta(data) {
+  const labelEl = document.getElementById('graph-label');
+  const countEl = document.getElementById('graph-source-count');
+  const sourcesEl = document.getElementById('graph-sources');
+
+  labelEl.textContent = data.label || '-';
+  const sources = data.sources || [];
+  countEl.textContent = sources.length;
+
+  sourcesEl.innerHTML = sources.map(src => {
+    const safe = escapeHtml(src);
+    return `<div class="meta-source" title="${safe}">${safe}</div>`;
+  }).join('');
+}
+
+function nodeDisplayName(node) {
+  if (node.display_name) return node.display_name;
+  if (node.domain && !node.label.includes('@')) {
+    return `${node.label}@${node.domain}`;
+  }
+  return node.label;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ============================================================
@@ -624,6 +850,9 @@ function renderStats(stats) {
     { value: stats.domains, label: 'Domains', color: 'var(--node-domain)' },
     { value: stats.gpos, label: 'GPOs', color: 'var(--node-gpo)' },
     { value: stats.ous, label: 'OUs', color: 'var(--node-ou)' },
+    { value: stats.cert_templates, label: 'Cert Tpl', color: 'var(--node-cert)' },
+    { value: stats.high_value, label: 'High Value', color: 'var(--accent-orange)' },
+    { value: stats.owned, label: 'Owned', color: 'var(--accent-green)' },
   ];
 
   grid.innerHTML = items.map(i => `
@@ -649,7 +878,7 @@ function renderGraph(data) {
   // Prepare nodes map
   const nodesMap = {};
   const nodes = data.nodes.map(n => {
-    const node = { ...n, radius: baseRadius };
+    const node = { ...n, display: nodeDisplayName(n), radius: baseRadius };
     nodesMap[n.id] = node;
     return node;
   });
@@ -706,7 +935,12 @@ function renderGraph(data) {
   const nodeSel = nodeGroup.selectAll('circle')
     .data(nodes)
     .join('circle')
-    .attr('class', 'node-circle')
+    .attr('class', d => {
+      let classes = 'node-circle';
+      if (d.high_value) classes += ' high-value';
+      if (d.owned) classes += ' owned';
+      return classes;
+    })
     .attr('r', d => d.radius)
     .attr('fill', d => NODE_COLORS[d.type] || '#8b949e')
     .on('click', (event, d) => {
@@ -726,7 +960,7 @@ function renderGraph(data) {
     .join('text')
     .attr('class', 'node-label')
     .attr('dy', d => d.radius + 14)
-    .text(d => d.label.length > 20 ? d.label.substring(0, 18) + '…' : d.label)
+    .text(d => d.display.length > 26 ? d.display.substring(0, 24) + '…' : d.display)
     .style('font-size', d => d.type === 'Domain' ? '14px' : '11px')
     .style('font-weight', d => d.type === 'Domain' ? '700' : '500');
 
@@ -799,8 +1033,10 @@ function showTooltip(event, d) {
   const tt = document.getElementById('tooltip');
   const color = NODE_COLORS[d.type] || '#8b949e';
   tt.innerHTML = `
-    <div class="tt-name" style="color:${color}">${d.label}</div>
-    <div class="tt-type">${d.type} · ${d.domain}</div>
+    <div class="tt-name" style="color:${color}">${d.display}</div>
+    <div class="tt-type">${d.type} · ${d.domain || 'UNKNOWN'}</div>
+    ${d.distinguished_name ? `<div class="tt-type" style="font-family:var(--font-mono)">${d.distinguished_name}</div>` : ''}
+    <div class="tt-type" style="font-family:var(--font-mono)">${d.id}</div>
     ${d.enabled === false ? '<div style="color:var(--accent-red);font-size:11px">Disabled</div>' : ''}
   `;
   tt.style.display = 'block';
@@ -861,13 +1097,18 @@ function deselectAll() {
 async function showNodeDetail(nodeId) {
   const panel = document.getElementById('node-detail');
   try {
-    const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}`);
+    const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}?graph=${encodeURIComponent(currentGraphId)}`);
     if (!resp.ok) {
       panel.innerHTML = '<h3>Node Detail</h3><p style="color:var(--text-muted)">Not found</p>';
       return;
     }
     const detail = await resp.json();
     const color = NODE_COLORS[detail.type] || '#8b949e';
+    const enabledText = detail.enabled === null ? 'Unknown' : (detail.enabled ? 'Yes' : 'No');
+    const badges = [];
+    if (detail.high_value) badges.push('<span class="pill high">High Value</span>');
+    if (detail.owned) badges.push('<span class="pill owned">Owned</span>');
+    const badgeHtml = badges.length ? `<div style="display:flex;gap:6px;margin-bottom:8px">${badges.join('')}</div>` : '';
 
     let propsHtml = Object.entries(detail.properties || {}).map(([k, v]) => `
       <div class="detail-row"><span class="key">${k}</span><span class="val" title="${v}">${v}</span></div>
@@ -875,20 +1116,22 @@ async function showNodeDetail(nodeId) {
 
     let connHtml = (detail.connections || []).map(c => {
       const edgeColor = EDGE_COLORS[c.relationship] || '#484f58';
-      const targetName = c.target.split('@')[0];
-      return `<div class="conn" onclick="highlightNode('${c.target}')">
+      return `<div class="conn" onclick="highlightNode('${c.target_id}')">
         <span style="color:${edgeColor};font-weight:600;font-size:11px">${c.relationship}</span>
-        <span>→ ${targetName}</span>
+        <span>→ ${c.target_display}</span>
       </div>`;
     }).join('');
 
     panel.innerHTML = `
       <h3>Node Detail</h3>
       <div class="detail-card">
-        <div class="detail-row"><span class="key">Name</span><span class="val" style="color:${color}">${detail.label}</span></div>
+        ${badgeHtml}
+        <div class="detail-row"><span class="key">Display</span><span class="val" style="color:${color}">${detail.display_name}</span></div>
+        <div class="detail-row"><span class="key">Object ID</span><span class="val" title="${detail.id}" style="font-family:var(--font-mono)">${detail.id}</span></div>
         <div class="detail-row"><span class="key">Type</span><span class="val">${detail.type}</span></div>
         <div class="detail-row"><span class="key">Domain</span><span class="val">${detail.domain}</span></div>
-        <div class="detail-row"><span class="key">Enabled</span><span class="val">${detail.enabled ? '✅' : '❌'}</span></div>
+        ${detail.distinguished_name ? `<div class="detail-row"><span class="key">DN</span><span class="val" title="${detail.distinguished_name}" style="font-family:var(--font-mono)">${detail.distinguished_name}</span></div>` : ''}
+        <div class="detail-row"><span class="key">Enabled</span><span class="val">${enabledText}</span></div>
         ${propsHtml}
       </div>
       <div id="connection-list">
@@ -931,7 +1174,7 @@ document.getElementById('search-input').addEventListener('input', (e) => {
   }
 
   searchTimeout = setTimeout(async () => {
-    const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const resp = await fetch(`/api/search?graph=${encodeURIComponent(currentGraphId)}&q=${encodeURIComponent(q)}`);
     const items = await resp.json();
 
     if (items.length === 0) {
@@ -941,7 +1184,7 @@ document.getElementById('search-input').addEventListener('input', (e) => {
         const color = NODE_COLORS[item.type] || '#8b949e';
         return `<div class="search-result" onclick="selectAndFocus('${item.id}')">
           <span class="badge" style="background:${color}22;color:${color}">${item.type}</span>
-          <span>${item.label}</span>
+          <span>${item.display_name}</span>
         </div>`;
       }).join('');
     }
@@ -969,7 +1212,7 @@ async function findAttackPath() {
   }
 
   try {
-    const resp = await fetch('/api/path', {
+    const resp = await fetch(`/api/path?graph=${encodeURIComponent(currentGraphId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to }),
@@ -984,9 +1227,9 @@ async function findAttackPath() {
     const hopsHtml = result.hops.map(hop => {
       const edgeColor = EDGE_COLORS[hop.relationship] || '#f85149';
       return `<div class="hop">
-        <span style="color:${NODE_COLORS[hop.source_type] || '#8b949e'}">${hop.source.split('@')[0]}</span>
+        <span style="color:${NODE_COLORS[hop.source_type] || '#8b949e'}">${hop.source_display}</span>
         <span class="hop-edge" style="color:${edgeColor}">──[${hop.relationship}]──▶</span>
-        <span style="color:${NODE_COLORS[hop.target_type] || '#8b949e'}">${hop.target.split('@')[0]}</span>
+        <span style="color:${NODE_COLORS[hop.target_type] || '#8b949e'}">${hop.target_display}</span>
         <span style="color:var(--text-muted);font-size:11px;margin-left:auto">(cost ${hop.cost})</span>
       </div>`;
     }).join('');
@@ -1011,15 +1254,15 @@ function highlightPath(hops) {
   const pathNodes = new Set();
 
   hops.forEach(hop => {
-    pathNodes.add(hop.source);
-    pathNodes.add(hop.target);
+    pathNodes.add(hop.source_id);
+    pathNodes.add(hop.target_id);
   });
 
   graphData.edges.forEach(e => {
     const src = typeof e.source === 'object' ? e.source.id : e.source;
     const tgt = typeof e.target === 'object' ? e.target.id : e.target;
     hops.forEach(hop => {
-      if (src === hop.source && tgt === hop.target && e.relationship === hop.relationship) {
+      if (src === hop.source_id && tgt === hop.target_id && e.relationship === hop.relationship) {
         pathEdges.add(e);
       }
     });
