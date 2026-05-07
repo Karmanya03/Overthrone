@@ -15,6 +15,7 @@
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -65,6 +66,19 @@ pub struct RidCycleConfig {
     pub start_rid: u32,
     pub end_rid: u32,
     pub batch_size: u32,
+}
+
+static RID_TOOLING_AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+/// Quick availability check for RID cycling tooling.
+pub fn tooling_available() -> bool {
+    *RID_TOOLING_AVAILABLE.get_or_init(|| {
+        if cfg!(windows) {
+            true
+        } else {
+            Command::new("rpcclient").arg("-V").output().is_ok()
+        }
+    })
 }
 
 impl Default for RidCycleConfig {

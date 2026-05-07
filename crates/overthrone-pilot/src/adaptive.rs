@@ -631,26 +631,7 @@ impl AdaptiveEngine {
     }
 
     fn action_identifier(&self, action: &PlannedAction) -> String {
-        match action {
-            PlannedAction::EnumerateUsers => "enumerate_users".to_string(),
-            PlannedAction::EnumerateComputers => "enumerate_computers".to_string(),
-            PlannedAction::EnumerateGroups => "enumerate_groups".to_string(),
-            PlannedAction::EnumerateTrusts => "enumerate_trusts".to_string(),
-            PlannedAction::EnumerateGpos => "enumerate_gpos".to_string(),
-            PlannedAction::EnumeratePasswordPolicy => "enumerate_password_policy".to_string(),
-            PlannedAction::EnumerateDelegations => "enumerate_delegations".to_string(),
-            PlannedAction::EnumerateLaps => "enumerate_laps".to_string(),
-            PlannedAction::EnumerateShares { .. } => "enumerate_shares".to_string(),
-            PlannedAction::CheckAdminAccess { .. } => "check_admin_access".to_string(),
-            PlannedAction::AsRepRoast { .. } => "asreproast".to_string(),
-            PlannedAction::Kerberoast { .. } => "kerberoast".to_string(),
-            PlannedAction::PasswordSpray { .. } => "password_spray".to_string(),
-            PlannedAction::AdcsEnumerate => "adcs_enum".to_string(),
-            PlannedAction::AdcsEsc1 { .. } => "adcs_esc1".to_string(),
-            PlannedAction::AdcsEsc4 { .. } => "adcs_esc4".to_string(),
-            PlannedAction::AdcsEsc6 { .. } => "adcs_esc6".to_string(),
-            _ => self.extract_method_name(action),
-        }
+        action.key().to_string()
     }
 
     // ═══════════════════════════════════════════════════════

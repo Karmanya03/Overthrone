@@ -341,7 +341,7 @@ ovt kerberos roast --spn MSSQLSvc/db01.corp.local  # Target a specific SPN
 
 # AS-REP Roast - no pre-auth required = free hashes
 ovt kerberos asrep-roast -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
-ovt kerberos asrep-roast --userlist users.txt  # From a user list
+ovt kerberos asrep-roast --userlist users.txt  # Optional list; falls back if missing
 
 # Request a TGT (proof of authentication)
 ovt kerberos get-tgt -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
@@ -457,7 +457,7 @@ ovt graph export --output graph.json
 ovt graph export --output bloodhound.json --bloodhound
 ```
 
-`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, lazy-loads and caches the selected graph, and opens a D3-powered browser UI with full node display names, spacious collision-aware layout, search, path finder, and live stats.
+`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, lazy-loads and caches the selected graph, and opens a D3-powered browser UI with full node display names, render-budget controls for large graphs, search, path finder, and live stats.
 
 ---
 
@@ -948,7 +948,7 @@ ovt rid -H DC --null-session                           # RID cycling
 
 # === KERBEROS ===
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS    # Kerberoast
-ovt kerberos asrep-roast -H DC -d DOMAIN -u USER      # AS-REP Roast
+ovt kerberos asrep-roast -H DC -d DOMAIN -u USER      # AS-REP Roast (LDAP or fallback list)
 ovt kerberos get-tgt -H DC -d DOMAIN -u USER -p PASS  # Get TGT
 ovt crack --file hashes.txt --mode thorough            # Crack offline
 

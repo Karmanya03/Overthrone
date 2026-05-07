@@ -365,7 +365,7 @@ ovt graph gui -i ./graphs/
 
 The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas that shows compact labels on zoom/selection while keeping full names in the side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
-The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once, so it opens on a black canvas until the operator chooses a file. The D3 view keeps full node display names, spacious collision-aware layout, lazy per-file loading, server-side graph caching, clickable nodes, search, path finding, and live stats without Neo4j.
+The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once, so it opens on a black canvas until the operator chooses a file. The D3 view keeps full node display names, spacious collision-aware layout, lazy per-file loading, render-budget controls that cap large graphs for responsiveness, server-side graph caching, clickable nodes, search, path finding, and live stats without Neo4j.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -640,7 +640,7 @@ brew install samba
 
 ## Wordlists
 
-Overthrone does **not** bundle wordlists - bring your own. `--userlist` inputs and cracking `--wordlist` inputs accept any path on your system.
+Overthrone does **not** bundle large wordlists - bring your own. A small embedded fallback username list is included for Kerberos user-enum/AS-REP roasting when no list is supplied or the default list is missing. `--userlist` inputs and cracking `--wordlist` inputs accept any path on your system.
 
 ### Recommended: SecLists
 

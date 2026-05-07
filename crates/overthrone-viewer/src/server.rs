@@ -3,6 +3,7 @@
 //! Serves a single-page BloodHound-style application with D3.js force-directed
 //! graph visualization, node search, attack path finder, and detail panels.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -42,6 +43,12 @@ struct AppState {
     cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
 }
 
+const AUTO_NODE_LIMIT: usize = 3500;
+const AUTO_NODE_THRESHOLD: usize = 4500;
+const AUTO_EDGE_PER_NODE: usize = 6;
+const MAX_NODE_LIMIT: usize = 20000;
+const MAX_EDGE_LIMIT: usize = 120000;
+
 // ============================================================
 //  API Response Types
 // ============================================================
@@ -62,6 +69,11 @@ struct GraphResponse {
     label: String,
     sources: Vec<String>,
     stats: StatsResponse,
+    rendered_nodes: usize,
+    rendered_edges: usize,
+    truncated: bool,
+    node_limit: usize,
+    edge_limit: usize,
     nodes: Vec<NodeResponse>,
     edges: Vec<EdgeResponse>,
 }
@@ -185,6 +197,8 @@ struct SearchQuery {
 #[derive(Deserialize)]
 struct GraphQuery {
     graph: Option<String>,
+    limit: Option<usize>,
+    edges: Option<usize>,
 }
 
 // ============================================================
@@ -225,6 +239,88 @@ fn stats_response(stats: &ViewerStats) -> StatsResponse {
         high_value: stats.high_value,
         owned: stats.owned,
     }
+}
+
+fn resolve_node_limit(limit: Option<usize>, total_nodes: usize) -> usize {
+    match limit {
+        Some(0) => total_nodes,
+        Some(n) => n.min(MAX_NODE_LIMIT).min(total_nodes),
+        None => {
+            if total_nodes <= AUTO_NODE_THRESHOLD {
+                total_nodes
+            } else {
+                AUTO_NODE_LIMIT.min(total_nodes)
+            }
+        }
+    }
+}
+
+fn resolve_edge_limit(
+    limit: Option<usize>,
+    node_limit: usize,
+    total_nodes: usize,
+    total_edges: usize,
+) -> usize {
+    if node_limit >= total_nodes {
+        return total_edges;
+    }
+
+    match limit {
+        Some(0) => total_edges,
+        Some(n) => n.min(MAX_EDGE_LIMIT).min(total_edges),
+        None => node_limit
+            .saturating_mul(AUTO_EDGE_PER_NODE)
+            .min(MAX_EDGE_LIMIT)
+            .min(total_edges),
+    }
+}
+
+fn select_graph_nodes(graph: &ViewerGraph, node_limit: usize) -> Vec<usize> {
+    let total_nodes = graph.stats().total_nodes;
+    if node_limit >= total_nodes {
+        return (0..total_nodes).collect();
+    }
+
+    let mut degrees = vec![0usize; total_nodes];
+    for edge in graph.edges() {
+        if edge.source < total_nodes && edge.target < total_nodes {
+            degrees[edge.source] += 1;
+            degrees[edge.target] += 1;
+        }
+    }
+
+    let mut selected = Vec::new();
+    let mut selected_mask = vec![false; total_nodes];
+
+    for (idx, node) in graph.nodes() {
+        if node.high_value || node.owned || node.kind.eq_ignore_ascii_case("domain") {
+            selected.push(idx);
+            selected_mask[idx] = true;
+        }
+    }
+
+    if selected.len() >= node_limit {
+        selected.truncate(node_limit);
+        return selected;
+    }
+
+    let mut remaining: Vec<usize> = (0..total_nodes)
+        .filter(|idx| !selected_mask[*idx])
+        .collect();
+    remaining.sort_by_key(|idx| Reverse(degrees[*idx]));
+
+    for idx in remaining.into_iter().take(node_limit - selected.len()) {
+        selected.push(idx);
+    }
+
+    selected
+}
+
+fn edge_is_important(relationship: &str) -> bool {
+    !matches!(
+        relationship,
+        "MemberOf" | "Contains" | "HasSpn" | "DontReqPreauth"
+    )
 }
 
 fn resolve_bundle<'a>(
@@ -366,37 +462,66 @@ fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
     Ok(bundles)
 }
 
-fn graph_nodes(graph: &ViewerGraph) -> Vec<NodeResponse> {
+fn graph_nodes(graph: &ViewerGraph, selected: &HashSet<usize>) -> Vec<NodeResponse> {
     graph
         .nodes()
-        .map(|(_, node)| NodeResponse {
-            id: node.id.clone(),
-            label: node.label.clone(),
-            display_name: node_display_name(node),
-            node_type: node_type_str(node),
-            domain: node_domain(node),
-            distinguished_name: node.distinguished_name.clone(),
-            enabled: node.enabled,
-            high_value: node.high_value,
-            owned: node.owned,
+        .filter_map(|(idx, node)| {
+            if !selected.contains(&idx) {
+                return None;
+            }
+            Some(NodeResponse {
+                id: node.id.clone(),
+                label: node.label.clone(),
+                display_name: node_display_name(node),
+                node_type: node_type_str(node),
+                domain: node_domain(node),
+                distinguished_name: node.distinguished_name.clone(),
+                enabled: node.enabled,
+                high_value: node.high_value,
+                owned: node.owned,
+            })
         })
         .collect()
 }
 
-fn graph_edges(graph: &ViewerGraph) -> Vec<EdgeResponse> {
-    graph
-        .edges()
-        .filter_map(|edge| {
-            let src = graph.get_node(edge.source)?;
-            let tgt = graph.get_node(edge.target)?;
-            Some(EdgeResponse {
-                source: src.id.clone(),
-                target: tgt.id.clone(),
-                relationship: edge.relationship.clone(),
-                cost: edge.cost,
-            })
-        })
-        .collect()
+fn graph_edges(
+    graph: &ViewerGraph,
+    selected: &HashSet<usize>,
+    edge_limit: usize,
+) -> Vec<EdgeResponse> {
+    let mut important = Vec::new();
+    let mut normal = Vec::new();
+
+    for edge in graph.edges() {
+        if !selected.contains(&edge.source) || !selected.contains(&edge.target) {
+            continue;
+        }
+        let (src, tgt) = match (graph.get_node(edge.source), graph.get_node(edge.target)) {
+            (Some(src), Some(tgt)) => (src, tgt),
+            _ => continue,
+        };
+        let response = EdgeResponse {
+            source: src.id.clone(),
+            target: tgt.id.clone(),
+            relationship: edge.relationship.clone(),
+            cost: edge.cost,
+        };
+        if edge_is_important(&edge.relationship) {
+            important.push(response);
+        } else {
+            normal.push(response);
+        }
+    }
+
+    let total = important.len() + normal.len();
+    let target = edge_limit.min(total);
+    let mut edges = Vec::with_capacity(target);
+    edges.extend(important.into_iter().take(target));
+    if edges.len() < target {
+        edges.extend(normal.into_iter().take(target - edges.len()));
+    }
+
+    edges
 }
 
 fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
@@ -514,13 +639,29 @@ async fn get_graph(
 ) -> Result<Json<GraphResponse>, StatusCode> {
     let (bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
 
+    let total_nodes = graph.stats().total_nodes;
+    let total_edges = graph.stats().total_edges;
+    let node_limit = resolve_node_limit(query.limit, total_nodes);
+    let edge_limit = resolve_edge_limit(query.edges, node_limit, total_nodes, total_edges);
+    let selected_nodes = select_graph_nodes(&graph, node_limit);
+    let selected_set: HashSet<usize> = selected_nodes.into_iter().collect();
+
+    let nodes = graph_nodes(&graph, &selected_set);
+    let edges = graph_edges(&graph, &selected_set, edge_limit);
+    let truncated = nodes.len() < total_nodes || edges.len() < total_edges;
+
     Ok(Json(GraphResponse {
         graph_id: bundle.id.clone(),
         label: bundle.label.clone(),
         sources: bundle.sources.clone(),
         stats: stats_response(graph.stats()),
-        nodes: graph_nodes(&graph),
-        edges: graph_edges(&graph),
+        rendered_nodes: nodes.len(),
+        rendered_edges: edges.len(),
+        truncated,
+        node_limit,
+        edge_limit,
+        nodes,
+        edges,
     }))
 }
 

@@ -1402,6 +1402,15 @@ async fn exec_rid_cycle(
     start_rid: u32,
     end_rid: u32,
 ) -> StepResult {
+    if !rid::tooling_available() {
+        return StepResult {
+            success: false,
+            output: "RID cycling skipped: rpcclient/net rpc tooling not available".to_string(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        };
+    }
+
     let (user, pass, _) = ctx.effective_creds();
     let config = rid::RidCycleConfig {
         target: ctx.dc_ip.clone(),

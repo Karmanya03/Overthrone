@@ -191,6 +191,58 @@ pub enum PlannedAction {
     },
 }
 
+impl PlannedAction {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::EnumerateUsers => "enumerate_users",
+            Self::EnumerateComputers => "enumerate_computers",
+            Self::EnumerateGroups => "enumerate_groups",
+            Self::EnumerateTrusts => "enumerate_trusts",
+            Self::EnumerateGpos => "enumerate_gpos",
+            Self::EnumeratePasswordPolicy => "enumerate_password_policy",
+            Self::EnumerateDelegations => "enumerate_delegations",
+            Self::EnumerateLaps => "enumerate_laps",
+            Self::EnumerateShares { .. } => "enumerate_shares",
+            Self::CheckAdminAccess { .. } => "check_admin_access",
+            Self::UserEnum { .. } => "user_enum",
+            Self::RidCycle { .. } => "rid_cycle",
+            Self::AsRepRoast { .. } => "asreproast",
+            Self::Kerberoast { .. } => "kerberoast",
+            Self::ConstrainedDelegation { .. } => "constrained_delegation",
+            Self::UnconstrainedDelegation { .. } => "unconstrained_delegation",
+            Self::RbcdAttack { .. } => "rbcd",
+            Self::PasswordSpray { .. } => "password_spray",
+            Self::CrackHashes { .. } => "crack_hashes",
+            Self::ExecCommand { .. } => "exec_command",
+            Self::PsExec { .. } => "psexec",
+            Self::SmbExec { .. } => "smbexec",
+            Self::WmiExec { .. } => "wmiexec",
+            Self::WinRmExec { .. } => "winrmexec",
+            Self::DumpSam { .. } => "dump_sam",
+            Self::DumpLsa { .. } => "dump_lsa",
+            Self::DumpNtds { .. } => "dump_ntds",
+            Self::DumpDcc2 { .. } => "dump_dcc2",
+            Self::DcsSync { .. } => "dcsync",
+            Self::Coerce { .. } => "coerce",
+            Self::AdcsEnumerate => "adcs_enum",
+            Self::AdcsEsc1 { .. } => "adcs_esc1",
+            Self::AdcsEsc4 { .. } => "adcs_esc4",
+            Self::AdcsEsc6 { .. } => "adcs_esc6",
+            Self::ForgeGoldenTicket { .. } => "forge_golden_ticket",
+            Self::ForgeSilverTicket { .. } => "forge_silver_ticket",
+            Self::RunPlaybook { .. } => "run_playbook",
+            Self::Sleep { .. } => "sleep",
+            Self::Checkpoint { .. } => "checkpoint",
+        }
+    }
+}
+
+impl PlanStep {
+    pub fn action_key(&self) -> &'static str {
+        self.action.key()
+    }
+}
+
 /// Result of executing a step
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepResult {
@@ -278,61 +330,71 @@ impl Planner {
             format!("step_{:03}", step_counter)
         };
 
+        let failed = |key: &str| failed_actions.iter().any(|action| action == key);
+
         // ── Phase 1: Recon (always needed if state is empty) ──
         if state.users.is_empty() {
             if ldap_available {
-                steps.push(PlanStep {
-                    id: next_id(),
-                    description: "Enumerate domain users".to_string(),
-                    stage: Stage::Enumerate,
-                    action: PlannedAction::EnumerateUsers,
-                    priority: 100,
-                    noise: NoiseLevel::Silent,
-                    depends_on: vec![],
-                    executed: false,
-                    result: None,
-                    retries: 0,
-                    max_retries: 2,
-                });
+                if failed("enumerate_users") {
+                    warn!("Skipping user enumeration (previously failed)");
+                } else {
+                    steps.push(PlanStep {
+                        id: next_id(),
+                        description: "Enumerate domain users".to_string(),
+                        stage: Stage::Enumerate,
+                        action: PlannedAction::EnumerateUsers,
+                        priority: 100,
+                        noise: NoiseLevel::Silent,
+                        depends_on: vec![],
+                        executed: false,
+                        result: None,
+                        retries: 0,
+                        max_retries: 2,
+                    });
+                }
             } else {
                 // LDAP unavailable — use Kerberos user enumeration as primary recon
-                steps.push(PlanStep {
-                    id: next_id(),
-                    description: "Kerberos User Enumeration (wordlist fallback)".to_string(),
-                    stage: Stage::Enumerate,
-                    action: PlannedAction::UserEnum {
-                        wordlist: "assets/ad_usernames.txt".to_string(),
-                    },
-                    priority: 105, // Higher priority as it's our only way to get users
-                    noise: NoiseLevel::Low,
-                    depends_on: vec![],
-                    executed: false,
-                    result: None,
-                    retries: 0,
-                    max_retries: 1,
-                });
+                if !failed("user_enum") {
+                    steps.push(PlanStep {
+                        id: next_id(),
+                        description: "Kerberos User Enumeration (wordlist fallback)".to_string(),
+                        stage: Stage::Enumerate,
+                        action: PlannedAction::UserEnum {
+                            wordlist: "assets/ad_usernames.txt".to_string(),
+                        },
+                        priority: 105, // Higher priority as it's our only way to get users
+                        noise: NoiseLevel::Low,
+                        depends_on: vec![],
+                        executed: false,
+                        result: None,
+                        retries: 0,
+                        max_retries: 1,
+                    });
+                }
 
                 // Also try RID cycling if we have SMB
-                steps.push(PlanStep {
-                    id: next_id(),
-                    description: "RID Cycling via SAMR (SMB fallback)".to_string(),
-                    stage: Stage::Enumerate,
-                    action: PlannedAction::RidCycle {
-                        start_rid: 500,
-                        end_rid: 2000,
-                    },
-                    priority: 104,
-                    noise: NoiseLevel::Low,
-                    depends_on: vec![],
-                    executed: false,
-                    result: None,
-                    retries: 0,
-                    max_retries: 1,
-                });
+                if !failed("rid_cycle") {
+                    steps.push(PlanStep {
+                        id: next_id(),
+                        description: "RID Cycling via SAMR (SMB fallback)".to_string(),
+                        stage: Stage::Enumerate,
+                        action: PlannedAction::RidCycle {
+                            start_rid: 500,
+                            end_rid: 2000,
+                        },
+                        priority: 104,
+                        noise: NoiseLevel::Low,
+                        depends_on: vec![],
+                        executed: false,
+                        result: None,
+                        retries: 0,
+                        max_retries: 1,
+                    });
+                }
             }
         }
 
-        if ldap_available && state.computers.is_empty() {
+        if ldap_available && state.computers.is_empty() && !failed("enumerate_computers") {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate domain computers".to_string(),
@@ -348,7 +410,7 @@ impl Planner {
             });
         }
 
-        if ldap_available && state.groups.is_empty() {
+        if ldap_available && state.groups.is_empty() && !failed("enumerate_groups") {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate groups & memberships".to_string(),
@@ -367,9 +429,7 @@ impl Planner {
         // ── Phase 1b: Extended Recon (trusts, GPOs, shares) ──
         // These give the planner and Q-learner richer state for decision-making.
 
-        if ldap_available
-            && state.password_policy.is_none()
-            && !failed_actions.contains(&"enumerate_password_policy".to_string())
+        if ldap_available && state.password_policy.is_none() && !failed("enumerate_password_policy")
         {
             steps.push(PlanStep {
                 id: next_id(),
@@ -386,10 +446,7 @@ impl Planner {
             });
         }
 
-        if ldap_available
-            && state.trusts.is_empty()
-            && !failed_actions.contains(&"enumerate_trusts".to_string())
-        {
+        if ldap_available && state.trusts.is_empty() && !failed("enumerate_trusts") {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate domain trusts & trust relationships".to_string(),
@@ -405,10 +462,7 @@ impl Planner {
             });
         }
 
-        if ldap_available
-            && state.gpos.is_empty()
-            && !failed_actions.contains(&"enumerate_gpos".to_string())
-        {
+        if ldap_available && state.gpos.is_empty() && !failed("enumerate_gpos") {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate GPOs & linked policies".to_string(),
@@ -424,10 +478,7 @@ impl Planner {
             });
         }
 
-        if ldap_available
-            && state.delegation_count() == 0
-            && !failed_actions.contains(&"enumerate_delegations".to_string())
-        {
+        if ldap_available && state.delegation_count() == 0 && !failed("enumerate_delegations") {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate Kerberos delegation and RBCD settings".to_string(),
@@ -443,10 +494,7 @@ impl Planner {
             });
         }
 
-        if ldap_available
-            && state.laps.is_empty()
-            && !failed_actions.contains(&"enumerate_laps".to_string())
-        {
+        if ldap_available && state.laps.is_empty() && !failed("enumerate_laps") {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate readable LAPS passwords".to_string(),
@@ -464,7 +512,7 @@ impl Planner {
 
         // Enumerate shares on the DC for GPP passwords, SYSVOL scripts, etc.
         if let Some(ref dc_ip) = state.dc_ip
-            && !failed_actions.contains(&"enumerate_shares".to_string())
+            && !failed("enumerate_shares")
         {
             steps.push(PlanStep {
                 id: next_id(),
@@ -491,7 +539,7 @@ impl Planner {
         // ── Phase 2: Kerberos Attacks (low noise, high reward) ──
         let recon_dep = steps.first().map(|s| s.id.clone()).unwrap_or_default();
 
-        if !failed_actions.contains(&"kerberoast".to_string())
+        if !failed("kerberoast")
             && state.roast_hashes.is_empty()
             && (state.users.is_empty() || !state.kerberoastable.is_empty())
         {
@@ -515,7 +563,7 @@ impl Planner {
             });
         }
 
-        if !failed_actions.contains(&"asreproast".to_string())
+        if !failed("asreproast")
             && state.roast_hashes.is_empty()
             && (state.users.is_empty() || !state.asrep_roastable.is_empty())
         {
@@ -539,7 +587,7 @@ impl Planner {
         }
 
         // ── Phase 2.1: Inline Hash Cracking (if we have captured roast hashes) ──
-        if !state.roast_hashes.is_empty() && !failed_actions.contains(&"crack_hashes".to_string()) {
+        if !state.roast_hashes.is_empty() && !failed("crack_hashes") {
             let hashes: Vec<String> = state.roast_hashes.clone();
             steps.push(PlanStep {
                 id: next_id(),
@@ -562,7 +610,7 @@ impl Planner {
         // ── Phase 2.2: Password Spray (if we have a user list but few creds) ──
         if !state.users.is_empty()
             && state.credentials.len() <= 1
-            && !failed_actions.contains(&"password_spray".to_string())
+            && !failed("password_spray")
             && state.spray_guard_allows_attempts()
             && !self.stealth
         // spraying is noisy, skip in stealth mode
@@ -597,7 +645,7 @@ impl Planner {
         }
 
         // ── Phase 2.5: ADCS Certificate Abuse ──
-        if ldap_available && !failed_actions.contains(&"adcs_enum".to_string()) {
+        if ldap_available && !failed("adcs_enum") {
             let adcs_enum_id = next_id();
             steps.push(PlanStep {
                 id: adcs_enum_id.clone(),
@@ -618,7 +666,7 @@ impl Planner {
             });
 
             // ESC1 — enrollee supplies SAN (most common ADCS vuln)
-            if !failed_actions.contains(&"adcs_esc1".to_string()) {
+            if !failed("adcs_esc1") {
                 steps.push(PlanStep {
                     id: next_id(),
                     description: "ADCS ESC1 — request cert with arbitrary SAN for impersonation"
@@ -640,7 +688,7 @@ impl Planner {
             }
 
             // ESC4 — writable template → make it ESC1-vulnerable
-            if !failed_actions.contains(&"adcs_esc4".to_string()) {
+            if !failed("adcs_esc4") {
                 steps.push(PlanStep {
                     id: next_id(),
                     description: "ADCS ESC4 — modify writable template then exploit as ESC1"
@@ -660,7 +708,7 @@ impl Planner {
             }
 
             // ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 on CA
-            if !failed_actions.contains(&"adcs_esc6".to_string()) {
+            if !failed("adcs_esc6") {
                 steps.push(PlanStep {
                     id: next_id(),
                     description:
@@ -684,7 +732,7 @@ impl Planner {
         }
 
         // ── Phase 3: Delegation Abuse ──
-        if !failed_actions.contains(&"constrained_delegation".to_string()) {
+        if !failed("constrained_delegation") {
             for delegation in &state.constrained_delegation {
                 let target_spn = delegation.targets.first().cloned().unwrap_or_default();
                 if delegation.account.is_empty() || target_spn.is_empty() {
@@ -717,7 +765,7 @@ impl Planner {
             }
         }
 
-        if !failed_actions.contains(&"unconstrained_delegation".to_string()) {
+        if !failed("unconstrained_delegation") {
             for target_host in &state.unconstrained_delegation {
                 steps.push(PlanStep {
                     id: next_id(),
@@ -764,7 +812,7 @@ impl Planner {
         }
 
         // ── Phase 4.5: RBCD Attack (if we have a controlled computer & write access) ──
-        if !state.rbcd_targets.is_empty() && !failed_actions.contains(&"rbcd".to_string()) {
+        if !state.rbcd_targets.is_empty() && !failed("rbcd") {
             for target in &state.rbcd_targets {
                 // Use the first discovered computer we control (or our own machine account)
                 let controlled = state
@@ -926,7 +974,7 @@ impl Planner {
         // ── Phase 8: Coercion (if other paths blocked) ──
         if !state.has_domain_admin
             && !state.unconstrained_delegation.is_empty()
-            && !failed_actions.contains(&"coerce".to_string())
+            && !failed("coerce")
             && self.max_noise >= NoiseLevel::Medium
         {
             steps.push(PlanStep {

@@ -13,12 +13,135 @@ use indicatif::{ProgressBar, ProgressStyle};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{self, UserEnumStatus};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════
+
+const EMBEDDED_USERLIST: &str = r#"# Common AD usernames and service accounts
+administrator
+admin
+adm
+root
+krbtgt
+guest
+test
+user
+user1
+user2
+backup
+backups
+helpdesk
+support
+it
+itadmin
+sysadmin
+sysadm
+administrator1
+administrator2
+svc
+service
+svc_backup
+svc_sql
+svc_mssql
+svc_exchange
+svc_adfs
+svc_sccm
+svc_dns
+svc_dhcp
+svc_web
+svc_http
+sql
+sqlsvc
+mssql
+mssqlsvc
+db
+dbsvc
+web
+websvc
+iis
+http
+smtp
+ftp
+dns
+dhcp
+adfs
+aadconnect
+sync
+sccm
+wds
+print
+printer
+filesvc
+fileserver
+sharepoint
+spfarm
+spadmin
+spservice
+ldap
+rdp
+vpn
+vmware
+vcenter
+citrix
+monitor
+nagios
+zabbix
+backupsvc
+ops
+dev
+devops
+qa
+stage
+prod
+hr
+finance
+accounting
+payroll
+legal
+security
+secops
+soc
+audit
+ceo
+cfo
+cio
+cto
+manager
+mgr
+admin1
+admin2
+john
+jane
+jdoe
+jsmith
+asmith
+bsmith
+mjones
+sjohnson
+david
+michael
+mike
+sarah
+susan
+daniel
+dan
+alex
+rob
+robert
+kevin
+mark
+matt
+paul
+linda
+mary
+maria
+ann
+anne
+"#;
 
 #[derive(Debug, Clone)]
 pub struct UserEnumConfig {
@@ -40,6 +163,45 @@ impl Default for UserEnumConfig {
             save_asrep_hashes: true,
             concurrency: 10,
         }
+    }
+}
+
+fn parse_userlist(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.to_string())
+        .collect()
+}
+
+pub fn embedded_usernames() -> Vec<String> {
+    parse_userlist(EMBEDDED_USERLIST)
+}
+
+async fn load_usernames(userlist_path: &Path) -> Result<(Vec<String>, String)> {
+    if userlist_path.as_os_str().is_empty() {
+        return Ok((embedded_usernames(), "embedded fallback list".to_string()));
+    }
+
+    match tokio::fs::read_to_string(userlist_path).await {
+        Ok(content) => Ok((
+            parse_userlist(&content),
+            userlist_path.display().to_string(),
+        )),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            warn!(
+                "Cannot read userlist {}: {}. Falling back to embedded list.",
+                userlist_path.display(),
+                e
+            );
+            Ok((embedded_usernames(), "embedded fallback list".to_string()))
+        }
+        Err(e) => Err(OverthroneError::Custom(format!(
+            "Cannot read userlist {}: {}",
+            userlist_path.display(),
+            e
+        ))),
     }
 }
 
@@ -83,23 +245,11 @@ pub async fn run(
 ) -> Result<UserEnumResult> {
     info!("{}", "═══ KERBEROS USER ENUMERATION ═══".bold().magenta());
 
-    // Load username wordlist
-    let content = tokio::fs::read_to_string(&uc.userlist).await.map_err(|e| {
-        OverthroneError::Custom(format!(
-            "Cannot read userlist {}: {}",
-            uc.userlist.display(),
-            e
-        ))
-    })?;
-
-    let usernames: Vec<&str> = content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
+    // Load username wordlist (fallback to embedded list if default is missing)
+    let (usernames, source) = load_usernames(&uc.userlist).await?;
 
     if usernames.is_empty() {
-        warn!("Userlist is empty: {}", uc.userlist.display());
+        warn!("Userlist is empty: {}", source);
         return Ok(UserEnumResult {
             valid_users: Vec::new(),
             no_preauth_users: Vec::new(),
@@ -113,7 +263,7 @@ pub async fn run(
     info!(
         "Loaded {} candidate usernames from {}",
         usernames.len(),
-        uc.userlist.display()
+        source
     );
 
     let pb = ProgressBar::new(usernames.len() as u64);

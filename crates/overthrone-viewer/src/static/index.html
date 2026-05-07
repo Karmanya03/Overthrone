@@ -118,6 +118,12 @@ select {
   text-transform: uppercase;
 }
 
+.hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 select,
 input {
   width: 100%;
@@ -672,6 +678,18 @@ input:disabled {
         <input type="text" id="search-input" placeholder="Search full names, SIDs, domains" autocomplete="off" disabled>
         <div id="search-results"></div>
       </div>
+
+      <div class="field">
+        <label for="render-select">Render Budget</label>
+        <select id="render-select">
+          <option value="auto" selected>Auto (recommended)</option>
+          <option value="2000">2,000 nodes</option>
+          <option value="4000">4,000 nodes</option>
+          <option value="8000">8,000 nodes</option>
+          <option value="full">Full graph (may lag)</option>
+        </select>
+        <div class="hint">Large graphs load in a capped mode to keep the browser responsive.</div>
+      </div>
     </div>
 
     <div class="scroll-area">
@@ -787,6 +805,7 @@ let graphList = [];
 let currentGraphId = null;
 let simulation = null;
 let selectedNode = null;
+let renderLimit = 'auto';
 let svg;
 let g;
 let linkGroup;
@@ -818,6 +837,12 @@ async function init() {
   document.getElementById('path-from').addEventListener('keydown', submitPathOnEnter);
   document.getElementById('path-to').addEventListener('keydown', submitPathOnEnter);
   document.getElementById('search-input').addEventListener('input', onSearchInput);
+  document.getElementById('render-select').addEventListener('change', event => {
+    renderLimit = event.target.value;
+    if (currentGraphId) {
+      loadGraph(currentGraphId);
+    }
+  });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       hideSearchResults();
@@ -879,7 +904,7 @@ async function loadGraph(graphId) {
   clearNodeDetail();
 
   try {
-    const resp = await fetch(`/api/graph?graph=${encodeURIComponent(graphId)}`);
+    const resp = await fetch(`/api/graph?graph=${encodeURIComponent(graphId)}${buildRenderParams()}`);
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
@@ -896,6 +921,7 @@ async function loadGraph(graphId) {
   updateGraphMeta(graphData, graphInfo);
   renderGraph(graphData);
   updateGraphBadge(graphData);
+  updateRenderBadge(graphData);
   setInteractiveEnabled(true);
   document.getElementById('empty-state').classList.add('hidden');
 }
@@ -942,8 +968,31 @@ function setInteractiveEnabled(enabled) {
 }
 
 function updateGraphBadge(data) {
-  document.getElementById('graph-badge').textContent =
-    `${data.label} | ${data.stats.total_nodes} nodes | ${data.stats.total_edges} edges`;
+  const renderedNodes = data.rendered_nodes ?? (data.nodes ? data.nodes.length : 0);
+  const renderedEdges = data.rendered_edges ?? (data.edges ? data.edges.length : 0);
+  const totalNodes = data.stats?.total_nodes ?? renderedNodes;
+  const totalEdges = data.stats?.total_edges ?? renderedEdges;
+  const nodeLabel = renderedNodes === totalNodes
+    ? `${totalNodes} nodes`
+    : `${renderedNodes}/${totalNodes} nodes`;
+  const edgeLabel = renderedEdges === totalEdges
+    ? `${totalEdges} edges`
+    : `${renderedEdges}/${totalEdges} edges`;
+  document.getElementById('graph-badge').textContent = `${data.label} | ${nodeLabel} | ${edgeLabel}`;
+}
+
+function updateRenderBadge(data) {
+  const badge = document.getElementById('render-badge');
+  if (!data) {
+    badge.textContent = 'Idle';
+    return;
+  }
+
+  if (data.truncated) {
+    badge.textContent = `Capped render (${data.rendered_nodes}/${data.stats.total_nodes} nodes)`;
+  } else {
+    badge.textContent = 'Full render';
+  }
 }
 
 function updateGraphMeta(data, graphInfo) {
@@ -1004,6 +1053,14 @@ function renderStats(stats) {
       <div class="label">${item.label}</div>
     </div>
   `).join('');
+}
+
+function buildRenderParams() {
+  if (renderLimit === 'auto') return '';
+  if (renderLimit === 'full') return '&limit=0';
+  const parsed = Number(renderLimit);
+  if (!Number.isFinite(parsed)) return '';
+  return `&limit=${parsed}`;
 }
 
 function renderGraph(data) {
@@ -1301,7 +1358,12 @@ function clearNodeDetail() {
 
 function highlightNode(nodeId) {
   const node = window._nodesMap ? window._nodesMap[nodeId] : null;
-  if (!node) return;
+  if (!node) {
+    if (graphData && graphData.truncated) {
+      document.getElementById('render-badge').textContent = 'Node not rendered — increase Render Budget';
+    }
+    return;
+  }
   selectNode(node);
   zoomToNode(node);
 }

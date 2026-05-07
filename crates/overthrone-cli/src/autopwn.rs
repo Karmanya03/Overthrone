@@ -230,7 +230,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 }
             } else {
                 banner::print_fail(&step_result.output);
-                failed_actions.push(step.description.clone());
+                let action_key = step.action_key().to_string();
+                if !failed_actions.contains(&action_key) {
+                    failed_actions.push(action_key);
+                }
             }
 
             if state_changed {
