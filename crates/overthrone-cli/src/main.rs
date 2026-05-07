@@ -356,13 +356,13 @@ enum Commands {
         action: SccmAction,
     },
 
-    /// Port scanner — lightweight network reconnaissance
-    #[command(alias = "portscan")]
+    /// Port scanner & unauthenticated discovery
+    #[command(alias = "portscan", alias = "discovery")]
     Scan {
         /// Target hosts (IP, CIDR, or range)
         #[arg(short, long, required = true)]
         targets: String,
-        /// Port range (e.g., 80,443 or 1-65535)
+        /// Port range (e.g., 80,443 or top1000)
         #[arg(short = 'P', long, default_value = "top1000")]
         ports: String,
         /// Scan type
@@ -371,6 +371,18 @@ enum Commands {
         /// Timeout in milliseconds
         #[arg(long, default_value = "1000")]
         timeout: u64,
+        /// Perform LDAP null session check
+        #[arg(long, default_value = "true")]
+        ldap: bool,
+        /// Perform SMB null session check
+        #[arg(long, default_value = "true")]
+        smb: bool,
+        /// Disable LDAP null session checks
+        #[arg(long)]
+        no_ldap: bool,
+        /// Disable SMB null session checks
+        #[arg(long)]
+        no_smb: bool,
     },
 
     /// MSSQL operations — query execution, linked servers, xp_cmdshell
@@ -695,11 +707,11 @@ enum GraphAction {
     /// Launch the browser-based graph GUI.
     #[command(alias = "web", alias = "browser")]
     Gui {
-        /// Overthrone/BloodHound JSON files or directories (multiple inputs create separate graphs).
+        /// Overthrone/BloodHound JSON files or directories (directories are selectable per JSON).
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
         /// Port to bind (0 selects a free port).
-        #[arg(short = 'p', long = "port", default_value = "0")]
+        #[arg(short = 'P', long = "port", default_value = "0")]
         port: u16,
     },
     /// Launch the local Rust BloodHound-style interactive tree explorer.
@@ -1612,7 +1624,22 @@ async fn async_main() {
             ref ports,
             ref scan_type,
             timeout,
-        } => commands_impl::cmd_scan(&cli, targets, ports, scan_type, timeout).await,
+            ldap,
+            smb,
+            no_ldap,
+            no_smb,
+        } => {
+            commands_impl::cmd_scan(
+                &cli,
+                targets,
+                ports,
+                scan_type,
+                timeout,
+                ldap && !no_ldap,
+                smb && !no_smb,
+            )
+            .await
+        }
         Commands::Mssql { ref action } => cmd_mssql(&cli, action.clone()).await,
         Commands::Tui {
             ref domain,

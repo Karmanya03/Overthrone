@@ -3,6 +3,7 @@
 //! Lightweight SYN/TCP/ACK scanner for self-contained operation.
 //! Supports CIDR notation, ranges, and hostname targets.
 
+pub mod discovery;
 use crate::error::{OverthroneError, Result};
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};

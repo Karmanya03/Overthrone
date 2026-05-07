@@ -69,6 +69,13 @@ pub enum PlannedAction {
     CheckAdminAccess {
         targets: Vec<String>,
     },
+    UserEnum {
+        wordlist: String,
+    },
+    RidCycle {
+        start_rid: u32,
+        end_rid: u32,
+    },
 
     // ── Kerberos Attacks ──
     AsRepRoast {
@@ -251,11 +258,17 @@ impl Planner {
         goal: &AttackGoal,
         state: &EngagementState,
         failed_actions: &[String],
+        ldap_available: bool,
     ) -> AttackPlan {
         info!(
-            "{} Planning attack: {}",
+            "{} Planning attack: {} (LDAP: {})",
             "PLAN".bold().blue(),
-            goal.describe().bold()
+            goal.describe().bold(),
+            if ldap_available {
+                "OK".green()
+            } else {
+                "OFF".red()
+            }
         );
 
         let mut steps = Vec::new();
@@ -267,22 +280,59 @@ impl Planner {
 
         // ── Phase 1: Recon (always needed if state is empty) ──
         if state.users.is_empty() {
-            steps.push(PlanStep {
-                id: next_id(),
-                description: "Enumerate domain users".to_string(),
-                stage: Stage::Enumerate,
-                action: PlannedAction::EnumerateUsers,
-                priority: 100,
-                noise: NoiseLevel::Silent,
-                depends_on: vec![],
-                executed: false,
-                result: None,
-                retries: 0,
-                max_retries: 2,
-            });
+            if ldap_available {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: "Enumerate domain users".to_string(),
+                    stage: Stage::Enumerate,
+                    action: PlannedAction::EnumerateUsers,
+                    priority: 100,
+                    noise: NoiseLevel::Silent,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 2,
+                });
+            } else {
+                // LDAP unavailable — use Kerberos user enumeration as primary recon
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: "Kerberos User Enumeration (wordlist fallback)".to_string(),
+                    stage: Stage::Enumerate,
+                    action: PlannedAction::UserEnum {
+                        wordlist: "assets/ad_usernames.txt".to_string(),
+                    },
+                    priority: 105, // Higher priority as it's our only way to get users
+                    noise: NoiseLevel::Low,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+
+                // Also try RID cycling if we have SMB
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: "RID Cycling via SAMR (SMB fallback)".to_string(),
+                    stage: Stage::Enumerate,
+                    action: PlannedAction::RidCycle {
+                        start_rid: 500,
+                        end_rid: 2000,
+                    },
+                    priority: 104,
+                    noise: NoiseLevel::Low,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
         }
 
-        if state.computers.is_empty() {
+        if ldap_available && state.computers.is_empty() {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate domain computers".to_string(),
@@ -298,7 +348,7 @@ impl Planner {
             });
         }
 
-        if state.groups.is_empty() {
+        if ldap_available && state.groups.is_empty() {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate groups & memberships".to_string(),
@@ -317,7 +367,8 @@ impl Planner {
         // ── Phase 1b: Extended Recon (trusts, GPOs, shares) ──
         // These give the planner and Q-learner richer state for decision-making.
 
-        if state.password_policy.is_none()
+        if ldap_available
+            && state.password_policy.is_none()
             && !failed_actions.contains(&"enumerate_password_policy".to_string())
         {
             steps.push(PlanStep {
@@ -335,7 +386,10 @@ impl Planner {
             });
         }
 
-        if state.trusts.is_empty() && !failed_actions.contains(&"enumerate_trusts".to_string()) {
+        if ldap_available
+            && state.trusts.is_empty()
+            && !failed_actions.contains(&"enumerate_trusts".to_string())
+        {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate domain trusts & trust relationships".to_string(),
@@ -351,7 +405,10 @@ impl Planner {
             });
         }
 
-        if state.gpos.is_empty() && !failed_actions.contains(&"enumerate_gpos".to_string()) {
+        if ldap_available
+            && state.gpos.is_empty()
+            && !failed_actions.contains(&"enumerate_gpos".to_string())
+        {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate GPOs & linked policies".to_string(),
@@ -367,7 +424,8 @@ impl Planner {
             });
         }
 
-        if state.delegation_count() == 0
+        if ldap_available
+            && state.delegation_count() == 0
             && !failed_actions.contains(&"enumerate_delegations".to_string())
         {
             steps.push(PlanStep {
@@ -385,7 +443,10 @@ impl Planner {
             });
         }
 
-        if state.laps.is_empty() && !failed_actions.contains(&"enumerate_laps".to_string()) {
+        if ldap_available
+            && state.laps.is_empty()
+            && !failed_actions.contains(&"enumerate_laps".to_string())
+        {
             steps.push(PlanStep {
                 id: next_id(),
                 description: "Enumerate readable LAPS passwords".to_string(),
@@ -536,7 +597,7 @@ impl Planner {
         }
 
         // ── Phase 2.5: ADCS Certificate Abuse ──
-        if !failed_actions.contains(&"adcs_enum".to_string()) {
+        if ldap_available && !failed_actions.contains(&"adcs_enum".to_string()) {
             let adcs_enum_id = next_id();
             steps.push(PlanStep {
                 id: adcs_enum_id.clone(),

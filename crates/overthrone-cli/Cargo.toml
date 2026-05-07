@@ -18,15 +18,15 @@ name = "ovt"
 path = "src/ovt_main.rs"
 
 [dependencies]
-overthrone-core = { version = "0.1.44", path = "../overthrone-core" }
-overthrone-reaper = { version = "0.1.44", path = "../overthrone-reaper" }
-overthrone-hunter = { version = "0.1.44", path = "../overthrone-hunter" }
-overthrone-pilot = { version = "0.1.44", path = "../overthrone-pilot", features = ["qlearn"] }
-overthrone-crawler = { version = "0.1.44", path = "../overthrone-crawler" }
-overthrone-forge = { version = "0.1.44", path = "../overthrone-forge" }
-overthrone-scribe = { version = "0.1.44", path = "../overthrone-scribe" }
-overthrone-relay = { version = "0.1.44", path = "../overthrone-relay" }
-overthrone-viewer = { version = "0.1.44", path = "../overthrone-viewer" }
+overthrone-core = { version = "0.1.45", path = "../overthrone-core" }
+overthrone-reaper = { version = "0.1.45", path = "../overthrone-reaper" }
+overthrone-hunter = { version = "0.1.45", path = "../overthrone-hunter" }
+overthrone-pilot = { version = "0.1.45", path = "../overthrone-pilot", features = ["qlearn"] }
+overthrone-crawler = { version = "0.1.45", path = "../overthrone-crawler" }
+overthrone-forge = { version = "0.1.45", path = "../overthrone-forge" }
+overthrone-scribe = { version = "0.1.45", path = "../overthrone-scribe" }
+overthrone-relay = { version = "0.1.45", path = "../overthrone-relay" }
+overthrone-viewer = { version = "0.1.45", path = "../overthrone-viewer" }
 clap.workspace = true
 clap_complete.workspace = true
 ratatui = "0.29"

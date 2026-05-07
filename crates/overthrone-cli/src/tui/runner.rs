@@ -136,6 +136,8 @@ pub async fn run_tui_with_crawler(
             acl_findings: Vec::new(),
             laps_entries: Vec::new(),
             mssql_instances: Vec::new(),
+            snaffle_findings: Vec::new(),
+            powerview_results: None,
             adcs_templates: Vec::new(),
         };
 

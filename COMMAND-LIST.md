@@ -13,7 +13,9 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
   <a href="#ovt-enum---quick-enumeration-by-target-type">enum</a> &nbsp;·&nbsp;
   <a href="#ovt-reaper---full-ad-enumeration-engine">reaper</a> &nbsp;·&nbsp;
   <a href="#ovt-rid---rid-cycling">rid</a> &nbsp;·&nbsp;
-  <a href="#ovt-scan---port-scanner">scan</a> &nbsp;·&nbsp;
+  <a href="#ovt-scan---network-discovery--recon">scan</a> &nbsp;·&nbsp;
+  <a href="#ovt-snaffler---sensitive-file-discovery">snaffler</a> &nbsp;·&nbsp;
+  <a href="#ovt-powerview---advanced-ad-enumeration">powerview</a> &nbsp;·&nbsp;
   <a href="#ovt-laps---laps-password-reading">laps</a> &nbsp;·&nbsp;
   <a href="#ovt-gpp---gpp-password-decryption">gpp</a>
 </p>
@@ -33,13 +35,13 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
   <a href="#ovt-shell---interactive-remote-shell">shell</a> &nbsp;·&nbsp;
   <a href="#ovt-smb---smb-operations">smb</a> &nbsp;·&nbsp;
   <a href="#ovt-move---lateral-movement--trust-mapping">move</a> &nbsp;·&nbsp;
-  <a href="#ovt-mssql---mssql-operations">mssql</a>
+  <a href="#ovt-mssql---advanced-mssql-audit--powerupsql">mssql</a>
 </p>
 
 <p align="center">
   <b>Persistence &amp; Certificates</b><br/>
   <a href="#ovt-forge---ticket-forging--persistence">forge</a> &nbsp;·&nbsp;
-  <a href="#ovt-adcs---adcs-certificate-abuse-esc1-esc8">adcs</a> &nbsp;·&nbsp;
+  <a href="#ovt-adcs---adcs-certificate-abuse-esc1-esc13">adcs</a> &nbsp;·&nbsp;
   <a href="#ovt-ntlm---ntlm-relay--poisoning">ntlm</a> &nbsp;·&nbsp;
   <a href="#ovt-graph---attack-graph-engine">graph</a>
 </p>
@@ -78,7 +80,7 @@ These work on every single command:
 
 ## `ovt auto-pwn` - The "Hold My Beer" Button
 
-The full autonomous killchain. Goes from "I have creds" to "I own everything" while you watch it happen in real time. Now with **Q-Learning AI** that gets smarter every engagement and actually shows its work - every step prints the stage, noise level, Q-state, action decision (explore vs exploit), Q-value, and reward. The final report has a kill-chain completion graphic, credential tables, loot summaries, and an audit trail. No more staring at a blank terminal hoping something is happening.
+The full autonomous killchain. Goes from "I have creds" to "I own everything" while you watch it happen in real time. Now with **Q-Learning AI** that gets smarter every engagement and actually shows its work - every step prints the stage, noise level, Q-state, action decision (explore vs exploit), Q-value, and reward. The final report has a kill-chain completion graphic, credential tables, loot summaries, and an audit trail. No more staring at a blank terminal hoping something is happening. Supports all advanced ADCS ESC1-ESC13 attack vectors.
 
 ```bash
 # Basic - let the AI figure it out
@@ -200,6 +202,83 @@ ovt reaper --dc-ip 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --page-si
 | `--dc-ip` | | Domain Controller IP (also accepts `--dc`, `--dc-host`) |
 | `--modules`, `-m` | all | Comma-separated list: `users`, `computers`, `groups`, `acls`, `trusts`, `gpos`, etc. |
 | `--page-size` | `500` | LDAP page size. Bigger = fewer round trips. Smaller = less suspicious. |
+
+Aliases: `ovt harvest`
+
+---
+
+## `ovt scan` - Network Discovery & Recon
+
+Unauthenticated discovery module for zero-knowledge reconnaissance. Identifies open ports, service versions, and misconfigurations (like LDAP null sessions) before you even have a username. Perfect for initial triage.
+
+```bash
+# Basic scan - triage DC ports and check for null sessions
+ovt scan --targets 10.10.10.1
+
+# Full port scan of common AD ports + null session checks
+ovt scan --targets 10.10.10.1 --ports top1000 --ldap --smb
+
+# Disable specific checks
+ovt scan --targets 10.10.10.1 --no-ldap --no-smb
+
+# No password, username, or domain required
+ovt enum pre -H 10.10.10.1
+ovt enum anonymous -H 10.10.10.1
+ovt enum null-session -H 10.10.10.1
+ovt rid -H 10.10.10.1 --null-session --start-rid 500 --end-rid 1100
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--targets`, `-t` | required | Target host, CIDR, or range. |
+| `--ldap` | `true` | Check for LDAP Null Session and dump RootDSE naming contexts. |
+| `--smb` | `true` | Check for SMB Null Session and list accessible shares. |
+| `--no-ldap` | `false` | Skip LDAP null-session checks. |
+| `--no-smb` | `false` | Skip SMB null-session checks. |
+| `--ports`, `-P` | `top1000` | Port list/range, for example `88,135,389,445` or `1-65535`. |
+| `--scan-type`, `-T` | `connect` | `connect`, `syn`, or `ack`. |
+
+---
+
+## `ovt snaffler` - Sensitive File Discovery
+
+The Rust implementation of the legendary Snaffler. Recursively scans accessible SMB shares for "high-value" files (passwords, certificates, keys, configs). Optimized for 2026 speeds with parallel host scanning and intelligent system directory filtering.
+
+```bash
+# Snaffle all computers found in AD
+ovt snaffler -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+
+# Save findings to JSON for later analysis
+ovt snaffler -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' -o json -O findings.json
+```
+
+---
+
+## `ovt powerview` - Advanced AD Enumeration
+
+PowerView, rewritten in Rust. Provides granular, high-fidelity enumeration of AD objects, their properties, and relationships. Mimics the output and functionality of the PowerView.ps1 script but without the PowerShell execution logs.
+
+```bash
+# Get detailed GPO info including links and status
+ovt powerview gpos -H 10.10.10.1 -d corp.local
+
+# Get all properties for a specific user
+ovt powerview users --username "adm-smith" -H 10.10.10.1 -d corp.local
+```
+
+---
+
+## `ovt mssql` - Advanced MSSQL Audit (PowerUpSQL)
+
+Advanced MSSQL enumeration and abuse module. Performs SPN discovery, linked server crawling, impersonation checks, and `xp_cmdshell` status auditing. Basically PowerUpSQL in a binary.
+
+```bash
+# Find all MSSQL instances and perform basic audit
+ovt mssql -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+
+# Deep crawl linked servers to find execution paths
+ovt mssql audit --crawl-links -H 10.10.10.1 -d corp.local
+```
 
 ---
 
@@ -356,8 +435,8 @@ ovt graph gui --file attack_graph.json
 ovt graph gui -i ./graphs/
 ovt graph gui -i ./graphs/engagement_a -i ./graphs/engagement_b
 
-# Directory inputs are expanded automatically (all JSON files become one graph)
-# Multiple -i inputs show up as selectable graphs in the GUI.
+# Directory inputs are indexed as selectable JSON files.
+# The GUI opens on a black canvas and renders only the selected file.
 
 # Find shortest path between two nodes
 ovt graph path --from jsmith --to "Domain Admins"
@@ -378,7 +457,7 @@ ovt graph export --output graph.json
 ovt graph export --output bloodhound.json --bloodhound
 ```
 
-`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local web server and opens a browser tab with a D3-powered graph UI, search, path finder, and live stats.
+`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, lazy-loads and caches the selected graph, and opens a D3-powered browser UI with full node display names, spacious collision-aware layout, search, path finder, and live stats.
 
 ---
 
@@ -612,6 +691,9 @@ ovt scan --targets 10.10.10.1 -P 1-65535
 # Specific ports with timeout
 ovt scan --targets 10.10.10.0/24 -P 80,443,445,3389,5985 --timeout 2000
 
+# Port scan only; skip null-session probes
+ovt scan --targets 10.10.10.0/24 --no-ldap --no-smb
+
 # SYN scan (requires root/raw sockets)
 ovt scan --targets 10.10.10.0/24 --scan-type syn
 
@@ -625,6 +707,8 @@ ovt scan --targets 10.10.10.0/24 --scan-type ack
 | `--ports`, `-P` | `top1000` | Port range: `80,443` or `1-65535` |
 | `--scan-type`, `-T` | `connect` | `syn` (needs root), `connect`, `ack` (firewall mapping) |
 | `--timeout` | `1000` | Timeout in milliseconds |
+| `--ldap` / `--no-ldap` | `true` | Enable or skip anonymous LDAP RootDSE/null-session checks |
+| `--smb` / `--no-smb` | `true` | Enable or skip SMB null-session share checks |
 
 ---
 
@@ -853,10 +937,14 @@ For the "I don't read docs, I read cheat sheets" crowd:
 
 ```bash
 # === RECON ===
+ovt scan --targets DC                                  # No-creds port/null-session triage
+ovt enum pre -H DC                                     # No-creds AD service triage
+ovt enum anonymous -H DC                               # Anonymous LDAP RootDSE probe
+ovt enum null-session -H DC                            # Null-session RID range probe
 ovt enum all -H DC -d DOMAIN -u USER -p PASS         # Enumerate everything
 ovt reaper -H DC -d DOMAIN -u USER -p PASS            # Full LDAP reaper
 ovt scan --targets 10.10.10.0/24                       # Port scan
-ovt rid -H DC -d DOMAIN --null-session                 # RID cycling
+ovt rid -H DC --null-session                           # RID cycling
 
 # === KERBEROS ===
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS    # Kerberoast

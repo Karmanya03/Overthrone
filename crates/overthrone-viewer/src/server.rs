@@ -3,9 +3,10 @@
 //! Serves a single-page BloodHound-style application with D3.js force-directed
 //! graph visualization, node search, attack path finder, and detail panels.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -16,8 +17,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::graph_data::{PathResult, ViewerGraph, ViewerNode, ViewerStats};
 
@@ -25,17 +27,19 @@ use crate::graph_data::{PathResult, ViewerGraph, ViewerNode, ViewerStats};
 const INDEX_HTML: &str = include_str!("static/index.html");
 
 /// Loaded graph bundle
+#[derive(Clone)]
 struct GraphBundle {
     id: String,
     label: String,
     sources: Vec<String>,
-    graph: Arc<ViewerGraph>,
+    file_bytes: u64,
 }
 
 /// Shared application state
 struct AppState {
     graphs: Vec<GraphBundle>,
     default_graph: String,
+    cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
 }
 
 // ============================================================
@@ -47,7 +51,9 @@ struct GraphInfo {
     id: String,
     label: String,
     sources: Vec<String>,
-    stats: StatsResponse,
+    file_bytes: u64,
+    loaded: bool,
+    stats: Option<StatsResponse>,
 }
 
 #[derive(Serialize)]
@@ -221,7 +227,7 @@ fn stats_response(stats: &ViewerStats) -> StatsResponse {
     }
 }
 
-fn resolve_graph<'a>(
+fn resolve_bundle<'a>(
     state: &'a AppState,
     graph_id: Option<&str>,
 ) -> Result<&'a GraphBundle, StatusCode> {
@@ -239,6 +245,30 @@ fn resolve_graph<'a>(
         .find(|graph| graph.id == state.default_graph)
         .or_else(|| state.graphs.first())
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn load_graph(
+    state: &AppState,
+    graph_id: Option<&str>,
+) -> Result<(GraphBundle, Arc<ViewerGraph>), StatusCode> {
+    let bundle = resolve_bundle(state, graph_id)?.clone();
+
+    if let Some(graph) = state.cache.read().await.get(&bundle.id).cloned() {
+        return Ok((bundle, graph));
+    }
+
+    let mut cache = state.cache.write().await;
+    if let Some(graph) = cache.get(&bundle.id).cloned() {
+        return Ok((bundle, graph));
+    }
+
+    let graph = ViewerGraph::from_sources(&bundle.sources).map_err(|e| {
+        warn!("failed to load graph {}: {}", bundle.label, e);
+        StatusCode::UNPROCESSABLE_ENTITY
+    })?;
+    let graph = Arc::new(graph);
+    cache.insert(bundle.id.clone(), Arc::clone(&graph));
+    Ok((bundle, graph))
 }
 
 fn graph_label_from_source(source: &str) -> String {
@@ -268,6 +298,35 @@ fn graph_id_from_label(label: &str) -> String {
     id.trim_matches('-').to_string()
 }
 
+fn expand_graph_sources(sources: &[String]) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for source in sources {
+        let path = PathBuf::from(source);
+        if !path.exists() {
+            return Err(anyhow!("graph source does not exist: {}", path.display()));
+        }
+
+        if path.is_dir() {
+            let mut entries = fs::read_dir(&path)?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|entry| {
+                    entry
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+                })
+                .collect::<Vec<_>>();
+            entries.sort();
+            paths.extend(entries);
+        } else {
+            paths.push(path);
+        }
+    }
+
+    Ok(paths)
+}
+
 fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
     if sources.is_empty() {
         return Err(anyhow!("no graph sources provided"));
@@ -275,11 +334,15 @@ fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
 
     let mut bundles = Vec::new();
     let mut seen_ids = HashSet::new();
+    let paths = expand_graph_sources(sources)?;
 
-    for (idx, source) in sources.iter().enumerate() {
-        let graph =
-            ViewerGraph::from_sources(std::slice::from_ref(source)).map_err(|e| anyhow!(e))?;
-        let label = graph_label_from_source(source);
+    if paths.is_empty() {
+        return Err(anyhow!("no JSON graph files found in the provided input"));
+    }
+
+    for (idx, path) in paths.iter().enumerate() {
+        let source = path.display().to_string();
+        let label = graph_label_from_source(&source);
         let mut base_id = graph_id_from_label(&label);
         if base_id.is_empty() {
             base_id = format!("graph-{}", idx + 1);
@@ -295,8 +358,8 @@ fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
         bundles.push(GraphBundle {
             id: graph_id,
             label,
-            sources: graph.sources().to_vec(),
-            graph: Arc::new(graph),
+            sources: vec![source],
+            file_bytes: fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
         });
     }
 
@@ -424,14 +487,20 @@ async fn index() -> Html<&'static str> {
 
 /// GET /api/graphs — List available graphs
 async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>> {
+    let cache = state.cache.read().await;
     let graphs = state
         .graphs
         .iter()
-        .map(|graph| GraphInfo {
-            id: graph.id.clone(),
-            label: graph.label.clone(),
-            sources: graph.sources.clone(),
-            stats: stats_response(graph.graph.stats()),
+        .map(|bundle| {
+            let cached = cache.get(&bundle.id);
+            GraphInfo {
+                id: bundle.id.clone(),
+                label: bundle.label.clone(),
+                sources: bundle.sources.clone(),
+                file_bytes: bundle.file_bytes,
+                loaded: cached.is_some(),
+                stats: cached.map(|graph| stats_response(graph.stats())),
+            }
         })
         .collect();
 
@@ -443,16 +512,15 @@ async fn get_graph(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<GraphResponse>, StatusCode> {
-    let bundle = resolve_graph(&state, query.graph.as_deref())?;
-    let graph = &bundle.graph;
+    let (bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
 
     Ok(Json(GraphResponse {
         graph_id: bundle.id.clone(),
         label: bundle.label.clone(),
         sources: bundle.sources.clone(),
         stats: stats_response(graph.stats()),
-        nodes: graph_nodes(graph),
-        edges: graph_edges(graph),
+        nodes: graph_nodes(&graph),
+        edges: graph_edges(&graph),
     }))
 }
 
@@ -462,8 +530,7 @@ async fn get_node_detail(
     AxumPath(nid): AxumPath<String>,
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<NodeDetail>, StatusCode> {
-    let bundle = resolve_graph(&state, query.graph.as_deref())?;
-    let graph = &bundle.graph;
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
 
     let node_idx = graph.resolve_node(&nid).ok_or(StatusCode::NOT_FOUND)?;
     let node = graph.get_node(node_idx).ok_or(StatusCode::NOT_FOUND)?;
@@ -524,8 +591,7 @@ async fn search_nodes(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<SearchResult>>, StatusCode> {
-    let bundle = resolve_graph(&state, query.graph.as_deref())?;
-    let graph = &bundle.graph;
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
     let q = query.q.trim().to_ascii_uppercase();
 
     let results: Vec<SearchResult> = graph
@@ -561,11 +627,10 @@ async fn find_path(
     Query(query): Query<GraphQuery>,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, StatusCode> {
-    let bundle = resolve_graph(&state, query.graph.as_deref())?;
-    let graph = &bundle.graph;
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
 
     if let Some(path) = graph.shortest_path(&req.from, &req.to) {
-        return Ok(Json(path_response(graph, path)));
+        return Ok(Json(path_response(&graph, path)));
     }
 
     Ok(Json(PathResponse {
@@ -589,8 +654,8 @@ async fn get_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<StatsResponse>, StatusCode> {
-    let bundle = resolve_graph(&state, query.graph.as_deref())?;
-    Ok(Json(stats_response(bundle.graph.stats())))
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
+    Ok(Json(stats_response(graph.stats())))
 }
 
 // ============================================================
@@ -605,10 +670,11 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
     let graphs = build_graph_bundles(sources)?;
 
     for graph in &graphs {
-        let stats = graph.graph.stats();
         info!(
-            "Loaded graph {}: {} nodes, {} edges",
-            graph.label, stats.total_nodes, stats.total_edges
+            "Indexed graph {}: {} bytes from {}",
+            graph.label,
+            graph.file_bytes,
+            graph.sources.join(", ")
         );
     }
 
@@ -620,6 +686,7 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
     let state = Arc::new(AppState {
         graphs,
         default_graph,
+        cache: RwLock::new(HashMap::new()),
     });
 
     let cors = CorsLayer::new()

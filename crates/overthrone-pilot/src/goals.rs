@@ -216,7 +216,7 @@ pub struct EngagementState {
     pub action_log: Vec<ActionLogEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiscoveredUser {
     pub sam_account_name: String,
     pub distinguished_name: String,

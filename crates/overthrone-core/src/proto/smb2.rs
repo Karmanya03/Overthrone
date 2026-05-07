@@ -54,6 +54,7 @@ const SMB2_QUERY_DIRECTORY: u16 = 0x000E;
 const SMB2_DIALECT_210: u16 = 0x0210; // SMB 2.1
 const SMB2_DIALECT_300: u16 = 0x0300; // SMB 3.0
 const SMB2_DIALECT_302: u16 = 0x0302; // SMB 3.0.2
+const SMB2_DIALECT_311: u16 = 0x0311; // SMB 3.1.1 (Windows 10 / Server 2016+)
 
 // SMB2 Flags
 #[allow(dead_code)] // Protocol reference constants
@@ -339,24 +340,47 @@ impl Smb2Connection {
         let mut body = Vec::with_capacity(64);
         // StructureSize = 36
         body.extend_from_slice(&36u16.to_le_bytes());
-        // DialectCount = 3
-        body.extend_from_slice(&3u16.to_le_bytes());
+        // DialectCount = 4
+        body.extend_from_slice(&4u16.to_le_bytes());
         // SecurityMode = Signing Enabled (0x01)
         body.extend_from_slice(&0x01u16.to_le_bytes());
         // Reserved
         body.extend_from_slice(&0u16.to_le_bytes());
-        // Capabilities = 0 (no DFS, no leasing, etc.)
-        body.extend_from_slice(&0u32.to_le_bytes());
+        // Capabilities = SMB2_GLOBAL_CAP_ENCRYPTION (0x40) for 3.x
+        body.extend_from_slice(&0x40u32.to_le_bytes());
         // ClientGuid (16 bytes random)
         let mut guid = [0u8; 16];
         rand::rng().fill(&mut guid);
         body.extend_from_slice(&guid);
-        // ClientStartTime = 0
-        body.extend_from_slice(&0u64.to_le_bytes());
-        // Dialects: 2.1, 3.0, 3.0.2
+        // NegotiateContextOffset (for 3.1.1)
+        let context_offset = (SMB2_HEADER_SIZE + 36 + 8) as u32; // Header + Body + Dialects
+        body.extend_from_slice(&context_offset.to_le_bytes());
+        // NegotiateContextCount
+        body.extend_from_slice(&1u16.to_le_bytes());
+        // Reserved
+        body.extend_from_slice(&0u16.to_le_bytes());
+        // Dialects: 2.1, 3.0, 3.0.2, 3.1.1
         body.extend_from_slice(&SMB2_DIALECT_210.to_le_bytes());
         body.extend_from_slice(&SMB2_DIALECT_300.to_le_bytes());
         body.extend_from_slice(&SMB2_DIALECT_302.to_le_bytes());
+        body.extend_from_slice(&SMB2_DIALECT_311.to_le_bytes());
+        // Padding for context
+        body.extend_from_slice(&[0, 0]);
+
+        // Pre-Auth Integrity Context (SHA-512)
+        // ContextType = 0x0001, DataLength = 38
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&38u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+        // HashAlgorithmCount = 1, SaltLength = 32
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&32u16.to_le_bytes());
+        // HashAlgorithm = SHA-512 (0x0001)
+        body.extend_from_slice(&1u16.to_le_bytes());
+        // Salt (32 bytes random)
+        let mut salt = [0u8; 32];
+        rand::rng().fill(&mut salt);
+        body.extend_from_slice(&salt);
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);

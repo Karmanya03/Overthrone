@@ -1,0 +1,284 @@
+//! Snaffler-like sensitive file discovery in SMB shares.
+//!
+//! Recursively walks through accessible shares and matches files against
+//! high-value patterns (passwords, keys, configurations, sensitive documents).
+//!
+//! Optimized for speed with parallel share scanning and depth-limited recursion.
+
+use crate::runner::{ReaperConfig, ldap_connect};
+use overthrone_core::error::Result;
+use overthrone_core::proto::smb::SmbSession;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+use tracing::{debug, info};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnaffleFinding {
+    pub hostname: String,
+    pub share: String,
+    pub path: String,
+    pub reason: String,
+    pub severity: u8, // 1 = Critical (Passwords, Keys), 2 = High (Config), 3 = Medium (Backups)
+    pub size: u64,
+}
+
+pub struct Snaffler {
+    config: ReaperConfig,
+    patterns: Vec<SnafflePattern>,
+    concurrency_limit: Arc<Semaphore>,
+}
+
+struct SnafflePattern {
+    extension: Option<String>,
+    name_contains: Option<String>,
+    reason: String,
+    severity: u8,
+}
+
+impl Snaffler {
+    pub fn new(config: ReaperConfig) -> Self {
+        let patterns = vec![
+            // --- CRITICAL (Severity 1) ---
+            SnafflePattern {
+                extension: Some("pfx".to_string()),
+                name_contains: None,
+                reason: "Certificate with private key (PFX/P12)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("kdbx".to_string()),
+                name_contains: None,
+                reason: "KeePass password database".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("key".to_string()),
+                name_contains: None,
+                reason: "Private key file".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("rdp".to_string()),
+                name_contains: None,
+                reason: "RDP connection file (may contain saved credentials)".to_string(),
+                severity: 1,
+            },
+            // --- HIGH (Severity 2) ---
+            SnafflePattern {
+                extension: Some("xml".to_string()),
+                name_contains: Some("web.config".to_string()),
+                reason: "IIS Web Configuration (contains connection strings)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: Some("config".to_string()),
+                name_contains: None,
+                reason: "Application configuration file".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: Some("ps1".to_string()),
+                name_contains: Some("deploy".to_string()),
+                reason: "Deployment script (often contains hardcoded creds)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("id_rsa".to_string()),
+                reason: "SSH private key".to_string(),
+                severity: 2,
+            },
+            // --- MEDIUM (Severity 3) ---
+            SnafflePattern {
+                extension: Some("bak".to_string()),
+                name_contains: None,
+                reason: "Backup file (possible database or config backup)".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("sql".to_string()),
+                name_contains: None,
+                reason: "SQL script (may contain data or credentials)".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("xlsx".to_string()),
+                name_contains: Some("password".to_string()),
+                reason: "Spreadsheet with 'password' in name".to_string(),
+                severity: 3,
+            },
+        ];
+
+        Self {
+            config,
+            patterns,
+            concurrency_limit: Arc::new(Semaphore::new(10)), // Scan 10 hosts in parallel
+        }
+    }
+
+    pub async fn run(&self) -> Result<Vec<SnaffleFinding>> {
+        info!("[snaffler] Starting sensitive file discovery (Snaffler-mode)");
+        let mut findings = Vec::new();
+
+        // 1. Get computers from AD
+        let mut ldap = ldap_connect(&self.config).await?;
+        let filter = "(objectCategory=computer)";
+        let entries = ldap
+            .custom_search(filter, &["dNSHostName", "sAMAccountName"])
+            .await?;
+        let _ = ldap.disconnect().await;
+
+        let mut host_tasks = Vec::new();
+
+        for entry in entries {
+            let hostname = entry
+                .attrs
+                .get("dNSHostName")
+                .and_then(|v| v.first())
+                .cloned()
+                .unwrap_or_else(|| {
+                    entry
+                        .attrs
+                        .get("sAMAccountName")
+                        .and_then(|v| v.first())
+                        .map(|s| s.trim_end_matches('$').to_string())
+                        .unwrap_or_default()
+                });
+
+            if hostname.is_empty() {
+                continue;
+            }
+
+            let permit = self
+                .concurrency_limit
+                .clone()
+                .acquire_owned()
+                .await
+                .unwrap();
+            let config = self.config.clone();
+            let patterns = self
+                .patterns
+                .iter()
+                .map(|p| {
+                    (
+                        p.extension.clone(),
+                        p.name_contains.clone(),
+                        p.reason.clone(),
+                        p.severity,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let hostname_clone = hostname.clone();
+
+            host_tasks.push(tokio::spawn(async move {
+                let _permit = permit;
+                let mut host_findings = Vec::new();
+
+                let session = match SmbSession::connect(
+                    &hostname_clone,
+                    &config.domain,
+                    &config.username,
+                    config.password.as_deref().unwrap_or(""),
+                )
+                .await
+                {
+                    Ok(s) => s,
+                    Err(_) => return host_findings,
+                };
+
+                // Common shares to snaffle
+                let shares = [
+                    "C$", "Users", "Shared", "Data", "Backup", "SYSVOL", "NETLOGON",
+                ];
+                let access = session.check_share_access(&shares).await;
+
+                for share in access {
+                    if share.readable {
+                        debug!(
+                            "[snaffler] Scanning \\\\{}\\{}",
+                            hostname_clone, share.share_name
+                        );
+                        let mut stack = vec!["".to_string()];
+                        let mut depth_map = std::collections::HashMap::new();
+                        depth_map.insert("".to_string(), 0);
+
+                        while let Some(current_path) = stack.pop() {
+                            let depth = *depth_map.get(&current_path).unwrap_or(&0);
+                            if depth > 5 {
+                                continue;
+                            } // Limit recursion depth to 5
+
+                            if let Ok(entries) = session
+                                .list_directory(&share.share_name, &current_path)
+                                .await
+                            {
+                                for entry in entries {
+                                    if entry.is_directory {
+                                        // Skip noisy/huge system directories
+                                        let lower_name = entry.name.to_lowercase();
+                                        if lower_name == "windows"
+                                            || lower_name == "program files"
+                                            || lower_name == "program files (x86)"
+                                            || lower_name == "winsxs"
+                                            || lower_name == "appdata"
+                                        {
+                                            continue;
+                                        }
+                                        let next_path = entry.path.clone();
+                                        depth_map.insert(next_path.clone(), depth + 1);
+                                        stack.push(next_path);
+                                    } else {
+                                        for (ext, name_part, reason, severity) in &patterns {
+                                            let mut matched = false;
+                                            if let Some(e) = ext
+                                                && entry.name.to_lowercase().ends_with(e)
+                                            {
+                                                matched = true;
+                                            }
+                                            if let Some(n) = name_part
+                                                && entry.name.to_lowercase().contains(n)
+                                            {
+                                                matched = true;
+                                            }
+
+                                            if matched {
+                                                host_findings.push(SnaffleFinding {
+                                                    hostname: hostname_clone.clone(),
+                                                    share: share.share_name.clone(),
+                                                    path: entry.path.clone(),
+                                                    reason: reason.clone(),
+                                                    severity: *severity,
+                                                    size: entry.size,
+                                                });
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                host_findings
+            }));
+        }
+
+        for task in host_tasks {
+            if let Ok(res) = task.await {
+                findings.extend(res);
+            }
+        }
+
+        info!(
+            "[snaffler] Discovery complete. Found {} sensitive files.",
+            findings.len()
+        );
+        Ok(findings)
+    }
+}
+
+pub async fn run_snaffler(config: &ReaperConfig) -> Result<Vec<SnaffleFinding>> {
+    let snaffler = Snaffler::new(config.clone());
+    snaffler.run().await
+}

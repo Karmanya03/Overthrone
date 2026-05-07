@@ -144,21 +144,21 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 
 ### The Crate Report Card
 
-These are real numbers. Test counts pulled directly from source. No rounding up.
+These are real numbers from `cargo test --workspace --lib` on v0.1.45. No rounding up.
 
 ```
-overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  292 unit tests. ESC1-ESC13. SOCKS5 proxy (RFC 1928). Mask attack
+overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  298 unit tests. ESC1-ESC13. SOCKS5 proxy (RFC 1928). Mask attack
                                                    cracker. Graph O(N²) fixed. Zero clippy warnings. The absolute unit
                                                    keeps getting bigger and hasn't broken yet. Suspicious.
 
-overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  65 unit tests. DPAPI decrypts LAPS v2 now. Full reaper_test.rs
+overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  47 unit tests. DPAPI decrypts LAPS v2 now. Full reaper_test.rs
                                                    integration suite (587 lines). Missing: a handful of edge-case GPO
                                                    attribute parsers that will never matter until they do.
 
 overthrone-hunter   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  11 unit tests. 100% feature complete. The overachiever.
                                                    hunter_test.rs integration suite (254 lines). No notes.
 
-overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~95%  10 unit tests. foreign.rs went from empty to 25KB of real cross-trust
+overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~95%  7 unit tests. foreign.rs went from empty to 25KB of real cross-trust
                                                    LDAP queries. crawler_test.rs integration suite (203 lines).
                                                    Missing: a few inter-realm SID filter edge cases. Close enough.
 
@@ -172,11 +172,11 @@ overthrone-pilot    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  8 unit t
                                                    kill-chain pipeline, per-step QL readout, 9-section final report.
                                                    The auto-pwn actually tells you what it's doing. Revolutionary.
 
-overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  34 unit tests. relay.rs (1,557 lines), responder.rs (836 lines),
+overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  43 unit tests. relay.rs (1,557 lines), responder.rs (836 lines),
                                                    poisoner.rs (766 lines), ADCS relay (359 lines). Born complete.
                                                    Still complete. Annoyingly consistent.
 
-overthrone-scribe   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  12 unit tests. scribe_test.rs integration suite (314 lines). All
+overthrone-scribe   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  13 unit tests. scribe_test.rs integration suite (314 lines). All
                                                    three output formats work and are wired to the CLI. PDF works.
                                                    We're as surprised as you are.
 
@@ -252,11 +252,11 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~102,000 lines of Rust. Zero Python wrappers. Minimal shell-outs where strictly needed. 455 unit tests in core, 80 in reaper, 11 in hunter, 25 in crawler, 17 in forge, 41 in relay, 12 in scribe, 10 in CLI, 8 in pilot. 36 integration tests covering graph, C2, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~97,100 lines of Rust (~102,700 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` currently exercises 444 library tests across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
-30+ commands across recon, Kerberos, lateral movement, persistence, and more. Every command works as both `overthrone <cmd>` and `ovt <cmd>`.
+29 top-level commands plus deep subcommands across recon, Kerberos, lateral movement, persistence, and reporting. Every command works as both `overthrone <cmd>` and `ovt <cmd>`.
 
 > **[Full Command Reference ?](COMMAND-LIST.md)** - detailed usage, flags, and examples for every command.
 
@@ -269,12 +269,15 @@ ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER      # Guided mode
 ovt enum all -H DC -d DOMAIN -u USER -p PASS            # Enumerate everything
 ovt enum policy -H DC -d DOMAIN -u USER -p PASS         # Lockout/password policy
 ovt enum laps -H DC -d DOMAIN -u USER -p PASS           # Readable LAPS secrets
+ovt scan --targets DC --ldap --smb                      # No-creds port + null-session triage
+ovt enum pre -H DC                                      # No-creds AD service triage
+ovt enum anonymous -H DC                                # Anonymous LDAP RootDSE probe
 ovt kerberos user-enum -H DC -d DOMAIN --userlist users.txt   # Zero-knowledge user enum
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
 ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
-ovt graph gui -i ./graphs/                               # Browser graph GUI (attack_graph.json)
+ovt graph gui -i ./graphs/                               # Browser GUI; choose one JSON at a time
 ovt doctor                                                # Health check
 ovt completions bash                                      # Shell tab completion
 ```
@@ -356,13 +359,13 @@ ovt graph view -i users.json -i groups.json -i computers.json -i domains.json
 # Launch the browser-based GUI from an Overthrone graph export
 ovt graph gui --file attack_graph.json
 
-# Or point it at a directory containing attack_graph.json
+# Or point it at a directory of BloodHound/Overthrone JSON files
 ovt graph gui -i ./graphs/
 ```
 
 The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas that shows compact labels on zoom/selection while keeping full names in the side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
-The new browser GUI runs a local HTTP server, opens a tab automatically, and serves the graph UI from your machine. It expects an Overthrone graph export (attack_graph.json or a directory of Overthrone graph JSONs) and renders as a proper web app with clickable nodes, a path finder, and live stats.
+The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once, so it opens on a black canvas until the operator chooses a file. The D3 view keeps full node display names, spacious collision-aware layout, lazy per-file loading, server-side graph caching, clickable nodes, search, path finding, and live stats without Neo4j.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -569,21 +572,21 @@ Grab the latest from [**Releases**](https://github.com/Karmanya03/Overthrone/rel
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.44/overthrone-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.44/overthrone-linux-x86_64) | x86_64 (musl, static) |
-| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.44/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-linux-x86_64) | x86_64 (musl, static) |
+| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick manual install:**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.44/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.44/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # Kali (you're probably already here)
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.44/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
 ```
 
 ### Build from source
@@ -771,8 +774,10 @@ ovt graph tree --file graph.json                         # local Rust tree explo
 ovt graph view -i ./bloodhound-json/                     # import BloodHound JSON directory
 ovt graph tree -i ./bloodhound-json/                     # GUI-style hierarchy
 ovt graph view -i users.json -i groups.json -i computers.json
+ovt graph gui -i ./bloodhound-json/                      # browser GUI; select one JSON file
 
-# Graph view keeps labels out of the canvas at every zoom level.
+# Graph GUI indexes directories without rendering every JSON at once.
+# Graph view keeps full names readable in panels while controlling canvas density.
 # Tree view expands domain -> type -> object -> relationships.
 # Both are local Rust TUIs with search, filters, details, path hints, mouse support,
 # ? help, and q quit. No Neo4j, no browser, no JVM.

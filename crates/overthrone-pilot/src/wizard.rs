@@ -185,6 +185,48 @@ impl WizardSession {
         };
         let mut ctx = self.config.exec_context();
 
+        // ── LDAP Pre-flight Check ──
+        if !self.config.dry_run {
+            println!(
+                "  {} Pre-flight LDAP connectivity check...",
+                "PRE".bold().cyan()
+            );
+            if ctx.use_hash {
+                println!(
+                    "  {} LDAP pre-flight skipped (pass-the-hash mode).",
+                    "!".yellow().bold()
+                );
+                ctx.ldap_available = false;
+            } else {
+                match overthrone_core::proto::ldap::LdapSession::connect(
+                    &ctx.dc_ip,
+                    &ctx.domain,
+                    &ctx.username,
+                    &ctx.secret,
+                    ctx.use_ldaps,
+                )
+                .await
+                {
+                    Ok(mut session) => {
+                        println!(
+                            "  {} LDAP bind OK ({})",
+                            "✓".green().bold(),
+                            session.bind_type
+                        );
+                        let _ = session.disconnect().await;
+                    }
+                    Err(e) => {
+                        println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
+                        println!(
+                            "  {} LDAP-dependent enumeration steps will be skipped.",
+                            "!".yellow().bold()
+                        );
+                        ctx.ldap_available = false;
+                    }
+                }
+            }
+        }
+
         let mut steps_executed = 0usize;
         let mut steps_succeeded = 0usize;
         let mut steps_failed = 0usize;
@@ -213,7 +255,12 @@ impl WizardSession {
             print_stage_banner(stage);
 
             // Build plan and filter to this stage
-            let mut plan = planner.plan(&goal, &self.state, adaptive.failed_actions());
+            let mut plan = planner.plan(
+                &goal,
+                &self.state,
+                adaptive.failed_actions(),
+                ctx.ldap_available,
+            );
             adaptive.adjust_plan(&mut plan, &self.state);
 
             let stage_steps: Vec<PlanStep> = plan

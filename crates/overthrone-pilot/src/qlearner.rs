@@ -201,7 +201,9 @@ fn action_family_index(action: &PlannedAction) -> u8 {
         | PlannedAction::EnumerateGpos
         | PlannedAction::EnumeratePasswordPolicy
         | PlannedAction::EnumerateDelegations
-        | PlannedAction::EnumerateLaps => 0,
+        | PlannedAction::EnumerateLaps
+        | PlannedAction::UserEnum { .. }
+        | PlannedAction::RidCycle { .. } => 0,
         PlannedAction::EnumerateShares { .. } => 1,
         PlannedAction::CheckAdminAccess { .. } => 2,
         PlannedAction::Kerberoast { .. } => 3,

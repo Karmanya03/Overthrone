@@ -3045,11 +3045,44 @@ pub async fn cmd_scan(
     ports: &str,
     scan_type: &ScanType,
     timeout: u64,
+    ldap: bool,
+    smb: bool,
 ) -> i32 {
     use overthrone_core::scan::{PortScanner, ScanConfig, ScanType as CoreScanType};
 
     banner::print_module_banner("SCAN");
     println!("  {} Targets: {}", "▸".bright_black(), targets.cyan());
+
+    // 1. Unauthenticated Discovery (if single target)
+    if !targets.contains('/') && !targets.contains('-') && (ldap || smb) {
+        let discovery = overthrone_core::scan::discovery::UnauthDiscovery::new(targets);
+        if let Ok(res) = discovery.run().await {
+            if ldap {
+                println!(
+                    "  {} LDAP Null Session: {}",
+                    "▸".bright_black(),
+                    if res.ldap_null_session {
+                        "OK".green().bold()
+                    } else {
+                        "FAILED".red()
+                    }
+                );
+            }
+            if smb {
+                println!(
+                    "  {} SMB Null Session: {}",
+                    "▸".bright_black(),
+                    if res.smb_null_session {
+                        "OK".green().bold()
+                    } else {
+                        "FAILED".red()
+                    }
+                );
+            }
+        }
+    }
+
+    // 2. Port Scanning
     println!("  {} Ports: {}", "▸".bright_black(), ports.cyan());
     println!("  {} Type: {:?}", "▸".bright_black(), scan_type);
     println!("  {} Timeout: {}ms", "▸".bright_black(), timeout);
@@ -3070,7 +3103,7 @@ pub async fn cmd_scan(
 
     let scanner = PortScanner::new(config);
 
-    println!("  {} Starting scan...", "▸".bright_black());
+    println!("  {} Starting port scan...", "▸".bright_black());
 
     match scanner.scan().await {
         Ok(results) => {
@@ -3137,7 +3170,7 @@ pub async fn cmd_scan(
         }
     }
 
-    banner::print_success("Port scan completed");
+    banner::print_success("Discovery and scan completed");
     0
 }
 

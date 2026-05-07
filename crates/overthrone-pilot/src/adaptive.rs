@@ -75,6 +75,7 @@ impl FailureClass {
             || lower.contains("network error")
             || lower.contains("no route")
             || lower.contains("reset by peer")
+            || lower.contains("service unavailable")
         {
             return Self::NetworkError;
         }
@@ -317,9 +318,12 @@ impl AdaptiveEngine {
 
     fn handle_auth_failure(
         &mut self,
-        _step: &PlanStep,
+        step: &PlanStep,
         state: &EngagementState,
     ) -> AdaptiveDecision {
+        // Remember this action failed to avoid infinite loops if re-planning
+        self.remember_failed_action(&self.action_identifier(&step.action));
+
         // If we have alternate credentials, try swapping
         if state.credentials.len() > 1 {
             info!(

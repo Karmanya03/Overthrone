@@ -4,420 +4,428 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Overthrone Graph Viewer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
-/* ============================================================
-   BloodHound-Inspired Dark Theme
-   ============================================================ */
 :root {
-  --font-sans: 'Space Grotesk', 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', Consolas, monospace;
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
-  --bg-card: #1c2128;
-  --border: #30363d;
-  --border-bright: #484f58;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #6e7681;
-  --accent-blue: #58a6ff;
-  --accent-green: #3fb950;
-  --accent-red: #f85149;
-  --accent-orange: #d29922;
-  --accent-purple: #bc8cff;
-  --accent-cyan: #39d2c0;
-  --accent-pink: #f778ba;
-  --node-user: #58a6ff;
-  --node-computer: #3fb950;
-  --node-group: #d29922;
-  --node-domain: #f85149;
-  --node-gpo: #bc8cff;
-  --node-ou: #f778ba;
-  --node-cert: #39d2c0;
+  --bg: #050505;
+  --panel: #0d0d0f;
+  --panel-2: #151518;
+  --panel-3: #1b1b20;
+  --line: #29292f;
+  --line-strong: #44444d;
+  --text: #f0f0f2;
+  --soft: #b5b5bc;
+  --muted: #74747d;
+  --red: #ff4d4d;
+  --green: #5bea8c;
+  --blue: #6aa8ff;
+  --yellow: #f4c95d;
+  --cyan: #49e4d6;
+  --magenta: #d08cff;
+  --pink: #ff7dbd;
+  --node-user: #6aa8ff;
+  --node-computer: #5bea8c;
+  --node-group: #f4c95d;
+  --node-domain: #ff4d4d;
+  --node-gpo: #d08cff;
+  --node-ou: #ff7dbd;
+  --node-cert: #49e4d6;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* { box-sizing: border-box; }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
 
 body {
-  background:
-    radial-gradient(1200px 600px at 15% -10%, #1b2230 0%, transparent 50%),
-    radial-gradient(900px 500px at 110% 10%, #1a2430 0%, transparent 45%),
-    var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
-  height: 100vh;
 }
 
-/* ============================================================
-   Layout
-   ============================================================ */
+button,
+input,
+select {
+  font: inherit;
+}
+
 #app {
-  display: flex;
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
   height: 100vh;
+  min-height: 0;
 }
 
-/* Sidebar */
 #sidebar {
-  width: 320px;
-  min-width: 320px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  min-height: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  z-index: 10;
 }
 
 #sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
 }
 
-#sidebar-header h1 {
-  font-size: 18px;
-  font-weight: 600;
+.brand-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-#sidebar-header h1 span.logo {
-  font-size: 22px;
-}
-
-.search-box {
-  margin-top: 12px;
-  position: relative;
-}
-
-.search-box input {
-  width: 100%;
-  padding: 8px 12px 8px 36px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-}
-
-.search-box input:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px rgba(88,166,255,0.15);
-}
-
-.search-box::before {
-  content: "🔍";
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 14px;
-}
-
-.graph-select {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.graph-select label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-}
-
-#graph-select {
-  width: 100%;
-  padding: 7px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  cursor: pointer;
-}
-
-#graph-select:focus {
-  border-color: var(--accent-cyan);
-  box-shadow: 0 0 0 3px rgba(57,210,192,0.15);
-}
-
-#graph-meta-panel {
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-#graph-meta-panel h3 {
-  font-size: 13px;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  letter-spacing: 0.5px;
-  margin-bottom: 10px;
-}
-
-#graph-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.meta-row {
-  display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
-.meta-row span:last-child {
-  color: var(--text-primary);
-  font-weight: 600;
+.brand-row h1 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.1;
+  letter-spacing: 0;
+  font-weight: 700;
 }
 
-#graph-sources {
+.status-pill {
+  border: 1px solid rgba(73, 228, 214, 0.45);
+  color: var(--cyan);
+  background: rgba(73, 228, 214, 0.08);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: 120px;
-  overflow-y: auto;
+  gap: 7px;
+  margin-top: 12px;
 }
 
-.meta-source {
-  padding: 4px 6px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-family: var(--font-mono);
+.field label,
+.panel h2 {
+  color: var(--soft);
   font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+select,
+input {
+  width: 100%;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  padding: 10px 11px;
+}
+
+select:focus,
+input:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(73, 228, 214, 0.12);
+}
+
+select:disabled,
+input:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 #search-results {
-  max-height: 200px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 6px 6px;
   display: none;
-  background: var(--bg-tertiary);
+  max-height: 210px;
+  overflow-y: auto;
+  margin-top: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
-#search-results.active { display: block; }
+#search-results.active {
+  display: block;
+}
 
 .search-result {
-  padding: 8px 12px;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
 }
 
-.search-result:hover { background: var(--bg-primary); }
-.search-result:last-child { border-bottom: none; }
-
-.search-result .badge {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: 500;
+.search-result:last-child {
+  border-bottom: 0;
 }
 
-/* Stats Panel */
-#stats-panel {
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
+.search-result:hover {
+  background: #202027;
+}
+
+.badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.scroll-area {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.panel {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
 }
 
 .stats-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  margin-top: 11px;
 }
 
 .stat-card {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px;
-  text-align: center;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 9px;
 }
 
 .stat-card .value {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 19px;
+  line-height: 1.1;
+  font-weight: 800;
 }
 
 .stat-card .label {
-  font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--muted);
+  margin-top: 5px;
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
-/* Attack Path Panel */
-#attack-path-panel {
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-#attack-path-panel h3 {
-  font-size: 13px;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  letter-spacing: 0.5px;
-  margin-bottom: 10px;
-}
-
-.path-input {
+.meta-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-top: 11px;
 }
 
-.path-input input {
-  padding: 7px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-}
-
-.path-input input:focus {
-  border-color: var(--accent-red);
-}
-
-.path-input button {
-  padding: 7px 12px;
-  background: var(--accent-red);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.path-input button:hover { opacity: 0.9; }
-
-#path-result {
-  margin-top: 10px;
-  font-size: 13px;
-}
-
-#path-result .hop {
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-#path-result .hop:last-child { border-bottom: none; }
-
-#path-result .hop-edge {
-  color: var(--accent-red);
-  font-weight: 600;
+.meta-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  color: var(--soft);
   font-size: 12px;
 }
 
-/* Node Detail */
-#node-detail {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-#node-detail h3 {
-  font-size: 13px;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  letter-spacing: 0.5px;
-  margin-bottom: 10px;
-}
-
-.detail-card {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px;
-}
-
-.detail-card .detail-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 0;
-  font-size: 13px;
-}
-
-.detail-card .detail-row .key {
-  color: var(--text-secondary);
-}
-
-.detail-card .detail-row .val {
-  font-weight: 500;
-  text-align: right;
-  max-width: 160px;
+.meta-row span:last-child {
+  color: var(--text);
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-#connection-list {
+.source-chip {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--soft);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 8px;
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.path-input {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.primary-button {
+  border: 1px solid rgba(255, 77, 77, 0.5);
+  background: #b92828;
+  color: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
+.primary-button:hover {
+  background: #cf3030;
+}
+
+.primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#path-result {
+  margin-top: 10px;
+  color: var(--soft);
+  font-size: 12px;
+}
+
+.hop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 6px;
+}
+
+.hop-edge {
+  color: var(--red);
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+#node-detail {
+  padding: 16px 18px;
+}
+
+.detail-card {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 11px;
+}
+
+.detail-name {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.3;
+  margin-bottom: 8px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: 95px minmax(0, 1fr);
+  gap: 10px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+}
+
+.detail-row:first-of-type {
+  border-top: 0;
+}
+
+.detail-row .key {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.detail-row .val {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.pill {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pill.high {
+  border-color: rgba(244, 201, 93, 0.55);
+  color: var(--yellow);
+}
+
+.pill.owned {
+  border-color: rgba(91, 234, 140, 0.55);
+  color: var(--green);
+}
+
+.connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 12px;
 }
 
-#connection-list .conn {
-  padding: 6px 8px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  margin-bottom: 4px;
-  font-size: 12px;
+.conn {
+  width: 100%;
+  color: var(--text);
+  background: #101012;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  text-align: left;
 }
 
-#connection-list .conn:hover {
-  border-color: var(--accent-blue);
+.conn:hover {
+  border-color: var(--cyan);
 }
 
-/* Legend */
-#legend {
-  padding: 16px;
-  border-top: 1px solid var(--border);
-  margin-top: auto;
+.legend {
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--line);
 }
 
-#legend h3 {
-  font-size: 13px;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
+.legend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-top: 10px;
 }
 
 .legend-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 0;
+  color: var(--soft);
   font-size: 12px;
-  color: var(--text-secondary);
 }
 
 .legend-dot {
@@ -426,368 +434,470 @@ body {
   border-radius: 50%;
 }
 
-/* ============================================================
-   Graph Canvas
-   ============================================================ */
 #graph-container {
-  flex: 1;
   position: relative;
+  min-width: 0;
+  background: #030303;
   overflow: hidden;
 }
 
-svg {
+#graph-svg {
   width: 100%;
   height: 100%;
+  display: block;
 }
 
-/* Graph elements */
+.graph-topbar {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+}
+
+#graph-badge,
+#render-badge {
+  max-width: min(620px, 65vw);
+  color: var(--soft);
+  background: rgba(13, 13, 15, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 12px;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.35);
+}
+
+#graph-badge {
+  color: var(--text);
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#render-badge {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+#empty-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+#empty-state.hidden {
+  display: none;
+}
+
+.empty-card {
+  width: min(460px, calc(100vw - 440px));
+  border: 1px solid var(--line);
+  background: rgba(13, 13, 15, 0.72);
+  border-radius: 8px;
+  padding: 24px;
+  text-align: center;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.55);
+}
+
+.empty-title {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.empty-copy {
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+#zoom-controls {
+  position: absolute;
+  bottom: 18px;
+  right: 18px;
+  display: flex;
+  gap: 6px;
+}
+
+#zoom-controls button {
+  min-width: 40px;
+  height: 38px;
+  color: var(--text);
+  background: rgba(13, 13, 15, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+#zoom-controls button:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-3);
+}
+
+#tooltip {
+  position: absolute;
+  z-index: 20;
+  display: none;
+  max-width: 380px;
+  color: var(--text);
+  background: rgba(13, 13, 15, 0.97);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 18px 58px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.tt-name {
+  font-size: 13px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.tt-meta {
+  color: var(--soft);
+  font-size: 11px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
 .link {
-  stroke-opacity: 0.4;
   fill: none;
+  stroke-opacity: 0.42;
 }
 
 .link.highlighted {
   stroke-opacity: 1;
-  stroke-width: 3px !important;
+  stroke-width: 4px;
+}
+
+.link.dimmed {
+  opacity: 0.05;
 }
 
 .node-circle {
-  stroke: #fff;
-  stroke-width: 1.5px;
   cursor: pointer;
-  transition: r 0.15s;
-}
-
-.node-circle:hover {
-  filter: brightness(1.3);
+  stroke: #f4f4f5;
+  stroke-width: 1.4px;
 }
 
 .node-circle.high-value {
-  stroke: var(--accent-orange);
+  stroke: var(--yellow);
   stroke-width: 3px;
 }
 
 .node-circle.owned {
-  stroke: var(--accent-green);
+  stroke: var(--green);
   stroke-width: 3px;
-}
-
-.node-circle.high-value.owned {
-  stroke: var(--accent-cyan);
 }
 
 .node-circle.selected {
-  stroke-width: 3px;
   stroke: #fff;
-  filter: drop-shadow(0 0 6px rgba(255,255,255,0.5));
+  stroke-width: 4px;
+  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.45));
 }
 
-.node-circle.dimmed { opacity: 0.15; }
-.link.dimmed { opacity: 0.05; }
+.node-circle.dimmed {
+  opacity: 0.14;
+}
 
 .node-label {
-  font-size: 11px;
-  fill: var(--text-primary);
-  text-anchor: middle;
-  pointer-events: none;
-  font-weight: 500;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.8), 0 0px 1px rgba(0,0,0,1);
-}
-
-.node-label.dimmed { opacity: 0.1; }
-
-.edge-label {
-  font-size: 9px;
-  fill: var(--text-muted);
-  text-anchor: middle;
-  pointer-events: none;
-}
-
-/* Floating badge */
-#graph-badge {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 14px;
+  fill: var(--text);
   font-size: 12px;
-  color: var(--text-secondary);
+  font-weight: 800;
+  paint-order: stroke;
   pointer-events: none;
+  stroke: #030303;
+  stroke-linejoin: round;
+  stroke-width: 4px;
+  text-anchor: middle;
 }
 
-/* Zoom controls */
-#zoom-controls {
-  position: absolute;
-  bottom: 16px;
-  right: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.node-label.dimmed {
+  opacity: 0.12;
 }
 
-#zoom-controls button {
-  width: 36px;
-  height: 36px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 18px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+::-webkit-scrollbar {
+  width: 8px;
 }
 
-#zoom-controls button:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--border-bright);
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-/* Tooltip */
-#tooltip {
-  position: absolute;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 12px;
-  pointer-events: none;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-  max-width: 300px;
-  display: none;
-}
-
-#tooltip .tt-name {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-#tooltip .tt-type {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  border: 1px solid var(--border);
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
 }
 
-.pill.high {
-  border-color: rgba(210,153,34,0.6);
-  color: var(--accent-orange);
-}
+@media (max-width: 980px) {
+  #app {
+    grid-template-columns: 310px minmax(0, 1fr);
+  }
 
-.pill.owned {
-  border-color: rgba(63,185,80,0.6);
-  color: var(--accent-green);
-}
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
+  .empty-card {
+    width: min(420px, calc(100vw - 360px));
+  }
+}
 </style>
 </head>
 <body>
 <div id="app">
-  <!-- Sidebar -->
-  <div id="sidebar">
+  <aside id="sidebar">
     <div id="sidebar-header">
-      <h1><span class="logo">🩸</span> Overthrone Viewer</h1>
-      <div class="graph-select" id="graph-select-wrap">
-        <label for="graph-select">Graph</label>
+      <div class="brand-row">
+        <h1>Overthrone Viewer</h1>
+        <span class="status-pill">Local</span>
+      </div>
+
+      <div class="field">
+        <label for="graph-select">BloodHound JSON</label>
         <select id="graph-select"></select>
       </div>
-      <div class="search-box">
-        <input type="text" id="search-input" placeholder="Search nodes..." autocomplete="off">
+
+      <div class="field">
+        <label for="search-input">Node Search</label>
+        <input type="text" id="search-input" placeholder="Search full names, SIDs, domains" autocomplete="off" disabled>
         <div id="search-results"></div>
       </div>
     </div>
 
-    <div id="stats-panel">
-      <div class="stats-grid" id="stats-grid"></div>
+    <div class="scroll-area">
+      <section class="panel">
+        <h2>Graph Stats</h2>
+        <div class="stats-grid" id="stats-grid"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Loaded Source</h2>
+        <div class="meta-list">
+          <div class="meta-row"><span>Graph</span><span id="graph-label">None</span></div>
+          <div class="meta-row"><span>Size</span><span id="graph-size">0 B</span></div>
+          <div class="meta-row"><span>Sources</span><span id="graph-source-count">0</span></div>
+          <div id="graph-sources"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Attack Path</h2>
+        <div class="path-input">
+          <input type="text" id="path-from" placeholder="Source node" disabled>
+          <input type="text" id="path-to" placeholder="Target node" disabled>
+          <button class="primary-button" id="path-button" disabled>Find Shortest Path</button>
+        </div>
+        <div id="path-result"></div>
+      </section>
+
+      <section id="node-detail">
+        <h2>Node Detail</h2>
+        <div class="detail-card">
+          <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
+        </div>
+      </section>
     </div>
 
-    <div id="graph-meta-panel">
-      <h3>Graph Sources</h3>
-      <div id="graph-meta">
-        <div class="meta-row"><span>Graph</span><span id="graph-label">-</span></div>
-        <div class="meta-row"><span>Sources</span><span id="graph-source-count">0</span></div>
-        <div id="graph-sources"></div>
+    <div class="legend">
+      <h2>Node Types</h2>
+      <div class="legend-grid">
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-user)"></span>User</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-computer)"></span>Computer</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-group)"></span>Group</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-domain)"></span>Domain</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-gpo)"></span>GPO</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-ou)"></span>OU</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--node-cert)"></span>Cert Template</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--muted)"></span>Unknown</div>
       </div>
     </div>
+  </aside>
 
-    <div id="attack-path-panel">
-      <h3>🎯 Attack Path Finder</h3>
-      <div class="path-input">
-        <input type="text" id="path-from" placeholder="Source (e.g. jdoe@CORP.LOCAL)">
-        <input type="text" id="path-to" placeholder="Target (e.g. DC01$@CORP.LOCAL)">
-        <button onclick="findAttackPath()">Find Shortest Path</button>
-      </div>
-      <div id="path-result"></div>
-    </div>
-
-    <div id="node-detail"></div>
-
-    <div id="legend">
-      <h3>Node Types</h3>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-user)"></div>User</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-computer)"></div>Computer</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-group)"></div>Group</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-domain)"></div>Domain</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-gpo)"></div>GPO</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-ou)"></div>OU</div>
-      <div class="legend-item"><div class="legend-dot" style="background:var(--node-cert)"></div>Cert Template</div>
-    </div>
-  </div>
-
-  <!-- Graph -->
-  <div id="graph-container">
+  <main id="graph-container">
     <svg id="graph-svg"></svg>
-    <div id="graph-badge"></div>
+    <div class="graph-topbar">
+      <div id="graph-badge">No graph selected</div>
+      <div id="render-badge">Idle</div>
+    </div>
+    <div id="empty-state">
+      <div class="empty-card">
+        <div class="empty-title">Select a JSON graph</div>
+        <div class="empty-copy" id="empty-copy">The canvas is intentionally empty until a BloodHound JSON file is selected.</div>
+      </div>
+    </div>
     <div id="zoom-controls">
-      <button onclick="zoomIn()">+</button>
-      <button onclick="zoomOut()">−</button>
-      <button onclick="zoomReset()">⟲</button>
+      <button id="zoom-in" title="Zoom in">+</button>
+      <button id="zoom-out" title="Zoom out">-</button>
+      <button id="zoom-fit" title="Fit graph">Fit</button>
     </div>
     <div id="tooltip"></div>
-  </div>
+  </main>
 </div>
 
 <script>
-// ============================================================
-//  Constants
-// ============================================================
 const NODE_COLORS = {
-  User: '#58a6ff',
-  Computer: '#3fb950',
-  Group: '#d29922',
-  Domain: '#f85149',
-  GPO: '#bc8cff',
-  OU: '#f778ba',
-  CertTemplate: '#39d2c0',
-  Container: '#8b949e',
-  Unknown: '#6e7681',
+  User: '#6aa8ff',
+  Computer: '#5bea8c',
+  Group: '#f4c95d',
+  Domain: '#ff4d4d',
+  GPO: '#d08cff',
+  OU: '#ff7dbd',
+  CertTemplate: '#49e4d6',
+  Container: '#b5b5bc',
+  Unknown: '#74747d',
 };
 
 const EDGE_COLORS = {
-  MemberOf: '#8b949e',
-  AdminTo: '#f85149',
-  HasSession: '#58a6ff',
-  DcSync: '#f85149',
-  GenericAll: '#d29922',
-  GenericWrite: '#d29922',
-  WriteOwner: '#d29922',
-  WriteDacl: '#d29922',
-  ForceChangePassword: '#d29922',
-  AddMembers: '#d29922',
-  AllowedToDelegate: '#bc8cff',
-  AllowedToAct: '#bc8cff',
-  TrustedBy: '#f778ba',
-  HasSpn: '#6e7681',
-  DontReqPreauth: '#6e7681',
-  CanRDP: '#39d2c0',
-  CanPSRemote: '#39d2c0',
-  ExecuteDCOM: '#39d2c0',
-  SQLAdmin: '#39d2c0',
-  GpoLink: '#bc8cff',
-  Contains: '#bc8cff',
-  Owns: '#f85149',
+  MemberOf: '#74747d',
+  AdminTo: '#ff4d4d',
+  HasSession: '#6aa8ff',
+  DcSync: '#ff4d4d',
+  GenericAll: '#f4c95d',
+  GenericWrite: '#f4c95d',
+  WriteOwner: '#f4c95d',
+  WriteDacl: '#f4c95d',
+  ForceChangePassword: '#f4c95d',
+  AddMembers: '#f4c95d',
+  AllowedToDelegate: '#d08cff',
+  AllowedToAct: '#d08cff',
+  TrustedBy: '#ff7dbd',
+  HasSpn: '#74747d',
+  DontReqPreauth: '#74747d',
+  CanRDP: '#49e4d6',
+  CanPSRemote: '#49e4d6',
+  ExecuteDCOM: '#49e4d6',
+  SQLAdmin: '#49e4d6',
+  GpoLink: '#d08cff',
+  Contains: '#b5b5bc',
+  Owns: '#ff4d4d',
 };
 
-// ============================================================
-//  State
-// ============================================================
 let graphData = null;
 let graphList = [];
 let currentGraphId = null;
 let simulation = null;
-let svg, g, linkGroup, nodeGroup, labelGroup, edgeLabelGroup;
-let zoomBehavior;
 let selectedNode = null;
+let svg;
+let g;
+let linkGroup;
+let nodeGroup;
+let labelGroup;
+let zoomBehavior;
+let currentTransform = d3.zoomIdentity;
 
-// ============================================================
-//  Init
-// ============================================================
 async function init() {
   svg = d3.select('#graph-svg');
-  const container = document.getElementById('graph-container');
-
-  // Zoom
   zoomBehavior = d3.zoom()
-    .scaleExtent([0.05, 8])
-    .on('zoom', (event) => {
-      g.attr('transform', event.transform);
+    .scaleExtent([0.04, 12])
+    .on('zoom', event => {
+      currentTransform = event.transform;
+      g.attr('transform', currentTransform);
+      refreshLabelVisibility();
     });
 
   svg.call(zoomBehavior);
-
-  // Main group
   g = svg.append('g');
   linkGroup = g.append('g').attr('class', 'links');
-  edgeLabelGroup = g.append('g').attr('class', 'edge-labels');
   nodeGroup = g.append('g').attr('class', 'nodes');
   labelGroup = g.append('g').attr('class', 'labels');
 
+  document.getElementById('zoom-in').addEventListener('click', zoomIn);
+  document.getElementById('zoom-out').addEventListener('click', zoomOut);
+  document.getElementById('zoom-fit').addEventListener('click', fitGraph);
+  document.getElementById('path-button').addEventListener('click', findAttackPath);
+  document.getElementById('path-from').addEventListener('keydown', submitPathOnEnter);
+  document.getElementById('path-to').addEventListener('keydown', submitPathOnEnter);
+  document.getElementById('search-input').addEventListener('input', onSearchInput);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      hideSearchResults();
+      deselectAll();
+    }
+  });
+  svg.on('click', deselectAll);
+
+  renderStats(emptyStats());
+  renderEmptyState();
   await loadGraphList();
-  if (currentGraphId) {
-    await loadGraph(currentGraphId);
-  }
 }
 
 async function loadGraphList() {
-  const resp = await fetch('/api/graphs');
-  graphList = await resp.json();
-
   const select = document.getElementById('graph-select');
-  const wrapper = document.getElementById('graph-select-wrap');
-
-  if (!graphList.length) {
-    wrapper.style.display = 'none';
+  try {
+    const resp = await fetch('/api/graphs');
+    graphList = await resp.json();
+  } catch (error) {
+    select.innerHTML = '<option value="">Unable to read graph list</option>';
+    select.disabled = true;
+    setEmptyMessage('Viewer API error', error.message);
     return;
   }
 
-  select.innerHTML = graphList.map(graph =>
-    `<option value="${graph.id}">${graph.label} (${graph.stats.total_nodes} nodes)</option>`
-  ).join('');
+  if (!graphList.length) {
+    select.innerHTML = '<option value="">No JSON files found</option>';
+    select.disabled = true;
+    setEmptyMessage('No JSON files found', 'Point the GUI command at a directory or file containing BloodHound-compatible JSON.');
+    return;
+  }
 
-  wrapper.style.display = graphList.length > 1 ? 'flex' : 'none';
-
-  currentGraphId = graphList[0].id;
-  select.value = currentGraphId;
-  select.addEventListener('change', () => {
-    loadGraph(select.value);
+  select.disabled = false;
+  select.innerHTML = '<option value="">Choose a JSON graph...</option>' + graphList.map(graph => {
+    const stats = graph.stats ? `${graph.stats.total_nodes} nodes` : formatBytes(graph.file_bytes);
+    return `<option value="${escapeAttr(graph.id)}">${escapeHtml(graph.label)} (${stats})</option>`;
+  }).join('');
+  select.addEventListener('change', event => {
+    if (event.target.value) {
+      loadGraph(event.target.value);
+    } else {
+      renderEmptyState();
+    }
   });
+
+  setEmptyMessage('Select a JSON graph', `${graphList.length} JSON file${graphList.length === 1 ? '' : 's'} indexed. Nothing is rendered until a file is selected.`);
 }
 
 async function loadGraph(graphId) {
-  if (!graphId) return;
-
   currentGraphId = graphId;
-  const resp = await fetch(`/api/graph?graph=${encodeURIComponent(graphId)}`);
-  graphData = await resp.json();
-
+  const graphInfo = graphList.find(graph => graph.id === graphId);
+  document.getElementById('graph-select').value = graphId;
+  setInteractiveEnabled(false);
+  setEmptyMessage('Loading graph', graphInfo ? graphInfo.label : graphId);
+  document.getElementById('empty-state').classList.remove('hidden');
+  document.getElementById('graph-badge').textContent = 'Loading graph';
+  document.getElementById('render-badge').textContent = 'Parsing JSON';
   teardownGraph();
+  clearNodeDetail();
+
+  try {
+    const resp = await fetch(`/api/graph?graph=${encodeURIComponent(graphId)}`);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    graphData = await resp.json();
+  } catch (error) {
+    graphData = null;
+    setEmptyMessage('Graph failed to load', error.message);
+    document.getElementById('graph-badge').textContent = 'Load failed';
+    document.getElementById('render-badge').textContent = 'Error';
+    return;
+  }
+
   renderStats(graphData.stats);
+  updateGraphMeta(graphData, graphInfo);
   renderGraph(graphData);
-  updateGraphMeta(graphData);
   updateGraphBadge(graphData);
-  deselectAll();
-  document.getElementById('path-result').innerHTML = '';
+  setInteractiveEnabled(true);
+  document.getElementById('empty-state').classList.add('hidden');
 }
 
 function teardownGraph() {
@@ -796,176 +906,209 @@ function teardownGraph() {
     simulation = null;
   }
   linkGroup.selectAll('*').remove();
-  edgeLabelGroup.selectAll('*').remove();
   nodeGroup.selectAll('*').remove();
   labelGroup.selectAll('*').remove();
+  window._graphNodes = null;
+  window._graphLinks = null;
+  window._graphLabels = null;
+  window._nodesMap = {};
+}
+
+function renderEmptyState() {
+  graphData = null;
+  currentGraphId = null;
+  selectedNode = null;
+  teardownGraph();
+  renderStats(emptyStats());
+  updateGraphMeta(null, null);
+  clearNodeDetail();
+  setInteractiveEnabled(false);
+  document.getElementById('empty-state').classList.remove('hidden');
+  document.getElementById('graph-badge').textContent = 'No graph selected';
+  document.getElementById('render-badge').textContent = 'Idle';
+  setEmptyMessage('Select a JSON graph', 'The canvas is intentionally empty until a BloodHound JSON file is selected.');
+}
+
+function setEmptyMessage(title, copy) {
+  document.querySelector('.empty-title').textContent = title;
+  document.getElementById('empty-copy').textContent = copy;
+}
+
+function setInteractiveEnabled(enabled) {
+  document.getElementById('search-input').disabled = !enabled;
+  document.getElementById('path-from').disabled = !enabled;
+  document.getElementById('path-to').disabled = !enabled;
+  document.getElementById('path-button').disabled = !enabled;
 }
 
 function updateGraphBadge(data) {
   document.getElementById('graph-badge').textContent =
-    `${data.label} · ${data.stats.total_nodes} nodes · ${data.stats.total_edges} edges`;
+    `${data.label} | ${data.stats.total_nodes} nodes | ${data.stats.total_edges} edges`;
 }
 
-function updateGraphMeta(data) {
-  const labelEl = document.getElementById('graph-label');
-  const countEl = document.getElementById('graph-source-count');
-  const sourcesEl = document.getElementById('graph-sources');
+function updateGraphMeta(data, graphInfo) {
+  const label = document.getElementById('graph-label');
+  const size = document.getElementById('graph-size');
+  const count = document.getElementById('graph-source-count');
+  const sources = document.getElementById('graph-sources');
 
-  labelEl.textContent = data.label || '-';
-  const sources = data.sources || [];
-  countEl.textContent = sources.length;
-
-  sourcesEl.innerHTML = sources.map(src => {
-    const safe = escapeHtml(src);
-    return `<div class="meta-source" title="${safe}">${safe}</div>`;
-  }).join('');
-}
-
-function nodeDisplayName(node) {
-  if (node.display_name) return node.display_name;
-  if (node.domain && !node.label.includes('@')) {
-    return `${node.label}@${node.domain}`;
+  if (!data) {
+    label.textContent = 'None';
+    size.textContent = '0 B';
+    count.textContent = '0';
+    sources.innerHTML = '';
+    document.getElementById('path-result').innerHTML = '';
+    return;
   }
-  return node.label;
+
+  label.textContent = data.label || 'Graph';
+  size.textContent = graphInfo ? formatBytes(graphInfo.file_bytes) : 'Loaded';
+  count.textContent = (data.sources || []).length;
+  sources.innerHTML = (data.sources || []).map(src =>
+    `<span class="source-chip" title="${escapeAttr(src)}">${escapeHtml(src)}</span>`
+  ).join('');
+  document.getElementById('path-result').innerHTML = '';
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function emptyStats() {
+  return {
+    users: 0,
+    computers: 0,
+    groups: 0,
+    domains: 0,
+    gpos: 0,
+    ous: 0,
+    cert_templates: 0,
+    high_value: 0,
+    owned: 0,
+  };
 }
 
-// ============================================================
-//  Render Stats
-// ============================================================
 function renderStats(stats) {
   const grid = document.getElementById('stats-grid');
   const items = [
-    { value: stats.users, label: 'Users', color: 'var(--node-user)' },
-    { value: stats.computers, label: 'Computers', color: 'var(--node-computer)' },
-    { value: stats.groups, label: 'Groups', color: 'var(--node-group)' },
-    { value: stats.domains, label: 'Domains', color: 'var(--node-domain)' },
-    { value: stats.gpos, label: 'GPOs', color: 'var(--node-gpo)' },
-    { value: stats.ous, label: 'OUs', color: 'var(--node-ou)' },
-    { value: stats.cert_templates, label: 'Cert Tpl', color: 'var(--node-cert)' },
-    { value: stats.high_value, label: 'High Value', color: 'var(--accent-orange)' },
-    { value: stats.owned, label: 'Owned', color: 'var(--accent-green)' },
+    { value: stats.users || 0, label: 'Users', color: 'var(--node-user)' },
+    { value: stats.computers || 0, label: 'Computers', color: 'var(--node-computer)' },
+    { value: stats.groups || 0, label: 'Groups', color: 'var(--node-group)' },
+    { value: stats.domains || 0, label: 'Domains', color: 'var(--node-domain)' },
+    { value: stats.gpos || 0, label: 'GPOs', color: 'var(--node-gpo)' },
+    { value: stats.ous || 0, label: 'OUs', color: 'var(--node-ou)' },
+    { value: stats.cert_templates || 0, label: 'Certs', color: 'var(--node-cert)' },
+    { value: stats.high_value || 0, label: 'High', color: 'var(--yellow)' },
+    { value: stats.owned || 0, label: 'Owned', color: 'var(--green)' },
   ];
 
-  grid.innerHTML = items.map(i => `
+  grid.innerHTML = items.map(item => `
     <div class="stat-card">
-      <div class="value" style="color:${i.color}">${i.value}</div>
-      <div class="label">${i.label}</div>
+      <div class="value" style="color:${item.color}">${item.value}</div>
+      <div class="label">${item.label}</div>
     </div>
   `).join('');
 }
 
-// ============================================================
-//  Render Graph (D3 Force)
-// ============================================================
 function renderGraph(data) {
   const container = document.getElementById('graph-container');
-  const width = container.clientWidth;
-  const height = container.clientHeight;
-
-  // Scale node radius by total count
-  const baseRadius = Math.max(4, Math.min(12, 200 / Math.sqrt(data.nodes.length)));
-  const largeRadius = baseRadius * 2.2;
-
-  // Prepare nodes map
+  const width = Math.max(640, container.clientWidth);
+  const height = Math.max(480, container.clientHeight);
+  const nodeCount = data.nodes.length;
   const nodesMap = {};
-  const nodes = data.nodes.map(n => {
-    const node = { ...n, display: nodeDisplayName(n), radius: baseRadius };
-    nodesMap[n.id] = node;
+
+  const nodes = data.nodes.map(raw => {
+    const display = nodeDisplayName(raw);
+    const node = {
+      ...raw,
+      display,
+      degree: 0,
+      radius: nodeRadius(raw, nodeCount),
+    };
+    nodesMap[node.id] = node;
     return node;
   });
 
-  // Make Domain nodes larger
-  nodes.forEach(n => {
-    if (n.type === 'Domain') n.radius = largeRadius;
-    if (n.type === 'Group') n.radius = baseRadius * 1.3;
-    if (n.type === 'Computer') n.radius = baseRadius * 1.1;
-  });
+  const links = data.edges
+    .filter(edge => nodesMap[edge.source] && nodesMap[edge.target])
+    .map(edge => {
+      nodesMap[edge.source].degree += 1;
+      nodesMap[edge.target].degree += 1;
+      return {
+        source: edge.source,
+        target: edge.target,
+        relationship: edge.relationship,
+        cost: edge.cost,
+        key: edgeKey(edge.source, edge.target, edge.relationship),
+      };
+    });
 
-  const links = data.edges.map(e => ({
-    source: e.source,
-    target: e.target,
-    relationship: e.relationship,
-    cost: e.cost,
-  }));
+  const distance = nodeCount > 5000 ? 180 : nodeCount > 1500 ? 150 : nodeCount > 450 ? 126 : 108;
+  const charge = nodeCount > 5000 ? -620 : nodeCount > 1500 ? -500 : nodeCount > 450 ? -360 : -260;
+  const collidePad = nodeCount > 2500 ? 26 : nodeCount > 900 ? 22 : 18;
 
-  // Force simulation
   simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(80).strength(0.3))
-    .force('charge', d3.forceManyBody().strength(-200).distanceMax(500))
+    .force('link', d3.forceLink(links).id(d => d.id).distance(d => distance + relationshipDistance(d.relationship)).strength(nodeCount > 3000 ? 0.12 : 0.22))
+    .force('charge', d3.forceManyBody().strength(charge).distanceMax(nodeCount > 3000 ? 900 : 650))
     .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius(d => d.radius + 4))
-    .force('x', d3.forceX(width / 2).strength(0.05))
-    .force('y', d3.forceY(height / 2).strength(0.05));
+    .force('collision', d3.forceCollide().radius(d => d.radius + collidePad + Math.min(88, d.display.length * 1.9)).iterations(nodeCount > 1500 ? 1 : 2))
+    .force('x', d3.forceX(width / 2).strength(0.035))
+    .force('y', d3.forceY(height / 2).strength(0.035))
+    .alphaDecay(nodeCount > 3000 ? 0.075 : 0.04)
+    .velocityDecay(0.48);
 
-  // Draw links
-  const linkSel = linkGroup.selectAll('line')
-    .data(links)
-    .join('line')
-    .attr('class', 'link')
-    .attr('stroke', d => EDGE_COLORS[d.relationship] || '#484f58')
-    .attr('stroke-width', d => d.relationship === 'MemberOf' ? 1.5 : 2)
-    .attr('marker-end', 'url(#arrow)')
-    .attr('stroke-dasharray', d => d.relationship === 'MemberOf' ? '4,2' : null);
-
-  // Arrow marker
-  svg.select('defs').remove();
-  const defs = svg.append('defs');
+  const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
+  defs.selectAll('*').remove();
   defs.append('marker')
     .attr('id', 'arrow')
     .attr('viewBox', '0 -5 10 10')
-    .attr('refX', 18)
+    .attr('refX', 22)
     .attr('refY', 0)
-    .attr('markerWidth', 6)
-    .attr('markerHeight', 6)
+    .attr('markerWidth', 7)
+    .attr('markerHeight', 7)
     .attr('orient', 'auto')
     .append('path')
     .attr('d', 'M0,-4L8,0L0,4')
-    .attr('fill', '#484f58');
+    .attr('fill', '#74747d');
 
-  // Draw nodes
+  const linkSel = linkGroup.selectAll('line')
+    .data(links, d => d.key)
+    .join('line')
+    .attr('class', 'link')
+    .attr('stroke', d => EDGE_COLORS[d.relationship] || '#44444d')
+    .attr('stroke-width', d => importantEdge(d.relationship) ? 2.4 : 1.3)
+    .attr('stroke-dasharray', d => d.relationship === 'MemberOf' || d.relationship === 'Contains' ? '5,4' : null)
+    .attr('marker-end', 'url(#arrow)');
+
   const nodeSel = nodeGroup.selectAll('circle')
-    .data(nodes)
+    .data(nodes, d => d.id)
     .join('circle')
     .attr('class', d => {
-      let classes = 'node-circle';
-      if (d.high_value) classes += ' high-value';
-      if (d.owned) classes += ' owned';
-      return classes;
+      let cls = 'node-circle';
+      if (d.high_value) cls += ' high-value';
+      if (d.owned) cls += ' owned';
+      return cls;
     })
     .attr('r', d => d.radius)
-    .attr('fill', d => NODE_COLORS[d.type] || '#8b949e')
+    .attr('fill', d => NODE_COLORS[d.type] || NODE_COLORS.Unknown)
     .on('click', (event, d) => {
       event.stopPropagation();
       selectNode(d);
     })
-    .on('mouseenter', (event, d) => showTooltip(event, d))
+    .on('mouseenter', showTooltip)
+    .on('mousemove', moveTooltip)
     .on('mouseleave', hideTooltip)
     .call(d3.drag()
       .on('start', dragStarted)
       .on('drag', dragged)
       .on('end', dragEnded));
 
-  // Draw labels (only show for large enough nodes or groups)
+  const labelNodes = nodes.filter(node => shouldCreateLabel(node, nodeCount));
   const labelSel = labelGroup.selectAll('text')
-    .data(nodes)
+    .data(labelNodes, d => d.id)
     .join('text')
     .attr('class', 'node-label')
-    .attr('dy', d => d.radius + 14)
-    .text(d => d.display.length > 26 ? d.display.substring(0, 24) + '…' : d.display)
-    .style('font-size', d => d.type === 'Domain' ? '14px' : '11px')
-    .style('font-weight', d => d.type === 'Domain' ? '700' : '500');
+    .attr('dy', d => d.radius + 18)
+    .text(d => d.display)
+    .style('font-size', d => d.type === 'Domain' ? '14px' : '12px');
 
-  // Tick
-  simulation.on('tick', () => {
+  function ticked() {
     linkSel
       .attr('x1', d => d.source.x)
       .attr('y1', d => d.source.y)
@@ -979,235 +1122,268 @@ function renderGraph(data) {
     labelSel
       .attr('x', d => d.x)
       .attr('y', d => d.y);
-  });
+  }
 
-  // Click background to deselect
-  svg.on('click', () => deselectAll());
+  const warmupTicks = nodeCount > 6000 ? 240 : nodeCount > 2500 ? 190 : nodeCount > 700 ? 130 : 70;
+  simulation.stop();
+  for (let i = 0; i < warmupTicks; i += 1) {
+    simulation.tick();
+  }
+  ticked();
 
-  // Store for highlighting
+  if (nodeCount <= 1800) {
+    simulation.on('tick', ticked).restart();
+    document.getElementById('render-badge').textContent = 'Live layout';
+  } else {
+    document.getElementById('render-badge').textContent = 'Optimized static layout';
+  }
+
   window._graphNodes = nodeSel;
   window._graphLinks = linkSel;
   window._graphLabels = labelSel;
   window._nodesMap = nodesMap;
+  fitGraph();
+  refreshLabelVisibility();
 }
 
-// ============================================================
-//  Drag
-// ============================================================
-function dragStarted(event, d) {
-  if (!event.active) simulation.alphaTarget(0.3).restart();
-  d.fx = d.x;
-  d.fy = d.y;
+function nodeRadius(node, total) {
+  const base = total > 5000 ? 5 : total > 1500 ? 6 : total > 450 ? 8 : 10;
+  if (node.type === 'Domain') return base + 9;
+  if (node.high_value) return base + 6;
+  if (node.owned) return base + 5;
+  if (node.type === 'Group') return base + 3;
+  if (node.type === 'Computer') return base + 2;
+  return base;
 }
 
-function dragged(event, d) {
-  d.fx = event.x;
-  d.fy = event.y;
+function relationshipDistance(relationship) {
+  if (relationship === 'MemberOf' || relationship === 'Contains') return 42;
+  if (importantEdge(relationship)) return 64;
+  return 28;
 }
 
-function dragEnded(event, d) {
-  if (!event.active) simulation.alphaTarget(0);
-  d.fx = null;
-  d.fy = null;
+function importantEdge(relationship) {
+  return !['MemberOf', 'Contains', 'HasSpn', 'DontReqPreauth'].includes(relationship);
 }
 
-// ============================================================
-//  Zoom
-// ============================================================
-function zoomIn() {
-  svg.transition().duration(300).call(zoomBehavior.scaleBy, 1.5);
+function shouldCreateLabel(node, total) {
+  if (total <= 1500) return true;
+  return node.high_value || node.owned || node.type === 'Domain' || node.degree >= 14;
 }
 
-function zoomOut() {
-  svg.transition().duration(300).call(zoomBehavior.scaleBy, 0.67);
+function shouldShowLabel(node, scale) {
+  if (!graphData) return false;
+  if (graphData.nodes.length <= 700) return true;
+  if (node.high_value || node.owned || node.type === 'Domain') return true;
+  if (scale >= 1.2 && graphData.nodes.length <= 1800) return true;
+  if (scale >= 2.1 && node.degree >= 4) return true;
+  return node.degree >= 18;
 }
 
-function zoomReset() {
-  svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity);
+function refreshLabelVisibility() {
+  if (!window._graphLabels) return;
+  const scale = currentTransform.k || 1;
+  window._graphLabels.style('display', d => shouldShowLabel(d, scale) ? null : 'none');
 }
 
-// ============================================================
-//  Tooltip
-// ============================================================
-function showTooltip(event, d) {
-  const tt = document.getElementById('tooltip');
-  const color = NODE_COLORS[d.type] || '#8b949e';
-  tt.innerHTML = `
-    <div class="tt-name" style="color:${color}">${d.display}</div>
-    <div class="tt-type">${d.type} · ${d.domain || 'UNKNOWN'}</div>
-    ${d.distinguished_name ? `<div class="tt-type" style="font-family:var(--font-mono)">${d.distinguished_name}</div>` : ''}
-    <div class="tt-type" style="font-family:var(--font-mono)">${d.id}</div>
-    ${d.enabled === false ? '<div style="color:var(--accent-red);font-size:11px">Disabled</div>' : ''}
-  `;
-  tt.style.display = 'block';
-  tt.style.left = (event.pageX + 12) + 'px';
-  tt.style.top = (event.pageY - 20) + 'px';
+function nodeDisplayName(node) {
+  if (node.display_name) return node.display_name;
+  if (node.domain && !node.label.includes('@')) {
+    return `${node.label}@${node.domain}`;
+  }
+  return node.label || node.id;
 }
 
-function hideTooltip() {
-  document.getElementById('tooltip').style.display = 'none';
+function edgeKey(source, target, relationship) {
+  const s = typeof source === 'object' ? source.id : source;
+  const t = typeof target === 'object' ? target.id : target;
+  return `${s}->${t}:${relationship}`;
 }
 
-// ============================================================
-//  Node Selection + Highlighting
-// ============================================================
-function selectNode(d) {
-  selectedNode = d;
+function selectNode(node) {
+  if (!graphData || !window._graphNodes) return;
+  selectedNode = node;
 
-  // Find connected nodes and edges
+  const connectedNodes = new Set([node.id]);
   const connectedEdges = new Set();
-  const connectedNodes = new Set();
-  connectedNodes.add(d.id);
-
-  graphData.edges.forEach(e => {
-    if (e.source === d.id || e.source.id === d.id) {
-      connectedEdges.add(e);
-      connectedNodes.add(typeof e.target === 'object' ? e.target.id : e.target);
-    }
-    if (e.target === d.id || e.target.id === d.id) {
-      connectedEdges.add(e);
-      connectedNodes.add(typeof e.source === 'object' ? e.source.id : e.source);
+  graphData.edges.forEach(edge => {
+    if (edge.source === node.id || edge.target === node.id) {
+      connectedNodes.add(edge.source);
+      connectedNodes.add(edge.target);
+      connectedEdges.add(edgeKey(edge.source, edge.target, edge.relationship));
     }
   });
 
-  // Dim everything
-  window._graphNodes.classed('dimmed', n => !connectedNodes.has(n.id));
-  window._graphLinks.classed('dimmed', e => !connectedEdges.has(e));
-  window._graphLinks.classed('highlighted', e => connectedEdges.has(e));
-  window._graphLabels.classed('dimmed', n => !connectedNodes.has(n.id));
-
-  // Selected marker
-  window._graphNodes.classed('selected', n => n.id === d.id);
-
-  // Show detail panel
-  showNodeDetail(d.id);
+  window._graphNodes
+    .classed('dimmed', item => !connectedNodes.has(item.id))
+    .classed('selected', item => item.id === node.id);
+  window._graphLinks
+    .classed('dimmed', item => !connectedEdges.has(item.key))
+    .classed('highlighted', item => connectedEdges.has(item.key));
+  window._graphLabels.classed('dimmed', item => !connectedNodes.has(item.id));
+  showNodeDetail(node.id);
 }
 
 function deselectAll() {
   selectedNode = null;
-  window._graphNodes.classed('dimmed', false).classed('selected', false);
-  window._graphLinks.classed('dimmed', false).classed('highlighted', false);
-  window._graphLabels.classed('dimmed', false);
-  document.getElementById('node-detail').innerHTML = '';
+  if (window._graphNodes) {
+    window._graphNodes.classed('dimmed', false).classed('selected', false);
+  }
+  if (window._graphLinks) {
+    window._graphLinks.classed('dimmed', false).classed('highlighted', false);
+  }
+  if (window._graphLabels) {
+    window._graphLabels.classed('dimmed', false);
+  }
+  if (graphData) {
+    clearNodeDetail();
+  }
 }
 
-// ============================================================
-//  Node Detail Panel
-// ============================================================
 async function showNodeDetail(nodeId) {
   const panel = document.getElementById('node-detail');
   try {
     const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}?graph=${encodeURIComponent(currentGraphId)}`);
-    if (!resp.ok) {
-      panel.innerHTML = '<h3>Node Detail</h3><p style="color:var(--text-muted)">Not found</p>';
-      return;
-    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const detail = await resp.json();
-    const color = NODE_COLORS[detail.type] || '#8b949e';
-    const enabledText = detail.enabled === null ? 'Unknown' : (detail.enabled ? 'Yes' : 'No');
-    const badges = [];
-    if (detail.high_value) badges.push('<span class="pill high">High Value</span>');
-    if (detail.owned) badges.push('<span class="pill owned">Owned</span>');
-    const badgeHtml = badges.length ? `<div style="display:flex;gap:6px;margin-bottom:8px">${badges.join('')}</div>` : '';
-
-    let propsHtml = Object.entries(detail.properties || {}).map(([k, v]) => `
-      <div class="detail-row"><span class="key">${k}</span><span class="val" title="${v}">${v}</span></div>
+    const color = NODE_COLORS[detail.type] || NODE_COLORS.Unknown;
+    const enabled = detail.enabled === null || detail.enabled === undefined ? 'Unknown' : (detail.enabled ? 'Yes' : 'No');
+    const pills = [
+      detail.high_value ? '<span class="pill high">High Value</span>' : '',
+      detail.owned ? '<span class="pill owned">Owned</span>' : '',
+    ].filter(Boolean).join('');
+    const props = Object.entries(detail.properties || {}).slice(0, 80).map(([key, value]) => `
+      <div class="detail-row"><span class="key">${escapeHtml(key)}</span><span class="val">${escapeHtml(value)}</span></div>
     `).join('');
-
-    let connHtml = (detail.connections || []).map(c => {
-      const edgeColor = EDGE_COLORS[c.relationship] || '#484f58';
-      return `<div class="conn" onclick="highlightNode('${c.target_id}')">
-        <span style="color:${edgeColor};font-weight:600;font-size:11px">${c.relationship}</span>
-        <span>→ ${c.target_display}</span>
-      </div>`;
+    const connections = (detail.connections || []).slice(0, 160).map(conn => {
+      const edgeColor = EDGE_COLORS[conn.relationship] || '#b5b5bc';
+      const direction = conn.direction === 'incoming' ? 'in' : 'out';
+      return `<button class="conn" data-target="${escapeAttr(conn.target_id)}">
+        <span style="color:${edgeColor};font-weight:900">${escapeHtml(direction)} ${escapeHtml(conn.relationship)}</span>
+        <span>${escapeHtml(conn.target_display)}</span>
+      </button>`;
     }).join('');
 
     panel.innerHTML = `
-      <h3>Node Detail</h3>
+      <h2>Node Detail</h2>
       <div class="detail-card">
-        ${badgeHtml}
-        <div class="detail-row"><span class="key">Display</span><span class="val" style="color:${color}">${detail.display_name}</span></div>
-        <div class="detail-row"><span class="key">Object ID</span><span class="val" title="${detail.id}" style="font-family:var(--font-mono)">${detail.id}</span></div>
-        <div class="detail-row"><span class="key">Type</span><span class="val">${detail.type}</span></div>
-        <div class="detail-row"><span class="key">Domain</span><span class="val">${detail.domain}</span></div>
-        ${detail.distinguished_name ? `<div class="detail-row"><span class="key">DN</span><span class="val" title="${detail.distinguished_name}" style="font-family:var(--font-mono)">${detail.distinguished_name}</span></div>` : ''}
-        <div class="detail-row"><span class="key">Enabled</span><span class="val">${enabledText}</span></div>
-        ${propsHtml}
+        <div class="pill-row">${pills}</div>
+        <div class="detail-name" style="color:${color}">${escapeHtml(detail.display_name)}</div>
+        <div class="detail-row"><span class="key">Object ID</span><span class="val">${escapeHtml(detail.id)}</span></div>
+        <div class="detail-row"><span class="key">Type</span><span class="val">${escapeHtml(detail.type)}</span></div>
+        <div class="detail-row"><span class="key">Domain</span><span class="val">${escapeHtml(detail.domain)}</span></div>
+        ${detail.distinguished_name ? `<div class="detail-row"><span class="key">DN</span><span class="val">${escapeHtml(detail.distinguished_name)}</span></div>` : ''}
+        <div class="detail-row"><span class="key">Enabled</span><span class="val">${enabled}</span></div>
+        ${props}
       </div>
-      <div id="connection-list">
-        <h3>Connections (${detail.connections.length})</h3>
-        ${connHtml}
+      <div class="connection-list">
+        <h2>Connections (${(detail.connections || []).length})</h2>
+        ${connections || '<div class="detail-card"><div class="detail-row"><span class="key">Edges</span><span class="val">None</span></div></div>'}
       </div>
     `;
-  } catch (e) {
-    panel.innerHTML = `<h3>Node Detail</h3><p style="color:var(--accent-red)">${e.message}</p>`;
+
+    panel.querySelectorAll('.conn').forEach(button => {
+      button.addEventListener('click', () => highlightNode(button.dataset.target));
+    });
+  } catch (error) {
+    panel.innerHTML = `<h2>Node Detail</h2><div class="detail-card"><div class="detail-row"><span class="key">Error</span><span class="val">${escapeHtml(error.message)}</span></div></div>`;
   }
+}
+
+function clearNodeDetail() {
+  document.getElementById('node-detail').innerHTML = `
+    <h2>Node Detail</h2>
+    <div class="detail-card">
+      <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
+    </div>
+  `;
 }
 
 function highlightNode(nodeId) {
-  const node = window._nodesMap[nodeId];
-  if (node) {
-    selectNode(node);
-    // Pan to node
-    const container = document.getElementById('graph-container');
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-    svg.transition().duration(500).call(
-      zoomBehavior.transform,
-      d3.zoomIdentity.translate(width/2, height/2).scale(1.2).translate(-node.x, -node.y)
-    );
-  }
+  const node = window._nodesMap ? window._nodesMap[nodeId] : null;
+  if (!node) return;
+  selectNode(node);
+  zoomToNode(node);
 }
 
-// ============================================================
-//  Search
-// ============================================================
-let searchTimeout;
-document.getElementById('search-input').addEventListener('input', (e) => {
-  clearTimeout(searchTimeout);
-  const q = e.target.value.trim();
-  const results = document.getElementById('search-results');
+function highlightPath(hops) {
+  if (!window._graphNodes || !graphData) return;
+  const pathNodes = new Set();
+  const pathEdges = new Set();
+  hops.forEach(hop => {
+    pathNodes.add(hop.source_id);
+    pathNodes.add(hop.target_id);
+    pathEdges.add(edgeKey(hop.source_id, hop.target_id, hop.relationship));
+  });
 
-  if (q.length < 2) {
-    results.classList.remove('active');
+  window._graphNodes.classed('dimmed', node => !pathNodes.has(node.id));
+  window._graphLinks
+    .classed('dimmed', edge => !pathEdges.has(edge.key))
+    .classed('highlighted', edge => pathEdges.has(edge.key));
+  window._graphLabels.classed('dimmed', node => !pathNodes.has(node.id));
+}
+
+let searchTimeout;
+function onSearchInput(event) {
+  clearTimeout(searchTimeout);
+  const query = event.target.value.trim();
+  const results = document.getElementById('search-results');
+  if (!currentGraphId || query.length < 2) {
+    hideSearchResults();
     return;
   }
 
   searchTimeout = setTimeout(async () => {
-    const resp = await fetch(`/api/search?graph=${encodeURIComponent(currentGraphId)}&q=${encodeURIComponent(q)}`);
-    const items = await resp.json();
-
-    if (items.length === 0) {
-      results.innerHTML = '<div style="padding:8px 12px;color:var(--text-muted);font-size:13px">No results</div>';
-    } else {
-      results.innerHTML = items.map(item => {
-        const color = NODE_COLORS[item.type] || '#8b949e';
-        return `<div class="search-result" onclick="selectAndFocus('${item.id}')">
-          <span class="badge" style="background:${color}22;color:${color}">${item.type}</span>
-          <span>${item.display_name}</span>
-        </div>`;
-      }).join('');
+    try {
+      const resp = await fetch(`/api/search?graph=${encodeURIComponent(currentGraphId)}&q=${encodeURIComponent(query)}`);
+      const items = await resp.json();
+      if (!items.length) {
+        results.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:13px">No results</div>';
+      } else {
+        results.innerHTML = items.map(item => {
+          const color = NODE_COLORS[item.type] || NODE_COLORS.Unknown;
+          return `<button class="search-result" data-node="${escapeAttr(item.id)}">
+            <span class="badge" style="color:${color};border-color:${color}66">${escapeHtml(item.type)}</span>
+            <span>${escapeHtml(item.display_name)}</span>
+          </button>`;
+        }).join('');
+        results.querySelectorAll('.search-result').forEach(button => {
+          button.addEventListener('click', () => {
+            document.getElementById('search-input').value = '';
+            hideSearchResults();
+            highlightNode(button.dataset.node);
+          });
+        });
+      }
+      results.classList.add('active');
+    } catch (error) {
+      results.innerHTML = `<div style="padding:10px;color:var(--red);font-size:13px">${escapeHtml(error.message)}</div>`;
+      results.classList.add('active');
     }
-    results.classList.add('active');
-  }, 200);
-});
-
-function selectAndFocus(nodeId) {
-  document.getElementById('search-results').classList.remove('active');
-  document.getElementById('search-input').value = '';
-  highlightNode(nodeId);
+  }, 160);
 }
 
-// ============================================================
-//  Attack Path Finder
-// ============================================================
+function hideSearchResults() {
+  document.getElementById('search-results').classList.remove('active');
+}
+
+function submitPathOnEnter(event) {
+  if (event.key === 'Enter') {
+    findAttackPath();
+  }
+}
+
 async function findAttackPath() {
+  const resultDiv = document.getElementById('path-result');
+  if (!currentGraphId) {
+    resultDiv.innerHTML = '<span style="color:var(--yellow)">Select a graph first.</span>';
+    return;
+  }
+
   const from = document.getElementById('path-from').value.trim();
   const to = document.getElementById('path-to').value.trim();
-  const resultDiv = document.getElementById('path-result');
-
   if (!from || !to) {
-    resultDiv.innerHTML = '<p style="color:var(--accent-orange);font-size:12px">Enter source and target</p>';
+    resultDiv.innerHTML = '<span style="color:var(--yellow)">Enter a source and target node.</span>';
     return;
   }
 
@@ -1218,75 +1394,135 @@ async function findAttackPath() {
       body: JSON.stringify({ from, to }),
     });
     const result = await resp.json();
-
     if (!result.found) {
-      resultDiv.innerHTML = `<p style="color:var(--accent-red);font-size:12px">No path found from ${from} to ${to}</p>`;
+      resultDiv.innerHTML = `<span style="color:var(--red)">No path found from ${escapeHtml(from)} to ${escapeHtml(to)}.</span>`;
       return;
     }
 
-    const hopsHtml = result.hops.map(hop => {
-      const edgeColor = EDGE_COLORS[hop.relationship] || '#f85149';
+    const hops = result.hops.map(hop => {
+      const edgeColor = EDGE_COLORS[hop.relationship] || '#ff4d4d';
       return `<div class="hop">
-        <span style="color:${NODE_COLORS[hop.source_type] || '#8b949e'}">${hop.source_display}</span>
-        <span class="hop-edge" style="color:${edgeColor}">──[${hop.relationship}]──▶</span>
-        <span style="color:${NODE_COLORS[hop.target_type] || '#8b949e'}">${hop.target_display}</span>
-        <span style="color:var(--text-muted);font-size:11px;margin-left:auto">(cost ${hop.cost})</span>
+        <span>${escapeHtml(hop.source_display)}</span>
+        <span class="hop-edge" style="color:${edgeColor}">--[${escapeHtml(hop.relationship)}]--></span>
+        <span>${escapeHtml(hop.target_display)} <span style="color:var(--muted)">cost ${hop.cost}</span></span>
       </div>`;
     }).join('');
-
-    resultDiv.innerHTML = `
-      <div style="padding:8px 0;font-size:12px;color:var(--accent-red);font-weight:600">
-        ⚡ ${result.hop_count} hops · total cost: ${result.total_cost}
-      </div>
-      ${hopsHtml}
-    `;
-
-    // Highlight path in graph
+    resultDiv.innerHTML = `<div style="color:var(--red);font-weight:900">${result.hop_count} hops | total cost ${result.total_cost}</div>${hops}`;
     highlightPath(result.hops);
-  } catch (e) {
-    resultDiv.innerHTML = `<p style="color:var(--accent-red);font-size:12px">${e.message}</p>`;
+  } catch (error) {
+    resultDiv.innerHTML = `<span style="color:var(--red)">${escapeHtml(error.message)}</span>`;
   }
 }
 
-function highlightPath(hops) {
-  // Build set of edges in path
-  const pathEdges = new Set();
-  const pathNodes = new Set();
-
-  hops.forEach(hop => {
-    pathNodes.add(hop.source_id);
-    pathNodes.add(hop.target_id);
-  });
-
-  graphData.edges.forEach(e => {
-    const src = typeof e.source === 'object' ? e.source.id : e.source;
-    const tgt = typeof e.target === 'object' ? e.target.id : e.target;
-    hops.forEach(hop => {
-      if (src === hop.source_id && tgt === hop.target_id && e.relationship === hop.relationship) {
-        pathEdges.add(e);
-      }
-    });
-  });
-
-  // Dim everything else
-  window._graphNodes.classed('dimmed', n => !pathNodes.has(n.id));
-  window._graphLinks.classed('dimmed', e => !pathEdges.has(e));
-  window._graphLinks.classed('highlighted', e => pathEdges.has(e));
-  window._graphLabels.classed('dimmed', n => !pathNodes.has(n.id));
+function dragStarted(event, d) {
+  if (simulation && !event.active) simulation.alphaTarget(0.18).restart();
+  d.fx = d.x;
+  d.fy = d.y;
 }
 
-// ============================================================
-//  Keyboard
-// ============================================================
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    deselectAll();
-  }
-});
+function dragged(event, d) {
+  d.fx = event.x;
+  d.fy = event.y;
+}
 
-// ============================================================
-//  Start
-// ============================================================
+function dragEnded(event, d) {
+  if (simulation && !event.active) simulation.alphaTarget(0);
+  d.fx = null;
+  d.fy = null;
+}
+
+function zoomIn() {
+  svg.transition().duration(180).call(zoomBehavior.scaleBy, 1.35);
+}
+
+function zoomOut() {
+  svg.transition().duration(180).call(zoomBehavior.scaleBy, 0.74);
+}
+
+function fitGraph() {
+  if (!graphData || !window._nodesMap) {
+    svg.transition().duration(180).call(zoomBehavior.transform, d3.zoomIdentity);
+    return;
+  }
+
+  const nodes = Object.values(window._nodesMap);
+  if (!nodes.length) return;
+  const xs = nodes.map(node => node.x || 0);
+  const ys = nodes.map(node => node.y || 0);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const container = document.getElementById('graph-container');
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  const graphWidth = Math.max(1, maxX - minX);
+  const graphHeight = Math.max(1, maxY - minY);
+  const scale = Math.max(0.08, Math.min(1.7, 0.82 / Math.max(graphWidth / width, graphHeight / height)));
+  const tx = width / 2 - scale * (minX + graphWidth / 2);
+  const ty = height / 2 - scale * (minY + graphHeight / 2);
+  svg.transition().duration(420).call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+
+function zoomToNode(node) {
+  const container = document.getElementById('graph-container');
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  const scale = Math.max(1.35, currentTransform.k || 1);
+  svg.transition().duration(360).call(
+    zoomBehavior.transform,
+    d3.zoomIdentity.translate(width / 2, height / 2).scale(scale).translate(-node.x, -node.y)
+  );
+}
+
+function showTooltip(event, d) {
+  const tooltip = document.getElementById('tooltip');
+  const color = NODE_COLORS[d.type] || NODE_COLORS.Unknown;
+  tooltip.innerHTML = `
+    <div class="tt-name" style="color:${color}">${escapeHtml(d.display)}</div>
+    <div class="tt-meta">${escapeHtml(d.type)} | ${escapeHtml(d.domain || 'UNKNOWN')}</div>
+    ${d.distinguished_name ? `<div class="tt-meta">${escapeHtml(d.distinguished_name)}</div>` : ''}
+    <div class="tt-meta">${escapeHtml(d.id)}</div>
+  `;
+  tooltip.style.display = 'block';
+  moveTooltip(event);
+}
+
+function moveTooltip(event) {
+  const tooltip = document.getElementById('tooltip');
+  tooltip.style.left = `${event.pageX + 14}px`;
+  tooltip.style.top = `${event.pageY + 12}px`;
+}
+
+function hideTooltip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
 init();
 </script>
 </body>

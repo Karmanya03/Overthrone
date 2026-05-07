@@ -406,6 +406,21 @@ fn attribute_guid_info(guid: &str) -> Option<(&'static str, &'static str, u8, bo
             false,
             "Write logonHours → lock account out of time window",
         )),
+        // ── Advanced ADCS GUIDs ──────────────────────────────────────────────
+        "0e10c968-78fb-11d2-90d4-00c04f79dc55" => Some((
+            "msPKI-Cert-Template-OID",
+            "EnrollCertificate",
+            2,
+            true,
+            "Enroll in certificate template → ADCS privilege escalation",
+        )),
+        "bf967a8b-0de6-11d0-a285-00aa003049e2" => Some((
+            "msPKI-Certificate-Name-Flag",
+            "WriteProperty",
+            2,
+            true,
+            "Modify certificate name flag → ESC1/ESC9 abuse",
+        )),
         _ => None,
     }
 }

@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::{
-    acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, policy, spns, trusts, users,
+    acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, policy, powerview,
+    snaffler, spns, trusts, users,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +84,8 @@ pub struct ReaperResult {
     pub acl_findings: Vec<acls::AclFinding>,
     pub laps_entries: Vec<laps::LapsEntry>,
     pub mssql_instances: Vec<mssql::MssqlInstance>,
+    pub snaffle_findings: Vec<snaffler::SnaffleFinding>,
+    pub powerview_results: Option<powerview::PowerViewResult>,
     pub adcs_templates: Vec<adcs::CertTemplate>,
 }
 
@@ -99,6 +102,8 @@ const MODULES: &[&str] = &[
     "acls",
     "laps",
     "mssql",
+    "snaffler",
+    "powerview",
     "adcs",
 ];
 
@@ -141,6 +146,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
         acl_findings: Vec::new(),
         laps_entries: Vec::new(),
         mssql_instances: Vec::new(),
+        snaffle_findings: Vec::new(),
+        powerview_results: None,
         adcs_templates: Vec::new(),
     };
 
@@ -261,6 +268,19 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     run_module!("acls", acls::enumerate_dangerous_acls, acl_findings);
     run_module!("laps", laps::enumerate_laps, laps_entries);
     run_module!("mssql", mssql::enumerate_mssql, mssql_instances);
+    run_module!("snaffler", snaffler::run_snaffler, snaffle_findings);
+    if config.should_run("powerview") {
+        pb.set_message("powerview...");
+        if let Ok(data) = powerview::run_powerview(config).await {
+            result.powerview_results = Some(data);
+            pb.println(format!(
+                "  {} {} → detailed AD info",
+                "✓".green().bold(),
+                "powerview"
+            ));
+        }
+        pb.inc(1);
+    }
     run_module!("adcs", adcs::enumerate_adcs, adcs_templates);
 
     pb.finish_with_message("done");

@@ -129,7 +129,6 @@ pub struct ViewerStats {
 
 #[derive(Clone, Debug)]
 pub struct ViewerGraph {
-    sources: Vec<String>,
     nodes: Vec<ViewerNode>,
     edges: Vec<ViewerEdge>,
     outgoing: Vec<Vec<usize>>,
@@ -173,10 +172,6 @@ impl ViewerGraph {
         }
 
         builder.finish()
-    }
-
-    pub fn sources(&self) -> &[String] {
-        &self.sources
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = (usize, &ViewerNode)> {
@@ -333,7 +328,6 @@ struct GraphBuilder {
     nodes: Vec<ViewerNode>,
     edges: Vec<(String, String, String, BTreeMap<String, String>)>,
     index: HashMap<String, usize>,
-    sources: Vec<String>,
 }
 
 impl GraphBuilder {
@@ -342,13 +336,10 @@ impl GraphBuilder {
             nodes: Vec::new(),
             edges: Vec::new(),
             index: HashMap::new(),
-            sources: Vec::new(),
         }
     }
 
     fn ingest_value(&mut self, path: &Path, value: &Value) -> Result<(), String> {
-        self.sources.push(path.display().to_string());
-
         if value.get("nodes").is_some() && value.get("edges").is_some() {
             return self.ingest_overthrone_flat(value);
         }
@@ -866,7 +857,6 @@ impl GraphBuilder {
         }
 
         Ok(ViewerGraph {
-            sources: self.sources,
             nodes: self.nodes,
             edges: visual_edges,
             outgoing,

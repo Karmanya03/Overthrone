@@ -168,7 +168,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     for round in 0..max_replan_rounds {
         info!("AutoPwn round {}", round + 1);
 
-        let plan = planner.plan(&goal, &state, &failed_actions);
+        let plan = planner.plan(&goal, &state, &failed_actions, ctx.ldap_available);
 
         if plan.steps.is_empty() {
             if round == 0 {

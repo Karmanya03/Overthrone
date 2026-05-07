@@ -2,8 +2,9 @@
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
+use overthrone_core::mssql::{LinkCrawler, LinkCrawlerConfig, MssqlClient, MssqlConfig};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlInstance {
@@ -14,6 +15,15 @@ pub struct MssqlInstance {
     pub instance_name: Option<String>,
     pub port: Option<u16>,
     pub enabled: bool,
+    pub audit_result: Option<MssqlAuditResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MssqlAuditResult {
+    pub is_sysadmin: bool,
+    pub xp_cmdshell_enabled: bool,
+    pub can_impersonate_sa: bool,
+    pub links: Vec<String>,
 }
 
 impl MssqlInstance {
@@ -46,6 +56,7 @@ impl MssqlInstance {
             instance_name: instance,
             port,
             enabled,
+            audit_result: None,
         }
     }
 }
@@ -115,7 +126,8 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
                 continue;
             }
 
-            let instance = MssqlInstance::from_spn(spn, &account, &entry.dn, enabled);
+            let mut instance = MssqlInstance::from_spn(spn, &account, &entry.dn, enabled);
+            instance.audit_result = None;
 
             info!(
                 "[mssql]  {} → {} (host: {}, port: {:?})",
@@ -124,6 +136,55 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
                 instance.hostname.as_deref().unwrap_or("?"),
                 instance.port
             );
+
+            // Optional: perform deep audit if credentials are available
+            if let (Some(host), Some(pass)) = (&instance.hostname, &config.password) {
+                let mssql_config = MssqlConfig {
+                    server: host.clone(),
+                    port: instance.port.unwrap_or(1433),
+                    domain: Some(config.domain.clone()),
+                    username: Some(config.username.clone()),
+                    password: Some(pass.clone()),
+                    ..Default::default()
+                };
+
+                if let Ok(mut client) = MssqlClient::connect(mssql_config).await {
+                    debug!("[mssql] Connected to {}, performing audit", host);
+                    let mut audit = MssqlAuditResult {
+                        is_sysadmin: false,
+                        xp_cmdshell_enabled: false,
+                        can_impersonate_sa: false,
+                        links: Vec::new(),
+                    };
+
+                    // Check sysadmin
+                    if let Ok(res) = client.query("SELECT IS_SRVROLEMEMBER('sysadmin')").await
+                        && let Some(val) = res.get(0, 0).and_then(|v| v.as_deref())
+                    {
+                        audit.is_sysadmin = val == "1";
+                    }
+
+                    // Check xp_cmdshell
+                    if audit.is_sysadmin
+                        && let Ok(res) = client
+                            .query(
+                                "SELECT value FROM sys.configurations WHERE name = 'xp_cmdshell'",
+                            )
+                            .await
+                        && let Some(val) = res.get(0, 0).and_then(|v| v.as_deref())
+                    {
+                        audit.xp_cmdshell_enabled = val == "1";
+                    }
+
+                    // Crawl links (PowerUpSQL-style)
+                    let mut crawler = LinkCrawler::new(&mut client, LinkCrawlerConfig::default());
+                    if let Ok(crawl_res) = crawler.crawl().await {
+                        audit.links = crawl_res.nodes.keys().cloned().collect();
+                    }
+
+                    instance.audit_result = Some(audit);
+                }
+            }
 
             results.push(instance);
         }

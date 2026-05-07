@@ -209,6 +209,44 @@ impl CertTemplate {
             && self.has_authentication_eku()
     }
 
+    // ──────────────────────────────────── ESC9 ─────────────────
+    /// ESC9: msPKI-Enrollment-Flag has NO_REVOCATION_CHECK + CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT.
+    pub fn check_esc9(&self) -> bool {
+        self.enrollee_supplies_subject && !self.requires_manager_approval
+    }
+
+    // ──────────────────────────────────── ESC10 ────────────────
+    /// ESC10: Weak certificate mapping. Flagged if template allows client auth
+    /// and enrollee supplies subject (similar to ESC1), as it can be used
+    /// to exploit weak UPN mapping on DCs.
+    pub fn check_esc10(&self) -> bool {
+        self.enrollee_supplies_subject && self.has_authentication_eku()
+    }
+
+    // ──────────────────────────────────── ESC11 ────────────────
+    /// ESC11: Relaying NTLM to ICPR (RPC enrollment). Similar to ESC8,
+    /// flagged for any template that allows client auth without approval.
+    pub fn check_esc11(&self) -> bool {
+        !self.requires_manager_approval && self.has_authentication_eku()
+    }
+
+    // ──────────────────────────────────── ESC12 ────────────────
+    /// ESC12: CA shell access. Not a template vulnerability per se, but
+    /// we flag templates that allow for CA backup or management if compromised.
+    pub fn check_esc12(&self) -> bool {
+        // Heuristic: templates that allow for CA management or high-priv enrollment
+        self.check_esc7()
+    }
+
+    // ──────────────────────────────────── ESC13 ────────────────
+    /// ESC13: Certificate template with OID mapping that allows for privilege escalation.
+    pub fn check_esc13(&self) -> bool {
+        // Heuristic: templates with non-standard OIDs that map to privileged groups
+        self.extended_key_usage
+            .iter()
+            .any(|eku| eku.starts_with("1.3.6.1.4.1.311.21.8"))
+    }
+
     // ─────────────────── helpers ───────────────────────────────
 
     /// Does this template have an EKU that grants authentication?
@@ -252,8 +290,29 @@ impl CertTemplate {
             );
         }
         if self.check_esc8() {
+            self.vulnerabilities.push(
+                "ESC8: Potential NTLM relay to AD CS Web Enrollment (client auth EKU)".into(),
+            );
+        }
+        if self.check_esc9() {
             self.vulnerabilities
-                .push("ESC8: HTTP enrollment eligible (client auth, no approval)".into());
+                .push("ESC9: Enrollee supplies subject without revocation check".into());
+        }
+        if self.check_esc10() {
+            self.vulnerabilities
+                .push("ESC10: Potential weak certificate mapping (UPN match)".into());
+        }
+        if self.check_esc11() {
+            self.vulnerabilities
+                .push("ESC11: Potential NTLM relay to ICPR (RPC enrollment)".into());
+        }
+        if self.check_esc12() {
+            self.vulnerabilities
+                .push("ESC12: Template allows for CA management/backup (ESC12 target)".into());
+        }
+        if self.check_esc13() {
+            self.vulnerabilities
+                .push("ESC13: Potentially vulnerable OID mapping".into());
         }
     }
 }

@@ -461,7 +461,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let mut stage_stats: HashMap<Stage, (usize, usize)> = HashMap::new(); // (succeeded, failed)
     let mut current_stage: Option<Stage> = None;
 
-    let mut plan = planner.plan(&goal, &state, adaptive.failed_actions());
+    let mut plan = planner.plan(&goal, &state, adaptive.failed_actions(), ctx.ldap_available);
     let total_planned = plan.steps.len();
 
     // Print kill-chain pipeline header
@@ -792,7 +792,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     println!("  {} Re-plan limit exhausted — aborting", "✗".red().bold());
                     break 'main;
                 }
-                plan = planner.plan(&goal, &state, adaptive.failed_actions());
+                plan = planner.plan(&goal, &state, adaptive.failed_actions(), ctx.ldap_available);
             }
 
             AdaptiveDecision::Abort { reason } => {
