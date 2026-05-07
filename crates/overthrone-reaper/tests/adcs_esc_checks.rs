@@ -458,5 +458,7 @@ fn full_sid_domain_users_suffix() {
 // ═══════════════════════════════════════════════════════════
 
 fn has_esc(t: &CertTemplate, esc: &str) -> bool {
-    t.vulnerabilities.iter().any(|v| v.contains(esc))
+    t.vulnerabilities
+        .iter()
+        .any(|v| v.split(':').next() == Some(esc))
 }
