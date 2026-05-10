@@ -939,7 +939,13 @@ input:disabled {
 
       <div class="field">
         <label for="graph-select">BloodHound JSON</label>
-        <select id="graph-select"></select>
+        <div style="display:flex;gap:8px">
+          <select id="graph-select" style="flex:1"></select>
+          <input type="file" id="json-upload" accept=".json,application/json" style="display:none">
+          <button class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          </button>
+        </div>
       </div>
 
       <div class="field">
@@ -1149,6 +1155,30 @@ async function init() {
   document.getElementById('zoom-fit').addEventListener('click', fitGraph);
   document.getElementById('render-button').addEventListener('click', () => renderSelectedChunk());
   document.getElementById('path-button').addEventListener('click', findAttackPath);
+  document.getElementById('upload-btn').addEventListener('click', () => {
+    document.getElementById('json-upload').click();
+  });
+  document.getElementById('json-upload').addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (file.type !== "application/json" && !file.name.endsWith(".json")) {
+        alert("Only JSON files are allowed");
+        return;
+    }
+    document.getElementById('graph-badge').textContent = 'Uploading...';
+    try {
+      const resp = await fetch('/api/upload', { method: 'POST', body: file });
+      if (!resp.ok) throw new Error(await resp.text());
+      const newGraph = await resp.json();
+      await loadGraphList();
+      document.getElementById('graph-select').value = newGraph.id;
+      loadGraph(newGraph.id);
+    } catch (e) {
+      alert("Upload failed: " + e.message);
+      document.getElementById('graph-badge').textContent = 'Upload failed';
+    }
+    event.target.value = '';
+  });
   document.getElementById('path-from').addEventListener('keydown', submitPathOnEnter);
   document.getElementById('path-to').addEventListener('keydown', submitPathOnEnter);
   bindSuggest('search-input', 'search-results', item => {
@@ -1652,11 +1682,11 @@ function renderGraph(data) {
   }
   ticked();
 
-  if (nodeCount <= 1800) {
+  if (nodeCount <= 800) {
     simulation.on('tick', ticked).restart();
     document.getElementById('render-badge').textContent = 'Live layout';
   } else {
-    document.getElementById('render-badge').textContent = 'Optimized static layout';
+    document.getElementById('render-badge').textContent = 'Optimized static layout (Canvas recommended for >5k)';
   }
 
   window._graphNodes = nodeSel;
@@ -1696,7 +1726,7 @@ function shouldShowLabel(node, scale) {
   if (!graphData) return false;
   if (graphData.nodes.length <= 700) return true;
   if (node.high_value || node.owned || node.type === 'Domain') return true;
-  if (scale >= 1.2 && graphData.nodes.length <= 1800) return true;
+  if (scale >= 1.2 && graphData.nodes.length <= 800) return true;
   if (scale >= 2.1 && node.degree >= 4) return true;
   return node.degree >= 18;
 }

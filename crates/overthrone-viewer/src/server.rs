@@ -38,7 +38,7 @@ struct GraphBundle {
 
 /// Shared application state
 struct AppState {
-    graphs: Vec<GraphBundle>,
+    graphs: RwLock<Vec<GraphBundle>>,
     default_graph: String,
     cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
 }
@@ -726,23 +726,24 @@ fn node_security_notes(graph: &ViewerGraph, node_idx: usize) -> Vec<DetailNote> 
     notes
 }
 
-fn resolve_bundle<'a>(
-    state: &'a AppState,
+async fn resolve_bundle(
+    state: &AppState,
     graph_id: Option<&str>,
-) -> Result<&'a GraphBundle, StatusCode> {
+) -> Result<GraphBundle, StatusCode> {
+    let graphs = state.graphs.read().await;
     if let Some(id) = graph_id {
-        return state
-            .graphs
+        return graphs
             .iter()
             .find(|graph| graph.id == id)
+            .cloned()
             .ok_or(StatusCode::NOT_FOUND);
     }
 
-    state
-        .graphs
+    graphs
         .iter()
         .find(|graph| graph.id == state.default_graph)
-        .or_else(|| state.graphs.first())
+        .or_else(|| graphs.first())
+        .cloned()
         .ok_or(StatusCode::NOT_FOUND)
 }
 
@@ -750,7 +751,7 @@ async fn load_graph(
     state: &AppState,
     graph_id: Option<&str>,
 ) -> Result<(GraphBundle, Arc<ViewerGraph>), StatusCode> {
-    let bundle = resolve_bundle(state, graph_id)?.clone();
+    let bundle = resolve_bundle(state, graph_id).await?;
 
     if let Some(graph) = state.cache.read().await.get(&bundle.id).cloned() {
         return Ok((bundle, graph));
@@ -1046,8 +1047,8 @@ async fn index() -> Html<&'static str> {
 /// GET /api/graphs — List available graphs
 async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>> {
     let cache = state.cache.read().await;
-    let graphs = state
-        .graphs
+    let graphs_lock = state.graphs.read().await;
+    let graphs = graphs_lock
         .iter()
         .map(|bundle| {
             let cached = cache.get(&bundle.id);
@@ -1245,6 +1246,51 @@ async fn get_stats(
     Ok(Json(stats_response(graph.stats())))
 }
 
+/// POST /api/upload — Upload a graph JSON file
+async fn upload_graph(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<Json<GraphInfo>, StatusCode> {
+    let temp_dir = std::env::temp_dir();
+    let file_id = uuid::Uuid::new_v4();
+    let temp_file = temp_dir.join(format!("overthrone_upload_{}.json", file_id));
+    if let Err(e) = fs::write(&temp_file, &body) {
+        warn!("Failed to write uploaded graph: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let source = temp_file.display().to_string();
+    let bundle = GraphBundle {
+        id: format!("upload-{}", file_id),
+        label: "Uploaded JSON".to_string(),
+        sources: vec![source],
+        file_bytes: body.len() as u64,
+    };
+
+    let graph = ViewerGraph::from_sources(&bundle.sources).map_err(|e| {
+        warn!("Failed to parse uploaded graph: {}", e);
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let info = GraphInfo {
+        id: bundle.id.clone(),
+        label: bundle.label.clone(),
+        sources: bundle.sources.clone(),
+        file_bytes: bundle.file_bytes,
+        loaded: true,
+        stats: Some(stats_response(graph.stats())),
+    };
+
+    state
+        .cache
+        .write()
+        .await
+        .insert(bundle.id.clone(), Arc::new(graph));
+    state.graphs.write().await.push(bundle);
+
+    Ok(Json(info))
+}
+
 // ============================================================
 //  Public API
 // ============================================================
@@ -1271,7 +1317,7 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
         .unwrap_or_else(|| "graph-1".to_string());
 
     let state = Arc::new(AppState {
-        graphs,
+        graphs: RwLock::new(graphs),
         default_graph,
         cache: RwLock::new(HashMap::new()),
     });
@@ -1289,6 +1335,7 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
         .route("/api/search", get(search_nodes))
         .route("/api/path", post(find_path))
         .route("/api/stats", get(get_stats))
+        .route("/api/upload", post(upload_graph))
         .layer(cors)
         .with_state(state);
 
