@@ -153,7 +153,7 @@ fn sanitize_name(value: &str) -> String {
 }
 
 fn sanitize_inline(value: &str) -> String {
-    value.replace('\r', " ").replace('\n', " ")
+    value.replace(['\r', '\n'], " ")
 }
 
 fn state_snapshot(state: &EngagementState) -> String {

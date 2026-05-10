@@ -2579,30 +2579,30 @@ async fn exec_adcs_guided(
     let mut enum_templates = Vec::new();
     let mut enum_cas = Vec::new();
 
-    if ctx.ldap_available {
-        if let Ok(conn) = ldap_connect(ctx, state).await {
-            let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
-            enum_templates = enumerator.enumerate_templates().await.unwrap_or_default();
-            enum_cas = enumerator.enumerate_cas().await.unwrap_or_default();
-        }
+    if ctx.ldap_available
+        && let Ok(conn) = ldap_connect(ctx, state).await
+    {
+        let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
+        enum_templates = enumerator.enumerate_templates().await.unwrap_or_default();
+        enum_cas = enumerator.enumerate_cas().await.unwrap_or_default();
     }
 
-    if params.get("ca").is_none_or(|value| value.is_empty()) {
-        if let Some(ca) = enum_cas.first() {
-            params.insert("ca".to_string(), ca.name.clone());
-        }
+    if params.get("ca").is_none_or(|value| value.is_empty())
+        && let Some(ca) = enum_cas.first()
+    {
+        params.insert("ca".to_string(), ca.name.clone());
     }
 
-    if params.get("ca_host").is_none_or(|value| value.is_empty()) {
-        if let Some(ca) = enum_cas.first() {
-            params.insert("ca_host".to_string(), ca.name.clone());
-        }
+    if params.get("ca_host").is_none_or(|value| value.is_empty())
+        && let Some(ca) = enum_cas.first()
+    {
+        params.insert("ca_host".to_string(), ca.name.clone());
     }
 
-    if params.get("ca_name").is_none_or(|value| value.is_empty()) {
-        if let Some(ca) = enum_cas.first() {
-            params.insert("ca_name".to_string(), ca.name.clone());
-        }
+    if params.get("ca_name").is_none_or(|value| value.is_empty())
+        && let Some(ca) = enum_cas.first()
+    {
+        params.insert("ca_name".to_string(), ca.name.clone());
     }
 
     for key in ["template", "agent_template", "target_template"] {
@@ -2631,14 +2631,13 @@ async fn exec_adcs_guided(
         );
     }
 
-    if params.get("victim").is_none_or(|value| value.is_empty()) {
-        if let Some(user) = state
+    if params.get("victim").is_none_or(|value| value.is_empty())
+        && let Some(user) = state
             .users
             .iter()
             .find(|user| user.enabled && !user.admin_count)
-        {
-            params.insert("victim".to_string(), user.sam_account_name.clone());
-        }
+    {
+        params.insert("victim".to_string(), user.sam_account_name.clone());
     }
 
     if params.get("variant").is_none_or(|value| value.is_empty()) {
