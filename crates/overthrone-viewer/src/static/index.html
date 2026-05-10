@@ -147,7 +147,8 @@ input:disabled {
   cursor: not-allowed;
 }
 
-#search-results {
+#search-results,
+.suggest-box {
   display: none;
   max-height: 210px;
   overflow-y: auto;
@@ -157,7 +158,8 @@ input:disabled {
   border-radius: 8px;
 }
 
-#search-results.active {
+#search-results.active,
+.suggest-box.active {
   display: block;
 }
 
@@ -191,6 +193,45 @@ input:disabled {
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.filter-chip {
+  min-width: 0;
+  color: var(--soft);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.filter-chip:has(input:checked) {
+  color: var(--text);
+  border-color: rgba(73, 228, 214, 0.38);
+  background: rgba(73, 228, 214, 0.08);
+}
+
+.filter-chip input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--cyan);
+}
+
+.render-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
 }
 
 .scroll-area {
@@ -296,6 +337,25 @@ input:disabled {
   cursor: not-allowed;
 }
 
+.secondary-button {
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
+.secondary-button:hover {
+  border-color: var(--cyan);
+}
+
+.secondary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 #path-result {
   margin-top: 10px;
   color: var(--soft);
@@ -330,6 +390,66 @@ input:disabled {
   border-radius: 8px;
   padding: 12px;
   margin-top: 11px;
+}
+
+.detail-section-title {
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin: 14px 0 7px;
+  text-transform: uppercase;
+}
+
+.detail-note {
+  border: 1px solid var(--line);
+  background: #101012;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 7px;
+}
+
+.detail-note-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.detail-note-body,
+.conn-guidance {
+  color: var(--soft);
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 5px;
+}
+
+.severity {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--soft);
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 2px 7px;
+  text-transform: uppercase;
+}
+
+.severity.s1 {
+  color: var(--red);
+  border-color: rgba(255, 77, 77, 0.65);
+}
+
+.severity.s2 {
+  color: var(--yellow);
+  border-color: rgba(244, 201, 93, 0.65);
+}
+
+.severity.s3 {
+  color: var(--cyan);
+  border-color: rgba(73, 228, 214, 0.55);
 }
 
 .detail-name {
@@ -404,10 +524,19 @@ input:disabled {
   border-radius: 8px;
   cursor: pointer;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 86px minmax(0, 1fr);
   gap: 8px;
   padding: 8px;
   text-align: left;
+}
+
+.conn span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.conn-guidance {
+  grid-column: 1 / -1;
 }
 
 .conn:hover {
@@ -674,21 +803,42 @@ input:disabled {
       </div>
 
       <div class="field">
+        <label>Type Filters</label>
+        <div class="filter-grid" id="type-filters">
+          <label class="filter-chip"><input type="checkbox" value="User" checked>Users</label>
+          <label class="filter-chip"><input type="checkbox" value="Computer" checked>Computers</label>
+          <label class="filter-chip"><input type="checkbox" value="Group" checked>Groups</label>
+          <label class="filter-chip"><input type="checkbox" value="Domain" checked>Domains</label>
+          <label class="filter-chip"><input type="checkbox" value="GPO" checked>GPOs</label>
+          <label class="filter-chip"><input type="checkbox" value="OU" checked>OUs</label>
+          <label class="filter-chip"><input type="checkbox" value="CertTemplate" checked>Templates</label>
+          <label class="filter-chip"><input type="checkbox" value="EnterpriseCA" checked>CAs</label>
+        </div>
+      </div>
+
+      <div class="field">
         <label for="search-input">Node Search</label>
         <input type="text" id="search-input" placeholder="Search full names, SIDs, domains" autocomplete="off" disabled>
-        <div id="search-results"></div>
+        <div id="search-results" class="suggest-box"></div>
       </div>
 
       <div class="field">
         <label for="render-select">Render Budget</label>
-        <select id="render-select">
-          <option value="auto" selected>Auto (recommended)</option>
-          <option value="2000">2,000 nodes</option>
-          <option value="4000">4,000 nodes</option>
-          <option value="8000">8,000 nodes</option>
-          <option value="full">Full graph (may lag)</option>
-        </select>
-        <div class="hint">Large graphs load in a capped mode to keep the browser responsive.</div>
+        <div class="render-row">
+          <select id="render-select">
+            <option value="50">50 nodes</option>
+            <option value="100" selected>100 nodes</option>
+            <option value="200">200 nodes</option>
+            <option value="300">300 nodes</option>
+            <option value="500">500 nodes</option>
+            <option value="1000">1,000 nodes</option>
+            <option value="2000">2,000 nodes</option>
+            <option value="5000">5,000 nodes</option>
+            <option value="all">ALL nodes</option>
+          </select>
+          <button class="secondary-button" id="render-button" disabled>Render</button>
+        </div>
+        <div class="hint">The canvas stays blank until you search, find a path, or render a chunk.</div>
       </div>
     </div>
 
@@ -712,7 +862,9 @@ input:disabled {
         <h2>Attack Path</h2>
         <div class="path-input">
           <input type="text" id="path-from" placeholder="Source node" disabled>
+          <div id="from-results" class="suggest-box"></div>
           <input type="text" id="path-to" placeholder="Target node" disabled>
+          <div id="to-results" class="suggest-box"></div>
           <button class="primary-button" id="path-button" disabled>Find Shortest Path</button>
         </div>
         <div id="path-result"></div>
@@ -805,7 +957,9 @@ let graphList = [];
 let currentGraphId = null;
 let simulation = null;
 let selectedNode = null;
-let renderLimit = 'auto';
+let renderLimit = '100';
+let pathFromId = '';
+let pathToId = '';
 let svg;
 let g;
 let linkGroup;
@@ -833,15 +987,41 @@ async function init() {
   document.getElementById('zoom-in').addEventListener('click', zoomIn);
   document.getElementById('zoom-out').addEventListener('click', zoomOut);
   document.getElementById('zoom-fit').addEventListener('click', fitGraph);
+  document.getElementById('render-button').addEventListener('click', () => renderSelectedChunk());
   document.getElementById('path-button').addEventListener('click', findAttackPath);
   document.getElementById('path-from').addEventListener('keydown', submitPathOnEnter);
   document.getElementById('path-to').addEventListener('keydown', submitPathOnEnter);
-  document.getElementById('search-input').addEventListener('input', onSearchInput);
+  bindSuggest('search-input', 'search-results', item => {
+    document.getElementById('search-input').value = item.display_name;
+    hideSearchResults();
+    loadFocusedNode(item.id);
+  });
+  bindSuggest('path-from', 'from-results', item => {
+    pathFromId = item.id;
+    document.getElementById('path-from').value = item.display_name;
+    hideSearchResults();
+  });
+  bindSuggest('path-to', 'to-results', item => {
+    pathToId = item.id;
+    document.getElementById('path-to').value = item.display_name;
+    hideSearchResults();
+  });
+  document.getElementById('path-from').addEventListener('input', () => { pathFromId = ''; });
+  document.getElementById('path-to').addEventListener('input', () => { pathToId = ''; });
   document.getElementById('render-select').addEventListener('change', event => {
     renderLimit = event.target.value;
-    if (currentGraphId) {
-      loadGraph(currentGraphId);
-    }
+  });
+  document.querySelectorAll('#type-filters input').forEach(input => {
+    input.addEventListener('change', () => {
+      hideSearchResults();
+      if (currentGraphId && graphData && graphData.nodes && graphData.nodes.length) {
+        if (renderLimit === 'all') {
+          document.getElementById('render-badge').textContent = 'ALL selected; press Render to confirm';
+          return;
+        }
+        renderSelectedChunk({ warnAll: false });
+      }
+    });
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
@@ -896,19 +1076,35 @@ async function loadGraph(graphId) {
   const graphInfo = graphList.find(graph => graph.id === graphId);
   document.getElementById('graph-select').value = graphId;
   setInteractiveEnabled(false);
-  setEmptyMessage('Loading graph', graphInfo ? graphInfo.label : graphId);
+  setEmptyMessage('Indexing graph', graphInfo ? graphInfo.label : graphId);
   document.getElementById('empty-state').classList.remove('hidden');
-  document.getElementById('graph-badge').textContent = 'Loading graph';
+  document.getElementById('graph-badge').textContent = 'Indexing graph';
   document.getElementById('render-badge').textContent = 'Parsing JSON';
   teardownGraph();
   clearNodeDetail();
+  document.getElementById('path-result').innerHTML = '';
+  pathFromId = '';
+  pathToId = '';
 
   try {
-    const resp = await fetch(`/api/graph?graph=${encodeURIComponent(graphId)}${buildRenderParams()}`);
+    const resp = await fetch(`/api/stats?graph=${encodeURIComponent(graphId)}`);
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
-    graphData = await resp.json();
+    const stats = await resp.json();
+    graphData = {
+      graph_id: graphId,
+      label: graphInfo ? graphInfo.label : graphId,
+      sources: graphInfo ? graphInfo.sources : [],
+      stats,
+      rendered_nodes: 0,
+      rendered_edges: 0,
+      truncated: stats.total_nodes > 0 || stats.total_edges > 0,
+      node_limit: 0,
+      edge_limit: 0,
+      nodes: [],
+      edges: [],
+    };
   } catch (error) {
     graphData = null;
     setEmptyMessage('Graph failed to load', error.message);
@@ -919,11 +1115,11 @@ async function loadGraph(graphId) {
 
   renderStats(graphData.stats);
   updateGraphMeta(graphData, graphInfo);
-  renderGraph(graphData);
   updateGraphBadge(graphData);
   updateRenderBadge(graphData);
   setInteractiveEnabled(true);
-  document.getElementById('empty-state').classList.add('hidden');
+  setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
+  document.getElementById('empty-state').classList.remove('hidden');
 }
 
 function teardownGraph() {
@@ -965,6 +1161,7 @@ function setInteractiveEnabled(enabled) {
   document.getElementById('path-from').disabled = !enabled;
   document.getElementById('path-to').disabled = !enabled;
   document.getElementById('path-button').disabled = !enabled;
+  document.getElementById('render-button').disabled = !enabled;
 }
 
 function updateGraphBadge(data) {
@@ -989,7 +1186,11 @@ function updateRenderBadge(data) {
   }
 
   if (data.truncated) {
-    badge.textContent = `Capped render (${data.rendered_nodes}/${data.stats.total_nodes} nodes)`;
+    if ((data.rendered_nodes || 0) === 0) {
+      badge.textContent = 'Blank start';
+    } else {
+      badge.textContent = `Chunk render (${data.rendered_nodes}/${data.stats.total_nodes} nodes)`;
+    }
   } else {
     badge.textContent = 'Full render';
   }
@@ -1016,7 +1217,6 @@ function updateGraphMeta(data, graphInfo) {
   sources.innerHTML = (data.sources || []).map(src =>
     `<span class="source-chip" title="${escapeAttr(src)}">${escapeHtml(src)}</span>`
   ).join('');
-  document.getElementById('path-result').innerHTML = '';
 }
 
 function emptyStats() {
@@ -1030,6 +1230,8 @@ function emptyStats() {
     cert_templates: 0,
     high_value: 0,
     owned: 0,
+    total_nodes: 0,
+    total_edges: 0,
   };
 }
 
@@ -1055,20 +1257,88 @@ function renderStats(stats) {
   `).join('');
 }
 
-function buildRenderParams() {
-  if (renderLimit === 'auto') return '';
-  if (renderLimit === 'full') return '&limit=0';
-  const parsed = Number(renderLimit);
-  if (!Number.isFinite(parsed)) return '';
-  return `&limit=${parsed}`;
+function activeGraphInfo() {
+  return graphList.find(graph => graph.id === currentGraphId);
+}
+
+function selectedTypeFilter() {
+  const boxes = Array.from(document.querySelectorAll('#type-filters input'));
+  const checked = boxes.filter(input => input.checked).map(input => input.value);
+  if (!checked.length || checked.length === boxes.length) {
+    return '';
+  }
+  return checked.join(',');
+}
+
+function buildGraphParams({ focus = null, limit = renderLimit } = {}) {
+  const params = new URLSearchParams();
+  params.set('graph', currentGraphId);
+  params.set('limit', limit === 'all' ? '0' : String(limit));
+  const types = selectedTypeFilter();
+  if (types) {
+    params.set('types', types);
+  }
+  if (focus) {
+    params.set('focus', focus);
+  }
+  return params;
+}
+
+async function fetchGraphSlice(options = {}) {
+  const resp = await fetch(`/api/graph?${buildGraphParams(options).toString()}`);
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+async function renderSelectedChunk({ focus = null, warnAll = true } = {}) {
+  if (!currentGraphId) return;
+  if (renderLimit === 'all' && warnAll) {
+    const confirmed = window.confirm('Rendering ALL nodes can freeze the browser on large domains. Continue?');
+    if (!confirmed) return;
+  }
+
+  document.getElementById('render-badge').textContent = focus ? 'Loading neighborhood' : 'Loading chunk';
+  setEmptyMessage('Rendering graph', focus ? 'Loading the selected node neighborhood.' : 'Loading a filtered node chunk.');
+  document.getElementById('empty-state').classList.remove('hidden');
+
+  try {
+    graphData = await fetchGraphSlice({ focus });
+    renderStats(graphData.stats);
+    updateGraphMeta(graphData, activeGraphInfo());
+    updateGraphBadge(graphData);
+    updateRenderBadge(graphData);
+    renderGraph(graphData);
+  } catch (error) {
+    setEmptyMessage('Render failed', error.message);
+    document.getElementById('render-badge').textContent = 'Error';
+  }
+}
+
+async function loadFocusedNode(nodeId) {
+  await renderSelectedChunk({ focus: nodeId });
+  const node = window._nodesMap ? window._nodesMap[nodeId] : null;
+  if (node) {
+    selectNode(node);
+    zoomToNode(node);
+  }
 }
 
 function renderGraph(data) {
+  teardownGraph();
   const container = document.getElementById('graph-container');
   const width = Math.max(640, container.clientWidth);
   const height = Math.max(480, container.clientHeight);
   const nodeCount = data.nodes.length;
   const nodesMap = {};
+
+  if (!nodeCount) {
+    setEmptyMessage('No nodes rendered', 'No nodes matched the current filter or chunk selection.');
+    document.getElementById('empty-state').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('empty-state').classList.add('hidden');
 
   const nodes = data.nodes.map(raw => {
     const display = nodeDisplayName(raw);
@@ -1092,6 +1362,8 @@ function renderGraph(data) {
         target: edge.target,
         relationship: edge.relationship,
         cost: edge.cost,
+        severity: edge.severity,
+        guidance: edge.guidance,
         key: edgeKey(edge.source, edge.target, edge.relationship),
       };
     });
@@ -1312,12 +1584,24 @@ async function showNodeDetail(nodeId) {
     const props = Object.entries(detail.properties || {}).slice(0, 80).map(([key, value]) => `
       <div class="detail-row"><span class="key">${escapeHtml(key)}</span><span class="val">${escapeHtml(value)}</span></div>
     `).join('');
+    const notes = (detail.security_notes || []).map(note => {
+      const sev = severityClass(note.severity);
+      return `<div class="detail-note">
+        <div class="detail-note-title">
+          <span>${escapeHtml(note.title)}</span>
+          <span class="severity ${sev}">${escapeHtml(severityText(note.severity))}</span>
+        </div>
+        <div class="detail-note-body">${escapeHtml(note.body)}</div>
+      </div>`;
+    }).join('');
     const connections = (detail.connections || []).slice(0, 160).map(conn => {
       const edgeColor = EDGE_COLORS[conn.relationship] || '#b5b5bc';
       const direction = conn.direction === 'incoming' ? 'in' : 'out';
+      const sev = severityClass(conn.severity);
       return `<button class="conn" data-target="${escapeAttr(conn.target_id)}">
         <span style="color:${edgeColor};font-weight:900">${escapeHtml(direction)} ${escapeHtml(conn.relationship)}</span>
         <span>${escapeHtml(conn.target_display)}</span>
+        <span class="conn-guidance"><span class="severity ${sev}">${escapeHtml(severityText(conn.severity))}</span> cost ${escapeHtml(conn.cost)} | ${escapeHtml(conn.guidance || 'Review relationship details before acting.')}</span>
       </button>`;
     }).join('');
 
@@ -1331,6 +1615,8 @@ async function showNodeDetail(nodeId) {
         <div class="detail-row"><span class="key">Domain</span><span class="val">${escapeHtml(detail.domain)}</span></div>
         ${detail.distinguished_name ? `<div class="detail-row"><span class="key">DN</span><span class="val">${escapeHtml(detail.distinguished_name)}</span></div>` : ''}
         <div class="detail-row"><span class="key">Enabled</span><span class="val">${enabled}</span></div>
+        ${notes ? `<div class="detail-section-title">ACL / ACE Guidance</div>${notes}` : ''}
+        ${props ? '<div class="detail-section-title">Properties</div>' : ''}
         ${props}
       </div>
       <div class="connection-list">
@@ -1356,9 +1642,13 @@ function clearNodeDetail() {
   `;
 }
 
-function highlightNode(nodeId) {
+async function highlightNode(nodeId) {
   const node = window._nodesMap ? window._nodesMap[nodeId] : null;
   if (!node) {
+    if (currentGraphId) {
+      await loadFocusedNode(nodeId);
+      return;
+    }
     if (graphData && graphData.truncated) {
       document.getElementById('render-badge').textContent = 'Node not rendered — increase Render Budget';
     }
@@ -1383,6 +1673,62 @@ function highlightPath(hops) {
     .classed('dimmed', edge => !pathEdges.has(edge.key))
     .classed('highlighted', edge => pathEdges.has(edge.key));
   window._graphLabels.classed('dimmed', node => !pathNodes.has(node.id));
+}
+
+function bindSuggest(inputId, resultsId, onPick) {
+  const input = document.getElementById(inputId);
+  const results = document.getElementById(resultsId);
+  let timeout = null;
+
+  input.addEventListener('input', () => {
+    clearTimeout(timeout);
+    const query = input.value.trim();
+    if (!currentGraphId || query.length < 1) {
+      results.classList.remove('active');
+      return;
+    }
+
+    timeout = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          graph: currentGraphId,
+          q: query,
+          limit: '50',
+        });
+        const types = selectedTypeFilter();
+        if (types) {
+          params.set('types', types);
+        }
+        const resp = await fetch(`/api/search?${params.toString()}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const items = await resp.json();
+        results.innerHTML = renderSuggestItems(items);
+        results.querySelectorAll('.search-result').forEach(button => {
+          button.addEventListener('click', () => {
+            const item = items.find(candidate => candidate.id === button.dataset.node);
+            if (item) onPick(item);
+          });
+        });
+        results.classList.add('active');
+      } catch (error) {
+        results.innerHTML = `<div style="padding:10px;color:var(--red);font-size:13px">${escapeHtml(error.message)}</div>`;
+        results.classList.add('active');
+      }
+    }, 70);
+  });
+}
+
+function renderSuggestItems(items) {
+  if (!items.length) {
+    return '<div style="padding:10px;color:var(--muted);font-size:13px">No matching nodes</div>';
+  }
+  return items.map(item => {
+    const color = NODE_COLORS[item.type] || NODE_COLORS.Unknown;
+    return `<button class="search-result" data-node="${escapeAttr(item.id)}">
+      <span class="badge" style="color:${color};border-color:${color}66">${escapeHtml(item.type)}</span>
+      <span>${escapeHtml(item.display_name)}</span>
+    </button>`;
+  }).join('');
 }
 
 let searchTimeout;
@@ -1426,7 +1772,7 @@ function onSearchInput(event) {
 }
 
 function hideSearchResults() {
-  document.getElementById('search-results').classList.remove('active');
+  document.querySelectorAll('.suggest-box').forEach(box => box.classList.remove('active'));
 }
 
 function submitPathOnEnter(event) {
@@ -1442,8 +1788,10 @@ async function findAttackPath() {
     return;
   }
 
-  const from = document.getElementById('path-from').value.trim();
-  const to = document.getElementById('path-to').value.trim();
+  const fromInput = document.getElementById('path-from').value.trim();
+  const toInput = document.getElementById('path-to').value.trim();
+  const from = pathFromId || fromInput;
+  const to = pathToId || toInput;
   if (!from || !to) {
     resultDiv.innerHTML = '<span style="color:var(--yellow)">Enter a source and target node.</span>';
     return;
@@ -1457,19 +1805,33 @@ async function findAttackPath() {
     });
     const result = await resp.json();
     if (!result.found) {
-      resultDiv.innerHTML = `<span style="color:var(--red)">No path found from ${escapeHtml(from)} to ${escapeHtml(to)}.</span>`;
+      resultDiv.innerHTML = `<span style="color:var(--red)">No path found from ${escapeHtml(fromInput || from)} to ${escapeHtml(toInput || to)}.</span>`;
       return;
     }
 
     const hops = result.hops.map(hop => {
       const edgeColor = EDGE_COLORS[hop.relationship] || '#ff4d4d';
+      const sev = severityClass(hop.severity);
       return `<div class="hop">
         <span>${escapeHtml(hop.source_display)}</span>
-        <span class="hop-edge" style="color:${edgeColor}">--[${escapeHtml(hop.relationship)}]--></span>
+        <span class="hop-edge" style="color:${edgeColor}">--[${escapeHtml(hop.relationship)}]--> <span class="severity ${sev}">${escapeHtml(severityText(hop.severity))}</span></span>
         <span>${escapeHtml(hop.target_display)} <span style="color:var(--muted)">cost ${hop.cost}</span></span>
+        ${hop.guidance ? `<span class="conn-guidance">${escapeHtml(hop.guidance)}</span>` : ''}
       </div>`;
     }).join('');
     resultDiv.innerHTML = `<div style="color:var(--red);font-weight:900">${result.hop_count} hops | total cost ${result.total_cost}</div>${hops}`;
+    const graphInfo = activeGraphInfo();
+    graphData = {
+      ...result,
+      graph_id: currentGraphId,
+      label: graphInfo ? graphInfo.label : currentGraphId,
+      sources: graphInfo ? graphInfo.sources : [],
+    };
+    renderStats(graphData.stats);
+    updateGraphMeta(graphData, graphInfo);
+    updateGraphBadge(graphData);
+    updateRenderBadge(graphData);
+    renderGraph(graphData);
     highlightPath(result.hops);
   } catch (error) {
     resultDiv.innerHTML = `<span style="color:var(--red)">${escapeHtml(error.message)}</span>`;
@@ -1558,6 +1920,21 @@ function moveTooltip(event) {
 
 function hideTooltip() {
   document.getElementById('tooltip').style.display = 'none';
+}
+
+function severityText(value) {
+  if (value <= 1) return 'critical';
+  if (value === 2) return 'high';
+  if (value === 3) return 'medium';
+  if (value === 4) return 'low';
+  return 'info';
+}
+
+function severityClass(value) {
+  if (value <= 1) return 's1';
+  if (value === 2) return 's2';
+  if (value === 3) return 's3';
+  return '';
 }
 
 function formatBytes(bytes) {

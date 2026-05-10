@@ -21,6 +21,7 @@ pub mod playbook;
 #[cfg(feature = "qlearn")]
 pub mod qlearner;
 pub mod runner;
+pub(crate) mod trail;
 pub mod wizard;
 
 // Re-exports for CLI integration

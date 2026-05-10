@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -137,6 +137,21 @@ pub struct ViewerGraph {
     relationships: Vec<String>,
     stats: ViewerStats,
     lookup: HashMap<String, usize>,
+    search_index: Vec<SearchIndexEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct SearchIndexEntry {
+    idx: usize,
+    primary: String,
+    label: String,
+    id: String,
+    domain: String,
+    distinguished_name: String,
+    haystack: String,
+    kind: String,
+    high_value: bool,
+    owned: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +265,53 @@ impl ViewerGraph {
                         .is_some_and(|domain| domain.to_ascii_uppercase().contains(&normalized))
             })
             .map(|(idx, _)| idx)
+    }
+
+    pub fn search_nodes(&self, query: &str, kinds: &[String], limit: usize) -> Vec<usize> {
+        let query = normalize_lookup(query);
+        if query.is_empty() {
+            return Vec::new();
+        }
+
+        let allowed: HashSet<String> = kinds
+            .iter()
+            .map(|kind| normalize_kind(kind).to_ascii_lowercase())
+            .collect();
+        let use_kind_filter = !allowed.is_empty();
+
+        let mut ranked = Vec::new();
+        for entry in &self.search_index {
+            if use_kind_filter && !allowed.contains(&entry.kind.to_ascii_lowercase()) {
+                continue;
+            }
+
+            let score = if entry.primary.starts_with(&query) || entry.label.starts_with(&query) {
+                0u8
+            } else if entry.id.starts_with(&query)
+                || entry.domain.starts_with(&query)
+                || entry.distinguished_name.starts_with(&query)
+            {
+                1
+            } else if entry.haystack.contains(&query) {
+                2
+            } else {
+                continue;
+            };
+
+            ranked.push((
+                score,
+                Reverse(entry.high_value || entry.owned),
+                entry.primary.len(),
+                entry.idx,
+            ));
+        }
+
+        ranked.sort_by_key(|(score, hv, len, idx)| (*score, *hv, *len, *idx));
+        ranked
+            .into_iter()
+            .take(limit.max(1))
+            .map(|(_, _, _, idx)| idx)
+            .collect()
     }
 
     pub fn shortest_path(&self, from: &str, to: &str) -> Option<PathResult> {
@@ -843,9 +905,11 @@ impl GraphBuilder {
         }
 
         let mut lookup = HashMap::new();
+        let mut search_index = Vec::with_capacity(self.nodes.len());
         for (idx, node) in self.nodes.iter().enumerate() {
             add_lookup(&mut lookup, &node.id, idx);
             add_lookup(&mut lookup, &node.label, idx);
+            let display = node_search_display(node);
             if let Some(domain) = &node.domain
                 && !node.label.contains('@')
             {
@@ -854,6 +918,26 @@ impl GraphBuilder {
             if let Some(dn) = &node.distinguished_name {
                 add_lookup(&mut lookup, dn, idx);
             }
+            let domain = node.domain.clone().unwrap_or_default();
+            let distinguished_name = node.distinguished_name.clone().unwrap_or_default();
+            let primary = normalize_lookup(&display);
+            let label = normalize_lookup(&node.label);
+            let id = normalize_lookup(&node.id);
+            let domain_norm = normalize_lookup(&domain);
+            let dn_norm = normalize_lookup(&distinguished_name);
+            let haystack = format!("{primary} {label} {id} {domain_norm} {dn_norm}");
+            search_index.push(SearchIndexEntry {
+                idx,
+                primary,
+                label,
+                id,
+                domain: domain_norm,
+                distinguished_name: dn_norm,
+                haystack,
+                kind: node.kind.clone(),
+                high_value: node.high_value,
+                owned: node.owned,
+            });
         }
 
         Ok(ViewerGraph {
@@ -864,6 +948,7 @@ impl GraphBuilder {
             relationships,
             stats,
             lookup,
+            search_index,
         })
     }
 }
@@ -1093,6 +1178,15 @@ fn add_lookup(lookup: &mut HashMap<String, usize>, key: &str, idx: usize) {
     if !key.is_empty() {
         lookup.entry(key).or_insert(idx);
     }
+}
+
+fn node_search_display(node: &ViewerNode) -> String {
+    if let Some(domain) = &node.domain
+        && !node.label.contains('@')
+    {
+        return format!("{}@{}", node.label, domain);
+    }
+    node.label.clone()
 }
 
 fn normalize_kind(raw: &str) -> String {

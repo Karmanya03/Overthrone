@@ -599,8 +599,18 @@ impl AdaptiveEngine {
                 | PlannedAction::PasswordSpray { .. }
                 | PlannedAction::AdcsEnumerate
                 | PlannedAction::AdcsEsc1 { .. }
+                | PlannedAction::AdcsEsc2 { .. }
+                | PlannedAction::AdcsEsc3 { .. }
                 | PlannedAction::AdcsEsc4 { .. }
+                | PlannedAction::AdcsEsc5 { .. }
                 | PlannedAction::AdcsEsc6 { .. }
+                | PlannedAction::AdcsEsc7 { .. }
+                | PlannedAction::AdcsEsc8 { .. }
+                | PlannedAction::AdcsEsc9 { .. }
+                | PlannedAction::AdcsEsc10 { .. }
+                | PlannedAction::AdcsEsc11 { .. }
+                | PlannedAction::AdcsEsc12 { .. }
+                | PlannedAction::AdcsEsc13 { .. }
                 | PlannedAction::EnumerateShares { .. }
                 | PlannedAction::EnumeratePasswordPolicy
                 | PlannedAction::EnumerateDelegations
@@ -672,6 +682,18 @@ impl AdaptiveEngine {
             }),
             // DCSync requires replication rights — try remote NTDS dump
             PlannedAction::DcsSync { .. } => None,
+            PlannedAction::AdcsEsc4 { .. }
+            | PlannedAction::AdcsEsc5 { .. }
+            | PlannedAction::AdcsEsc7 { .. } => Some(PlannedAction::AdcsEnumerate),
+            PlannedAction::AdcsEsc8 {
+                ca,
+                template,
+                target_upn,
+            } => Some(PlannedAction::AdcsEsc11 {
+                ca: ca.clone(),
+                template: template.clone(),
+                target_upn: target_upn.clone(),
+            }),
             _ => None,
         }
     }
@@ -706,6 +728,19 @@ impl AdaptiveEngine {
                     None
                 }
             }
+            PlannedAction::AdcsEsc8 {
+                ca,
+                template,
+                target_upn,
+            } => Some(PlannedAction::AdcsEsc11 {
+                ca: ca.clone(),
+                template: template.clone(),
+                target_upn: target_upn.clone(),
+            }),
+            PlannedAction::AdcsEsc4 { template } => Some(PlannedAction::AdcsEsc2 {
+                template: template.clone(),
+                ca: String::new(),
+            }),
             _ => None,
         }
     }

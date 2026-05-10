@@ -76,6 +76,8 @@ pub enum PlannedAction {
         start_rid: u32,
         end_rid: u32,
     },
+    StealthLdapProbe,
+    StealthDelegationProbe,
 
     // ── Kerberos Attacks ──
     AsRepRoast {
@@ -159,10 +161,58 @@ pub enum PlannedAction {
         ca: String,
         target_upn: String,
     },
+    AdcsEsc2 {
+        template: String,
+        ca: String,
+    },
+    AdcsEsc3 {
+        agent_template: String,
+        target_template: String,
+        ca: String,
+        target_upn: String,
+    },
     AdcsEsc4 {
         template: String,
     },
+    AdcsEsc5 {
+        ca: String,
+    },
     AdcsEsc6 {
+        template: String,
+        ca: String,
+        target_upn: String,
+    },
+    AdcsEsc7 {
+        ca: String,
+    },
+    AdcsEsc8 {
+        ca: String,
+        template: String,
+        target_upn: String,
+    },
+    AdcsEsc9 {
+        template: String,
+        ca: String,
+        victim: String,
+        target_upn: String,
+    },
+    AdcsEsc10 {
+        template: String,
+        ca: String,
+        victim: String,
+        target_upn: String,
+        variant: String,
+    },
+    AdcsEsc11 {
+        ca: String,
+        template: String,
+        target_upn: String,
+    },
+    AdcsEsc12 {
+        ca_host: String,
+        ca_name: String,
+    },
+    AdcsEsc13 {
         template: String,
         ca: String,
         target_upn: String,
@@ -206,6 +256,8 @@ impl PlannedAction {
             Self::CheckAdminAccess { .. } => "check_admin_access",
             Self::UserEnum { .. } => "user_enum",
             Self::RidCycle { .. } => "rid_cycle",
+            Self::StealthLdapProbe => "stealth_ldap_probe",
+            Self::StealthDelegationProbe => "stealth_delegation_probe",
             Self::AsRepRoast { .. } => "asreproast",
             Self::Kerberoast { .. } => "kerberoast",
             Self::ConstrainedDelegation { .. } => "constrained_delegation",
@@ -226,8 +278,18 @@ impl PlannedAction {
             Self::Coerce { .. } => "coerce",
             Self::AdcsEnumerate => "adcs_enum",
             Self::AdcsEsc1 { .. } => "adcs_esc1",
+            Self::AdcsEsc2 { .. } => "adcs_esc2",
+            Self::AdcsEsc3 { .. } => "adcs_esc3",
             Self::AdcsEsc4 { .. } => "adcs_esc4",
+            Self::AdcsEsc5 { .. } => "adcs_esc5",
             Self::AdcsEsc6 { .. } => "adcs_esc6",
+            Self::AdcsEsc7 { .. } => "adcs_esc7",
+            Self::AdcsEsc8 { .. } => "adcs_esc8",
+            Self::AdcsEsc9 { .. } => "adcs_esc9",
+            Self::AdcsEsc10 { .. } => "adcs_esc10",
+            Self::AdcsEsc11 { .. } => "adcs_esc11",
+            Self::AdcsEsc12 { .. } => "adcs_esc12",
+            Self::AdcsEsc13 { .. } => "adcs_esc13",
             Self::ForgeGoldenTicket { .. } => "forge_golden_ticket",
             Self::ForgeSilverTicket { .. } => "forge_silver_ticket",
             Self::RunPlaybook { .. } => "run_playbook",
@@ -331,6 +393,43 @@ impl Planner {
         };
 
         let failed = |key: &str| failed_actions.iter().any(|action| action == key);
+
+        if ldap_available && self.stealth {
+            if !failed("stealth_ldap_probe") {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description:
+                        "Stealth LDAP baseline probe (RootDSE, domain flags, tiny tier-zero sample)"
+                            .to_string(),
+                    stage: Stage::Enumerate,
+                    action: PlannedAction::StealthLdapProbe,
+                    priority: 110,
+                    noise: NoiseLevel::Silent,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+            if !failed("stealth_delegation_probe") {
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description:
+                        "Stealth delegation probe (targeted UAC and delegation attributes)"
+                            .to_string(),
+                    stage: Stage::Enumerate,
+                    action: PlannedAction::StealthDelegationProbe,
+                    priority: 109,
+                    noise: NoiseLevel::Silent,
+                    depends_on: vec![],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+        }
 
         // ── Phase 1: Recon (always needed if state is empty) ──
         if state.users.is_empty() {
@@ -722,7 +821,133 @@ impl Planner {
                     },
                     priority: 83,
                     noise: NoiseLevel::Low,
-                    depends_on: vec![adcs_enum_id],
+                    depends_on: vec![adcs_enum_id.clone()],
+                    executed: false,
+                    result: None,
+                    retries: 0,
+                    max_retries: 1,
+                });
+            }
+
+            let additional_adcs = vec![
+                (
+                    "adcs_esc2",
+                    "ADCS ESC2 - abuse Any Purpose or weak EKU certificate template",
+                    PlannedAction::AdcsEsc2 {
+                        template: String::new(),
+                        ca: String::new(),
+                    },
+                    82,
+                    NoiseLevel::Low,
+                ),
+                (
+                    "adcs_esc3",
+                    "ADCS ESC3 - enrollment-agent abuse for certificate impersonation",
+                    PlannedAction::AdcsEsc3 {
+                        agent_template: String::new(),
+                        target_template: String::new(),
+                        ca: String::new(),
+                        target_upn: String::new(),
+                    },
+                    81,
+                    NoiseLevel::Low,
+                ),
+                (
+                    "adcs_esc5",
+                    "ADCS ESC5 - CA object or PKI container control path",
+                    PlannedAction::AdcsEsc5 { ca: String::new() },
+                    80,
+                    NoiseLevel::Medium,
+                ),
+                (
+                    "adcs_esc7",
+                    "ADCS ESC7 - ManageCA or ManageCertificates abuse path",
+                    PlannedAction::AdcsEsc7 { ca: String::new() },
+                    79,
+                    NoiseLevel::Medium,
+                ),
+                (
+                    "adcs_esc8",
+                    "ADCS ESC8 - NTLM relay to web enrollment endpoints",
+                    PlannedAction::AdcsEsc8 {
+                        ca: String::new(),
+                        template: String::new(),
+                        target_upn: String::new(),
+                    },
+                    78,
+                    NoiseLevel::Medium,
+                ),
+                (
+                    "adcs_esc9",
+                    "ADCS ESC9 - NoSecurityExtension mapping abuse",
+                    PlannedAction::AdcsEsc9 {
+                        template: String::new(),
+                        ca: String::new(),
+                        victim: String::new(),
+                        target_upn: String::new(),
+                    },
+                    77,
+                    NoiseLevel::Low,
+                ),
+                (
+                    "adcs_esc10",
+                    "ADCS ESC10 - weak certificate mapping abuse",
+                    PlannedAction::AdcsEsc10 {
+                        template: String::new(),
+                        ca: String::new(),
+                        victim: String::new(),
+                        target_upn: String::new(),
+                        variant: String::new(),
+                    },
+                    76,
+                    NoiseLevel::Low,
+                ),
+                (
+                    "adcs_esc11",
+                    "ADCS ESC11 - IF_ENFORCEENCRYPTICERTREQUEST relay path",
+                    PlannedAction::AdcsEsc11 {
+                        ca: String::new(),
+                        template: String::new(),
+                        target_upn: String::new(),
+                    },
+                    75,
+                    NoiseLevel::Medium,
+                ),
+                (
+                    "adcs_esc12",
+                    "ADCS ESC12 - vulnerable CA certificate or key material path",
+                    PlannedAction::AdcsEsc12 {
+                        ca_host: String::new(),
+                        ca_name: String::new(),
+                    },
+                    74,
+                    NoiseLevel::Medium,
+                ),
+                (
+                    "adcs_esc13",
+                    "ADCS ESC13 - issuance policy OID group link abuse",
+                    PlannedAction::AdcsEsc13 {
+                        template: String::new(),
+                        ca: String::new(),
+                        target_upn: String::new(),
+                    },
+                    73,
+                    NoiseLevel::Low,
+                ),
+            ];
+
+            for (key, description, action, priority, noise) in additional_adcs {
+                if failed(key) {
+                    continue;
+                }
+                steps.push(PlanStep {
+                    id: next_id(),
+                    description: description.to_string(),
+                    stage: Stage::Attack,
+                    action,
+                    priority,
+                    noise,
+                    depends_on: vec![adcs_enum_id.clone()],
                     executed: false,
                     result: None,
                     retries: 0,

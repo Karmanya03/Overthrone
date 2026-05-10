@@ -18,6 +18,7 @@ use crate::executor::{self, ExecContext};
 use crate::goals::{AttackGoal, EngagementState, GoalStatus};
 use crate::planner::{PlanStep, PlannedAction, Planner};
 use crate::playbook::{Playbook, PlaybookId};
+use crate::trail::TrailWriter;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -379,6 +380,26 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     };
     state.domain = state.domain.or_else(|| Some(config.creds.domain.clone()));
     state.dc_ip = state.dc_ip.or_else(|| Some(config.dc_host.clone()));
+    let trail = match TrailWriter::start(
+        "Auto-pwn",
+        &config.creds.domain,
+        &config.dc_host,
+        &goal.describe(),
+        config.initial_state.is_some(),
+    ) {
+        Ok(writer) => {
+            println!(
+                "  {} Trail file: {}",
+                "TRAIL".bold().cyan(),
+                writer.path().display()
+            );
+            Some(writer)
+        }
+        Err(e) => {
+            warn!("trail file initialization failed: {e}");
+            None
+        }
+    };
 
     let planner = Planner::new(config.stealth);
     let mut adaptive = AdaptiveEngine::new(config.stealth);
@@ -538,6 +559,9 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 .max()
                 .unwrap_or(crate::planner::NoiseLevel::Silent);
             print_stage_banner(step.stage, steps_in_stage, noise_in_stage);
+            if let Some(writer) = &trail {
+                writer.append_stage(step.stage, steps_in_stage);
+            }
             current_stage = Some(step.stage);
         }
 
@@ -571,6 +595,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
 
         // ── Step result display ──
+        if let Some(writer) = &trail {
+            writer.append_step(&plan.steps[step_idx], &result, &state);
+        }
+
         if result.success {
             let output_display = truncate_output(&result.output, 120);
             let extras = if result.new_credentials > 0 || result.new_admin_hosts > 0 {
@@ -683,6 +711,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
 
         // ── Handle decision ──
+        if let Some(writer) = &trail {
+            writer.append_decision("Decision", format!("{:?}", decision));
+        }
+
         match decision {
             AdaptiveDecision::Continue => {
                 let status = state.evaluate_goal(&goal);
@@ -841,6 +873,15 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let da_achieved = final_status.is_success()
         || state.has_domain_admin
         || matches!(final_status, GoalStatus::Achieved);
+    if let Some(writer) = &trail {
+        writer.append_final(
+            &state,
+            format!(
+                "Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds. Final status: `{:?}`.",
+                steps_executed, steps_succeeded, steps_failed, duration_secs, final_status
+            ),
+        );
+    }
 
     println!(
         "\n{}",

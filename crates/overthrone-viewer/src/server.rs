@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
-use crate::graph_data::{PathResult, ViewerGraph, ViewerNode, ViewerStats};
+use crate::graph_data::{PathResult, ViewerEdge, ViewerGraph, ViewerNode, ViewerStats};
 
 /// Embedded HTML content (built from static/index.html)
 const INDEX_HTML: &str = include_str!("static/index.html");
@@ -113,6 +113,8 @@ struct EdgeResponse {
     target: String,
     relationship: String,
     cost: u32,
+    severity: u8,
+    guidance: String,
 }
 
 #[derive(Serialize)]
@@ -128,6 +130,7 @@ struct NodeDetail {
     high_value: bool,
     owned: bool,
     properties: BTreeMap<String, String>,
+    security_notes: Vec<DetailNote>,
     connections: Vec<Connection>,
 }
 
@@ -140,6 +143,17 @@ struct Connection {
     target_domain: String,
     relationship: String,
     direction: String,
+    cost: u32,
+    severity: u8,
+    guidance: String,
+    properties: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct DetailNote {
+    title: String,
+    severity: u8,
+    body: String,
 }
 
 #[derive(Serialize)]
@@ -169,9 +183,17 @@ struct PathResponse {
     target_label: String,
     target_display: String,
     target_type: String,
+    stats: StatsResponse,
+    rendered_nodes: usize,
+    rendered_edges: usize,
+    truncated: bool,
+    node_limit: usize,
+    edge_limit: usize,
     total_cost: u32,
     hop_count: usize,
     hops: Vec<HopResponse>,
+    nodes: Vec<NodeResponse>,
+    edges: Vec<EdgeResponse>,
 }
 
 #[derive(Serialize)]
@@ -186,12 +208,16 @@ struct HopResponse {
     target_type: String,
     relationship: String,
     cost: u32,
+    severity: u8,
+    guidance: String,
 }
 
 #[derive(Deserialize)]
 struct SearchQuery {
     q: String,
     graph: Option<String>,
+    types: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +225,8 @@ struct GraphQuery {
     graph: Option<String>,
     limit: Option<usize>,
     edges: Option<usize>,
+    focus: Option<String>,
+    types: Option<String>,
 }
 
 // ============================================================
@@ -275,10 +303,56 @@ fn resolve_edge_limit(
     }
 }
 
-fn select_graph_nodes(graph: &ViewerGraph, node_limit: usize) -> Vec<usize> {
+fn parse_type_filter(types: Option<&str>) -> Vec<String> {
+    types
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty() && !item.eq_ignore_ascii_case("all"))
+        .map(normalize_node_type_filter)
+        .collect()
+}
+
+fn normalize_node_type_filter(raw: &str) -> String {
+    match raw.to_ascii_lowercase().as_str() {
+        "user" | "users" => "User",
+        "computer" | "computers" | "host" | "hosts" => "Computer",
+        "group" | "groups" => "Group",
+        "domain" | "domains" => "Domain",
+        "gpo" | "gpos" => "GPO",
+        "ou" | "ous" => "OU",
+        "container" | "containers" => "Container",
+        "certtemplate" | "cert-template" | "cert_template" | "template" | "templates" => {
+            "CertTemplate"
+        }
+        "ca" | "certauthority" | "cert-authority" | "cert_authority" | "enterprise_ca" => {
+            "EnterpriseCA"
+        }
+        other => other,
+    }
+    .to_string()
+}
+
+fn node_matches_type_filter(node: &ViewerNode, type_filter: &[String]) -> bool {
+    type_filter.is_empty()
+        || type_filter
+            .iter()
+            .any(|kind| node.kind.eq_ignore_ascii_case(kind))
+}
+
+fn select_graph_nodes(
+    graph: &ViewerGraph,
+    node_limit: usize,
+    type_filter: &[String],
+) -> Vec<usize> {
     let total_nodes = graph.stats().total_nodes;
-    if node_limit >= total_nodes {
-        return (0..total_nodes).collect();
+    let eligible: Vec<usize> = graph
+        .nodes()
+        .filter_map(|(idx, node)| node_matches_type_filter(node, type_filter).then_some(idx))
+        .collect();
+
+    if node_limit >= eligible.len() {
+        return eligible;
     }
 
     let mut degrees = vec![0usize; total_nodes];
@@ -293,7 +367,9 @@ fn select_graph_nodes(graph: &ViewerGraph, node_limit: usize) -> Vec<usize> {
     let mut selected_mask = vec![false; total_nodes];
 
     for (idx, node) in graph.nodes() {
-        if node.high_value || node.owned || node.kind.eq_ignore_ascii_case("domain") {
+        if node_matches_type_filter(node, type_filter)
+            && (node.high_value || node.owned || node.kind.eq_ignore_ascii_case("domain"))
+        {
             selected.push(idx);
             selected_mask[idx] = true;
         }
@@ -305,7 +381,12 @@ fn select_graph_nodes(graph: &ViewerGraph, node_limit: usize) -> Vec<usize> {
     }
 
     let mut remaining: Vec<usize> = (0..total_nodes)
-        .filter(|idx| !selected_mask[*idx])
+        .filter(|idx| {
+            !selected_mask[*idx]
+                && graph
+                    .get_node(*idx)
+                    .is_some_and(|node| node_matches_type_filter(node, type_filter))
+        })
         .collect();
     remaining.sort_by_key(|idx| Reverse(degrees[*idx]));
 
@@ -318,9 +399,331 @@ fn select_graph_nodes(graph: &ViewerGraph, node_limit: usize) -> Vec<usize> {
 
 fn edge_is_important(relationship: &str) -> bool {
     !matches!(
-        relationship,
-        "MemberOf" | "Contains" | "HasSpn" | "DontReqPreauth"
+        relationship.to_ascii_lowercase().as_str(),
+        "memberof" | "contains" | "hasspn" | "dontreqpreauth"
     )
+}
+
+fn push_selected_node(
+    graph: &ViewerGraph,
+    selected: &mut Vec<usize>,
+    selected_mask: &mut [bool],
+    idx: usize,
+    type_filter: &[String],
+    force: bool,
+) -> bool {
+    if selected_mask.get(idx).copied().unwrap_or(true) {
+        return false;
+    }
+
+    if !force
+        && !graph
+            .get_node(idx)
+            .is_some_and(|node| node_matches_type_filter(node, type_filter))
+    {
+        return false;
+    }
+
+    selected_mask[idx] = true;
+    selected.push(idx);
+    true
+}
+
+fn select_focus_nodes(
+    graph: &ViewerGraph,
+    focus_idx: usize,
+    node_limit: usize,
+    type_filter: &[String],
+) -> Vec<usize> {
+    let total_nodes = graph.stats().total_nodes;
+    let target = node_limit.max(1).min(total_nodes);
+    let mut selected = Vec::with_capacity(target);
+    let mut selected_mask = vec![false; total_nodes];
+
+    push_selected_node(
+        graph,
+        &mut selected,
+        &mut selected_mask,
+        focus_idx,
+        type_filter,
+        true,
+    );
+
+    let mut incident = Vec::new();
+    if let Some(edges) = graph.outgoing(focus_idx) {
+        incident.extend(edges.iter().copied());
+    }
+    if let Some(edges) = graph.incoming(focus_idx) {
+        incident.extend(edges.iter().copied());
+    }
+    incident.sort_by_key(|edge_idx| {
+        graph.edge(*edge_idx).map_or((1u8, u32::MAX), |edge| {
+            (
+                if edge_is_important(&edge.relationship) {
+                    0
+                } else {
+                    1
+                },
+                edge.cost,
+            )
+        })
+    });
+
+    for edge_idx in incident {
+        if selected.len() >= target {
+            break;
+        }
+        let Some(edge) = graph.edge(edge_idx) else {
+            continue;
+        };
+        let neighbor = if edge.source == focus_idx {
+            edge.target
+        } else {
+            edge.source
+        };
+        push_selected_node(
+            graph,
+            &mut selected,
+            &mut selected_mask,
+            neighbor,
+            type_filter,
+            false,
+        );
+    }
+
+    if selected.len() < target {
+        let first_hop = selected.clone();
+        let mut second_hop_edges = Vec::new();
+        for idx in first_hop {
+            if let Some(edges) = graph.outgoing(idx) {
+                second_hop_edges.extend(edges.iter().copied());
+            }
+            if let Some(edges) = graph.incoming(idx) {
+                second_hop_edges.extend(edges.iter().copied());
+            }
+        }
+        second_hop_edges.sort_by_key(|edge_idx| {
+            graph.edge(*edge_idx).map_or((1u8, u32::MAX), |edge| {
+                (
+                    if edge_is_important(&edge.relationship) {
+                        0
+                    } else {
+                        1
+                    },
+                    edge.cost,
+                )
+            })
+        });
+
+        for edge_idx in second_hop_edges {
+            if selected.len() >= target {
+                break;
+            }
+            let Some(edge) = graph.edge(edge_idx) else {
+                continue;
+            };
+            if selected_mask.get(edge.source).copied().unwrap_or(false) {
+                push_selected_node(
+                    graph,
+                    &mut selected,
+                    &mut selected_mask,
+                    edge.target,
+                    type_filter,
+                    false,
+                );
+            }
+            if selected.len() >= target {
+                break;
+            }
+            if selected_mask.get(edge.target).copied().unwrap_or(false) {
+                push_selected_node(
+                    graph,
+                    &mut selected,
+                    &mut selected_mask,
+                    edge.source,
+                    type_filter,
+                    false,
+                );
+            }
+        }
+    }
+
+    selected
+}
+
+fn edge_security_guidance(relationship: &str) -> (u8, &'static str) {
+    match relationship.to_ascii_lowercase().as_str() {
+        "genericall" => (
+            1,
+            "Full control. Common abuse paths include password reset, DACL edit, group modification, or shadow credentials. Capture the original state before changing anything.",
+        ),
+        "genericwrite" => (
+            2,
+            "Write access. Look for targeted Kerberoast, shadow credentials, SPN writes, logon script changes, or certificate mapping depending on the target type.",
+        ),
+        "writedacl" => (
+            1,
+            "DACL write. Add a tightly scoped ACE for the controlled principal, perform the operation, then restore the original ACL from your notes.",
+        ),
+        "writeowner" | "owns" => (
+            1,
+            "Ownership control. Taking ownership usually enables a follow-up DACL write; preserve current owner and restore it after validation.",
+        ),
+        "forcechangepassword" => (
+            2,
+            "Password reset edge. Useful for takeover but noisy; prefer a maintenance window or controlled lab validation when possible.",
+        ),
+        "addmembers" | "addself" => (
+            2,
+            "Group membership control. Add only the required principal and remove it quickly after the dependent action completes.",
+        ),
+        "allextendedrights" => (
+            1,
+            "Extended rights. On users this can enable password reset; on domain objects it may combine with replication rights for DCSync.",
+        ),
+        "getchanges" | "getchangesall" | "getchangesinfilteredset" | "dcsync" => (
+            1,
+            "Replication rights. Validate whether the principal can perform DCSync and treat the target as domain-impacting.",
+        ),
+        "readlapspassword" => (
+            2,
+            "LAPS read. Recover local admin material for the target computer, then prefer remote management paths that match the engagement rules.",
+        ),
+        "readgmsapassword" => (
+            2,
+            "gMSA read. Derive the managed account secret and map where that service identity has reach before using it.",
+        ),
+        "allowedtoact" => (
+            1,
+            "Resource-based constrained delegation. Pair with a controlled machine account to impersonate to the target service.",
+        ),
+        "allowedtodelegate" => (
+            2,
+            "Constrained delegation. Enumerate allowed services and test S4U paths against the target with minimal ticket requests.",
+        ),
+        "adminto" => (
+            2,
+            "Local admin. Prefer stealthy execution choices, avoid broad service creation, and document the host-specific evidence.",
+        ),
+        "canrdp" => (
+            3,
+            "Interactive logon. Useful for validation but visible; prefer non-interactive checks unless the scenario requires RDP.",
+        ),
+        "canpsremote" => (
+            3,
+            "PowerShell Remoting. Validate WinRM reachability and use constrained, low-volume commands.",
+        ),
+        "executedcom" => (
+            3,
+            "DCOM execution. Can be loud on EDR; reserve for approved execution phases and collect host telemetry expectations first.",
+        ),
+        "sqladmin" => (
+            2,
+            "SQL admin. Check linked servers, xp_cmdshell state, impersonation chains, and database trust relationships.",
+        ),
+        "hasspn" => (
+            4,
+            "Kerberoast marker. Request only scoped service tickets and prioritize high-value or weakly managed service accounts.",
+        ),
+        "dontreqpreauth" => (
+            4,
+            "AS-REP roast marker. Offline attack path; avoid repeated online queries after collecting the roastable principal list.",
+        ),
+        "gpoadmin" | "gpolink" | "gpocontributor" => (
+            2,
+            "GPO control. Review linked OUs and security filtering before changing policy; use rollback-ready edits.",
+        ),
+        "trustedby" | "trustedtoauth" => (
+            2,
+            "Trust relationship. Confirm direction, SID filtering, selective auth, and transitive scope before planning cross-domain movement.",
+        ),
+        "memberoftierzero" | "memberoftier0" => (
+            1,
+            "Tier-zero membership path. Treat as domain-impacting and verify nested group expansion carefully.",
+        ),
+        "memberof" => (
+            5,
+            "Membership edge. Usually context, but nested high-value memberships can become the bridge to privilege.",
+        ),
+        "contains" => (
+            5,
+            "Containment edge. Useful for scoping GPO inheritance, OU ownership, and where principals live.",
+        ),
+        _ => (
+            4,
+            "Review the ACE or relationship properties, confirm directionality, and validate the exact abuse primitive before acting.",
+        ),
+    }
+}
+
+fn edge_response(graph: &ViewerGraph, edge: &ViewerEdge) -> Option<EdgeResponse> {
+    let src = graph.get_node(edge.source)?;
+    let tgt = graph.get_node(edge.target)?;
+    let (severity, guidance) = edge_security_guidance(&edge.relationship);
+    Some(EdgeResponse {
+        source: src.id.clone(),
+        target: tgt.id.clone(),
+        relationship: edge.relationship.clone(),
+        cost: edge.cost,
+        severity,
+        guidance: guidance.to_string(),
+    })
+}
+
+fn node_security_notes(graph: &ViewerGraph, node_idx: usize) -> Vec<DetailNote> {
+    let mut notes = Vec::new();
+    let mut seen = HashSet::new();
+
+    for edge_idx in graph
+        .outgoing(node_idx)
+        .into_iter()
+        .flatten()
+        .chain(graph.incoming(node_idx).into_iter().flatten())
+    {
+        let Some(edge) = graph.edge(*edge_idx) else {
+            continue;
+        };
+        let (severity, guidance) = edge_security_guidance(&edge.relationship);
+        if severity > 3 || !seen.insert(edge.relationship.to_ascii_lowercase()) {
+            continue;
+        }
+        notes.push(DetailNote {
+            title: format!("{} relationship", edge.relationship),
+            severity,
+            body: guidance.to_string(),
+        });
+        if notes.len() >= 8 {
+            break;
+        }
+    }
+
+    if let Some(node) = graph.get_node(node_idx) {
+        for (key, value) in &node.properties {
+            let lower = key.to_ascii_lowercase();
+            if lower.contains("aces")
+                || lower.contains("acl")
+                || lower.contains("owner")
+                || lower.contains("dacl")
+            {
+                if value.trim().is_empty() || value == "0" {
+                    continue;
+                }
+                notes.push(DetailNote {
+                    title: key.clone(),
+                    severity: 3,
+                    body: format!(
+                        "{}. Review the raw value, identify trustee/object type/inherited scope, and prefer reversible changes.",
+                        value
+                    ),
+                });
+                if notes.len() >= 12 {
+                    break;
+                }
+            }
+        }
+    }
+
+    notes
 }
 
 fn resolve_bundle<'a>(
@@ -496,15 +899,8 @@ fn graph_edges(
         if !selected.contains(&edge.source) || !selected.contains(&edge.target) {
             continue;
         }
-        let (src, tgt) = match (graph.get_node(edge.source), graph.get_node(edge.target)) {
-            (Some(src), Some(tgt)) => (src, tgt),
-            _ => continue,
-        };
-        let response = EdgeResponse {
-            source: src.id.clone(),
-            target: tgt.id.clone(),
-            relationship: edge.relationship.clone(),
-            cost: edge.cost,
+        let Some(response) = edge_response(graph, edge) else {
+            continue;
         };
         if edge_is_important(&edge.relationship) {
             important.push(response);
@@ -527,6 +923,29 @@ fn graph_edges(
 fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
     let source = graph.get_node(path.source_idx);
     let target = graph.get_node(path.target_idx);
+    let mut selected_set = HashSet::new();
+    selected_set.insert(path.source_idx);
+    selected_set.insert(path.target_idx);
+    for hop in &path.hops {
+        selected_set.insert(hop.source_idx);
+        selected_set.insert(hop.target_idx);
+    }
+
+    let nodes = graph_nodes(graph, &selected_set);
+    let edges: Vec<EdgeResponse> = path
+        .hops
+        .iter()
+        .filter_map(|hop| {
+            graph
+                .edges()
+                .find(|edge| {
+                    edge.source == hop.source_idx
+                        && edge.target == hop.target_idx
+                        && edge.relationship == hop.relationship
+                })
+                .and_then(|edge| edge_response(graph, edge))
+        })
+        .collect();
 
     let (source_id, source_label, source_display, source_type) = source
         .map(|node| {
@@ -570,6 +989,7 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
         .filter_map(|hop| {
             let source_node = graph.get_node(hop.source_idx)?;
             let target_node = graph.get_node(hop.target_idx)?;
+            let (severity, guidance) = edge_security_guidance(&hop.relationship);
             Some(HopResponse {
                 source_id: source_node.id.clone(),
                 source_label: source_node.label.clone(),
@@ -581,9 +1001,13 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
                 target_type: node_type_str(target_node),
                 relationship: hop.relationship,
                 cost: hop.cost,
+                severity,
+                guidance: guidance.to_string(),
             })
         })
         .collect();
+    let rendered_nodes = nodes.len();
+    let rendered_edges = edges.len();
 
     PathResponse {
         found: true,
@@ -595,9 +1019,18 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
         target_label,
         target_display,
         target_type,
+        stats: stats_response(graph.stats()),
+        rendered_nodes,
+        rendered_edges,
+        truncated: rendered_nodes < graph.stats().total_nodes
+            || rendered_edges < graph.stats().total_edges,
+        node_limit: rendered_nodes,
+        edge_limit: rendered_edges,
         total_cost: path.total_cost,
         hop_count: hops.len(),
         hops,
+        nodes,
+        edges,
     }
 }
 
@@ -641,9 +1074,15 @@ async fn get_graph(
 
     let total_nodes = graph.stats().total_nodes;
     let total_edges = graph.stats().total_edges;
+    let type_filter = parse_type_filter(query.types.as_deref());
     let node_limit = resolve_node_limit(query.limit, total_nodes);
     let edge_limit = resolve_edge_limit(query.edges, node_limit, total_nodes, total_edges);
-    let selected_nodes = select_graph_nodes(&graph, node_limit);
+    let selected_nodes = if let Some(focus) = query.focus.as_deref() {
+        let focus_idx = graph.resolve_node(focus).ok_or(StatusCode::NOT_FOUND)?;
+        select_focus_nodes(&graph, focus_idx, node_limit, &type_filter)
+    } else {
+        select_graph_nodes(&graph, node_limit, &type_filter)
+    };
     let selected_set: HashSet<usize> = selected_nodes.into_iter().collect();
 
     let nodes = graph_nodes(&graph, &selected_set);
@@ -691,6 +1130,10 @@ async fn get_node_detail(
                 target_domain: node_domain(tgt),
                 relationship: edge.relationship.clone(),
                 direction: "outgoing".to_string(),
+                cost: edge.cost,
+                severity: edge_security_guidance(&edge.relationship).0,
+                guidance: edge_security_guidance(&edge.relationship).1.to_string(),
+                properties: edge.properties.clone(),
             });
         }
     }
@@ -708,6 +1151,10 @@ async fn get_node_detail(
                 target_domain: node_domain(src),
                 relationship: edge.relationship.clone(),
                 direction: "incoming".to_string(),
+                cost: edge.cost,
+                severity: edge_security_guidance(&edge.relationship).0,
+                guidance: edge_security_guidance(&edge.relationship).1.to_string(),
+                properties: edge.properties.clone(),
             });
         }
     }
@@ -723,6 +1170,7 @@ async fn get_node_detail(
         high_value: node.high_value,
         owned: node.owned,
         properties: node.properties.clone(),
+        security_notes: node_security_notes(&graph, node_idx),
         connections,
     }))
 }
@@ -733,24 +1181,14 @@ async fn search_nodes(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<SearchResult>>, StatusCode> {
     let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
-    let q = query.q.trim().to_ascii_uppercase();
+    let type_filter = parse_type_filter(query.types.as_deref());
+    let limit = query.limit.unwrap_or(75).clamp(1, 100);
 
     let results: Vec<SearchResult> = graph
-        .nodes()
-        .filter(|(_, node)| {
-            node.label.to_ascii_uppercase().contains(&q)
-                || node.id.to_ascii_uppercase().contains(&q)
-                || node
-                    .domain
-                    .as_ref()
-                    .is_some_and(|domain| domain.to_ascii_uppercase().contains(&q))
-                || node
-                    .distinguished_name
-                    .as_ref()
-                    .is_some_and(|dn| dn.to_ascii_uppercase().contains(&q))
-        })
-        .take(75)
-        .map(|(_, node)| SearchResult {
+        .search_nodes(&query.q, &type_filter, limit)
+        .into_iter()
+        .filter_map(|idx| graph.get_node(idx))
+        .map(|node| SearchResult {
             id: node.id.clone(),
             label: node.label.clone(),
             display_name: node_display_name(node),
@@ -784,9 +1222,17 @@ async fn find_path(
         target_label: req.to.clone(),
         target_display: req.to.clone(),
         target_type: "Unknown".to_string(),
+        stats: stats_response(graph.stats()),
+        rendered_nodes: 0,
+        rendered_edges: 0,
+        truncated: graph.stats().total_nodes > 0 || graph.stats().total_edges > 0,
+        node_limit: 0,
+        edge_limit: 0,
         total_cost: 0,
         hop_count: 0,
         hops: Vec::new(),
+        nodes: Vec::new(),
+        edges: Vec::new(),
     }))
 }
 

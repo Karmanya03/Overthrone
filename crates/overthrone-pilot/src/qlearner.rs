@@ -203,7 +203,9 @@ fn action_family_index(action: &PlannedAction) -> u8 {
         | PlannedAction::EnumerateDelegations
         | PlannedAction::EnumerateLaps
         | PlannedAction::UserEnum { .. }
-        | PlannedAction::RidCycle { .. } => 0,
+        | PlannedAction::RidCycle { .. }
+        | PlannedAction::StealthLdapProbe
+        | PlannedAction::StealthDelegationProbe => 0,
         PlannedAction::EnumerateShares { .. } => 1,
         PlannedAction::CheckAdminAccess { .. } => 2,
         PlannedAction::Kerberoast { .. } => 3,
@@ -226,8 +228,18 @@ fn action_family_index(action: &PlannedAction) -> u8 {
         PlannedAction::Coerce { .. } => 10,
         PlannedAction::AdcsEnumerate
         | PlannedAction::AdcsEsc1 { .. }
+        | PlannedAction::AdcsEsc2 { .. }
+        | PlannedAction::AdcsEsc3 { .. }
         | PlannedAction::AdcsEsc4 { .. }
-        | PlannedAction::AdcsEsc6 { .. } => 11,
+        | PlannedAction::AdcsEsc5 { .. }
+        | PlannedAction::AdcsEsc6 { .. }
+        | PlannedAction::AdcsEsc7 { .. }
+        | PlannedAction::AdcsEsc8 { .. }
+        | PlannedAction::AdcsEsc9 { .. }
+        | PlannedAction::AdcsEsc10 { .. }
+        | PlannedAction::AdcsEsc11 { .. }
+        | PlannedAction::AdcsEsc12 { .. }
+        | PlannedAction::AdcsEsc13 { .. } => 11,
         PlannedAction::ForgeGoldenTicket { .. } | PlannedAction::ForgeSilverTicket { .. } => 12,
         PlannedAction::RunPlaybook { .. } => 13,
         PlannedAction::Sleep { .. } | PlannedAction::Checkpoint { .. } => 14,

@@ -193,6 +193,125 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
     }
 }
 
+fn edge_severity(edge_type: &EdgeType) -> u8 {
+    match edge_type {
+        EdgeType::GenericAll
+        | EdgeType::WriteDacl
+        | EdgeType::WriteOwner
+        | EdgeType::Owns
+        | EdgeType::DcSync
+        | EdgeType::AllowedToAct => 1,
+        EdgeType::GenericWrite
+        | EdgeType::ForceChangePassword
+        | EdgeType::AddMembers
+        | EdgeType::AddSelf
+        | EdgeType::ReadLapsPassword
+        | EdgeType::ReadGmsaPassword
+        | EdgeType::AllowedToDelegate
+        | EdgeType::SQLAdmin
+        | EdgeType::GpoLink
+        | EdgeType::TrustedBy
+        | EdgeType::GetChanges
+        | EdgeType::GetChangesAll => 2,
+        EdgeType::AdminTo
+        | EdgeType::CanRDP
+        | EdgeType::CanPSRemote
+        | EdgeType::ExecuteDCOM
+        | EdgeType::HasSession
+        | EdgeType::HasSidHistory => 3,
+        EdgeType::HasSpn | EdgeType::DontReqPreauth => 4,
+        EdgeType::MemberOf | EdgeType::Contains | EdgeType::Custom(_) => 5,
+    }
+}
+
+fn edge_operator_note(edge_type: &EdgeType) -> Option<&'static str> {
+    match edge_type {
+        EdgeType::GenericAll => Some(
+            "Operator note: full control; preserve current ACL/owner before password, group, or shadow-credential abuse.",
+        ),
+        EdgeType::GenericWrite => Some(
+            "Operator note: write path; evaluate SPN, KeyCredentialLink, logon script, and certificate mapping options.",
+        ),
+        EdgeType::WriteDacl => Some(
+            "Operator note: add a minimal temporary ACE, complete the action, and restore the original DACL.",
+        ),
+        EdgeType::WriteOwner | EdgeType::Owns => Some(
+            "Operator note: ownership can unlock DACL changes; restore owner and ACL after validation.",
+        ),
+        EdgeType::ForceChangePassword => Some(
+            "Operator note: password reset is visible and disruptive; use only when approved by the runbook.",
+        ),
+        EdgeType::AddMembers | EdgeType::AddSelf => Some(
+            "Operator note: group change should be scoped, time-boxed, and removed after the dependent step.",
+        ),
+        EdgeType::AllowedToAct => Some(
+            "Operator note: RBCD path; use a controlled machine account and request only the needed service ticket.",
+        ),
+        EdgeType::AllowedToDelegate => Some(
+            "Operator note: constrained delegation; enumerate allowed services before S4U testing.",
+        ),
+        EdgeType::DcSync | EdgeType::GetChanges | EdgeType::GetChangesAll => Some(
+            "Operator note: replication-impacting right; validate scope and prefer targeted secret retrieval.",
+        ),
+        EdgeType::ReadLapsPassword => Some(
+            "Operator note: collect the host password once, protect it as credential material, and avoid repeated reads.",
+        ),
+        EdgeType::ReadGmsaPassword => Some(
+            "Operator note: derive gMSA material and map service-account reach before using it.",
+        ),
+        EdgeType::AdminTo => Some(
+            "Operator note: local admin path; choose the lowest-volume remote-management primitive allowed.",
+        ),
+        EdgeType::CanRDP => Some(
+            "Operator note: interactive access is visible; prefer non-interactive validation unless RDP is required.",
+        ),
+        EdgeType::CanPSRemote => {
+            Some("Operator note: keep WinRM commands low-volume and host-scoped.")
+        }
+        EdgeType::ExecuteDCOM => Some(
+            "Operator note: DCOM has a high telemetry surface; reserve for approved execution phases.",
+        ),
+        EdgeType::SQLAdmin => Some(
+            "Operator note: inspect linked servers, impersonation, xp_cmdshell, CLR, and trust paths.",
+        ),
+        EdgeType::HasSession => Some(
+            "Operator note: confirm live session freshness and combine with host admin before token operations.",
+        ),
+        EdgeType::HasSpn => Some(
+            "Operator note: Kerberoast marker; request scoped tickets and continue cracking offline.",
+        ),
+        EdgeType::DontReqPreauth => {
+            Some("Operator note: AS-REP roast marker; collect once and continue offline.")
+        }
+        EdgeType::GpoLink => Some(
+            "Operator note: review linked OU scope, security filtering, and rollback before GPO edits.",
+        ),
+        EdgeType::TrustedBy => Some(
+            "Operator note: confirm trust direction, SID filtering, selective auth, and transitivity.",
+        ),
+        EdgeType::HasSidHistory => Some(
+            "Operator note: validate effective SIDHistory membership and cross-domain side effects.",
+        ),
+        EdgeType::MemberOf | EdgeType::Contains | EdgeType::Custom(_) => None,
+    }
+}
+
+fn push_edge_guidance<'a>(lines: &mut Vec<Line<'a>>, edge_type: &EdgeType, indent: &'static str) {
+    if let Some(note) = edge_operator_note(edge_type) {
+        let severity = edge_severity(edge_type);
+        lines.push(Line::from(vec![
+            Span::raw(indent),
+            Span::styled(
+                format!("[S{}] ", severity),
+                Style::default()
+                    .fg(severity_color(severity))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(note, Style::default().fg(Color::Gray)),
+        ]));
+    }
+}
+
 // ─── Graph overview panel ─────────────────────────────────────────────────────
 
 /// Render the graph-overview canvas (left pane of the Graph tab).
@@ -668,6 +787,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     Style::default().fg(node_color(&target_node.node_type)),
                 ),
             ]));
+            push_edge_guidance(&mut lines, edge.weight(), "      ");
         }
     }
 
@@ -708,6 +828,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     Style::default().fg(color).add_modifier(modifier),
                 ),
             ]));
+            push_edge_guidance(&mut lines, edge.weight(), "      ");
         }
     }
 

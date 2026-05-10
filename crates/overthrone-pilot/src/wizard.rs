@@ -22,6 +22,7 @@ use crate::planner::{PlanStep, Planner};
 #[cfg(feature = "qlearn")]
 use crate::qlearner::{AdaptiveMode, AdaptiveQLearner, EngagementStateKey, decision_to_action};
 use crate::runner::{AutoPwnConfig, AutoPwnConfigSnapshot, AutoPwnResult, Stage};
+use crate::trail::TrailWriter;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, Color as TableColor, Table, presets::UTF8_FULL};
@@ -165,6 +166,26 @@ impl WizardSession {
         print_wizard_banner(&self.config);
 
         let goal = self.config.goal();
+        let trail = match TrailWriter::start(
+            "Wizard",
+            &self.config.creds.domain,
+            &self.config.dc_host,
+            &goal.describe(),
+            !self.completed_stages.is_empty(),
+        ) {
+            Ok(writer) => {
+                println!(
+                    "  {} Trail file: {}",
+                    "TRAIL".bold().cyan(),
+                    writer.path().display()
+                );
+                Some(writer)
+            }
+            Err(e) => {
+                warn!("wizard trail file initialization failed: {e}");
+                None
+            }
+        };
         let planner = Planner::new(self.config.stealth);
         let mut adaptive = AdaptiveEngine::new(self.config.stealth);
         #[cfg(feature = "qlearn")]
@@ -277,6 +298,10 @@ impl WizardSession {
                 continue;
             }
 
+            if let Some(writer) = &trail {
+                writer.append_stage(stage, stage_steps.len());
+            }
+
             info!(
                 "  {} {} planned actions",
                 stage_steps.len().to_string().bold(),
@@ -308,6 +333,9 @@ impl WizardSession {
 
                 step.executed = true;
                 step.result = Some(result.clone());
+                if let Some(writer) = &trail {
+                    writer.append_step(&step, &result, &self.state);
+                }
 
                 #[cfg(feature = "qlearn")]
                 let pre_state_key = qlearner.as_ref().map(|ql| {
@@ -374,6 +402,10 @@ impl WizardSession {
                     );
                 }
 
+                if let Some(writer) = &trail {
+                    writer.append_decision("Wizard decision", format!("{:?}", decision));
+                }
+
                 match decision {
                     AdaptiveDecision::Replan { reason } => {
                         warn!("  🔄 Re-planning: {}", reason);
@@ -383,6 +415,15 @@ impl WizardSession {
                     AdaptiveDecision::Abort { reason } => {
                         error!("  ✗ Aborting: {}", reason);
                         pb.finish_with_message("Aborted".to_string());
+                        if let Some(writer) = &trail {
+                            writer.append_final(
+                                &self.state,
+                                format!(
+                                    "Wizard aborted: {}. Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`.",
+                                    reason, steps_executed, steps_succeeded, steps_failed
+                                ),
+                            );
+                        }
                         #[cfg(feature = "qlearn")]
                         if let Some(ref mut ql) = qlearner {
                             ql.end_episode();
@@ -450,6 +491,19 @@ impl WizardSession {
                     }
                 }
             }
+        }
+
+        if let Some(writer) = &trail {
+            writer.append_final(
+                &self.state,
+                format!(
+                    "Wizard completed. Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds.",
+                    steps_executed,
+                    steps_succeeded,
+                    steps_failed,
+                    wall_start.elapsed().as_secs()
+                ),
+            );
         }
 
         #[cfg(feature = "qlearn")]

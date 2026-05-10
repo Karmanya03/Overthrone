@@ -277,7 +277,7 @@ ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
 ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
-ovt graph gui -i ./graphs/                               # Browser GUI; choose one JSON at a time
+ovt graph gui -i ./graphs/                               # Browser GUI; blank-first search/chunk render
 ovt doctor                                                # Health check
 ovt completions bash                                      # Shell tab completion
 ```
@@ -365,7 +365,7 @@ ovt graph gui -i ./graphs/
 
 The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas that shows compact labels on zoom/selection while keeping full names in the side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
-The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once, so it opens on a black canvas until the operator chooses a file. The D3 view keeps full node display names, spacious collision-aware layout, lazy per-file loading, render-budget controls that cap large graphs for responsiveness, server-side graph caching, clickable nodes, search, path finding, and live stats without Neo4j.
+The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once. Like BloodHound, the canvas starts blank after selection: stats are indexed, then the operator searches source/destination nodes with realtime suggestions, filters object types, finds focused paths, or renders a chunk. Render budgets are `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, and `ALL`; `ALL` prompts before rendering because giant domains deserve a seatbelt. Node and edge detail panels include human-readable ACE/ACL guidance for GenericAll, GenericWrite, WriteDacl, WriteOwner, delegation, DCSync, LAPS/gMSA reads, GPO control, and similar abuse paths.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -751,7 +751,7 @@ ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
 ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --dry-run
 ```
 
-That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The spray planner now respects lockout policy and skips users already near/at lockout instead of face-planting into `KDC_ERR_CLIENT_REVOKED`. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
+That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The spray planner now respects lockout policy and skips users already near/at lockout instead of face-planting into `KDC_ERR_CLIENT_REVOKED`. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. In stealth mode it starts with low-volume LDAP baseline and delegation probes before heavier enumeration. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. Auto-pwn and Wizard also write a single phase-wise Markdown trail under `loot/trails/overthrone_<domain>_<dc>_runNNN.md`; repeated runs detect prior trails and never overwrite. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
 
 ### Manual Mode
 
@@ -774,9 +774,10 @@ ovt graph tree --file graph.json                         # local Rust tree explo
 ovt graph view -i ./bloodhound-json/                     # import BloodHound JSON directory
 ovt graph tree -i ./bloodhound-json/                     # GUI-style hierarchy
 ovt graph view -i users.json -i groups.json -i computers.json
-ovt graph gui -i ./bloodhound-json/                      # browser GUI; select one JSON file
+ovt graph gui -i ./bloodhound-json/                      # browser GUI; blank-first search/chunk render
 
 # Graph GUI indexes directories without rendering every JSON at once.
+# It renders only searched nodes, paths, or explicit chunks.
 # Graph view keeps full names readable in panels while controlling canvas density.
 # Tree view expands domain -> type -> object -> relationships.
 # Both are local Rust TUIs with search, filters, details, path hints, mouse support,
