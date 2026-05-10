@@ -56,9 +56,22 @@ select {
 
 #app {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
+  transition: grid-template-columns 0.25s ease;
+}
+
+#app.sidebar-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr);
+}
+
+#app.sidebar-collapsed #sidebar {
+  overflow: hidden;
+  width: 0;
+  min-width: 0;
+  border-right: none;
+  padding: 0;
 }
 
 #sidebar {
@@ -67,24 +80,130 @@ select {
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+  transition: width 0.25s ease, min-width 0.25s ease;
+  overflow: hidden;
+}
+
+#sidebar-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 30;
+  width: 36px;
+  height: 36px;
+  color: var(--text);
+  background: rgba(13, 13, 15, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 900;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+#sidebar-toggle:hover {
+  border-color: var(--cyan);
+  background: var(--panel-3);
+}
+
+#app.sidebar-collapsed #sidebar-toggle {
+  display: flex;
+}
+
+.collapse-panel {
+  border-bottom: 1px solid var(--line);
+}
+
+.collapse-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  border: none;
+  color: var(--soft);
+  width: 100%;
+  text-align: left;
+}
+
+.collapse-header:hover {
+  background: rgba(73, 228, 214, 0.04);
+}
+
+.collapse-header h2 {
+  margin: 0;
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.collapse-chevron {
+  font-size: 12px;
+  transition: transform 0.2s ease;
+  color: var(--muted);
+}
+
+.collapse-panel.collapsed .collapse-chevron {
+  transform: rotate(-90deg);
+}
+
+.collapse-body {
+  padding: 0 18px 16px;
+  overflow: hidden;
+  max-height: 2000px;
+  transition: max-height 0.3s ease, padding 0.3s ease;
+}
+
+.collapse-panel.collapsed .collapse-body {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 #sidebar-header {
-  padding: 18px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.sidebar-close-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-close-btn:hover {
+  border-color: var(--cyan);
+  color: var(--text);
 }
 
 .brand-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .brand-row h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1.1;
   letter-spacing: 0;
   font-weight: 700;
@@ -237,10 +356,11 @@ input:disabled {
 .scroll-area {
   min-height: 0;
   overflow-y: auto;
+  flex: 1;
 }
 
 .panel {
-  padding: 16px 18px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -543,30 +663,47 @@ input:disabled {
   border-color: var(--cyan);
 }
 
-.legend {
-  padding: 14px 18px 18px;
-  border-top: 1px solid var(--line);
+.legend-overlay {
+  position: absolute;
+  top: 52px;
+  right: 18px;
+  z-index: 15;
+  background: rgba(5, 5, 5, 0.55);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  pointer-events: auto;
+}
+
+.legend-overlay h2 {
+  color: var(--soft);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
 }
 
 .legend-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 10px;
-  margin-top: 10px;
+  gap: 4px 10px;
 }
 
 .legend-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--soft);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .legend-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 #graph-container {
@@ -775,7 +912,7 @@ input:disabled {
 
 @media (max-width: 980px) {
   #app {
-    grid-template-columns: 310px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
   .stats-grid {
@@ -783,7 +920,7 @@ input:disabled {
   }
 
   .empty-card {
-    width: min(420px, calc(100vw - 360px));
+    width: min(420px, calc(100vw - 330px));
   }
 }
 </style>
@@ -793,8 +930,11 @@ input:disabled {
   <aside id="sidebar">
     <div id="sidebar-header">
       <div class="brand-row">
-        <h1>Overthrone Viewer</h1>
-        <span class="status-pill">Local</span>
+        <h1>Overthrone Graph Viewer</h1>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="status-pill">Local</span>
+          <button class="sidebar-close-btn" id="sidebar-close" title="Collapse sidebar">✕</button>
+        </div>
       </div>
 
       <div class="field">
@@ -843,42 +983,70 @@ input:disabled {
     </div>
 
     <div class="scroll-area">
-      <section class="panel">
-        <h2>Graph Stats</h2>
-        <div class="stats-grid" id="stats-grid"></div>
-      </section>
-
-      <section class="panel">
-        <h2>Loaded Source</h2>
-        <div class="meta-list">
-          <div class="meta-row"><span>Graph</span><span id="graph-label">None</span></div>
-          <div class="meta-row"><span>Size</span><span id="graph-size">0 B</span></div>
-          <div class="meta-row"><span>Sources</span><span id="graph-source-count">0</span></div>
-          <div id="graph-sources"></div>
+      <div class="collapse-panel" id="panel-stats">
+        <button class="collapse-header" onclick="togglePanel('panel-stats')">
+          <h2>Graph Stats</h2>
+          <span class="collapse-chevron">▼</span>
+        </button>
+        <div class="collapse-body">
+          <div class="stats-grid" id="stats-grid"></div>
         </div>
-      </section>
+      </div>
 
-      <section class="panel">
-        <h2>Attack Path</h2>
-        <div class="path-input">
-          <input type="text" id="path-from" placeholder="Source node" disabled>
-          <div id="from-results" class="suggest-box"></div>
-          <input type="text" id="path-to" placeholder="Target node" disabled>
-          <div id="to-results" class="suggest-box"></div>
-          <button class="primary-button" id="path-button" disabled>Find Shortest Path</button>
+      <div class="collapse-panel" id="panel-source">
+        <button class="collapse-header" onclick="togglePanel('panel-source')">
+          <h2>Loaded Source</h2>
+          <span class="collapse-chevron">▼</span>
+        </button>
+        <div class="collapse-body">
+          <div class="meta-list">
+            <div class="meta-row"><span>Graph</span><span id="graph-label">None</span></div>
+            <div class="meta-row"><span>Size</span><span id="graph-size">0 B</span></div>
+            <div class="meta-row"><span>Sources</span><span id="graph-source-count">0</span></div>
+            <div id="graph-sources"></div>
+          </div>
         </div>
-        <div id="path-result"></div>
-      </section>
+      </div>
 
-      <section id="node-detail">
-        <h2>Node Detail</h2>
-        <div class="detail-card">
-          <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
+      <div class="collapse-panel" id="panel-path">
+        <button class="collapse-header" onclick="togglePanel('panel-path')">
+          <h2>Attack Path</h2>
+          <span class="collapse-chevron">▼</span>
+        </button>
+        <div class="collapse-body">
+          <div class="path-input">
+            <input type="text" id="path-from" placeholder="Source node" disabled>
+            <div id="from-results" class="suggest-box"></div>
+            <input type="text" id="path-to" placeholder="Target node" disabled>
+            <div id="to-results" class="suggest-box"></div>
+            <button class="primary-button" id="path-button" disabled>Find Shortest Path</button>
+          </div>
+          <div id="path-result"></div>
         </div>
-      </section>
+      </div>
+
+      <div class="collapse-panel" id="panel-detail">
+        <button class="collapse-header" onclick="togglePanel('panel-detail')">
+          <h2>Node Detail</h2>
+          <span class="collapse-chevron">▼</span>
+        </button>
+        <div class="collapse-body" id="node-detail">
+          <div class="detail-card">
+            <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
+          </div>
+        </div>
+      </div>
     </div>
+  </aside>
 
-    <div class="legend">
+  <main id="graph-container">
+    <button id="sidebar-toggle" title="Open sidebar">☰</button>
+    <svg id="graph-svg"></svg>
+    <div class="graph-topbar">
+      <div id="graph-badge">No graph selected</div>
+      <div id="render-badge">Idle</div>
+    </div>
+    <div class="legend-overlay" id="legend-overlay">
       <h2>Node Types</h2>
       <div class="legend-grid">
         <div class="legend-item"><span class="legend-dot" style="background:var(--node-user)"></span>User</div>
@@ -890,14 +1058,6 @@ input:disabled {
         <div class="legend-item"><span class="legend-dot" style="background:var(--node-cert)"></span>Cert Template</div>
         <div class="legend-item"><span class="legend-dot" style="background:var(--muted)"></span>Unknown</div>
       </div>
-    </div>
-  </aside>
-
-  <main id="graph-container">
-    <svg id="graph-svg"></svg>
-    <div class="graph-topbar">
-      <div id="graph-badge">No graph selected</div>
-      <div id="render-badge">Idle</div>
     </div>
     <div id="empty-state">
       <div class="empty-card">
@@ -1033,6 +1193,14 @@ async function init() {
 
   renderStats(emptyStats());
   renderEmptyState();
+
+  // Sidebar toggle
+  document.getElementById('sidebar-close').addEventListener('click', () => {
+    document.getElementById('app').classList.add('sidebar-collapsed');
+  });
+  document.getElementById('sidebar-toggle').addEventListener('click', () => {
+    document.getElementById('app').classList.remove('sidebar-collapsed');
+  });
   await loadGraphList();
 }
 
@@ -1368,19 +1536,43 @@ function renderGraph(data) {
       };
     });
 
-  const distance = nodeCount > 5000 ? 180 : nodeCount > 1500 ? 150 : nodeCount > 450 ? 126 : 108;
-  const charge = nodeCount > 5000 ? -620 : nodeCount > 1500 ? -500 : nodeCount > 450 ? -360 : -260;
-  const collidePad = nodeCount > 2500 ? 26 : nodeCount > 900 ? 22 : 18;
+  // BloodHound-style hierarchical layout parameters
+  const distance = nodeCount > 5000 ? 260 : nodeCount > 1500 ? 220 : nodeCount > 450 ? 180 : 150;
+  const charge = nodeCount > 5000 ? -1200 : nodeCount > 1500 ? -900 : nodeCount > 450 ? -650 : -500;
+  const collidePad = nodeCount > 2500 ? 36 : nodeCount > 900 ? 30 : 24;
+
+  // Assign hierarchical layers based on node type (like BloodHound)
+  const typeLayer = { Domain: 0, OU: 1, GPO: 1, Group: 2, Computer: 3, CertTemplate: 3, EnterpriseCA: 3, User: 4 };
+  const layerSpacing = Math.max(180, height / 5);
+
+  // Group nodes by domain for horizontal spreading
+  const domains = [...new Set(nodes.map(n => n.domain || 'UNKNOWN'))];
+  const domainIndex = {};
+  domains.forEach((d, i) => { domainIndex[d] = i; });
+  const domainSpacing = Math.max(400, width / Math.max(1, domains.length));
+
+  nodes.forEach(n => {
+    const layer = typeLayer[n.type] !== undefined ? typeLayer[n.type] : 3;
+    const dIdx = domainIndex[n.domain || 'UNKNOWN'] || 0;
+    // Seed initial positions for hierarchy
+    n.x = width / 2 + (dIdx - (domains.length - 1) / 2) * domainSpacing + (Math.random() - 0.5) * 60;
+    n.y = 80 + layer * layerSpacing + (Math.random() - 0.5) * 40;
+  });
 
   simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(d => distance + relationshipDistance(d.relationship)).strength(nodeCount > 3000 ? 0.12 : 0.22))
-    .force('charge', d3.forceManyBody().strength(charge).distanceMax(nodeCount > 3000 ? 900 : 650))
-    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('link', d3.forceLink(links).id(d => d.id).distance(d => distance + relationshipDistance(d.relationship)).strength(nodeCount > 3000 ? 0.08 : 0.15))
+    .force('charge', d3.forceManyBody().strength(charge).distanceMax(nodeCount > 3000 ? 1400 : 1000))
     .force('collision', d3.forceCollide().radius(d => d.radius + collidePad + Math.min(88, d.display.length * 1.9)).iterations(nodeCount > 1500 ? 1 : 2))
-    .force('x', d3.forceX(width / 2).strength(0.035))
-    .force('y', d3.forceY(height / 2).strength(0.035))
-    .alphaDecay(nodeCount > 3000 ? 0.075 : 0.04)
-    .velocityDecay(0.48);
+    .force('x', d3.forceX(d => {
+      const dIdx = domainIndex[d.domain || 'UNKNOWN'] || 0;
+      return width / 2 + (dIdx - (domains.length - 1) / 2) * domainSpacing;
+    }).strength(domains.length > 1 ? 0.12 : 0.03))
+    .force('y', d3.forceY(d => {
+      const layer = typeLayer[d.type] !== undefined ? typeLayer[d.type] : 3;
+      return 80 + layer * layerSpacing;
+    }).strength(0.15))
+    .alphaDecay(nodeCount > 3000 ? 0.06 : 0.035)
+    .velocityDecay(0.52);
 
   const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
   defs.selectAll('*').remove();
@@ -1571,6 +1763,9 @@ function deselectAll() {
 
 async function showNodeDetail(nodeId) {
   const panel = document.getElementById('node-detail');
+  // Auto-expand the detail panel
+  const detailPanel = document.getElementById('panel-detail');
+  if (detailPanel) detailPanel.classList.remove('collapsed');
   try {
     const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}?graph=${encodeURIComponent(currentGraphId)}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1606,7 +1801,6 @@ async function showNodeDetail(nodeId) {
     }).join('');
 
     panel.innerHTML = `
-      <h2>Node Detail</h2>
       <div class="detail-card">
         <div class="pill-row">${pills}</div>
         <div class="detail-name" style="color:${color}">${escapeHtml(detail.display_name)}</div>
@@ -1620,7 +1814,7 @@ async function showNodeDetail(nodeId) {
         ${props}
       </div>
       <div class="connection-list">
-        <h2>Connections (${(detail.connections || []).length})</h2>
+        <div class="detail-section-title">Connections (${(detail.connections || []).length})</div>
         ${connections || '<div class="detail-card"><div class="detail-row"><span class="key">Edges</span><span class="val">None</span></div></div>'}
       </div>
     `;
@@ -1629,13 +1823,12 @@ async function showNodeDetail(nodeId) {
       button.addEventListener('click', () => highlightNode(button.dataset.target));
     });
   } catch (error) {
-    panel.innerHTML = `<h2>Node Detail</h2><div class="detail-card"><div class="detail-row"><span class="key">Error</span><span class="val">${escapeHtml(error.message)}</span></div></div>`;
+    panel.innerHTML = `<div class="detail-card"><div class="detail-row"><span class="key">Error</span><span class="val">${escapeHtml(error.message)}</span></div></div>`;
   }
 }
 
 function clearNodeDetail() {
   document.getElementById('node-detail').innerHTML = `
-    <h2>Node Detail</h2>
     <div class="detail-card">
       <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
     </div>
@@ -1960,6 +2153,13 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function togglePanel(panelId) {
+  const panel = document.getElementById(panelId);
+  if (panel) {
+    panel.classList.toggle('collapsed');
+  }
 }
 
 init();
