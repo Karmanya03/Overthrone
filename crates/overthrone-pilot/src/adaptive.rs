@@ -611,6 +611,9 @@ impl AdaptiveEngine {
                 | PlannedAction::AdcsEsc11 { .. }
                 | PlannedAction::AdcsEsc12 { .. }
                 | PlannedAction::AdcsEsc13 { .. }
+                | PlannedAction::AdcsEsc14
+                | PlannedAction::AdcsEsc15 { .. }
+                | PlannedAction::AdcsEsc16 { .. }
                 | PlannedAction::EnumerateShares { .. }
                 | PlannedAction::EnumeratePasswordPolicy
                 | PlannedAction::EnumerateDelegations

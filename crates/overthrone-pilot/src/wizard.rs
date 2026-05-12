@@ -350,12 +350,16 @@ impl WizardSession {
 
                 #[cfg(feature = "qlearn")]
                 if let (Some(ql), Some(key)) = (&qlearner, &pre_state_key) {
+                    let state_snapshot = AdaptiveQLearner::format_state_snapshot(key, ql.epsilon());
                     println!(
                         "  {}  {} state={{{}}}",
                         "│".dimmed(),
                         "[QL]".magenta().bold(),
-                        AdaptiveQLearner::format_state_snapshot(key, ql.epsilon()).dimmed(),
+                        state_snapshot.dimmed(),
                     );
+                    if let Some(writer) = &trail {
+                        writer.append_decision("QL state", state_snapshot);
+                    }
                 }
 
                 #[cfg(feature = "qlearn")]
@@ -371,12 +375,17 @@ impl WizardSession {
                 if let Some(ref ql) = qlearner
                     && let Some((action, q_val, exploring)) = ql.last_decision_meta()
                 {
+                    let decision_snapshot =
+                        AdaptiveQLearner::format_decision(action, *q_val, *exploring);
                     println!(
                         "  {}  {} -> {}",
                         "│".dimmed(),
                         "[QL]".magenta().bold(),
-                        AdaptiveQLearner::format_decision(action, *q_val, *exploring).cyan(),
+                        decision_snapshot.cyan(),
                     );
+                    if let Some(writer) = &trail {
+                        writer.append_decision("QL decision", decision_snapshot);
+                    }
                 }
 
                 #[cfg(feature = "qlearn")]
@@ -393,6 +402,8 @@ impl WizardSession {
                         ql.consecutive_failures(),
                     );
                     ql.record_outcome(pre_key, &action, reward, &post_key);
+                    let reward_snapshot =
+                        format!("reward={:+.1} table={} states", reward, ql.q_table_size());
                     println!(
                         "  {}  {} reward={:+.1} table={} states",
                         "│".dimmed(),
@@ -400,6 +411,9 @@ impl WizardSession {
                         reward,
                         ql.q_table_size(),
                     );
+                    if let Some(writer) = &trail {
+                        writer.append_decision("QL reward", reward_snapshot);
+                    }
                 }
 
                 if let Some(writer) = &trail {
@@ -493,17 +507,19 @@ impl WizardSession {
             }
         }
 
+        let mut final_summary = format!(
+            "Wizard completed. Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds.",
+            steps_executed,
+            steps_succeeded,
+            steps_failed,
+            wall_start.elapsed().as_secs()
+        );
+        #[cfg(feature = "qlearn")]
+        if let Some(ref ql) = qlearner {
+            final_summary.push_str(&format!(" Q-learner: {}", ql.session_summary()));
+        }
         if let Some(writer) = &trail {
-            writer.append_final(
-                &self.state,
-                format!(
-                    "Wizard completed. Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds.",
-                    steps_executed,
-                    steps_succeeded,
-                    steps_failed,
-                    wall_start.elapsed().as_secs()
-                ),
-            );
+            writer.append_final(&self.state, final_summary);
         }
 
         #[cfg(feature = "qlearn")]

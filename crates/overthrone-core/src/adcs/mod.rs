@@ -1,6 +1,6 @@
 //! ADCS (Active Directory Certificate Services) abuse module
 //!
-//! Implements certificate template attacks ESC1-ESC13 as described in
+//! Implements ADCS attack and guidance paths ESC1-ESC16 as described in
 //! Certified Pre-Owned research by SpecterOps and subsequent community research.
 //!
 //! # Modules
@@ -23,12 +23,18 @@
 //! - ESC11: Relaying NTLM to ICPR (IForceCertificateRequirements disabled)
 //! - ESC12: Shell access to CA server — CA private key exfiltration
 //! - ESC13: Issuance Policy OID linked to privileged group (msDS-OIDToGroupLink)
+//! - ESC14: Certificate mapping / altSecurityIdentities guidance trail
+//! - ESC15: Schema V1 template with enrollee-supplied subject (CVE-2024-49019)
+//! - ESC16: CA security extension disabled (szOID_NTDS_CA_SECURITY_EXT removed)
 pub mod csr;
 pub mod esc1;
 pub mod esc10;
 pub mod esc11;
 pub mod esc12;
 pub mod esc13;
+pub mod esc14;
+pub mod esc15;
+pub mod esc16;
 pub mod esc2;
 pub mod esc3;
 pub mod esc4;
@@ -66,6 +72,13 @@ pub use esc13::{
     Esc13Config, Esc13Exploiter, Esc13Result, Esc13VulnerableTemplate, LinkedIssuancePolicy,
     linked_oid_ldap_filter, oid_container_dn,
 };
+pub use esc14::{
+    Esc14Config, Esc14Exploiter, Esc14Result, Esc14VulnerableTarget, MappingStyle,
+    alt_security_identities_filter, build_issuer_serial_mapping, build_issuer_subject_mapping,
+    build_rfc822_mapping, build_sha1_pubkey_mapping,
+};
+pub use esc15::{Esc15Config, Esc15Exploiter, Esc15Result, Esc15VulnerableTemplate};
+pub use esc16::{Esc16Config, Esc16Exploiter, Esc16Result, Esc16VulnerableTemplate};
 pub use ldap_enumeration::{
     CaConfiguration, CaVulnerabilityInfo, EnrollmentService, LdapAdcsEnumerator,
     LdapCertificateTemplate, LdapCertificationAuthority,
@@ -109,6 +122,11 @@ impl TemplateConfig {
 
     /// Determine which ESC vulnerability applies
     pub fn esc_vulnerability(&self) -> Option<u8> {
+        // ESC15: Schema V1 template with enrollee-supplied subject on an unpatched CA
+        if self.schema_version == 1 && !self.requires_manager_approval && self.allows_san() {
+            return Some(15);
+        }
+
         // ESC1: Any purpose EKU + no security extension + allows SAN
         if self.has_any_purpose_eku() && !self.requires_manager_approval && self.allows_san() {
             return Some(1);
@@ -129,6 +147,11 @@ impl TemplateConfig {
             return Some(4);
         }
 
+        // ESC16: Template has CT_FLAG_NO_SECURITY_EXTENSION and supports Client Auth
+        if self.has_no_security_extension_flag() && self.supports_client_auth() {
+            return Some(16);
+        }
+
         // ESC9: CT_FLAG_NO_SECURITY_EXTENSION (0x00080000) is set on the template
         if self.has_no_security_extension_flag() {
             return Some(9);
@@ -141,6 +164,16 @@ impl TemplateConfig {
         }
 
         None
+    }
+
+    /// Check if template supports Client Authentication (standard or PKINIT)
+    pub fn supports_client_auth(&self) -> bool {
+        self.ekus.iter().any(|eku| {
+            eku.contains("1.3.6.1.5.5.7.3.2")           // Client Authentication
+                || eku.contains("2.5.29.37.0")            // Any Purpose
+                || eku.contains("Any Purpose")
+                || eku.contains("1.3.6.1.4.1.311.20.2.2") // PKINIT Client Authentication
+        })
     }
 
     fn has_any_purpose_eku(&self) -> bool {
@@ -965,6 +998,31 @@ mod tests {
 
         assert!(vulnerable_template.is_vulnerable());
         assert_eq!(vulnerable_template.esc_vulnerability(), Some(1));
+    }
+
+    #[test]
+    fn test_schema_v1_template_reports_esc15() {
+        let vulnerable_template = TemplateConfig {
+            name: "Legacy".to_string(),
+            schema_version: 1,
+            validity_period_days: 365,
+            renewal_period_days: 60,
+            ekus: vec!["Client Authentication".to_string()],
+            subject_name_flag: 1,
+            enrollment_flag: 0,
+            private_key_flag: 0,
+            requires_manager_approval: false,
+            authorized_signatures_required: 0,
+            application_policies: vec![],
+            issuance_policies: vec![],
+            security_descriptor: "D:AI".to_string(),
+            certificate_name_flag: 0,
+            private_key_usage_period_flag: 0,
+            private_key_usage_period: None,
+        };
+
+        assert!(vulnerable_template.is_vulnerable());
+        assert_eq!(vulnerable_template.esc_vulnerability(), Some(15));
     }
 
     #[test]

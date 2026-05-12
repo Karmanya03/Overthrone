@@ -1,7 +1,7 @@
 //! LDAP Certificate Template Enumeration
 //!
 //! Queries Active Directory for certificate templates and CA configurations
-//! to identify ESC vulnerabilities.
+//! to identify ESC vulnerabilities and CA-side ESC16 hooks.
 
 use crate::error::Result;
 use crate::proto::ldap::LdapSession;
@@ -102,6 +102,14 @@ impl LdapCertificateTemplate {
 
     /// Determine ESC vulnerability
     pub fn esc_vulnerability(&self) -> Option<u8> {
+        // ESC15: Schema V1 template with enrollee-supplied subject on an unpatched CA
+        if self.schema_version == 1
+            && self.allows_enrollee_subject()
+            && !self.requires_manager_approval()
+        {
+            return Some(15);
+        }
+
         // ESC1: Any Purpose + SAN allowed + no manager approval
         if self.has_any_purpose()
             && self.allows_enrollee_subject()
@@ -138,6 +146,17 @@ pub struct LdapCertificationAuthority {
     pub certificate_templates: Vec<String>,
     pub security_descriptor: String,
     pub enrollment_endpoints: Vec<String>,
+    #[serde(default)]
+    pub disabled_extensions: Vec<String>,
+}
+
+impl LdapCertificationAuthority {
+    /// Return true when the CA disables the NTDS security extension.
+    pub fn is_security_extension_disabled(&self) -> bool {
+        self.disabled_extensions
+            .iter()
+            .any(|extension| extension == "1.3.6.1.4.1.311.25.2")
+    }
 }
 
 /// CA Configuration Flags
@@ -149,10 +168,22 @@ pub struct CaConfiguration {
     pub allows_san_attribute: bool,
     /// EDITF_REQUESTEXTENSIONLIST flag
     pub allows_extension_list: bool,
+    /// Disabled certificate extensions (ESC16 hook)
+    #[serde(default)]
+    pub disabled_extensions: Vec<String>,
     /// Security descriptor
     pub security_descriptor: String,
     /// Vulnerable configurations found
     pub vulnerabilities: Vec<CaVulnerabilityInfo>,
+}
+
+impl CaConfiguration {
+    /// Return true when the CA disables the NTDS security extension.
+    pub fn is_security_extension_disabled(&self) -> bool {
+        self.disabled_extensions
+            .iter()
+            .any(|extension| extension == "1.3.6.1.4.1.311.25.2")
+    }
 }
 
 /// CA Vulnerability Information
@@ -162,6 +193,17 @@ pub struct CaVulnerabilityInfo {
     pub description: String,
     pub severity: String,
     pub remediation: String,
+}
+
+impl CaVulnerabilityInfo {
+    pub fn new(esc_number: u8, description: &str, severity: &str, remediation: &str) -> Self {
+        Self {
+            esc_number,
+            description: description.to_string(),
+            severity: severity.to_string(),
+            remediation: remediation.to_string(),
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -367,6 +409,7 @@ impl LdapAdcsEnumerator {
                     "cn",
                     "cACertificate",
                     "certificateTemplates",
+                    "disabled_extensions",
                     "nTSecurityDescriptor",
                     "distinguishedName",
                 ],
@@ -424,6 +467,12 @@ impl LdapAdcsEnumerator {
             .cloned()
             .unwrap_or_default();
 
+        let disabled_extensions = entry
+            .attrs
+            .get("disabled_extensions")
+            .cloned()
+            .unwrap_or_default();
+
         Ok(LdapCertificationAuthority {
             name,
             dn,
@@ -431,6 +480,7 @@ impl LdapAdcsEnumerator {
             certificate_templates,
             security_descriptor,
             enrollment_endpoints,
+            disabled_extensions,
         })
     }
 
@@ -511,8 +561,8 @@ impl LdapAdcsEnumerator {
         Ok(vulnerable)
     }
 
-    /// Check for ESC6 (EDITF_ATTRIBUTESUBJECTALTNAME2)
-    /// This requires checking CA registry settings or certificate enrollment policy
+    /// Check for CA-side ESC6 / ESC16 configuration.
+    /// ESC6 still requires registry checks; ESC16 can be inferred from LDAP if exposed.
     pub async fn check_esc6_configuration(&mut self) -> Result<Vec<CaConfiguration>> {
         let cas = self.enumerate_cas().await?;
 
@@ -526,15 +576,21 @@ impl LdapAdcsEnumerator {
             if ca.security_descriptor.contains("S-1-1-0")
                 || ca.security_descriptor.contains("S-1-5-11")
             {
-                vulnerabilities.push(CaVulnerabilityInfo {
-                    esc_number: 7,
-                    description:
-                        "Weak CA permissions - unprivileged users may have enrollment rights"
-                            .to_string(),
-                    severity: "High".to_string(),
-                    remediation: "Review CA security descriptor and remove unnecessary permissions"
-                        .to_string(),
-                });
+                vulnerabilities.push(CaVulnerabilityInfo::new(
+                    7,
+                    "Weak CA permissions - unprivileged users may have enrollment rights",
+                    "High",
+                    "Review CA security descriptor and remove unnecessary permissions",
+                ));
+            }
+
+            if ca.is_security_extension_disabled() {
+                vulnerabilities.push(CaVulnerabilityInfo::new(
+                    16,
+                    "CA security extension is disabled - issued certificates omit the NTDS security extension",
+                    "High",
+                    "Re-enable the NTDS security extension and remove 1.3.6.1.4.1.311.25.2 from the disabled extension list",
+                ));
             }
 
             configs.push(CaConfiguration {
@@ -543,6 +599,7 @@ impl LdapAdcsEnumerator {
                 // ESC6 requires checking registry or using certutil - this is a best-effort check
                 allows_san_attribute: false, // Would need to check registry
                 allows_extension_list: false,
+                disabled_extensions: ca.disabled_extensions,
                 security_descriptor: ca.security_descriptor,
                 vulnerabilities,
             });
@@ -621,5 +678,46 @@ mod tests {
         assert!(template.requires_manager_approval());
         assert!(!template.has_any_purpose());
         assert_eq!(template.esc_vulnerability(), None);
+    }
+
+    #[test]
+    fn test_schema_v1_template_reports_esc15() {
+        let template = LdapCertificateTemplate {
+            name: "Legacy".to_string(),
+            display_name: "Legacy Template".to_string(),
+            oid: "1.2.3.6".to_string(),
+            flags: 0,
+            subject_name_flags: CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT,
+            enrollment_flags: 0,
+            private_key_flags: 0,
+            schema_version: 1,
+            validity_period: "1 year".to_string(),
+            renewal_period: "6 weeks".to_string(),
+            extended_key_usage: vec!["1.3.6.1.5.5.7.3.2".to_string()],
+            application_policies: vec![],
+            issuance_policies: vec![],
+            authorized_signatures_required: 0,
+            security_descriptor: String::new(),
+            dn: "CN=Legacy,CN=Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=corp,DC=local".to_string(),
+        };
+
+        assert!(template.allows_enrollee_subject());
+        assert!(!template.requires_manager_approval());
+        assert_eq!(template.esc_vulnerability(), Some(15));
+    }
+
+    #[test]
+    fn test_ca_configuration_is_security_extension_disabled_flag() {
+        let config = CaConfiguration {
+            ca_name: "TestCA".to_string(),
+            dn: "CN=TestCA,CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,DC=corp,DC=local".to_string(),
+            allows_san_attribute: false,
+            allows_extension_list: false,
+            disabled_extensions: vec!["1.3.6.1.4.1.311.25.2".to_string()],
+            security_descriptor: String::new(),
+            vulnerabilities: vec![],
+        };
+
+        assert!(config.is_security_extension_disabled());
     }
 }

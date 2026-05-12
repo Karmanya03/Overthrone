@@ -16,6 +16,7 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
   <a href="#ovt-scan---network-discovery--recon">scan</a> &nbsp;·&nbsp;
   <a href="#ovt-snaffler---sensitive-file-discovery">snaffler</a> &nbsp;·&nbsp;
   <a href="#ovt-powerview---advanced-ad-enumeration">powerview</a> &nbsp;·&nbsp;
+  <a href="#ovt-guid---ad-aceguid-resolver">guid</a> &nbsp;·&nbsp;
   <a href="#ovt-laps---laps-password-reading">laps</a> &nbsp;·&nbsp;
   <a href="#ovt-gpp---gpp-password-decryption">gpp</a>
 </p>
@@ -251,7 +252,7 @@ The Rust implementation of the legendary Snaffler. Recursively scans accessible 
 ovt snaffler -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
 # Save findings to JSON for later analysis
-ovt snaffler -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' -o json -O findings.json
+ovt snaffler -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --output-format json -O findings.json
 ```
 
 ---
@@ -262,10 +263,32 @@ PowerView, rewritten in Rust. Provides granular, high-fidelity enumeration of AD
 
 ```bash
 # Get detailed GPO info including links and status
-ovt powerview gpos -H 10.10.10.1 -d corp.local
+ovt powerview gpos --name "Default Domain Policy" -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
 # Get all properties for a specific user
-ovt powerview users --username "adm-smith" -H 10.10.10.1 -d corp.local
+ovt powerview users --identity "adm-smith" -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+
+# Find abusable ACEs for a trustee SID
+ovt powerview acls --sid S-1-5-21-1111111111-2222222222-3333333333-1105 -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+```
+
+Available PowerView-style actions: `users`, `computers`, `groups`, `trusts`, `spns`, `asrep`, `delegations`, `gpos`, `policy`, `laps`, `acls`, and `all`. `pv` and `power-view` are aliases for `powerview`.
+
+---
+
+## `ovt guid` - AD ACE/GUID Resolver
+
+Offline helper for resolving common AD control-access and attribute GUIDs that show up in ACLs.
+
+```bash
+# Resolve by right name
+ovt guid resolve ForceChangePassword
+
+# Resolve by raw GUID
+ovt guid resolve 1131f6ad-9c07-11d1-f79f-00c04fc2dcd2
+
+# List built-in mappings, optionally filtered
+ovt guid list --filter replication
 ```
 
 ---
@@ -275,11 +298,14 @@ ovt powerview users --username "adm-smith" -H 10.10.10.1 -d corp.local
 Advanced MSSQL enumeration and abuse module. Performs SPN discovery, linked server crawling, impersonation checks, and `xp_cmdshell` status auditing. Basically PowerUpSQL in a binary.
 
 ```bash
-# Find all MSSQL instances and perform basic audit
-ovt mssql -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+# Run a basic query
+ovt mssql query --target sql01.corp.local --query "select @@version" -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
-# Deep crawl linked servers to find execution paths
-ovt mssql audit --crawl-links -H 10.10.10.1 -d corp.local
+# Enumerate linked servers
+ovt mssql linked-servers --target sql01.corp.local -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
+
+# Check xp_cmdshell state
+ovt mssql check-xp-cmd-shell --target sql01.corp.local -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 ```
 
 ---

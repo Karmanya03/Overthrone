@@ -144,7 +144,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 
 ### The Crate Report Card
 
-These are real numbers from `cargo test --workspace --lib` on v0.1.45. No rounding up.
+These are real numbers from `cargo test --workspace --lib` on v0.1.46. No rounding up.
 
 ```
 overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  298 unit tests. ESC1-ESC13. SOCKS5 proxy (RFC 1928). Mask attack
@@ -208,7 +208,7 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **Session resume + TOML config** | `cli/src/main.rs`, `pilot/src/runner.rs` | `--resume <file>` picks up mid-chain. `--config <file>` loads DC, domain, auth, stealth, jitter from TOML. No more repeating 14 flags every run. |
 | **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. Knows which creds are worth more than others. |
 | **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. The audit trail explains why it chickened out. |
-| **JSON output + shell completions** | `cli/src/commands_impl.rs`, `main.rs` | `--output json` on `dump`/`rid`/`laps`/`gpp`/`scan`. `ovt completions <shell>` for bash, fish, zsh, powershell, elvish. Quality-of-life was underrated. |
+| **JSON output + shell completions** | `cli/src/commands_impl.rs`, `main.rs` | `--output-format json` with optional `-O file.json` on `dump`/`rid`/`laps`/`gpp`/`scan`/`snaffler`. `ovt completions <shell>` for bash, fish, zsh, powershell, elvish. Quality-of-life was underrated. |
 
 ### ? Still Pending
 
@@ -269,13 +269,16 @@ ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER      # Guided mode
 ovt enum all -H DC -d DOMAIN -u USER -p PASS            # Enumerate everything
 ovt enum policy -H DC -d DOMAIN -u USER -p PASS         # Lockout/password policy
 ovt enum laps -H DC -d DOMAIN -u USER -p PASS           # Readable LAPS secrets
+ovt powerview users --identity adm-smith -H DC -d DOMAIN -u USER -p PASS
+ovt guid resolve ForceChangePassword                    # Resolve common ACE GUIDs
+ovt snaffler -H DC -d DOMAIN -u USER -p PASS --output-format json -O snaffle.json
 ovt scan --targets DC --ldap --smb                      # No-creds port + null-session triage
 ovt enum pre -H DC                                      # No-creds AD service triage
 ovt enum anonymous -H DC                                # Anonymous LDAP RootDSE probe
 ovt kerberos user-enum -H DC -d DOMAIN --userlist users.txt   # Zero-knowledge user enum
 ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
 ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
-ovt dump -t DC ntds -d DOMAIN -u DA -p PASS -o json     # Dump NTDS as JSON
+ovt dump -t DC ntds -d DOMAIN -u DA -p PASS --output-format json -O ntds.json
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
 ovt graph gui -i ./graphs/                               # Browser GUI; blank-first search/chunk render
 ovt doctor                                                # Health check
@@ -365,7 +368,7 @@ ovt graph gui -i ./graphs/
 
 The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas that shows compact labels on zoom/selection while keeping full names in the side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
-The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once. Like BloodHound, the canvas starts blank after selection: stats are indexed, then the operator searches source/destination nodes with realtime suggestions, filters object types, finds focused paths, or renders a chunk. Render budgets are `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, and `ALL`; `ALL` prompts before rendering because giant domains deserve a seatbelt. Node and edge detail panels include human-readable ACE/ACL guidance for GenericAll, GenericWrite, WriteDacl, WriteOwner, delegation, DCSync, LAPS/gMSA reads, GPO control, and similar abuse paths.
+The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once. Like BloodHound, the canvas starts blank after selection: stats are indexed, then the operator searches source/destination nodes with realtime suggestions, filters object types, finds focused paths, or renders a chunk. Render budgets are `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, and `ALL`; `ALL` prompts before rendering because giant domains deserve a seatbelt. The renderer uses a deterministic left-to-right hierarchy instead of a circular force cluster, and node details live in their own right rail so collapsing graph controls does not hide the selected object context. Node and edge detail panels include human-readable ACE/ACL guidance for GenericAll, GenericWrite, WriteDacl, WriteOwner, delegation, DCSync, LAPS/gMSA reads, GPO control, shadow credentials, ADCS enrollment, attribute-specific WriteProperty edges, and similar abuse paths. A small demo fixture lives at `docs/bloodhound-hierarchy-demo.json`.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -572,21 +575,21 @@ Grab the latest from [**Releases**](https://github.com/Karmanya03/Overthrone/rel
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-linux-x86_64) | x86_64 (musl, static) |
-| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-linux-x86_64) | x86_64 (musl, static) |
+| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick manual install:**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # Kali (you're probably already here)
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.45/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
 ```
 
 ### Build from source

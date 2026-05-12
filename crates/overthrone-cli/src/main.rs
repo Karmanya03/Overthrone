@@ -120,6 +120,12 @@ enum Commands {
         page_size: u32,
     },
 
+    /// Snaffler-style sensitive file discovery across readable SMB shares
+    Snaffler {
+        #[arg(long, default_value = "500")]
+        page_size: u32,
+    },
+
     /// Enumerate specific AD object types
     Enum {
         #[arg(value_enum)]
@@ -128,6 +134,19 @@ enum Commands {
         filter: Option<String>,
         #[arg(long, default_value = "false")]
         include_disabled: bool,
+    },
+
+    /// PowerView-style LDAP enumeration aliases backed by Overthrone modules
+    #[command(alias = "pv", alias = "power-view")]
+    Powerview {
+        #[command(subcommand)]
+        action: PowerViewAction,
+    },
+
+    /// Resolve common AD attribute/right GUIDs used in ACEs and ACLs
+    Guid {
+        #[command(subcommand)]
+        action: GuidAction,
     },
 
     /// Kerberos operations
@@ -613,6 +632,71 @@ enum EnumTarget {
     Laps,
     Policy,
     All,
+}
+
+#[derive(Subcommand, Clone)]
+enum PowerViewAction {
+    /// Get-DomainUser equivalent
+    Users {
+        #[arg(long)]
+        identity: Option<String>,
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long, default_value = "false")]
+        include_disabled: bool,
+    },
+    /// Get-DomainComputer equivalent
+    Computers {
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long, default_value = "false")]
+        include_disabled: bool,
+    },
+    /// Get-DomainGroup equivalent
+    Groups {
+        #[arg(long, alias = "identity")]
+        group: Option<String>,
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Get-DomainTrust equivalent
+    Trusts,
+    /// Get-DomainSPNTicket / Get-DomainUser -SPN style discovery
+    Spns,
+    /// AS-REP roastable user discovery
+    Asrep,
+    /// Delegation discovery
+    Delegations,
+    /// Get-DomainGPO equivalent
+    Gpos {
+        #[arg(long, alias = "identity")]
+        name: Option<String>,
+    },
+    /// Domain policy and password policy discovery
+    Policy,
+    /// LAPS-readable computer discovery and read
+    Laps {
+        #[arg(long)]
+        computer: Option<String>,
+    },
+    /// Find-InterestingDomainAcl-style abusable ACE enumeration
+    Acls {
+        #[arg(long)]
+        sid: Option<String>,
+    },
+    /// Run the full LDAP-backed enumeration set
+    All,
+}
+
+#[derive(Subcommand, Clone)]
+enum GuidAction {
+    /// Resolve a GUID, right name, or attribute name
+    Resolve { value: String },
+    /// List the built-in GUID/right mappings
+    List {
+        #[arg(long)]
+        filter: Option<String>,
+    },
 }
 
 // ──────────────────────────────────────────────────────────
@@ -1116,6 +1200,75 @@ enum AdcsAction {
         )]
         output: String,
     },
+    /// ESC14 — Certificate mapping / altSecurityIdentities guidance
+    Esc14 {
+        /// Target account DN (e.g. CN=Administrator,CN=Users,DC=corp,DC=local)
+        #[arg(short = 'T', long, required = true)]
+        target_dn: String,
+        /// Target account sAMAccountName
+        #[arg(short = 'S', long, required = true)]
+        target_sam: String,
+        /// Certificate mapping value to write (e.g. X509:<RFC822>admin@corp.local)
+        #[arg(short = 'M', long, required = true)]
+        mapping: String,
+        /// DC IP/hostname for LDAP modification
+        #[arg(short, long)]
+        dc: Option<String>,
+        /// [LIVE] Perform live LDAP modification (requires ldap-user/ldap-pass)
+        #[arg(long)]
+        live: bool,
+    },
+    /// ESC15 — Schema V1 template with enrollee-supplied subject (EKUwu)
+    Esc15 {
+        /// CA web enrollment server
+        #[arg(short, long, required = true)]
+        ca: String,
+        /// Schema V1 template name
+        #[arg(short, long, required = true)]
+        template: String,
+        /// Target user to impersonate via SAN
+        #[arg(short = 'U', long, required = true)]
+        target_user: String,
+        /// Output PFX file path
+        #[arg(
+            id = "adcs_esc15_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc15_cert.pfx"
+        )]
+        output: String,
+    },
+    /// ESC16 — CA security extension disabled path
+    Esc16 {
+        /// CA web enrollment server
+        #[arg(short, long, required = true)]
+        ca: String,
+        /// Template name (with NO_SECURITY_EXTENSION flag)
+        #[arg(short, long, required = true)]
+        template: String,
+        /// Target UPN to impersonate
+        #[arg(short = 'T', long, required = true)]
+        target_upn: String,
+        /// Victim account whose UPN will be poisoned
+        #[arg(short = 'V', long, required = true)]
+        victim: String,
+        /// Original UPN of the victim (for cleanup)
+        #[arg(short = 'R', long, required = true)]
+        original_upn: String,
+        /// LDAP URL (e.g. ldap://dc01.corp.local)
+        #[arg(short, long, default_value = "ldap://dc01.corp.local")]
+        ldap_url: String,
+        /// Output PFX file path
+        #[arg(
+            id = "adcs_esc16_output",
+            short = 'o',
+            long = "output",
+            value_name = "OUTPUT",
+            default_value = "esc16_cert.pfx"
+        )]
+        output: String,
+    },
     /// Request a certificate
     Request {
         #[arg(short, long, required = true)]
@@ -1512,11 +1665,14 @@ async fn async_main() {
             ref modules,
             page_size,
         } => cmd_reaper(&cli, modules.clone(), page_size).await,
+        Commands::Snaffler { page_size } => cmd_snaffler(&cli, page_size).await,
         Commands::Enum {
             ref target,
             ref filter,
             include_disabled,
         } => cmd_enum(&cli, target.clone(), filter.clone(), include_disabled).await,
+        Commands::Powerview { ref action } => cmd_powerview(&cli, action.clone()).await,
+        Commands::Guid { ref action } => cmd_guid(action.clone()),
         Commands::Kerberos { ref action } => cmd_kerberos(&cli, action.clone()).await,
         Commands::Smb { ref action } => cmd_smb(&cli, action.clone()).await,
         Commands::Exec {
@@ -1745,6 +1901,22 @@ fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
     })
 }
 
+/// Retrieve credentials if available without terminating on missing arguments
+fn require_creds_silent(cli: &Cli) -> std::result::Result<Credentials, String> {
+    let domain = cli.domain.as_deref().ok_or("Missing --domain")?;
+    let username = cli.username.as_deref().ok_or("Missing --username")?;
+
+    Credentials::from_args(
+        domain,
+        username,
+        cli.password.as_deref(),
+        cli.nt_hash.as_deref(),
+        cli.ticket.as_deref(),
+        Some(cli.auth_method.clone()),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Require credentials for operations that need domain and DC access
 /// but not a specific username. Used by spray operations.
 fn require_dc_only_creds(cli: &Cli) -> std::result::Result<String, i32> {
@@ -1818,6 +1990,208 @@ async fn cmd_reaper(cli: &Cli, modules: Vec<String>, page_size: u32) -> i32 {
             1
         }
     }
+}
+
+async fn cmd_snaffler(cli: &Cli, page_size: u32) -> i32 {
+    banner::print_module_banner("SNAFFLER");
+
+    let creds = match require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let config = match make_reaper_config(cli, creds, dc, vec!["snaffler".to_string()], page_size) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    match overthrone_reaper::snaffler::run_snaffler(&config).await {
+        Ok(findings) => {
+            if matches!(cli.stdout_format, OutputFormat::Json) {
+                let json = serde_json::to_string_pretty(&findings)
+                    .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}"));
+                println!("{json}");
+                if let Some(path) = &cli.outfile
+                    && let Err(e) = std::fs::write(path, &json)
+                {
+                    eprintln!("warn: failed to write output file '{}': {}", path, e);
+                }
+                return 0;
+            }
+
+            if findings.is_empty() {
+                banner::print_info("No sensitive files matched the Snaffler patterns");
+            } else {
+                banner::print_success(&format!("Found {} sensitive files", findings.len()));
+                for finding in &findings {
+                    println!(
+                        "  [S{}] \\\\{}\\{}\\{} - {} ({} bytes)",
+                        finding.severity,
+                        finding.hostname,
+                        finding.share,
+                        finding.path,
+                        finding.reason,
+                        finding.size
+                    );
+                }
+                if let Some(path) = &cli.outfile {
+                    let json = serde_json::to_string_pretty(&findings).unwrap_or_default();
+                    if let Err(e) = std::fs::write(path, &json) {
+                        eprintln!("warn: failed to write output file '{}': {}", path, e);
+                    }
+                }
+            }
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Snaffler error: {}", e));
+            1
+        }
+    }
+}
+
+async fn cmd_powerview(cli: &Cli, action: PowerViewAction) -> i32 {
+    match action {
+        PowerViewAction::Users {
+            identity,
+            filter,
+            include_disabled,
+        } => {
+            cmd_enum(
+                cli,
+                EnumTarget::Users,
+                identity.or(filter),
+                include_disabled,
+            )
+            .await
+        }
+        PowerViewAction::Computers {
+            filter,
+            include_disabled,
+        } => cmd_enum(cli, EnumTarget::Computers, filter, include_disabled).await,
+        PowerViewAction::Groups { group, filter } => {
+            cmd_enum(cli, EnumTarget::Groups, group.or(filter), false).await
+        }
+        PowerViewAction::Trusts => cmd_enum(cli, EnumTarget::Trusts, None, false).await,
+        PowerViewAction::Spns => cmd_enum(cli, EnumTarget::Spns, None, false).await,
+        PowerViewAction::Asrep => cmd_enum(cli, EnumTarget::Asrep, None, false).await,
+        PowerViewAction::Delegations => cmd_enum(cli, EnumTarget::Delegations, None, false).await,
+        PowerViewAction::Gpos { name } => cmd_enum(cli, EnumTarget::Gpos, name, false).await,
+        PowerViewAction::Policy => cmd_enum(cli, EnumTarget::Policy, None, false).await,
+        PowerViewAction::Laps { computer } => {
+            commands_impl::cmd_laps(cli, computer.as_deref()).await
+        }
+        PowerViewAction::Acls { sid } => cmd_acl(cli, AclAction::Enum { sid }).await,
+        PowerViewAction::All => cmd_enum(cli, EnumTarget::All, None, false).await,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GuidEntry {
+    guid: &'static str,
+    name: &'static str,
+    category: &'static str,
+    maps_to: &'static str,
+    note: &'static str,
+}
+
+const AD_GUIDS: &[GuidEntry] = &[
+    GuidEntry {
+        guid: "00299570-246d-11d0-a768-00aa006e0529",
+        name: "User-Force-Change-Password",
+        category: "ControlAccessRight",
+        maps_to: "ForceChangePassword",
+        note: "Lets the trustee reset a user password without knowing the current password.",
+    },
+    GuidEntry {
+        guid: "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2",
+        name: "DS-Replication-Get-Changes",
+        category: "ControlAccessRight",
+        maps_to: "GetChanges",
+        note: "One of the replication rights required for DCSync-style secret replication.",
+    },
+    GuidEntry {
+        guid: "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2",
+        name: "DS-Replication-Get-Changes-All",
+        category: "ControlAccessRight",
+        maps_to: "GetChangesAll",
+        note: "Pairs with Get-Changes for full secret replication impact.",
+    },
+    GuidEntry {
+        guid: "89e95b76-444d-4c62-991a-0facbeda640c",
+        name: "DS-Replication-Get-Changes-In-Filtered-Set",
+        category: "ControlAccessRight",
+        maps_to: "GetChangesInFilteredSet",
+        note: "Filtered-set replication right; important on hardened domains and RODC-related paths.",
+    },
+    GuidEntry {
+        guid: "bf9679c0-0de6-11d0-a285-00aa003049e2",
+        name: "member",
+        category: "AttributeSchema",
+        maps_to: "AddMembers/WriteSelf",
+        note: "WriteProperty(member) or validated self-membership can add principals to groups.",
+    },
+];
+
+fn cmd_guid(action: GuidAction) -> i32 {
+    match action {
+        GuidAction::Resolve { value } => {
+            let query = normalize_guid_query(&value);
+            let matches: Vec<_> = AD_GUIDS
+                .iter()
+                .copied()
+                .filter(|entry| guid_entry_matches(*entry, &query))
+                .collect();
+            if matches.is_empty() {
+                banner::print_fail(&format!("No built-in GUID mapping found for '{}'", value));
+                println!(
+                    "Tip: use `ovt powerview acls` or `ovt acl enum` against LDAP to inspect live objectType GUIDs."
+                );
+                return 1;
+            }
+            for entry in matches {
+                print_guid_entry(entry);
+            }
+            0
+        }
+        GuidAction::List { filter } => {
+            let query = filter.as_deref().map(normalize_guid_query);
+            for entry in AD_GUIDS
+                .iter()
+                .copied()
+                .filter(|entry| query.as_ref().is_none_or(|q| guid_entry_matches(*entry, q)))
+            {
+                print_guid_entry(entry);
+            }
+            0
+        }
+    }
+}
+
+fn normalize_guid_query(value: &str) -> String {
+    value
+        .trim()
+        .replace(['{', '}'], "")
+        .replace([' ', '_'], "-")
+        .to_ascii_lowercase()
+}
+
+fn guid_entry_matches(entry: GuidEntry, query: &str) -> bool {
+    entry.guid.eq_ignore_ascii_case(query)
+        || entry.name.to_ascii_lowercase().contains(query)
+        || entry.category.to_ascii_lowercase().contains(query)
+        || entry.maps_to.to_ascii_lowercase().contains(query)
+}
+
+fn print_guid_entry(entry: GuidEntry) {
+    println!("{}", entry.name.bold().cyan());
+    println!("  GUID:     {}", entry.guid.yellow());
+    println!("  Category: {}", entry.category);
+    println!("  OVT edge: {}", entry.maps_to.green());
+    println!("  Note:     {}", entry.note);
 }
 
 // cmd_ntlm

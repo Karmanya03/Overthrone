@@ -581,6 +581,146 @@ fn edge_security_guidance(relationship: &str) -> (u8, &'static str) {
             1,
             "Extended rights. On users this can enable password reset; on domain objects it may combine with replication rights for DCSync.",
         ),
+        "createchild" => (
+            3,
+            "CreateChild. Can create objects in the target container or OU; check machine-account, group, service account, and policy abuse scope before acting.",
+        ),
+        "writeself" => (
+            2,
+            "Validated self-write. Commonly maps to group self-add or constrained attribute updates; confirm the exact validated write before use.",
+        ),
+        "readlapspasswordexpiry" | "readlapsencryptedpassword" => (
+            2,
+            "LAPS metadata or encrypted LAPS material. Pair with DPAPI/LAPS decryption paths and treat recovered values as credential material.",
+        ),
+        "writespn" | "writeserviceprincipalname" => (
+            2,
+            "SPN write. Set a single temporary SPN for targeted Kerberoasting, collect one TGS, then restore the original SPN set.",
+        ),
+        "writeallowedtodelegateto" => (
+            1,
+            "Delegation write. Changes msDS-AllowedToDelegateTo and can enable S4U paths; record and restore the original service list.",
+        ),
+        "addallowedtoact" => (
+            1,
+            "RBCD write. Add a controlled computer account to msDS-AllowedToActOnBehalfOfOtherIdentity, request only needed service tickets, then clean up.",
+        ),
+        "writeaccountrestrictions" => (
+            2,
+            "Account restrictions write. May alter delegation or authentication behavior; inspect the target class and attribute before modification.",
+        ),
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => (
+            2,
+            "Logon/profile script write. Code execution path with visible user impact; keep payloads minimal, scoped, and rollback-ready.",
+        ),
+        "writednshostname" => (
+            3,
+            "DNS hostname write. Validate DNS, SPN, and delegation side effects before changing host identity fields.",
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => (
+            1,
+            "Shadow credentials. Add a controlled KeyCredentialLink, authenticate with PKINIT, and remove the value after validation.",
+        ),
+        "writealtsecurityidentities" => (
+            1,
+            "Certificate mapping write. Can map attacker-controlled certificates to the account; verify ADCS mapping policy and restore original values.",
+        ),
+        "writeuserparameters" => (
+            3,
+            "UserParameters write. Legacy execution or persistence surface; validate logon impact and avoid production user disruption.",
+        ),
+        "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => (
+            3,
+            "Password policy write. Domain-visible and potentially disruptive; document the original policy and prefer read-only proof unless approved.",
+        ),
+        "writegplink" => (
+            2,
+            "GPLink write. Link a controlled GPO to an OU only after checking inheritance, enforcement, security filtering, and rollback.",
+        ),
+        "enrollcertificate" => (
+            2,
+            "Certificate enrollment. Review template EKUs, subject supply, approval, and enrollment rights before requesting credentials.",
+        ),
+        "enrollonbehalfof" => (
+            1,
+            "Enrollment agent path. Request on behalf of another principal only after validating template constraints and approval settings.",
+        ),
+        "adcsesc1" => (
+            1,
+            "ESC1 — Enrollee supplies SAN. Request a certificate for a target user via this template and use it for authentication (PKINIT).",
+        ),
+        "adcsesc2" => (
+            1,
+            "ESC2 — Any purpose template. Template can be used for any purpose, including client authentication or as an enrollment agent.",
+        ),
+        "adcsesc3" => (
+            1,
+            "ESC3 — Enrollment agent abuse. Enroll for an agent certificate, then use it to request a certificate on behalf of a target user.",
+        ),
+        "adcsesc4" => (
+            1,
+            "ESC4 — Vulnerable template ACLs. Modify the template to enable SAN abuse (ESC1), enroll, then restore the original ACLs.",
+        ),
+        "adcsesc5" => (
+            1,
+            "ESC5 — Vulnerable CA object ACLs. CA configuration can be modified to enable other ESC paths; check security descriptor on the CA.",
+        ),
+        "adcsesc6" => (
+            1,
+            "ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 enabled. CA global flag allows SANs in all requests; request any template with a target SAN.",
+        ),
+        "adcsesc7" => (
+            1,
+            "ESC7 — Vulnerable CA permissions. Control over ManageCA/ManageCertificates allows adding officers or enabling SAN abuse flags.",
+        ),
+        "adcsesc8" => (
+            1,
+            "ESC8 — ADCS Web Enrollment relay. Relay an authenticated NTLM session to the web enrollment endpoint to obtain a certificate.",
+        ),
+        "adcsesc9" => (
+            1,
+            "ESC9 — No Security Extension (UPN poisoning). Victim with CT_FLAG_NO_SECURITY_EXTENSION template can be impersonated via UPN poisoning.",
+        ),
+        "adcsesc10" => (
+            1,
+            "ESC10 — Weak certificate mapping. Impersonation via accounts with weak mapping settings or registry-based enforcement disabled.",
+        ),
+        "adcsesc11" => (
+            1,
+            "ESC11 — NTLM relay to RPC. Relay NTLM to the ICertPassage RPC interface to obtain a certificate.",
+        ),
+        "adcsesc12" => (
+            1,
+            "ESC12 — Policy Server relay. Relay to the Certificate Enrollment Policy (CEP) service.",
+        ),
+        "adcsesc13" => (
+            1,
+            "ESC13 — OID-to-Group Link. Template issuance policy is linked to a privileged group, granting its membership upon authentication.",
+        ),
+        "adcsesc14" => (
+            1,
+            "ESC14 — altSecurityIdentities mapping. Add an RFC822/UPN mapping for a victim account, obtain a certificate, and restore mapping.",
+        ),
+        "adcsesc15" => (
+            1,
+            "ESC15 — Schema V1 EKU abuse. Exploit implicit SAN allowance in old templates for impersonation via PKINIT.",
+        ),
+        "adcsesc16" => (
+            1,
+            "ESC16 — NO_SECURITY_EXTENSION abuse. Poison UPN and request certificate via a template with security extensions disabled.",
+        ),
+        "writeproperty" => (
+            2,
+            "WriteProperty. Inspect the attribute GUID: abuse varies from SPN writes and delegation to shadow credentials and ADCS mapping.",
+        ),
         "getchanges" | "getchangesall" | "getchangesinfilteredset" | "dcsync" => (
             1,
             "Replication rights. Validate whether the principal can perform DCSync and treat the target as domain-impacting.",

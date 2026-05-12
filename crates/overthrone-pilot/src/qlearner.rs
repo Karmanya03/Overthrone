@@ -210,39 +210,41 @@ fn action_family_index(action: &PlannedAction) -> u8 {
         PlannedAction::CheckAdminAccess { .. } => 2,
         PlannedAction::Kerberoast { .. } => 3,
         PlannedAction::AsRepRoast { .. } => 4,
-        PlannedAction::ConstrainedDelegation { .. }
-        | PlannedAction::UnconstrainedDelegation { .. }
-        | PlannedAction::RbcdAttack { .. } => 5,
-        PlannedAction::PasswordSpray { .. } => 6,
-        PlannedAction::CrackHashes { .. } => 7,
+        PlannedAction::ConstrainedDelegation { .. } => 5,
+        PlannedAction::UnconstrainedDelegation { .. } => 6,
+        PlannedAction::RbcdAttack { .. } => 7,
+        PlannedAction::PasswordSpray { .. } => 8,
+        PlannedAction::CrackHashes { .. } => 9,
         PlannedAction::ExecCommand { .. }
         | PlannedAction::PsExec { .. }
         | PlannedAction::SmbExec { .. }
         | PlannedAction::WmiExec { .. }
-        | PlannedAction::WinRmExec { .. } => 8,
+        | PlannedAction::WinRmExec { .. } => 10,
         PlannedAction::DumpSam { .. }
         | PlannedAction::DumpLsa { .. }
-        | PlannedAction::DumpNtds { .. }
-        | PlannedAction::DumpDcc2 { .. }
-        | PlannedAction::DcsSync { .. } => 9,
-        PlannedAction::Coerce { .. } => 10,
-        PlannedAction::AdcsEnumerate
-        | PlannedAction::AdcsEsc1 { .. }
-        | PlannedAction::AdcsEsc2 { .. }
-        | PlannedAction::AdcsEsc3 { .. }
-        | PlannedAction::AdcsEsc4 { .. }
-        | PlannedAction::AdcsEsc5 { .. }
-        | PlannedAction::AdcsEsc6 { .. }
-        | PlannedAction::AdcsEsc7 { .. }
-        | PlannedAction::AdcsEsc8 { .. }
-        | PlannedAction::AdcsEsc9 { .. }
-        | PlannedAction::AdcsEsc10 { .. }
-        | PlannedAction::AdcsEsc11 { .. }
-        | PlannedAction::AdcsEsc12 { .. }
-        | PlannedAction::AdcsEsc13 { .. } => 11,
-        PlannedAction::ForgeGoldenTicket { .. } | PlannedAction::ForgeSilverTicket { .. } => 12,
-        PlannedAction::RunPlaybook { .. } => 13,
-        PlannedAction::Sleep { .. } | PlannedAction::Checkpoint { .. } => 14,
+        | PlannedAction::DumpDcc2 { .. } => 11,
+        PlannedAction::DumpNtds { .. } | PlannedAction::DcsSync { .. } => 12,
+        PlannedAction::Coerce { .. } => 13,
+        PlannedAction::AdcsEnumerate => 14,
+        PlannedAction::AdcsEsc1 { .. } => 15,
+        PlannedAction::AdcsEsc2 { .. } => 16,
+        PlannedAction::AdcsEsc3 { .. } => 17,
+        PlannedAction::AdcsEsc4 { .. } => 18,
+        PlannedAction::AdcsEsc5 { .. } => 19,
+        PlannedAction::AdcsEsc6 { .. } => 20,
+        PlannedAction::AdcsEsc7 { .. } => 21,
+        PlannedAction::AdcsEsc8 { .. } => 22,
+        PlannedAction::AdcsEsc9 { .. } => 23,
+        PlannedAction::AdcsEsc10 { .. } => 24,
+        PlannedAction::AdcsEsc11 { .. } => 25,
+        PlannedAction::AdcsEsc12 { .. } => 26,
+        PlannedAction::AdcsEsc13 { .. } => 27,
+        PlannedAction::ForgeGoldenTicket { .. } | PlannedAction::ForgeSilverTicket { .. } => 28,
+        PlannedAction::RunPlaybook { .. } => 29,
+        PlannedAction::Sleep { .. } | PlannedAction::Checkpoint { .. } => 30,
+        PlannedAction::AdcsEsc14 => 31,
+        PlannedAction::AdcsEsc15 { .. } => 32,
+        PlannedAction::AdcsEsc16 { .. } => 33,
     }
 }
 
@@ -253,15 +255,35 @@ fn action_family_label(index: u8) -> &'static str {
         2 => "admin-check",
         3 => "kerberoast",
         4 => "asrep",
-        5 => "delegation",
-        6 => "spray",
-        7 => "crack",
-        8 => "exec",
-        9 => "dump",
-        10 => "coerce",
-        11 => "adcs",
-        12 => "forge",
-        13 => "playbook",
+        5 => "constrained-delegation",
+        6 => "unconstrained-delegation",
+        7 => "rbcd",
+        8 => "spray",
+        9 => "crack",
+        10 => "exec",
+        11 => "host-dump",
+        12 => "ntds-dcsync",
+        13 => "coerce",
+        14 => "adcs-enum",
+        15 => "adcs-esc1",
+        16 => "adcs-esc2",
+        17 => "adcs-esc3",
+        18 => "adcs-esc4",
+        19 => "adcs-esc5",
+        20 => "adcs-esc6",
+        21 => "adcs-esc7",
+        22 => "adcs-esc8",
+        23 => "adcs-esc9",
+        24 => "adcs-esc10",
+        25 => "adcs-esc11",
+        26 => "adcs-esc12",
+        27 => "adcs-esc13",
+        28 => "forge",
+        29 => "playbook",
+        30 => "utility",
+        31 => "adcs-esc14",
+        32 => "adcs-esc15",
+        33 => "adcs-esc16",
         _ => "utility",
     }
 }
@@ -1032,7 +1054,7 @@ impl AdaptiveQLearner {
     pub fn session_summary(&self) -> String {
         let most_used = self.most_used_action();
         format!(
-            "Episode: {} | ε: {:.3} | States: {} | Most-used action: {:?}",
+            "Episode: {} | ε: {:.3} | States: {} | Most-used action: {:?} | Tool surfaces: powerview/pv, snaffler, guid",
             self.episode_count,
             self.epsilon,
             self.q_table.len(),
@@ -1264,6 +1286,10 @@ mod tests {
         let mut learner = AdaptiveQLearner::new(false, path.clone());
         assert_eq!(learner.q_table_size(), 0);
         assert_eq!(learner.episode_count(), 0);
+        let summary = learner.session_summary();
+        assert!(summary.contains("powerview/pv"));
+        assert!(summary.contains("snaffler"));
+        assert!(summary.contains("guid"));
 
         // Record a fake outcome
         let s1 = EngagementStateKey {
@@ -1319,5 +1345,12 @@ mod tests {
         assert_eq!(bucket_failures(0), 0);
         assert_eq!(bucket_failures(1), 1);
         assert_eq!(bucket_failures(5), 2);
+    }
+
+    #[test]
+    fn test_action_family_labels_cover_esc14_to_esc16() {
+        assert_eq!(action_family_label(31), "adcs-esc14");
+        assert_eq!(action_family_label(32), "adcs-esc15");
+        assert_eq!(action_family_label(33), "adcs-esc16");
     }
 }

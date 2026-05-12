@@ -654,12 +654,16 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         // ── Q-state display (before decision) ──
         #[cfg(feature = "qlearn")]
         if let (Some(ql), Some(key)) = (&qlearner, &pre_state_key) {
+            let state_snapshot = AdaptiveQLearner::format_state_snapshot(key, ql.epsilon());
             println!(
                 "  {}  {} state={{{}}}",
                 "│".dimmed(),
                 "[QL]".magenta().bold(),
-                AdaptiveQLearner::format_state_snapshot(key, ql.epsilon()).dimmed(),
+                state_snapshot.dimmed(),
             );
+            if let Some(writer) = &trail {
+                writer.append_decision("QL state", state_snapshot);
+            }
         }
 
         // ── Decide next action ──
@@ -677,12 +681,16 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         if let Some(ref ql) = qlearner
             && let Some((action, q_val, exploring)) = ql.last_decision_meta()
         {
+            let decision_snapshot = AdaptiveQLearner::format_decision(action, *q_val, *exploring);
             println!(
                 "  {}  {} → {}",
                 "│".dimmed(),
                 "[QL]".magenta().bold(),
-                AdaptiveQLearner::format_decision(action, *q_val, *exploring).cyan(),
+                decision_snapshot.cyan(),
             );
+            if let Some(writer) = &trail {
+                writer.append_decision("QL decision", decision_snapshot);
+            }
         }
 
         // ── Record Q-learning outcome + display reward ──
@@ -700,6 +708,8 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 ql.consecutive_failures(),
             );
             ql.record_outcome(pre_key, &action, reward, &post_key);
+            let reward_snapshot =
+                format!("reward={:+.1} table={} states", reward, ql.q_table_size());
 
             println!(
                 "  {}  {} reward={:+.1}  table={} states",
@@ -708,6 +718,9 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 reward,
                 ql.q_table_size(),
             );
+            if let Some(writer) = &trail {
+                writer.append_decision("QL reward", reward_snapshot);
+            }
         }
 
         // ── Handle decision ──
@@ -873,14 +886,16 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let da_achieved = final_status.is_success()
         || state.has_domain_admin
         || matches!(final_status, GoalStatus::Achieved);
+    let mut final_summary = format!(
+        "Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds. Final status: `{:?}`.",
+        steps_executed, steps_succeeded, steps_failed, duration_secs, final_status
+    );
+    #[cfg(feature = "qlearn")]
+    if let Some(ref ql) = qlearner {
+        final_summary.push_str(&format!(" Q-learner: {}", ql.session_summary()));
+    }
     if let Some(writer) = &trail {
-        writer.append_final(
-            &state,
-            format!(
-                "Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds. Final status: `{:?}`.",
-                steps_executed, steps_succeeded, steps_failed, duration_secs, final_status
-            ),
-        );
+        writer.append_final(&state, final_summary);
     }
 
     println!(

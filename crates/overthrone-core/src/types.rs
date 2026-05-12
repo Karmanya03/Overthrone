@@ -393,6 +393,14 @@ pub enum EscVulnerability {
     ESC6,
     ESC7,
     ESC8,
+    ESC9,
+    ESC10,
+    ESC11,
+    ESC12,
+    ESC13,
+    ESC14,
+    ESC15,
+    ESC16,
 }
 
 impl std::fmt::Display for EscVulnerability {
@@ -406,6 +414,17 @@ impl std::fmt::Display for EscVulnerability {
             Self::ESC6 => write!(f, "ESC6 - EDITF_ATTRIBUTESUBJECTALTNAME2 flag"),
             Self::ESC7 => write!(f, "ESC7 - Vulnerable CA ACLs"),
             Self::ESC8 => write!(f, "ESC8 - NTLM relay to HTTP enrollment"),
+            Self::ESC9 => write!(
+                f,
+                "ESC9 - No Security Extension (CT_FLAG_NO_SECURITY_EXTENSION)"
+            ),
+            Self::ESC10 => write!(f, "ESC10 - Weak Certificate Mapping"),
+            Self::ESC11 => write!(f, "ESC11 - NTLM relay to ICPR"),
+            Self::ESC12 => write!(f, "ESC12 - CA private key exfiltration"),
+            Self::ESC13 => write!(f, "ESC13 - Issuance Policy OID linked to group"),
+            Self::ESC14 => write!(f, "ESC14 - Certificate mapping / altSecurityIdentities"),
+            Self::ESC15 => write!(f, "ESC15 - Schema V1 enrollee-supplied subject"),
+            Self::ESC16 => write!(f, "ESC16 - CA security extension disabled"),
         }
     }
 }

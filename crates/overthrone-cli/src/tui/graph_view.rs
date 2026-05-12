@@ -80,7 +80,24 @@ pub fn edge_color(edge_type: &EdgeType, highlighted: bool) -> Color {
 
         EdgeType::GpoLink => Color::Green,
 
-        EdgeType::Custom(_) => Color::Gray,
+        EdgeType::AdcsEsc1
+        | EdgeType::AdcsEsc2
+        | EdgeType::AdcsEsc3
+        | EdgeType::AdcsEsc4
+        | EdgeType::AdcsEsc5
+        | EdgeType::AdcsEsc6
+        | EdgeType::AdcsEsc7
+        | EdgeType::AdcsEsc8
+        | EdgeType::AdcsEsc9
+        | EdgeType::AdcsEsc10
+        | EdgeType::AdcsEsc11
+        | EdgeType::AdcsEsc12
+        | EdgeType::AdcsEsc13
+        | EdgeType::AdcsEsc14
+        | EdgeType::AdcsEsc15
+        | EdgeType::AdcsEsc16 => Color::LightRed,
+
+        EdgeType::Custom(name) => edge_color_by_name(name),
     }
 }
 
@@ -111,24 +128,51 @@ pub fn node_color(node_type: &NodeType) -> Color {
 
 /// Derive a display colour from an edge-type name string.
 /// Used in the statistics view where we only have `&str`, not `&EdgeType`.
+fn normalized_edge_name(name: &str) -> String {
+    name.trim()
+        .trim_start_matches("Custom(")
+        .trim_end_matches(')')
+        .replace([' ', '-', '_'], "")
+        .to_ascii_lowercase()
+}
+
 fn edge_color_by_name(name: &str) -> Color {
-    match name {
-        "AdminTo" | "AllowedToAct" => Color::Red,
-        "GenericAll" | "WriteDacl" | "WriteOwner" | "GenericWrite" | "Owns" => Color::LightRed,
-        "HasSession" | "HasSpn" | "DontReqPreauth" | "AddMembers" | "AddSelf" => Color::Yellow,
-        "CanRDP" | "SQLAdmin" => Color::Cyan,
-        "CanPSRemote" | "ExecuteDCOM" => Color::LightRed,
-        "ForceChangePassword"
-        | "DcSync"
-        | "GetChanges"
-        | "GetChangesAll"
-        | "AllowedToDelegate"
-        | "ReadLapsPassword"
-        | "ReadGmsaPassword"
-        | "HasSidHistory" => Color::Magenta,
-        "GpoLink" => Color::Green,
-        "TrustedBy" => Color::LightMagenta,
-        "MemberOf" | "Contains" => Color::DarkGray,
+    match normalized_edge_name(name).as_str() {
+        "adminto" | "allowedtoact" | "addallowedtoact" => Color::Red,
+        "genericall"
+        | "writedacl"
+        | "writeowner"
+        | "genericwrite"
+        | "owns"
+        | "allextendedrights"
+        | "writekeycredentiallink"
+        | "writemsdskeycredentiallink"
+        | "addkeycredentiallink"
+        | "writealtsecurityidentities"
+        | "enrollcertificate"
+        | "enrollonbehalfof" => Color::LightRed,
+        "hassession" | "hasspn" | "dontreqpreauth" | "addmembers" | "addself" | "writeself" => {
+            Color::Yellow
+        }
+        "canrdp" | "sqladmin" => Color::Cyan,
+        "canpsremote" | "executedcom" => Color::LightRed,
+        "forcechangepassword"
+        | "dcsync"
+        | "getchanges"
+        | "getchangesall"
+        | "getchangesinfilteredset"
+        | "allowedtodelegate"
+        | "writeallowedtodelegateto"
+        | "readlapspassword"
+        | "readlapspasswordexpiry"
+        | "readlapsencryptedpassword"
+        | "readgmsapassword"
+        | "hassidhistory"
+        | "writespn"
+        | "writeserviceprincipalname" => Color::Magenta,
+        "gpolink" | "gplink" | "writegplink" | "gpoadmin" | "gpocontributor" => Color::Green,
+        "trustedby" | "trustedtoauth" => Color::LightMagenta,
+        "memberof" | "contains" | "createchild" => Color::DarkGray,
         _ => Color::Gray,
     }
 }
@@ -188,8 +232,95 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::TrustedBy => {
             Some("Cross-domain trust — SID injection / trust escalation potential")
         }
+        EdgeType::AdcsEsc1 | EdgeType::AdcsEsc6 | EdgeType::AdcsEsc16 => {
+            Some("ADCS: Impersonate any user via SAN / UPN poisoning")
+        }
+        EdgeType::AdcsEsc3 => Some("ADCS: Enrollment agent path — request on behalf of others"),
+        EdgeType::AdcsEsc4 => Some("ADCS: Template modification — grant yourself enroll rights"),
+        EdgeType::AdcsEsc9 | EdgeType::AdcsEsc15 => {
+            Some("ADCS: No-security-extension abuse / UPN poisoning")
+        }
+        EdgeType::AdcsEsc14 => Some("ADCS: altSecurityIdentities mapping abuse"),
+        EdgeType::AdcsEsc2
+        | EdgeType::AdcsEsc5
+        | EdgeType::AdcsEsc7
+        | EdgeType::AdcsEsc8
+        | EdgeType::AdcsEsc10
+        | EdgeType::AdcsEsc11
+        | EdgeType::AdcsEsc12
+        | EdgeType::AdcsEsc13 => Some("ADCS: Configuration-based certificate abuse path"),
+
         // Non-abusable traversal / membership edges — no abuse note
-        EdgeType::MemberOf | EdgeType::Contains | EdgeType::Custom(_) => None,
+        EdgeType::Custom(name) => edge_abuse_info_by_name(name),
+        EdgeType::MemberOf | EdgeType::Contains => None,
+    }
+}
+
+fn edge_abuse_info_by_name(name: &str) -> Option<&'static str> {
+    match normalized_edge_name(name).as_str() {
+        "allextendedrights" => Some(
+            "AllExtendedRights - on users this often enables password reset; on domains confirm replication rights before DCSync.",
+        ),
+        "createchild" => Some(
+            "CreateChild - can create objects in the container/OU; check machine-account, group, and policy abuse scope.",
+        ),
+        "writeself" => Some(
+            "WriteSelf - validated self-write; commonly abused for group self-add or targeted attribute updates.",
+        ),
+        "readlapspasswordexpiry" | "readlapsencryptedpassword" => Some(
+            "LAPS metadata/encrypted material - pair with DPAPI/LAPS decryption capability and host targeting rules.",
+        ),
+        "writespn" | "writeserviceprincipalname" => Some(
+            "SPN write - set a controlled SPN for targeted Kerberoasting, then remove it after ticket collection.",
+        ),
+        "writeallowedtodelegateto" => Some(
+            "Delegation write - change msDS-AllowedToDelegateTo, then test only the intended S4U service path.",
+        ),
+        "addallowedtoact" => Some(
+            "RBCD write - add msDS-AllowedToActOnBehalfOfOtherIdentity for a controlled computer account.",
+        ),
+        "writeaccountrestrictions" => Some(
+            "Account restrictions write - may enable delegation or auth-policy changes depending on target class.",
+        ),
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => Some(
+            "Logon/profile script write - code execution path that is visible; keep payload and rollback tightly scoped.",
+        ),
+        "writednshostname" => Some(
+            "DNS hostname write - validate SPN/DNS side effects before using for delegation or relay chains.",
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => Some(
+            "Shadow credentials - add a controlled KeyCredentialLink, authenticate with PKINIT, then remove the value.",
+        ),
+        "writealtsecurityidentities" => Some(
+            "Certificate mapping write - can map an attacker certificate to the account; verify ADCS mapping policy first.",
+        ),
+        "writeuserparameters" => Some(
+            "UserParameters write - legacy attribute execution or persistence surface; validate client logon impact.",
+        ),
+        "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => Some(
+            "Password policy write - domain-impacting control; document original policy and avoid disruptive changes.",
+        ),
+        "writegplink" => Some(
+            "GPLink write - link a controlled GPO to an OU; confirm security filtering, inheritance, and rollback.",
+        ),
+        "enrollcertificate" => Some(
+            "Certificate enrollment - inspect template EKUs, subject supply, manager approval, and enrollment agent scope.",
+        ),
+        "enrollonbehalfof" => Some(
+            "Enrollment-agent path - request on behalf of another principal only after validating template constraints.",
+        ),
+        "writeproperty" => Some(
+            "WriteProperty - inspect the exact attribute GUID; abuse varies from SPN and delegation to ADCS mapping.",
+        ),
+        _ => None,
     }
 }
 
@@ -220,7 +351,62 @@ fn edge_severity(edge_type: &EdgeType) -> u8 {
         | EdgeType::HasSession
         | EdgeType::HasSidHistory => 3,
         EdgeType::HasSpn | EdgeType::DontReqPreauth => 4,
-        EdgeType::MemberOf | EdgeType::Contains | EdgeType::Custom(_) => 5,
+        EdgeType::AdcsEsc1
+        | EdgeType::AdcsEsc2
+        | EdgeType::AdcsEsc3
+        | EdgeType::AdcsEsc4
+        | EdgeType::AdcsEsc5
+        | EdgeType::AdcsEsc6
+        | EdgeType::AdcsEsc7
+        | EdgeType::AdcsEsc8
+        | EdgeType::AdcsEsc9
+        | EdgeType::AdcsEsc10
+        | EdgeType::AdcsEsc11
+        | EdgeType::AdcsEsc12
+        | EdgeType::AdcsEsc13
+        | EdgeType::AdcsEsc14
+        | EdgeType::AdcsEsc15
+        | EdgeType::AdcsEsc16 => 1,
+        EdgeType::Custom(name) => edge_severity_by_name(name),
+        EdgeType::MemberOf | EdgeType::Contains => 5,
+    }
+}
+
+fn edge_severity_by_name(name: &str) -> u8 {
+    match normalized_edge_name(name).as_str() {
+        "allextendedrights"
+        | "writekeycredentiallink"
+        | "writemsdskeycredentiallink"
+        | "addkeycredentiallink"
+        | "writealtsecurityidentities"
+        | "addallowedtoact"
+        | "writeallowedtodelegateto"
+        | "enrollonbehalfof" => 1,
+        "writeself"
+        | "writespn"
+        | "writeserviceprincipalname"
+        | "readlapspasswordexpiry"
+        | "readlapsencryptedpassword"
+        | "writeaccountrestrictions"
+        | "writelogonscript"
+        | "writeprofilepath"
+        | "writescriptpath"
+        | "writegplink"
+        | "enrollcertificate"
+        | "writeproperty" => 2,
+        "createchild"
+        | "writednshostname"
+        | "writeuserparameters"
+        | "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => 3,
+        _ => 4,
     }
 }
 
@@ -292,7 +478,91 @@ fn edge_operator_note(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::HasSidHistory => Some(
             "Operator note: validate effective SIDHistory membership and cross-domain side effects.",
         ),
-        EdgeType::MemberOf | EdgeType::Contains | EdgeType::Custom(_) => None,
+        EdgeType::AdcsEsc1
+        | EdgeType::AdcsEsc2
+        | EdgeType::AdcsEsc3
+        | EdgeType::AdcsEsc4
+        | EdgeType::AdcsEsc5
+        | EdgeType::AdcsEsc6
+        | EdgeType::AdcsEsc7
+        | EdgeType::AdcsEsc8
+        | EdgeType::AdcsEsc9
+        | EdgeType::AdcsEsc10
+        | EdgeType::AdcsEsc11
+        | EdgeType::AdcsEsc12
+        | EdgeType::AdcsEsc13
+        | EdgeType::AdcsEsc14
+        | EdgeType::AdcsEsc15
+        | EdgeType::AdcsEsc16 => Some(
+            "Operator note: ADCS path; verify template EKUs, SAN policy, and enrollment agent requirements.",
+        ),
+        EdgeType::Custom(name) => edge_operator_note_by_name(name),
+        EdgeType::MemberOf | EdgeType::Contains => None,
+    }
+}
+
+fn edge_operator_note_by_name(name: &str) -> Option<&'static str> {
+    match normalized_edge_name(name).as_str() {
+        "allextendedrights" => Some(
+            "Operator note: resolve target class first; this can mean password reset, enrollment control, or replication impact.",
+        ),
+        "createchild" => Some(
+            "Operator note: create only disposable test objects and remove them; OU/container scope matters.",
+        ),
+        "writeself" => Some(
+            "Operator note: validated writes are attribute-specific; confirm member/self or SPN semantics before acting.",
+        ),
+        "readlapspasswordexpiry" | "readlapsencryptedpassword" => Some(
+            "Operator note: treat LAPS values as credential material and avoid repeated reads.",
+        ),
+        "writespn" | "writeserviceprincipalname" => Some(
+            "Operator note: set one temporary SPN, request one ticket, then restore the original SPN set.",
+        ),
+        "writeallowedtodelegateto" => Some(
+            "Operator note: record the original delegation list and add only the specific service needed.",
+        ),
+        "addallowedtoact" => Some(
+            "Operator note: use a controlled computer account for RBCD and remove the ACE after validation.",
+        ),
+        "writeaccountrestrictions" => Some(
+            "Operator note: verify whether the write changes delegation, logon, or account policy behavior.",
+        ),
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => Some(
+            "Operator note: script/profile paths are visible execution surfaces; keep payloads minimal and reversible.",
+        ),
+        "writednshostname" => Some(
+            "Operator note: check DNS, SPN, and delegation side effects before modifying host identity fields.",
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => Some(
+            "Operator note: shadow credentials require exact original-value capture and cleanup after PKINIT.",
+        ),
+        "writealtsecurityidentities" => Some(
+            "Operator note: certificate mapping depends on domain mapping policy; capture and restore original values.",
+        ),
+        "writeuserparameters" => Some(
+            "Operator note: legacy user-parameter abuse can affect logon behavior; validate with a non-critical account first.",
+        ),
+        "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => Some(
+            "Operator note: password-policy changes are domain visible; prefer read-only proof unless explicitly approved.",
+        ),
+        "writegplink" => Some(
+            "Operator note: validate OU scope, inheritance, enforced links, and security filtering before a GPO change.",
+        ),
+        "enrollcertificate" | "enrollonbehalfof" => Some(
+            "Operator note: confirm template EKUs, subject requirements, approval, and enrollment-agent restrictions.",
+        ),
+        "writeproperty" => Some(
+            "Operator note: inspect the attribute GUID and map it to a precise primitive before taking action.",
+        ),
+        _ => None,
     }
 }
 

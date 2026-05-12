@@ -1496,6 +1496,16 @@ impl LdapSession {
         Ok(())
     }
 
+    /// Read a specific attribute from a DN
+    pub async fn read_attribute(&mut self, dn: &str, attr: &str) -> Result<Vec<String>> {
+        let entries = self.search_entries(dn, "(objectClass=*)", &[attr]).await?;
+        if let Some(entry) = entries.first() {
+            Ok(entry.attrs.get(attr).cloned().unwrap_or_default())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     // ═══════════════════════════════════════════════════════
     //  Raw Search Helper
     // ═══════════════════════════════════════════════════════

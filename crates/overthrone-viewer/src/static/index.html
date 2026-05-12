@@ -30,6 +30,9 @@
   --node-gpo: #d08cff;
   --node-ou: #ff7dbd;
   --node-cert: #49e4d6;
+  --graph-bg: #0b0b10;
+  --graph-ink: #f0f0f2;
+  --graph-ink-stroke: #0b0b12;
 }
 
 * { box-sizing: border-box; }
@@ -56,14 +59,14 @@ select {
 
 #app {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr) 380px;
   height: 100vh;
   min-height: 0;
   transition: grid-template-columns 0.25s ease;
 }
 
 #app.sidebar-collapsed {
-  grid-template-columns: 0px minmax(0, 1fr);
+  grid-template-columns: 0px minmax(0, 1fr) 380px;
 }
 
 #app.sidebar-collapsed #sidebar {
@@ -82,6 +85,43 @@ select {
   flex-direction: column;
   transition: width 0.25s ease, min-width 0.25s ease;
   overflow: hidden;
+}
+
+#details-sidebar {
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.details-header {
+  border-bottom: 1px solid var(--line);
+  padding: 16px 18px 12px;
+}
+
+.details-header h2 {
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.details-header p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 7px 0 0;
+}
+
+.details-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0 18px;
 }
 
 #sidebar-toggle {
@@ -668,7 +708,7 @@ input:disabled {
   top: 52px;
   right: 18px;
   z-index: 15;
-  background: rgba(5, 5, 5, 0.55);
+  background: rgba(13, 13, 15, 0.78);
   backdrop-filter: blur(6px);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -709,7 +749,7 @@ input:disabled {
 #graph-container {
   position: relative;
   min-width: 0;
-  background: #030303;
+  background: var(--graph-bg);
   overflow: hidden;
 }
 
@@ -771,7 +811,7 @@ input:disabled {
 .empty-card {
   width: min(460px, calc(100vw - 440px));
   border: 1px solid var(--line);
-  background: rgba(13, 13, 15, 0.72);
+  background: rgba(13, 13, 15, 0.86);
   border-radius: 8px;
   padding: 24px;
   text-align: center;
@@ -843,7 +883,8 @@ input:disabled {
 
 .link {
   fill: none;
-  stroke-opacity: 0.42;
+  stroke-opacity: 0.7;
+  stroke-linecap: round;
 }
 
 .link.highlighted {
@@ -855,10 +896,26 @@ input:disabled {
   opacity: 0.05;
 }
 
+.edge-label {
+  fill: var(--graph-ink);
+  font-size: 10px;
+  font-weight: 800;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: var(--graph-ink-stroke);
+  stroke-linejoin: round;
+  stroke-width: 4px;
+  text-anchor: middle;
+}
+
+.edge-label.dimmed {
+  opacity: 0.12;
+}
+
 .node-circle {
   cursor: pointer;
-  stroke: #f4f4f5;
-  stroke-width: 1.4px;
+  stroke: #030303;
+  stroke-width: 3px;
 }
 
 .node-circle.high-value {
@@ -873,8 +930,8 @@ input:disabled {
 
 .node-circle.selected {
   stroke: #fff;
-  stroke-width: 4px;
-  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.45));
+  stroke-width: 5px;
+  filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.42));
 }
 
 .node-circle.dimmed {
@@ -882,12 +939,12 @@ input:disabled {
 }
 
 .node-label {
-  fill: var(--text);
+  fill: var(--graph-ink);
   font-size: 12px;
   font-weight: 800;
   paint-order: stroke;
   pointer-events: none;
-  stroke: #030303;
+  stroke: var(--graph-ink-stroke);
   stroke-linejoin: round;
   stroke-width: 4px;
   text-anchor: middle;
@@ -895,6 +952,37 @@ input:disabled {
 
 .node-label.dimmed {
   opacity: 0.12;
+}
+
+.node-glyph {
+  fill: #030303;
+  font-size: 10px;
+  font-weight: 950;
+  pointer-events: none;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.node-glyph.dimmed,
+.node-badge.dimmed,
+.node-badge-text.dimmed {
+  opacity: 0.12;
+}
+
+.node-badge {
+  fill: #030303;
+  pointer-events: none;
+  stroke: #cfcfd2;
+  stroke-width: 1px;
+}
+
+.node-badge-text {
+  fill: #f7f7f8;
+  font-size: 9px;
+  font-weight: 950;
+  pointer-events: none;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 
 ::-webkit-scrollbar {
@@ -912,7 +1000,11 @@ input:disabled {
 
 @media (max-width: 980px) {
   #app {
-    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr) 320px;
+  }
+
+  #app.sidebar-collapsed {
+    grid-template-columns: 0px minmax(0, 1fr) 320px;
   }
 
   .stats-grid {
@@ -920,7 +1012,24 @@ input:disabled {
   }
 
   .empty-card {
-    width: min(420px, calc(100vw - 330px));
+    width: min(420px, calc(100vw - 620px));
+  }
+}
+
+@media (max-width: 760px) {
+  #app,
+  #app.sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #sidebar,
+  #app.sidebar-collapsed #sidebar,
+  #details-sidebar {
+    display: none;
+  }
+
+  .empty-card {
+    width: min(420px, calc(100vw - 40px));
   }
 }
 </style>
@@ -1031,17 +1140,6 @@ input:disabled {
         </div>
       </div>
 
-      <div class="collapse-panel" id="panel-detail">
-        <button class="collapse-header" onclick="togglePanel('panel-detail')">
-          <h2>Node Detail</h2>
-          <span class="collapse-chevron">▼</span>
-        </button>
-        <div class="collapse-body" id="node-detail">
-          <div class="detail-card">
-            <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
-          </div>
-        </div>
-      </div>
     </div>
   </aside>
 
@@ -1078,6 +1176,18 @@ input:disabled {
     </div>
     <div id="tooltip"></div>
   </main>
+
+  <aside id="details-sidebar">
+    <div class="details-header">
+      <h2>Node Detail</h2>
+      <p>Selection details stay visible while graph controls are collapsed.</p>
+    </div>
+    <div class="details-body" id="node-detail">
+      <div class="detail-card">
+        <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
+      </div>
+    </div>
+  </aside>
 </div>
 
 <script>
@@ -1089,6 +1199,7 @@ const NODE_COLORS = {
   GPO: '#d08cff',
   OU: '#ff7dbd',
   CertTemplate: '#49e4d6',
+  EnterpriseCA: '#49e4d6',
   Container: '#b5b5bc',
   Unknown: '#74747d',
 };
@@ -1102,10 +1213,16 @@ const EDGE_COLORS = {
   GenericWrite: '#f4c95d',
   WriteOwner: '#f4c95d',
   WriteDacl: '#f4c95d',
+  AllExtendedRights: '#f4c95d',
+  CreateChild: '#b5b5bc',
+  WriteSelf: '#f4c95d',
   ForceChangePassword: '#f4c95d',
   AddMembers: '#f4c95d',
+  AddSelf: '#f4c95d',
   AllowedToDelegate: '#d08cff',
   AllowedToAct: '#d08cff',
+  WriteAllowedToDelegateTo: '#d08cff',
+  AddAllowedToAct: '#d08cff',
   TrustedBy: '#ff7dbd',
   HasSpn: '#74747d',
   DontReqPreauth: '#74747d',
@@ -1114,8 +1231,36 @@ const EDGE_COLORS = {
   ExecuteDCOM: '#49e4d6',
   SQLAdmin: '#49e4d6',
   GpoLink: '#d08cff',
+  WriteGPLink: '#d08cff',
   Contains: '#b5b5bc',
   Owns: '#ff4d4d',
+  ReadLapsPassword: '#ff7dbd',
+  ReadLapsPasswordExpiry: '#ff7dbd',
+  ReadGmsaPassword: '#ff7dbd',
+  WriteSPN: '#ff7dbd',
+  WriteServicePrincipalName: '#ff7dbd',
+  WriteKeyCredentialLink: '#ff4d4d',
+  WriteMsDsKeyCredentialLink: '#ff4d4d',
+  AddKeyCredentialLink: '#ff4d4d',
+  WriteAltSecurityIdentities: '#ff4d4d',
+  EnrollCertificate: '#49e4d6',
+  EnrollOnBehalfOf: '#ff4d4d',
+  AdcsEsc1: '#ff4d4d',
+  AdcsEsc2: '#ff4d4d',
+  AdcsEsc3: '#ff4d4d',
+  AdcsEsc4: '#ff4d4d',
+  AdcsEsc5: '#ff4d4d',
+  AdcsEsc6: '#ff4d4d',
+  AdcsEsc7: '#ff4d4d',
+  AdcsEsc8: '#ff4d4d',
+  AdcsEsc9: '#ff4d4d',
+  AdcsEsc10: '#ff4d4d',
+  AdcsEsc11: '#ff4d4d',
+  AdcsEsc12: '#ff4d4d',
+  AdcsEsc13: '#ff4d4d',
+  AdcsEsc14: '#ff4d4d',
+  AdcsEsc15: '#ff4d4d',
+  AdcsEsc16: '#ff4d4d',
 };
 
 let graphData = null;
@@ -1131,6 +1276,7 @@ let g;
 let linkGroup;
 let nodeGroup;
 let labelGroup;
+let edgeLabelGroup;
 let zoomBehavior;
 let currentTransform = d3.zoomIdentity;
 
@@ -1147,6 +1293,7 @@ async function init() {
   svg.call(zoomBehavior);
   g = svg.append('g');
   linkGroup = g.append('g').attr('class', 'links');
+  edgeLabelGroup = g.append('g').attr('class', 'edge-labels');
   nodeGroup = g.append('g').attr('class', 'nodes');
   labelGroup = g.append('g').attr('class', 'labels');
 
@@ -1326,11 +1473,16 @@ function teardownGraph() {
     simulation = null;
   }
   linkGroup.selectAll('*').remove();
+  edgeLabelGroup.selectAll('*').remove();
   nodeGroup.selectAll('*').remove();
   labelGroup.selectAll('*').remove();
   window._graphNodes = null;
   window._graphLinks = null;
   window._graphLabels = null;
+  window._edgeLabels = null;
+  window._graphGlyphs = null;
+  window._nodeBadges = null;
+  window._nodeBadgeText = null;
   window._nodesMap = {};
 }
 
@@ -1553,11 +1705,13 @@ function renderGraph(data) {
   const links = data.edges
     .filter(edge => nodesMap[edge.source] && nodesMap[edge.target])
     .map(edge => {
-      nodesMap[edge.source].degree += 1;
-      nodesMap[edge.target].degree += 1;
+      const source = nodesMap[edge.source];
+      const target = nodesMap[edge.target];
+      source.degree += 1;
+      target.degree += 1;
       return {
-        source: edge.source,
-        target: edge.target,
+        source,
+        target,
         relationship: edge.relationship,
         cost: edge.cost,
         severity: edge.severity,
@@ -1566,43 +1720,7 @@ function renderGraph(data) {
       };
     });
 
-  // BloodHound-style hierarchical layout parameters
-  const distance = nodeCount > 5000 ? 260 : nodeCount > 1500 ? 220 : nodeCount > 450 ? 180 : 150;
-  const charge = nodeCount > 5000 ? -1200 : nodeCount > 1500 ? -900 : nodeCount > 450 ? -650 : -500;
-  const collidePad = nodeCount > 2500 ? 36 : nodeCount > 900 ? 30 : 24;
-
-  // Assign hierarchical layers based on node type (like BloodHound)
-  const typeLayer = { Domain: 0, OU: 1, GPO: 1, Group: 2, Computer: 3, CertTemplate: 3, EnterpriseCA: 3, User: 4 };
-  const layerSpacing = Math.max(180, height / 5);
-
-  // Group nodes by domain for horizontal spreading
-  const domains = [...new Set(nodes.map(n => n.domain || 'UNKNOWN'))];
-  const domainIndex = {};
-  domains.forEach((d, i) => { domainIndex[d] = i; });
-  const domainSpacing = Math.max(400, width / Math.max(1, domains.length));
-
-  nodes.forEach(n => {
-    const layer = typeLayer[n.type] !== undefined ? typeLayer[n.type] : 3;
-    const dIdx = domainIndex[n.domain || 'UNKNOWN'] || 0;
-    // Seed initial positions for hierarchy
-    n.x = width / 2 + (dIdx - (domains.length - 1) / 2) * domainSpacing + (Math.random() - 0.5) * 60;
-    n.y = 80 + layer * layerSpacing + (Math.random() - 0.5) * 40;
-  });
-
-  simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(d => distance + relationshipDistance(d.relationship)).strength(nodeCount > 3000 ? 0.08 : 0.15))
-    .force('charge', d3.forceManyBody().strength(charge).distanceMax(nodeCount > 3000 ? 1400 : 1000))
-    .force('collision', d3.forceCollide().radius(d => d.radius + collidePad + Math.min(88, d.display.length * 1.9)).iterations(nodeCount > 1500 ? 1 : 2))
-    .force('x', d3.forceX(d => {
-      const dIdx = domainIndex[d.domain || 'UNKNOWN'] || 0;
-      return width / 2 + (dIdx - (domains.length - 1) / 2) * domainSpacing;
-    }).strength(domains.length > 1 ? 0.12 : 0.03))
-    .force('y', d3.forceY(d => {
-      const layer = typeLayer[d.type] !== undefined ? typeLayer[d.type] : 3;
-      return 80 + layer * layerSpacing;
-    }).strength(0.15))
-    .alphaDecay(nodeCount > 3000 ? 0.06 : 0.035)
-    .velocityDecay(0.52);
+  computeHierarchicalLayout(nodes, links, width, height, data.hops || []);
 
   const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
   defs.selectAll('*').remove();
@@ -1616,16 +1734,25 @@ function renderGraph(data) {
     .attr('orient', 'auto')
     .append('path')
     .attr('d', 'M0,-4L8,0L0,4')
-    .attr('fill', '#74747d');
+    .attr('fill', '#4d4d55');
 
-  const linkSel = linkGroup.selectAll('line')
+  const linkSel = linkGroup.selectAll('path')
     .data(links, d => d.key)
-    .join('line')
+    .join('path')
     .attr('class', 'link')
     .attr('stroke', d => EDGE_COLORS[d.relationship] || '#44444d')
     .attr('stroke-width', d => importantEdge(d.relationship) ? 2.4 : 1.3)
     .attr('stroke-dasharray', d => d.relationship === 'MemberOf' || d.relationship === 'Contains' ? '5,4' : null)
+    .attr('d', edgePath)
     .attr('marker-end', 'url(#arrow)');
+
+  const edgeLabelData = links.filter(edge => shouldCreateEdgeLabel(edge, links.length, nodeCount));
+  const edgeLabelSel = edgeLabelGroup.selectAll('text')
+    .data(edgeLabelData, d => d.key)
+    .join('text')
+    .attr('class', 'edge-label')
+    .attr('transform', edgeLabelTransform)
+    .text(d => d.relationship);
 
   const nodeSel = nodeGroup.selectAll('circle')
     .data(nodes, d => d.id)
@@ -1637,6 +1764,8 @@ function renderGraph(data) {
       return cls;
     })
     .attr('r', d => d.radius)
+    .attr('cx', d => d.x)
+    .attr('cy', d => d.y)
     .attr('fill', d => NODE_COLORS[d.type] || NODE_COLORS.Unknown)
     .on('click', (event, d) => {
       event.stopPropagation();
@@ -1650,67 +1779,225 @@ function renderGraph(data) {
       .on('drag', dragged)
       .on('end', dragEnded));
 
+  const glyphNodes = nodes.filter(node => shouldCreateGlyph(node, nodeCount));
+  const glyphSel = nodeGroup.selectAll('text.node-glyph')
+    .data(glyphNodes, d => d.id)
+    .join('text')
+    .attr('class', 'node-glyph')
+    .attr('x', d => d.x)
+    .attr('y', d => d.y + 0.5)
+    .text(nodeGlyph);
+
+  const badgeNodes = nodes.filter(node => nodeBadgeText(node));
+  const badgeSel = nodeGroup.selectAll('circle.node-badge')
+    .data(badgeNodes, d => d.id)
+    .join('circle')
+    .attr('class', 'node-badge')
+    .attr('r', 9)
+    .attr('cx', d => d.x + d.radius * 0.82)
+    .attr('cy', d => d.y + d.radius * 0.82);
+
+  const badgeTextSel = nodeGroup.selectAll('text.node-badge-text')
+    .data(badgeNodes, d => d.id)
+    .join('text')
+    .attr('class', 'node-badge-text')
+    .attr('x', d => d.x + d.radius * 0.82)
+    .attr('y', d => d.y + d.radius * 0.82 + 0.5)
+    .text(nodeBadgeText);
+
   const labelNodes = nodes.filter(node => shouldCreateLabel(node, nodeCount));
   const labelSel = labelGroup.selectAll('text')
     .data(labelNodes, d => d.id)
     .join('text')
     .attr('class', 'node-label')
     .attr('dy', d => d.radius + 18)
+    .attr('x', d => d.x)
+    .attr('y', d => d.y)
     .text(d => d.display)
     .style('font-size', d => d.type === 'Domain' ? '14px' : '12px');
-
-  function ticked() {
-    linkSel
-      .attr('x1', d => d.source.x)
-      .attr('y1', d => d.source.y)
-      .attr('x2', d => d.target.x)
-      .attr('y2', d => d.target.y);
-
-    nodeSel
-      .attr('cx', d => d.x)
-      .attr('cy', d => d.y);
-
-    labelSel
-      .attr('x', d => d.x)
-      .attr('y', d => d.y);
-  }
-
-  const warmupTicks = nodeCount > 6000 ? 240 : nodeCount > 2500 ? 190 : nodeCount > 700 ? 130 : 70;
-  simulation.stop();
-  for (let i = 0; i < warmupTicks; i += 1) {
-    simulation.tick();
-  }
-  ticked();
-
-  if (nodeCount <= 800) {
-    simulation.on('tick', ticked).restart();
-    document.getElementById('render-badge').textContent = 'Live layout';
-  } else {
-    document.getElementById('render-badge').textContent = 'Optimized static layout (Canvas recommended for >5k)';
-  }
 
   window._graphNodes = nodeSel;
   window._graphLinks = linkSel;
   window._graphLabels = labelSel;
+  window._edgeLabels = edgeLabelSel;
+  window._graphGlyphs = glyphSel;
+  window._nodeBadges = badgeSel;
+  window._nodeBadgeText = badgeTextSel;
   window._nodesMap = nodesMap;
+  document.getElementById('render-badge').textContent = nodeCount > 2500
+    ? 'Fast hierarchical layout'
+    : 'Hierarchical layout';
   fitGraph();
   refreshLabelVisibility();
 }
 
 function nodeRadius(node, total) {
-  const base = total > 5000 ? 5 : total > 1500 ? 6 : total > 450 ? 8 : 10;
-  if (node.type === 'Domain') return base + 9;
-  if (node.high_value) return base + 6;
+  const base = total > 5000 ? 5 : total > 1500 ? 6 : total > 450 ? 8 : 11;
+  if (node.type === 'Domain') return base + 8;
+  if (node.high_value) return base + 5;
   if (node.owned) return base + 5;
-  if (node.type === 'Group') return base + 3;
+  if (node.type === 'Group') return base + 4;
   if (node.type === 'Computer') return base + 2;
   return base;
 }
 
-function relationshipDistance(relationship) {
-  if (relationship === 'MemberOf' || relationship === 'Contains') return 42;
-  if (importantEdge(relationship)) return 64;
-  return 28;
+function computeHierarchicalLayout(nodes, links, width, height, hops) {
+  const incoming = new Map(nodes.map(node => [node.id, 0]));
+  const outgoing = new Map(nodes.map(node => [node.id, []]));
+  links.forEach(link => {
+    incoming.set(link.target.id, (incoming.get(link.target.id) || 0) + 1);
+    if (outgoing.has(link.source.id)) {
+      outgoing.get(link.source.id).push(link.target.id);
+    }
+  });
+
+  const rank = new Map();
+  hops.forEach((hop, index) => {
+    const sourceRank = Math.min(rank.get(hop.source_id) ?? index, index);
+    rank.set(hop.source_id, sourceRank);
+    rank.set(hop.target_id, Math.max(rank.get(hop.target_id) ?? index + 1, sourceRank + 1));
+  });
+
+  const roots = nodes
+    .filter(node => {
+      const sourceLike = node.type === 'User' || node.owned || incoming.get(node.id) === 0;
+      const rightSideAnchor = node.type === 'Domain' || node.type === 'EnterpriseCA';
+      return sourceLike && !rightSideAnchor && node.degree > 0;
+    })
+    .sort(compareNodesForLayout);
+
+  if (!rank.size) {
+    roots.slice(0, Math.max(1, Math.min(80, roots.length))).forEach(node => rank.set(node.id, 0));
+  }
+
+  const queue = [...rank.keys()];
+  while (queue.length) {
+    const current = queue.shift();
+    const currentRank = rank.get(current) ?? 0;
+    (outgoing.get(current) || []).forEach(next => {
+      const nextRank = currentRank + 1;
+      if (!rank.has(next) || rank.get(next) < nextRank) {
+        rank.set(next, nextRank);
+        if (nextRank < 16) queue.push(next);
+      }
+    });
+  }
+
+  nodes.forEach(node => {
+    if (!rank.has(node.id)) {
+      rank.set(node.id, fallbackRank(node));
+    }
+  });
+
+  const ranks = [...rank.values()];
+  const minRank = Math.min(...ranks);
+  if (minRank > 0) {
+    nodes.forEach(node => rank.set(node.id, rank.get(node.id) - minRank));
+  }
+
+  const layers = new Map();
+  nodes.forEach(node => {
+    const layer = Math.max(0, Math.min(18, rank.get(node.id) || 0));
+    node.layer = layer;
+    if (!layers.has(layer)) layers.set(layer, []);
+    layers.get(layer).push(node);
+  });
+
+  const layerCount = Math.max(...layers.keys()) + 1;
+  const layerGap = nodes.length > 5000 ? 165 : nodes.length > 2000 ? 185 : nodes.length > 800 ? 210 : 250;
+  const verticalGap = nodes.length > 5000 ? 36 : nodes.length > 2000 ? 44 : nodes.length > 800 ? 56 : 86;
+  const left = 110;
+  const top = 90;
+  const bottom = 130;
+  const virtualHeight = Math.max(
+    height,
+    ...Array.from(layers.values()).map(layer => top + bottom + Math.max(1, layer.length - 1) * verticalGap)
+  );
+
+  Array.from(layers.entries())
+    .sort(([leftRank], [rightRank]) => leftRank - rightRank)
+    .forEach(([layerIndex, layerNodes]) => {
+      layerNodes.sort(compareNodesForLayout);
+      const layerHeight = Math.max(1, (layerNodes.length - 1) * verticalGap);
+      const startY = Math.max(top, (virtualHeight - layerHeight) / 2);
+      layerNodes.forEach((node, index) => {
+        const branchOffset = layerNodes.length > 8 ? ((index % 2) - 0.5) * 18 : 0;
+        node.x = left + layerIndex * layerGap + branchOffset;
+        node.y = startY + index * verticalGap;
+      });
+    });
+
+  const virtualWidth = Math.max(width, left * 2 + Math.max(1, layerCount - 1) * layerGap);
+  nodes.forEach(node => {
+    node.x = Math.max(70, Math.min(virtualWidth - 70, node.x));
+    node.y = Math.max(60, Math.min(virtualHeight - 60, node.y));
+  });
+}
+
+function compareNodesForLayout(a, b) {
+  if (a.high_value !== b.high_value) return a.high_value ? -1 : 1;
+  if (a.owned !== b.owned) return a.owned ? -1 : 1;
+  const typeDelta = typeOrder(a.type) - typeOrder(b.type);
+  if (typeDelta) return typeDelta;
+  const domainDelta = String(a.domain || '').localeCompare(String(b.domain || ''));
+  if (domainDelta) return domainDelta;
+  return String(a.display || a.label || a.id).localeCompare(String(b.display || b.label || b.id));
+}
+
+function typeOrder(type) {
+  const order = {
+    User: 0,
+    Group: 1,
+    Computer: 2,
+    OU: 3,
+    GPO: 4,
+    CertTemplate: 5,
+    EnterpriseCA: 6,
+    Domain: 7,
+  };
+  return order[type] ?? 8;
+}
+
+function fallbackRank(node) {
+  const rank = {
+    User: 0,
+    Group: 1,
+    Computer: 2,
+    OU: 2,
+    GPO: 3,
+    CertTemplate: 3,
+    EnterpriseCA: 4,
+    Domain: 4,
+  };
+  return rank[node.type] ?? 2;
+}
+
+function edgePath(edge) {
+  const sx = edge.source.x;
+  const sy = edge.source.y;
+  const tx = edge.target.x;
+  const ty = edge.target.y;
+  const direction = tx >= sx ? 1 : -1;
+  const curve = Math.max(80, Math.abs(tx - sx) * 0.48);
+  return `M${sx},${sy} C${sx + direction * curve},${sy} ${tx - direction * curve},${ty} ${tx},${ty}`;
+}
+
+function edgeLabelTransform(edge) {
+  const mx = (edge.source.x + edge.target.x) / 2;
+  const my = (edge.source.y + edge.target.y) / 2 - 6;
+  let angle = Math.atan2(edge.target.y - edge.source.y, edge.target.x - edge.source.x) * 180 / Math.PI;
+  if (angle > 90 || angle < -90) angle += 180;
+  return `translate(${mx},${my}) rotate(${angle})`;
+}
+
+function redrawGraphPositions() {
+  if (window._graphLinks) window._graphLinks.attr('d', edgePath);
+  if (window._edgeLabels) window._edgeLabels.attr('transform', edgeLabelTransform);
+  if (window._graphNodes) window._graphNodes.attr('cx', d => d.x).attr('cy', d => d.y);
+  if (window._graphGlyphs) window._graphGlyphs.attr('x', d => d.x).attr('y', d => d.y + 0.5);
+  if (window._graphLabels) window._graphLabels.attr('x', d => d.x).attr('y', d => d.y);
+  if (window._nodeBadges) window._nodeBadges.attr('cx', d => d.x + d.radius * 0.82).attr('cy', d => d.y + d.radius * 0.82);
+  if (window._nodeBadgeText) window._nodeBadgeText.attr('x', d => d.x + d.radius * 0.82).attr('y', d => d.y + d.radius * 0.82 + 0.5);
 }
 
 function importantEdge(relationship) {
@@ -1718,8 +2005,17 @@ function importantEdge(relationship) {
 }
 
 function shouldCreateLabel(node, total) {
-  if (total <= 1500) return true;
+  if (total <= 1000) return true;
   return node.high_value || node.owned || node.type === 'Domain' || node.degree >= 14;
+}
+
+function shouldCreateGlyph(node, total) {
+  return total <= 5000 || node.high_value || node.owned || node.type === 'Domain';
+}
+
+function shouldCreateEdgeLabel(edge, edgeCount, nodeCount) {
+  if (edgeCount <= 900 && nodeCount <= 1200) return true;
+  return importantEdge(edge.relationship) && edgeCount <= 2600;
 }
 
 function shouldShowLabel(node, scale) {
@@ -1735,6 +2031,30 @@ function refreshLabelVisibility() {
   if (!window._graphLabels) return;
   const scale = currentTransform.k || 1;
   window._graphLabels.style('display', d => shouldShowLabel(d, scale) ? null : 'none');
+  if (window._edgeLabels) {
+    window._edgeLabels.style('display', d => (scale >= 0.55 || importantEdge(d.relationship)) ? null : 'none');
+  }
+}
+
+function nodeGlyph(node) {
+  const glyphs = {
+    User: 'U',
+    Computer: 'C',
+    Group: 'G',
+    Domain: 'D',
+    GPO: 'P',
+    OU: 'OU',
+    CertTemplate: 'T',
+    EnterpriseCA: 'CA',
+    Container: 'O',
+  };
+  return glyphs[node.type] || '?';
+}
+
+function nodeBadgeText(node) {
+  if (node.type !== 'Group' && !node.high_value && !node.owned) return '';
+  if (node.degree < 3 && !node.high_value && !node.owned) return '';
+  return String(Math.min(99, Math.max(node.degree, node.high_value ? 1 : 0)));
 }
 
 function nodeDisplayName(node) {
@@ -1772,6 +2092,18 @@ function selectNode(node) {
     .classed('dimmed', item => !connectedEdges.has(item.key))
     .classed('highlighted', item => connectedEdges.has(item.key));
   window._graphLabels.classed('dimmed', item => !connectedNodes.has(item.id));
+  if (window._edgeLabels) {
+    window._edgeLabels.classed('dimmed', item => !connectedEdges.has(item.key));
+  }
+  if (window._graphGlyphs) {
+    window._graphGlyphs.classed('dimmed', item => !connectedNodes.has(item.id));
+  }
+  if (window._nodeBadges) {
+    window._nodeBadges.classed('dimmed', item => !connectedNodes.has(item.id));
+  }
+  if (window._nodeBadgeText) {
+    window._nodeBadgeText.classed('dimmed', item => !connectedNodes.has(item.id));
+  }
   showNodeDetail(node.id);
 }
 
@@ -1786,6 +2118,18 @@ function deselectAll() {
   if (window._graphLabels) {
     window._graphLabels.classed('dimmed', false);
   }
+  if (window._edgeLabels) {
+    window._edgeLabels.classed('dimmed', false);
+  }
+  if (window._graphGlyphs) {
+    window._graphGlyphs.classed('dimmed', false);
+  }
+  if (window._nodeBadges) {
+    window._nodeBadges.classed('dimmed', false);
+  }
+  if (window._nodeBadgeText) {
+    window._nodeBadgeText.classed('dimmed', false);
+  }
   if (graphData) {
     clearNodeDetail();
   }
@@ -1793,9 +2137,6 @@ function deselectAll() {
 
 async function showNodeDetail(nodeId) {
   const panel = document.getElementById('node-detail');
-  // Auto-expand the detail panel
-  const detailPanel = document.getElementById('panel-detail');
-  if (detailPanel) detailPanel.classList.remove('collapsed');
   try {
     const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}?graph=${encodeURIComponent(currentGraphId)}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1896,6 +2237,18 @@ function highlightPath(hops) {
     .classed('dimmed', edge => !pathEdges.has(edge.key))
     .classed('highlighted', edge => pathEdges.has(edge.key));
   window._graphLabels.classed('dimmed', node => !pathNodes.has(node.id));
+  if (window._edgeLabels) {
+    window._edgeLabels.classed('dimmed', edge => !pathEdges.has(edge.key));
+  }
+  if (window._graphGlyphs) {
+    window._graphGlyphs.classed('dimmed', node => !pathNodes.has(node.id));
+  }
+  if (window._nodeBadges) {
+    window._nodeBadges.classed('dimmed', node => !pathNodes.has(node.id));
+  }
+  if (window._nodeBadgeText) {
+    window._nodeBadgeText.classed('dimmed', node => !pathNodes.has(node.id));
+  }
 }
 
 function bindSuggest(inputId, resultsId, onPick) {
@@ -2062,20 +2415,17 @@ async function findAttackPath() {
 }
 
 function dragStarted(event, d) {
-  if (simulation && !event.active) simulation.alphaTarget(0.18).restart();
-  d.fx = d.x;
-  d.fy = d.y;
+  d._dragging = true;
 }
 
 function dragged(event, d) {
-  d.fx = event.x;
-  d.fy = event.y;
+  d.x = event.x;
+  d.y = event.y;
+  redrawGraphPositions();
 }
 
 function dragEnded(event, d) {
-  if (simulation && !event.active) simulation.alphaTarget(0);
-  d.fx = null;
-  d.fy = null;
+  d._dragging = false;
 }
 
 function zoomIn() {

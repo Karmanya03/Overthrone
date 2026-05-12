@@ -1204,6 +1204,7 @@ fn normalize_kind(raw: &str) -> String {
         "ou" => "OU".to_string(),
         "container" => "Container".to_string(),
         "certtemplate" | "certificatetemplate" | "template" => "CertTemplate".to_string(),
+        "enterpriseca" | "ca" | "certificateauthority" => "EnterpriseCA".to_string(),
         "unknown" | "" => "Unknown".to_string(),
         other => {
             let mut chars = other.chars();
@@ -1394,4 +1395,27 @@ fn truncate_owned(mut s: String, max: usize) -> String {
         s.push_str("...");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ViewerGraph;
+
+    #[test]
+    fn demo_bloodhound_hierarchy_fixture_loads_and_paths() {
+        let fixture = format!(
+            "{}/../../docs/bloodhound-hierarchy-demo.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let graph = ViewerGraph::from_sources(&[fixture]).expect("demo fixture should load");
+        assert_eq!(graph.stats().users, 4);
+        assert_eq!(graph.stats().groups, 5);
+        assert_eq!(graph.stats().domains, 1);
+        assert!(graph.stats().total_edges >= 11);
+
+        let path = graph
+            .shortest_path("CONTRACTINGF@INTERNAL.LOCAL", "INTERNAL.LOCAL")
+            .expect("demo fixture should expose a membership-to-domain path");
+        assert!(!path.hops.is_empty());
+    }
 }

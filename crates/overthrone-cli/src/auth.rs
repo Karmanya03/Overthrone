@@ -150,6 +150,16 @@ impl Credentials {
     }
 }
 
+impl Default for Credentials {
+    fn default() -> Self {
+        Self {
+            domain: String::new(),
+            username: String::new(),
+            auth: AuthData::Password(String::new()),
+        }
+    }
+}
+
 fn prompt_password() -> Result<String, String> {
     eprint!("  Password: ");
     io::stderr().flush().map_err(|e| e.to_string())?;
