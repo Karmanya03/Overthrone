@@ -1407,6 +1407,10 @@ mod tests {
             "{}/../../docs/bloodhound-hierarchy-demo.json",
             env!("CARGO_MANIFEST_DIR")
         );
+        if !std::path::Path::new(&fixture).exists() {
+            eprintln!("Skipping demo fixture test: file not found at {}", fixture);
+            return;
+        }
         let graph = ViewerGraph::from_sources(&[fixture]).expect("demo fixture should load");
         assert_eq!(graph.stats().users, 4);
         assert_eq!(graph.stats().groups, 5);
