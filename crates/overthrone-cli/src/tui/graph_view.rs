@@ -32,6 +32,7 @@ use ratatui::prelude::*;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use std::collections::HashMap;
+use std::time::Instant;
 
 // ─── Colour helpers ───────────────────────────────────────────────────────────
 
@@ -324,6 +325,91 @@ fn edge_abuse_info_by_name(name: &str) -> Option<&'static str> {
     }
 }
 
+fn edge_ovt_command(edge_type: &EdgeType) -> Option<&'static str> {
+    match edge_type {
+        EdgeType::AdminTo => Some("ovt exec --target <TARGET> --method auto"),
+        EdgeType::GenericAll | EdgeType::GenericWrite => Some("ovt powerview acls --sid <SID>"),
+        EdgeType::WriteDacl | EdgeType::WriteOwner | EdgeType::Owns => {
+            Some("ovt acls writedacl --target <TARGET>")
+        }
+        EdgeType::ForceChangePassword => {
+            Some("ovt acl force-password --target <TARGET> --password <NEW_PASSWORD>")
+        }
+        EdgeType::AddMembers => Some("ovt acl add-member --group <GROUP> --member <ACCOUNT>"),
+        EdgeType::AddSelf => Some("ovt acl add-self --group <GROUP>"),
+        EdgeType::AllowedToDelegate => Some("ovt powerview delegations --target <TARGET>"),
+        EdgeType::AllowedToAct => Some("ovt acls add-allowed-to-act --target <TARGET>"),
+        EdgeType::DcSync | EdgeType::GetChanges | EdgeType::GetChangesAll => {
+            Some("ovt adcs dcsync --target <TARGET> --domain <DOMAIN>")
+        }
+        EdgeType::ReadLapsPassword => Some("ovt laps read --computer <COMPUTER> --target-dc <DC>"),
+        EdgeType::ReadGmsaPassword => Some("ovt powerview acls --sid <SID>"),
+        EdgeType::HasSidHistory => Some("ovt move sid-history --target <TARGET>"),
+        EdgeType::CanRDP => Some("ovt exec --target <TARGET> --method rdp"),
+        EdgeType::CanPSRemote => Some("ovt exec --target <TARGET> --method psremote"),
+        EdgeType::ExecuteDCOM => Some("ovt exec --target <TARGET> --method dcom"),
+        EdgeType::SQLAdmin => Some("ovt mssql --target <TARGET> --query 'SELECT @@version'"),
+        EdgeType::HasSession => Some("ovt exec --target <TARGET> --method token"),
+        EdgeType::HasSpn => Some("ovt kerberoast --spn <SPN>"),
+        EdgeType::DontReqPreauth => Some("ovt asrep --user <USER>"),
+        EdgeType::GpoLink => Some("ovt gpo status --target <TARGET>"),
+        EdgeType::TrustedBy => Some("ovt move trust --domain <SOURCE_DOMAIN> --target <TARGET>"),
+        EdgeType::AdcsEsc1 => Some("ovt adcs esc1 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc2 => Some("ovt adcs esc2 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc3 => Some("ovt adcs esc3 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc4 => Some("ovt adcs esc4 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc5 => Some("ovt adcs esc5 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc6 => Some("ovt adcs esc6 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc7 => Some("ovt adcs esc7 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc8 => Some("ovt adcs esc8 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc9 => Some("ovt adcs esc9 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc10 => Some("ovt adcs esc10 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc11 => Some("ovt adcs esc11 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc12 => Some("ovt adcs esc12 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc13 => Some("ovt adcs esc13 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc14 => Some("ovt adcs esc14 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc15 => Some("ovt adcs esc15 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::AdcsEsc16 => Some("ovt adcs esc16 --ca <CA> --template <TEMPLATE>"),
+        EdgeType::Custom(name) => edge_ovt_command_by_name(name),
+        EdgeType::MemberOf => Some("ovt powerview members --group <GROUP> --recurse"),
+        EdgeType::Contains => Some("ovt powerview container --target <TARGET>"),
+    }
+}
+
+fn edge_ovt_command_by_name(name: &str) -> Option<&'static str> {
+    match normalized_edge_name(name).as_str() {
+        "allextendedrights" | "writeself" | "writeproperty" => {
+            Some("ovt powerview acls --sid <SID>")
+        }
+        "createchild" | "writeallowedtodelegateto" => Some("ovt acls writedacl --target <TARGET>"),
+        "writespn" | "writeserviceprincipalname" => {
+            Some("ovt acl write-spn --target <TARGET> --spn <SPN>")
+        }
+        "addallowedtoact" => Some("ovt acls add-allowed-to-act --target <TARGET>"),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => {
+            Some("ovt acl shadow-creds --target <TARGET> --cert <CERT_FILE>")
+        }
+        "writealtsecurityidentities" => Some("ovt adcs alt-sid --target <TARGET>"),
+        "writegplink" => Some("ovt gpo link --target <TARGET> --gpo <GPO_ID>"),
+        "enrollcertificate" | "enrollonbehalfof" => {
+            Some("ovt adcs enroll --template <TEMPLATE> --target <TARGET>")
+        }
+        "readlapspasswordexpiry" | "readlapsencryptedpassword" => {
+            Some("ovt laps read --computer <COMPUTER> --target-dc <DC>")
+        }
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => {
+            Some("ovt acl write-script --target <TARGET>")
+        }
+        "manageca" => Some("ovt adcs manage-ca --ca <CA>"),
+        "managecertificates" => Some("ovt adcs manage-certificates --ca <CA>"),
+        "managecerttemplate" => Some("ovt adcs template --template <TEMPLATE> --inspect"),
+        name if name.starts_with("adcsesc") => {
+            Some("ovt adcs esc<N> --ca <CA> --template <TEMPLATE>")
+        }
+        _ => None,
+    }
+}
+
 fn edge_severity(edge_type: &EdgeType) -> u8 {
     match edge_type {
         EdgeType::GenericAll
@@ -580,6 +666,18 @@ fn push_edge_guidance<'a>(lines: &mut Vec<Line<'a>>, edge_type: &EdgeType, inden
             Span::styled(note, Style::default().fg(Color::Gray)),
         ]));
     }
+    if let Some(command) = edge_ovt_command(edge_type) {
+        lines.push(Line::from(vec![
+            Span::raw(indent),
+            Span::styled(
+                "$ ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(command, Style::default().fg(Color::LightCyan)),
+        ]));
+    }
 }
 
 // ─── Graph overview panel ─────────────────────────────────────────────────────
@@ -590,6 +688,7 @@ fn push_edge_guidance<'a>(lines: &mut Vec<Line<'a>>, edge_type: &EdgeType, inden
 /// The lock is released before any call to `f.render_widget`, preventing a
 /// deadlock when the background collector thread contends the same lock.
 pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
+    let render_started = Instant::now();
     // Collect stats under the lock, then drop it immediately.
     let (stats, hv_targets, _nodes, _edges) = {
         let graph = app.graph.lock().unwrap();
@@ -840,6 +939,21 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
             ]));
         }
     }
+
+    let render_ms = render_started.elapsed().as_millis();
+    lines.insert(
+        1,
+        Line::from(vec![
+            Span::styled(" Timing: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "render {}ms | nodes {} | edges {}",
+                    render_ms, stats.total_nodes, stats.total_edges
+                ),
+                Style::default().fg(Color::LightCyan),
+            ),
+        ]),
+    );
 
     let scrolled: Vec<Line> = lines.into_iter().skip(scroll).collect();
 

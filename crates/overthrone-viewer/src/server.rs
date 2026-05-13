@@ -1,31 +1,38 @@
 //! Embedded web server for the graph viewer.
 //!
-//! Serves a single-page BloodHound-style application with D3.js force-directed
-//! graph visualization, node search, attack path finder, and detail panels.
+//! Serves a single-page BloodHound-style application with Three.js graph
+//! visualization, node search, attack path finder, and detail panels.
 
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
+use axum::http::header;
 use axum::response::Html;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
-use crate::graph_data::{PathResult, ViewerEdge, ViewerGraph, ViewerNode, ViewerStats};
+use crate::graph_data::{
+    GraphLoadMetrics, PathResult, ViewerEdge, ViewerGraph, ViewerNode, ViewerStats,
+};
 
 /// Embedded HTML content (built from static/index.html)
 const INDEX_HTML: &str = include_str!("static/index.html");
+/// Embedded Three.js renderer (built from static/three-graph.js)
+const THREE_GRAPH_JS: &str = include_str!("static/three-graph.js");
 
 /// Loaded graph bundle
 #[derive(Clone)]
@@ -41,6 +48,40 @@ struct AppState {
     graphs: RwLock<Vec<GraphBundle>>,
     default_graph: String,
     cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct OperationMetrics {
+    started_at: String,
+    total_ms: u128,
+    phases: Vec<MetricSample>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MetricSample {
+    name: String,
+    ms: u128,
+}
+
+impl OperationMetrics {
+    fn new() -> Self {
+        Self {
+            started_at: Utc::now().to_rfc3339(),
+            total_ms: 0,
+            phases: Vec::new(),
+        }
+    }
+
+    fn phase(&mut self, name: impl Into<String>, elapsed_ms: u128) {
+        self.phases.push(MetricSample {
+            name: name.into(),
+            ms: elapsed_ms,
+        });
+    }
+
+    fn finish(&mut self) {
+        self.total_ms = self.phases.iter().map(|phase| phase.ms).sum();
+    }
 }
 
 const AUTO_NODE_LIMIT: usize = 3500;
@@ -61,6 +102,7 @@ struct GraphInfo {
     file_bytes: u64,
     loaded: bool,
     stats: Option<StatsResponse>,
+    load_metrics: Option<GraphLoadMetrics>,
 }
 
 #[derive(Serialize)]
@@ -74,6 +116,14 @@ struct GraphResponse {
     truncated: bool,
     node_limit: usize,
     edge_limit: usize,
+    chunk_offset: usize,
+    chunk_size: usize,
+    chunk_index: usize,
+    chunk_count: usize,
+    load_metrics: Option<GraphLoadMetrics>,
+    server_metrics: OperationMetrics,
+    load_time_ms: u128,
+    render_time_ms: u128,
     nodes: Vec<NodeResponse>,
     edges: Vec<EdgeResponse>,
 }
@@ -91,6 +141,8 @@ struct StatsResponse {
     cert_templates: usize,
     high_value: usize,
     owned: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_metrics: Option<GraphLoadMetrics>,
 }
 
 #[derive(Serialize)]
@@ -105,6 +157,8 @@ struct NodeResponse {
     enabled: Option<bool>,
     high_value: bool,
     owned: bool,
+    out_degree: usize,
+    in_degree: usize,
 }
 
 #[derive(Serialize)]
@@ -115,6 +169,10 @@ struct EdgeResponse {
     cost: u32,
     severity: u8,
     guidance: String,
+    ovt_command: String,
+    ovt_command_desc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ace_details: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -132,6 +190,10 @@ struct NodeDetail {
     properties: BTreeMap<String, String>,
     security_notes: Vec<DetailNote>,
     connections: Vec<Connection>,
+    out_degree: usize,
+    in_degree: usize,
+    metrics: OperationMetrics,
+    retrieval_ms: u128,
 }
 
 #[derive(Serialize)]
@@ -147,6 +209,10 @@ struct Connection {
     severity: u8,
     guidance: String,
     properties: BTreeMap<String, String>,
+    ovt_command: String,
+    ovt_command_desc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ace_details: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -191,6 +257,8 @@ struct PathResponse {
     edge_limit: usize,
     total_cost: u32,
     hop_count: usize,
+    metrics: OperationMetrics,
+    pathfinding_ms: u128,
     hops: Vec<HopResponse>,
     nodes: Vec<NodeResponse>,
     edges: Vec<EdgeResponse>,
@@ -210,6 +278,10 @@ struct HopResponse {
     cost: u32,
     severity: u8,
     guidance: String,
+    ovt_command: String,
+    ovt_command_desc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ace_details: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -221,10 +293,37 @@ struct SearchQuery {
 }
 
 #[derive(Deserialize)]
+struct CommandLookupRequest {
+    relationship: String,
+    source: Option<String>,
+    target: Option<String>,
+}
+
+#[derive(Serialize)]
+struct EdgeCommandResponse {
+    relationship: String,
+    severity: u8,
+    guidance: String,
+    ovt_command: String,
+    ovt_command_desc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ace_details: Option<String>,
+}
+
+#[derive(Serialize)]
+struct EdgeTypeInfo {
+    relationship: String,
+    severity: u8,
+    guidance: String,
+    ovt_command_template: String,
+}
+
+#[derive(Deserialize)]
 struct GraphQuery {
     graph: Option<String>,
     limit: Option<usize>,
     edges: Option<usize>,
+    offset: Option<usize>,
     focus: Option<String>,
     types: Option<String>,
 }
@@ -253,7 +352,7 @@ fn node_type_str(node: &ViewerNode) -> String {
     node.kind.clone()
 }
 
-fn stats_response(stats: &ViewerStats) -> StatsResponse {
+fn stats_response(stats: &ViewerStats, load_metrics: Option<GraphLoadMetrics>) -> StatsResponse {
     StatsResponse {
         total_nodes: stats.total_nodes,
         total_edges: stats.total_edges,
@@ -266,7 +365,383 @@ fn stats_response(stats: &ViewerStats) -> StatsResponse {
         cert_templates: stats.cert_templates,
         high_value: stats.high_value,
         owned: stats.owned,
+        load_metrics,
     }
+}
+
+fn node_degree(graph: &ViewerGraph, idx: usize) -> (usize, usize) {
+    (
+        graph.outgoing(idx).map_or(0, Vec::len),
+        graph.incoming(idx).map_or(0, Vec::len),
+    )
+}
+
+fn property_value_ci(properties: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        properties
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn node_sid(node: &ViewerNode) -> String {
+    property_value_ci(
+        &node.properties,
+        &["objectsid", "objectid", "securityidentifier"],
+    )
+    .unwrap_or_else(|| node.id.clone())
+}
+
+fn edge_ace_details(edge: &ViewerEdge, source: &ViewerNode, target: &ViewerNode) -> Option<String> {
+    let mut details = Vec::new();
+    if let Some(principal) = property_value_ci(
+        &edge.properties,
+        &[
+            "Principalsid",
+            "PrincipalSID",
+            "PrincipalObjectIdentifier",
+            "Source",
+        ],
+    ) {
+        details.push(format!("principal={principal}"));
+    }
+    if let Some(right) = property_value_ci(&edge.properties, &["RightName", "Right", "Type"]) {
+        details.push(format!("right={right}"));
+    }
+    if let Some(object_type) = property_value_ci(
+        &edge.properties,
+        &["ObjectType", "InheritedObjectType", "ObjectClass"],
+    ) {
+        details.push(format!("object_type={object_type}"));
+    }
+    if let Some(ace_type) = property_value_ci(&edge.properties, &["AceType", "ACEType"]) {
+        details.push(format!("ace_type={ace_type}"));
+    }
+    if let Some(flags) = property_value_ci(&edge.properties, &["AceFlags", "Flags"]) {
+        details.push(format!("flags={flags}"));
+    }
+    if let Some(inherited) = property_value_ci(&edge.properties, &["IsInherited", "Inherited"]) {
+        details.push(format!("inherited={inherited}"));
+    }
+    if let Some(scope) = property_value_ci(&edge.properties, &["AppliesTo", "AppliesToType"]) {
+        details.push(format!("scope={scope}"));
+    }
+
+    if details.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{} -> {} [{}]",
+        node_display_name(source),
+        node_display_name(target),
+        details.join(", ")
+    ))
+}
+
+fn edge_ovt_command(
+    edge: &ViewerEdge,
+    source: &ViewerNode,
+    target: &ViewerNode,
+) -> (String, String) {
+    let target_sid = node_sid(target);
+    let target_name = target.label.clone();
+    let target_display = node_display_name(target);
+    let source_domain = node_domain(source);
+
+    match edge.relationship.to_ascii_lowercase().as_str() {
+        "genericall" | "genericwrite" | "allextendedrights" | "writeproperty" => (
+            format!("ovt powerview acls --sid {target_sid}"),
+            format!("Review ACLs on {target_display} and scope the write primitive before acting."),
+        ),
+        "writedacl" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "Add a tightly scoped ACE on {target_display}, complete the action, then restore the original ACL."
+            ),
+        ),
+        "writeowner" | "owns" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "Take ownership of {target_display}, modify the DACL, then restore the original owner."
+            ),
+        ),
+        "forcechangepassword" => (
+            format!(
+                "ovt acl force-password --target {} --password <NEW_PASSWORD>",
+                target.id
+            ),
+            format!(
+                "Reset the password for {target_display}; noisy, so prefer a controlled window."
+            ),
+        ),
+        "addmembers" => (
+            format!(
+                "ovt acl add-member --group {} --member <YOUR_ACCOUNT>",
+                target.id
+            ),
+            format!(
+                "Add a single principal to {target_display} and remove it immediately after the dependent action."
+            ),
+        ),
+        "addself" => (
+            format!("ovt acl add-self --group {}", target.id),
+            format!("Self-add access to {target_display}; scope it tightly and clean up quickly."),
+        ),
+        "createchild" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "CreateChild on {target_display}; only create disposable test objects and remove them."
+            ),
+        ),
+        "writeself" => (
+            format!("ovt powerview acls --sid {target_sid}"),
+            format!(
+                "Validated self-write on {target_display}; confirm the exact attribute before use."
+            ),
+        ),
+        "readlapspassword" | "readlapspasswordexpiry" | "readlapsencryptedpassword" => (
+            format!("ovt laps read --computer {target_name} --target-dc {source_domain}"),
+            format!(
+                "Read LAPS material for {target_display}; treat the value as credential material."
+            ),
+        ),
+        "readgmsapassword" => (
+            format!("ovt powerview acls --sid {target_sid}"),
+            format!(
+                "gMSA password path on {target_display}; map the service identity reach before using it."
+            ),
+        ),
+        "allowedtodelegate" => (
+            format!("ovt powerview delegations --target {}", target.id),
+            format!("Enumerate constrained delegation on {target_display} before any S4U testing."),
+        ),
+        "allowedtoact" | "addallowedtoact" => (
+            format!("ovt acls add-allowed-to-act --target {}", target.id),
+            format!(
+                "RBCD on {target_display}; use a controlled machine account and remove the ACE after validation."
+            ),
+        ),
+        "adcsesc1" | "adcsesc2" | "adcsesc3" | "adcsesc4" | "adcsesc5" | "adcsesc6"
+        | "adcsesc7" | "adcsesc8" | "adcsesc9" | "adcsesc10" | "adcsesc11" | "adcsesc12"
+        | "adcsesc13" | "adcsesc14" | "adcsesc15" | "adcsesc16" => {
+            let esc_num = edge.relationship.trim_start_matches("AdcsEsc");
+            (
+                format!("ovt adcs esc{esc_num} --ca <CA_HOST> --template <TEMPLATE>"),
+                format!(
+                    "ADCS ESC{esc_num} path to {target_display}; verify template EKUs, SAN policy, and mapping before use."
+                ),
+            )
+        }
+        "dcsync" | "getchanges" | "getchangesall" => (
+            format!(
+                "ovt adcs dcsync --target {} --domain {source_domain}",
+                target.id
+            ),
+            format!(
+                "Replication rights on {target_display}; prefer targeted secret retrieval over a full DCSync."
+            ),
+        ),
+        "writespn" | "writeserviceprincipalname" => (
+            format!("ovt acl write-spn --target {} --spn <SPN>", target.id),
+            format!(
+                "SPN write on {target_display}; use one temporary SPN, collect a single TGS, then restore the original."
+            ),
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => (
+            format!(
+                "ovt acl shadow-creds --target {} --cert <CERT_FILE>",
+                target.id
+            ),
+            format!(
+                "Shadow credentials on {target_display}; add a controlled KeyCredentialLink, authenticate, then remove it."
+            ),
+        ),
+        "writealtsecurityidentities" => (
+            format!("ovt adcs alt-sid --target {}", target.id),
+            format!(
+                "Certificate mapping write on {target_display}; verify policy and restore original values."
+            ),
+        ),
+        "writeaccountrestrictions" => (
+            format!("ovt acl modify --target {} --restrictions", target.id),
+            format!(
+                "Account restrictions write on {target_display}; inspect the target class first."
+            ),
+        ),
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => (
+            format!("ovt acl write-script --target {}", target.id),
+            format!("Script path write on {target_display}; keep payloads minimal and reversible."),
+        ),
+        "writednshostname" => (
+            format!("ovt acl write-dnshost --target {}", target.id),
+            format!(
+                "DNS hostname write on {target_display}; validate SPN and delegation side effects first."
+            ),
+        ),
+        "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => (
+            format!("ovt acl modify --target {} --pwd-policy", target.id),
+            format!(
+                "Password policy write on {target_display}; document the original policy and prefer a read-only proof."
+            ),
+        ),
+        "writegplink" => (
+            format!("ovt gpo link --target {} --gpo <GPO_ID>", target.id),
+            format!(
+                "GPLink write on {target_display}; validate scope, inheritance, filtering, and rollback first."
+            ),
+        ),
+        "enrollcertificate" | "enrollonbehalfof" => (
+            format!(
+                "ovt adcs enroll --template <TEMPLATE> --target {}",
+                target.id
+            ),
+            format!(
+                "Certificate enrollment on {target_display}; inspect EKUs, subject supply, approval, and agent restrictions."
+            ),
+        ),
+        "hasspn" => (
+            "ovt kerberoast --spn <SPN>".to_string(),
+            format!(
+                "Kerberoast marker on {target_display}; request one scoped ticket and crack offline."
+            ),
+        ),
+        "dontreqpreauth" => (
+            format!("ovt asrep --user {}", target.label),
+            format!(
+                "AS-REP roast marker on {target_display}; collect once and avoid repeated online queries."
+            ),
+        ),
+        "adminto" => (
+            format!("ovt exec --target {} --method auto", target.id),
+            format!(
+                "Local admin on {target_display}; choose the lowest-volume execution primitive."
+            ),
+        ),
+        "canrdp" => (
+            format!("ovt exec --target {} --method rdp", target.id),
+            format!("RDP on {target_display}; visible but useful for validation."),
+        ),
+        "canpsremote" => (
+            format!("ovt exec --target {} --method psremote", target.id),
+            format!(
+                "PowerShell Remoting on {target_display}; keep commands host-scoped and low-volume."
+            ),
+        ),
+        "executedcom" => (
+            format!("ovt exec --target {} --method dcom", target.id),
+            format!("DCOM on {target_display}; reserve for approved execution phases."),
+        ),
+        "sqladmin" => (
+            format!(
+                "ovt mssql --target {} --query 'SELECT @@version'",
+                target.id
+            ),
+            format!(
+                "SQL admin on {target_display}; check linked servers, xp_cmdshell, impersonation, and CLR."
+            ),
+        ),
+        "hassession" => (
+            format!("ovt exec --target {} --method token", target.id),
+            format!("Session on {target_display}; verify freshness before token impersonation."),
+        ),
+        "trustedby" => (
+            format!(
+                "ovt move trust --domain {source_domain} --target {}",
+                target.id
+            ),
+            format!(
+                "Cross-domain trust from {source_domain}; confirm direction, SID filtering, and transitive scope."
+            ),
+        ),
+        "memberof" => (
+            format!("ovt powerview members --group {} --recurse", target.id),
+            format!(
+                "Membership in {target_display}; inspect nested memberships for escalation paths."
+            ),
+        ),
+        "contains" => (
+            format!("ovt powerview container --target {}", target.id),
+            format!("Containment of {target_display}; useful for GPO inheritance and OU scope."),
+        ),
+        "gpolink" => (
+            format!("ovt gpo status --target {}", target.id),
+            format!("GPO link on {target_display}; review linked OUs and security filtering."),
+        ),
+        "hassidhistory" => (
+            format!("ovt move sid-history --target {}", target.id),
+            format!(
+                "SIDHistory on {target_display}; validate effective membership and cross-domain effects."
+            ),
+        ),
+        _ => {
+            let safe_rel = edge
+                .relationship
+                .replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+            (
+                format!("ovt powerview acls --sid {target_sid} --edge-type {safe_rel}"),
+                format!(
+                    "Review the {} relationship on {}; confirm directionality and validate the abuse primitive before acting.",
+                    edge.relationship, target_display
+                ),
+            )
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EdgeAnnotation {
+    severity: u8,
+    guidance: String,
+    ovt_command: String,
+    ovt_command_desc: String,
+    ace_details: Option<String>,
+}
+
+fn annotate_edge(graph: &ViewerGraph, edge: &ViewerEdge) -> Option<EdgeAnnotation> {
+    let source = graph.get_node(edge.source)?;
+    let target = graph.get_node(edge.target)?;
+    let (fallback_severity, fallback_guidance) = edge_security_guidance(&edge.relationship);
+    let (fallback_command, fallback_command_desc) = edge_ovt_command(edge, source, target);
+    let severity = edge.severity.unwrap_or(fallback_severity);
+    let guidance = edge
+        .guidance
+        .clone()
+        .unwrap_or_else(|| fallback_guidance.to_string());
+    let ovt_command = edge.ovt_command.clone().unwrap_or(fallback_command);
+    let ovt_command_desc = edge
+        .ovt_command_desc
+        .clone()
+        .unwrap_or(fallback_command_desc);
+    let ace_details = edge
+        .ace_details
+        .clone()
+        .or_else(|| edge_ace_details(edge, source, target));
+
+    Some(EdgeAnnotation {
+        severity,
+        guidance,
+        ovt_command,
+        ovt_command_desc,
+        ace_details,
+    })
+}
+
+fn estimate_render_time(node_count: usize, edge_count: usize) -> u128 {
+    let base_ms: u128 = 50;
+    let node_batch_ms = (node_count / 5000).saturating_add(1) as u128 * 8;
+    let edge_batch_ms = (edge_count / 20000).saturating_add(1) as u128 * 3;
+    base_ms + node_batch_ms + edge_batch_ms
 }
 
 fn resolve_node_limit(limit: Option<usize>, total_nodes: usize) -> usize {
@@ -343,10 +818,11 @@ fn node_matches_type_filter(node: &ViewerNode, type_filter: &[String]) -> bool {
 fn select_graph_nodes(
     graph: &ViewerGraph,
     node_limit: usize,
+    offset: usize,
     type_filter: &[String],
 ) -> Vec<usize> {
     let total_nodes = graph.stats().total_nodes;
-    let eligible: Vec<usize> = graph
+    let mut eligible: Vec<usize> = graph
         .nodes()
         .filter_map(|(idx, node)| node_matches_type_filter(node, type_filter).then_some(idx))
         .collect();
@@ -355,46 +831,78 @@ fn select_graph_nodes(
         return eligible;
     }
 
-    let mut degrees = vec![0usize; total_nodes];
-    for edge in graph.edges() {
-        if edge.source < total_nodes && edge.target < total_nodes {
-            degrees[edge.source] += 1;
-            degrees[edge.target] += 1;
-        }
-    }
-
-    let mut selected = Vec::new();
-    let mut selected_mask = vec![false; total_nodes];
-
-    for (idx, node) in graph.nodes() {
-        if node_matches_type_filter(node, type_filter)
-            && (node.high_value || node.owned || node.kind.eq_ignore_ascii_case("domain"))
-        {
-            selected.push(idx);
-            selected_mask[idx] = true;
-        }
-    }
-
-    if selected.len() >= node_limit {
-        selected.truncate(node_limit);
-        return selected;
-    }
-
-    let mut remaining: Vec<usize> = (0..total_nodes)
-        .filter(|idx| {
-            !selected_mask[*idx]
-                && graph
-                    .get_node(*idx)
-                    .is_some_and(|node| node_matches_type_filter(node, type_filter))
-        })
+    eligible.sort_unstable();
+    let start = offset.min(eligible.len());
+    let mut selected: Vec<usize> = eligible
+        .into_iter()
+        .skip(start)
+        .take(node_limit.max(1))
         .collect();
-    remaining.sort_by_key(|idx| Reverse(degrees[*idx]));
+    let mut selected_mask = vec![false; total_nodes];
+    for idx in &selected {
+        if *idx < selected_mask.len() {
+            selected_mask[*idx] = true;
+        }
+    }
 
-    for idx in remaining.into_iter().take(node_limit - selected.len()) {
+    add_connected_context_nodes(graph, &mut selected, &mut selected_mask, node_limit);
+    selected
+}
+
+fn add_connected_context_nodes(
+    graph: &ViewerGraph,
+    selected: &mut Vec<usize>,
+    selected_mask: &mut [bool],
+    node_limit: usize,
+) {
+    let total_nodes = graph.stats().total_nodes;
+    if node_limit == 0 || selected.len() >= total_nodes {
+        return;
+    }
+
+    let target = node_limit
+        .saturating_mul(3)
+        .max(node_limit.saturating_add(32))
+        .min(MAX_NODE_LIMIT)
+        .min(total_nodes);
+    if selected.len() >= target {
+        return;
+    }
+
+    let mut candidates = Vec::new();
+    for edge in graph.edges() {
+        let source_selected = selected_mask.get(edge.source).copied().unwrap_or(false);
+        let target_selected = selected_mask.get(edge.target).copied().unwrap_or(false);
+        if source_selected == target_selected {
+            continue;
+        }
+        let neighbor = if source_selected {
+            edge.target
+        } else {
+            edge.source
+        };
+        candidates.push((
+            if edge_is_important(&edge.relationship) {
+                0u8
+            } else {
+                1u8
+            },
+            edge.cost,
+            neighbor,
+        ));
+    }
+    candidates.sort_unstable_by_key(|(importance, cost, idx)| (*importance, *cost, *idx));
+
+    for (_, _, idx) in candidates {
+        if selected.len() >= target {
+            break;
+        }
+        if selected_mask.get(idx).copied().unwrap_or(true) {
+            continue;
+        }
+        selected_mask[idx] = true;
         selected.push(idx);
     }
-
-    selected
 }
 
 fn edge_is_important(relationship: &str) -> bool {
@@ -796,17 +1304,84 @@ fn edge_security_guidance(relationship: &str) -> (u8, &'static str) {
     }
 }
 
+fn command_template_for_relationship(relationship: &str) -> String {
+    let lower = relationship.to_ascii_lowercase();
+    match lower.as_str() {
+        "genericall" | "genericwrite" | "allextendedrights" | "writeproperty" => {
+            "ovt powerview acls --sid <SID>".to_string()
+        }
+        "writedacl" | "writeowner" | "owns" | "createchild" => {
+            "ovt acls writedacl --target <TARGET>".to_string()
+        }
+        "forcechangepassword" => {
+            "ovt acl force-password --target <TARGET> --password <NEW_PASSWORD>".to_string()
+        }
+        "addmembers" => "ovt acl add-member --group <GROUP> --member <ACCOUNT>".to_string(),
+        "addself" => "ovt acl add-self --group <GROUP>".to_string(),
+        "writeself" => "ovt powerview acls --sid <SID>".to_string(),
+        "readlapspassword" | "readlapspasswordexpiry" => {
+            "ovt laps read --computer <COMPUTER> --target-dc <DC>".to_string()
+        }
+        "readgmsapassword" => "ovt powerview acls --sid <SID>".to_string(),
+        "allowedtodelegate" => "ovt powerview delegations --target <TARGET>".to_string(),
+        "allowedtoact" | "addallowedtoact" => {
+            "ovt acls add-allowed-to-act --target <TARGET>".to_string()
+        }
+        "writeallowedtodelegateto" => "ovt acls writedacl --target <TARGET>".to_string(),
+        "dcsync" | "getchanges" | "getchangesall" | "getchangesinfilteredset" => {
+            "ovt adcs dcsync --target <TARGET> --domain <DOMAIN>".to_string()
+        }
+        "writespn" | "writeserviceprincipalname" => {
+            "ovt acl write-spn --target <TARGET> --spn <SPN>".to_string()
+        }
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => {
+            "ovt acl shadow-creds --target <TARGET> --cert <CERT_FILE>".to_string()
+        }
+        "writealtsecurityidentities" => "ovt adcs alt-sid --target <TARGET>".to_string(),
+        "writegplink" => "ovt gpo link --target <TARGET> --gpo <GPO_ID>".to_string(),
+        "gpolink" => "ovt gpo status --target <TARGET>".to_string(),
+        "enrollcertificate" | "enrollonbehalfof" => {
+            "ovt adcs enroll --template <TEMPLATE> --target <TARGET>".to_string()
+        }
+        "manageca" => "ovt adcs manage-ca --ca <CA>".to_string(),
+        "managecertificates" => "ovt adcs manage-certificates --ca <CA>".to_string(),
+        "managecerttemplate" => "ovt adcs template --template <TEMPLATE> --inspect".to_string(),
+        "hasspn" => "ovt kerberoast --spn <SPN>".to_string(),
+        "dontreqpreauth" => "ovt asrep --user <USER>".to_string(),
+        "adminto" => "ovt exec --target <TARGET> --method auto".to_string(),
+        "canrdp" => "ovt exec --target <TARGET> --method rdp".to_string(),
+        "canpsremote" => "ovt exec --target <TARGET> --method psremote".to_string(),
+        "executedcom" => "ovt exec --target <TARGET> --method dcom".to_string(),
+        "sqladmin" => "ovt mssql --target <TARGET> --query 'SELECT @@version'".to_string(),
+        "hassession" => "ovt exec --target <TARGET> --method token".to_string(),
+        "trustedby" => "ovt move trust --domain <SOURCE_DOMAIN> --target <TARGET>".to_string(),
+        "memberof" | "memberoftierzero" | "memberoftier0" => {
+            "ovt powerview members --group <GROUP> --recurse".to_string()
+        }
+        "contains" => "ovt powerview container --target <TARGET>".to_string(),
+        "hassidhistory" => "ovt move sid-history --target <TARGET>".to_string(),
+        _ if lower.starts_with("adcsesc") => {
+            let suffix = lower.trim_start_matches("adcsesc");
+            format!("ovt adcs esc{suffix} --ca <CA> --template <TEMPLATE>")
+        }
+        _ => "ovt powerview acls --sid <SID> --edge-type <RELATIONSHIP>".to_string(),
+    }
+}
+
 fn edge_response(graph: &ViewerGraph, edge: &ViewerEdge) -> Option<EdgeResponse> {
     let src = graph.get_node(edge.source)?;
     let tgt = graph.get_node(edge.target)?;
-    let (severity, guidance) = edge_security_guidance(&edge.relationship);
+    let annotation = annotate_edge(graph, edge)?;
     Some(EdgeResponse {
         source: src.id.clone(),
         target: tgt.id.clone(),
         relationship: edge.relationship.clone(),
         cost: edge.cost,
-        severity,
-        guidance: guidance.to_string(),
+        severity: annotation.severity,
+        guidance: annotation.guidance,
+        ovt_command: annotation.ovt_command,
+        ovt_command_desc: annotation.ovt_command_desc,
+        ace_details: annotation.ace_details,
     })
 }
 
@@ -823,15 +1398,24 @@ fn node_security_notes(graph: &ViewerGraph, node_idx: usize) -> Vec<DetailNote> 
         let Some(edge) = graph.edge(*edge_idx) else {
             continue;
         };
-        let (severity, guidance) = edge_security_guidance(&edge.relationship);
-        if severity > 3 || !seen.insert(edge.relationship.to_ascii_lowercase()) {
+        let Some(annotation) = annotate_edge(graph, edge) else {
+            continue;
+        };
+        if annotation.severity > 3 || !seen.insert(edge.relationship.to_ascii_lowercase()) {
             continue;
         }
         notes.push(DetailNote {
             title: format!("{} relationship", edge.relationship),
-            severity,
-            body: guidance.to_string(),
+            severity: annotation.severity,
+            body: annotation.guidance.clone(),
         });
+        if let Some(details) = annotation.ace_details {
+            notes.push(DetailNote {
+                title: format!("ACE detail: {}", edge.relationship),
+                severity: annotation.severity.min(3),
+                body: details,
+            });
+        }
         if notes.len() >= 8 {
             break;
         }
@@ -1013,6 +1597,7 @@ fn graph_nodes(graph: &ViewerGraph, selected: &HashSet<usize>) -> Vec<NodeRespon
             if !selected.contains(&idx) {
                 return None;
             }
+            let (out_degree, in_degree) = node_degree(graph, idx);
             Some(NodeResponse {
                 id: node.id.clone(),
                 label: node.label.clone(),
@@ -1023,6 +1608,8 @@ fn graph_nodes(graph: &ViewerGraph, selected: &HashSet<usize>) -> Vec<NodeRespon
                 enabled: node.enabled,
                 high_value: node.high_value,
                 owned: node.owned,
+                out_degree,
+                in_degree,
             })
         })
         .collect()
@@ -1059,6 +1646,36 @@ fn graph_edges(
     }
 
     edges
+}
+
+fn build_connection(
+    graph: &ViewerGraph,
+    edge: &ViewerEdge,
+    target: &ViewerNode,
+    direction: &str,
+) -> Option<Connection> {
+    let annotation = annotate_edge(graph, edge)?;
+    let source = graph.get_node(edge.source)?;
+    let actual_target = graph.get_node(edge.target)?;
+
+    Some(Connection {
+        target_id: target.id.clone(),
+        target_label: target.label.clone(),
+        target_display: node_display_name(target),
+        target_type: node_type_str(target),
+        target_domain: node_domain(target),
+        relationship: edge.relationship.clone(),
+        direction: direction.to_string(),
+        cost: edge.cost,
+        severity: annotation.severity,
+        guidance: annotation.guidance,
+        properties: edge.properties.clone(),
+        ovt_command: annotation.ovt_command,
+        ovt_command_desc: annotation.ovt_command_desc,
+        ace_details: annotation
+            .ace_details
+            .or_else(|| edge_ace_details(edge, source, actual_target)),
+    })
 }
 
 fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
@@ -1130,7 +1747,12 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
         .filter_map(|hop| {
             let source_node = graph.get_node(hop.source_idx)?;
             let target_node = graph.get_node(hop.target_idx)?;
-            let (severity, guidance) = edge_security_guidance(&hop.relationship);
+            let edge = graph.edges().find(|edge| {
+                edge.source == hop.source_idx
+                    && edge.target == hop.target_idx
+                    && edge.relationship == hop.relationship
+            })?;
+            let annotation = annotate_edge(graph, edge)?;
             Some(HopResponse {
                 source_id: source_node.id.clone(),
                 source_label: source_node.label.clone(),
@@ -1142,13 +1764,14 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
                 target_type: node_type_str(target_node),
                 relationship: hop.relationship,
                 cost: hop.cost,
-                severity,
-                guidance: guidance.to_string(),
+                severity: annotation.severity,
+                guidance: annotation.guidance,
+                ovt_command: annotation.ovt_command,
+                ovt_command_desc: annotation.ovt_command_desc,
+                ace_details: annotation.ace_details,
             })
         })
         .collect();
-    let rendered_nodes = nodes.len();
-    let rendered_edges = edges.len();
 
     PathResponse {
         found: true,
@@ -1160,15 +1783,17 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
         target_label,
         target_display,
         target_type,
-        stats: stats_response(graph.stats()),
-        rendered_nodes,
-        rendered_edges,
-        truncated: rendered_nodes < graph.stats().total_nodes
-            || rendered_edges < graph.stats().total_edges,
-        node_limit: rendered_nodes,
-        edge_limit: rendered_edges,
+        stats: stats_response(graph.stats(), graph.load_metrics.clone()),
+        rendered_nodes: nodes.len(),
+        rendered_edges: edges.len(),
+        truncated: nodes.len() < graph.stats().total_nodes
+            || edges.len() < graph.stats().total_edges,
+        node_limit: nodes.len(),
+        edge_limit: edges.len(),
         total_cost: path.total_cost,
         hop_count: hops.len(),
+        metrics: OperationMetrics::new(),
+        pathfinding_ms: 0,
         hops,
         nodes,
         edges,
@@ -1182,6 +1807,16 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
 /// GET / — Serve the embedded SPA
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn three_graph_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        THREE_GRAPH_JS,
+    )
 }
 
 /// GET /api/graphs — List available graphs
@@ -1198,7 +1833,9 @@ async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>>
                 sources: bundle.sources.clone(),
                 file_bytes: bundle.file_bytes,
                 loaded: cached.is_some(),
-                stats: cached.map(|graph| stats_response(graph.stats())),
+                stats: cached
+                    .map(|graph| stats_response(graph.stats(), graph.load_metrics.clone())),
+                load_metrics: cached.and_then(|graph| graph.load_metrics.clone()),
             }
         })
         .collect();
@@ -1211,35 +1848,71 @@ async fn get_graph(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<GraphResponse>, StatusCode> {
+    let mut server_metrics = OperationMetrics::new();
+    let load_started = Instant::now();
     let (bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
+    server_metrics.phase("cache_or_load", load_started.elapsed().as_millis());
 
+    let limits_started = Instant::now();
     let total_nodes = graph.stats().total_nodes;
     let total_edges = graph.stats().total_edges;
     let type_filter = parse_type_filter(query.types.as_deref());
     let node_limit = resolve_node_limit(query.limit, total_nodes);
+    let chunk_offset = query.offset.unwrap_or(0).min(total_nodes);
     let edge_limit = resolve_edge_limit(query.edges, node_limit, total_nodes, total_edges);
+    server_metrics.phase("resolve_limits", limits_started.elapsed().as_millis());
+
+    let selection_started = Instant::now();
     let selected_nodes = if let Some(focus) = query.focus.as_deref() {
         let focus_idx = graph.resolve_node(focus).ok_or(StatusCode::NOT_FOUND)?;
         select_focus_nodes(&graph, focus_idx, node_limit, &type_filter)
     } else {
-        select_graph_nodes(&graph, node_limit, &type_filter)
+        select_graph_nodes(&graph, node_limit, chunk_offset, &type_filter)
     };
     let selected_set: HashSet<usize> = selected_nodes.into_iter().collect();
+    server_metrics.phase("node_selection", selection_started.elapsed().as_millis());
 
+    let node_started = Instant::now();
     let nodes = graph_nodes(&graph, &selected_set);
+    server_metrics.phase("node_serialization", node_started.elapsed().as_millis());
+    let edge_started = Instant::now();
     let edges = graph_edges(&graph, &selected_set, edge_limit);
+    server_metrics.phase("edge_serialization", edge_started.elapsed().as_millis());
     let truncated = nodes.len() < total_nodes || edges.len() < total_edges;
+    server_metrics.finish();
+    let load_time_ms = graph
+        .load_metrics
+        .as_ref()
+        .map(|metrics| metrics.total_ms)
+        .unwrap_or(server_metrics.total_ms);
+    let render_time_ms = estimate_render_time(nodes.len(), edges.len());
 
     Ok(Json(GraphResponse {
         graph_id: bundle.id.clone(),
         label: bundle.label.clone(),
         sources: bundle.sources.clone(),
-        stats: stats_response(graph.stats()),
+        stats: stats_response(graph.stats(), graph.load_metrics.clone()),
         rendered_nodes: nodes.len(),
         rendered_edges: edges.len(),
         truncated,
         node_limit,
         edge_limit,
+        chunk_offset,
+        chunk_size: node_limit,
+        chunk_index: if node_limit == 0 {
+            0
+        } else {
+            chunk_offset / node_limit
+        },
+        chunk_count: if node_limit == 0 || total_nodes == 0 {
+            1
+        } else {
+            (total_nodes + node_limit - 1) / node_limit
+        },
+        load_metrics: graph.load_metrics.clone(),
+        server_metrics,
+        load_time_ms,
+        render_time_ms,
         nodes,
         edges,
     }))
@@ -1251,31 +1924,24 @@ async fn get_node_detail(
     AxumPath(nid): AxumPath<String>,
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<NodeDetail>, StatusCode> {
+    let request_started = Instant::now();
     let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
 
     let node_idx = graph.resolve_node(&nid).ok_or(StatusCode::NOT_FOUND)?;
     let node = graph.get_node(node_idx).ok_or(StatusCode::NOT_FOUND)?;
+    let (out_degree, in_degree) = node_degree(&graph, node_idx);
 
     let mut connections = Vec::new();
+    let connections_started = Instant::now();
 
     for edge_idx in graph.outgoing(node_idx).into_iter().flatten() {
         let Some(edge) = graph.edge(*edge_idx) else {
             continue;
         };
         if let Some(tgt) = graph.get_node(edge.target) {
-            connections.push(Connection {
-                target_id: tgt.id.clone(),
-                target_label: tgt.label.clone(),
-                target_display: node_display_name(tgt),
-                target_type: node_type_str(tgt),
-                target_domain: node_domain(tgt),
-                relationship: edge.relationship.clone(),
-                direction: "outgoing".to_string(),
-                cost: edge.cost,
-                severity: edge_security_guidance(&edge.relationship).0,
-                guidance: edge_security_guidance(&edge.relationship).1.to_string(),
-                properties: edge.properties.clone(),
-            });
+            if let Some(connection) = build_connection(&graph, edge, tgt, "outgoing") {
+                connections.push(connection);
+            }
         }
     }
 
@@ -1284,21 +1950,16 @@ async fn get_node_detail(
             continue;
         };
         if let Some(src) = graph.get_node(edge.source) {
-            connections.push(Connection {
-                target_id: src.id.clone(),
-                target_label: src.label.clone(),
-                target_display: node_display_name(src),
-                target_type: node_type_str(src),
-                target_domain: node_domain(src),
-                relationship: edge.relationship.clone(),
-                direction: "incoming".to_string(),
-                cost: edge.cost,
-                severity: edge_security_guidance(&edge.relationship).0,
-                guidance: edge_security_guidance(&edge.relationship).1.to_string(),
-                properties: edge.properties.clone(),
-            });
+            if let Some(connection) = build_connection(&graph, edge, src, "incoming") {
+                connections.push(connection);
+            }
         }
     }
+
+    let mut metrics = OperationMetrics::new();
+    metrics.phase("resolve_node", request_started.elapsed().as_millis());
+    metrics.phase("connections", connections_started.elapsed().as_millis());
+    metrics.finish();
 
     Ok(Json(NodeDetail {
         id: node.id.clone(),
@@ -1313,6 +1974,10 @@ async fn get_node_detail(
         properties: node.properties.clone(),
         security_notes: node_security_notes(&graph, node_idx),
         connections,
+        out_degree,
+        in_degree,
+        metrics: metrics.clone(),
+        retrieval_ms: metrics.total_ms,
     }))
 }
 
@@ -1341,18 +2006,150 @@ async fn search_nodes(
     Ok(Json(results))
 }
 
+async fn lookup_edge_command(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<GraphQuery>,
+    Json(req): Json<CommandLookupRequest>,
+) -> Result<Json<EdgeCommandResponse>, StatusCode> {
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
+    let source_idx = req
+        .source
+        .as_deref()
+        .and_then(|source| graph.resolve_node(source))
+        .or_else(|| graph.nodes().next().map(|(idx, _)| idx))
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let target_idx = req
+        .target
+        .as_deref()
+        .and_then(|target| graph.resolve_node(target))
+        .or(Some(source_idx))
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let edge = ViewerEdge {
+        source: source_idx,
+        target: target_idx,
+        relationship: req.relationship.clone(),
+        cost: 0,
+        properties: BTreeMap::new(),
+        ovt_command: None,
+        ovt_command_desc: None,
+        severity: None,
+        guidance: None,
+        ace_details: None,
+    };
+    let annotation = annotate_edge(&graph, &edge).ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(EdgeCommandResponse {
+        relationship: req.relationship,
+        severity: annotation.severity,
+        guidance: annotation.guidance,
+        ovt_command: annotation.ovt_command,
+        ovt_command_desc: annotation.ovt_command_desc,
+        ace_details: annotation.ace_details,
+    }))
+}
+
+async fn edge_types() -> Json<Vec<EdgeTypeInfo>> {
+    const RELATIONSHIPS: &[&str] = &[
+        "GenericAll",
+        "GenericWrite",
+        "WriteDacl",
+        "WriteOwner",
+        "Owns",
+        "ForceChangePassword",
+        "AddMembers",
+        "AddSelf",
+        "AllExtendedRights",
+        "CreateChild",
+        "WriteSelf",
+        "ReadLapsPassword",
+        "ReadGmsaPassword",
+        "AllowedToDelegate",
+        "AllowedToAct",
+        "WriteAllowedToDelegateTo",
+        "AddAllowedToAct",
+        "DcSync",
+        "GetChanges",
+        "GetChangesAll",
+        "HasSpn",
+        "DontReqPreauth",
+        "AdminTo",
+        "CanRDP",
+        "CanPSRemote",
+        "ExecuteDCOM",
+        "SQLAdmin",
+        "HasSession",
+        "TrustedBy",
+        "GpoLink",
+        "WriteGPLink",
+        "WriteSPN",
+        "WriteKeyCredentialLink",
+        "WriteAltSecurityIdentities",
+        "EnrollCertificate",
+        "EnrollOnBehalfOf",
+        "ManageCA",
+        "ManageCertificates",
+        "ManageCertTemplate",
+        "AdcsEsc1",
+        "AdcsEsc2",
+        "AdcsEsc3",
+        "AdcsEsc4",
+        "AdcsEsc5",
+        "AdcsEsc6",
+        "AdcsEsc7",
+        "AdcsEsc8",
+        "AdcsEsc9",
+        "AdcsEsc10",
+        "AdcsEsc11",
+        "AdcsEsc12",
+        "AdcsEsc13",
+        "AdcsEsc14",
+        "AdcsEsc15",
+        "AdcsEsc16",
+        "MemberOf",
+        "Contains",
+        "MemberOfTierZero",
+    ];
+
+    Json(
+        RELATIONSHIPS
+            .iter()
+            .map(|relationship| {
+                let (severity, guidance) = edge_security_guidance(relationship);
+                EdgeTypeInfo {
+                    relationship: (*relationship).to_string(),
+                    severity,
+                    guidance: guidance.to_string(),
+                    ovt_command_template: command_template_for_relationship(relationship),
+                }
+            })
+            .collect(),
+    )
+}
+
 /// POST /api/path — Find shortest attack path between two nodes
 async fn find_path(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, StatusCode> {
+    let path_started = Instant::now();
     let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
 
     if let Some(path) = graph.shortest_path(&req.from, &req.to) {
-        return Ok(Json(path_response(&graph, path)));
+        let mut response = path_response(&graph, path);
+        response.pathfinding_ms = path_started.elapsed().as_millis();
+        response
+            .metrics
+            .phase("pathfinding", response.pathfinding_ms);
+        response.metrics.finish();
+        return Ok(Json(response));
     }
 
+    let mut metrics = OperationMetrics::new();
+    let pathfinding_ms = path_started.elapsed().as_millis();
+    metrics.phase("pathfinding", pathfinding_ms);
+    metrics.finish();
     Ok(Json(PathResponse {
         found: false,
         source_id: req.from.clone(),
@@ -1363,7 +2160,7 @@ async fn find_path(
         target_label: req.to.clone(),
         target_display: req.to.clone(),
         target_type: "Unknown".to_string(),
-        stats: stats_response(graph.stats()),
+        stats: stats_response(graph.stats(), graph.load_metrics.clone()),
         rendered_nodes: 0,
         rendered_edges: 0,
         truncated: graph.stats().total_nodes > 0 || graph.stats().total_edges > 0,
@@ -1371,6 +2168,8 @@ async fn find_path(
         edge_limit: 0,
         total_cost: 0,
         hop_count: 0,
+        metrics,
+        pathfinding_ms,
         hops: Vec::new(),
         nodes: Vec::new(),
         edges: Vec::new(),
@@ -1383,7 +2182,23 @@ async fn get_stats(
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<StatsResponse>, StatusCode> {
     let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
-    Ok(Json(stats_response(graph.stats())))
+    Ok(Json(stats_response(
+        graph.stats(),
+        graph.load_metrics.clone(),
+    )))
+}
+
+/// GET /api/graph/:id/timings — Graph load timing breakdown
+async fn get_graph_timings(
+    State(state): State<Arc<AppState>>,
+    AxumPath(graph_id): AxumPath<String>,
+) -> Result<Json<GraphLoadMetrics>, StatusCode> {
+    let (_bundle, graph) = load_graph(&state, Some(&graph_id)).await?;
+    graph
+        .load_metrics
+        .clone()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 /// POST /api/upload — Upload a graph JSON file
@@ -1418,7 +2233,8 @@ async fn upload_graph(
         sources: bundle.sources.clone(),
         file_bytes: bundle.file_bytes,
         loaded: true,
-        stats: Some(stats_response(graph.stats())),
+        stats: Some(stats_response(graph.stats(), graph.load_metrics.clone())),
+        load_metrics: graph.load_metrics.clone(),
     };
 
     state
@@ -1469,10 +2285,14 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/three-graph.js", get(three_graph_js))
         .route("/api/graphs", get(list_graphs))
         .route("/api/graph", get(get_graph))
+        .route("/api/graph/{graph_id}/timings", get(get_graph_timings))
         .route("/api/node/{node_id}", get(get_node_detail))
         .route("/api/search", get(search_nodes))
+        .route("/api/commands/lookup", post(lookup_edge_command))
+        .route("/api/edge-types", get(edge_types))
         .route("/api/path", post(find_path))
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))

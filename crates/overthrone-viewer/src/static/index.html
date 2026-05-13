@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Overthrone Graph Viewer</title>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
 :root {
   --bg: #050505;
@@ -207,6 +207,39 @@ select {
   padding-bottom: 0;
 }
 
+/* Graph stats grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 6px;
+}
+.stat-card {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+.stat-card .value {
+  font-size: 18px;
+  font-weight: 900;
+}
+.stat-card .label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+/* Custom render input hidden until 'Custom' is selected */
+#render-custom {
+  display: none;
+  width: 86px;
+}
+#render-custom.active {
+  display: inline-block;
+}
+
 #sidebar-header {
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
@@ -292,6 +325,11 @@ input {
   border-radius: 8px;
   outline: none;
   padding: 10px 11px;
+}
+
+option {
+  color: var(--text);
+  background: var(--panel-2);
 }
 
 select:focus,
@@ -388,9 +426,50 @@ input:disabled {
 }
 
 .render-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.render-row > select, .render-row > input {
+  flex: 1;
+  min-width: 0;
+}
+
+#render-custom {
+  display: none;
+}
+
+#render-custom.active {
+  display: block;
+}
+
+.chunk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  min-height: 16px;
+}
+
+.chunk-button {
+  min-width: 34px;
+  padding: 10px 9px;
+  text-align: center;
+}
+
+@media (max-width: 820px) {
+  .render-row {
+    flex-wrap: wrap;
+  }
+
+  #render-button {
+    flex: 1;
+  }
 }
 
 .scroll-area {
@@ -586,6 +665,29 @@ input:disabled {
   margin-top: 5px;
 }
 
+.conn-ace {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  margin-top: 5px;
+}
+
+.conn-command {
+  color: var(--cyan);
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.conn-command-desc {
+  color: var(--soft);
+  font-size: 10px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
 .severity {
   border: 1px solid var(--line-strong);
   border-radius: 999px;
@@ -699,6 +801,12 @@ input:disabled {
   grid-column: 1 / -1;
 }
 
+.conn-ace,
+.conn-command,
+.conn-command-desc {
+  grid-column: 1 / -1;
+}
+
 .conn:hover {
   border-color: var(--cyan);
 }
@@ -759,6 +867,21 @@ input:disabled {
   display: block;
 }
 
+#graph-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#selection-box {
+  position: absolute;
+  display: none;
+  border: 1px solid rgba(73, 228, 214, 0.9);
+  background: rgba(73, 228, 214, 0.12);
+  pointer-events: none;
+  z-index: 22;
+}
+
 .graph-topbar {
   position: absolute;
   left: 18px;
@@ -794,6 +917,29 @@ input:disabled {
 #render-badge {
   flex: 0 0 auto;
   color: var(--muted);
+}
+
+#perf-hud {
+  position: absolute;
+  top: 70px;
+  right: 18px;
+  min-width: 210px;
+  display: none;
+  pointer-events: none;
+  z-index: 30;
+  color: var(--cyan);
+  background: rgba(13, 13, 15, 0.9);
+  border: 1px solid rgba(73, 228, 214, 0.34);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.35);
+}
+
+#perf-hud.active {
+  display: block;
 }
 
 #empty-state {
@@ -1047,11 +1193,11 @@ input:disabled {
       </div>
 
       <div class="field">
-        <label for="graph-select">BloodHound JSON</label>
-        <div style="display:flex;gap:8px">
-          <select id="graph-select" style="flex:1"></select>
-          <input type="file" id="json-upload" accept=".json,application/json" style="display:none">
-          <button class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
+            <label for="graph-select">BloodHound JSON</label>
+            <div style="display:flex;gap:8px">
+              <select id="graph-select" style="flex:1; appearance:auto"><option value="" disabled selected>Choose JSON file...</option></select>
+              <input type="file" id="json-upload" accept=".json,application/json" style="display:none">
+              <button class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           </button>
         </div>
@@ -1089,10 +1235,15 @@ input:disabled {
             <option value="1000">1,000 nodes</option>
             <option value="2000">2,000 nodes</option>
             <option value="5000">5,000 nodes</option>
+            <option value="custom">Custom</option>
             <option value="all">ALL nodes</option>
           </select>
+          <input type="number" id="render-custom" min="1" max="20000" step="1" value="100" aria-label="Custom node count">
+          <button class="secondary-button chunk-button" id="prev-chunk" disabled title="Previous chunk">&lt;</button>
           <button class="secondary-button" id="render-button" disabled>Render</button>
+          <button class="secondary-button chunk-button" id="next-chunk" disabled title="Next chunk">&gt;</button>
         </div>
+        <div class="chunk-row"><span id="chunk-badge">Chunk 1 / 1</span></div>
         <div class="hint">The canvas stays blank until you search, find a path, or render a chunk.</div>
       </div>
     </div>
@@ -1145,10 +1296,19 @@ input:disabled {
 
   <main id="graph-container">
     <button id="sidebar-toggle" title="Open sidebar">☰</button>
-    <svg id="graph-svg"></svg>
+    <canvas id="graph-canvas"></canvas>
+    <div id="selection-box"></div>
     <div class="graph-topbar">
       <div id="graph-badge">No graph selected</div>
       <div id="render-badge">Idle</div>
+    </div>
+    <div id="perf-hud">
+      <div id="perf-total">total --ms</div>
+      <div id="perf-server">server --ms</div>
+      <div id="perf-render">render --ms</div>
+      <div id="perf-load">load --ms</div>
+      <div id="perf-counts">nodes 0 | edges 0</div>
+      <div id="perf-chunk">chunk 1/1</div>
     </div>
     <div class="legend-overlay" id="legend-overlay">
       <h2>Node Types</h2>
@@ -1269,6 +1429,9 @@ let currentGraphId = null;
 let simulation = null;
 let selectedNode = null;
 let renderLimit = '100';
+let prevRenderSelectValue = '100';
+let renderOffset = 0;
+let perfHudVisible = false;
 let pathFromId = '';
 let pathToId = '';
 let svg;
@@ -1278,7 +1441,7 @@ let nodeGroup;
 let labelGroup;
 let edgeLabelGroup;
 let zoomBehavior;
-let currentTransform = d3.zoomIdentity;
+let currentTransform = { x: 0, y: 0, k: 1 };
 
 async function init() {
   svg = d3.select('#graph-svg');
@@ -1346,13 +1509,41 @@ async function init() {
   document.getElementById('path-from').addEventListener('input', () => { pathFromId = ''; });
   document.getElementById('path-to').addEventListener('input', () => { pathToId = ''; });
   document.getElementById('render-select').addEventListener('change', event => {
-    renderLimit = event.target.value;
+    const select = event.target;
+    // If user selected custom, prompt for a value
+    if (select.value === 'custom') {
+      const current = document.getElementById('render-custom').value || '100';
+      const raw = window.prompt('Enter custom node count (1-20000):', current);
+      if (raw === null) {
+        // user cancelled - revert to previous selection
+        select.value = prevRenderSelectValue || '100';
+      } else {
+        const parsed = Math.max(1, Math.min(20000, Number.parseInt(raw || '100', 10) || 100));
+        document.getElementById('render-custom').value = String(parsed);
+        prevRenderSelectValue = 'custom';
+      }
+    } else {
+      prevRenderSelectValue = select.value;
+    }
+    renderLimit = currentRenderLimit();
+    renderOffset = 0;
+    updateRenderLimitControls();
+    updateChunkControls(graphData);
   });
+  document.getElementById('render-custom').addEventListener('input', () => {
+    renderLimit = currentRenderLimit();
+    renderOffset = 0;
+    updateChunkControls(graphData);
+  });
+  document.getElementById('prev-chunk').addEventListener('click', () => cycleChunk(-1));
+  document.getElementById('next-chunk').addEventListener('click', () => cycleChunk(1));
   document.querySelectorAll('#type-filters input').forEach(input => {
     input.addEventListener('change', () => {
       hideSearchResults();
+      renderOffset = 0;
+      updateChunkControls(graphData);
       if (currentGraphId && graphData && graphData.nodes && graphData.nodes.length) {
-        if (renderLimit === 'all') {
+        if (currentRenderLimit() === 'all') {
           document.getElementById('render-badge').textContent = 'ALL selected; press Render to confirm';
           return;
         }
@@ -1361,6 +1552,13 @@ async function init() {
     });
   });
   document.addEventListener('keydown', event => {
+    if (event.key === 'F3') {
+      event.preventDefault();
+      perfHudVisible = !perfHudVisible;
+      document.getElementById('perf-hud').classList.toggle('active', perfHudVisible);
+      updatePerfHud(graphData);
+      return;
+    }
     if (event.key === 'Escape') {
       hideSearchResults();
       deselectAll();
@@ -1401,23 +1599,24 @@ async function loadGraphList() {
   }
 
   select.disabled = false;
-  select.innerHTML = '<option value="">Choose a JSON graph...</option>' + graphList.map(graph => {
+  select.innerHTML = '<option value="" disabled selected>Choose JSON file...</option>' + graphList.map(graph => {
     const stats = graph.stats ? `${graph.stats.total_nodes} nodes` : formatBytes(graph.file_bytes);
     return `<option value="${escapeAttr(graph.id)}">${escapeHtml(graph.label)} (${stats})</option>`;
   }).join('');
-  select.addEventListener('change', event => {
+  select.onchange = event => {
     if (event.target.value) {
       loadGraph(event.target.value);
     } else {
       renderEmptyState();
     }
-  });
+  };
 
   setEmptyMessage('Select a JSON graph', `${graphList.length} JSON file${graphList.length === 1 ? '' : 's'} indexed. Nothing is rendered until a file is selected.`);
 }
 
 async function loadGraph(graphId) {
   currentGraphId = graphId;
+  renderOffset = 0;
   const graphInfo = graphList.find(graph => graph.id === graphId);
   document.getElementById('graph-select').value = graphId;
   setInteractiveEnabled(false);
@@ -1442,11 +1641,18 @@ async function loadGraph(graphId) {
       label: graphInfo ? graphInfo.label : graphId,
       sources: graphInfo ? graphInfo.sources : [],
       stats,
+      load_metrics: stats.load_metrics || null,
+      load_time_ms: stats.load_metrics ? stats.load_metrics.total_ms : 0,
+      render_time_ms: 0,
       rendered_nodes: 0,
       rendered_edges: 0,
       truncated: stats.total_nodes > 0 || stats.total_edges > 0,
       node_limit: 0,
       edge_limit: 0,
+      chunk_offset: 0,
+      chunk_size: numericRenderLimit(),
+      chunk_index: 0,
+      chunk_count: 1,
       nodes: [],
       edges: [],
     };
@@ -1462,6 +1668,7 @@ async function loadGraph(graphId) {
   updateGraphMeta(graphData, graphInfo);
   updateGraphBadge(graphData);
   updateRenderBadge(graphData);
+  updateChunkControls(graphData);
   setInteractiveEnabled(true);
   setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
   document.getElementById('empty-state').classList.remove('hidden');
@@ -1490,6 +1697,7 @@ function renderEmptyState() {
   graphData = null;
   currentGraphId = null;
   selectedNode = null;
+  renderOffset = 0;
   teardownGraph();
   renderStats(emptyStats());
   updateGraphMeta(null, null);
@@ -1498,6 +1706,7 @@ function renderEmptyState() {
   document.getElementById('empty-state').classList.remove('hidden');
   document.getElementById('graph-badge').textContent = 'No graph selected';
   document.getElementById('render-badge').textContent = 'Idle';
+  updateChunkControls(null);
   setEmptyMessage('Select a JSON graph', 'The canvas is intentionally empty until a BloodHound JSON file is selected.');
 }
 
@@ -1512,6 +1721,9 @@ function setInteractiveEnabled(enabled) {
   document.getElementById('path-to').disabled = !enabled;
   document.getElementById('path-button').disabled = !enabled;
   document.getElementById('render-button').disabled = !enabled;
+  document.getElementById('render-select').disabled = !enabled;
+  document.getElementById('render-custom').disabled = !enabled;
+  updateChunkControls(graphData);
 }
 
 function updateGraphBadge(data) {
@@ -1539,11 +1751,48 @@ function updateRenderBadge(data) {
     if ((data.rendered_nodes || 0) === 0) {
       badge.textContent = 'Blank start';
     } else {
-      badge.textContent = `Chunk render (${data.rendered_nodes}/${data.stats.total_nodes} nodes)`;
+      const chunk = data.chunk_count && data.chunk_count > 1
+        ? ` ${Number(data.chunk_index || 0) + 1}/${data.chunk_count}`
+        : '';
+      badge.textContent = `Chunk${chunk} render (${data.rendered_nodes}/${data.stats.total_nodes} nodes)`;
     }
   } else {
     badge.textContent = 'Full render';
   }
+
+  const timingBits = [];
+  const loadMs = data.load_time_ms || data.load_metrics?.total_ms || data.stats?.load_metrics?.total_ms || 0;
+  const renderMs = data.render_time_ms || 0;
+  if (loadMs) timingBits.push(`load ${loadMs}ms`);
+  if (renderMs) timingBits.push(`render ${renderMs}ms`);
+  if (data.server_metrics?.total_ms) timingBits.push(`server ${data.server_metrics.total_ms}ms`);
+  if (timingBits.length) {
+    badge.textContent += ` | ${timingBits.join(' | ')}`;
+  }
+  updatePerfHud(data);
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function updatePerfHud(data) {
+  if (!perfHudVisible && !document.getElementById('perf-hud')?.classList.contains('active')) return;
+  const renderedNodes = data?.rendered_nodes ?? (data?.nodes ? data.nodes.length : 0);
+  const renderedEdges = data?.rendered_edges ?? (data?.edges ? data.edges.length : 0);
+  const loadMs = data?.load_time_ms || data?.load_metrics?.total_ms || data?.stats?.load_metrics?.total_ms || 0;
+  const serverMs = data?.server_metrics?.total_ms || 0;
+  const renderMs = data?.client_render_ms || data?.render_time_ms || 0;
+  const totalMs = serverMs + renderMs;
+  const chunkIndex = Number(data?.chunk_index || 0) + 1;
+  const chunkCount = data?.chunk_count || 1;
+  setText('perf-total', `total ${totalMs}ms`);
+  setText('perf-server', `server ${serverMs}ms`);
+  setText('perf-render', `render ${renderMs}ms`);
+  setText('perf-load', `load ${loadMs}ms`);
+  setText('perf-counts', `nodes ${renderedNodes} | edges ${renderedEdges}`);
+  setText('perf-chunk', `chunk ${chunkIndex}/${chunkCount}`);
 }
 
 function updateGraphMeta(data, graphInfo) {
@@ -1587,6 +1836,7 @@ function emptyStats() {
 
 function renderStats(stats) {
   const grid = document.getElementById('stats-grid');
+  if (!stats) stats = emptyStats();
   const items = [
     { value: stats.users || 0, label: 'Users', color: 'var(--node-user)' },
     { value: stats.computers || 0, label: 'Computers', color: 'var(--node-computer)' },
@@ -1620,10 +1870,69 @@ function selectedTypeFilter() {
   return checked.join(',');
 }
 
-function buildGraphParams({ focus = null, limit = renderLimit } = {}) {
+function currentRenderLimit() {
+  const select = document.getElementById('render-select');
+  if (!select) return renderLimit || '100';
+  if (select.value !== 'custom') return select.value;
+  const custom = document.getElementById('render-custom');
+  const parsed = Number.parseInt(custom?.value || '100', 10);
+  return String(Math.max(1, Math.min(20000, Number.isFinite(parsed) ? parsed : 100)));
+}
+
+function numericRenderLimit() {
+  const limit = currentRenderLimit();
+  if (limit === 'all') return 0;
+  const parsed = Number.parseInt(limit, 10);
+  return Math.max(1, Math.min(20000, Number.isFinite(parsed) ? parsed : 100));
+}
+
+function updateRenderLimitControls() {
+  const select = document.getElementById('render-select');
+  const custom = document.getElementById('render-custom');
+  if (!select || !custom) return;
+  custom.classList.toggle('active', select.value === 'custom');
+}
+
+function updateChunkControls(data = graphData) {
+  updateRenderLimitControls();
+  const prev = document.getElementById('prev-chunk');
+  const next = document.getElementById('next-chunk');
+  const badge = document.getElementById('chunk-badge');
+  if (!prev || !next || !badge) return;
+
+  const limit = currentRenderLimit();
+  const total = data?.stats?.total_nodes || 0;
+  const size = numericRenderLimit();
+  const chunkCount = limit === 'all' || !total || !size ? 1 : Math.max(1, Math.ceil(total / size));
+  const index = limit === 'all' || !size ? 0 : Math.min(chunkCount - 1, Math.floor(renderOffset / size));
+  const start = limit === 'all' || !total ? 0 : index * size + 1;
+  const end = limit === 'all' ? total : Math.min(total, index * size + size);
+
+  prev.disabled = !currentGraphId || limit === 'all' || index <= 0;
+  next.disabled = !currentGraphId || limit === 'all' || index >= chunkCount - 1;
+  badge.textContent = limit === 'all'
+    ? `All nodes (${total})`
+    : `Chunk ${index + 1} / ${chunkCount}${total ? ` | ${start}-${end} of ${total}` : ''}`;
+}
+
+function cycleChunk(direction) {
+  if (!currentGraphId || currentRenderLimit() === 'all') return;
+  const size = numericRenderLimit();
+  const total = graphData?.stats?.total_nodes || 0;
+  if (!size || !total) return;
+  const lastOffset = Math.max(0, Math.floor((total - 1) / size) * size);
+  renderOffset = Math.max(0, Math.min(lastOffset, renderOffset + direction * size));
+  updateChunkControls(graphData);
+  renderSelectedChunk({ warnAll: false });
+}
+
+function buildGraphParams({ focus = null, limit = currentRenderLimit() } = {}) {
   const params = new URLSearchParams();
   params.set('graph', currentGraphId);
   params.set('limit', limit === 'all' ? '0' : String(limit));
+  if (!focus && limit !== 'all') {
+    params.set('offset', String(renderOffset));
+  }
   const types = selectedTypeFilter();
   if (types) {
     params.set('types', types);
@@ -1644,6 +1953,7 @@ async function fetchGraphSlice(options = {}) {
 
 async function renderSelectedChunk({ focus = null, warnAll = true } = {}) {
   if (!currentGraphId) return;
+  renderLimit = currentRenderLimit();
   if (renderLimit === 'all' && warnAll) {
     const confirmed = window.confirm('Rendering ALL nodes can freeze the browser on large domains. Continue?');
     if (!confirmed) return;
@@ -1655,10 +1965,14 @@ async function renderSelectedChunk({ focus = null, warnAll = true } = {}) {
 
   try {
     graphData = await fetchGraphSlice({ focus });
+    if (!focus && Number.isFinite(graphData.chunk_offset)) {
+      renderOffset = graphData.chunk_offset;
+    }
     renderStats(graphData.stats);
     updateGraphMeta(graphData, activeGraphInfo());
     updateGraphBadge(graphData);
     updateRenderBadge(graphData);
+    updateChunkControls(graphData);
     renderGraph(graphData);
   } catch (error) {
     setEmptyMessage('Render failed', error.message);
@@ -1676,6 +1990,7 @@ async function loadFocusedNode(nodeId) {
 }
 
 function renderGraph(data) {
+  const renderStarted = performance.now();
   teardownGraph();
   const container = document.getElementById('graph-container');
   const width = Math.max(640, container.clientWidth);
@@ -1716,6 +2031,9 @@ function renderGraph(data) {
         cost: edge.cost,
         severity: edge.severity,
         guidance: edge.guidance,
+        ovt_command: edge.ovt_command,
+        ovt_command_desc: edge.ovt_command_desc,
+        ace_details: edge.ace_details,
         key: edgeKey(edge.source, edge.target, edge.relationship),
       };
     });
@@ -1824,11 +2142,12 @@ function renderGraph(data) {
   window._nodeBadges = badgeSel;
   window._nodeBadgeText = badgeTextSel;
   window._nodesMap = nodesMap;
-  document.getElementById('render-badge').textContent = nodeCount > 2500
-    ? 'Fast hierarchical layout'
-    : 'Hierarchical layout';
   fitGraph();
   refreshLabelVisibility();
+  data.render_time_ms = Math.max(0, Math.round(performance.now() - renderStarted));
+  data.client_render_ms = data.render_time_ms;
+  updateRenderBadge(data);
+  updateChunkControls(data);
 }
 
 function nodeRadius(node, total) {
@@ -1904,30 +2223,51 @@ function computeHierarchicalLayout(nodes, links, width, height, hops) {
   });
 
   const layerCount = Math.max(...layers.keys()) + 1;
-  const layerGap = nodes.length > 5000 ? 165 : nodes.length > 2000 ? 185 : nodes.length > 800 ? 210 : 250;
-  const verticalGap = nodes.length > 5000 ? 36 : nodes.length > 2000 ? 44 : nodes.length > 800 ? 56 : 86;
+  const layerGap = nodes.length > 5000 ? 640 : nodes.length > 2000 ? 520 : nodes.length > 800 ? 430 : nodes.length > 250 ? 360 : 310;
+  const verticalGap = nodes.length > 5000 ? 220 : nodes.length > 2000 ? 180 : nodes.length > 800 ? 150 : nodes.length > 250 ? 124 : 104;
   const left = 110;
   const top = 90;
   const bottom = 130;
+  const layerMetrics = Array.from(layers.values()).map(layerNodes => {
+    const laneCount = layerNodes.length > 36 ? 4 : layerNodes.length > 18 ? 3 : layerNodes.length > 8 ? 2 : 1;
+    const laneSpan = laneCount > 1 ? Math.min(layerGap * 0.48, 60 + layerNodes.length * 2.2) : 0;
+    return {
+      laneCount,
+      laneSpan,
+      height: Math.max(1, (Math.ceil(layerNodes.length / laneCount) - 1) * verticalGap),
+    };
+  });
   const virtualHeight = Math.max(
     height,
-    ...Array.from(layers.values()).map(layer => top + bottom + Math.max(1, layer.length - 1) * verticalGap)
+    ...layerMetrics.map(metric => top + bottom + metric.height)
+  );
+  const widestLaneOffset = Math.max(
+    0,
+    ...layerMetrics.map(metric => ((metric.laneCount - 1) / 2) * metric.laneSpan)
   );
 
   Array.from(layers.entries())
     .sort(([leftRank], [rightRank]) => leftRank - rightRank)
     .forEach(([layerIndex, layerNodes]) => {
       layerNodes.sort(compareNodesForLayout);
-      const layerHeight = Math.max(1, (layerNodes.length - 1) * verticalGap);
+      const laneCount = layerNodes.length > 36 ? 4 : layerNodes.length > 18 ? 3 : layerNodes.length > 8 ? 2 : 1;
+      const laneSpan = laneCount > 1 ? Math.min(layerGap * 0.48, 60 + layerNodes.length * 2.2) : 0;
+      const rowCount = Math.max(1, Math.ceil(layerNodes.length / laneCount));
+      const layerHeight = Math.max(1, (rowCount - 1) * verticalGap);
       const startY = Math.max(top, (virtualHeight - layerHeight) / 2);
       layerNodes.forEach((node, index) => {
-        const branchOffset = layerNodes.length > 8 ? ((index % 2) - 0.5) * 18 : 0;
-        node.x = left + layerIndex * layerGap + branchOffset;
-        node.y = startY + index * verticalGap;
+        const lane = laneCount === 1 ? 0 : index % laneCount;
+        const row = Math.floor(index / laneCount);
+        const laneOffset = laneCount > 1 ? (lane - (laneCount - 1) / 2) * laneSpan : 0;
+        node.x = left + layerIndex * layerGap + laneOffset;
+        node.y = startY + row * verticalGap;
       });
     });
 
-  const virtualWidth = Math.max(width, left * 2 + Math.max(1, layerCount - 1) * layerGap);
+  const virtualWidth = Math.max(
+    width,
+    left * 2 + Math.max(1, layerCount - 1) * layerGap + widestLaneOffset * 2
+  );
   nodes.forEach(node => {
     node.x = Math.max(70, Math.min(virtualWidth - 70, node.x));
     node.y = Math.max(60, Math.min(virtualHeight - 60, node.y));
@@ -2164,10 +2504,16 @@ async function showNodeDetail(nodeId) {
       const edgeColor = EDGE_COLORS[conn.relationship] || '#b5b5bc';
       const direction = conn.direction === 'incoming' ? 'in' : 'out';
       const sev = severityClass(conn.severity);
+      const aceDetails = conn.ace_details ? `<div class="conn-ace">${escapeHtml(conn.ace_details)}</div>` : '';
+      const commandLine = conn.ovt_command ? `<div class="conn-command">$ ${escapeHtml(conn.ovt_command)}</div>` : '';
+      const commandDesc = conn.ovt_command_desc ? `<div class="conn-command-desc">${escapeHtml(conn.ovt_command_desc)}</div>` : '';
       return `<button class="conn" data-target="${escapeAttr(conn.target_id)}">
         <span style="color:${edgeColor};font-weight:900">${escapeHtml(direction)} ${escapeHtml(conn.relationship)}</span>
         <span>${escapeHtml(conn.target_display)}</span>
         <span class="conn-guidance"><span class="severity ${sev}">${escapeHtml(severityText(conn.severity))}</span> cost ${escapeHtml(conn.cost)} | ${escapeHtml(conn.guidance || 'Review relationship details before acting.')}</span>
+        ${aceDetails}
+        ${commandLine}
+        ${commandDesc}
       </button>`;
     }).join('');
 
@@ -2180,6 +2526,9 @@ async function showNodeDetail(nodeId) {
         <div class="detail-row"><span class="key">Domain</span><span class="val">${escapeHtml(detail.domain)}</span></div>
         ${detail.distinguished_name ? `<div class="detail-row"><span class="key">DN</span><span class="val">${escapeHtml(detail.distinguished_name)}</span></div>` : ''}
         <div class="detail-row"><span class="key">Enabled</span><span class="val">${enabled}</span></div>
+        <div class="detail-row"><span class="key">Out Degree</span><span class="val">${escapeHtml(detail.out_degree ?? 0)}</span></div>
+        <div class="detail-row"><span class="key">In Degree</span><span class="val">${escapeHtml(detail.in_degree ?? 0)}</span></div>
+        <div class="detail-row"><span class="key">Retrieval</span><span class="val">${escapeHtml(detail.retrieval_ms ?? 0)} ms</span></div>
         ${notes ? `<div class="detail-section-title">ACL / ACE Guidance</div>${notes}` : ''}
         ${props ? '<div class="detail-section-title">Properties</div>' : ''}
         ${props}
@@ -2388,14 +2737,21 @@ async function findAttackPath() {
     const hops = result.hops.map(hop => {
       const edgeColor = EDGE_COLORS[hop.relationship] || '#ff4d4d';
       const sev = severityClass(hop.severity);
+      const aceDetails = hop.ace_details ? `<div class="conn-ace">${escapeHtml(hop.ace_details)}</div>` : '';
+      const commandLine = hop.ovt_command ? `<div class="conn-command">$ ${escapeHtml(hop.ovt_command)}</div>` : '';
+      const commandDesc = hop.ovt_command_desc ? `<div class="conn-command-desc">${escapeHtml(hop.ovt_command_desc)}</div>` : '';
       return `<div class="hop">
         <span>${escapeHtml(hop.source_display)}</span>
         <span class="hop-edge" style="color:${edgeColor}">--[${escapeHtml(hop.relationship)}]--> <span class="severity ${sev}">${escapeHtml(severityText(hop.severity))}</span></span>
         <span>${escapeHtml(hop.target_display)} <span style="color:var(--muted)">cost ${hop.cost}</span></span>
         ${hop.guidance ? `<span class="conn-guidance">${escapeHtml(hop.guidance)}</span>` : ''}
+        ${aceDetails}
+        ${commandLine}
+        ${commandDesc}
       </div>`;
     }).join('');
-    resultDiv.innerHTML = `<div style="color:var(--red);font-weight:900">${result.hop_count} hops | total cost ${result.total_cost}</div>${hops}`;
+    const timingLine = result.pathfinding_ms ? ` | pathfinding ${result.pathfinding_ms}ms` : '';
+    resultDiv.innerHTML = `<div style="color:var(--red);font-weight:900">${result.hop_count} hops | total cost ${result.total_cost}${timingLine}</div>${hops}`;
     const graphInfo = activeGraphInfo();
     graphData = {
       ...result,
@@ -2455,7 +2811,8 @@ function fitGraph() {
   const height = container.clientHeight;
   const graphWidth = Math.max(1, maxX - minX);
   const graphHeight = Math.max(1, maxY - minY);
-  const scale = Math.max(0.08, Math.min(1.7, 0.82 / Math.max(graphWidth / width, graphHeight / height)));
+  const fillRatio = nodes.length > 5000 ? 0.9 : nodes.length > 2000 ? 0.86 : 0.82;
+  const scale = Math.max(0.08, Math.min(1.7, fillRatio / Math.max(graphWidth / width, graphHeight / height)));
   const tx = width / 2 - scale * (minX + graphWidth / 2);
   const ty = height / 2 - scale * (minY + graphHeight / 2);
   svg.transition().duration(420).call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
@@ -2542,7 +2899,12 @@ function togglePanel(panelId) {
   }
 }
 
-init();
+window.addEventListener('load', () => {
+  if (window.bootViewer) {
+    window.bootViewer();
+  }
+});
 </script>
+<script src="/three-graph.js"></script>
 </body>
 </html>

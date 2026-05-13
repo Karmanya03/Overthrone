@@ -15,4 +15,5 @@ serde_json.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 open = "5"

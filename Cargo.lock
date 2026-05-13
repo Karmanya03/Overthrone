@@ -4306,6 +4306,7 @@ version = "0.1.46"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
+ "chrono",
  "open",
  "serde",
  "serde_json",

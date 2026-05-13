@@ -2,11 +2,13 @@
 //!
 //! Supports Overthrone export JSON and BloodHound collections.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 const EDGE_KEYS: &[&str] = &[
     "MemberOf",
@@ -87,7 +89,59 @@ const EDGE_KEYS: &[&str] = &[
     "WriteUserCertificate",
     "EnrollCertificate",
     "WriteProperty",
+    "ADCSESC1",
+    "ADCSESC2",
+    "ADCSESC3",
+    "ADCSESC4",
+    "ADCSESC5",
+    "ADCSESC6",
+    "ADCSESC7",
+    "ADCSESC8",
+    "ADCSESC9",
+    "ADCSESC10",
+    "ADCSESC11",
+    "ADCSESC12",
+    "ADCSESC13",
+    "ADCSESC14",
+    "ADCSESC15",
+    "ADCSESC16",
+    "ManageCA",
+    "ManageCertificates",
+    "ManageCertTemplate",
+    "Enroll",
 ];
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct GraphLoadMetrics {
+    pub parse_ms: u128,
+    pub build_ms: u128,
+    pub index_ms: u128,
+    pub layout_ms: u128,
+    pub total_ms: u128,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub file_bytes: u64,
+}
+
+#[derive(Debug)]
+struct PerfTimer {
+    start: Instant,
+    #[allow(dead_code)]
+    label: &'static str,
+}
+
+impl PerfTimer {
+    fn start(label: &'static str) -> Self {
+        Self {
+            start: Instant::now(),
+            label,
+        }
+    }
+
+    fn elapsed_ms(&self) -> u128 {
+        self.start.elapsed().as_millis()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ViewerNode {
@@ -102,7 +156,7 @@ pub struct ViewerNode {
     pub properties: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewerEdge {
     pub source: usize,
     pub target: usize,
@@ -110,6 +164,16 @@ pub struct ViewerEdge {
     pub cost: u32,
     #[allow(dead_code)]
     pub properties: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ovt_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ovt_command_desc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ace_details: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -138,6 +202,7 @@ pub struct ViewerGraph {
     stats: ViewerStats,
     lookup: HashMap<String, usize>,
     search_index: Vec<SearchIndexEntry>,
+    pub load_metrics: Option<GraphLoadMetrics>,
 }
 
 #[derive(Clone, Debug)]
@@ -177,16 +242,42 @@ impl ViewerGraph {
             return Err("no JSON files matched the provided input".to_string());
         }
 
+        let total_timer = PerfTimer::start("total");
+        let mut parse_ms = 0u128;
+        let mut build_ms = 0u128;
+        let mut file_bytes = 0u64;
         let mut builder = GraphBuilder::new();
         for path in expanded {
+            file_bytes =
+                file_bytes.saturating_add(fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0));
+
+            let parse_timer = PerfTimer::start("parse");
             let raw = fs::read_to_string(&path)
                 .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
             let value: Value = serde_json::from_str(&raw)
                 .map_err(|e| format!("failed to parse {} as JSON: {e}", path.display()))?;
+            parse_ms = parse_ms.saturating_add(parse_timer.elapsed_ms());
+
+            let build_timer = PerfTimer::start("build");
             builder.ingest_value(&path, &value)?;
+            build_ms = build_ms.saturating_add(build_timer.elapsed_ms());
         }
 
-        builder.finish()
+        let index_timer = PerfTimer::start("index");
+        let mut graph = builder.finish()?;
+        let index_ms = index_timer.elapsed_ms();
+        graph.load_metrics = Some(GraphLoadMetrics {
+            parse_ms,
+            build_ms,
+            index_ms,
+            layout_ms: 0,
+            total_ms: total_timer.elapsed_ms(),
+            node_count: graph.stats.total_nodes,
+            edge_count: graph.stats.total_edges,
+            file_bytes,
+        });
+
+        Ok(graph)
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = (usize, &ViewerNode)> {
@@ -867,12 +958,23 @@ impl GraphBuilder {
             outgoing[source_idx].push(idx);
             incoming[target_idx].push(idx);
             *rel_counts.entry(relationship.clone()).or_default() += 1;
+            let annotation = annotate_viewer_edge(
+                &relationship,
+                &properties,
+                &self.nodes[source_idx],
+                &self.nodes[target_idx],
+            );
             visual_edges.push(ViewerEdge {
                 source: source_idx,
                 target: target_idx,
                 cost: relationship_cost(&relationship),
                 relationship,
                 properties,
+                ovt_command: annotation.ovt_command,
+                ovt_command_desc: annotation.ovt_command_desc,
+                severity: annotation.severity,
+                guidance: annotation.guidance,
+                ace_details: annotation.ace_details,
             });
         }
 
@@ -949,6 +1051,7 @@ impl GraphBuilder {
             stats,
             lookup,
             search_index,
+            load_metrics: None,
         })
     }
 }
@@ -1189,6 +1292,617 @@ fn node_search_display(node: &ViewerNode) -> String {
     node.label.clone()
 }
 
+#[derive(Clone, Debug)]
+struct EdgeComputedAnnotation {
+    ovt_command: Option<String>,
+    ovt_command_desc: Option<String>,
+    severity: Option<u8>,
+    guidance: Option<String>,
+    ace_details: Option<String>,
+}
+
+fn annotate_viewer_edge(
+    relationship: &str,
+    properties: &BTreeMap<String, String>,
+    source: &ViewerNode,
+    target: &ViewerNode,
+) -> EdgeComputedAnnotation {
+    let (severity, guidance) = viewer_edge_security_guidance(relationship);
+    let (ovt_command, ovt_command_desc) =
+        viewer_edge_ovt_command(relationship, properties, source, target);
+
+    EdgeComputedAnnotation {
+        ovt_command: Some(ovt_command),
+        ovt_command_desc: Some(ovt_command_desc),
+        severity: Some(severity),
+        guidance: Some(guidance.to_string()),
+        ace_details: viewer_edge_ace_details(relationship, properties, source, target),
+    }
+}
+
+fn viewer_property_value_ci(
+    properties: &BTreeMap<String, String>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        properties
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn viewer_node_domain(node: &ViewerNode) -> String {
+    node.domain.clone().unwrap_or_else(|| "UNKNOWN".to_string())
+}
+
+fn viewer_node_display_name(node: &ViewerNode) -> String {
+    if let Some(domain) = &node.domain
+        && !node.label.contains('@')
+    {
+        return format!("{}@{}", node.label, domain);
+    }
+    node.label.clone()
+}
+
+fn viewer_node_sid(node: &ViewerNode) -> String {
+    viewer_property_value_ci(
+        &node.properties,
+        &[
+            "objectsid",
+            "objectid",
+            "securityidentifier",
+            "ObjectIdentifier",
+        ],
+    )
+    .unwrap_or_else(|| node.id.clone())
+}
+
+fn adcs_esc_number(relationship: &str) -> Option<String> {
+    let lower = relationship.to_ascii_lowercase();
+    let suffix = lower.strip_prefix("adcsesc")?;
+    suffix
+        .chars()
+        .all(|ch| ch.is_ascii_digit())
+        .then(|| suffix.to_string())
+}
+
+fn viewer_edge_ace_details(
+    relationship: &str,
+    properties: &BTreeMap<String, String>,
+    source: &ViewerNode,
+    target: &ViewerNode,
+) -> Option<String> {
+    let mut details = Vec::new();
+    if let Some(principal) = viewer_property_value_ci(
+        properties,
+        &[
+            "PrincipalSID",
+            "PrincipalObjectIdentifier",
+            "Principalsid",
+            "Source",
+        ],
+    ) {
+        details.push(format!("principal={principal}"));
+    }
+    if let Some(right) = viewer_property_value_ci(properties, &["RightName", "Right", "Type"]) {
+        details.push(format!("right={right}"));
+    } else if !relationship.eq_ignore_ascii_case("Relationship") {
+        details.push(format!("right={relationship}"));
+    }
+    if let Some(object_type) = viewer_property_value_ci(
+        properties,
+        &[
+            "ObjectType",
+            "InheritedObjectType",
+            "ObjectClass",
+            "ObjectTypeGuid",
+        ],
+    ) {
+        details.push(format!("object_type={object_type}"));
+    }
+    if let Some(ace_type) = viewer_property_value_ci(properties, &["AceType", "ACEType"]) {
+        details.push(format!("ace_type={ace_type}"));
+    }
+    if let Some(flags) = viewer_property_value_ci(properties, &["AceFlags", "Flags"]) {
+        details.push(format!("flags={flags}"));
+    }
+    if let Some(inherited) = viewer_property_value_ci(properties, &["IsInherited", "Inherited"]) {
+        details.push(format!("inherited={inherited}"));
+    }
+    if let Some(scope) = viewer_property_value_ci(properties, &["AppliesTo", "AppliesToType"]) {
+        details.push(format!("scope={scope}"));
+    }
+    if let Some(template) = viewer_property_value_ci(properties, &["Template", "TemplateName"]) {
+        details.push(format!("template={template}"));
+    }
+    if let Some(ca) =
+        viewer_property_value_ci(properties, &["CA", "CAName", "CertificateAuthority"])
+    {
+        details.push(format!("ca={ca}"));
+    }
+
+    if details.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{} -> {} [{}]",
+        viewer_node_display_name(source),
+        viewer_node_display_name(target),
+        details.join(", ")
+    ))
+}
+
+fn viewer_edge_ovt_command(
+    relationship: &str,
+    properties: &BTreeMap<String, String>,
+    source: &ViewerNode,
+    target: &ViewerNode,
+) -> (String, String) {
+    let target_sid = viewer_node_sid(target);
+    let target_name = target.label.clone();
+    let target_display = viewer_node_display_name(target);
+    let source_domain = viewer_node_domain(source);
+    let template = viewer_property_value_ci(properties, &["Template", "TemplateName"])
+        .unwrap_or_else(|| "<TEMPLATE>".to_string());
+    let ca = viewer_property_value_ci(properties, &["CA", "CAName", "CertificateAuthority"])
+        .unwrap_or_else(|| "<CA_HOST>".to_string());
+
+    match relationship.to_ascii_lowercase().as_str() {
+        "genericall" | "genericwrite" | "allextendedrights" | "writeproperty" => (
+            format!("ovt powerview acls --sid {target_sid}"),
+            format!("Review ACLs on {target_display} and scope the write primitive before acting."),
+        ),
+        "writedacl" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "Add a tightly scoped ACE on {target_display}, complete the action, then restore the original ACL."
+            ),
+        ),
+        "writeowner" | "owns" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "Take ownership of {target_display}, modify the DACL, then restore the original owner."
+            ),
+        ),
+        "forcechangepassword" => (
+            format!(
+                "ovt acl force-password --target {} --password <NEW_PASSWORD>",
+                target.id
+            ),
+            format!(
+                "Reset the password for {target_display}; noisy, so prefer a controlled window."
+            ),
+        ),
+        "addmembers" => (
+            format!(
+                "ovt acl add-member --group {} --member <YOUR_ACCOUNT>",
+                target.id
+            ),
+            format!(
+                "Add a single principal to {target_display} and remove it immediately after the dependent action."
+            ),
+        ),
+        "addself" => (
+            format!("ovt acl add-self --group {}", target.id),
+            format!("Self-add access to {target_display}; scope it tightly and clean up quickly."),
+        ),
+        "createchild" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "CreateChild on {target_display}; only create disposable test objects and remove them."
+            ),
+        ),
+        "writeself" => (
+            format!("ovt powerview acls --sid {target_sid}"),
+            format!(
+                "Validated self-write on {target_display}; confirm the exact attribute before use."
+            ),
+        ),
+        "readlapspassword" | "readlapspasswordexpiry" | "readlapsencryptedpassword" => (
+            format!("ovt laps read --computer {target_name} --target-dc {source_domain}"),
+            format!(
+                "Read LAPS material for {target_display}; treat the value as credential material."
+            ),
+        ),
+        "readgmsapassword" => (
+            format!("ovt powerview acls --sid {target_sid}"),
+            format!(
+                "gMSA password path on {target_display}; map the service identity reach before using it."
+            ),
+        ),
+        "allowedtodelegate" => (
+            format!("ovt powerview delegations --target {}", target.id),
+            format!("Enumerate constrained delegation on {target_display} before any S4U testing."),
+        ),
+        "allowedtoact" | "addallowedtoact" => (
+            format!("ovt acls add-allowed-to-act --target {}", target.id),
+            format!(
+                "RBCD on {target_display}; use a controlled machine account and remove the ACE after validation."
+            ),
+        ),
+        "writeallowedtodelegateto" => (
+            format!("ovt acls writedacl --target {}", target.id),
+            format!(
+                "Delegation write on {target_display}; record and restore the original service list."
+            ),
+        ),
+        "dcsync" | "getchanges" | "getchangesall" | "getchangesinfilteredset" => (
+            format!(
+                "ovt adcs dcsync --target {} --domain {source_domain}",
+                target.id
+            ),
+            format!(
+                "Replication rights on {target_display}; prefer targeted secret retrieval over a full DCSync."
+            ),
+        ),
+        "writespn" | "writeserviceprincipalname" => (
+            format!("ovt acl write-spn --target {} --spn <SPN>", target.id),
+            format!(
+                "SPN write on {target_display}; use one temporary SPN, collect a single TGS, then restore the original."
+            ),
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => (
+            format!(
+                "ovt acl shadow-creds --target {} --cert <CERT_FILE>",
+                target.id
+            ),
+            format!(
+                "Shadow credentials on {target_display}; add a controlled KeyCredentialLink, authenticate, then remove it."
+            ),
+        ),
+        "writealtsecurityidentities" => (
+            format!("ovt adcs alt-sid --target {}", target.id),
+            format!(
+                "Certificate mapping write on {target_display}; verify policy and restore original values."
+            ),
+        ),
+        "writeaccountrestrictions" => (
+            format!("ovt acl modify --target {} --restrictions", target.id),
+            format!(
+                "Account restrictions write on {target_display}; inspect the target class first."
+            ),
+        ),
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => (
+            format!("ovt acl write-script --target {}", target.id),
+            format!("Script path write on {target_display}; keep payloads minimal and reversible."),
+        ),
+        "writednshostname" => (
+            format!("ovt acl write-dnshost --target {}", target.id),
+            format!(
+                "DNS hostname write on {target_display}; validate SPN and delegation side effects first."
+            ),
+        ),
+        "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => (
+            format!("ovt acl modify --target {} --pwd-policy", target.id),
+            format!(
+                "Password policy write on {target_display}; document the original policy and prefer a read-only proof."
+            ),
+        ),
+        "writegplink" => (
+            format!("ovt gpo link --target {} --gpo <GPO_ID>", target.id),
+            format!(
+                "GPLink write on {target_display}; validate scope, inheritance, filtering, and rollback first."
+            ),
+        ),
+        "enrollcertificate" | "enroll" => (
+            format!(
+                "ovt adcs enroll --template {template} --target {}",
+                target.id
+            ),
+            format!(
+                "Certificate enrollment on {target_display}; inspect EKUs, subject supply, approval, and enrollment rights."
+            ),
+        ),
+        "enrollonbehalfof" => (
+            format!(
+                "ovt adcs enroll --template {template} --target {}",
+                target.id
+            ),
+            format!(
+                "Enrollment-agent path on {target_display}; validate template constraints and approval settings."
+            ),
+        ),
+        "manageca" => (
+            format!("ovt adcs manage-ca --ca {ca}"),
+            format!(
+                "ManageCA rights on {target_display}; record CA configuration and restore every changed flag."
+            ),
+        ),
+        "managecertificates" => (
+            format!("ovt adcs manage-certificates --ca {ca}"),
+            format!(
+                "ManageCertificates rights on {target_display}; validate officer scope and pending request risk."
+            ),
+        ),
+        "managecerttemplate" => (
+            format!("ovt adcs template --template {template} --inspect"),
+            format!(
+                "Certificate template control on {target_display}; inspect and restore template ACLs and flags."
+            ),
+        ),
+        "hasspn" => (
+            "ovt kerberoast --spn <SPN>".to_string(),
+            format!(
+                "Kerberoast marker on {target_display}; request one scoped ticket and crack offline."
+            ),
+        ),
+        "dontreqpreauth" => (
+            format!("ovt asrep --user {}", target.label),
+            format!(
+                "AS-REP roast marker on {target_display}; collect once and avoid repeated online queries."
+            ),
+        ),
+        "adminto" => (
+            format!("ovt exec --target {} --method auto", target.id),
+            format!(
+                "Local admin on {target_display}; choose the lowest-volume execution primitive."
+            ),
+        ),
+        "canrdp" => (
+            format!("ovt exec --target {} --method rdp", target.id),
+            format!("RDP on {target_display}; visible but useful for validation."),
+        ),
+        "canpsremote" => (
+            format!("ovt exec --target {} --method psremote", target.id),
+            format!(
+                "PowerShell Remoting on {target_display}; keep commands host-scoped and low-volume."
+            ),
+        ),
+        "executedcom" => (
+            format!("ovt exec --target {} --method dcom", target.id),
+            format!("DCOM on {target_display}; reserve for approved execution phases."),
+        ),
+        "sqladmin" => (
+            format!(
+                "ovt mssql --target {} --query 'SELECT @@version'",
+                target.id
+            ),
+            format!(
+                "SQL admin on {target_display}; check linked servers, xp_cmdshell, impersonation, and CLR."
+            ),
+        ),
+        "hassession" => (
+            format!("ovt exec --target {} --method token", target.id),
+            format!("Session on {target_display}; verify freshness before token impersonation."),
+        ),
+        "trustedby" => (
+            format!(
+                "ovt move trust --domain {source_domain} --target {}",
+                target.id
+            ),
+            format!(
+                "Cross-domain trust from {source_domain}; confirm direction, SID filtering, and transitive scope."
+            ),
+        ),
+        "memberof" | "memberoftierzero" | "memberoftier0" => (
+            format!("ovt powerview members --group {} --recurse", target.id),
+            format!(
+                "Membership in {target_display}; inspect nested memberships for escalation paths."
+            ),
+        ),
+        "contains" => (
+            format!("ovt powerview container --target {}", target.id),
+            format!("Containment of {target_display}; useful for GPO inheritance and OU scope."),
+        ),
+        "gpolink" => (
+            format!("ovt gpo status --target {}", target.id),
+            format!("GPO link on {target_display}; review linked OUs and security filtering."),
+        ),
+        "hassidhistory" => (
+            format!("ovt move sid-history --target {}", target.id),
+            format!(
+                "SIDHistory on {target_display}; validate effective membership and cross-domain effects."
+            ),
+        ),
+        _ if adcs_esc_number(relationship).is_some() => {
+            let esc_num = adcs_esc_number(relationship).unwrap_or_else(|| "N".to_string());
+            (
+                format!("ovt adcs esc{esc_num} --ca {ca} --template {template}"),
+                format!(
+                    "ADCS ESC{esc_num} path to {target_display}; verify EKUs, SAN policy, and mapping before use."
+                ),
+            )
+        }
+        _ => {
+            let safe_rel = relationship.replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+            (
+                format!("ovt powerview acls --sid {target_sid} --edge-type {safe_rel}"),
+                format!(
+                    "Review the {relationship} relationship on {target_display}; confirm directionality and validate the abuse primitive before acting."
+                ),
+            )
+        }
+    }
+}
+
+fn viewer_edge_security_guidance(relationship: &str) -> (u8, &'static str) {
+    match relationship.to_ascii_lowercase().as_str() {
+        "genericall" => (
+            1,
+            "Full control. Password reset, DACL edit, group modification, and shadow credentials are common abuse paths.",
+        ),
+        "genericwrite" => (
+            2,
+            "Write access. Inspect SPN, delegation, logon script, certificate mapping, and shadow credential options.",
+        ),
+        "writedacl" => (
+            1,
+            "DACL write. Add only the scoped ACE needed for validation and restore the original ACL.",
+        ),
+        "writeowner" | "owns" => (
+            1,
+            "Ownership control. Preserve the original owner, modify DACL only as needed, and restore ownership.",
+        ),
+        "forcechangepassword" => (
+            2,
+            "Password reset edge. Useful but noisy; use only with approval and clear rollback notes.",
+        ),
+        "addmembers" | "addself" => (
+            2,
+            "Group membership control. Add the smallest required principal and remove it immediately after validation.",
+        ),
+        "allextendedrights" => (
+            1,
+            "Extended rights. May enable password reset or DCSync depending on target object scope.",
+        ),
+        "createchild" => (
+            3,
+            "CreateChild. Validate object class scope before creating disposable test objects.",
+        ),
+        "writeself" => (
+            2,
+            "Validated self-write. Confirm the exact attribute or validated write before acting.",
+        ),
+        "readlapspassword" | "readlapspasswordexpiry" | "readlapsencryptedpassword" => (
+            2,
+            "LAPS read. Treat recovered or derived values as credential material.",
+        ),
+        "readgmsapassword" => (
+            2,
+            "gMSA read. Derive the managed password only after mapping where the service identity has reach.",
+        ),
+        "allowedtoact" | "addallowedtoact" => (
+            1,
+            "Resource-based constrained delegation. Use a controlled machine account and clean up the value.",
+        ),
+        "allowedtodelegate" => (
+            2,
+            "Constrained delegation. Enumerate allowed services and request only scoped S4U tickets.",
+        ),
+        "writeallowedtodelegateto" => (
+            1,
+            "Delegation write. Record and restore the original msDS-AllowedToDelegateTo service list.",
+        ),
+        "dcsync" | "getchanges" | "getchangesall" | "getchangesinfilteredset" => (
+            1,
+            "Replication rights. Domain-impacting path; prefer targeted retrieval over full-domain dumping.",
+        ),
+        "writespn" | "writeserviceprincipalname" => (
+            2,
+            "SPN write. Use one temporary SPN, collect one TGS, then restore the original SPN set.",
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => (
+            1,
+            "Shadow credentials. Add a controlled key credential, authenticate, then remove it.",
+        ),
+        "writealtsecurityidentities" => (
+            1,
+            "Certificate mapping write. Verify mapping policy and restore original altSecurityIdentities values.",
+        ),
+        "writeaccountrestrictions" => (
+            2,
+            "Account restriction write. Inspect target class and delegation impact before changing attributes.",
+        ),
+        "writelogonscript" | "writeprofilepath" | "writescriptpath" => (
+            2,
+            "Script path write. Visible execution path; keep payloads minimal and reversible.",
+        ),
+        "writednshostname" => (
+            3,
+            "DNS hostname write. Validate DNS, SPN, and delegation side effects first.",
+        ),
+        "writepwdproperties"
+        | "writelockoutthreshold"
+        | "writeminpwdlength"
+        | "writepwdhistorylength"
+        | "writepwdcomplexity"
+        | "writepwdreversibleencryption"
+        | "writepwdage"
+        | "writelockoutduration"
+        | "writelockoutobservationwindow" => (
+            3,
+            "Password policy write. Domain-visible and disruptive; document original settings first.",
+        ),
+        "writegplink" | "gpolink" => (
+            2,
+            "GPO control. Review linked OUs, inheritance, enforcement, security filtering, and rollback.",
+        ),
+        "enrollcertificate" | "enroll" => (
+            2,
+            "Certificate enrollment. Review EKUs, subject supply, approval, and enrollment rights.",
+        ),
+        "enrollonbehalfof" => (
+            1,
+            "Enrollment agent path. Validate template constraints and approval settings before requesting on behalf of another principal.",
+        ),
+        "manageca" | "managecertificates" | "managecerttemplate" => (
+            1,
+            "ADCS management control. CA or template configuration changes can unlock certificate abuse paths; record and restore changes.",
+        ),
+        "adminto" => (
+            2,
+            "Local admin. Prefer low-volume execution and host-scoped validation.",
+        ),
+        "canrdp" => (
+            3,
+            "Interactive logon path. Useful but visible; prefer non-interactive validation when possible.",
+        ),
+        "canpsremote" => (
+            3,
+            "PowerShell Remoting. Validate WinRM reachability and keep commands constrained.",
+        ),
+        "executedcom" => (
+            3,
+            "DCOM execution. High telemetry; reserve for approved execution phases.",
+        ),
+        "sqladmin" => (
+            2,
+            "SQL admin. Check linked servers, xp_cmdshell, impersonation, CLR, and database trust chains.",
+        ),
+        "hassession" => (
+            3,
+            "Session edge. Verify freshness before relying on token impersonation.",
+        ),
+        "hasspn" => (
+            4,
+            "Kerberoast marker. Request scoped tickets and crack offline.",
+        ),
+        "dontreqpreauth" => (
+            4,
+            "AS-REP roast marker. Collect once and avoid repeated online queries.",
+        ),
+        "trustedby" | "trustedtoauth" => (
+            2,
+            "Trust relationship. Confirm direction, SID filtering, selective auth, and transitivity.",
+        ),
+        "hassidhistory" => (
+            3,
+            "SIDHistory. Validate effective privileges and cross-domain effects.",
+        ),
+        "memberoftierzero" | "memberoftier0" => (
+            1,
+            "Tier-zero membership. Treat as domain-impacting and verify nested group expansion.",
+        ),
+        "memberof" => (
+            5,
+            "Membership edge. Mostly context, but nested memberships often bridge privilege paths.",
+        ),
+        "contains" => (
+            5,
+            "Containment edge. Useful for GPO inheritance, OU scope, and object placement.",
+        ),
+        _ if adcs_esc_number(relationship).is_some() => (
+            1,
+            "ADCS ESC path. Validate certificate template, CA configuration, mapping, and rollback requirements.",
+        ),
+        _ => (
+            4,
+            "Review relationship properties, confirm directionality, and validate the exact abuse primitive before acting.",
+        ),
+    }
+}
+
 fn normalize_kind(raw: &str) -> String {
     match raw
         .trim()
@@ -1282,6 +1996,27 @@ fn relationship_name(raw: &str) -> String {
         "writegplink" => "WriteGPLink",
         "writeusercertificate" => "WriteUserCertificate",
         "enrollcertificate" => "EnrollCertificate",
+        "enroll" => "EnrollCertificate",
+        "enrollonbehalfof" => "EnrollOnBehalfOf",
+        "manageca" => "ManageCA",
+        "managecertificates" => "ManageCertificates",
+        "managecerttemplate" => "ManageCertTemplate",
+        "adcsesc1" => "AdcsEsc1",
+        "adcsesc2" => "AdcsEsc2",
+        "adcsesc3" => "AdcsEsc3",
+        "adcsesc4" => "AdcsEsc4",
+        "adcsesc5" => "AdcsEsc5",
+        "adcsesc6" => "AdcsEsc6",
+        "adcsesc7" => "AdcsEsc7",
+        "adcsesc8" => "AdcsEsc8",
+        "adcsesc9" => "AdcsEsc9",
+        "adcsesc10" => "AdcsEsc10",
+        "adcsesc11" => "AdcsEsc11",
+        "adcsesc12" => "AdcsEsc12",
+        "adcsesc13" => "AdcsEsc13",
+        "adcsesc14" => "AdcsEsc14",
+        "adcsesc15" => "AdcsEsc15",
+        "adcsesc16" => "AdcsEsc16",
         "writeproperty" => "WriteProperty",
         "" => "Relationship",
         _ => return cleaned,
@@ -1300,9 +2035,31 @@ fn relationship_cost(relationship: &str) -> u32 {
         | "writedacl"
         | "writeowner"
         | "allowedtodelegate"
-        | "allowedtoact" => 1,
+        | "allowedtoact"
+        | "addallowedtoact"
+        | "writeallowedtodelegateto"
+        | "manageca"
+        | "managecertificates"
+        | "managecerttemplate"
+        | "enrollonbehalfof"
+        | "adcsesc1"
+        | "adcsesc2"
+        | "adcsesc3"
+        | "adcsesc4"
+        | "adcsesc5"
+        | "adcsesc6"
+        | "adcsesc7"
+        | "adcsesc8"
+        | "adcsesc9"
+        | "adcsesc10"
+        | "adcsesc11"
+        | "adcsesc12"
+        | "adcsesc13"
+        | "adcsesc14"
+        | "adcsesc15"
+        | "adcsesc16" => 1,
         "hassession" | "genericwrite" | "addmembers" | "addself" | "readlapspassword"
-        | "readgmsapassword" | "getchanges" | "getchangesall" => 2,
+        | "readgmsapassword" | "getchanges" | "getchangesall" | "enrollcertificate" => 2,
         "canrdp" | "canpsremote" | "executedcom" | "sqladmin" | "gpolink" => 3,
         "trustedby" => 4,
         "hasspn" | "dontreqpreauth" => 5,
