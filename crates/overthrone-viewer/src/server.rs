@@ -1899,15 +1899,11 @@ async fn get_graph(
         edge_limit,
         chunk_offset,
         chunk_size: node_limit,
-        chunk_index: if node_limit == 0 {
-            0
-        } else {
-            chunk_offset / node_limit
-        },
+        chunk_index: chunk_offset.checked_div(node_limit).unwrap_or(0),
         chunk_count: if node_limit == 0 || total_nodes == 0 {
             1
         } else {
-            (total_nodes + node_limit - 1) / node_limit
+            total_nodes.div_ceil(node_limit)
         },
         load_metrics: graph.load_metrics.clone(),
         server_metrics,
@@ -1938,10 +1934,10 @@ async fn get_node_detail(
         let Some(edge) = graph.edge(*edge_idx) else {
             continue;
         };
-        if let Some(tgt) = graph.get_node(edge.target) {
-            if let Some(connection) = build_connection(&graph, edge, tgt, "outgoing") {
-                connections.push(connection);
-            }
+        if let Some(tgt) = graph.get_node(edge.target)
+            && let Some(connection) = build_connection(&graph, edge, tgt, "outgoing")
+        {
+            connections.push(connection);
         }
     }
 
@@ -1949,10 +1945,10 @@ async fn get_node_detail(
         let Some(edge) = graph.edge(*edge_idx) else {
             continue;
         };
-        if let Some(src) = graph.get_node(edge.source) {
-            if let Some(connection) = build_connection(&graph, edge, src, "incoming") {
-                connections.push(connection);
-            }
+        if let Some(src) = graph.get_node(edge.source)
+            && let Some(connection) = build_connection(&graph, edge, src, "incoming")
+        {
+            connections.push(connection);
         }
     }
 

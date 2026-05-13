@@ -3800,8 +3800,15 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
         }
 
         GraphAction::Gui { input, port } => {
+            // Build sources: prefer explicit input; otherwise prefer graph_file, then docs demo JSON, then fallback
             let sources = if input.is_empty() {
-                let resolved_path = graph_file.unwrap_or(default_path);
+                let resolved_path = graph_file.unwrap_or_else(|| {
+                    if std::path::Path::new("docs/bloodhound-hierarchy-demo.json").exists() {
+                        "docs/bloodhound-hierarchy-demo.json"
+                    } else {
+                        default_path
+                    }
+                });
                 if graph_file.is_none() {
                     banner::print_info(&format!("Using default graph file: {}", resolved_path));
                 }
@@ -3810,9 +3817,25 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                 input
             };
 
+            // Flexible existence checks: try the literal path, then try converting backslashes,
+            // and finally attempt to canonicalize.
             let mut missing = false;
             for source in &sources {
-                if !std::path::Path::new(source).exists() {
+                let mut found = false;
+                let p = std::path::Path::new(source);
+                if p.exists() {
+                    found = true;
+                } else if source.contains('\\') {
+                    let alt = source.replace('\\', "/");
+                    if std::path::Path::new(&alt).exists() {
+                        found = true;
+                    }
+                }
+                if !found && p.canonicalize().map(|c| c.exists()).unwrap_or(false) {
+                    found = true;
+                }
+
+                if !found {
                     banner::print_fail(&format!("Graph source not found: {}", source));
                     missing = true;
                 }

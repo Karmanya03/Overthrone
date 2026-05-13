@@ -1197,9 +1197,9 @@ input:disabled {
             <div style="display:flex;gap:8px">
               <select id="graph-select" style="flex:1; appearance:auto"><option value="" disabled selected>Choose JSON file...</option></select>
               <input type="file" id="json-upload" accept=".json,application/json" style="display:none">
-              <button class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
+              <label for="json-upload" class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-          </button>
+              </label>
         </div>
       </div>
 
@@ -1568,6 +1568,8 @@ async function init() {
 
   renderStats(emptyStats());
   renderEmptyState();
+  // Ensure Graph Stats panel is expanded and visible by default
+  try { document.getElementById('panel-stats').classList.remove('collapsed'); } catch(e){}
 
   // Sidebar toggle
   document.getElementById('sidebar-close').addEventListener('click', () => {
@@ -1610,6 +1612,14 @@ async function loadGraphList() {
       renderEmptyState();
     }
   };
+
+  // If there's exactly one indexed graph, auto-select it so stats are visible immediately.
+  if (graphList.length === 1) {
+    const firstId = graphList[0].id;
+    select.value = firstId;
+    await loadGraph(firstId);
+    return;
+  }
 
   setEmptyMessage('Select a JSON graph', `${graphList.length} JSON file${graphList.length === 1 ? '' : 's'} indexed. Nothing is rendered until a file is selected.`);
 }
@@ -1855,6 +1865,12 @@ function renderStats(stats) {
       <div class="label">${item.label}</div>
     </div>
   `).join('');
+
+  // Ensure the Graph Stats panel is expanded and visible when stats are rendered
+  try {
+    const panel = document.getElementById('panel-stats');
+    if (panel) panel.classList.remove('collapsed');
+  } catch (e) {}
 }
 
 function activeGraphInfo() {
