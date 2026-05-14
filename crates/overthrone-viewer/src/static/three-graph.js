@@ -2,11 +2,45 @@
   const THREE = window.THREE;
   if (!THREE) {
     window.bootViewer = function bootViewerFallback() {
-      if (typeof window.init === 'function') {
+      const canInitD3 = typeof window.init === 'function' && typeof window.d3 !== 'undefined';
+      if (canInitD3) {
         window.init();
         return;
       }
-      setEmptyMessage('Three.js unavailable', 'The graph renderer could not load the WebGL library.');
+      const empty = typeof window.emptyStats === 'function'
+        ? window.emptyStats()
+        : {
+            users: 0,
+            computers: 0,
+            groups: 0,
+            domains: 0,
+            gpos: 0,
+            ous: 0,
+            cert_templates: 0,
+            high_value: 0,
+            owned: 0,
+            total_nodes: 0,
+            total_edges: 0,
+          };
+      if (typeof window.renderStats === 'function') {
+        window.renderStats(empty);
+      }
+      if (typeof window.renderEmptyState === 'function') {
+        window.renderEmptyState();
+      }
+      if (typeof window.loadGraphList === 'function') {
+        window.loadGraphList();
+      }
+      if (typeof window.setEmptyMessage === 'function') {
+        window.setEmptyMessage(
+          'Three.js unavailable',
+          'The graph renderer could not load the WebGL library. Graph stats and sources are still available.'
+        );
+      }
+      try {
+        const panel = document.getElementById('panel-stats');
+        if (panel) panel.classList.remove('collapsed');
+      } catch (e) {}
     };
     return;
   }
@@ -26,6 +60,7 @@
 
   let graphRenderer = null;
   let controlsInstalled = false;
+  let booted = false;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));

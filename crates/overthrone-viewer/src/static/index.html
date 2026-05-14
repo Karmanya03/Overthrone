@@ -5,6 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Overthrone Graph Viewer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// Fallback: if CDN fails, try local bundled copy
+window.addEventListener('load', function() {
+  if (typeof THREE === 'undefined') {
+    var s = document.createElement('script');
+    s.src = '/three-graph.js';
+    s.onload = function() {
+      if (typeof window.bootViewer === 'function') window.bootViewer();
+    };
+    s.onerror = function() {
+      document.getElementById('empty-state').classList.remove('hidden');
+      setEmptyMessage('Three.js Load Failed', 'Could not load the graph renderer library. Check your network connection.');
+    };
+    document.head.appendChild(s);
+  }
+});
+</script>
 <style>
 :root {
   --bg: #050505;
@@ -1195,7 +1212,7 @@ input:disabled {
       <div class="field">
             <label for="graph-select">BloodHound JSON</label>
             <div style="display:flex;gap:8px">
-              <select id="graph-select" style="flex:1; appearance:auto"><option value="" disabled selected>Choose JSON file...</option></select>
+              <select id="graph-select" style="flex:1; appearance:auto"></select>
               <input type="file" id="json-upload" accept=".json,application/json" style="display:none">
               <label for="json-upload" class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
@@ -1426,7 +1443,6 @@ const EDGE_COLORS = {
 let graphData = null;
 let graphList = [];
 let currentGraphId = null;
-let simulation = null;
 let selectedNode = null;
 let renderLimit = '100';
 let prevRenderSelectValue = '100';
@@ -1434,32 +1450,8 @@ let renderOffset = 0;
 let perfHudVisible = false;
 let pathFromId = '';
 let pathToId = '';
-let svg;
-let g;
-let linkGroup;
-let nodeGroup;
-let labelGroup;
-let edgeLabelGroup;
-let zoomBehavior;
-let currentTransform = { x: 0, y: 0, k: 1 };
 
 async function init() {
-  svg = d3.select('#graph-svg');
-  zoomBehavior = d3.zoom()
-    .scaleExtent([0.04, 12])
-    .on('zoom', event => {
-      currentTransform = event.transform;
-      g.attr('transform', currentTransform);
-      refreshLabelVisibility();
-    });
-
-  svg.call(zoomBehavior);
-  g = svg.append('g');
-  linkGroup = g.append('g').attr('class', 'links');
-  edgeLabelGroup = g.append('g').attr('class', 'edge-labels');
-  nodeGroup = g.append('g').attr('class', 'nodes');
-  labelGroup = g.append('g').attr('class', 'labels');
-
   document.getElementById('zoom-in').addEventListener('click', zoomIn);
   document.getElementById('zoom-out').addEventListener('click', zoomOut);
   document.getElementById('zoom-fit').addEventListener('click', fitGraph);
@@ -1475,17 +1467,37 @@ async function init() {
         alert("Only JSON files are allowed");
         return;
     }
+    if (file.size > 200 * 1024 * 1024) {
+        alert("File too large (max 200 MB). Consider using the --input flag with the CLI.");
+        return;
+    }
     document.getElementById('graph-badge').textContent = 'Uploading...';
     try {
       const resp = await fetch('/api/upload', { method: 'POST', body: file });
-      if (!resp.ok) throw new Error(await resp.text());
-      const newGraph = await resp.json();
+      const text = await resp.text();
+      if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try { msg = JSON.parse(text).error || text; } catch(e) {}
+        throw new Error(msg);
+      }
+      let newGraph;
+      try {
+        newGraph = JSON.parse(text);
+      } catch(e) {
+        throw new Error("Server returned invalid JSON: " + e.message);
+      }
+      if (!newGraph.id) throw new Error("Upload succeeded but no graph ID returned");
+      if (typeof ensureGraphOption === 'function') {
+        ensureGraphOption(newGraph);
+      }
       await loadGraphList();
       document.getElementById('graph-select').value = newGraph.id;
       loadGraph(newGraph.id);
     } catch (e) {
-      alert("Upload failed: " + e.message);
+      const msg = e.message || String(e);
+      console.error("Upload error:", e);
       document.getElementById('graph-badge').textContent = 'Upload failed';
+      setEmptyMessage('Upload failed', msg.length > 200 ? msg.slice(0, 200) + '...' : msg);
     }
     event.target.value = '';
   });
@@ -1510,12 +1522,10 @@ async function init() {
   document.getElementById('path-to').addEventListener('input', () => { pathToId = ''; });
   document.getElementById('render-select').addEventListener('change', event => {
     const select = event.target;
-    // If user selected custom, prompt for a value
     if (select.value === 'custom') {
       const current = document.getElementById('render-custom').value || '100';
       const raw = window.prompt('Enter custom node count (1-20000):', current);
       if (raw === null) {
-        // user cancelled - revert to previous selection
         select.value = prevRenderSelectValue || '100';
       } else {
         const parsed = Math.max(1, Math.min(20000, Number.parseInt(raw || '100', 10) || 100));
@@ -1564,25 +1574,24 @@ async function init() {
       deselectAll();
     }
   });
-  svg.on('click', deselectAll);
 
   renderStats(emptyStats());
   renderEmptyState();
-  // Ensure Graph Stats panel is expanded and visible by default
   try { document.getElementById('panel-stats').classList.remove('collapsed'); } catch(e){}
 
-  // Sidebar toggle
   document.getElementById('sidebar-close').addEventListener('click', () => {
     document.getElementById('app').classList.add('sidebar-collapsed');
   });
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     document.getElementById('app').classList.remove('sidebar-collapsed');
   });
-  await loadGraphList();
+
+await loadGraphList();
 }
 
 async function loadGraphList() {
   const select = document.getElementById('graph-select');
+  const previousValue = select?.value || '';
   try {
     const resp = await fetch('/api/graphs');
     graphList = await resp.json();
@@ -1605,6 +1614,9 @@ async function loadGraphList() {
     const stats = graph.stats ? `${graph.stats.total_nodes} nodes` : formatBytes(graph.file_bytes);
     return `<option value="${escapeAttr(graph.id)}">${escapeHtml(graph.label)} (${stats})</option>`;
   }).join('');
+  if (previousValue && graphList.some(graph => graph.id === previousValue)) {
+    select.value = previousValue;
+  }
   select.onchange = event => {
     if (event.target.value) {
       loadGraph(event.target.value);
@@ -1622,6 +1634,30 @@ async function loadGraphList() {
   }
 
   setEmptyMessage('Select a JSON graph', `${graphList.length} JSON file${graphList.length === 1 ? '' : 's'} indexed. Nothing is rendered until a file is selected.`);
+}
+
+function ensureGraphOption(graph) {
+  if (!graph) return;
+  const select = document.getElementById('graph-select');
+  if (!select) return;
+  select.disabled = false;
+  const placeholder = Array.from(select.options).find(option => option.value === '');
+  if (!placeholder) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.disabled = true;
+    opt.selected = true;
+    opt.textContent = 'Choose JSON file...';
+    select.appendChild(opt);
+  }
+  const existing = Array.from(select.options).find(option => option.value === graph.id);
+  if (!existing) {
+    const stats = graph.stats ? `${graph.stats.total_nodes} nodes` : formatBytes(graph.file_bytes);
+    const opt = document.createElement('option');
+    opt.value = graph.id;
+    opt.textContent = `${graph.label} (${stats})`;
+    select.appendChild(opt);
+  }
 }
 
 async function loadGraph(graphId) {
@@ -1685,23 +1721,11 @@ async function loadGraph(graphId) {
 }
 
 function teardownGraph() {
-  if (simulation) {
-    simulation.stop();
-    simulation = null;
-  }
-  linkGroup.selectAll('*').remove();
-  edgeLabelGroup.selectAll('*').remove();
-  nodeGroup.selectAll('*').remove();
-  labelGroup.selectAll('*').remove();
-  window._graphNodes = null;
-  window._graphLinks = null;
-  window._graphLabels = null;
-  window._edgeLabels = null;
-  window._graphGlyphs = null;
-  window._nodeBadges = null;
-  window._nodeBadgeText = null;
-  window._nodesMap = {};
-}
+   if (graphRenderer) {
+     graphRenderer.clearGraph();
+   }
+   window._nodesMap = {};
+ }
 
 function renderEmptyState() {
   graphData = null;
@@ -2006,164 +2030,65 @@ async function loadFocusedNode(nodeId) {
 }
 
 function renderGraph(data) {
-  const renderStarted = performance.now();
-  teardownGraph();
-  const container = document.getElementById('graph-container');
-  const width = Math.max(640, container.clientWidth);
-  const height = Math.max(480, container.clientHeight);
-  const nodeCount = data.nodes.length;
-  const nodesMap = {};
+   const renderStarted = performance.now();
+   teardownGraph();
+   const container = document.getElementById('graph-container');
+   const width = Math.max(640, container.clientWidth);
+   const height = Math.max(480, container.clientHeight);
+   const nodeCount = data.nodes.length;
+   const nodesMap = {};
 
-  if (!nodeCount) {
-    setEmptyMessage('No nodes rendered', 'No nodes matched the current filter or chunk selection.');
-    document.getElementById('empty-state').classList.remove('hidden');
-    return;
-  }
-  document.getElementById('empty-state').classList.add('hidden');
+   if (!nodeCount) {
+     setEmptyMessage('No nodes rendered', 'No nodes matched the current filter or chunk selection.');
+     document.getElementById('empty-state').classList.remove('hidden');
+     return;
+   }
+   document.getElementById('empty-state').classList.add('hidden');
 
-  const nodes = data.nodes.map(raw => {
-    const display = nodeDisplayName(raw);
-    const node = {
-      ...raw,
-      display,
-      degree: 0,
-      radius: nodeRadius(raw, nodeCount),
-    };
-    nodesMap[node.id] = node;
-    return node;
-  });
+   const nodes = data.nodes.map(raw => {
+     const display = nodeDisplayName(raw);
+     const node = {
+       ...raw,
+       display,
+       degree: 0,
+       radius: nodeRadius(raw, nodeCount),
+     };
+     nodesMap[node.id] = node;
+     return node;
+   });
 
-  const links = data.edges
-    .filter(edge => nodesMap[edge.source] && nodesMap[edge.target])
-    .map(edge => {
-      const source = nodesMap[edge.source];
-      const target = nodesMap[edge.target];
-      source.degree += 1;
-      target.degree += 1;
-      return {
-        source,
-        target,
-        relationship: edge.relationship,
-        cost: edge.cost,
-        severity: edge.severity,
-        guidance: edge.guidance,
-        ovt_command: edge.ovt_command,
-        ovt_command_desc: edge.ovt_command_desc,
-        ace_details: edge.ace_details,
-        key: edgeKey(edge.source, edge.target, edge.relationship),
-      };
-    });
+   const links = data.edges
+     .filter(edge => nodesMap[edge.source] && nodesMap[edge.target])
+     .map(edge => {
+       const source = nodesMap[edge.source];
+       const target = nodesMap[edge.target];
+       source.degree += 1;
+       target.degree += 1;
+       return {
+         source,
+         target,
+         relationship: edge.relationship,
+         cost: edge.cost,
+         severity: edge.severity,
+         guidance: edge.guidance,
+         ovt_command: edge.ovt_command,
+         ovt_command_desc: edge.ovt_command_desc,
+         ace_details: edge.ace_details,
+         key: edgeKey(edge.source, edge.target, edge.relationship),
+       };
+     });
 
-  computeHierarchicalLayout(nodes, links, width, height, data.hops || []);
+   computeHierarchicalLayout(nodes, links, width, height, data.hops || []);
 
-  const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
-  defs.selectAll('*').remove();
-  defs.append('marker')
-    .attr('id', 'arrow')
-    .attr('viewBox', '0 -5 10 10')
-    .attr('refX', 22)
-    .attr('refY', 0)
-    .attr('markerWidth', 7)
-    .attr('markerHeight', 7)
-    .attr('orient', 'auto')
-    .append('path')
-    .attr('d', 'M0,-4L8,0L0,4')
-    .attr('fill', '#4d4d55');
-
-  const linkSel = linkGroup.selectAll('path')
-    .data(links, d => d.key)
-    .join('path')
-    .attr('class', 'link')
-    .attr('stroke', d => EDGE_COLORS[d.relationship] || '#44444d')
-    .attr('stroke-width', d => importantEdge(d.relationship) ? 2.4 : 1.3)
-    .attr('stroke-dasharray', d => d.relationship === 'MemberOf' || d.relationship === 'Contains' ? '5,4' : null)
-    .attr('d', edgePath)
-    .attr('marker-end', 'url(#arrow)');
-
-  const edgeLabelData = links.filter(edge => shouldCreateEdgeLabel(edge, links.length, nodeCount));
-  const edgeLabelSel = edgeLabelGroup.selectAll('text')
-    .data(edgeLabelData, d => d.key)
-    .join('text')
-    .attr('class', 'edge-label')
-    .attr('transform', edgeLabelTransform)
-    .text(d => d.relationship);
-
-  const nodeSel = nodeGroup.selectAll('circle')
-    .data(nodes, d => d.id)
-    .join('circle')
-    .attr('class', d => {
-      let cls = 'node-circle';
-      if (d.high_value) cls += ' high-value';
-      if (d.owned) cls += ' owned';
-      return cls;
-    })
-    .attr('r', d => d.radius)
-    .attr('cx', d => d.x)
-    .attr('cy', d => d.y)
-    .attr('fill', d => NODE_COLORS[d.type] || NODE_COLORS.Unknown)
-    .on('click', (event, d) => {
-      event.stopPropagation();
-      selectNode(d);
-    })
-    .on('mouseenter', showTooltip)
-    .on('mousemove', moveTooltip)
-    .on('mouseleave', hideTooltip)
-    .call(d3.drag()
-      .on('start', dragStarted)
-      .on('drag', dragged)
-      .on('end', dragEnded));
-
-  const glyphNodes = nodes.filter(node => shouldCreateGlyph(node, nodeCount));
-  const glyphSel = nodeGroup.selectAll('text.node-glyph')
-    .data(glyphNodes, d => d.id)
-    .join('text')
-    .attr('class', 'node-glyph')
-    .attr('x', d => d.x)
-    .attr('y', d => d.y + 0.5)
-    .text(nodeGlyph);
-
-  const badgeNodes = nodes.filter(node => nodeBadgeText(node));
-  const badgeSel = nodeGroup.selectAll('circle.node-badge')
-    .data(badgeNodes, d => d.id)
-    .join('circle')
-    .attr('class', 'node-badge')
-    .attr('r', 9)
-    .attr('cx', d => d.x + d.radius * 0.82)
-    .attr('cy', d => d.y + d.radius * 0.82);
-
-  const badgeTextSel = nodeGroup.selectAll('text.node-badge-text')
-    .data(badgeNodes, d => d.id)
-    .join('text')
-    .attr('class', 'node-badge-text')
-    .attr('x', d => d.x + d.radius * 0.82)
-    .attr('y', d => d.y + d.radius * 0.82 + 0.5)
-    .text(nodeBadgeText);
-
-  const labelNodes = nodes.filter(node => shouldCreateLabel(node, nodeCount));
-  const labelSel = labelGroup.selectAll('text')
-    .data(labelNodes, d => d.id)
-    .join('text')
-    .attr('class', 'node-label')
-    .attr('dy', d => d.radius + 18)
-    .attr('x', d => d.x)
-    .attr('y', d => d.y)
-    .text(d => d.display)
-    .style('font-size', d => d.type === 'Domain' ? '14px' : '12px');
-
-  window._graphNodes = nodeSel;
-  window._graphLinks = linkSel;
-  window._graphLabels = labelSel;
-  window._edgeLabels = edgeLabelSel;
-  window._graphGlyphs = glyphSel;
-  window._nodeBadges = badgeSel;
-  window._nodeBadgeText = badgeTextSel;
-  window._nodesMap = nodesMap;
-  fitGraph();
-  refreshLabelVisibility();
-  data.render_time_ms = Math.max(0, Math.round(performance.now() - renderStarted));
-  data.client_render_ms = data.render_time_ms;
-  updateRenderBadge(data);
-  updateChunkControls(data);
+   const renderer = ensureRenderer();
+   window._nodesMap = nodesMap;
+   graphData = data;
+   renderer.setGraphData({ nodes, edges: links, width, height, graphData: data });
+   fitGraph();
+   data.render_time_ms = Math.max(0, Math.round(performance.now() - renderStarted));
+   data.client_render_ms = data.render_time_ms;
+   updateRenderBadge(data);
+   updateChunkControls(data);
 }
 
 function nodeRadius(node, total) {
@@ -2346,16 +2271,6 @@ function edgeLabelTransform(edge) {
   return `translate(${mx},${my}) rotate(${angle})`;
 }
 
-function redrawGraphPositions() {
-  if (window._graphLinks) window._graphLinks.attr('d', edgePath);
-  if (window._edgeLabels) window._edgeLabels.attr('transform', edgeLabelTransform);
-  if (window._graphNodes) window._graphNodes.attr('cx', d => d.x).attr('cy', d => d.y);
-  if (window._graphGlyphs) window._graphGlyphs.attr('x', d => d.x).attr('y', d => d.y + 0.5);
-  if (window._graphLabels) window._graphLabels.attr('x', d => d.x).attr('y', d => d.y);
-  if (window._nodeBadges) window._nodeBadges.attr('cx', d => d.x + d.radius * 0.82).attr('cy', d => d.y + d.radius * 0.82);
-  if (window._nodeBadgeText) window._nodeBadgeText.attr('x', d => d.x + d.radius * 0.82).attr('y', d => d.y + d.radius * 0.82 + 0.5);
-}
-
 function importantEdge(relationship) {
   return !['MemberOf', 'Contains', 'HasSpn', 'DontReqPreauth'].includes(relationship);
 }
@@ -2381,15 +2296,6 @@ function shouldShowLabel(node, scale) {
   if (scale >= 1.2 && graphData.nodes.length <= 800) return true;
   if (scale >= 2.1 && node.degree >= 4) return true;
   return node.degree >= 18;
-}
-
-function refreshLabelVisibility() {
-  if (!window._graphLabels) return;
-  const scale = currentTransform.k || 1;
-  window._graphLabels.style('display', d => shouldShowLabel(d, scale) ? null : 'none');
-  if (window._edgeLabels) {
-    window._edgeLabels.style('display', d => (scale >= 0.55 || importantEdge(d.relationship)) ? null : 'none');
-  }
 }
 
 function nodeGlyph(node) {
@@ -2428,68 +2334,31 @@ function edgeKey(source, target, relationship) {
 }
 
 function selectNode(node) {
-  if (!graphData || !window._graphNodes) return;
-  selectedNode = node;
+   if (!graphData) return;
+   selectedNode = node;
+   const renderer = ensureRenderer();
+   const connectedNodes = new Set([node.id]);
+   const connectedEdges = new Set();
+   graphData.edges.forEach(edge => {
+     if (edge.source === node.id || edge.target === node.id) {
+       connectedNodes.add(edge.source);
+       connectedNodes.add(edge.target);
+       connectedEdges.add(edgeKey(edge.source, edge.target, edge.relationship));
+     }
+   });
+   renderer.selectNode(node, connectedNodes, connectedEdges);
+   showNodeDetail(node.id);
+ }
 
-  const connectedNodes = new Set([node.id]);
-  const connectedEdges = new Set();
-  graphData.edges.forEach(edge => {
-    if (edge.source === node.id || edge.target === node.id) {
-      connectedNodes.add(edge.source);
-      connectedNodes.add(edge.target);
-      connectedEdges.add(edgeKey(edge.source, edge.target, edge.relationship));
-    }
-  });
-
-  window._graphNodes
-    .classed('dimmed', item => !connectedNodes.has(item.id))
-    .classed('selected', item => item.id === node.id);
-  window._graphLinks
-    .classed('dimmed', item => !connectedEdges.has(item.key))
-    .classed('highlighted', item => connectedEdges.has(item.key));
-  window._graphLabels.classed('dimmed', item => !connectedNodes.has(item.id));
-  if (window._edgeLabels) {
-    window._edgeLabels.classed('dimmed', item => !connectedEdges.has(item.key));
-  }
-  if (window._graphGlyphs) {
-    window._graphGlyphs.classed('dimmed', item => !connectedNodes.has(item.id));
-  }
-  if (window._nodeBadges) {
-    window._nodeBadges.classed('dimmed', item => !connectedNodes.has(item.id));
-  }
-  if (window._nodeBadgeText) {
-    window._nodeBadgeText.classed('dimmed', item => !connectedNodes.has(item.id));
-  }
-  showNodeDetail(node.id);
-}
-
-function deselectAll() {
-  selectedNode = null;
-  if (window._graphNodes) {
-    window._graphNodes.classed('dimmed', false).classed('selected', false);
-  }
-  if (window._graphLinks) {
-    window._graphLinks.classed('dimmed', false).classed('highlighted', false);
-  }
-  if (window._graphLabels) {
-    window._graphLabels.classed('dimmed', false);
-  }
-  if (window._edgeLabels) {
-    window._edgeLabels.classed('dimmed', false);
-  }
-  if (window._graphGlyphs) {
-    window._graphGlyphs.classed('dimmed', false);
-  }
-  if (window._nodeBadges) {
-    window._nodeBadges.classed('dimmed', false);
-  }
-  if (window._nodeBadgeText) {
-    window._nodeBadgeText.classed('dimmed', false);
-  }
-  if (graphData) {
-    clearNodeDetail();
-  }
-}
+ function deselectAll() {
+   selectedNode = null;
+   if (graphRenderer) {
+     graphRenderer.clearSelection();
+   }
+   if (graphData) {
+     clearNodeDetail();
+   }
+ }
 
 async function showNodeDetail(nodeId) {
   const panel = document.getElementById('node-detail');
@@ -2588,40 +2457,55 @@ async function highlightNode(nodeId) {
 }
 
 function highlightPath(hops) {
-  if (!window._graphNodes || !graphData) return;
-  const pathNodes = new Set();
-  const pathEdges = new Set();
-  hops.forEach(hop => {
-    pathNodes.add(hop.source_id);
-    pathNodes.add(hop.target_id);
-    pathEdges.add(edgeKey(hop.source_id, hop.target_id, hop.relationship));
-  });
+   if (!graphRenderer || !graphData) return;
+   graphRenderer.highlightPath(hops);
+ }
 
-  window._graphNodes.classed('dimmed', node => !pathNodes.has(node.id));
-  window._graphLinks
-    .classed('dimmed', edge => !pathEdges.has(edge.key))
-    .classed('highlighted', edge => pathEdges.has(edge.key));
-  window._graphLabels.classed('dimmed', node => !pathNodes.has(node.id));
-  if (window._edgeLabels) {
-    window._edgeLabels.classed('dimmed', edge => !pathEdges.has(edge.key));
-  }
-  if (window._graphGlyphs) {
-    window._graphGlyphs.classed('dimmed', node => !pathNodes.has(node.id));
-  }
-  if (window._nodeBadges) {
-    window._nodeBadges.classed('dimmed', node => !pathNodes.has(node.id));
-  }
-  if (window._nodeBadgeText) {
-    window._nodeBadgeText.classed('dimmed', node => !pathNodes.has(node.id));
-  }
+function zoomIn() {
+   if (graphRenderer) graphRenderer.zoomBy(1.35);
+ }
+
+ function zoomOut() {
+   if (graphRenderer) graphRenderer.zoomBy(0.74);
+ }
+
+ function fitGraph() {
+   if (graphRenderer) graphRenderer.fitToGraph();
+ }
+
+ function zoomToNode(node) {
+   if (graphRenderer) graphRenderer.zoomToNode(node);
+ }
+
+ function showTooltip(event, d) {
+   const tooltip = document.getElementById('tooltip');
+   const color = NODE_COLORS[d.type] || NODE_COLORS.Unknown;
+   tooltip.innerHTML = `
+     <div class="tt-name" style="color:${color}">${escapeHtml(d.display)}</div>
+     <div class="tt-meta">${escapeHtml(d.type)} | ${escapeHtml(d.domain || 'UNKNOWN')}</div>
+     ${d.distinguished_name ? `<div class="tt-meta">${escapeHtml(d.distinguished_name)}</div>` : ''}
+     <div class="tt-meta">${escapeHtml(d.id)}</div>
+   `;
+   tooltip.style.display = 'block';
+   moveTooltip(event);
+ }
+
+ function moveTooltip(event) {
+   const tooltip = document.getElementById('tooltip');
+   tooltip.style.left = `${event.pageX + 14}px`;
+   tooltip.style.top = `${event.pageY + 12}px`;
+ }
+
+ function hideTooltip() {
+   document.getElementById('tooltip').style.display = 'none';
 }
 
-function bindSuggest(inputId, resultsId, onPick) {
-  const input = document.getElementById(inputId);
-  const results = document.getElementById(resultsId);
-  let timeout = null;
+ function bindSuggest(inputId, resultsId, onPick) {
+   const input = document.getElementById(inputId);
+   const results = document.getElementById(resultsId);
+   let timeout = null;
 
-  input.addEventListener('input', () => {
+   input.addEventListener('input', () => {
     clearTimeout(timeout);
     const query = input.value.trim();
     if (!currentGraphId || query.length < 1) {
@@ -2786,63 +2670,18 @@ async function findAttackPath() {
   }
 }
 
-function dragStarted(event, d) {
-  d._dragging = true;
-}
-
-function dragged(event, d) {
-  d.x = event.x;
-  d.y = event.y;
-  redrawGraphPositions();
-}
-
-function dragEnded(event, d) {
-  d._dragging = false;
-}
-
-function zoomIn() {
-  svg.transition().duration(180).call(zoomBehavior.scaleBy, 1.35);
-}
-
-function zoomOut() {
-  svg.transition().duration(180).call(zoomBehavior.scaleBy, 0.74);
-}
-
-function fitGraph() {
-  if (!graphData || !window._nodesMap) {
-    svg.transition().duration(180).call(zoomBehavior.transform, d3.zoomIdentity);
+function highlightNode(nodeId) {
+  const node = window._nodesMap ? window._nodesMap[nodeId] : null;
+  if (!node) {
+    if (currentGraphId) {
+      loadFocusedNode(nodeId);
+    } else if (graphData && graphData.truncated) {
+      document.getElementById('render-badge').textContent = 'Node not rendered — increase Render Budget';
+    }
     return;
   }
-
-  const nodes = Object.values(window._nodesMap);
-  if (!nodes.length) return;
-  const xs = nodes.map(node => node.x || 0);
-  const ys = nodes.map(node => node.y || 0);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const container = document.getElementById('graph-container');
-  const width = container.clientWidth;
-  const height = container.clientHeight;
-  const graphWidth = Math.max(1, maxX - minX);
-  const graphHeight = Math.max(1, maxY - minY);
-  const fillRatio = nodes.length > 5000 ? 0.9 : nodes.length > 2000 ? 0.86 : 0.82;
-  const scale = Math.max(0.08, Math.min(1.7, fillRatio / Math.max(graphWidth / width, graphHeight / height)));
-  const tx = width / 2 - scale * (minX + graphWidth / 2);
-  const ty = height / 2 - scale * (minY + graphHeight / 2);
-  svg.transition().duration(420).call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
-}
-
-function zoomToNode(node) {
-  const container = document.getElementById('graph-container');
-  const width = container.clientWidth;
-  const height = container.clientHeight;
-  const scale = Math.max(1.35, currentTransform.k || 1);
-  svg.transition().duration(360).call(
-    zoomBehavior.transform,
-    d3.zoomIdentity.translate(width / 2, height / 2).scale(scale).translate(-node.x, -node.y)
-  );
+  selectNode(node);
+  zoomToNode(node);
 }
 
 function showTooltip(event, d) {
@@ -2858,7 +2697,7 @@ function showTooltip(event, d) {
   moveTooltip(event);
 }
 
-function moveTooltip(event) {
+ function moveTooltip(event) {
   const tooltip = document.getElementById('tooltip');
   tooltip.style.left = `${event.pageX + 14}px`;
   tooltip.style.top = `${event.pageY + 12}px`;
@@ -2915,9 +2754,23 @@ function togglePanel(panelId) {
   }
 }
 
+function bootViewerFallback() {
+  try {
+    renderStats(emptyStats());
+    renderEmptyState();
+    loadGraphList();
+    const panel = document.getElementById('panel-stats');
+    if (panel) panel.classList.remove('collapsed');
+  } catch (e) {
+    // Keep the UI usable even if scripts fail.
+  }
+}
+
 window.addEventListener('load', () => {
   if (window.bootViewer) {
     window.bootViewer();
+  } else {
+    bootViewerFallback();
   }
 });
 </script>

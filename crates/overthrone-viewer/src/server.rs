@@ -1522,6 +1522,28 @@ fn graph_id_from_label(label: &str) -> String {
     id.trim_matches('-').to_string()
 }
 
+fn collect_json_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn expand_graph_sources(sources: &[String]) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for source in sources {
@@ -1531,23 +1553,13 @@ fn expand_graph_sources(sources: &[String]) -> Result<Vec<PathBuf>> {
         }
 
         if path.is_dir() {
-            let mut entries = fs::read_dir(&path)?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|entry| {
-                    entry
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-                })
-                .collect::<Vec<_>>();
-            entries.sort();
-            paths.extend(entries);
+            collect_json_files(&path, &mut paths)?;
         } else {
             paths.push(path);
         }
     }
 
+    paths.sort();
     Ok(paths)
 }
 
@@ -1805,16 +1817,30 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
 // ============================================================
 
 /// GET / — Serve the embedded SPA
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+async fn index() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=3600, must-revalidate",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Html(INDEX_HTML),
+    )
 }
 
 async fn three_graph_js() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            "application/javascript; charset=utf-8",
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
         THREE_GRAPH_JS,
     )
 }
