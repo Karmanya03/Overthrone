@@ -87,15 +87,11 @@ impl EventLoop {
             KeyCode::Char('5') => app.active_tab = Tab::Trusts,
 
             // Graph navigation / Scrolling
-            KeyCode::Left | KeyCode::Char('h') => {
-                if app.active_tab == Tab::Graph {
-                    app.pan(-5.0, 0.0);
-                }
+            KeyCode::Left | KeyCode::Char('h') if app.active_tab == Tab::Graph => {
+                app.pan(-5.0, 0.0);
             }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if app.active_tab == Tab::Graph {
-                    app.pan(5.0, 0.0);
-                }
+            KeyCode::Right | KeyCode::Char('l') if app.active_tab == Tab::Graph => {
+                app.pan(5.0, 0.0);
             }
             KeyCode::Up | KeyCode::Char('k') => match app.active_tab {
                 Tab::Graph => {
