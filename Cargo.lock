@@ -4016,6 +4016,7 @@ name = "overthrone"
 version = "0.1.47"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64",
  "chrono",
  "clap",

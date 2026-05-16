@@ -85,6 +85,10 @@ pub struct DcSyncResult {
     pub more_data: bool,
     /// Total objects in the response
     pub total_objects: u32,
+    /// Cursor: uuidInvocIdSrc from the response (for pagination)
+    pub uuid_invoc_id_src: [u8; 16],
+    /// Cursor: usnvecTo from the response (3 × u64 USN values)
+    pub usnvec_to: [u64; 3],
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -160,6 +164,8 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
     const CNUMOBJECTS_OFF: usize = 108;
     const POBJ_REF_OFF: usize = 116;
     const FMOREDATA_OFF: usize = 120;
+    const UUID_INVOC_SRC_OFF: usize = 24;
+    const USNVEC_TO_OFF: usize = 76;
     const FIXED_HDR: usize = 140;
 
     if stub_data.len() < FIXED_HDR {
@@ -167,6 +173,19 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
             "DRS reply stub too short for fixed v6 header",
         ));
     }
+
+    // Parse cursor for pagination
+    let uuid_invoc_id_src: [u8; 16] = {
+        let mut buf = [0u8; 16];
+        buf.copy_from_slice(&stub_data[UUID_INVOC_SRC_OFF..UUID_INVOC_SRC_OFF + 16]);
+        buf
+    };
+
+    let usnvec_to = [
+        read_u64(stub_data, USNVEC_TO_OFF),
+        read_u64(stub_data, USNVEC_TO_OFF + 8),
+        read_u64(stub_data, USNVEC_TO_OFF + 16),
+    ];
 
     let c_num_objects = read_u32(stub_data, CNUMOBJECTS_OFF) as usize;
     let p_obj_ref = read_u32(stub_data, POBJ_REF_OFF);
@@ -183,6 +202,8 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
             objects: Vec::new(),
             more_data: f_more_data,
             total_objects: 0,
+            uuid_invoc_id_src,
+            usnvec_to,
         });
     }
 
@@ -203,6 +224,8 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
         objects,
         more_data: f_more_data,
         total_objects: n,
+        uuid_invoc_id_src,
+        usnvec_to,
     })
 }
 
@@ -682,6 +705,22 @@ fn parse_kerberos_keys(data: &[u8], result: &mut SupplementalCredentials) {
 // ═══════════════════════════════════════════════════════════
 
 #[inline]
+fn read_u64(data: &[u8], offset: usize) -> u64 {
+    if offset + 8 > data.len() {
+        return 0;
+    }
+    u64::from_le_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
+    ])
+}
+
 fn read_u32(data: &[u8], offset: usize) -> u32 {
     if offset + 4 > data.len() {
         return 0;

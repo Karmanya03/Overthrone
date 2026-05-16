@@ -1,5 +1,6 @@
 //! Command implementations for Overthrone CLI
 
+use crate::auth::Credentials;
 use crate::banner;
 use crate::{
     AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, OutputFormat,
@@ -427,17 +428,195 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 // Module command handlers
 // ──────────────────────────────────────────────────────────
 
-pub async fn cmd_module_list(cli: &Cli) -> i32 {
+pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
     use overthrone_core::exec::modules;
-    let modules = modules::list_modules().await;
+
+    let meta = if let Some(cat_str) = category {
+        let cat = match cat_str.to_lowercase().as_str() {
+            "execute" => modules::ModuleCategory::Execute,
+            "dump" => modules::ModuleCategory::Dump,
+            "enum" => modules::ModuleCategory::Enum,
+            "kerberos" => modules::ModuleCategory::Kerberos,
+            "secrets" => modules::ModuleCategory::Secrets,
+            "scan" => modules::ModuleCategory::Scan,
+            "coerce" => modules::ModuleCategory::Coerce,
+            _ => {
+                banner::print_fail(&format!(
+                    "Unknown category: {}. Valid: execute, dump, enum, kerberos, secrets, scan, coerce",
+                    cat_str
+                ));
+                return 1;
+            }
+        };
+        let mut filtered: Vec<_> = modules::list_module_metadata()
+            .await
+            .into_iter()
+            .filter(|m| m.category == cat)
+            .collect();
+        filtered.sort_by(|a, b| a.name.cmp(b.name));
+        filtered
+    } else {
+        let mut all = modules::list_module_metadata().await;
+        all.sort_by(|a, b| {
+            a.category
+                .label()
+                .cmp(b.category.label())
+                .then_with(|| a.name.cmp(b.name))
+        });
+        all
+    };
+
     if wants_json(cli) {
-        return emit_json(cli, serde_json::json!({"modules": modules}));
+        return emit_json(cli, serde_json::json!({"modules": meta}));
     }
 
-    println!("Available modules:");
-    for m in modules {
-        println!("  - {}", m);
+    if meta.is_empty() {
+        banner::print_info("No modules found");
+        return 0;
     }
+
+    println!("\n{}", "Available Modules:".yellow().bold());
+    println!(
+        "{}",
+        "─────────────────────────────────────────────────".dimmed()
+    );
+
+    let mut current_cat = String::new();
+    for m in &meta {
+        let cat_label = m.category.label();
+        if cat_label != current_cat {
+            current_cat = cat_label.to_string();
+            println!(
+                "\n  {} {} {}",
+                "■".cyan(),
+                cat_label.cyan().bold(),
+                format!(
+                    "({})",
+                    meta.iter()
+                        .filter(|x| x.category.label() == cat_label)
+                        .count()
+                )
+                .dimmed()
+            );
+        }
+        let cred_icon = if m.requires_creds { "🔐" } else { "🔓" };
+        println!(
+            "    {} {} {}",
+            cred_icon,
+            m.name.green().bold(),
+            m.description.dimmed()
+        );
+    }
+
+    println!(
+        "\n{} {} {}",
+        "Total:".bright_black(),
+        meta.len().to_string().yellow().bold(),
+        "modules".bright_black()
+    );
+    println!(
+        "  {} {} {}",
+        "Tip:".yellow(),
+        "ovt module info <name>".cyan(),
+        "for details".dimmed()
+    );
+    println!(
+        "  {} {} {}",
+        "Run:".yellow(),
+        "ovt module run <name> -t TARGET [--params '{\"key\":\"val\"}']".cyan(),
+        "".dimmed()
+    );
+    println!(
+        "  {} {} {}",
+        "Parallel:".yellow(),
+        "ovt module run-parallel <name> -t TARGET1,TARGET2 [--concurrency 10]".cyan(),
+        "".dimmed()
+    );
+    0
+}
+
+pub async fn cmd_module_info(cli: &Cli, name: String) -> i32 {
+    use overthrone_core::exec::modules;
+
+    let module = match modules::get_module(&name).await {
+        Some(m) => m,
+        None => {
+            banner::print_fail(&format!("Module not found: {}", name));
+            return 1;
+        }
+    };
+
+    let meta = module.metadata();
+
+    if wants_json(cli) {
+        return emit_json(cli, serde_json::json!({"module": meta}));
+    }
+
+    let sep = "━━━".dimmed();
+    println!("\n{} {} {}", sep, meta.name.yellow().bold(), sep);
+    println!(
+        "  {}    {}",
+        "Description:".bright_black(),
+        meta.description.white()
+    );
+    println!(
+        "  {}    {}",
+        "Category:".bright_black(),
+        meta.category.to_string().cyan()
+    );
+    println!(
+        "  {}  {}",
+        "Requires creds:".bright_black(),
+        if meta.requires_creds {
+            "yes".green()
+        } else {
+            "no".yellow()
+        }
+    );
+    println!(
+        "  {} {}",
+        "Requires target:".bright_black(),
+        if meta.requires_target {
+            "yes".green()
+        } else {
+            "no".yellow()
+        }
+    );
+
+    // Show known parameters for the module
+    println!(
+        "\n  {} {}",
+        "Common params:".bright_black().bold(),
+        "(JSON, pass via --params)".dimmed()
+    );
+
+    // Known parameter hints based on module name
+    let params_hint = match meta.name {
+        "winrm-exec" | "smb-exec" | "psexec" | "wmi-exec" | "atexec" => r#"{"command": "whoami"}"#,
+        "procdump" | "lsassy" => r#"{"dump_path": "C:\\Windows\\Temp\\lsass.dmp"}"#,
+        "sam-dump" | "lsa-dump" => r#"{}  (no additional params needed)"#,
+        "ntds-dump" => r#"{"output": "hashes.txt"}"#,
+        "bloodhound" => r#"{"outdir": "./bloodhound", "page_size": 500}"#,
+        "kerberoast" | "asreproast" => r#"{"outdir": "./loot"}"#,
+        "gpp" => r#"{"policy_id": ""}  (empty = all policies)"#,
+        "nslookup" => r#"{"type": "A", "name": "hostname"}"#,
+        "coerce" => r#"{"listener": "YOUR_IP", "technique": "petitpotam"}"#,
+        "zerologon" => r#"{}  (no creds needed)"#,
+        _ => r#"{"key": "value"}"#,
+    };
+    println!("    {}", params_hint.cyan());
+
+    // Module registration order hint
+    println!(
+        "\n  {} {}",
+        "Example:".yellow(),
+        format!(
+            "ovt module run {} -t TARGET --params '{}'",
+            meta.name, params_hint
+        )
+        .cyan()
+    );
+
     0
 }
 
@@ -448,9 +627,28 @@ pub async fn cmd_module_run(
     params: Option<String>,
 ) -> i32 {
     use overthrone_core::exec::modules;
-    let creds = match crate::require_creds(cli) {
+
+    // Check if module needs creds before requiring them
+    let module = match modules::get_module(&name).await {
+        Some(m) => m,
+        None => {
+            banner::print_fail(&format!("Module not found: {}", name));
+            return 1;
+        }
+    };
+
+    let creds = match crate::require_creds_silent(cli).or_else(|_| {
+        if module.requires_creds() {
+            Err("Credentials required (--domain, --username, --password)")
+        } else {
+            Ok(Credentials::default())
+        }
+    }) {
         Ok(c) => c,
-        Err(e) => return e,
+        Err(e) => {
+            banner::print_fail(e);
+            return 1;
+        }
     };
 
     let exec_creds = overthrone_core::exec::ExecCredentials {
@@ -460,32 +658,39 @@ pub async fn cmd_module_run(
         nt_hash: creds.nthash().map(str::to_string),
     };
 
-    let module = match modules::get_module(&name).await {
-        Some(m) => m,
-        None => {
-            banner::print_fail(&format!("Module not found: {}", name));
-            return 1;
-        }
-    };
+    let params_json = params
+        .as_deref()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok());
 
-    let params_json = if let Some(p) = params {
-        match serde_json::from_str::<serde_json::Value>(&p) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                banner::print_fail(&format!("Invalid params JSON: {}", e));
-                return 1;
-            }
-        }
-    } else {
-        None
-    };
+    banner::print_info(&format!(
+        "Running module {} against {}...",
+        name.green().bold(),
+        target.cyan()
+    ));
 
     match module.run(&target, exec_creds, params_json).await {
         Ok(out) => {
             if wants_json(cli) {
                 return emit_json(cli, serde_json::json!({"status": "success", "output": out}));
             }
-            println!("Module run complete — stdout:\n{}", out.stdout);
+            if !out.stdout.is_empty() || !out.stderr.is_empty() {
+                println!("\n{}", "Output:".yellow().bold());
+                println!("{}", "───────".dimmed());
+                if !out.stdout.is_empty() {
+                    println!("{}", out.stdout);
+                }
+                if !out.stderr.is_empty() {
+                    eprintln!("{}", "Stderr:".red().bold());
+                    eprintln!("{}", out.stderr);
+                }
+            }
+            match out.exit_code {
+                Some(0) => banner::print_success("Module completed successfully"),
+                Some(code) => {
+                    banner::print_warn(&format!("Module completed with exit code {}", code))
+                }
+                None => banner::print_info("Module completed (no exit code)"),
+            }
             0
         }
         Err(e) => {
@@ -499,6 +704,105 @@ pub async fn cmd_module_run(
             1
         }
     }
+}
+
+pub async fn cmd_module_run_parallel(
+    cli: &Cli,
+    name: String,
+    targets: String,
+    params: Option<String>,
+    concurrency: usize,
+) -> i32 {
+    use overthrone_core::exec::modules;
+
+    let module = match modules::get_module(&name).await {
+        Some(m) => m,
+        None => {
+            banner::print_fail(&format!("Module not found: {}", name));
+            return 1;
+        }
+    };
+
+    let creds = match crate::require_creds_silent(cli).or_else(|_| {
+        if module.requires_creds() {
+            Err("Credentials required (--domain, --username, --password)")
+        } else {
+            Ok(Credentials::default())
+        }
+    }) {
+        Ok(c) => c,
+        Err(e) => {
+            banner::print_fail(e);
+            return 1;
+        }
+    };
+
+    let exec_creds = overthrone_core::exec::ExecCredentials {
+        domain: creds.domain.clone(),
+        username: creds.username.clone(),
+        password: creds.password().map(str::to_string).unwrap_or_default(),
+        nt_hash: creds.nthash().map(str::to_string),
+    };
+
+    let params_json = params
+        .as_deref()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok());
+
+    let target_list: Vec<String> = targets.split(',').map(|s| s.trim().to_string()).collect();
+    let total = target_list.len();
+
+    banner::print_info(&format!(
+        "Running module {} against {} targets (concurrency: {})...",
+        name.green().bold(),
+        total.to_string().cyan(),
+        concurrency.to_string().yellow()
+    ));
+
+    let config = modules::ParallelModuleConfig {
+        concurrency,
+        timeout_secs: 30,
+    };
+
+    let results =
+        modules::run_module_parallel(&module, &target_list, exec_creds, params_json, config).await;
+
+    let success_count = results.iter().filter(|r| r.success).count();
+    let fail_count = results.iter().filter(|r| !r.success).count();
+
+    if wants_json(cli) {
+        return emit_json(
+            cli,
+            serde_json::json!({
+                "module": name,
+                "total": total,
+                "success": success_count,
+                "failed": fail_count,
+                "results": results
+            }),
+        );
+    }
+
+    println!("\n{}", "Results:".yellow().bold());
+    println!("{}", "────────".dimmed());
+    for r in &results {
+        let icon = if r.success {
+            "[✓]".green()
+        } else {
+            "[✗]".red()
+        };
+        println!(
+            "  {} {} — {}",
+            icon,
+            r.target.cyan(),
+            r.module_name.dimmed()
+        );
+        if let Some(ref err) = r.error {
+            println!("       {}", err.red().dimmed());
+        }
+    }
+
+    banner::print_stage_summary(&format!("Parallel {}", name), success_count, fail_count);
+    0
 }
 
 // ═══════════════════════════════════════════════════════
@@ -987,6 +1291,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                 nt_hash: creds.nthash().map(str::to_string),
                 modules: vec!["trusts".to_string()],
                 page_size: 500,
+                use_ldaps: false,
             };
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
@@ -1048,6 +1353,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                     "users".to_string(),
                 ],
                 page_size: 500,
+                use_ldaps: false,
             };
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
@@ -1119,6 +1425,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                 nt_hash: creds.nthash().map(str::to_string),
                 modules: vec!["mssql".to_string()],
                 page_size: 500,
+                use_ldaps: false,
             };
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
@@ -1179,6 +1486,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                 nt_hash: creds.nthash().map(str::to_string),
                 modules: vec!["trusts".to_string()],
                 page_size: 500,
+                use_ldaps: false,
             };
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
@@ -1438,6 +1746,7 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
         nt_hash: creds.nthash().map(str::to_string),
         modules: vec!["laps".to_string()],
         page_size: 500,
+        use_ldaps: false,
     };
 
     if let Some(comp) = computer {

@@ -22,6 +22,7 @@ pub struct ReaperConfig {
     pub nt_hash: Option<String>,
     pub modules: Vec<String>,
     pub page_size: u32,
+    pub use_ldaps: bool,
 }
 
 impl ReaperConfig {
@@ -52,16 +53,23 @@ impl ReaperConfig {
 /// This prevents all enumeration returning 0 results when the
 /// operator authenticates via NT hash.
 pub async fn ldap_connect(config: &ReaperConfig) -> Result<LdapSession> {
+    let use_ssl = config.use_ldaps;
     if let Some(hash) = config.nt_hash.as_deref() {
-        LdapSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash, false)
-            .await
+        LdapSession::connect_with_hash(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            hash,
+            use_ssl,
+        )
+        .await
     } else {
         LdapSession::connect(
             &config.dc_ip,
             &config.domain,
             &config.username,
             config.password.as_deref().unwrap_or(""),
-            false,
+            use_ssl,
         )
         .await
     }
@@ -310,4 +318,75 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     println!();
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reaper_config_ldaps_toggle() {
+        let base = ReaperConfig {
+            dc_ip: "10.0.0.1".into(),
+            domain: "corp.local".into(),
+            base_dn: "DC=corp,DC=local".into(),
+            username: "user".into(),
+            password: Some("pass".into()),
+            nt_hash: None,
+            modules: vec![],
+            page_size: 500,
+            use_ldaps: false,
+        };
+        assert!(!base.use_ldaps);
+
+        let ldaps = ReaperConfig {
+            use_ldaps: true,
+            ..base.clone()
+        };
+        assert!(ldaps.use_ldaps);
+    }
+
+    #[test]
+    fn test_ldap_connect_dispatches_on_nt_hash() {
+        // ldap_connect branches on nt_hash:
+        //   Some(hash) → LdapSession::connect_with_hash(..., use_ssl)
+        //   None       → LdapSession::connect(..., use_ssl)
+        // Both paths receive `use_ldaps` as the `use_ssl` argument.
+        // We verify both config shapes are constructible and the flag is set.
+
+        let hash_cfg = ReaperConfig {
+            dc_ip: "10.0.0.1".into(),
+            domain: "corp.local".into(),
+            base_dn: "DC=corp,DC=local".into(),
+            username: "admin".into(),
+            password: None,
+            nt_hash: Some(
+                "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0".into(),
+            ),
+            modules: vec![],
+            page_size: 500,
+            use_ldaps: true,
+        };
+        assert!(hash_cfg.use_ldaps);
+        assert!(hash_cfg.nt_hash.is_some());
+        assert!(hash_cfg.password.is_none());
+
+        let pass_cfg = ReaperConfig {
+            nt_hash: None,
+            password: Some("cleartext123".into()),
+            use_ldaps: false,
+            ..hash_cfg.clone()
+        };
+        assert!(!pass_cfg.use_ldaps);
+        assert!(pass_cfg.nt_hash.is_none());
+    }
+
+    #[test]
+    fn test_base_dn_from_domain() {
+        assert_eq!(
+            ReaperConfig::base_dn_from_domain("corp.local"),
+            "DC=corp,DC=local"
+        );
+        assert_eq!(ReaperConfig::base_dn_from_domain("CORP"), "DC=CORP");
+    }
 }

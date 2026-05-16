@@ -7,6 +7,7 @@ mod bloodhound_viewer;
 mod commands;
 mod commands_impl;
 mod interactive_shell;
+mod modules_ext;
 mod ovt_config;
 mod session_store;
 mod tree_viewer;
@@ -111,10 +112,20 @@ enum OutputFormat {
 
 #[derive(Subcommand, Clone)]
 enum ModuleAction {
-    /// List registered modules
-    List,
+    /// List registered modules (optionally filtered by category)
+    List {
+        /// Filter by category: Execute, Dump, Enum, Kerberos, Secrets, Scan, Coerce
+        #[arg(short, long)]
+        category: Option<String>,
+    },
 
-    /// Run a module against a target
+    /// Show detailed info for a module
+    Info {
+        /// Module name
+        name: String,
+    },
+
+    /// Run a module against a single target
     Run {
         /// Module name
         name: String,
@@ -124,6 +135,21 @@ enum ModuleAction {
         /// Optional JSON parameters for the module
         #[arg(long)]
         params: Option<String>,
+    },
+
+    /// Run a module against multiple targets in parallel
+    RunParallel {
+        /// Module name
+        name: String,
+        /// Comma-separated target hosts
+        #[arg(short, long)]
+        targets: String,
+        /// Optional JSON parameters for the module
+        #[arg(long)]
+        params: Option<String>,
+        /// Max concurrent targets
+        #[arg(short = 'c', long, default_value = "10")]
+        concurrency: usize,
     },
 }
 
@@ -1730,14 +1756,10 @@ async fn async_main() {
 
     banner::print_banner();
 
-    // Register builtin execution modules (winrm, smb-exec, psexec, ...)
+    // Register all built-in modules (core + extended CME-style)
     // This ensures `ovt module list` returns available modules.
-    if let Err(e) = tokio::runtime::Handle::current().block_on(async {
-        ovt_modules::register_builtin_modules().await;
-        Ok::<(), ()>(())
-    }) {
-        eprintln!("warn: failed to register builtin modules: {:?}", e);
-    }
+    ovt_modules::register_core_modules().await;
+    modules_ext::register_extended_modules().await;
 
     let exit_code = match *cli.command {
         Commands::Wizard { args } => match commands::wizard::run(args.clone()).await {
@@ -1935,7 +1957,10 @@ async fn async_main() {
 
         // ─── Module handler ──────────────────────────────────
         Commands::Module { ref action } => match action {
-            ModuleAction::List => commands_impl::cmd_module_list(&cli).await,
+            ModuleAction::List { category } => {
+                commands_impl::cmd_module_list(&cli, category.as_deref()).await
+            }
+            ModuleAction::Info { name } => commands_impl::cmd_module_info(&cli, name.clone()).await,
             ModuleAction::Run {
                 name,
                 target,
@@ -1943,6 +1968,21 @@ async fn async_main() {
             } => {
                 commands_impl::cmd_module_run(&cli, name.clone(), target.clone(), params.clone())
                     .await
+            }
+            ModuleAction::RunParallel {
+                name,
+                targets,
+                params,
+                concurrency,
+            } => {
+                commands_impl::cmd_module_run_parallel(
+                    &cli,
+                    name.clone(),
+                    targets.clone(),
+                    params.clone(),
+                    *concurrency,
+                )
+                .await
             }
         },
 
@@ -2092,6 +2132,7 @@ fn make_reaper_config(
         nt_hash: creds.nthash().map(str::to_string),
         modules,
         page_size,
+        use_ldaps: false,
     })
 }
 
@@ -3196,6 +3237,7 @@ async fn run_preauth_snaffler(dc: &str, domain: &str) {
         nt_hash: None,
         modules: vec!["snaffler".to_string()],
         page_size: 500,
+        use_ldaps: false,
     };
 
     match overthrone_reaper::snaffler::run_snaffler(&config).await {
