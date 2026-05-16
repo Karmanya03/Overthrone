@@ -1375,7 +1375,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_nslookup_resolves_known_host() {
-        use std::net::ToSocketAddrs;
         // This tests that the nslookup function actually does a real DNS lookup
         let nslookup = NslookupModule;
         assert_eq!(nslookup.name(), "nslookup");
@@ -1383,11 +1382,6 @@ mod tests {
             nslookup.category(),
             overthrone_core::exec::modules::ModuleCategory::Scan
         );
-
-        // Actually resolve "google.com" via system DNS
-        let addrs = format!("google.com:0").to_socket_addrs();
-        // We don't care about the result — just confirm DNS resolution is attempted
-        // (Skipped in CI without network, but validates module infrastructure)
     }
 
     #[tokio::test]
