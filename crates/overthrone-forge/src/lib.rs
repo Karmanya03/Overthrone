@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! overthrone-forge — Kerberos ticket forging & persistence engine.
 //!
 //! Forges Golden Tickets (krbtgt), Silver Tickets (service keys),

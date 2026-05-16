@@ -1404,9 +1404,9 @@ impl SmbSession {
             Ok(fid) => {
                 let _ = conn.write(&fid, 0, b"x").await;
                 let _ = conn.close(&fid).await;
-                return true;
+                true
             }
-            Err(_) => return false,
+            Err(_) => false,
         }
     }
 

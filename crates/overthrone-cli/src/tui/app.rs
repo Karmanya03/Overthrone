@@ -95,6 +95,7 @@ pub struct GraphStats {
     pub trusts: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_repulsive_force(
     forces: &mut HashMap<NodeId, (f64, f64)>,
     n1: NodeId,

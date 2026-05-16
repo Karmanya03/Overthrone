@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! overthrone-scribe — Pentest report generation engine.
 //!
 //! Consumes engagement data from overthrone-pilot (and other crates)

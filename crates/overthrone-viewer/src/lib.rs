@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! BloodHound-style graph viewer for Overthrone.
 //!
 //! Launches a local HTTP server that serves an interactive graph visualization

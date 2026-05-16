@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Overthrone Relay — NTLM Relay and Responder Framework
 //!
 //! Implements LLMNR/NBT-NS poisoning and NTLM relay attacks

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! overthrone-crawler — AD trust traversal & cross-domain escalation engine.
 //!
 //! Analyzes reaper enumeration data to map trust relationships,

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! overthrone-hunter — Kerberos attack toolkit for Active Directory.
 //!
 //! Modules:

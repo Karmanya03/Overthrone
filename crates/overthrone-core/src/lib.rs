@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub mod adcs;
 pub mod c2; // ← Export C2 module
 pub mod config;
