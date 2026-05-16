@@ -1,9 +1,9 @@
+use crate::error::OverthroneError;
 use crate::error::Result;
-use async_trait::async_trait;
-use once_cell::sync::Lazy;
 use crate::exec::RemoteExecutor;
 use crate::proto::smb::SmbSession;
-use crate::error::OverthroneError;
+use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,14 +19,18 @@ pub trait OvtModule: Send + Sync {
 
     /// Run the module against a single target. The `params` value can contain
     /// module-specific parameters (e.g. `command`, `port`, etc.).
-    async fn run(&self, target: &str, creds: ExecCredentials, params: Option<Value>) -> Result<ExecOutput>;
+    async fn run(
+        &self,
+        target: &str,
+        creds: ExecCredentials,
+        params: Option<Value>,
+    ) -> Result<ExecOutput>;
 }
 
 /// Simple registry for modules. Modules are stored as `Arc<dyn OvtModule>` so
 /// they can be shared and cloned cheaply.
-static MODULE_REGISTRY: Lazy<RwLock<HashMap<String, Arc<dyn OvtModule>>>> = Lazy::new(|| {
-    RwLock::new(HashMap::<String, Arc<dyn OvtModule>>::new())
-});
+static MODULE_REGISTRY: Lazy<RwLock<HashMap<String, Arc<dyn OvtModule>>>> =
+    Lazy::new(|| RwLock::new(HashMap::<String, Arc<dyn OvtModule>>::new()));
 
 /// Register a module (usually called at startup by the crate that defines
 /// built-in modules).
@@ -42,12 +46,7 @@ pub async fn get_module(name: &str) -> Option<Arc<dyn OvtModule>> {
 
 /// List registered module names
 pub async fn list_modules() -> Vec<String> {
-    MODULE_REGISTRY
-        .read()
-        .await
-        .keys()
-        .cloned()
-        .collect()
+    MODULE_REGISTRY.read().await.keys().cloned().collect()
 }
 
 // Example: a tiny WinRM-backed exec module that delegates to the existing
@@ -65,10 +64,18 @@ impl OvtModule for WinRmExecModule {
         "Execute a command via WinRM (uses existing WinRmExecutor)"
     }
 
-    async fn run(&self, target: &str, creds: ExecCredentials, params: Option<Value>) -> Result<ExecOutput> {
+    async fn run(
+        &self,
+        target: &str,
+        creds: ExecCredentials,
+        params: Option<Value>,
+    ) -> Result<ExecOutput> {
         // Extract `command` from params or default to `whoami`
         let command = params
-            .and_then(|v| v.get("command").and_then(|c| c.as_str().map(|s| s.to_string())))
+            .and_then(|v| {
+                v.get("command")
+                    .and_then(|c| c.as_str().map(|s| s.to_string()))
+            })
             .unwrap_or_else(|| "whoami".to_string());
 
         // Defer to the WinRmExecutor already implemented in this crate.
@@ -98,10 +105,18 @@ impl OvtModule for SmbExecModule {
         "Execute a command via SMBExec (creates minimal artifacts)"
     }
 
-    async fn run(&self, target: &str, creds: ExecCredentials, params: Option<Value>) -> Result<ExecOutput> {
+    async fn run(
+        &self,
+        target: &str,
+        creds: ExecCredentials,
+        params: Option<Value>,
+    ) -> Result<ExecOutput> {
         let command = params
             .as_ref()
-            .and_then(|v| v.get("command").and_then(|c| c.as_str().map(|s| s.to_string())))
+            .and_then(|v| {
+                v.get("command")
+                    .and_then(|c| c.as_str().map(|s| s.to_string()))
+            })
             .unwrap_or_else(|| "whoami".to_string());
 
         let cleanup = params
@@ -109,13 +124,15 @@ impl OvtModule for SmbExecModule {
             .and_then(|v| v.get("cleanup").and_then(|c| c.as_bool()))
             .unwrap_or(true);
 
-        let output_share = params
-            .as_ref()
-            .and_then(|v| v.get("output_share").and_then(|c| c.as_str().map(|s| s.to_string())));
+        let output_share = params.as_ref().and_then(|v| {
+            v.get("output_share")
+                .and_then(|c| c.as_str().map(|s| s.to_string()))
+        });
 
-        let output_path = params
-            .as_ref()
-            .and_then(|v| v.get("output_path").and_then(|c| c.as_str().map(|s| s.to_string())));
+        let output_path = params.as_ref().and_then(|v| {
+            v.get("output_path")
+                .and_then(|c| c.as_str().map(|s| s.to_string()))
+        });
 
         // Connect SMB session
         let session = if let Some(nt) = creds.nt_hash.as_deref() {
@@ -126,8 +143,12 @@ impl OvtModule for SmbExecModule {
 
         // Build SMBExecConfig
         let mut cfg = crate::exec::smbexec::SmbExecConfig::default();
-        if let Some(s) = output_share { cfg.output_share = s; }
-        if let Some(p) = output_path { cfg.output_path = p; }
+        if let Some(s) = output_share {
+            cfg.output_share = s;
+        }
+        if let Some(p) = output_path {
+            cfg.output_path = p;
+        }
         cfg.cleanup = cleanup;
 
         let res = crate::exec::smbexec::execute(&session, &command, &cfg).await?;
@@ -154,17 +175,25 @@ impl OvtModule for PsExecModule {
         "Execute a command via PsExec-style service creation"
     }
 
-    async fn run(&self, target: &str, creds: ExecCredentials, params: Option<Value>) -> Result<ExecOutput> {
+    async fn run(
+        &self,
+        target: &str,
+        creds: ExecCredentials,
+        params: Option<Value>,
+    ) -> Result<ExecOutput> {
         // Parse parameters
-        let command = params
-            .as_ref()
-            .and_then(|v| v.get("command").and_then(|c| c.as_str().map(|s| s.to_string())));
-        let upload_path = params
-            .as_ref()
-            .and_then(|v| v.get("upload").and_then(|c| c.as_str().map(|s| s.to_string())));
-        let remote_filename = params
-            .as_ref()
-            .and_then(|v| v.get("remote_filename").and_then(|c| c.as_str().map(|s| s.to_string())));
+        let command = params.as_ref().and_then(|v| {
+            v.get("command")
+                .and_then(|c| c.as_str().map(|s| s.to_string()))
+        });
+        let upload_path = params.as_ref().and_then(|v| {
+            v.get("upload")
+                .and_then(|c| c.as_str().map(|s| s.to_string()))
+        });
+        let remote_filename = params.as_ref().and_then(|v| {
+            v.get("remote_filename")
+                .and_then(|c| c.as_str().map(|s| s.to_string()))
+        });
         let cleanup = params
             .as_ref()
             .and_then(|v| v.get("cleanup").and_then(|c| c.as_bool()))
@@ -181,14 +210,18 @@ impl OvtModule for PsExecModule {
         let mut deployed_name: Option<String> = None;
         if let Some(local) = upload_path {
             // Determine filename to use
-            let fname = if let Some(rfn) = remote_filename { rfn } else { 
+            let fname = if let Some(rfn) = remote_filename {
+                rfn
+            } else {
                 match std::path::Path::new(&local).file_name() {
                     Some(n) => n.to_string_lossy().to_string(),
                     None => format!("ovt_payload_{:08X}.bin", rand::random::<u32>()),
                 }
             };
 
-            let data = tokio::fs::read(&local).await.map_err(|e| OverthroneError::custom(format!("Failed to read upload '{}': {}", local, e)))?;
+            let data = tokio::fs::read(&local).await.map_err(|e| {
+                OverthroneError::custom(format!("Failed to read upload '{}': {}", local, e))
+            })?;
             let full_path = session.deploy_payload(&data, &fname).await?;
             deployed_name = Some(fname);
             // Use deployed binary as command if none provided
@@ -209,7 +242,12 @@ impl OvtModule for PsExecModule {
                     }
                 }
                 return match res {
-                    Ok(r) => Ok(ExecOutput { stdout: r.output.unwrap_or_default(), stderr: String::new(), exit_code: Some(if r.success {0} else {1}), method: super::ExecMethod::PsExec }),
+                    Ok(r) => Ok(ExecOutput {
+                        stdout: r.output.unwrap_or_default(),
+                        stderr: String::new(),
+                        exit_code: Some(if r.success { 0 } else { 1 }),
+                        method: super::ExecMethod::PsExec,
+                    }),
                     Err(e) => Err(e),
                 };
             }
@@ -230,6 +268,8 @@ impl OvtModule for PsExecModule {
             return out;
         }
 
-        Err(crate::error::OverthroneError::ExecSimple("No command or upload specified".to_string()))
+        Err(crate::error::OverthroneError::ExecSimple(
+            "No command or upload specified".to_string(),
+        ))
     }
 }

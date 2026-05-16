@@ -272,8 +272,16 @@ pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i3
 
             let tool_checks: [(&str, &[&str], &str); 3] = [
                 ("rpcclient", &["-V"], "RID cycling / SAMR null-session"),
-                ("smbclient", &["--version"], "SMB guest/null-session interoperability"),
-                ("ldapsearch", &["-VV"], "External LDAP/LDAPS troubleshooting"),
+                (
+                    "smbclient",
+                    &["--version"],
+                    "SMB guest/null-session interoperability",
+                ),
+                (
+                    "ldapsearch",
+                    &["-VV"],
+                    "External LDAP/LDAPS troubleshooting",
+                ),
             ];
             for (tool, args, purpose) in tool_checks {
                 let found = std::process::Command::new(tool)
@@ -284,12 +292,7 @@ pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i3
                 if found {
                     println!("    {} {}: available ({})", "✓".green(), tool, purpose);
                 } else {
-                    println!(
-                        "    {} {}: not found ({})",
-                        "✗".red(),
-                        tool,
-                        purpose
-                    );
+                    println!("    {} {}: not found ({})", "✗".red(), tool, purpose);
                 }
             }
         }
@@ -438,7 +441,12 @@ pub async fn cmd_module_list(cli: &Cli) -> i32 {
     0
 }
 
-pub async fn cmd_module_run(cli: &Cli, name: String, target: String, params: Option<String>) -> i32 {
+pub async fn cmd_module_run(
+    cli: &Cli,
+    name: String,
+    target: String,
+    params: Option<String>,
+) -> i32 {
     use overthrone_core::exec::modules;
     let creds = match crate::require_creds(cli) {
         Ok(c) => c,
@@ -482,7 +490,10 @@ pub async fn cmd_module_run(cli: &Cli, name: String, target: String, params: Opt
         }
         Err(e) => {
             if wants_json(cli) {
-                return emit_json(cli, serde_json::json!({"status": "error", "error": format!("{}", e)}));
+                return emit_json(
+                    cli,
+                    serde_json::json!({"status": "error", "error": format!("{}", e)}),
+                );
             }
             banner::print_fail(&format!("Module run failed: {}", e));
             1

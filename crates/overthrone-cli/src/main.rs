@@ -21,9 +21,9 @@ use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use overthrone_core::c2::C2Manager;
+use overthrone_core::exec::modules as ovt_modules;
 use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
-use overthrone_core::exec::modules as ovt_modules;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -42,7 +42,6 @@ use std::sync::{Arc, RwLock};
 struct Cli {
     #[command(subcommand)]
     command: Box<Commands>,
-
 
     #[arg(
         short = 'H',
@@ -262,7 +261,11 @@ enum Commands {
     },
 
     /// Autonomous attack chain starting from no credentials (pre-auth enum + loot bootstrap)
-    #[command(name = "auto-pwn-preauth", alias = "autopwn-preauth", alias = "auto-preauth")]
+    #[command(
+        name = "auto-pwn-preauth",
+        alias = "autopwn-preauth",
+        alias = "auto-preauth"
+    )]
     AutoPwnPreauth {
         /// Goal: "Domain Admins", "ntds", "recon", hostname, or user
         #[arg(short, long, default_value = "Domain Admins")]
@@ -1729,7 +1732,10 @@ async fn async_main() {
 
     // Register builtin execution modules (winrm, smb-exec, psexec, ...)
     // This ensures `ovt module list` returns available modules.
-    if let Err(e) = tokio::runtime::Handle::current().block_on(async { ovt_modules::register_builtin_modules().await; Ok::<(), ()>(()) }) {
+    if let Err(e) = tokio::runtime::Handle::current().block_on(async {
+        ovt_modules::register_builtin_modules().await;
+        Ok::<(), ()>(())
+    }) {
         eprintln!("warn: failed to register builtin modules: {:?}", e);
     }
 
@@ -1930,8 +1936,13 @@ async fn async_main() {
         // ─── Module handler ──────────────────────────────────
         Commands::Module { ref action } => match action {
             ModuleAction::List => commands_impl::cmd_module_list(&cli).await,
-            ModuleAction::Run { name, target, params } => {
-                commands_impl::cmd_module_run(&cli, name.clone(), target.clone(), params.clone()).await
+            ModuleAction::Run {
+                name,
+                target,
+                params,
+            } => {
+                commands_impl::cmd_module_run(&cli, name.clone(), target.clone(), params.clone())
+                    .await
             }
         },
 
