@@ -1,4 +1,4 @@
-use crate::tui::app::App;
+use crate::tui::app::{App, Tab};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
@@ -50,20 +50,77 @@ impl EventLoop {
                 app.should_quit = true;
             }
 
+            // Scrolling
+            KeyCode::PageUp => {
+                match app.active_tab {
+                    Tab::Nodes => app.node_scroll = app.node_scroll.saturating_sub(10),
+                    Tab::Paths => app.path_scroll = app.path_scroll.saturating_sub(10),
+                    Tab::Logs => app.log_scroll = app.log_scroll.saturating_sub(10),
+                    Tab::Trusts => app.trust_scroll = app.trust_scroll.saturating_sub(10),
+                    Tab::Graph => {
+                        // Graph tab has multiple scrollable areas, but we scroll Detail or Overview
+                        app.detail_scroll = app.detail_scroll.saturating_sub(10);
+                        app.overview_scroll = app.overview_scroll.saturating_sub(10);
+                        app.acl_scroll = app.acl_scroll.saturating_sub(10);
+                    }
+                }
+            }
+            KeyCode::PageDown => match app.active_tab {
+                Tab::Nodes => app.node_scroll = app.node_scroll.saturating_add(10),
+                Tab::Paths => app.path_scroll = app.path_scroll.saturating_add(10),
+                Tab::Logs => app.log_scroll = app.log_scroll.saturating_add(10),
+                Tab::Trusts => app.trust_scroll = app.trust_scroll.saturating_add(10),
+                Tab::Graph => {
+                    app.detail_scroll = app.detail_scroll.saturating_add(10);
+                    app.overview_scroll = app.overview_scroll.saturating_add(10);
+                    app.acl_scroll = app.acl_scroll.saturating_add(10);
+                }
+            },
+
             // Tab navigation
             KeyCode::Tab => app.next_tab(),
             KeyCode::BackTab => app.prev_tab(),
-            KeyCode::Char('1') => app.active_tab = super::app::Tab::Graph,
-            KeyCode::Char('2') => app.active_tab = super::app::Tab::Nodes,
-            KeyCode::Char('3') => app.active_tab = super::app::Tab::Paths,
-            KeyCode::Char('4') => app.active_tab = super::app::Tab::Logs,
-            KeyCode::Char('5') => app.active_tab = super::app::Tab::Trusts,
+            KeyCode::Char('1') => app.active_tab = Tab::Graph,
+            KeyCode::Char('2') => app.active_tab = Tab::Nodes,
+            KeyCode::Char('3') => app.active_tab = Tab::Paths,
+            KeyCode::Char('4') => app.active_tab = Tab::Logs,
+            KeyCode::Char('5') => app.active_tab = Tab::Trusts,
 
-            // Graph navigation
-            KeyCode::Left | KeyCode::Char('h') => app.pan(-5.0, 0.0),
-            KeyCode::Right | KeyCode::Char('l') => app.pan(5.0, 0.0),
-            KeyCode::Up | KeyCode::Char('k') => app.pan(0.0, -5.0),
-            KeyCode::Down | KeyCode::Char('j') => app.pan(0.0, 5.0),
+            // Graph navigation / Scrolling
+            KeyCode::Left | KeyCode::Char('h') => {
+                if app.active_tab == Tab::Graph {
+                    app.pan(-5.0, 0.0);
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if app.active_tab == Tab::Graph {
+                    app.pan(5.0, 0.0);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => match app.active_tab {
+                Tab::Graph => {
+                    app.pan(0.0, -5.0);
+                    app.detail_scroll = app.detail_scroll.saturating_sub(1);
+                    app.overview_scroll = app.overview_scroll.saturating_sub(1);
+                    app.acl_scroll = app.acl_scroll.saturating_sub(1);
+                }
+                Tab::Nodes => app.node_scroll = app.node_scroll.saturating_sub(1),
+                Tab::Paths => app.path_scroll = app.path_scroll.saturating_sub(1),
+                Tab::Logs => app.log_scroll = app.log_scroll.saturating_sub(1),
+                Tab::Trusts => app.trust_scroll = app.trust_scroll.saturating_sub(1),
+            },
+            KeyCode::Down | KeyCode::Char('j') => match app.active_tab {
+                Tab::Graph => {
+                    app.pan(0.0, 5.0);
+                    app.detail_scroll = app.detail_scroll.saturating_add(1);
+                    app.overview_scroll = app.overview_scroll.saturating_add(1);
+                    app.acl_scroll = app.acl_scroll.saturating_add(1);
+                }
+                Tab::Nodes => app.node_scroll = app.node_scroll.saturating_add(1),
+                Tab::Paths => app.path_scroll = app.path_scroll.saturating_add(1),
+                Tab::Logs => app.log_scroll = app.log_scroll.saturating_add(1),
+                Tab::Trusts => app.trust_scroll = app.trust_scroll.saturating_add(1),
+            },
 
             // Zoom
             KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),

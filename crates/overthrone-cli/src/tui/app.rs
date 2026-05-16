@@ -1,6 +1,6 @@
 use overthrone_core::graph::{AttackGraph, EdgeId, EdgeRef, NodeId, NodeType};
 use overthrone_reaper::acls::AclFinding;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// Application state for the TUI
@@ -19,17 +19,14 @@ pub struct App {
     pub should_quit: bool,
     pub layout: HashMap<NodeId, (f64, f64)>,
     pub stats: GraphStats,
-    #[allow(dead_code)]
-    pub acl_scroll: Option<usize>,
-    #[allow(dead_code)]
-    pub path_scroll: Option<usize>,
-    #[allow(dead_code)]
-    pub graph_scroll: Option<usize>,
-    #[allow(dead_code)]
-    pub detail_scroll: Option<usize>,
-    #[allow(dead_code)]
+    pub node_scroll: usize,
+    pub path_scroll: usize,
+    pub trust_scroll: usize,
+    pub detail_scroll: usize,
+    pub log_scroll: usize,
+    pub acl_scroll: usize,
+    pub overview_scroll: usize,
     pub current_path: Option<overthrone_core::graph::AttackPath>,
-    #[allow(dead_code)]
     pub acl_findings: Option<Vec<AclFinding>>,
     // Visibility toggles for graph nodes
     pub show_users: bool,
@@ -98,6 +95,32 @@ pub struct GraphStats {
     pub trusts: usize,
 }
 
+fn add_repulsive_force(
+    forces: &mut HashMap<NodeId, (f64, f64)>,
+    n1: NodeId,
+    n2: NodeId,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    k: f64,
+) {
+    let dx = x1 - x2;
+    let dy = y1 - y2;
+    let dist = (dx * dx + dy * dy).sqrt().max(0.1);
+    let force = (k * k) / dist;
+    let fx = (dx / dist) * force;
+    let fy = (dy / dist) * force;
+
+    let left = forces.entry(n1).or_insert((0.0, 0.0));
+    left.0 += fx;
+    left.1 += fy;
+
+    let right = forces.entry(n2).or_insert((0.0, 0.0));
+    right.0 -= fx;
+    right.1 -= fy;
+}
+
 impl App {
     pub fn new(graph: Arc<Mutex<AttackGraph>>) -> Self {
         Self {
@@ -115,10 +138,13 @@ impl App {
             filter_active: false,
             stats: GraphStats::default(),
             highlighted_path: Vec::new(),
-            acl_scroll: None,
-            path_scroll: None,
-            graph_scroll: None,
-            detail_scroll: None,
+            node_scroll: 0,
+            path_scroll: 0,
+            trust_scroll: 0,
+            detail_scroll: 0,
+            log_scroll: 0,
+            acl_scroll: 0,
+            overview_scroll: 0,
             current_path: None,
             acl_findings: None,
             // Default: show all node types
@@ -133,8 +159,21 @@ impl App {
 
     /// Update layout positions using force-directed algorithm
     pub fn update_layout(&mut self) {
-        let graph = self.graph.lock().unwrap();
-        let nodes: Vec<NodeId> = graph.nodes().map(|(id, _)| id).collect();
+        let (nodes, edges) = {
+            let graph = self.graph.lock().unwrap();
+            (
+                graph.nodes().map(|(id, _)| id).collect::<Vec<_>>(),
+                graph
+                    .edges()
+                    .map(|edge| (edge.source(), edge.target()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        if nodes.is_empty() {
+            self.refresh_stats();
+            return;
+        }
 
         // Initialize new nodes at random positions
         for &id in &nodes {
@@ -145,44 +184,82 @@ impl App {
             });
         }
 
-        // Force-directed iteration (Fruchterman-Reingold simplified)
-        let k = 8.0; // optimal distance
-        let iterations = 5; // per frame
+        let active_nodes: HashSet<NodeId> = nodes.iter().copied().collect();
+        self.layout
+            .retain(|node_id, _| active_nodes.contains(node_id));
+
+        // Force-directed iteration (Fruchterman-Reingold simplified).
+        // Large graphs use a spatial grid for repulsion so the TUI stays responsive.
+        let k = if nodes.len() > 5000 {
+            18.0
+        } else if nodes.len() > 1500 {
+            14.0
+        } else {
+            8.0
+        };
+        let iterations = if nodes.len() > 5000 {
+            1
+        } else if nodes.len() > 1200 {
+            2
+        } else {
+            4
+        };
+        let use_grid = nodes.len() > 650;
+        let cell_size = k * 8.0;
+        let edge_step = (edges.len() / 30_000).max(1);
 
         for _ in 0..iterations {
             let mut forces: HashMap<NodeId, (f64, f64)> = HashMap::new();
 
-            // Repulsive forces between all pairs
-            for (i, &n1) in nodes.iter().enumerate() {
-                let (x1, y1) = self.layout[&n1];
-                let mut fx = 0.0;
-                let mut fy = 0.0;
-
-                for &n2 in &nodes[i + 1..] {
-                    let (x2, y2) = self.layout[&n2];
-                    let dx = x1 - x2;
-                    let dy = y1 - y2;
-                    let dist = (dx * dx + dy * dy).sqrt().max(0.1);
-                    let force = (k * k) / dist;
-                    fx += (dx / dist) * force;
-                    fy += (dy / dist) * force;
-
-                    let e = forces.entry(n2).or_insert((0.0, 0.0));
-                    e.0 -= (dx / dist) * force;
-                    e.1 -= (dy / dist) * force;
+            if use_grid {
+                let mut grid: HashMap<(i64, i64), Vec<NodeId>> = HashMap::new();
+                for &node in &nodes {
+                    if let Some(&(x, y)) = self.layout.get(&node) {
+                        grid.entry(((x / cell_size) as i64, (y / cell_size) as i64))
+                            .or_default()
+                            .push(node);
+                    }
                 }
 
-                let e = forces.entry(n1).or_insert((0.0, 0.0));
-                e.0 += fx;
-                e.1 += fy;
+                for &n1 in &nodes {
+                    let Some(&(x1, y1)) = self.layout.get(&n1) else {
+                        continue;
+                    };
+                    let cx = (x1 / cell_size) as i64;
+                    let cy = (y1 / cell_size) as i64;
+                    for gx in cx - 1..=cx + 1 {
+                        for gy in cy - 1..=cy + 1 {
+                            let Some(bucket) = grid.get(&(gx, gy)) else {
+                                continue;
+                            };
+                            for &n2 in bucket.iter().take(96) {
+                                if n2.index() <= n1.index() {
+                                    continue;
+                                }
+                                let Some(&(x2, y2)) = self.layout.get(&n2) else {
+                                    continue;
+                                };
+                                add_repulsive_force(&mut forces, n1, n2, x1, y1, x2, y2, k);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Repulsive forces between all pairs for small graphs.
+                for (i, &n1) in nodes.iter().enumerate() {
+                    let (x1, y1) = self.layout[&n1];
+                    for &n2 in &nodes[i + 1..] {
+                        let (x2, y2) = self.layout[&n2];
+                        add_repulsive_force(&mut forces, n1, n2, x1, y1, x2, y2, k);
+                    }
+                }
             }
 
             // Attractive forces along edges
-            for edge in graph.edges() {
-                if let (Some(&(x1, y1)), Some(&(x2, y2))) = (
-                    self.layout.get(&edge.source()),
-                    self.layout.get(&edge.target()),
-                ) {
+            for &(source, target) in edges.iter().step_by(edge_step) {
+                if let (Some(&(x1, y1)), Some(&(x2, y2))) =
+                    (self.layout.get(&source), self.layout.get(&target))
+                {
                     let dx = x2 - x1;
                     let dy = y2 - y1;
                     let dist = (dx * dx + dy * dy).sqrt().max(0.1);
@@ -190,18 +267,18 @@ impl App {
                     let fx = (dx / dist) * force;
                     let fy = (dy / dist) * force;
 
-                    let e = forces.entry(edge.source()).or_insert((0.0, 0.0));
+                    let e = forces.entry(source).or_insert((0.0, 0.0));
                     e.0 += fx * 0.5;
                     e.1 += fy * 0.5;
 
-                    let e = forces.entry(edge.target()).or_insert((0.0, 0.0));
+                    let e = forces.entry(target).or_insert((0.0, 0.0));
                     e.0 -= fx * 0.5;
                     e.1 -= fy * 0.5;
                 }
             }
 
             // Apply forces with cooling
-            let temp = 2.0;
+            let temp = if nodes.len() > 1500 { 1.35 } else { 2.0 };
             for (&node, &(fx, fy)) in &forces {
                 if let Some(pos) = self.layout.get_mut(&node) {
                     let mag = (fx * fx + fy * fy).sqrt().max(0.01);
@@ -212,7 +289,6 @@ impl App {
             }
         }
 
-        drop(graph);
         self.refresh_stats();
     }
 

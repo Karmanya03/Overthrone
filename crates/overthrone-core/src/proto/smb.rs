@@ -32,7 +32,9 @@ const READ_BUF_SIZE: usize = 1_048_576; // 1 MiB — large enough for DCSync/Ker
 
 pub struct SmbSession {
     #[cfg(windows)]
-    client: Client,
+    client: Option<Client>,
+    #[cfg(windows)]
+    inner: Option<std::sync::Arc<tokio::sync::Mutex<super::smb2::Smb2Connection>>>,
     #[cfg(not(windows))]
     inner: std::sync::Arc<tokio::sync::Mutex<super::smb2::Smb2Connection>>,
     pub target: String,
@@ -134,8 +136,9 @@ impl SmbSession {
         let unc = UncPath::from_str(&ipc_path)
             .map_err(|e| OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}")))?;
 
+        let qualified_user = format!("{}\\{}", domain, username);
         client
-            .share_connect(&unc, username, password.to_string())
+            .share_connect(&unc, &qualified_user, password.to_string())
             .await
             .map_err(|e| {
                 OverthroneError::Smb(format!(
@@ -146,7 +149,8 @@ impl SmbSession {
         info!("SMB: Authenticated to \\\\{target}");
 
         Ok(SmbSession {
-            client,
+            client: Some(client),
+            inner: None,
             target: target.to_string(),
             username: username.to_string(),
             domain: domain.to_string(),
@@ -157,77 +161,41 @@ impl SmbSession {
 
     /// Connect using pass-the-hash (NTLM hash instead of plaintext password).
     ///
-    /// The `smb` crate on Windows authenticates via SSPI/NTLM. SSPI on Windows
-    /// does not natively accept raw NT hashes, so we attempt two strategies:
-    ///  1. Impersonation via `LogonUserW` with `LOGON32_LOGON_NEW_CREDENTIALS`
-    ///     (requires the caller to be running elevated — SeImpersonatePrivilege).
-    ///  2. Fallback: pass the hex hash as the password string. Some SMB servers
-    ///     (e.g. Impacket smbserver) accept this; native Windows DCs do not.
+    /// On Windows, the `smb` crate authenticates via SSPI/NTLM, which does not
+    /// natively accept raw NT hashes.  We therefore use the pure-Rust SMB2
+    /// client (smb2.rs) which implements NTLMSSP directly and supports
+    /// pass-the-hash natively.
+    ///
+    /// Fallback for elevated users: if `LogonUserW` with
+    /// `LOGON32_LOGON_NEW_CREDENTIALS` succeeds (requires SeImpersonatePrivilege),
+    /// we still use the pure-Rust SMB2 client since SSPI hashes the password
+    /// string again, making it impossible to pass a raw NT hash through the
+    /// smb crate's API.
     pub async fn connect_with_hash(
         target: &str,
         domain: &str,
         username: &str,
         nt_hash: &str,
     ) -> Result<Self> {
-        info!("SMB: PTH connecting to \\\\{target} as {domain}\\{username} (hash)");
+        info!(
+            "SMB: PTH connecting to \\\\{target} as {domain}\\{username} (hash) -- using pure-Rust SMB2 client"
+        );
 
-        // Strategy 1: Try Windows LogonUser + impersonation
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::{CloseHandle, HANDLE};
-            use windows::Win32::Security::{
-                ImpersonateLoggedOnUser, LOGON32_LOGON_NEW_CREDENTIALS, LOGON32_PROVIDER_WINNT50,
-                LogonUserW, RevertToSelf,
-            };
-            use windows::core::PCWSTR;
+        let conn = super::smb2::Smb2Connection::connect(target, SMB_PORT).await?;
+        conn.negotiate().await?;
+        conn.session_setup_hash(domain, username, nt_hash).await?;
 
-            // Encode UTF-16 null-terminated strings
-            let user_w: Vec<u16> = username.encode_utf16().chain(std::iter::once(0)).collect();
-            let domain_w: Vec<u16> = domain.encode_utf16().chain(std::iter::once(0)).collect();
-            // Use the hash as password for LOGON32_LOGON_NEW_CREDENTIALS
-            let hash_w: Vec<u16> = nt_hash.encode_utf16().chain(std::iter::once(0)).collect();
+        info!("SMB: PTH authenticated to \\\\{target} via pure-Rust SMB2");
 
-            let mut token = HANDLE::default();
-            let ok = unsafe {
-                LogonUserW(
-                    PCWSTR(user_w.as_ptr()),
-                    PCWSTR(domain_w.as_ptr()),
-                    PCWSTR(hash_w.as_ptr()),
-                    LOGON32_LOGON_NEW_CREDENTIALS,
-                    LOGON32_PROVIDER_WINNT50,
-                    &mut token,
-                )
-            };
-
-            if ok.is_ok() {
-                let imp = unsafe { ImpersonateLoggedOnUser(token) };
-                if imp.is_ok() {
-                    info!("SMB: PTH impersonation succeeded, connecting as {domain}\\{username}");
-                    // Now connect using the impersonated token (empty password — creds come from token)
-                    let result = Self::connect(target, domain, username, "").await;
-                    // Revert impersonation & close token regardless of connect result
-                    unsafe {
-                        let _ = RevertToSelf();
-                        let _ = CloseHandle(token);
-                    }
-                    return result;
-                }
-                unsafe {
-                    let _ = CloseHandle(token);
-                }
-                warn!(
-                    "SMB: ImpersonateLoggedOnUser failed, no unsafe hash-as-password fallback will be attempted"
-                );
-            } else {
-                warn!(
-                    "SMB: LogonUserW failed for PTH, no unsafe hash-as-password fallback will be attempted"
-                );
-            }
-        }
-
-        Err(OverthroneError::Smb(
-            "Pass-the-hash fallback via literal password string is disabled".to_string(),
-        ))
+        Ok(SmbSession {
+            client: None,
+            inner: Some(std::sync::Arc::new(tokio::sync::Mutex::new(conn))),
+            target: target.to_string(),
+            username: username.to_string(),
+            domain: domain.to_string(),
+            ticket: None,
+            session_key: None,
+        })
     }
 
     pub fn session_key(&self) -> Option<Vec<u8>> {
@@ -244,9 +212,23 @@ impl SmbSession {
     }
 
     pub async fn connect_share(&self, share: &str) -> Result<()> {
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            conn.tree_connect(&share_path).await?;
+            debug!("SMB: Connected to \\\\{}\\{} (PTH)", self.target, share);
+            return Ok(());
+        }
+        // Standard path via smb crate
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB client not initialized".to_string()))?;
         let unc = self.unc(share, None)?;
-        self.client
-            .share_connect(&unc, &self.username, String::new())
+        let qualified_user = format!("{}\\{}", self.domain, self.username);
+        client
+            .share_connect(&unc, &qualified_user, String::new())
             .await
             .map_err(|e| {
                 OverthroneError::Smb(format!(
@@ -259,13 +241,28 @@ impl SmbSession {
     }
 
     pub async fn check_share_read(&self, share: &str) -> bool {
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let ok = conn.tree_connect(&share_path).await.is_ok();
+            if ok {
+                debug!("SMB: Read access on \\\\{}\\{} (PTH)", self.target, share);
+            }
+            return ok;
+        }
+        // Standard path via smb crate
+        let client = match self.client.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
         let unc = match self.unc(share, None) {
             Ok(u) => u,
             Err(_) => return false,
         };
-        match self
-            .client
-            .share_connect(&unc, &self.username, String::new())
+        let qualified_user = format!("{}\\{}", self.domain, self.username);
+        match client
+            .share_connect(&unc, &qualified_user, String::new())
             .await
         {
             Ok(_) => {
@@ -277,6 +274,34 @@ impl SmbSession {
     }
 
     pub async fn check_share_write(&self, share: &str) -> bool {
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            if share == "IPC$" {
+                return false;
+            }
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let _tree_id = match conn.tree_connect(&share_path).await {
+                Ok(id) => id,
+                Err(_) => return false,
+            };
+            let test_file = format!("__overthrone_test_{}.tmp", rand::random::<u32>());
+            match conn.open_file_write(&test_file).await {
+                Ok(fid) => {
+                    let _ = conn.write(&fid, 0, b"x").await;
+                    let _ = conn.close(&fid).await;
+                    let _ = conn.delete_file(&test_file).await;
+                    debug!("SMB: Write access on \\\\{}\\{} (PTH)", self.target, share);
+                    return true;
+                }
+                Err(_) => return false,
+            }
+        }
+        // Standard path via smb crate
+        let client = match self.client.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
         let test_file = format!("__overthrone_test_{}.tmp", rand::random::<u32>());
         let unc = match self.unc(share, Some(&test_file)) {
             Ok(u) => u,
@@ -284,7 +309,7 @@ impl SmbSession {
         };
         let create_args =
             FileCreateArgs::make_create_new(FileAttributes::default(), CreateOptions::default());
-        match self.client.create_file(&unc, &create_args).await {
+        match client.create_file(&unc, &create_args).await {
             Ok(resource) => {
                 if let Resource::File(file) = resource {
                     let _ = file.close().await;
@@ -420,11 +445,27 @@ impl SmbSession {
             "SMB: Reading \\\\{}\\{}\\{}",
             self.target, share, remote_path
         );
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&share_path).await?;
+            let file_path = remote_path.replace('/', "\\");
+            let fid = conn.open_file_read(&file_path).await?;
+            let data = conn.read_all(&fid).await?;
+            conn.close(&fid).await?;
+            info!("SMB: Read {} bytes from {} (PTH)", data.len(), remote_path);
+            return Ok(data);
+        }
+        // Standard path via smb crate
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB client not initialized".to_string()))?;
         let unc = self.unc(share, Some(remote_path))?;
         let open_args =
             FileCreateArgs::make_open_existing(FileAccessMask::new().with_generic_read(true));
-        let resource = self
-            .client
+        let resource = client
             .create_file(&unc, &open_args)
             .await
             .map_err(|e| OverthroneError::Smb(format!("Cannot open '{}': {e}", remote_path)))?;
@@ -458,18 +499,32 @@ impl SmbSession {
     }
 
     pub async fn write_file(&self, share: &str, remote_path: &str, data: &[u8]) -> Result<()> {
+        let data_len = data.len();
         info!(
             "SMB: Writing {} bytes to \\\\{}\\{}\\{}",
-            data.len(),
-            self.target,
-            share,
-            remote_path
+            data_len, self.target, share, remote_path
         );
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&share_path).await?;
+            let file_path = remote_path.replace('/', "\\");
+            let fid = conn.open_file_write(&file_path).await?;
+            conn.write_all(&fid, data).await?;
+            conn.close(&fid).await?;
+            info!("SMB: Write complete ({} bytes) (PTH)", data_len);
+            return Ok(());
+        }
+        // Standard path via smb crate
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB client not initialized".to_string()))?;
         let unc = self.unc(share, Some(remote_path))?;
         let create_args =
             FileCreateArgs::make_overwrite(FileAttributes::default(), CreateOptions::default());
-        let resource = self
-            .client
+        let resource = client
             .create_file(&unc, &create_args)
             .await
             .map_err(|e| OverthroneError::Smb(format!("Cannot create '{}': {e}", remote_path)))?;
@@ -491,7 +546,7 @@ impl SmbSession {
         file.close()
             .await
             .map_err(|e| OverthroneError::Smb(format!("Close failed: {e}")))?;
-        info!("SMB: Write complete ({} bytes)", data.len());
+        info!("SMB: Write complete ({} bytes)", data_len);
         Ok(())
     }
 
@@ -500,15 +555,26 @@ impl SmbSession {
             "SMB: Deleting \\\\{}\\{}\\{}",
             self.target, share, remote_path
         );
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&share_path).await?;
+            let file_path = remote_path.replace('/', "\\");
+            conn.delete_file(&file_path).await?;
+            info!("SMB: Deleted {} (PTH)", remote_path);
+            return Ok(());
+        }
+        // Standard path via smb crate
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB client not initialized".to_string()))?;
         let unc = self.unc(share, Some(remote_path))?;
         let open_args = FileCreateArgs::make_open_existing(FileAccessMask::new().with_delete(true));
-        let resource = self
-            .client
-            .create_file(&unc, &open_args)
-            .await
-            .map_err(|e| {
-                OverthroneError::Smb(format!("Cannot open for delete '{}': {e}", remote_path))
-            })?;
+        let resource = client.create_file(&unc, &open_args).await.map_err(|e| {
+            OverthroneError::Smb(format!("Cannot open for delete '{}': {e}", remote_path))
+        })?;
         if let Resource::File(file) = resource {
             file.close().await.map_err(|e| {
                 OverthroneError::Smb(format!("Delete failed '{}': {e}", remote_path))
@@ -560,10 +626,26 @@ impl SmbSession {
             pipe_name,
             request.len()
         );
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let ipc_path = format!(r"\\{}\IPC$", self.target);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&ipc_path).await?;
+            let name = pipe_name.trim_start_matches('/').trim_start_matches('\\');
+            let fid = conn.open_pipe(name).await?;
+            let response = conn.ioctl_pipe_transceive(&fid, request).await?;
+            conn.close(&fid).await?;
+            debug!("SMB: Pipe response: {} bytes (PTH)", response.len());
+            return Ok(response);
+        }
+        // Standard path via smb crate
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB client not initialized".to_string()))?;
         let unc = self.unc("IPC$", Some(pipe_name))?;
         let open_args = FileCreateArgs::make_pipe();
-        let resource = self
-            .client
+        let resource = client
             .create_file(&unc, &open_args)
             .await
             .map_err(|e| OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name)))?;
@@ -603,10 +685,54 @@ impl SmbSession {
         const RPC_HDR: usize = 24; // DCE/RPC response PDU fixed header
         const FRAG_LEN_OFF: usize = 4; // offset of frag_len (u16 LE) in PDU
 
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let ipc_path = format!(r"\\{}\IPC$", self.target);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&ipc_path).await?;
+            let name = pipe_name.trim_start_matches('/').trim_start_matches('\\');
+            let fid = conn.open_pipe(name).await?;
+            let first = conn.ioctl_pipe_transceive(&fid, request).await?;
+            let ptype = first.get(2).copied().unwrap_or(0);
+            let pfc_flags = first.get(3).copied().unwrap_or(0x02);
+            let is_last = (pfc_flags & 0x02) != 0;
+            if first.len() < 6 || ptype != 2 || is_last {
+                conn.close(&fid).await?;
+                return Ok(first);
+            }
+            let first_frag_len =
+                u16::from_le_bytes([first[FRAG_LEN_OFF], first[FRAG_LEN_OFF + 1]]) as usize;
+            let header: Vec<u8> = first[..RPC_HDR.min(first.len())].to_vec();
+            let mut all_stubs: Vec<u8> =
+                first[RPC_HDR.min(first.len())..first_frag_len.min(first.len())].to_vec();
+            loop {
+                let frag = conn.read(&fid, 0, 65536).await.unwrap_or_default();
+                if frag.is_empty() {
+                    break;
+                }
+                let flen = if frag.len() >= FRAG_LEN_OFF + 2 {
+                    u16::from_le_bytes([frag[FRAG_LEN_OFF], frag[FRAG_LEN_OFF + 1]]) as usize
+                } else {
+                    frag.len()
+                };
+                all_stubs.extend_from_slice(&frag[RPC_HDR.min(frag.len())..flen.min(frag.len())]);
+                if frag.len() >= 4 && (frag[3] & 0x02 != 0) {
+                    break;
+                }
+            }
+            conn.close(&fid).await?;
+            let mut result = header;
+            result.extend_from_slice(&all_stubs);
+            return Ok(result);
+        }
+        // Standard path via smb crate
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB client not initialized".to_string()))?;
         let unc = self.unc("IPC$", Some(pipe_name))?;
         let open_args = FileCreateArgs::make_pipe();
-        let resource = self
-            .client
+        let resource = client
             .create_file(&unc, &open_args)
             .await
             .map_err(|e| OverthroneError::Smb(format!("Cannot open pipe '{}': {e}", pipe_name)))?;
@@ -789,7 +915,10 @@ impl SmbSession {
 
         // Attempt 1: Use empty password — SSPI will use the cached Kerberos
         // ticket. If that fails, fall back to session-key-as-hash.
-        let connect_result = client.share_connect(&unc, username, String::new()).await;
+        let qualified_user = format!("{}\\{}", domain, username);
+        let connect_result = client
+            .share_connect(&unc, &qualified_user, String::new())
+            .await;
 
         match connect_result {
             Ok(()) => {
@@ -802,7 +931,7 @@ impl SmbSession {
                 // Attempt 2: Use session key hex as pass-the-hash
                 let session_key_hex = hex::encode(&ticket.session_key);
                 client
-                    .share_connect(&unc, username, session_key_hex)
+                    .share_connect(&unc, &qualified_user, session_key_hex)
                     .await
                     .map_err(|e2| {
                         OverthroneError::Smb(format!(
@@ -814,7 +943,8 @@ impl SmbSession {
         }
 
         Ok(SmbSession {
-            client,
+            client: Some(client),
+            inner: None,
             target: target.to_string(),
             username: username.to_string(),
             domain: domain.to_string(),
@@ -1270,16 +1400,13 @@ impl SmbSession {
             Err(_) => return false,
         };
         let test_file = format!("__overthrone_test_{}.tmp", rand::random::<u32>());
-        // Try to create, write, and delete a test file
         match conn.open_file_write(&test_file).await {
             Ok(fid) => {
                 let _ = conn.write(&fid, 0, b"x").await;
                 let _ = conn.close(&fid).await;
-                let _ = conn.delete_file(&test_file).await;
-                debug!("SMB: Write access on \\\\{}\\{}", self.target, share);
-                true
+                return true;
             }
-            Err(_) => false,
+            Err(_) => return false,
         }
     }
 

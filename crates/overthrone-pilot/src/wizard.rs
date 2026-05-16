@@ -213,11 +213,32 @@ impl WizardSession {
                 "PRE".bold().cyan()
             );
             if ctx.use_hash {
-                println!(
-                    "  {} LDAP pre-flight skipped (pass-the-hash mode).",
-                    "!".yellow().bold()
-                );
-                ctx.ldap_available = false;
+                match overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+                    &ctx.dc_ip,
+                    &ctx.domain,
+                    &ctx.username,
+                    &ctx.secret,
+                    ctx.use_ldaps,
+                )
+                .await
+                {
+                    Ok(mut session) => {
+                        println!(
+                            "  {} LDAP NTLM bind OK ({})",
+                            "✓".green().bold(),
+                            session.bind_type
+                        );
+                        let _ = session.disconnect().await;
+                    }
+                    Err(e) => {
+                        println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
+                        println!(
+                            "  {} LDAP-dependent enumeration steps will be skipped.",
+                            "!".yellow().bold()
+                        );
+                        ctx.ldap_available = false;
+                    }
+                }
             } else {
                 match overthrone_core::proto::ldap::LdapSession::connect(
                     &ctx.dc_ip,

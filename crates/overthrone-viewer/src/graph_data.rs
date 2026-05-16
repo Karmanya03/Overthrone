@@ -254,12 +254,14 @@ impl ViewerGraph {
             let parse_timer = PerfTimer::start("parse");
             let raw = fs::read_to_string(&path)
                 .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-            let value: Value = serde_json::from_str(&raw)
+            let value: serde_json::Value = serde_json::from_str(&raw)
                 .map_err(|e| format!("failed to parse {} as JSON: {e}", path.display()))?;
             parse_ms = parse_ms.saturating_add(parse_timer.elapsed_ms());
 
             let build_timer = PerfTimer::start("build");
-            builder.ingest_value(&path, &value)?;
+            if let Err(e) = builder.ingest_value(&path, &value) {
+                tracing::warn!("Skipping {}: {}", path.display(), e);
+            }
             build_ms = build_ms.saturating_add(build_timer.elapsed_ms());
         }
 

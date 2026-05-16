@@ -3,7 +3,10 @@ use crate::tui::graph_view;
 use overthrone_core::graph::{EdgeRef, EdgeType, NodeType};
 use ratatui::prelude::*;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs};
+use ratatui::widgets::{
+    Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    Tabs,
+};
 
 /// Main UI draw function — called every frame
 pub fn draw(f: &mut Frame, app: &App) {
@@ -153,7 +156,7 @@ fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let table = Table::new(
-        rows,
+        rows.clone(),
         [
             Constraint::Length(6),
             Constraint::Length(12),
@@ -174,6 +177,20 @@ fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
     .row_highlight_style(Style::default().bg(Color::DarkGray));
 
     f.render_widget(table, area);
+
+    let scrollbar = Scrollbar::default()
+        .orientation(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("↑"))
+        .end_symbol(Some("↓"));
+    let mut scrollbar_state = ScrollbarState::new(rows.len()).position(app.node_scroll);
+    f.render_stateful_widget(
+        scrollbar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scrollbar_state,
+    );
 }
 
 fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
@@ -187,7 +204,6 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
         ])
         .split(area);
 
-    // Stats summary
     let stats_text = format!(
         " 🎯 Shortest paths to DA: {} | Total attack edges: {} | Domains: {} ",
         app.stats.attack_paths, app.stats.edges, app.stats.domains
@@ -201,14 +217,11 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().fg(Color::LightRed));
     f.render_widget(stats, chunks[0]);
 
-    // Attack paths (grouped by target)
     let mut path_lines: Vec<Line> = Vec::new();
 
-    // Get all high-value targets (DA, EA, DC$)
     let high_value_targets: Vec<_> = graph
         .nodes()
         .filter(|(_, n)| {
-            // Check if node is high-value based on name or properties
             n.name.to_lowercase().contains("admin")
                 || n.name.to_lowercase().contains("domain")
                 || n.properties.get("high_value").is_some_and(|v| v == "true")
@@ -229,10 +242,8 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
             ),
         ]));
 
-        // Find shortest paths to this target from compromised nodes
-        let paths = graph.shortest_paths_to(*target_id, 5); // top 5 paths
+        let paths = graph.shortest_paths_to(*target_id, 5);
         for (i, _path) in paths.iter().enumerate() {
-            // Simplified path rendering since we don't have full path reconstruction yet
             path_lines.push(Line::from(vec![
                 Span::styled(format!("  #{} ", i + 1), Style::default().fg(Color::Cyan)),
                 Span::styled("(path exists)", Style::default().fg(Color::Yellow)),
@@ -251,23 +262,29 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
         path_lines.push(Line::from(""));
     }
 
-    if high_value_targets.is_empty() {
-        path_lines.push(Line::from(Span::styled(
-            "No high-value targets identified yet. Run crawler first.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    let paths_widget = Paragraph::new(path_lines)
+    let paths_list = Paragraph::new(path_lines)
         .block(
             Block::default()
-                .title(" ⚔ Attack Paths (shortest to high-value targets) ")
+                .title(" 🚀 Attack Paths ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red)),
         )
-        .wrap(ratatui::widgets::Wrap { trim: false });
+        .scroll((app.path_scroll as u16, 0));
+    f.render_widget(paths_list, chunks[1]);
 
-    f.render_widget(paths_widget, chunks[1]);
+    let scrollbar = Scrollbar::default()
+        .orientation(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("↑"))
+        .end_symbol(Some("↓"));
+    let mut scrollbar_state = ScrollbarState::new(200).position(app.path_scroll);
+    f.render_stateful_widget(
+        scrollbar,
+        chunks[1].inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scrollbar_state,
+    );
 }
 
 fn draw_logs_tab(f: &mut Frame, area: Rect, app: &App) {
@@ -301,14 +318,6 @@ fn draw_logs_tab(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    // Auto-scroll to bottom
-    let visible_lines = area.height.saturating_sub(2) as usize;
-    let scroll_offset = if log_lines.len() > visible_lines {
-        (log_lines.len() - visible_lines) as u16
-    } else {
-        0
-    };
-
     let logs_widget = Paragraph::new(log_lines)
         .block(
             Block::default()
@@ -316,9 +325,23 @@ fn draw_logs_tab(f: &mut Frame, area: Rect, app: &App) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green)),
         )
-        .scroll((scroll_offset, 0));
+        .scroll((app.log_scroll as u16, 0));
 
     f.render_widget(logs_widget, area);
+
+    let scrollbar = Scrollbar::default()
+        .orientation(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("↑"))
+        .end_symbol(Some("↓"));
+    let mut scrollbar_state = ScrollbarState::new(app.logs.len()).position(app.log_scroll);
+    f.render_stateful_widget(
+        scrollbar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scrollbar_state,
+    );
 }
 
 fn draw_trusts_tab(f: &mut Frame, area: Rect, app: &App) {
@@ -326,9 +349,7 @@ fn draw_trusts_tab(f: &mut Frame, area: Rect, app: &App) {
 
     let mut rows = Vec::new();
 
-    // Collect trust-type nodes and their edges
     for (node_id, node) in graph.nodes() {
-        // Only process Domain nodes (Trust is not a valid NodeType)
         if !matches!(node.node_type, NodeType::Domain) {
             continue;
         }
@@ -353,30 +374,13 @@ fn draw_trusts_tab(f: &mut Frame, area: Rect, app: &App) {
                 "→ Outbound"
             };
 
-            // Simplified - edge properties would need to be added to EdgeType or stored separately
-            let sid_filter_str = "❓";
-            let trust_type_str = "Unknown";
-            let attackable = false;
-
             rows.push(Row::new(vec![
                 Cell::from(&*node.name),
                 Cell::from(direction_str),
                 Cell::from(&*target.name),
-                Cell::from(trust_type_str),
-                Cell::from(sid_filter_str).style(if attackable {
-                    Style::default()
-                        .fg(Color::LightRed)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Green)
-                }),
-                Cell::from(if attackable { "⚡ ExtraSids" } else { "—" }).style(
-                    Style::default().fg(if attackable {
-                        Color::Red
-                    } else {
-                        Color::DarkGray
-                    }),
-                ),
+                Cell::from("Unknown"),
+                Cell::from("❓"),
+                Cell::from("—"),
             ]));
         }
     }
@@ -393,7 +397,7 @@ fn draw_trusts_tab(f: &mut Frame, area: Rect, app: &App) {
     .bottom_margin(1);
 
     let table = Table::new(
-        rows,
+        rows.clone(),
         [
             Constraint::Percentage(20),
             Constraint::Length(16),
@@ -406,13 +410,26 @@ fn draw_trusts_tab(f: &mut Frame, area: Rect, app: &App) {
     .header(header)
     .block(
         Block::default()
-            .title(" 🌐 Trust Relationships ")
+            .title(" 🤝 Domain Trusts ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Magenta)),
-    )
-    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    );
 
     f.render_widget(table, area);
+
+    let scrollbar = Scrollbar::default()
+        .orientation(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("↑"))
+        .end_symbol(Some("↓"));
+    let mut scrollbar_state = ScrollbarState::new(rows.len()).position(app.trust_scroll);
+    f.render_stateful_widget(
+        scrollbar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scrollbar_state,
+    );
 }
 
 fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {

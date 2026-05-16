@@ -3,6 +3,7 @@
 //! Serves a single-page BloodHound-style application with Three.js graph
 //! visualization, node search, attack path finder, and detail panels.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -84,6 +85,79 @@ impl OperationMetrics {
     }
 }
 
+const RELATIONSHIPS: &[&str] = &[
+    "GenericAll",
+    "GenericWrite",
+    "WriteDacl",
+    "WriteOwner",
+    "WriteSelf",
+    "AllExtendedRights",
+    "Owns",
+    "ForceChangePassword",
+    "AddSelf",
+    "CreateChild",
+    "WriteProperty",
+    "WriteSPN",
+    "WriteServicePrincipalName",
+    "WriteKeyCredentialLink",
+    "WriteMsDsKeyCredentialLink",
+    "AddKeyCredentialLink",
+    "WriteAllowedToDelegateTo",
+    "WriteAccountRestrictions",
+    "WriteAltSecurityIdentities",
+    "WriteUserCertificate",
+    "WriteGPLink",
+    "WritePwdProperties",
+    "WriteLockoutThreshold",
+    "WriteMinPwdLength",
+    "WritePwdHistoryLength",
+    "WritePwdComplexity",
+    "WritePwdReversibleEncryption",
+    "WritePwdAge",
+    "WriteLockoutDuration",
+    "WriteLockoutObservationWindow",
+    "AddMember",
+    "AddMembers",
+    "MemberOf",
+    "Members",
+    "AdminTo",
+    "CanRDP",
+    "CanPSRemote",
+    "ExecuteDCOM",
+    "SQLAdmin",
+    "HasSession",
+    "TrustedBy",
+    "AllowedToDelegate",
+    "AllowedToAct",
+    "HasSidHistory",
+    "HasSpn",
+    "DontReqPreauth",
+    "DcSync",
+    "GetChanges",
+    "GetChangesAll",
+    "Enroll",
+    "EnrollCertificate",
+    "ManageCA",
+    "ManageCertificates",
+    "ManageCertTemplate",
+    "AdcsEsc1",
+    "AdcsEsc2",
+    "AdcsEsc3",
+    "AdcsEsc4",
+    "AdcsEsc5",
+    "AdcsEsc6",
+    "AdcsEsc7",
+    "AdcsEsc8",
+    "AdcsEsc9",
+    "AdcsEsc10",
+    "AdcsEsc11",
+    "AdcsEsc12",
+    "AdcsEsc13",
+    "AdcsEsc14",
+    "AdcsEsc15",
+    "AdcsEsc16",
+];
+
 const AUTO_NODE_LIMIT: usize = 3500;
 const AUTO_NODE_THRESHOLD: usize = 4500;
 const AUTO_EDGE_PER_NODE: usize = 6;
@@ -128,7 +202,7 @@ struct GraphResponse {
     edges: Vec<EdgeResponse>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct StatsResponse {
     total_nodes: usize,
     total_edges: usize,
@@ -293,6 +367,32 @@ struct SearchQuery {
 }
 
 #[derive(Deserialize)]
+struct CustomQuery {
+    q: String,
+    graph: Option<String>,
+    types: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct CustomQueryResponse {
+    query: String,
+    nodes: Vec<SearchResult>,
+    relationships: Vec<QueryRelationship>,
+    total_node_matches: usize,
+    total_edge_matches: usize,
+}
+
+#[derive(Serialize)]
+struct QueryRelationship {
+    relationship: String,
+    category: String,
+    edge_count: usize,
+    severity: u8,
+    guidance: String,
+}
+
+#[derive(Deserialize)]
 struct CommandLookupRequest {
     relationship: String,
     source: Option<String>,
@@ -322,10 +422,11 @@ struct EdgeTypeInfo {
 struct GraphQuery {
     graph: Option<String>,
     limit: Option<usize>,
-    edges: Option<usize>,
     offset: Option<usize>,
-    focus: Option<String>,
+    edges: Option<usize>,
     types: Option<String>,
+    focus: Option<String>,
+    relationship: Option<String>,
 }
 
 // ============================================================
@@ -847,6 +948,277 @@ fn select_graph_nodes(
 
     add_connected_context_nodes(graph, &mut selected, &mut selected_mask, node_limit);
     selected
+}
+
+fn select_relationship_nodes(
+    graph: &ViewerGraph,
+    relationship: &str,
+    node_limit: usize,
+    type_filter: &[String],
+) -> Vec<usize> {
+    let mut selected = HashSet::new();
+    for edge in graph.edges() {
+        if edge.relationship.eq_ignore_ascii_case(relationship) {
+            if graph
+                .get_node(edge.source)
+                .filter(|n| node_matches_type_filter(n, type_filter))
+                .is_some()
+            {
+                selected.insert(edge.source);
+            }
+            if graph
+                .get_node(edge.target)
+                .filter(|n| node_matches_type_filter(n, type_filter))
+                .is_some()
+            {
+                selected.insert(edge.target);
+            }
+        }
+        if selected.len() >= node_limit {
+            break;
+        }
+    }
+    selected.into_iter().collect()
+}
+
+fn attack_relationships(alias: &str) -> Vec<&'static str> {
+    match alias.to_ascii_lowercase().as_str() {
+        "kerberos" => vec![
+            "HasSpn",
+            "DontReqPreauth",
+            "AllowedToDelegate",
+            "AllowedToAct",
+            "WriteSPN",
+            "WriteServicePrincipalName",
+            "WriteAllowedToDelegateTo",
+        ],
+        "asrep" | "asreproast" => vec!["DontReqPreauth"],
+        "kerberoast" => vec!["HasSpn", "WriteSPN", "WriteServicePrincipalName"],
+        "delegation" | "s4u" | "rbcd" => vec![
+            "AllowedToDelegate",
+            "AllowedToAct",
+            "AddAllowedToAct",
+            "WriteAllowedToDelegateTo",
+        ],
+        "shadow" | "shadowcreds" | "shadow-credentials" => vec![
+            "WriteKeyCredentialLink",
+            "WriteMsDsKeyCredentialLink",
+            "AddKeyCredentialLink",
+        ],
+        "dcsync" | "replication" => {
+            vec!["DcSync", "GetChanges", "GetChangesAll", "AllExtendedRights"]
+        }
+        "adcs" | "cert" | "certificate" | "esc" | "escs" => vec![
+            "AdcsEsc1",
+            "AdcsEsc2",
+            "AdcsEsc3",
+            "AdcsEsc4",
+            "AdcsEsc5",
+            "AdcsEsc6",
+            "AdcsEsc7",
+            "AdcsEsc8",
+            "AdcsEsc9",
+            "AdcsEsc10",
+            "AdcsEsc11",
+            "AdcsEsc12",
+            "AdcsEsc13",
+            "AdcsEsc14",
+            "AdcsEsc15",
+            "AdcsEsc16",
+            "EnrollCertificate",
+            "EnrollOnBehalfOf",
+            "ManageCA",
+            "ManageCertificates",
+            "ManageCertTemplate",
+        ],
+        "llmnr" | "ntlmrelay" | "relay" => vec![
+            "AdcsEsc8",
+            "AdcsEsc11",
+            "EnrollCertificate",
+            "AdminTo",
+            "CanPSRemote",
+            "CanRDP",
+            "HasSession",
+        ],
+        "coercion" | "petitpotam" | "printerbug" | "dfscoerce" | "shadowcoerce" => {
+            vec!["AdcsEsc8", "AdcsEsc11", "AdminTo", "CanPSRemote", "CanRDP"]
+        }
+        "ldap" | "ldaps" => vec![
+            "GenericAll",
+            "GenericWrite",
+            "WriteDacl",
+            "WriteOwner",
+            "AllExtendedRights",
+            "WriteKeyCredentialLink",
+            "AddKeyCredentialLink",
+            "WriteAltSecurityIdentities",
+            "WriteAccountRestrictions",
+        ],
+        "lateral" | "movement" => vec![
+            "AdminTo",
+            "CanRDP",
+            "CanPSRemote",
+            "ExecuteDCOM",
+            "SQLAdmin",
+            "HasSession",
+        ],
+        "acl" | "aces" | "control" => vec![
+            "GenericAll",
+            "GenericWrite",
+            "WriteDacl",
+            "WriteOwner",
+            "Owns",
+            "AllExtendedRights",
+            "AddMembers",
+            "AddSelf",
+            "ForceChangePassword",
+            "CreateChild",
+            "WriteSelf",
+        ],
+        "gpo" | "gplink" => vec!["GpoLink", "WriteGPLink", "GenericAll", "GenericWrite"],
+        "laps" | "gmsa" | "secrets" => vec![
+            "ReadLapsPassword",
+            "ReadLapsPasswordExpiry",
+            "ReadGmsaPassword",
+            "GenericAll",
+            "AllExtendedRights",
+        ],
+        "trust" | "trusts" | "crossdomain" | "cross-domain" => {
+            vec!["TrustedBy", "HasSidHistory"]
+        }
+        "session" | "sessions" => vec!["HasSession"],
+        "rdp" => vec!["CanRDP"],
+        "psremote" | "winrm" => vec!["CanPSRemote"],
+        "dcom" => vec!["ExecuteDCOM"],
+        "sql" | "mssql" => vec!["SQLAdmin"],
+        "policy" | "password-policy" | "spray" => vec![
+            "WritePwdProperties",
+            "WriteLockoutThreshold",
+            "WriteMinPwdLength",
+            "WritePwdHistoryLength",
+            "WritePwdComplexity",
+            "WritePwdReversibleEncryption",
+            "WritePwdAge",
+            "WriteLockoutDuration",
+            "WriteLockoutObservationWindow",
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn relationship_category(relationship: &str) -> &'static str {
+    match relationship.to_ascii_lowercase().as_str() {
+        "hasspn" | "dontreqpreauth" | "writespn" | "writeserviceprincipalname" => "Kerberos",
+        "allowedtodelegate" | "allowedtoact" | "addallowedtoact" | "writeallowedtodelegateto" => {
+            "Delegation"
+        }
+        "dcsync" | "getchanges" | "getchangesall" => "Replication",
+        "enrollcertificate" | "enrollonbehalfof" | "manageca" | "managecertificates"
+        | "managecerttemplate" => "ADCS",
+        rel if rel.starts_with("adcsesc") => "ADCS ESC",
+        "adminto" | "canrdp" | "canpsremote" | "executedcom" | "sqladmin" | "hassession" => {
+            "Lateral"
+        }
+        "trustedby" => "Trust",
+        _ => "ACL",
+    }
+}
+
+fn normalize_relationship_query(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("edge:")
+        .trim_start_matches("rel:")
+        .trim_start_matches("relationship:");
+    if cleaned.is_empty() {
+        return None;
+    }
+    if let Some(num) = cleaned
+        .to_ascii_lowercase()
+        .strip_prefix("esc")
+        .and_then(|n| n.parse::<u8>().ok())
+        .filter(|n| (1..=16).contains(n))
+    {
+        return Some(format!("AdcsEsc{num}"));
+    }
+    RELATIONSHIPS
+        .iter()
+        .find(|relationship| relationship.eq_ignore_ascii_case(cleaned))
+        .map(|relationship| (*relationship).to_string())
+        .or_else(|| {
+            RELATIONSHIPS
+                .iter()
+                .find(|relationship| {
+                    relationship
+                        .to_ascii_lowercase()
+                        .contains(&cleaned.to_ascii_lowercase())
+                })
+                .map(|relationship| (*relationship).to_string())
+        })
+}
+
+fn node_contains_terms(node: &ViewerNode, terms: &[String]) -> bool {
+    if terms.is_empty() {
+        return true;
+    }
+    let mut haystack = format!(
+        "{} {} {} {} {}",
+        node.id,
+        node.label,
+        node.kind,
+        node.domain.as_deref().unwrap_or_default(),
+        node.distinguished_name.as_deref().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    for (key, value) in &node.properties {
+        haystack.push(' ');
+        haystack.push_str(&key.to_ascii_lowercase());
+        haystack.push('=');
+        haystack.push_str(&value.to_ascii_lowercase());
+    }
+    terms
+        .iter()
+        .all(|term| haystack.contains(&term.to_ascii_lowercase()))
+}
+
+fn node_matches_custom_filters(
+    node: &ViewerNode,
+    type_filter: &[String],
+    query_type: &Option<String>,
+    domain: &Option<String>,
+    owned: Option<bool>,
+    high_value: Option<bool>,
+    terms: &[String],
+) -> bool {
+    if !node_matches_type_filter(node, type_filter) {
+        return false;
+    }
+    if let Some(kind) = query_type
+        && !node.kind.eq_ignore_ascii_case(kind)
+    {
+        return false;
+    }
+    if let Some(domain_filter) = domain
+        && !node
+            .domain
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains(&domain_filter.to_ascii_lowercase())
+    {
+        return false;
+    }
+    if let Some(expected) = owned
+        && node.owned != expected
+    {
+        return false;
+    }
+    if let Some(expected) = high_value
+        && node.high_value != expected
+    {
+        return false;
+    }
+    node_contains_terms(node, terms)
 }
 
 fn add_connected_context_nodes(
@@ -1495,6 +1867,7 @@ async fn load_graph(
     Ok((bundle, graph))
 }
 
+#[allow(dead_code)]
 fn graph_label_from_source(source: &str) -> String {
     let path = Path::new(source);
     if path.is_dir() {
@@ -1564,25 +1937,23 @@ fn expand_graph_sources(sources: &[String]) -> Result<Vec<PathBuf>> {
 }
 
 fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
-    if sources.is_empty() {
-        return Err(anyhow!("no graph sources provided"));
-    }
-
     let mut bundles = Vec::new();
     let mut seen_ids = HashSet::new();
-    let paths = expand_graph_sources(sources)?;
 
-    if paths.is_empty() {
-        return Err(anyhow!("no JSON graph files found in the provided input"));
-    }
+    let files = expand_graph_sources(sources)?;
 
-    for (idx, path) in paths.iter().enumerate() {
-        let source = path.display().to_string();
-        let label = graph_label_from_source(&source);
+    for file in files {
+        let label = file
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown-graph")
+            .to_string();
+
         let mut base_id = graph_id_from_label(&label);
         if base_id.is_empty() {
-            base_id = format!("graph-{}", idx + 1);
+            base_id = format!("graph-{}", bundles.len() + 1);
         }
+
         let mut graph_id = base_id.clone();
         let mut counter = 2;
         while seen_ids.contains(&graph_id) {
@@ -1591,12 +1962,20 @@ fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
         }
         seen_ids.insert(graph_id.clone());
 
+        let file_bytes = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+
         bundles.push(GraphBundle {
             id: graph_id,
             label,
-            sources: vec![source],
-            file_bytes: fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+            sources: vec![file.display().to_string()],
+            file_bytes,
         });
+    }
+
+    if bundles.is_empty() {
+        return Err(anyhow!(
+            "no valid JSON graph files found in the provided sources"
+        ));
     }
 
     Ok(bundles)
@@ -1838,7 +2217,7 @@ async fn three_graph_js() -> impl IntoResponse {
                 header::CONTENT_TYPE,
                 "application/javascript; charset=utf-8",
             ),
-            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+            (header::CACHE_CONTROL, "no-cache, must-revalidate"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         THREE_GRAPH_JS,
@@ -1889,7 +2268,9 @@ async fn get_graph(
     server_metrics.phase("resolve_limits", limits_started.elapsed().as_millis());
 
     let selection_started = Instant::now();
-    let selected_nodes = if let Some(focus) = query.focus.as_deref() {
+    let selected_nodes = if let Some(rel) = query.relationship.as_deref() {
+        select_relationship_nodes(&graph, rel, node_limit, &type_filter)
+    } else if let Some(focus) = query.focus.as_deref() {
         let focus_idx = graph.resolve_node(focus).ok_or(StatusCode::NOT_FOUND)?;
         select_focus_nodes(&graph, focus_idx, node_limit, &type_filter)
     } else {
@@ -1983,7 +2364,7 @@ async fn get_node_detail(
     metrics.phase("connections", connections_started.elapsed().as_millis());
     metrics.finish();
 
-    Ok(Json(NodeDetail {
+    let detail = NodeDetail {
         id: node.id.clone(),
         label: node.label.clone(),
         display_name: node_display_name(node),
@@ -2000,7 +2381,9 @@ async fn get_node_detail(
         in_degree,
         metrics: metrics.clone(),
         retrieval_ms: metrics.total_ms,
-    }))
+    };
+
+    Ok(Json(detail))
 }
 
 /// GET /api/search?q=... — Search nodes by name
@@ -2012,7 +2395,7 @@ async fn search_nodes(
     let type_filter = parse_type_filter(query.types.as_deref());
     let limit = query.limit.unwrap_or(75).clamp(1, 100);
 
-    let results: Vec<SearchResult> = graph
+    let mut results: Vec<SearchResult> = graph
         .search_nodes(&query.q, &type_filter, limit)
         .into_iter()
         .filter_map(|idx| graph.get_node(idx))
@@ -2025,7 +2408,197 @@ async fn search_nodes(
         })
         .collect();
 
+    // Add attack-type matches
+    let query_lower = query.q.to_lowercase();
+    if query_lower.len() >= 3 {
+        for &rel in RELATIONSHIPS {
+            if rel.to_lowercase().contains(&query_lower) {
+                results.push(SearchResult {
+                    id: format!("query:attack:{}", rel),
+                    label: rel.to_string(),
+                    display_name: format!("Filter: Nodes with {} access", rel),
+                    node_type: "AttackQuery".to_string(),
+                    domain: "Global".to_string(),
+                });
+            }
+        }
+    }
+
     Ok(Json(results))
+}
+
+async fn custom_query(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CustomQuery>,
+) -> Result<Json<CustomQueryResponse>, StatusCode> {
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
+    let type_filter = parse_type_filter(query.types.as_deref());
+    let limit = query.limit.unwrap_or(60).clamp(1, 150);
+
+    let mut text_terms = Vec::new();
+    let mut query_type = None;
+    let mut domain = None;
+    let mut owned = None;
+    let mut high_value = None;
+    let mut wanted_relationships: HashSet<String> = HashSet::new();
+    let mut property_terms = Vec::new();
+
+    for raw in query.q.split_whitespace() {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if let Some(value) = lower.strip_prefix("attack:") {
+            for relationship in attack_relationships(value) {
+                wanted_relationships.insert(relationship.to_string());
+            }
+            if matches!(value, "llmnr" | "ldap" | "ldaps" | "relay" | "ntlmrelay") {
+                property_terms.push(value.to_string());
+            }
+        } else if lower.starts_with("edge:")
+            || lower.starts_with("rel:")
+            || lower.starts_with("relationship:")
+        {
+            if let Some(relationship) = normalize_relationship_query(token) {
+                wanted_relationships.insert(relationship);
+            }
+        } else if let Some(value) = lower
+            .strip_prefix("type:")
+            .or_else(|| lower.strip_prefix("kind:"))
+        {
+            query_type = Some(normalize_node_type_filter(value));
+        } else if let Some(value) = token.strip_prefix("domain:") {
+            domain = Some(value.to_string());
+        } else if let Some(value) = lower.strip_prefix("owned:") {
+            owned = Some(matches!(value, "1" | "true" | "yes"));
+        } else if let Some(value) = lower
+            .strip_prefix("high:")
+            .or_else(|| lower.strip_prefix("highvalue:"))
+            .or_else(|| lower.strip_prefix("high_value:"))
+        {
+            high_value = Some(matches!(value, "1" | "true" | "yes"));
+        } else if let Some(relationship) = normalize_relationship_query(token) {
+            wanted_relationships.insert(relationship);
+        } else if !attack_relationships(&lower).is_empty() {
+            for relationship in attack_relationships(&lower) {
+                wanted_relationships.insert(relationship.to_string());
+            }
+            if matches!(
+                lower.as_str(),
+                "llmnr" | "ldap" | "ldaps" | "relay" | "ntlmrelay"
+            ) {
+                property_terms.push(lower);
+            }
+        } else {
+            text_terms.push(token.to_string());
+        }
+    }
+
+    let relationship_query = !wanted_relationships.is_empty();
+
+    let mut edge_counts: HashMap<String, usize> = HashMap::new();
+    let mut relationship_nodes = HashSet::new();
+    for edge in graph.edges() {
+        let relationship_match = wanted_relationships
+            .iter()
+            .any(|wanted| edge.relationship.eq_ignore_ascii_case(wanted));
+        if relationship_match {
+            *edge_counts.entry(edge.relationship.clone()).or_default() += 1;
+            relationship_nodes.insert(edge.source);
+            relationship_nodes.insert(edge.target);
+        }
+    }
+
+    let mut relationships: Vec<QueryRelationship> = edge_counts
+        .into_iter()
+        .map(|(relationship, edge_count)| {
+            let (severity, guidance) = edge_security_guidance(&relationship);
+            QueryRelationship {
+                category: relationship_category(&relationship).to_string(),
+                relationship,
+                edge_count,
+                severity,
+                guidance: guidance.to_string(),
+            }
+        })
+        .collect();
+    relationships.sort_by_key(|item| (item.severity, Reverse(item.edge_count)));
+
+    let has_property_terms = !property_terms.is_empty();
+    let property_text_terms = if property_terms.is_empty() {
+        text_terms.clone()
+    } else {
+        let mut merged = text_terms.clone();
+        merged.extend(property_terms);
+        merged
+    };
+
+    let mut node_ids = Vec::new();
+    let mut seen_nodes = HashSet::new();
+    for idx in relationship_nodes {
+        if let Some(node) = graph.get_node(idx)
+            && node_matches_custom_filters(
+                node,
+                &type_filter,
+                &query_type,
+                &domain,
+                owned,
+                high_value,
+                &property_text_terms,
+            )
+            && seen_nodes.insert(idx)
+        {
+            node_ids.push(idx);
+        }
+    }
+
+    if node_ids.len() < limit && (!relationship_query || has_property_terms) {
+        for (idx, node) in graph.nodes() {
+            if seen_nodes.contains(&idx) {
+                continue;
+            }
+            if node_matches_custom_filters(
+                node,
+                &type_filter,
+                &query_type,
+                &domain,
+                owned,
+                high_value,
+                &property_text_terms,
+            ) && seen_nodes.insert(idx)
+            {
+                node_ids.push(idx);
+            }
+        }
+    }
+
+    node_ids.sort_unstable();
+    let total_node_matches = node_ids.len();
+    let nodes = node_ids
+        .into_iter()
+        .take(limit)
+        .filter_map(|idx| graph.get_node(idx))
+        .map(|node| SearchResult {
+            id: node.id.clone(),
+            label: node.label.clone(),
+            display_name: node_display_name(node),
+            node_type: node_type_str(node),
+            domain: node_domain(node),
+        })
+        .collect();
+    let total_edge_matches = relationships
+        .iter()
+        .map(|relationship| relationship.edge_count)
+        .sum();
+
+    Ok(Json(CustomQueryResponse {
+        query: query.q,
+        nodes,
+        relationships,
+        total_node_matches,
+        total_edge_matches,
+    }))
 }
 
 async fn lookup_edge_command(
@@ -2072,67 +2645,6 @@ async fn lookup_edge_command(
 }
 
 async fn edge_types() -> Json<Vec<EdgeTypeInfo>> {
-    const RELATIONSHIPS: &[&str] = &[
-        "GenericAll",
-        "GenericWrite",
-        "WriteDacl",
-        "WriteOwner",
-        "Owns",
-        "ForceChangePassword",
-        "AddMembers",
-        "AddSelf",
-        "AllExtendedRights",
-        "CreateChild",
-        "WriteSelf",
-        "ReadLapsPassword",
-        "ReadGmsaPassword",
-        "AllowedToDelegate",
-        "AllowedToAct",
-        "WriteAllowedToDelegateTo",
-        "AddAllowedToAct",
-        "DcSync",
-        "GetChanges",
-        "GetChangesAll",
-        "HasSpn",
-        "DontReqPreauth",
-        "AdminTo",
-        "CanRDP",
-        "CanPSRemote",
-        "ExecuteDCOM",
-        "SQLAdmin",
-        "HasSession",
-        "TrustedBy",
-        "GpoLink",
-        "WriteGPLink",
-        "WriteSPN",
-        "WriteKeyCredentialLink",
-        "WriteAltSecurityIdentities",
-        "EnrollCertificate",
-        "EnrollOnBehalfOf",
-        "ManageCA",
-        "ManageCertificates",
-        "ManageCertTemplate",
-        "AdcsEsc1",
-        "AdcsEsc2",
-        "AdcsEsc3",
-        "AdcsEsc4",
-        "AdcsEsc5",
-        "AdcsEsc6",
-        "AdcsEsc7",
-        "AdcsEsc8",
-        "AdcsEsc9",
-        "AdcsEsc10",
-        "AdcsEsc11",
-        "AdcsEsc12",
-        "AdcsEsc13",
-        "AdcsEsc14",
-        "AdcsEsc15",
-        "AdcsEsc16",
-        "MemberOf",
-        "Contains",
-        "MemberOfTierZero",
-    ];
-
     Json(
         RELATIONSHIPS
             .iter()
@@ -2313,6 +2825,7 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
         .route("/api/graph/{graph_id}/timings", get(get_graph_timings))
         .route("/api/node/{node_id}", get(get_node_detail))
         .route("/api/search", get(search_nodes))
+        .route("/api/query", get(custom_query))
         .route("/api/commands/lookup", post(lookup_edge_command))
         .route("/api/edge-types", get(edge_types))
         .route("/api/path", post(find_path))

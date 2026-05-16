@@ -70,7 +70,10 @@ impl UnauthDiscovery {
         }
 
         // 2. SMB Null Session check
-        if let Ok(smb) = SmbSession::connect(&self.target, "", "", "").await {
+        // Use guest/null credentials: empty domain + empty username + empty password
+        // Some Windows servers allow null session connections to IPC$.
+        let smb_result = SmbSession::connect(&self.target, "", "", "").await;
+        if let Ok(smb) = smb_result {
             result.smb_null_session = true;
             info!("[discovery] SMB Null Session OK on {}", self.target);
 
@@ -78,6 +81,19 @@ impl UnauthDiscovery {
             for share in shares {
                 if smb.check_share_read(share).await {
                     result.accessible_shares.push(share.to_string());
+                }
+            }
+        } else if let Err(e) = smb_result {
+            // Try anonymous guest as well
+            log::debug!("[discovery] SMB null session failed ({}), trying guest", e);
+            if let Ok(smb) = SmbSession::connect(&self.target, ".", "guest", "").await {
+                result.smb_null_session = true;
+                info!("[discovery] SMB Guest Session OK on {}", self.target);
+                let shares = ["IPC$", "C$", "ADMIN$", "NETLOGON", "SYSVOL"];
+                for share in shares {
+                    if smb.check_share_read(share).await {
+                        result.accessible_shares.push(share.to_string());
+                    }
                 }
             }
         }

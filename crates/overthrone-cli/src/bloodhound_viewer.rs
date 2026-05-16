@@ -1461,7 +1461,7 @@ impl ViewerApp {
             KeyCode::Char('/') => {
                 self.search_mode = true;
                 self.status =
-                    "Search mode: type to filter nodes, Enter selects first match, Esc exits."
+                    "Search mode: text, edge:GenericAll, esc8, or attack:adcs; Enter selects first match."
                         .to_string();
             }
             KeyCode::Char('+') | KeyCode::Char('=') => self.zoom = (self.zoom * 1.18).min(8.0),
@@ -1905,21 +1905,41 @@ impl ViewerApp {
         if self.search_text.is_empty() {
             return true;
         }
-        let needle = self.search_text.to_ascii_lowercase();
+        let (relationships, text_terms) = parse_tui_query(&self.search_text);
+        if !relationships.is_empty()
+            && !self.graph.outgoing[idx]
+                .iter()
+                .chain(self.graph.incoming[idx].iter())
+                .any(|edge_idx| {
+                    let rel = &self.graph.edges[*edge_idx].relationship;
+                    relationships
+                        .iter()
+                        .any(|wanted| rel.eq_ignore_ascii_case(wanted))
+                })
+        {
+            return false;
+        }
+        if text_terms.is_empty() {
+            return true;
+        }
         let node = &self.graph.nodes[idx];
-        node.id.to_ascii_lowercase().contains(&needle)
-            || node.label.to_ascii_lowercase().contains(&needle)
-            || node.kind.to_ascii_lowercase().contains(&needle)
-            || node
-                .domain
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .contains(&needle)
-            || node.properties.iter().any(|(key, value)| {
-                key.to_ascii_lowercase().contains(&needle)
-                    || value.to_ascii_lowercase().contains(&needle)
-            })
+        let mut haystack = format!(
+            "{} {} {} {}",
+            node.id,
+            node.label,
+            node.kind,
+            node.domain.as_deref().unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+        for (key, value) in &node.properties {
+            haystack.push(' ');
+            haystack.push_str(&key.to_ascii_lowercase());
+            haystack.push('=');
+            haystack.push_str(&value.to_ascii_lowercase());
+        }
+        text_terms
+            .iter()
+            .all(|needle| haystack.contains(&needle.to_ascii_lowercase()))
     }
 
     fn filtered_nodes(&self) -> Vec<usize> {
@@ -1977,6 +1997,146 @@ pub(crate) fn wrap_index(pos: usize, delta: isize, len: usize) -> usize {
         Ordering::Equal => pos,
         Ordering::Greater => (pos + delta as usize) % len,
     }
+}
+
+fn tui_attack_relationships(alias: &str) -> Vec<&'static str> {
+    match alias.to_ascii_lowercase().as_str() {
+        "kerberos" => vec![
+            "HasSpn",
+            "DontReqPreauth",
+            "AllowedToDelegate",
+            "AllowedToAct",
+            "WriteSPN",
+            "WriteServicePrincipalName",
+            "WriteAllowedToDelegateTo",
+        ],
+        "asrep" | "asreproast" => vec!["DontReqPreauth"],
+        "kerberoast" => vec!["HasSpn", "WriteSPN", "WriteServicePrincipalName"],
+        "delegation" | "s4u" | "rbcd" => vec![
+            "AllowedToDelegate",
+            "AllowedToAct",
+            "AddAllowedToAct",
+            "WriteAllowedToDelegateTo",
+        ],
+        "shadow" | "shadowcreds" | "shadow-credentials" => vec![
+            "WriteKeyCredentialLink",
+            "WriteMsDsKeyCredentialLink",
+            "AddKeyCredentialLink",
+        ],
+        "dcsync" | "replication" => vec!["DcSync", "GetChanges", "GetChangesAll"],
+        "adcs" | "cert" | "certificate" | "esc" | "escs" => vec![
+            "AdcsEsc1",
+            "AdcsEsc2",
+            "AdcsEsc3",
+            "AdcsEsc4",
+            "AdcsEsc5",
+            "AdcsEsc6",
+            "AdcsEsc7",
+            "AdcsEsc8",
+            "AdcsEsc9",
+            "AdcsEsc10",
+            "AdcsEsc11",
+            "AdcsEsc12",
+            "AdcsEsc13",
+            "AdcsEsc14",
+            "AdcsEsc15",
+            "AdcsEsc16",
+            "EnrollCertificate",
+            "EnrollOnBehalfOf",
+        ],
+        "llmnr" | "ntlmrelay" | "relay" | "coercion" | "petitpotam" | "printerbug" => {
+            vec!["AdcsEsc8", "AdcsEsc11", "AdminTo", "CanPSRemote", "CanRDP"]
+        }
+        "ldap" | "ldaps" | "acl" | "aces" | "control" => vec![
+            "GenericAll",
+            "GenericWrite",
+            "WriteDacl",
+            "WriteOwner",
+            "Owns",
+            "AllExtendedRights",
+            "AddMembers",
+            "AddSelf",
+            "ForceChangePassword",
+            "CreateChild",
+            "WriteSelf",
+            "WriteKeyCredentialLink",
+            "AddKeyCredentialLink",
+        ],
+        "lateral" | "movement" => vec![
+            "AdminTo",
+            "CanRDP",
+            "CanPSRemote",
+            "ExecuteDCOM",
+            "SQLAdmin",
+            "HasSession",
+        ],
+        "gpo" | "gplink" => vec!["GpoLink", "WriteGPLink", "GenericAll", "GenericWrite"],
+        "laps" | "gmsa" | "secrets" => vec![
+            "ReadLapsPassword",
+            "ReadLapsPasswordExpiry",
+            "ReadGmsaPassword",
+            "AllExtendedRights",
+        ],
+        "trust" | "trusts" | "crossdomain" | "cross-domain" => {
+            vec!["TrustedBy", "HasSidHistory"]
+        }
+        "session" | "sessions" => vec!["HasSession"],
+        "rdp" => vec!["CanRDP"],
+        "psremote" | "winrm" => vec!["CanPSRemote"],
+        "dcom" => vec!["ExecuteDCOM"],
+        "sql" | "mssql" => vec!["SQLAdmin"],
+        _ => Vec::new(),
+    }
+}
+
+fn parse_tui_query(query: &str) -> (Vec<String>, Vec<String>) {
+    let mut relationships = Vec::new();
+    let mut terms = Vec::new();
+    for raw in query.split_whitespace() {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if let Some(alias) = lower.strip_prefix("attack:") {
+            relationships.extend(
+                tui_attack_relationships(alias)
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        } else if lower.starts_with("edge:")
+            || lower.starts_with("rel:")
+            || lower.starts_with("relationship:")
+        {
+            let relationship = token
+                .split_once(':')
+                .map(|(_, value)| value)
+                .unwrap_or(token);
+            relationships.push(relationship_name(relationship));
+        } else if let Some(num) = lower
+            .strip_prefix("esc")
+            .and_then(|n| n.parse::<u8>().ok())
+            .filter(|n| (1..=16).contains(n))
+        {
+            relationships.push(format!("AdcsEsc{num}"));
+        } else if let Some(kind) = token
+            .strip_prefix("type:")
+            .or_else(|| token.strip_prefix("kind:"))
+        {
+            terms.push(kind.to_string());
+        } else if !tui_attack_relationships(&lower).is_empty() {
+            relationships.extend(
+                tui_attack_relationships(&lower)
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        } else {
+            terms.push(token.to_string());
+        }
+    }
+    relationships.sort();
+    relationships.dedup();
+    (relationships, terms)
 }
 
 pub fn run(sources: &[String]) -> io::Result<()> {
@@ -3097,6 +3257,22 @@ mod tests {
         assert!(relationship_is_attack_edge("WriteSPN"));
         assert!(!relationship_is_attack_edge("MemberOf"));
         assert!(relationship_hint("WritePwdComplexity").contains("Domain policy"));
+    }
+
+    #[test]
+    fn tui_search_understands_custom_query_tokens() {
+        let (relationships, terms) = parse_tui_query("attack:adcs type:user");
+        assert!(relationships.contains(&"AdcsEsc8".to_string()));
+        assert!(relationships.contains(&"AdcsEsc16".to_string()));
+        assert_eq!(terms, vec!["user".to_string()]);
+
+        let (relationships, terms) = parse_tui_query("edge:GenericAll admin");
+        assert_eq!(relationships, vec!["GenericAll".to_string()]);
+        assert_eq!(terms, vec!["admin".to_string()]);
+
+        let (relationships, terms) = parse_tui_query("esc15");
+        assert_eq!(relationships, vec!["AdcsEsc15".to_string()]);
+        assert!(terms.is_empty());
     }
 
     #[test]

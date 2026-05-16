@@ -432,17 +432,37 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             "PRE".bold().cyan()
         );
         if ctx.use_hash {
-            // In pass-the-hash mode the pre-flight LDAP check is skipped because
-            // simple bind requires a cleartext password. Mark LDAP as unavailable
-            // conservatively; it will be re-enabled if a cleartext credential is
-            // cracked or provided later.
-            println!(
-                "  {} LDAP pre-flight skipped (pass-the-hash mode). \
-                 LDAP-dependent steps will try Kerberos-first auth or wait \
-                 for a cracked cleartext credential.",
-                "!".yellow().bold()
-            );
-            ctx.ldap_available = false;
+            match overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+                &ctx.dc_ip,
+                &ctx.domain,
+                &ctx.username,
+                &ctx.secret,
+                ctx.use_ldaps,
+            )
+            .await
+            {
+                Ok(mut session) => {
+                    println!(
+                        "  {} LDAP NTLM bind OK ({})",
+                        "✓".green().bold(),
+                        session.bind_type
+                    );
+                    let _ = session.disconnect().await;
+                }
+                Err(e) => {
+                    println!(
+                        "  {} LDAP pre-flight failed (hash mode): {}",
+                        "✗".red().bold(),
+                        e
+                    );
+                    println!(
+                        "  {} LDAP-dependent enumeration steps will be skipped. \
+                     Kerberos and SMB operations will still be attempted.",
+                        "!".yellow().bold()
+                    );
+                    ctx.ldap_available = false;
+                }
+            }
         } else {
             match overthrone_core::proto::ldap::LdapSession::connect(
                 &ctx.dc_ip,
@@ -471,7 +491,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     ctx.ldap_available = false;
                 }
             }
-        } // end else (non-PtH LDAP pre-flight)
+        }
     }
 
     let mut steps_executed = 0usize;

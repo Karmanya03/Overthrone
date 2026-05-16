@@ -30,7 +30,10 @@ use crate::tui::app::App;
 use overthrone_core::graph::{EdgeRef, EdgeType, NodeId, NodeType};
 use ratatui::prelude::*;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Wrap,
+};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -723,7 +726,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
         (stats, hv, nodes, edges)
     };
 
-    let scroll = app.graph_scroll.unwrap_or(0);
+    let scroll = app.overview_scroll;
     let mut lines: Vec<Line> = Vec::new();
 
     // Header
@@ -1011,10 +1014,9 @@ fn is_node_visible(
 /// Render the node-detail panel for the currently selected node.
 pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
     let lines = build_node_detail_lines(app);
-    let scroll = app.detail_scroll.unwrap_or(0);
-    let scrolled: Vec<Line> = lines.into_iter().skip(scroll).collect();
+    let scroll = app.detail_scroll;
 
-    let widget = Paragraph::new(scrolled)
+    let widget = Paragraph::new(lines.clone())
         .block(
             Block::default()
                 .title(Span::styled(
@@ -1024,9 +1026,24 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll as u16, 0));
 
     f.render_widget(widget, area);
+
+    let scrollbar = Scrollbar::default()
+        .orientation(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("↑"))
+        .end_symbol(Some("↓"));
+    let mut scrollbar_state = ScrollbarState::new(lines.len()).position(scroll);
+    f.render_stateful_widget(
+        scrollbar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scrollbar_state,
+    );
 }
 
 /// Build the line buffer for `render_node_detail`.
@@ -1321,7 +1338,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
 /// Render the full ACL findings list in a scrollable panel.
 #[allow(dead_code)]
 pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
-    let scroll = app.acl_scroll.unwrap_or(0);
+    let scroll = app.acl_scroll;
 
     let items: Vec<ListItem> = match &app.acl_findings {
         None => vec![ListItem::new(Span::styled(
@@ -1385,7 +1402,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
 /// Render the current computed attack path.
 #[allow(dead_code)]
 pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
-    let scroll = app.path_scroll.unwrap_or(0);
+    let scroll = app.path_scroll;
     let mut lines: Vec<Line> = Vec::new();
 
     match &app.current_path {
