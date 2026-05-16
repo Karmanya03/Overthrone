@@ -1594,12 +1594,13 @@ async fn exec_rid_cycle(
     }
 
     let (user, pass, _) = ctx.effective_creds();
+    let null_session = user.trim().is_empty() && pass.trim().is_empty();
     let config = rid::RidCycleConfig {
         target: ctx.dc_ip.clone(),
         domain: ctx.domain.clone(),
         username: user.to_string(),
         password: pass.to_string(),
-        null_session: false,
+        null_session,
         start_rid,
         end_rid,
         batch_size: 50,

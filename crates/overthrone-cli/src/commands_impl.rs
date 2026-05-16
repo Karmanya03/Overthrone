@@ -269,6 +269,29 @@ pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i3
                     "✗".red()
                 ),
             }
+
+            let tool_checks: [(&str, &[&str], &str); 3] = [
+                ("rpcclient", &["-V"], "RID cycling / SAMR null-session"),
+                ("smbclient", &["--version"], "SMB guest/null-session interoperability"),
+                ("ldapsearch", &["-VV"], "External LDAP/LDAPS troubleshooting"),
+            ];
+            for (tool, args, purpose) in tool_checks {
+                let found = std::process::Command::new(tool)
+                    .args(args)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if found {
+                    println!("    {} {}: available ({})", "✓".green(), tool, purpose);
+                } else {
+                    println!(
+                        "    {} {}: not found ({})",
+                        "✗".red(),
+                        tool,
+                        purpose
+                    );
+                }
+            }
         }
 
         // Kerberos
@@ -395,6 +418,76 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
     banner::print_success(&format!("Report saved to: {}", output));
     0
+}
+
+// ──────────────────────────────────────────────────────────
+// Module command handlers
+// ──────────────────────────────────────────────────────────
+
+pub async fn cmd_module_list(cli: &Cli) -> i32 {
+    use overthrone_core::exec::modules;
+    let modules = modules::list_modules().await;
+    if wants_json(cli) {
+        return emit_json(cli, serde_json::json!({"modules": modules}));
+    }
+
+    println!("Available modules:");
+    for m in modules {
+        println!("  - {}", m);
+    }
+    0
+}
+
+pub async fn cmd_module_run(cli: &Cli, name: String, target: String, params: Option<String>) -> i32 {
+    use overthrone_core::exec::modules;
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let exec_creds = overthrone_core::exec::ExecCredentials {
+        domain: creds.domain.clone(),
+        username: creds.username.clone(),
+        password: creds.password().map(str::to_string).unwrap_or_default(),
+        nt_hash: creds.nthash().map(str::to_string),
+    };
+
+    let module = match modules::get_module(&name).await {
+        Some(m) => m,
+        None => {
+            banner::print_fail(&format!("Module not found: {}", name));
+            return 1;
+        }
+    };
+
+    let params_json = if let Some(p) = params {
+        match serde_json::from_str::<serde_json::Value>(&p) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                banner::print_fail(&format!("Invalid params JSON: {}", e));
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
+    match module.run(&target, exec_creds, params_json).await {
+        Ok(out) => {
+            if wants_json(cli) {
+                return emit_json(cli, serde_json::json!({"status": "success", "output": out}));
+            }
+            println!("Module run complete — stdout:\n{}", out.stdout);
+            0
+        }
+        Err(e) => {
+            if wants_json(cli) {
+                return emit_json(cli, serde_json::json!({"status": "error", "error": format!("{}", e)}));
+            }
+            banner::print_fail(&format!("Module run failed: {}", e));
+            1
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════

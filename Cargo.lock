@@ -4085,6 +4085,7 @@ dependencies = [
  "md-5 0.10.6",
  "md4",
  "ntlmclient",
+ "once_cell",
  "p12",
  "p12-keystore",
  "pbkdf2 0.12.2",

@@ -18,6 +18,7 @@ pub mod shell; // ← Export shell module
 pub mod smbexec;
 pub mod winrm;
 pub mod wmiexec;
+pub mod modules;
 
 use crate::error::Result;
 use async_trait::async_trait;

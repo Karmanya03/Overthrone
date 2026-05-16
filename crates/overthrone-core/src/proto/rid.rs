@@ -70,13 +70,17 @@ pub struct RidCycleConfig {
 
 static RID_TOOLING_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
+fn command_available(program: &str, args: &[&str]) -> bool {
+    Command::new(program).args(args).output().is_ok()
+}
+
 /// Quick availability check for RID cycling tooling.
 pub fn tooling_available() -> bool {
     *RID_TOOLING_AVAILABLE.get_or_init(|| {
         if cfg!(windows) {
             true
         } else {
-            Command::new("rpcclient").arg("-V").output().is_ok()
+            command_available("rpcclient", &["-V"])
         }
     })
 }
@@ -296,15 +300,19 @@ async fn run_rpcclient(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String>
 
 /// Synchronous rpcclient execution
 fn run_rpcclient_sync(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
-    // Try rpcclient first (Linux/macOS), then net rpc (Windows/Linux)
-    if let Ok(output) = try_rpcclient(config, rpc_cmd) {
-        return Ok(output);
+    let rpcclient_present = command_available("rpcclient", &["-V"]);
+
+    // Try rpcclient first (Linux/macOS primary path)
+    if rpcclient_present {
+        return try_rpcclient(config, rpc_cmd);
     }
 
     // Fallback: net rpc on Windows
     #[cfg(windows)]
-    if let Ok(output) = try_net_rpc(config, rpc_cmd) {
-        return Ok(output);
+    {
+        if let Ok(output) = try_net_rpc(config, rpc_cmd) {
+            return Ok(output);
+        }
     }
 
     Err(OverthroneError::Rpc {
