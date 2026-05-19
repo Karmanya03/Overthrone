@@ -884,16 +884,14 @@ fn parse_ocsp_response(data: &[u8]) -> Result<OcspStatus> {
     for i in 0..data.len() {
         let byte = data[i];
         match byte {
-            0x80 | 0x81 | 0x82 | 0xA0 | 0xA1 | 0xA2 => {
+                0x80 | 0x81 | 0x82 | 0xA0 | 0xA1 | 0xA2 if found_cert_id_end => {
                 // Context-specific tags — possible certStatus
-                if found_cert_id_end {
-                    return match byte {
-                        0x80 | 0xA0 => Ok(OcspStatus::Good),
-                        0x81 | 0xA1 => Ok(OcspStatus::Revoked),
-                        0x82 | 0xA2 => Ok(OcspStatus::Unknown),
-                        _ => Ok(OcspStatus::Unknown),
-                    };
-                }
+                return match byte {
+                    0x80 | 0xA0 => Ok(OcspStatus::Good),
+                    0x81 | 0xA1 => Ok(OcspStatus::Revoked),
+                    0x82 | 0xA2 => Ok(OcspStatus::Unknown),
+                    _ => Ok(OcspStatus::Unknown),
+                };
             }
             _ => {}
         }
