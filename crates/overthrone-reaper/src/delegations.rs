@@ -7,19 +7,41 @@ use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DelegationType {
+    /// `Unconstrained` variant
     Unconstrained,
+    /// `Constrained` variant
     Constrained,
+    /// `ConstrainedWithProtocolTransition` variant
     ConstrainedWithProtocolTransition,
+    /// `ResourceBased` variant
     ResourceBased,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationEntry {
+    /// principal field
     pub principal: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Classification for this object.
     pub delegation_type: DelegationType,
+    /// targets field
     pub targets: Vec<String>,
+    /// enabled field
     pub enabled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_delegation_filter() {
+        let f = delegation_filter();
+        assert!(f.contains("userAccountControl:1.2.840.113556.1.4.803:=524288"));
+        assert!(f.contains("msDS-AllowedToDelegateTo=*"));
+        assert!(f.contains("msDS-AllowedToActOnBehalfOfOtherIdentity=*"));
+    }
 }
 
 pub fn delegation_filter() -> String {

@@ -8,7 +8,6 @@ use crate::{NtlmChallenge, NtlmResponse, Result};
 use overthrone_core::proto::ntlm;
 
 /// Calculate NTLMv2 response for a given challenge.
-///
 /// This is used for offline cracking validation — NOT for relay
 /// (relay forwards the victim's response directly).
 pub fn calculate_ntlmv2_response(
@@ -132,6 +131,10 @@ pub fn extract_domain_from_target_info(target_info: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
+    const TEST_USER: &str = "testuser";
+    const TEST_DOMAIN: &str = "TEST";
+    const TEST_PASSWORD: &str = "NtlmV2TestPwd!";
+
     #[test]
     fn test_generate_challenge() {
         let challenge = generate_challenge();
@@ -196,9 +199,10 @@ mod tests {
             target_name: "TEST".to_string(),
         };
 
-        let response = calculate_ntlmv2_response("admin", "TEST", "password", &challenge).unwrap();
-        assert_eq!(response.username, "admin");
-        assert_eq!(response.domain, "TEST");
+        let response =
+            calculate_ntlmv2_response(TEST_USER, TEST_DOMAIN, TEST_PASSWORD, &challenge).unwrap();
+        assert_eq!(response.username, TEST_USER);
+        assert_eq!(response.domain, TEST_DOMAIN);
         // NTLMv2 response = NTProofStr(16) + ClientBlob(28+)
         assert!(response.nt_response.len() >= 44);
         // LMv2 response is always 24 bytes
@@ -212,8 +216,9 @@ mod tests {
             target_name: "CORP".to_string(),
         };
 
-        let response = calculate_ntlmv2_response("user", "CORP", "secret123", &challenge).unwrap();
-        let valid = validate_ntlm_response(&response, &challenge, "secret123").unwrap();
+        let response =
+            calculate_ntlmv2_response(TEST_USER, TEST_DOMAIN, TEST_PASSWORD, &challenge).unwrap();
+        let valid = validate_ntlm_response(&response, &challenge, TEST_PASSWORD).unwrap();
         assert!(valid);
     }
 
@@ -224,8 +229,9 @@ mod tests {
             target_name: "CORP".to_string(),
         };
 
-        let response = calculate_ntlmv2_response("user", "CORP", "secret123", &challenge).unwrap();
-        let valid = validate_ntlm_response(&response, &challenge, "wrong_password").unwrap();
+        let response =
+            calculate_ntlmv2_response(TEST_USER, TEST_DOMAIN, TEST_PASSWORD, &challenge).unwrap();
+        let valid = validate_ntlm_response(&response, &challenge, "WrongPwd!").unwrap();
         assert!(!valid);
     }
 }

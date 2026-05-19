@@ -11,28 +11,35 @@ use crate::proto::ldap::LdapSession;
 use crate::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use tracing::info;
-
+/// Data structure used by this module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryResult {
+    /// Target domain FQDN
     pub target: String,
+    /// ldap null session field
     pub ldap_null_session: bool,
+    /// smb null session field
     pub smb_null_session: bool,
+    /// naming contexts field
     pub naming_contexts: Vec<String>,
+    /// Object or account name.
     pub netbios_name: Option<String>,
+    /// accessible shares field
     pub accessible_shares: Vec<String>,
 }
-
+/// Data structure used by this module.
 pub struct UnauthDiscovery {
+    /// Target domain FQDN
     pub target: String,
 }
 
 impl UnauthDiscovery {
+    /// Runs this module operation.
     pub fn new(target: &str) -> Self {
         Self {
             target: target.to_string(),
         }
     }
-
     pub async fn run(&self) -> Result<DiscoveryResult> {
         info!(
             "[discovery] Starting unauthenticated discovery on {}",

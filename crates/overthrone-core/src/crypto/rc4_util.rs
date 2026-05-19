@@ -11,7 +11,6 @@ use anyhow::{Result, bail};
 use super::hmac_util;
 
 /// Raw RC4 encrypt/decrypt (symmetric — same operation for both).
-///
 /// RC4 is a stream cipher, so encryption and decryption are identical.
 /// Uses a pure-Rust implementation to avoid generic key-size constraints
 /// from the `rc4` crate.
@@ -43,7 +42,6 @@ pub fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// Encrypt data using Kerberos RC4-HMAC (etype 23).
-///
 /// Per RFC 4757:
 /// 1. K1 = HMAC-MD5(key, usage_number_le32)
 /// 2. Generate random 8-byte confounder
@@ -82,7 +80,6 @@ pub fn rc4_hmac_encrypt(key: &[u8], data: &[u8], key_usage: i32) -> Vec<u8> {
 }
 
 /// Decrypt data encrypted with Kerberos RC4-HMAC (etype 23).
-///
 /// Input format: checksum (16) || encrypted(confounder (8) || plaintext)
 pub fn rc4_hmac_decrypt(key: &[u8], data: &[u8], key_usage: i32) -> Result<Vec<u8>> {
     if data.len() < 24 {
@@ -132,7 +129,6 @@ const SAM_LMPASSWORD: &[u8] = b"LMPASSWORD\x00";
 const SAM_NTPASSWORD: &[u8] = b"NTPASSWORD\x00";
 
 /// Decrypt a SAM hash (pre-Vista format, RC4-based).
-///
 /// Algorithm (per Impacket/MS-SAMR):
 /// 1. `rc4_key = MD5(hashed_boot_key || RID_le32 || constant)`
 ///    where constant is `"LMPASSWORD\0"` for LM or `"NTPASSWORD\0"` for NT.
@@ -174,7 +170,6 @@ pub fn decrypt_sam_hash_rc4(
 }
 
 /// Decrypt a SAM hash block using DES with RID-derived keys.
-///
 /// The 16-byte hash is split into two 8-byte blocks, each decrypted with a
 /// 7-byte DES key derived from the RID.
 pub(crate) fn des_decrypt_hash(rid: u32, data: &[u8]) -> Result<[u8; 16]> {
@@ -203,7 +198,6 @@ pub(crate) fn des_decrypt_hash(rid: u32, data: &[u8]) -> Result<[u8; 16]> {
 }
 
 /// Convert a RID to two 8-byte DES keys.
-///
 /// Per MS-SAMR, the RID is expanded into two 7-byte strings which are then
 /// spread into 8-byte DES keys with parity bits.
 fn rid_to_des_keys(rid: u32) -> ([u8; 8], [u8; 8]) {
@@ -232,7 +226,6 @@ fn str_to_des_key(s: &[u8; 7]) -> [u8; 8] {
 // ═══════════════════════════════════════════════════════════
 
 /// Derive the pre-Vista LSA secret encryption key.
-///
 /// Per Impacket `_decryptSecret`:
 /// ```text
 /// key = boot_key

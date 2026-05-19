@@ -10,13 +10,18 @@ use tracing::info;
 
 /// Target for ESC7 CA modification
 pub struct Esc7Target {
+    /// Object or account name.
     pub ca_name: String,
+    /// ca server field
     pub ca_server: String,
+    /// Domain FQDN
     pub domain: String,
+    /// current user field
     pub current_user: String,
 }
 
 impl Esc7Target {
+    /// Runs this module operation.
     pub fn new(
         ca_name: impl Into<String>,
         ca_server: impl Into<String>,

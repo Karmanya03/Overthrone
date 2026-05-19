@@ -29,7 +29,6 @@ const AES_BLOCK_SIZE: usize = 16;
 // ═══════════════════════════════════════════════════════════
 
 /// Derive an AES-256 key from a password and salt per RFC 3962.
-///
 /// `key = PBKDF2-HMAC-SHA1(password, salt, 4096, 32)` for etype 18.
 pub fn derive_key_aes256(password: &str, salt: &str) -> [u8; 32] {
     use sha1::Sha1;
@@ -39,7 +38,6 @@ pub fn derive_key_aes256(password: &str, salt: &str) -> [u8; 32] {
 }
 
 /// Derive an AES-128 key from a password and salt per RFC 3962.
-///
 /// `key = PBKDF2-HMAC-SHA1(password, salt, 4096, 16)` for etype 17.
 pub fn derive_key_aes128(password: &str, salt: &str) -> [u8; 16] {
     use sha1::Sha1;
@@ -53,7 +51,6 @@ pub fn derive_key_aes128(password: &str, salt: &str) -> [u8; 16] {
 // ═══════════════════════════════════════════════════════════
 
 /// Encrypt with AES-256-CTS (CipherText Stealing).
-///
 /// For data shorter than one block, standard CBC is used.
 /// For data exactly one block, standard ECB is used.
 /// For longer data, CBC with the last two ciphertext blocks swapped.
@@ -75,7 +72,6 @@ pub fn aes256_cts_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Decrypt with AES-256-CTS (CipherText Stealing).
-///
 /// Handles three cases:
 /// - Single block (≤16 bytes): ECB decrypt
 /// - Block-aligned (multiple of 16): swap last two blocks, CBC decrypt
@@ -117,7 +113,6 @@ pub fn aes128_cts_encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Decrypt with AES-128-CTS (CipherText Stealing).
-///
 /// Same algorithm as AES-256-CTS but with 128-bit key.
 pub fn aes128_cts_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != 16 {
@@ -155,10 +150,8 @@ fn cts_swap_and_truncate(mut ct: Vec<u8>, original_len: usize) -> Vec<u8> {
 }
 
 /// Core CTS decryption implementation using a provided CBC decrypt closure.
-///
 /// The CTS encrypt format for non-block-aligned data is:
 ///   `C_1 .. C_{n-2}, C_n (full), C_{n-1}[0..remainder]`
-///
 /// Decryption recovers the stolen bytes by ECB-decrypting the last full block
 /// (using CBC with IV=0 on a single block, which is equivalent to ECB), then
 /// reconstructing the full penultimate block from the partial ciphertext bytes
@@ -253,7 +246,6 @@ where
 // ═══════════════════════════════════════════════════════════
 
 /// Decrypt with AES-128-CBC (Vista+ SAM hash decryption).
-///
 /// Input must be a multiple of 16 bytes. IV is provided separately.
 pub fn aes128_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != 16 {
@@ -315,7 +307,6 @@ pub fn aes256_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec
 // ═══════════════════════════════════════════════════════════
 
 /// Decrypt a Vista+ SAM hash (AES-128-CBC + DES two-block).
-///
 /// Algorithm:
 /// 1. AES-128-CBC decrypt with provided IV.
 /// 2. DES two-block decrypt using RID-derived keys.
@@ -350,11 +341,9 @@ pub fn decrypt_sam_hash_aes(
 // ═══════════════════════════════════════════════════════════
 
 /// Decrypt a Vista+ LSA secret using AES-256-CBC.
-///
 /// The encrypted blob has the IV prepended (first 16 bytes), then AES-256-CBC
 /// encrypted data follows. The encryption key is the LSA encryption key from
 /// the policy store.
-///
 /// The decryption is done in 16-byte-at-a-time blocks with the same IV reused
 /// for each block (per Impacket's LSA implementation).
 pub fn decrypt_lsa_secret_vista(encryption_key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>> {
@@ -398,13 +387,11 @@ fn decrypt_lsa_blocks(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Decrypt the Vista+ LSA encryption key list (policy secret EK list).
-///
 /// Structure of `LSAPR_CR_CIPHER_VALUE` (simplified):
-/// - Bytes 0..3:  version (must be 3)
-/// - Bytes 16..32: IV
-/// - Bytes 32..: AES-256-CBC encrypted key material
-///
-/// The boot key is SHA-256 hashed to derive the AES-256 key.
+///   - Bytes 0..3:  version (must be 3)
+///   - Bytes 16..32: IV
+///   - Bytes 32..: AES-256-CBC encrypted key material
+///     The boot key is SHA-256 hashed to derive the AES-256 key.
 pub fn decrypt_lsa_key_vista(boot_key: &[u8], ek_list: &[u8]) -> Result<Vec<u8>> {
     use sha2::{Digest, Sha256};
 
@@ -425,7 +412,6 @@ pub fn decrypt_lsa_key_vista(boot_key: &[u8], ek_list: &[u8]) -> Result<Vec<u8>>
 }
 
 /// Decrypt a Vista+ cached domain credential entry.
-///
 /// Uses AES-128-CBC with the NL$KEY and an all-zeros IV.
 pub fn decrypt_cached_credential(nl_key: &[u8], encrypted_entry: &[u8]) -> Result<Vec<u8>> {
     if nl_key.len() < 16 {
@@ -449,16 +435,16 @@ mod tests {
 
     #[test]
     fn test_derive_key_aes256() {
-        let key = derive_key_aes256("password", "CONTOSO.COMadministrator");
+        let key = derive_key_aes256("password", "CONTOSO.COMadministrator"); // Test vector
         assert_eq!(key.len(), 32);
         // Key derivation is deterministic
-        let key2 = derive_key_aes256("password", "CONTOSO.COMadministrator");
+        let key2 = derive_key_aes256("password", "CONTOSO.COMadministrator"); // Test vector
         assert_eq!(key, key2);
     }
 
     #[test]
     fn test_derive_key_aes128() {
-        let key = derive_key_aes128("password", "CONTOSO.COMadministrator");
+        let key = derive_key_aes128("password", "CONTOSO.COMadministrator"); // Test vector
         assert_eq!(key.len(), 16);
     }
 

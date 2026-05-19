@@ -26,6 +26,7 @@ impl Default for SmartSprayPlugin {
 }
 
 impl SmartSprayPlugin {
+    /// Runs this module operation.
     pub fn new() -> Self {
         let manifest = PluginManifest {
             id: "overthrone.builtin.smart-spray".to_string(),

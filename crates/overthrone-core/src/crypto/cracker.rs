@@ -1,4 +1,4 @@
-//! Inline Hash Cracking — RC4-HMAC, AES (Kerberos) and NTLM hash cracking.
+//! Inline Hash Cracking â€” RC4-HMAC, AES (Kerberos) and NTLM hash cracking.
 //!
 //! Provides offline cracking capabilities for:
 //! - AS-REP Roasting hashes (hashcat mode 18200)
@@ -20,9 +20,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Embedded Wordlist (Top 10K + common passwords)
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Relative path to the shared compressed top-10K password wordlist.
 const WORDLIST_REL_PATH: &str = "../../assets/wordlist_top10k.txt.zst";
@@ -96,9 +96,9 @@ fn decompress_wordlist(compressed: &[u8]) -> Result<Vec<String>> {
         .collect())
 }
 
-// ═══════════════════════════════════════════════════════════
-// Rule Engine — Password Variations
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Rule Engine â€” Password Variations
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Password transformation rules for expanding the wordlist
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +119,7 @@ pub enum Rule {
     AppendYear,
     /// Prepend digit (0-9)
     PrependDigit,
-    /// Common l33t substitutions (a→@, e→3, i→1, o→0, s→$)
+    /// Common l33t substitutions (aâ†’@, eâ†’3, iâ†’1, oâ†’0, sâ†’$)
     Leet,
     /// Append special char (!@#$%^&*)
     AppendSpecial,
@@ -236,21 +236,18 @@ pub fn expand_wordlist(base: &[String], rules: &[Rule]) -> Vec<String> {
     expanded
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Mask Attack Engine
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Mask-based candidate generator (hashcat-style masks).
-///
 /// Charset tokens:
 /// - `?l` = lowercase a-z
-/// - `?u` = uppercase A-Z
-/// - `?d` = digit 0-9
-/// - `?s` = symbols `!@#$%^&*()-_=+`
-/// - `?a` = all printable (`?l + ?u + ?d + ?s`)
-///
-/// Literal characters are used as-is.
-///
+///   - `?u` = uppercase A-Z
+///   - `?d` = digit 0-9
+///   - `?s` = symbols `!@#$%^&*()-_=+`
+///   - `?a` = all printable (`?l + ?u + ?d + ?s`)
+///     Literal characters are used as-is.
 /// # Example
 /// ```ignore
 /// let mask = MaskPattern::parse("?u?l?l?l?d?d?d?d")?; // e.g. Pass1234
@@ -329,7 +326,7 @@ impl MaskPattern {
     }
 
     /// Generate all candidates from this mask.
-    /// WARNING: can be extremely large — use `generate_limited` for safety.
+    /// WARNING: can be extremely large â€” use `generate_limited` for safety.
     pub fn generate(&self) -> Vec<String> {
         self.generate_limited(u64::MAX)
     }
@@ -380,29 +377,39 @@ impl MaskPattern {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Hash Types
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Supported hash types for cracking
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashType {
     /// AS-REP Roasting (hashcat mode 18200)
     AsRep {
+        /// Username for authentication
         username: String,
+        /// Domain FQDN
         domain: String,
+        /// Classification for this object.
         etype: i32,
+        /// cipher field
         cipher: Vec<u8>,
     },
     /// Kerberoast TGS (hashcat mode 13100/19600/19700)
     Kerberoast {
+        /// Username for authentication
         username: String,
+        /// Domain FQDN
         domain: String,
+        /// Service Principal Name
         spn: String,
+        /// Classification for this object.
         etype: i32,
+        /// cipher field
         cipher: Vec<u8>,
     },
     /// NTLM hash (hashcat mode 1000)
+    #[allow(missing_docs)]
     Ntlm { hash: [u8; 16] },
 }
 
@@ -540,9 +547,9 @@ impl HashType {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Kerberos Crypto — RC4-HMAC Key Derivation
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Kerberos Crypto â€” RC4-HMAC Key Derivation
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Compute NTLM hash from password (used as RC4-HMAC key for Kerberos)
 pub fn password_to_nt_hash(password: &str) -> [u8; 16] {
@@ -607,9 +614,9 @@ fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-// ═══════════════════════════════════════════════════════════
-// Kerberos Crypto — AES Key Derivation (etype 17/18)
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Kerberos Crypto â€” AES Key Derivation (etype 17/18)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build the Kerberos salt for AES key derivation.
 /// Convention: `REALM` + principal (e.g. `CORP.LOCALjdoe` for user,
@@ -635,23 +642,29 @@ fn verify_aes_candidate(password: &str, salt: &str, etype: i32, cipher: &[u8]) -
         return false;
     }
 
-    // Try decryption — key_usage 2 for TGS-REP (Kerberoast), 3 for AS-REP
+    // Try decryption â€” key_usage 2 for TGS-REP (Kerberoast), 3 for AS-REP
     // Try both usages since we don't always know context
     kc.decrypt(&key, 2, cipher).is_ok() || kc.decrypt(&key, 3, cipher).is_ok()
 }
 
-// ═══════════════════════════════════════════════════════════
-// Crackers — Parallel Implementation
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Crackers â€” Parallel Implementation
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Result of a cracking attempt
 #[derive(Debug, Clone)]
 pub struct CrackResult {
+    /// Classification for this object.
     pub hash_type: String,
+    /// Username for authentication
     pub username: Option<String>,
+    /// cracked field
     pub cracked: bool,
+    /// Password for authentication
     pub password: Option<String>,
+    /// Stable unique identifier.
     pub candidates_tried: usize,
+    /// time ms field
     pub time_ms: u64,
 }
 
@@ -699,7 +712,7 @@ impl Default for CrackerConfig {
 }
 
 impl CrackerConfig {
-    /// Fast mode — minimal rules, embedded wordlist only
+    /// Fast mode â€” minimal rules, embedded wordlist only
     pub fn fast() -> Self {
         Self {
             use_embedded: true,
@@ -713,7 +726,7 @@ impl CrackerConfig {
         }
     }
 
-    /// Thorough mode — all rules, expanded candidates, common masks
+    /// Thorough mode â€” all rules, expanded candidates, common masks
     pub fn thorough() -> Self {
         Self {
             use_embedded: true,
@@ -751,7 +764,7 @@ impl CrackerConfig {
     }
 }
 
-/// Main cracker — parallel candidate testing
+/// Main cracker â€” parallel candidate testing
 pub struct HashCracker {
     config: CrackerConfig,
     wordlist: Vec<String>,
@@ -819,12 +832,12 @@ impl HashCracker {
         };
 
         info!(
-            "Phase 1: Dictionary+rules — {} candidates ({} rules)",
+            "Phase 1: Dictionary+rules â€” {} candidates ({} rules)",
             total_candidates,
             self.config.rules.len()
         );
 
-        // Parallel cracking — Phase 1: Dictionary
+        // Parallel cracking â€” Phase 1: Dictionary
         let counter = AtomicUsize::new(0);
         let password = candidates
             .par_iter()
@@ -846,7 +859,7 @@ impl HashCracker {
             let tried = counter.load(Ordering::Relaxed);
             let elapsed = start.elapsed().as_millis() as u64;
             info!(
-                "✓ Password found (dictionary): {} ({} candidates, {}ms)",
+                "âœ“ Password found (dictionary): {} ({} candidates, {}ms)",
                 pwd, tried, elapsed
             );
             return CrackResult {
@@ -863,7 +876,7 @@ impl HashCracker {
 
         // Phase 2: Mask attacks
         if !self.config.masks.is_empty() {
-            info!("Phase 2: Mask attack — {} masks", self.config.masks.len());
+            info!("Phase 2: Mask attack â€” {} masks", self.config.masks.len());
             for mask_str in &self.config.masks {
                 match MaskPattern::parse(mask_str) {
                     Ok(mask) => {
@@ -873,7 +886,10 @@ impl HashCracker {
                         } else {
                             ks.min(50_000_000) // 50M cap per mask
                         };
-                        info!("  Mask '{}' — keyspace {} (limit {})", mask_str, ks, limit);
+                        info!(
+                            "  Mask '{}' â€” keyspace {} (limit {})",
+                            mask_str, ks, limit
+                        );
                         let mask_candidates = mask.generate_limited(limit);
                         let mask_counter = AtomicUsize::new(0);
                         let found = mask_candidates.par_iter().find_map_any(|candidate| {
@@ -892,7 +908,7 @@ impl HashCracker {
                             let total_tried = counter.load(Ordering::Relaxed);
                             let elapsed = start.elapsed().as_millis() as u64;
                             info!(
-                                "✓ Password found (mask): {} ({} total candidates, {}ms)",
+                                "âœ“ Password found (mask): {} ({} total candidates, {}ms)",
                                 pwd, total_tried, elapsed
                             );
                             return CrackResult {
@@ -915,7 +931,7 @@ impl HashCracker {
         // Phase 3: Hybrid (wordlist base + mask suffix)
         if !self.config.hybrid_masks.is_empty() {
             info!(
-                "Phase 3: Hybrid attack — {} masks × {} words",
+                "Phase 3: Hybrid attack â€” {} masks Ã— {} words",
                 self.config.hybrid_masks.len(),
                 self.wordlist.len()
             );
@@ -956,7 +972,7 @@ impl HashCracker {
                             let total_tried = counter.load(Ordering::Relaxed);
                             let elapsed = start.elapsed().as_millis() as u64;
                             info!(
-                                "✓ Password found (hybrid): {} ({} total, {}ms)",
+                                "âœ“ Password found (hybrid): {} ({} total, {}ms)",
                                 pwd, total_tried, elapsed
                             );
                             return CrackResult {
@@ -979,7 +995,7 @@ impl HashCracker {
         let tried = counter.load(Ordering::Relaxed);
         let elapsed = start.elapsed().as_millis() as u64;
         info!(
-            "✗ Password not found after {} candidates ({}ms)",
+            "âœ— Password not found after {} candidates ({}ms)",
             tried, elapsed
         );
         CrackResult {
@@ -1032,7 +1048,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                     decrypted.len() >= 32 && (decrypted[0] == 0x30 || decrypted[0] == 0x7A)
                 }
                 17 | 18 => {
-                    // AES verification — salt is REALM + username
+                    // AES verification â€” salt is REALM + username
                     let salt = kerberos_aes_salt(domain, username);
                     verify_aes_candidate(password, &salt, *etype, cipher)
                 }
@@ -1049,7 +1065,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
         } => {
             match *etype {
                 23 => {
-                    // RC4-HMAC — service account's NT hash
+                    // RC4-HMAC â€” service account's NT hash
                     let nt_hash = password_to_nt_hash(password);
                     if cipher.len() < 32 {
                         return false;
@@ -1058,7 +1074,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                     decrypted.len() >= 32 && decrypted[0] == 0x63
                 }
                 17 | 18 => {
-                    // AES — salt is REALM + service principal (from SPN)
+                    // AES â€” salt is REALM + service principal (from SPN)
                     // For service accounts, salt = REALM + principal (e.g. "CORP.LOCALsqlsvc")
                     // Try multiple salt formats since SPN parsing varies
                     let service_name = spn.split('/').next().unwrap_or(spn);
@@ -1087,9 +1103,9 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Hashcat Integration
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Check if hashcat is available on the system
 pub fn is_hashcat_available() -> bool {
@@ -1202,9 +1218,9 @@ fn try_hashcat(hash: &HashType) -> Option<String> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Helper Traits
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 impl HashType {
     /// Get the username if available
@@ -1217,9 +1233,9 @@ impl HashType {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Tests
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(test)]
 mod tests {
@@ -1257,7 +1273,7 @@ mod tests {
     #[test]
     fn test_leet_substitution() {
         let leet = apply_leet("password");
-        // a→@, s→$, o→0, so "password" becomes "p@$$w0rd"
+        // aâ†’@, sâ†’$, oâ†’0, so "password" becomes "p@$$w0rd"
         assert_eq!(leet, "p@$$w0rd");
     }
 
@@ -1381,7 +1397,7 @@ mod tests {
     #[test]
     fn test_mask_pattern_limited() {
         let mask = MaskPattern::parse("?a?a?a?a?a?a").unwrap();
-        // Full keyspace would be 76^6 ≈ 192 billion
+        // Full keyspace would be 76^6 â‰ˆ 192 billion
         let candidates = mask.generate_limited(100);
         assert_eq!(candidates.len(), 100);
     }

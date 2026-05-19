@@ -4,13 +4,11 @@
 //! and platform-specific features. Because knowing is half the battle.
 //! (The other half is actually hacking things, but we can't help you there.)
 
-#![allow(dead_code)] // Doctor module is WIP — functions not yet wired into dispatch
-
 use crate::banner;
 use chrono::{NaiveDateTime, Utc};
 use colored::Colorize;
 use std::net::TcpStream;
-use std::process::Command;
+
 use std::time::Duration;
 
 /// Result of a single diagnostic check
@@ -32,8 +30,6 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
 
     let all_checks = vec![
         check_platform(),
-        check_smbclient(),
-        check_libsmbclient(),
         check_kerberos_config(),
         check_winrm_adapter(),
         check_network_ports(),
@@ -102,24 +98,24 @@ fn check_platform() -> CheckResult {
     let (platform, features) = if cfg!(windows) {
         (
             "Windows",
-            vec!["SMB (native)", "WinRM (native)", "NTLM (SSPI)"],
+            vec!["SMB2/3 (native Rust)", "WinRM (native)", "NTLM (SSPI)"],
         )
     } else if cfg!(target_os = "linux") {
         (
             "Linux",
             vec![
-                "SMB (pavao/libsmbclient)",
+                "SMB2/3 (native Rust)",
                 "WinRM (WS-Man)",
-                "NTLM (ntlmclient)",
+                "NTLM (native Rust/ntlmclient)",
             ],
         )
     } else if cfg!(target_os = "macos") {
         (
             "macOS",
             vec![
-                "SMB (pavao/libsmbclient)",
+                "SMB2/3 (native Rust)",
                 "WinRM (WS-Man)",
-                "NTLM (ntlmclient)",
+                "NTLM (native Rust/ntlmclient)",
             ],
         )
     } else {
@@ -134,210 +130,44 @@ fn check_platform() -> CheckResult {
     }
 }
 
-/// Check if smbclient CLI is available
-fn check_smbclient() -> CheckResult {
-    #[cfg(windows)]
-    {
-        CheckResult {
-            name: "smbclient".to_string(),
-            passed: true,
-            message: "Not needed on Windows (native SMB)".to_string(),
-            hint: None,
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        let result = Command::new("smbclient").arg("--version").output();
-
-        match result {
-            Ok(output) if output.status.success() => {
-                let version = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("installed")
-                    .trim()
-                    .to_string();
-                CheckResult {
-                    name: "smbclient".to_string(),
-                    passed: true,
-                    message: version,
-                    hint: None,
-                }
-            }
-            Ok(_) => CheckResult {
-                name: "smbclient".to_string(),
-                passed: false,
-                message: "found but not executable".to_string(),
-                hint: Some(
-                    "apt install smbclient (Debian/Ubuntu) or brew install samba (macOS)"
-                        .to_string(),
-                ),
-            },
-            Err(_) => CheckResult {
-                name: "smbclient".to_string(),
-                passed: false,
-                message: "not found".to_string(),
-                hint: Some(
-                    "apt install smbclient (Debian/Ubuntu) or brew install samba (macOS)"
-                        .to_string(),
-                ),
-            },
-        }
-    }
-}
-
-/// Check if libsmbclient library is available
-fn check_libsmbclient() -> CheckResult {
-    #[cfg(windows)]
-    {
-        CheckResult {
-            name: "libsmbclient".to_string(),
-            passed: true,
-            message: "Not needed on Windows (native SMB)".to_string(),
-            hint: None,
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        // Try to find libsmbclient via ldconfig or pkg-config
-        let ldconfig = Command::new("sh")
-            .arg("-c")
-            .arg("ldconfig -p 2>/dev/null | grep -i libsmbclient || pkg-config --exists libsmbclient 2>/dev/null && echo found")
-            .output();
-
-        let found = ldconfig
-            .map(|o| !o.stdout.is_empty() && String::from_utf8_lossy(&o.stdout).contains("found"))
-            .unwrap_or(false);
-
-        // Alternative: check for the library file directly
-        let alt_check = std::fs::metadata("/usr/lib/x86_64-linux-gnu/libsmbclient.so")
-            .or_else(|_| std::fs::metadata("/usr/lib/libsmbclient.so"))
-            .or_else(|_| std::fs::metadata("/usr/local/lib/libsmbclient.so"))
-            .or_else(|_| std::fs::metadata("/opt/homebrew/lib/libsmbclient.dylib"))
-            .is_ok();
-
-        if found || alt_check {
-            CheckResult {
-                name: "libsmbclient".to_string(),
-                passed: true,
-                message: "library available".to_string(),
-                hint: None,
-            }
-        } else {
-            CheckResult {
-                name: "libsmbclient".to_string(),
-                passed: false,
-                message: "not found".to_string(),
-                hint: Some(
-                    "apt install libsmbclient-dev (Debian/Ubuntu) or brew install samba (macOS)"
-                        .to_string(),
-                ),
-            }
-        }
-    }
-}
-
 /// Check for Kerberos configuration
 fn check_kerberos_config() -> CheckResult {
-    #[cfg(windows)]
-    {
-        // Windows has built-in Kerberos via SSPI
-        CheckResult {
-            name: "kerberos".to_string(),
-            passed: true,
-            message: "Native Windows Kerberos (SSPI)".to_string(),
-            hint: None,
-        }
-    }
+    let has_config = ["/etc/krb5.conf", "/etc/krb5/krb5.conf"]
+        .iter()
+        .any(|path| std::fs::metadata(path).is_ok())
+        || std::env::var("KRB5_CONFIG").is_ok();
 
-    #[cfg(not(windows))]
-    {
-        let config_paths = [
-            "/etc/krb5.conf",
-            "/etc/krb5/krb5.conf",
-            &format!("{}/.krb5.conf", std::env::var("HOME").unwrap_or_default()),
-        ];
+    let hint = if cfg!(windows) || has_config {
+        None
+    } else {
+        Some("Set KRB5_CONFIG or add /etc/krb5.conf if you want kerberos-native tools to auto-discover realm defaults".to_string())
+    };
 
-        for path in &config_paths {
-            if std::fs::metadata(path).is_ok() {
-                return CheckResult {
-                    name: "kerberos".to_string(),
-                    passed: true,
-                    message: format!("config found at {}", path),
-                    hint: None,
-                };
-            }
-        }
-
-        // Check for MIT Kerberos binary
-        let kinit = Command::new("kinit").arg("--version").output();
-        if kinit.map(|o| o.status.success()).unwrap_or(false) {
-            return CheckResult {
-                name: "kerberos".to_string(),
-                passed: true,
-                message: "kinit available, but no krb5.conf found".to_string(),
-                hint: Some("Create /etc/krb5.conf for your domain".to_string()),
-            };
-        }
-
-        CheckResult {
-            name: "kerberos".to_string(),
-            passed: false,
-            message: "no krb5.conf found".to_string(),
-            hint: Some(
-                "apt install krb5-user (Debian/Ubuntu) or brew install krb5 (macOS)".to_string(),
-            ),
-        }
+    CheckResult {
+        name: "kerberos".to_string(),
+        passed: true,
+        message: if cfg!(windows) {
+            "Native Kerberos via SSPI; external tools not required".to_string()
+        } else if has_config {
+            "Native Kerberos stack ready".to_string()
+        } else {
+            "Native Kerberos stack ready; krb5.conf optional for some paths".to_string()
+        },
+        hint,
     }
 }
 
 /// Check for WinRM adapter availability
 fn check_winrm_adapter() -> CheckResult {
-    let mut adapters = Vec::new();
-
-    // Native support
-    #[cfg(windows)]
-    adapters.push("native Win32 API");
-
-    #[cfg(not(windows))]
-    adapters.push("native WS-Man (ntlmclient)");
-
-    // Check for winrs
-    if Command::new("winrs").arg("-?").output().is_ok() {
-        adapters.push("winrs");
-    }
-
-    // Check for evil-winrm (Ruby gem)
-    if Command::new("evil-winrm").arg("--version").output().is_ok() {
-        adapters.push("evil-winrm");
-    }
-
-    // Check for pywinrm
-    if Command::new("python3")
-        .args(["-c", "import winrm"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        adapters.push("pywinrm");
-    }
-
-    if adapters.is_empty() {
-        CheckResult {
-            name: "winrm".to_string(),
-            passed: false,
-            message: "no adapters found".to_string(),
-            hint: Some("Install evil-winrm (gem install evil-winrm) or pywinrm".to_string()),
-        }
-    } else {
-        CheckResult {
-            name: "winrm".to_string(),
-            passed: true,
-            message: adapters.join(", "),
-            hint: None,
-        }
+    CheckResult {
+        name: "winrm".to_string(),
+        passed: true,
+        message: if cfg!(windows) {
+            "Native WinRM/WS-Man path available".to_string()
+        } else {
+            "Native WS-Man path available; no external winrm adapters required".to_string()
+        },
+        hint: None,
     }
 }
 
@@ -359,10 +189,14 @@ fn check_network_ports() -> CheckResult {
     for (port, name) in &ports {
         // We check if we can bind to the port locally (not ideal, but safe)
         // For actual DC connectivity, user should test with actual target
-        let addr = format!("127.0.0.1:{}", port);
-        if TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(100)).is_ok() {
-            available.push(*name);
+        if let Ok(addr) = format!("127.0.0.1:{}", port).parse::<std::net::SocketAddr>() {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
+                available.push(*name);
+            } else {
+                unavailable.push(*name);
+            }
         } else {
+            tracing::warn!("Failed to parse address for port {}", port);
             unavailable.push(*name);
         }
     }
@@ -393,12 +227,19 @@ pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
 
     for (port, name) in &ports {
         let addr = format!("{}:{}", dc, port);
-        let result = TcpStream::connect_timeout(
-            &addr
-                .parse()
-                .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
-            Duration::from_secs(3),
-        );
+        let socket_addr = match addr.parse::<std::net::SocketAddr>() {
+            Ok(a) => a,
+            Err(_) => {
+                results.push(CheckResult {
+                    name: format!("{}:{}", dc, port),
+                    passed: false,
+                    message: format!("{} — invalid address", name),
+                    hint: None,
+                });
+                continue;
+            }
+        };
+        let result = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(3));
 
         let passed = result.is_ok();
         let message = if passed {

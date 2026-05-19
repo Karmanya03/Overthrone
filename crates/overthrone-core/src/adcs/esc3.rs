@@ -25,12 +25,10 @@ impl Esc3Exploiter {
     }
 
     /// Execute ESC3 two-step attack
-    ///
     /// # Arguments
     /// * `agent_template` - Template name for enrollment agent certificate
     /// * `target_template` - Template name for target user certificate
     /// * `target_user` - Target user UPN to impersonate
-    ///
     /// # Returns
     /// * `Ok((agent_cert, user_cert))` - Both certificates
     /// * `Err(OverthroneError)` - If the attack fails

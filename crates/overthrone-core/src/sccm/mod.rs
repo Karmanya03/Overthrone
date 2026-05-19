@@ -29,31 +29,44 @@ use serde::Deserialize;
 
 /// Configuration for SCCM Scanner operations
 pub struct SccmScannerConfig {
+    /// Target domain FQDN
     pub target: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: Option<String>,
+    /// Hash value
     pub pth_hash: Option<String>,
+    /// Status or error code
     pub site_code: Option<String>,
 }
 
 /// Represents an SCCM Site Server / Management Point
 #[derive(Debug, Clone)]
 pub struct SccmSite {
+    /// Status or error code
     pub site_code: String,
+    /// site server field
     pub site_server: String,
+    /// version field
     pub version: String,
+    /// is management point field
     pub is_management_point: bool,
 }
 
 /// Represents an extracted SCCM Network Access Account (NAA)
 #[derive(Debug, Clone)]
 pub struct NaaCredential {
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Password for authentication
     pub password_blob: String, // Encrypted Blob
 }
-
+/// Data structure used by this module.
 pub struct SccmScanner {
     config: SccmScannerConfig,
     #[allow(dead_code)] // Created during initialization, used in future scan operations
@@ -61,6 +74,7 @@ pub struct SccmScanner {
 }
 
 impl SccmScanner {
+    /// Runs this module operation.
     pub fn new(config: SccmScannerConfig) -> Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -209,11 +223,9 @@ impl SccmScanner {
     }
 
     /// Requests the SCCM Machine Policy (which contains Network Access Accounts)
-    ///
     /// This requires sending a well-crafted XML payload to the Management Point
     /// masquerading as a newly registered or existing SCCM Client. The MP then
     /// encrypts the resulting policy using a provided public key.
-    ///
     /// Returns `(raw_body, extracted_naa_credentials)`.  The body is the raw XML
     /// response from the Management Point.  The credentials vec is non-empty when
     /// the policy contained decryptable NetworkAccessAccount entries.

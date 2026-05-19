@@ -83,11 +83,17 @@ impl Default for AtExecConfig {
 /// Result of an AtExec command
 #[derive(Debug)]
 pub struct AtExecResult {
+    /// Target domain FQDN
     pub target: String,
+    /// command field
     pub command: String,
+    /// Object or account name.
     pub task_name: String,
+    /// success field
     pub success: bool,
+    /// output field
     pub output: String,
+    /// Stable unique identifier.
     pub job_id: Option<u32>,
 }
 
@@ -294,7 +300,6 @@ fn extract_job_id(response: &[u8]) -> Result<u32> {
 // ═══════════════════════════════════════════════════════════
 
 /// Execute a command on a remote host using Scheduled Tasks.
-///
 /// Creates an "at" job (scheduled task), waits for execution,
 /// reads output, then cleans up.
 pub async fn exec_command(session: &SmbSession, command: &str) -> Result<AtExecResult> {
@@ -432,6 +437,7 @@ pub struct AtExecShell<'a> {
 }
 
 impl<'a> AtExecShell<'a> {
+    /// Runs this module operation.
     pub fn new(session: &'a SmbSession) -> Self {
         AtExecShell {
             session,
@@ -469,6 +475,7 @@ pub struct AtExecutor {
 }
 
 impl AtExecutor {
+    /// Runs this module operation.
     pub fn new(creds: ExecCredentials) -> Self {
         Self { creds }
     }

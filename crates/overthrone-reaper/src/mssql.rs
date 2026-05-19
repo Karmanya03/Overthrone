@@ -5,30 +5,42 @@ use overthrone_core::error::Result;
 use overthrone_core::mssql::{LinkCrawler, LinkCrawlerConfig, MssqlClient, MssqlConfig};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlInstance {
+    /// Item count
     pub service_account: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Service Principal Name
     pub spn: String,
+    /// Object or account name.
     pub hostname: Option<String>,
+    /// Object or account name.
     pub instance_name: Option<String>,
+    /// Port number
     pub port: Option<u16>,
+    /// enabled field
     pub enabled: bool,
+    /// audit result field
     pub audit_result: Option<MssqlAuditResult>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlAuditResult {
+    /// is sysadmin field
     pub is_sysadmin: bool,
+    /// xp cmdshell enabled field
     pub xp_cmdshell_enabled: bool,
+    /// can impersonate sa field
     pub can_impersonate_sa: bool,
+    /// links field
     pub links: Vec<String>,
 }
 
 impl MssqlInstance {
     /// Parse a MSSQLSvc SPN into its components.
-    /// Format: MSSQLSvc/<host>:<port|instance>
+    /// Format: `MSSQLSvc/<host>:<port|instance>`
     pub fn from_spn(spn: &str, account: &str, dn: &str, enabled: bool) -> Self {
         let parts: Vec<&str> = spn.splitn(2, '/').collect();
         let (hostname, instance, port) = if parts.len() == 2 {
@@ -58,6 +70,71 @@ impl MssqlInstance {
             enabled,
             audit_result: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mssql_filter() {
+        let f = mssql_filter();
+        assert!(f.contains("servicePrincipalName=MSSQLSvc/*"));
+        assert!(f.contains("objectCategory=person"));
+        assert!(f.contains("objectCategory=computer"));
+        assert!(f.contains("msDS-GroupManagedServiceAccount"));
+    }
+
+    #[test]
+    fn test_from_spn_host_port() {
+        let inst = MssqlInstance::from_spn(
+            "MSSQLSvc/sql01.contoso.com:1433",
+            "svc_sql",
+            "CN=SQL,DC=c",
+            true,
+        );
+        assert_eq!(inst.hostname.as_deref(), Some("sql01.contoso.com"));
+        assert_eq!(inst.port, Some(1433));
+        assert!(inst.instance_name.is_none());
+        assert_eq!(inst.service_account, "svc_sql");
+        assert!(inst.enabled);
+    }
+
+    #[test]
+    fn test_from_spn_host_instance() {
+        let inst = MssqlInstance::from_spn(
+            "MSSQLSvc/sql02.contoso.com:NAMEDINST",
+            "svc_sql2",
+            "CN=SQL2,DC=c",
+            false,
+        );
+        assert_eq!(inst.hostname.as_deref(), Some("sql02.contoso.com"));
+        assert!(inst.port.is_none());
+        assert_eq!(inst.instance_name.as_deref(), Some("NAMEDINST"));
+        assert!(!inst.enabled);
+    }
+
+    #[test]
+    fn test_from_spn_host_only() {
+        let inst = MssqlInstance::from_spn(
+            "MSSQLSvc/sql03.contoso.com",
+            "svc_sql3",
+            "CN=SQL3,DC=c",
+            true,
+        );
+        assert_eq!(inst.hostname.as_deref(), Some("sql03.contoso.com"));
+        assert!(inst.port.is_none());
+        assert!(inst.instance_name.is_none());
+    }
+
+    #[test]
+    fn test_from_spn_malformed() {
+        let inst = MssqlInstance::from_spn("not-a-valid-spn", "svc", "CN=Bad,DC=c", true);
+        assert!(inst.hostname.is_none());
+        assert!(inst.port.is_none());
+        assert!(inst.instance_name.is_none());
+        assert_eq!(inst.spn, "not-a-valid-spn");
     }
 }
 

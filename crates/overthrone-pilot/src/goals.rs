@@ -1,4 +1,4 @@
-//! Attack goals — Define what the pilot is trying to achieve.
+//! Attack goals â€” Define what the pilot is trying to achieve.
 //!
 //! Goals are high-level objectives like "become Domain Admin" or
 //! "dump NTDS.dit". Each goal has success criteria that can be
@@ -10,12 +10,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Goal Definitions
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// A high-level attack objective
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(missing_docs)]
 pub enum AttackGoal {
     /// Achieve membership/token for a target group (default: "Domain Admins")
     DomainAdmin { target_group: String },
@@ -100,19 +101,25 @@ impl std::fmt::Display for AttackGoal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PersistenceMethod {
+    /// `GoldenTicket` variant
     GoldenTicket,
+    /// `SilverTicket` variant
     SilverTicket,
+    /// `Skeleton` variant
     Skeleton,
+    /// `DCShadow` variant
     DCShadow,
+    /// `AdminSDHolder` variant
     AdminSDHolder,
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Goal Status / Evaluation
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Current status of a goal
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(missing_docs)]
 pub enum GoalStatus {
     /// Not yet attempted
     Pending,
@@ -122,7 +129,7 @@ pub enum GoalStatus {
     Achieved,
     /// Goal failed, but alternative paths may exist
     Blocked { reason: String },
-    /// Goal definitively failed — no remaining paths
+    /// Goal definitively failed â€” no remaining paths
     Failed { reason: String },
     /// Skipped (dry-run or dependency not met)
     Skipped,
@@ -151,16 +158,18 @@ impl std::fmt::Display for GoalStatus {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Engagement State — everything we know so far
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Engagement State â€” everything we know so far
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-/// Accumulated knowledge from the engagement — updated after each step
+/// Accumulated knowledge from the engagement â€” updated after each step
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EngagementState {
     /// Domain info
     pub domain: Option<String>,
+    /// Domain controller IP address
     pub dc_ip: Option<String>,
+    /// Object or account name.
     pub dc_hostname: Option<String>,
 
     /// Discovered users
@@ -202,7 +211,9 @@ pub struct EngagementState {
 
     /// Delegation findings
     pub constrained_delegation: Vec<DelegationInfo>,
+    /// unconstrained delegation field
     pub unconstrained_delegation: Vec<String>,
+    /// rbcd targets field
     pub rbcd_targets: Vec<String>,
 
     /// Whether we currently hold DA-equivalent privileges
@@ -215,61 +226,91 @@ pub struct EngagementState {
     /// All actions taken (for audit trail)
     pub action_log: Vec<ActionLogEntry>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiscoveredUser {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Item count
     pub admin_count: bool,
+    /// Service Principal Name
     pub has_spn: bool,
+    /// dont req preauth field
     pub dont_req_preauth: bool,
+    /// enabled field
     pub enabled: bool,
+    /// description field
     pub description: Option<String>,
+    /// Item count
     #[serde(default)]
     pub bad_pwd_count: Option<u32>,
+    /// bad pwd time field
     #[serde(default)]
     pub bad_pwd_time: Option<String>,
+    /// lockout time field
     #[serde(default)]
     pub lockout_time: Option<String>,
+    /// Item count
     #[serde(default)]
     pub logon_count: Option<u32>,
+    /// pwd last set field
     #[serde(default)]
     pub pwd_last_set: Option<String>,
+    /// last logon timestamp field
     #[serde(default)]
     pub last_logon_timestamp: Option<String>,
+    /// Object or account name.
     #[serde(default)]
     pub user_principal_name: Option<String>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredComputer {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub dns_hostname: Option<String>,
+    /// operating system field
     pub operating_system: Option<String>,
+    /// unconstrained delegation field
     pub unconstrained_delegation: bool,
+    /// is dc field
     pub is_dc: bool,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompromisedCred {
+    /// Username for authentication
     pub username: String,
+    /// Secret value
     pub secret: String,
+    /// Classification for this object.
     pub secret_type: SecretType,
+    /// Source domain FQDN
     pub source: String,
+    /// is admin field
     pub is_admin: bool,
+    /// admin on field
     pub admin_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SecretType {
+    /// `Password` variant
     Password,
+    /// `NtHash` variant
     NtHash,
+    /// `AesKey` variant
     AesKey,
+    /// `Ticket` variant
     Ticket,
+    /// `Dcc2` variant
     Dcc2,
 }
 
-// ─── Display impl for SecretType (fixes E0277 in autopwn.rs) ───
+// â”€â”€â”€ Display impl for SecretType (fixes E0277 in autopwn.rs) â”€â”€â”€
 impl std::fmt::Display for SecretType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -281,89 +322,145 @@ impl std::fmt::Display for SecretType {
         }
     }
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationInfo {
+    /// Item count
     pub account: String,
+    /// Classification for this object.
     pub delegation_type: String,
+    /// targets field
     pub targets: Vec<String>,
+    /// Network protocol variant
     pub protocol_transition: bool,
 }
-
+/// Structure
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PasswordPolicyInfo {
+    /// Password for authentication
     pub min_password_length: Option<u32>,
+    /// lockout threshold field
     pub lockout_threshold: Option<u32>,
+    /// lockout duration field
     pub lockout_duration: Option<String>,
+    /// lockout observation window field
     pub lockout_observation_window: Option<String>,
+    /// Password for authentication
     pub max_password_age: Option<String>,
+    /// Password for authentication
     pub min_password_age: Option<String>,
+    /// Password for authentication
     pub password_history_length: Option<u32>,
+    /// Password for authentication
     pub password_complexity_enabled: bool,
+    /// reversible encryption enabled field
     pub reversible_encryption_enabled: bool,
+    /// Item count
     pub fine_grained_policy_count: usize,
 }
-
+/// Structure
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GpoInfo {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub distinguished_name: Option<String>,
+    /// Filesystem path.
     pub sysvol_path: Option<String>,
+    /// flags field
     pub flags: Option<u32>,
+    /// version field
     pub version: Option<u32>,
+    /// when changed field
     pub when_changed: Option<String>,
+    /// user settings disabled field
     pub user_settings_disabled: bool,
+    /// computer settings disabled field
     pub computer_settings_disabled: bool,
 }
-
+/// Structure
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LapsInfo {
+    /// Object or account name.
     pub computer_name: String,
+    /// Object or account name.
     pub dns_name: Option<String>,
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: Option<String>,
+    /// expiration field
     pub expiration: Option<String>,
+    /// Source domain FQDN
     pub source: String,
+    /// readable field
     pub readable: bool,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LootItem {
+    /// Classification for this object.
     pub loot_type: String,
+    /// Source domain FQDN
     pub source: String,
+    /// Filesystem path.
     pub path: Option<String>,
+    /// entries field
     pub entries: usize,
+    /// collected at field
     pub collected_at: DateTime<Utc>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionLogEntry {
+    /// timestamp field
     pub timestamp: DateTime<Utc>,
+    /// stage field
     pub stage: String,
+    /// action field
     pub action: String,
+    /// Target domain FQDN
     pub target: String,
+    /// success field
     pub success: bool,
+    /// detail field
     pub detail: String,
 }
 
 /// Summary statistics for engagement state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateStats {
+    /// Total count
     pub total_users: usize,
+    /// Total count
     pub total_computers: usize,
+    /// Total count
     pub total_groups: usize,
+    /// credentials obtained field
     pub credentials_obtained: usize,
+    /// admin hosts field
     pub admin_hosts: usize,
+    /// kerberoastable field
     pub kerberoastable: usize,
+    /// asrep roastable field
     pub asrep_roastable: usize,
+    /// Password for authentication
     pub cracked_passwords: usize,
+    /// Domain FQDN
     pub domain_admin: bool,
+    /// da user field
     pub da_user: Option<String>,
+    /// actions logged field
     pub actions_logged: usize,
+    /// loot items field
     pub loot_items: usize,
+    /// locked or near lockout field
     pub locked_or_near_lockout: usize,
+    /// readable laps field
     pub readable_laps: usize,
+    /// delegation findings field
     pub delegation_findings: usize,
+    /// Password for authentication
     pub password_policy_known: bool,
 }
 
@@ -431,6 +528,7 @@ impl DiscoveredUser {
 }
 
 impl EngagementState {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self::default()
     }
@@ -575,7 +673,7 @@ impl EngagementState {
     pub fn add_credential(&mut self, cred: CompromisedCred) {
         info!(
             " {} New credential: {}:{} ({})",
-            "🔑".green(),
+            "ðŸ”‘".green(),
             cred.username.bold(),
             if cred.secret_type == SecretType::Password {
                 "***"
@@ -660,7 +758,7 @@ impl EngagementState {
 
     /// Pretty-print current state summary
     pub fn print_summary(&self) {
-        println!("\n{}", "═══ ENGAGEMENT STATE ═══".bold().cyan());
+        println!("\n{}", "â•â•â• ENGAGEMENT STATE â•â•â•".bold().cyan());
         println!(
             "  Domain:      {}",
             self.domain.as_deref().unwrap_or("unknown")
@@ -706,6 +804,9 @@ impl EngagementState {
             "  Spray Guard: {}",
             self.spray_risk_summary().bright_black()
         );
-        println!("{}\n", "════════════════════════".cyan());
+        println!(
+            "{}\n",
+            "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•".cyan()
+        );
     }
 }

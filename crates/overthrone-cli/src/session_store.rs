@@ -1,6 +1,6 @@
 //! Session persistence — save and restore EngagementState to/from disk.
 //!
-//! Saves engagement state as JSON to ~/.overthrone/sessions/<name>.json
+//! Saves engagement state as JSON to `~/.overthrone/sessions/<name>.json`
 //! allowing interrupted runs to be resumed without re-doing recon/attack steps.
 
 use std::path::{Path, PathBuf};
@@ -34,7 +34,6 @@ fn dirs_home() -> PathBuf {
 }
 
 /// Serialize and save `EngagementState` to `path`.
-///
 /// Creates parent directories if needed.
 pub fn save_session(path: &Path, state: &EngagementState) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -70,7 +69,6 @@ pub fn load_session(path: &Path) -> Result<EngagementState, String> {
 }
 
 /// Build a session file path for a given engagement name.
-///
 /// E.g. `session_path("corp.local")` → `~/.overthrone/sessions/corp.local.json`
 #[allow(dead_code)]
 pub fn session_path(name: &str) -> PathBuf {

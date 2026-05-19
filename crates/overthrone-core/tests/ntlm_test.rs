@@ -45,7 +45,7 @@ fn test_negotiate_message_minimum_length() {
 
 #[test]
 fn test_authenticate_message_starts_with_ntlmssp_signature() {
-    let key = nt_hash("password");
+    let key = nt_hash("password"); // Test vector
     let challenge = [0xaa, 0xbb, 0xcc, 0xdd, 0x01, 0x02, 0x03, 0x04u8];
     let msg = build_authenticate_message("CORP", "admin", &key, &challenge, None, None);
     assert_eq!(&msg[0..8], b"NTLMSSP\x00");
@@ -53,7 +53,7 @@ fn test_authenticate_message_starts_with_ntlmssp_signature() {
 
 #[test]
 fn test_authenticate_message_type_is_3() {
-    let key = nt_hash("password");
+    let key = nt_hash("password"); // Test vector
     let challenge = [0u8; 8];
     let msg = build_authenticate_message("CORP", "admin", &key, &challenge, None, None);
     let msg_type = u32::from_le_bytes([msg[8], msg[9], msg[10], msg[11]]);
@@ -65,7 +65,7 @@ fn test_authenticate_message_type_is_3() {
 
 #[test]
 fn test_authenticate_message_min_length() {
-    let key = nt_hash("password");
+    let key = nt_hash("password"); // Test vector
     let challenge = [0u8; 8];
     let msg = build_authenticate_message("CORP", "admin", &key, &challenge, None, None);
     // Header (64 bytes) + at minimum some payload bytes
@@ -192,7 +192,7 @@ fn test_is_empty_nt_hash_detects_blank_password() {
 
 #[test]
 fn test_is_empty_nt_hash_rejects_real_password() {
-    let nonempty = nt_hash("password");
+    let nonempty = nt_hash("password"); // Test vector
     assert!(
         !is_empty_nt_hash(&nonempty),
         "NT hash of 'password' must NOT be considered empty"

@@ -145,8 +145,11 @@ pub struct LdapSession {
     ldap: Option<ldap3::Ldap>,
     /// Raw NTLM-authenticated session (used when `use_hash=true`)
     raw: Option<Box<RawLdapConn>>,
+    /// base dn field
     pub base_dn: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Domain controller IP address
     pub dc_ip: String,
     /// How the session was authenticated
     pub bind_type: BindType,
@@ -157,7 +160,6 @@ pub struct LdapSession {
 // ═══════════════════════════════════════════════════════════
 
 /// Minimal raw LDAP client backed by a `tokio::net::TcpStream`.
-///
 /// Supports NTLM SASL bind (pass-the-hash) and basic `SearchRequest`
 /// operations without paging.  Used by `LdapSession::connect_with_hash`
 /// when an NT hash is provided instead of a cleartext password.
@@ -597,6 +599,7 @@ async fn raw_ldap_recv(stream: &mut tokio::net::TcpStream) -> crate::error::Resu
 
 // ──────────────── LDAP response parsers ────────────────
 
+#[derive(Debug, PartialEq)]
 enum LdapMsgKind {
     SearchEntry,
     SearchDone(u8),
@@ -792,67 +795,110 @@ fn ber_read_tlv(data: &[u8], offset: &mut usize) -> Option<(u8, Vec<u8>)> {
 /// Parsed AD user object
 #[derive(Debug, Clone)]
 pub struct AdUser {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Object or account name.
     pub user_principal_name: Option<String>,
+    /// Item count
     pub user_account_control: u32,
+    /// member of field
     pub member_of: Vec<String>,
+    /// Object or account name.
     pub service_principal_names: Vec<String>,
+    /// Item count
     pub admin_count: bool,
+    /// pwd last set field
     pub pwd_last_set: Option<String>,
+    /// last logon field
     pub last_logon: Option<String>,
+    /// description field
     pub description: Option<String>,
+    /// allowed to delegate to field
     pub allowed_to_delegate_to: Vec<String>,
+    /// enabled field
     pub enabled: bool,
+    /// dont req preauth field
     pub dont_req_preauth: bool,
+    /// trusted for delegation field
     pub trusted_for_delegation: bool,
+    /// constrained delegation field
     pub constrained_delegation: bool,
 }
 
 /// Parsed AD computer object
 #[derive(Debug, Clone)]
 pub struct AdComputer {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Object or account name.
     pub dns_hostname: Option<String>,
+    /// operating system field
     pub operating_system: Option<String>,
+    /// os version field
     pub os_version: Option<String>,
+    /// Item count
     pub user_account_control: u32,
+    /// Object or account name.
     pub service_principal_names: Vec<String>,
+    /// allowed to delegate to field
     pub allowed_to_delegate_to: Vec<String>,
+    /// last logon field
     pub last_logon: Option<String>,
+    /// unconstrained delegation field
     pub unconstrained_delegation: bool,
+    /// constrained delegation field
     pub constrained_delegation: bool,
 }
 
 /// Parsed AD group object
 #[derive(Debug, Clone)]
 pub struct AdGroup {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// members field
     pub members: Vec<String>,
+    /// member of field
     pub member_of: Vec<String>,
+    /// description field
     pub description: Option<String>,
+    /// Item count
     pub admin_count: bool,
+    /// Classification for this object.
     pub group_type: i32,
 }
 
 /// Parsed AD domain trust
 #[derive(Debug, Clone)]
 pub struct AdTrust {
+    /// trust partner field
     pub trust_partner: String,
+    /// trust direction field
     pub trust_direction: TrustDirection,
+    /// Classification for this object.
     pub trust_type: TrustType,
+    /// trust attributes field
     pub trust_attributes: u32,
+    /// Object or account name.
     pub flat_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrustDirection {
+    /// `Disabled` variant
     Disabled,
+    /// `Inbound` variant
     Inbound,
+    /// `Outbound` variant
     Outbound,
+    /// `Bidirectional` variant
     Bidirectional,
+    /// `Unknown` variant
     Unknown(u32),
 }
 
@@ -882,10 +928,15 @@ impl std::fmt::Display for TrustDirection {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrustType {
+    /// `Downlevel` variant
     Downlevel,
+    /// `Uplevel` variant
     Uplevel,
+    /// `Mit` variant
     Mit,
+    /// `Dce` variant
     Dce,
+    /// `Unknown` variant
     Unknown(u32),
 }
 
@@ -916,20 +967,35 @@ impl std::fmt::Display for TrustType {
 /// Summary of domain enumeration results
 #[derive(Debug, Clone)]
 pub struct DomainEnumeration {
+    /// Domain FQDN
     pub domain: String,
+    /// base dn field
     pub base_dn: String,
+    /// users field
     pub users: Vec<AdUser>,
+    /// computers field
     pub computers: Vec<AdComputer>,
+    /// groups field
     pub groups: Vec<AdGroup>,
+    /// trusts field
     pub trusts: Vec<AdTrust>,
+    /// kerberoastable field
     pub kerberoastable: Vec<AdUser>,
+    /// asrep roastable field
     pub asrep_roastable: Vec<AdUser>,
+    /// unconstrained delegation field
     pub unconstrained_delegation: Vec<AdComputer>,
+    /// constrained delegation users field
     pub constrained_delegation_users: Vec<AdUser>,
+    /// constrained delegation computers field
     pub constrained_delegation_computers: Vec<AdComputer>,
+    /// Domain FQDN
     pub domain_admins: Vec<String>,
+    /// Service Principal Name
     pub spn_map: HashMap<String, Vec<String>>,
+    /// gpos field
     pub gpos: Vec<GpoInfo>,
+    /// acl entries field
     pub acl_entries: Vec<DaclInfo>,
 }
 
@@ -940,10 +1006,15 @@ pub struct DomainEnumeration {
 /// ACE type from an Active Directory DACL
 #[derive(Debug, Clone, PartialEq)]
 pub enum AceType {
+    /// `AccessAllowed` variant
     AccessAllowed,
+    /// `AccessDenied` variant
     AccessDenied,
+    /// `AccessAllowedObject` variant
     AccessAllowedObject,
+    /// `AccessDeniedObject` variant
     AccessDeniedObject,
+    /// `Unknown` variant
     Unknown(u8),
 }
 
@@ -974,9 +1045,13 @@ impl std::fmt::Display for AceType {
 /// A parsed Access Control Entry from an AD object's DACL
 #[derive(Debug, Clone)]
 pub struct AceEntry {
+    /// Classification for this object.
     pub ace_type: AceType,
+    /// ace flags field
     pub ace_flags: u8,
+    /// access mask field
     pub access_mask: u32,
+    /// Security Identifier
     pub trustee_sid: String,
     /// Object type GUID (for object-specific ACEs)
     pub object_type: Option<String>,
@@ -1019,19 +1094,28 @@ impl AceEntry {
 /// DACL information for an AD object
 #[derive(Debug, Clone)]
 pub struct DaclInfo {
+    /// object dn field
     pub object_dn: String,
+    /// Security Identifier
     pub owner_sid: String,
+    /// aces field
     pub aces: Vec<AceEntry>,
 }
 
 /// Group Policy Object information
 #[derive(Debug, Clone)]
 pub struct GpoInfo {
+    /// Object or account name.
     pub display_name: String,
+    /// cn field
     pub cn: String,
+    /// Filesystem path.
     pub gpc_file_sys_path: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// when changed field
     pub when_changed: Option<String>,
+    /// flags field
     pub flags: u32,
 }
 
@@ -1178,6 +1262,56 @@ impl LdapSession {
             domain: domain.to_string(),
             dc_ip: dc_ip.to_string(),
             bind_type,
+        })
+    }
+
+    /// Connect anonymously to LDAP/LDAPS.
+    pub async fn connect_anonymous(dc_ip: &str, domain: &str, use_tls: bool) -> Result<Self> {
+        let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
+        let scheme = if use_tls { "ldaps" } else { "ldap" };
+        let url = format!("{scheme}://{dc_ip}:{port}");
+
+        info!("Connecting anonymously to LDAP: {url}");
+
+        let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(10));
+        let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: url.clone(),
+                reason: format!("Connection failed: {e}"),
+            })?;
+
+        drive!(conn);
+
+        let result = ldap
+            .simple_bind("", "")
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: dc_ip.to_string(),
+                reason: format!("Anonymous bind failed: {e}"),
+            })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dc_ip.to_string(),
+                reason: format!(
+                    "Anonymous bind rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        let base_dn = domain_to_base_dn(domain);
+        info!("Anonymous LDAP bind successful. Base DN: {base_dn}");
+
+        Ok(LdapSession {
+            ldap: Some(ldap),
+            raw: None,
+            base_dn,
+            domain: domain.to_string(),
+            dc_ip: dc_ip.to_string(),
+            bind_type: BindType::Anonymous,
         })
     }
 
@@ -1442,7 +1576,6 @@ impl LdapSession {
     }
 
     /// Modify an LDAP attribute with typed operation and string values.
-    ///
     /// Used by ADCS ESC4 and other modules that need proper LDAP writes
     /// with multiple string values and a selectable operation type.
     pub async fn modify_attribute(
@@ -1496,6 +1629,79 @@ impl LdapSession {
         Ok(())
     }
 
+    /// Create a new computer/machine account in AD via LDAP add.
+    /// Returns the DN of the created computer object.
+    /// Uses the `ldap3::Ldap::add()` method with the full set of required
+    /// attributes for an AD computer account (objectClass, sAMAccountName,
+    /// userAccountControl, unicodePwd, servicePrincipalName).
+    pub async fn add_computer(
+        &mut self,
+        computer_name: &str,
+        password: &str,
+        container_dn: Option<&str>,
+    ) -> Result<String> {
+        debug!("LDAP add-computer: name={computer_name}");
+
+        let cn = computer_name.trim_end_matches('$');
+        let sam_name = format!("{}${}", cn, "");
+        let container = container_dn
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("CN=Computers,{}", self.base_dn));
+        let computer_dn = format!("CN={cn},{container}");
+
+        // Encode password as UTF-16LE surrounded by quotes (AD requirement)
+        let quoted_pwd = format!("\"{password}\"");
+        let pwd_bytes: Vec<u8> = quoted_pwd
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+
+        use std::collections::HashSet;
+
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: self.dc_ip.clone(),
+            reason: "Add-computer requires password auth (not supported with NT hash)".to_string(),
+        })?;
+
+        let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = Vec::new();
+
+        let mut add_attr = |name: &[u8], val: Vec<u8>| {
+            let mut s = HashSet::new();
+            s.insert(val);
+            attrs.push((name.to_vec(), s));
+        };
+
+        add_attr(b"objectClass", b"computer".to_vec());
+        add_attr(b"sAMAccountName", sam_name.as_bytes().to_vec());
+        add_attr(
+            b"userAccountControl",
+            UAC_WORKSTATION_TRUST.to_le_bytes().to_vec(),
+        );
+        add_attr(b"unicodePwd", pwd_bytes);
+
+        let result = ldap
+            .add(&computer_dn, attrs)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: computer_dn.clone(),
+                reason: format!("Add-computer failed: {e}"),
+            })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: computer_dn.clone(),
+                reason: format!(
+                    "Add-computer rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP add-computer successful: {computer_dn}");
+        Ok(computer_dn)
+    }
+
     /// Read a specific attribute from a DN
     pub async fn read_attribute(&mut self, dn: &str, attr: &str) -> Result<Vec<String>> {
         let entries = self.search_entries(dn, "(objectClass=*)", &[attr]).await?;
@@ -1511,7 +1717,6 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Perform an LDAP search with automatic paging (RFC 2696).
-    ///
     /// Uses the Simple Paged Results Control to iterate through all results
     /// in chunks of 1000, avoiding the server's default size limit.
     async fn search_entries(
@@ -1821,7 +2026,6 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Return every account that is transitively a member of Domain Admins.
-    ///
     /// Uses the LDAP_MATCHING_RULE_IN_CHAIN OID (1.2.840.113556.1.4.1941)
     /// which Active Directory resolves server-side — no recursive client
     /// enumeration required.  Returns `sAMAccountName` strings.
@@ -1912,7 +2116,6 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Build a map of SPN → account(s) for all users and computers with SPNs.
-    ///
     /// Returns `HashMap<String, Vec<String>>` where key is the SPN
     /// (e.g., "MSSQLSvc/db01.corp.local:1433") and value is the list
     /// of accounts that have that SPN registered.
@@ -1968,7 +2171,6 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Enumerate all Group Policy Objects in the domain.
-    ///
     /// Returns GPO display names, CNs (GUIDs), SYSVOL paths, and flags.
     pub async fn enumerate_gpos(&mut self) -> Result<Vec<GpoInfo>> {
         info!("Enumerating Group Policy Objects...");
@@ -2008,7 +2210,6 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Enumerate DACLs for high-value objects (users, groups, computers, OUs).
-    ///
     /// Uses the SD_FLAGS control to request only DACL + Owner from the
     /// `nTSecurityDescriptor` attribute, then parses the binary
     /// NT Security Descriptor into structured ACE entries.
@@ -2078,7 +2279,6 @@ impl LdapSession {
     }
 
     /// Find objects where a specific SID has dangerous permissions.
-    ///
     /// Searches for DACLs containing ACEs that grant the given SID
     /// GenericAll, WriteDacl, WriteOwner, GenericWrite, or DCSync rights.
     pub async fn find_abusable_acls(&mut self, trustee_sid: &str) -> Result<Vec<DaclInfo>> {
@@ -2131,10 +2331,8 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Read the binary `nTSecurityDescriptor` for an object identified by its full DN.
-    ///
     /// Uses a base-scoped search with the SD_FLAGS critical control (DACL + Owner) so
     /// that the returned bytes include the DACL and can be modified and written back.
-    ///
     /// Only works with ldap3 (password / Kerberos) sessions — raw NTLM sessions cannot
     /// send the SD_FLAGS control.
     pub async fn read_ntsd(&mut self, dn: &str) -> Result<Vec<u8>> {
@@ -2184,7 +2382,6 @@ impl LdapSession {
     }
 
     /// Resolve a `sAMAccountName` to its binary `objectSid` bytes.
-    ///
     /// Searches users, groups, and computers with the given account name and returns
     /// the raw 28-byte binary SID suitable for embedding in ACE structures.
     pub async fn resolve_object_sid_binary(&mut self, sam_account_name: &str) -> Result<Vec<u8>> {
@@ -2240,7 +2437,6 @@ impl LdapSession {
 
     /// Force-change a user's password using the `User-Force-Change-Password`
     /// extended right (does not require knowing the current password).
-    ///
     /// Requires `ExtendedRight(User-Force-Change-Password)` or `GenericAll` on
     /// the target user object.  Uses the LDAP password modify extended operation
     /// through a `unicodePwd` REPLACE (requires LDAPS or signing).
@@ -2261,7 +2457,6 @@ impl LdapSession {
     }
 
     /// Add `member_dn` to a group identified by `group_dn`.
-    ///
     /// Requires `WriteProperty(member)` or `GenericAll` on the group object.
     pub async fn add_member_to_group(&mut self, group_dn: &str, member_dn: &str) -> Result<()> {
         info!("ACL: Adding '{}' to group '{}'", member_dn, group_dn);
@@ -2272,7 +2467,6 @@ impl LdapSession {
     }
 
     /// Remove `member_dn` from a group identified by `group_dn`.
-    ///
     /// Requires `WriteProperty(member)` or `GenericAll` on the group object.
     pub async fn remove_member_from_group(
         &mut self,
@@ -2288,11 +2482,9 @@ impl LdapSession {
 
     /// Append a new allow-ACE granting `GenericAll` to `trustee_sid` on
     /// the object at `target_dn`.
-    ///
     /// Reads the current `nTSecurityDescriptor`, builds a new allow-ACE
     /// (ACCESS_ALLOWED_ACE: ACCESS_MASK=0x000F01FF = GENERIC_ALL), appends
     /// it to the existing DACL, and writes the descriptor back.
-    ///
     /// Requires `WriteDACL` on the target object.
     pub async fn write_dacl_grant_generic_all(
         &mut self,
@@ -2360,7 +2552,6 @@ impl LdapSession {
     }
 
     /// Set the `servicePrincipalName` attribute on `target_dn` to `spn`.
-    ///
     /// With `WriteProperty(servicePrincipalName)` or `GenericAll`, this
     /// enables targeted Kerberoasting of any user account.
     pub async fn write_spn(&mut self, target_dn: &str, spn: &str) -> Result<()> {
@@ -2480,13 +2671,11 @@ impl LdapSession {
     // ═══════════════════════════════════════════════════════
 
     /// Read LAPS (Local Administrator Password Solution) passwords from AD.
-    ///
     /// Queries computer objects for:
-    /// - `ms-Mcs-AdmPwd` (LAPS v1)
-    /// - `ms-Mcs-AdmPwdExpirationTime` (LAPS v1 expiry)
-    /// - `msLAPS-Password` (Windows LAPS / LAPS v2)
-    ///
-    /// Returns only computers where the password is readable.
+    ///   - `ms-Mcs-AdmPwd` (LAPS v1)
+    ///   - `ms-Mcs-AdmPwdExpirationTime` (LAPS v1 expiry)
+    ///   - `msLAPS-Password` (Windows LAPS / LAPS v2)
+    ///     Returns only computers where the password is readable.
     pub async fn read_laps_passwords(
         &mut self,
         computer_filter: Option<&str>,
@@ -2544,7 +2733,9 @@ impl LdapSession {
 /// LAPS password query result
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LapsResult {
+    /// Object or account name.
     pub computer_name: String,
+    /// Object or account name.
     pub dns_name: String,
     /// LAPS v1 password (ms-Mcs-AdmPwd)
     pub password: Option<String>,
@@ -2688,7 +2879,6 @@ fn ldap_rc_to_string(rc: u32) -> &'static str {
 // ═══════════════════════════════════════════════════════════
 
 /// Build a BER-encoded Simple Paged Results Control for LDAP requests.
-///
 /// The control value is a BER `SEQUENCE { INTEGER size, OCTET STRING cookie }`.
 fn build_paged_results_control(page_size: i32, cookie: &[u8]) -> RawControl {
     let mut inner = Vec::new();
@@ -2726,7 +2916,6 @@ fn build_sd_flags_control(flags: u32) -> RawControl {
 }
 
 /// Extract the paged results cookie from LDAP response controls.
-///
 /// Iterates through response controls looking for the Paged Results OID,
 /// then parses the BER-encoded value to extract the cookie.
 fn extract_paged_cookie(ctrls: &[ldap3::controls::Control]) -> Vec<u8> {
@@ -2791,7 +2980,6 @@ fn ber_write_length(buf: &mut Vec<u8>, len: usize) {
 // ═══════════════════════════════════════════════════════════
 
 /// Parse a binary NT Security Descriptor (SECURITY_DESCRIPTOR_RELATIVE format).
-///
 /// Returns `(owner_sid, Vec<AceEntry>)` containing the DACL entries.
 fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<AceEntry>), String> {
     // SECURITY_DESCRIPTOR_RELATIVE layout:
@@ -2942,7 +3130,6 @@ fn parse_sid(data: &[u8]) -> String {
 }
 
 /// Format a 16-byte GUID as a string (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
-///
 /// Uses the mixed-endian format that Windows GUIDs use:
 /// - bytes 0-3: little-endian u32
 /// - bytes 4-5: little-endian u16
@@ -2959,4 +3146,937 @@ fn format_guid(data: &[u8]) -> String {
         "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         d1, d2, d3, data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── BER primitives ──
+
+    #[test]
+    fn test_ber_len_bytes_short() {
+        assert_eq!(ber_len_bytes(0), vec![0]);
+        assert_eq!(ber_len_bytes(1), vec![1]);
+        assert_eq!(ber_len_bytes(127), vec![127]);
+    }
+
+    #[test]
+    fn test_ber_len_bytes_long_1byte() {
+        assert_eq!(ber_len_bytes(128), vec![0x81, 128]);
+        assert_eq!(ber_len_bytes(255), vec![0x81, 255]);
+    }
+
+    #[test]
+    fn test_ber_len_bytes_long_2byte() {
+        assert_eq!(ber_len_bytes(256), vec![0x82, 1, 0]);
+        assert_eq!(ber_len_bytes(65535), vec![0x82, 255, 255]);
+    }
+
+    #[test]
+    fn test_ber_len_bytes_long_3byte() {
+        assert_eq!(ber_len_bytes(65536), vec![0x83, 1, 0, 0]);
+        assert_eq!(ber_len_bytes(0xFFFFFF), vec![0x83, 255, 255, 255]);
+    }
+
+    #[test]
+    fn test_ber_tlv() {
+        assert_eq!(
+            ber_tlv(0x04, b"test"),
+            vec![0x04, 0x04, b't', b'e', b's', b't']
+        );
+        assert_eq!(ber_tlv(0x30, &[]), vec![0x30, 0x00]);
+    }
+
+    #[test]
+    fn test_ber_integer() {
+        // tag=0x02 + length + value
+        assert_eq!(ber_integer(0), vec![0x02, 0x01, 0x00]);
+        assert_eq!(ber_integer(1), vec![0x02, 0x01, 0x01]);
+        assert_eq!(ber_integer(127), vec![0x02, 0x01, 0x7F]);
+        assert_eq!(ber_integer(128), vec![0x02, 0x02, 0x00, 0x80]);
+        assert_eq!(ber_integer(256), vec![0x02, 0x02, 0x01, 0x00]);
+        assert_eq!(ber_integer(65535), vec![0x02, 0x03, 0x00, 0xFF, 0xFF]);
+        assert_eq!(ber_integer(0x7FFFFF), vec![0x02, 0x03, 0x7F, 0xFF, 0xFF]);
+        assert_eq!(
+            ber_integer(0x800000),
+            vec![0x02, 0x04, 0x00, 0x80, 0x00, 0x00]
+        );
+        assert_eq!(
+            ber_integer(0xFFFFFFFF),
+            vec![0x02, 0x04, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
+    }
+
+    #[test]
+    fn test_ber_octet_string() {
+        assert_eq!(ber_octet_string(b""), vec![0x04, 0x00]);
+        assert_eq!(ber_octet_string(b"hi"), vec![0x04, 0x02, b'h', b'i']);
+    }
+
+    #[test]
+    fn test_ber_boolean() {
+        assert_eq!(ber_boolean(true), vec![0x01, 0x01, 0xFF]);
+        assert_eq!(ber_boolean(false), vec![0x01, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn test_ber_enumerated() {
+        assert_eq!(ber_enumerated(0), vec![0x0A, 0x01, 0x00]);
+        assert_eq!(ber_enumerated(2), vec![0x0A, 0x01, 0x02]);
+        assert_eq!(ber_enumerated(80), vec![0x0A, 0x01, 0x50]);
+    }
+
+    #[test]
+    fn test_ber_sequence() {
+        assert_eq!(ber_sequence(&[]), vec![0x30, 0x00]);
+        assert_eq!(ber_sequence(&[0x01, 0x02]), vec![0x30, 0x02, 0x01, 0x02]);
+    }
+
+    // ── BER writers ──
+
+    #[test]
+    fn test_ber_write_length() {
+        let mut buf = Vec::new();
+        ber_write_length(&mut buf, 0);
+        assert_eq!(buf, vec![0]);
+        buf.clear();
+        ber_write_length(&mut buf, 127);
+        assert_eq!(buf, vec![127]);
+        buf.clear();
+        ber_write_length(&mut buf, 128);
+        assert_eq!(buf, vec![0x81, 128]);
+        buf.clear();
+        ber_write_length(&mut buf, 255);
+        assert_eq!(buf, vec![0x81, 255]);
+        buf.clear();
+        ber_write_length(&mut buf, 256);
+        assert_eq!(buf, vec![0x82, 1, 0]);
+        buf.clear();
+        ber_write_length(&mut buf, 65535);
+        assert_eq!(buf, vec![0x82, 255, 255]);
+    }
+
+    #[test]
+    fn test_ber_write_integer() {
+        let mut buf = Vec::new();
+        ber_write_integer(&mut buf, 0);
+        assert_eq!(buf, vec![0x02, 0x01, 0x00]);
+        buf.clear();
+        ber_write_integer(&mut buf, 1);
+        assert_eq!(buf, vec![0x02, 0x01, 0x01]);
+        buf.clear();
+        ber_write_integer(&mut buf, 127);
+        assert_eq!(buf, vec![0x02, 0x01, 0x7F]);
+        buf.clear();
+        ber_write_integer(&mut buf, 128);
+        assert_eq!(buf, vec![0x02, 0x02, 0x00, 0x80]);
+        buf.clear();
+        // 65535 = 0xFFFF → high bit set → leading zero byte added
+        ber_write_integer(&mut buf, 65535);
+        assert_eq!(buf, vec![0x02, 0x03, 0x00, 0xFF, 0xFF]);
+        buf.clear();
+        ber_write_integer(&mut buf, 65536);
+        assert_eq!(buf, vec![0x02, 0x03, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_ber_write_octet_string() {
+        let mut buf = Vec::new();
+        ber_write_octet_string(&mut buf, b"");
+        assert_eq!(buf, vec![0x04, 0x00]);
+        buf.clear();
+        ber_write_octet_string(&mut buf, b"abc");
+        assert_eq!(buf, vec![0x04, 0x03, b'a', b'b', b'c']);
+    }
+
+    // ── BER reader ──
+
+    #[test]
+    fn test_ber_read_tlv_integer() {
+        let data = ber_integer(42);
+        let mut off = 0usize;
+        let result = ber_read_tlv(&data, &mut off);
+        assert_eq!(result, Some((0x02, vec![42])));
+        assert_eq!(off, data.len());
+    }
+
+    #[test]
+    fn test_ber_read_tlv_sequence() {
+        let inner = ber_integer(1);
+        let data = ber_sequence(&inner);
+        let mut off = 0usize;
+        let result = ber_read_tlv(&data, &mut off);
+        assert_eq!(result, Some((0x30, vec![0x02, 0x01, 0x01])));
+        assert_eq!(off, data.len());
+    }
+
+    #[test]
+    fn test_ber_read_tlv_long_length() {
+        let data = vec![0x04, 0x82, 0x00, 0x04, b't', b'e', b's', b't'];
+        let mut off = 0usize;
+        let result = ber_read_tlv(&data, &mut off);
+        assert_eq!(result, Some((0x04, b"test".to_vec())));
+        assert_eq!(off, data.len());
+    }
+
+    #[test]
+    fn test_ber_read_tlv_empty() {
+        let mut off = 0usize;
+        assert_eq!(ber_read_tlv(&[], &mut off), None);
+        assert_eq!(off, 0);
+    }
+
+    #[test]
+    fn test_ber_read_tlv_truncated_tag() {
+        let mut off = 0usize;
+        assert_eq!(ber_read_tlv(&[0x30], &mut off), None);
+    }
+
+    #[test]
+    fn test_ber_read_tlv_truncated_data() {
+        let mut off = 0usize;
+        assert_eq!(ber_read_tlv(&[0x04, 0x05, b'h'], &mut off), None);
+    }
+
+    // ── domain_to_base_dn ──
+
+    #[test]
+    fn test_domain_to_base_dn_single() {
+        assert_eq!(domain_to_base_dn("corp"), "DC=corp");
+    }
+
+    #[test]
+    fn test_domain_to_base_dn_standard() {
+        assert_eq!(domain_to_base_dn("corp.local"), "DC=corp,DC=local");
+    }
+
+    #[test]
+    fn test_domain_to_base_dn_triple() {
+        assert_eq!(domain_to_base_dn("one.two.three"), "DC=one,DC=two,DC=three");
+    }
+
+    #[test]
+    fn test_domain_to_base_dn_empty() {
+        // split(".") on empty string yields [""] → DC=
+        assert_eq!(domain_to_base_dn(""), "DC=");
+    }
+
+    // ── ldap_rc_to_string ──
+
+    #[test]
+    fn test_ldap_rc_to_string_success() {
+        assert_eq!(ldap_rc_to_string(0), "Success");
+    }
+
+    #[test]
+    fn test_ldap_rc_to_string_known() {
+        assert_eq!(ldap_rc_to_string(49), "Invalid credentials");
+        assert_eq!(ldap_rc_to_string(32), "No such object");
+        assert_eq!(ldap_rc_to_string(50), "Insufficient access rights");
+        assert_eq!(ldap_rc_to_string(53), "Unwilling to perform");
+        assert_eq!(ldap_rc_to_string(68), "Entry already exists");
+    }
+
+    #[test]
+    fn test_ldap_rc_to_string_unknown() {
+        assert_eq!(ldap_rc_to_string(999), "Unknown error");
+    }
+
+    // ── LDAP filter encoder ──
+
+    #[test]
+    fn test_encode_ldap_filter_present() {
+        let result = encode_ldap_filter("objectClass");
+        // Present filter tag 0x87
+        assert_eq!(result[0], 0x87);
+        let expected_len = "objectClass".len();
+        assert_eq!(result[1], expected_len as u8);
+    }
+
+    #[test]
+    fn test_encode_ldap_filter_equality() {
+        let result = encode_ldap_filter("(sAMAccountName=testuser)");
+        // Equality filter is [APPLICATION 3] = 0xA3
+        assert_eq!(result[0], 0xA3);
+        // Content should contain two OCTET STRINGs
+        assert!(result.windows(7).any(|w| w == b"sAMAcco"));
+        assert!(result.windows(8).any(|w| w == b"testuser"));
+    }
+
+    #[test]
+    fn test_encode_ldap_filter_and() {
+        let result = encode_ldap_filter("(&(a=b)(c=d))");
+        assert_eq!(result[0], 0xA0); // AND tag
+    }
+
+    #[test]
+    fn test_encode_ldap_filter_or() {
+        let result = encode_ldap_filter("(|(a=b)(c=d))");
+        assert_eq!(result[0], 0xA1); // OR tag
+    }
+
+    #[test]
+    fn test_encode_ldap_filter_not() {
+        let result = encode_ldap_filter("(!(a=b))");
+        assert_eq!(result[0], 0xA2); // NOT tag
+    }
+
+    #[test]
+    fn test_encode_ldap_filter_wildcard() {
+        let result = encode_ldap_filter("(name=*)");
+        assert_eq!(result[0], 0x87); // Present filter
+    }
+
+    #[test]
+    fn test_encode_ldap_filter_no_parens() {
+        // Bare attribute treated as presence
+        let result = encode_ldap_filter("objectClass");
+        assert_eq!(result[0], 0x87);
+    }
+
+    #[test]
+    fn test_split_ldap_filter_list() {
+        let result = split_ldap_filter_list("(a=b)(c=d)");
+        assert_eq!(result, vec!["(a=b)".to_string(), "(c=d)".to_string()]);
+    }
+
+    #[test]
+    fn test_split_ldap_filter_list_nested() {
+        let result = split_ldap_filter_list("(&(a=b)(c=d))");
+        assert_eq!(result, vec!["(&(a=b)(c=d))".to_string()]);
+    }
+
+    #[test]
+    fn test_split_ldap_filter_list_empty() {
+        let result = split_ldap_filter_list("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_encode_extensible_filter_basic() {
+        let result = encode_extensible_filter("attr", "value");
+        // Extensible match = [APPLICATION 9] = 0xA9
+        assert_eq!(result[0], 0xA9);
+    }
+
+    #[test]
+    fn test_encode_extensible_filter_with_oid() {
+        let result = encode_extensible_filter("attr:1.2.3.4.5", "val");
+        assert_eq!(result[0], 0xA9);
+        // Should include matchingRule (0x81) and type (0x82) and matchValue (0x83)
+        assert!(result.contains(&0x81));
+        assert!(result.contains(&0x82));
+        assert!(result.contains(&0x83));
+    }
+
+    // ── LDAP message builders ──
+
+    #[test]
+    fn test_build_bind_sasl_structure() {
+        let mut scratch = Vec::new();
+        let result = build_bind_sasl(&mut scratch, 1, "GSS-SPNEGO", &[0x01, 0x02]);
+        // Outer should be SEQUENCE (0x30)
+        assert_eq!(result[0], 0x30);
+    }
+
+    #[test]
+    fn test_build_search_request_structure() {
+        let result = build_search_request(
+            1,
+            "DC=corp,DC=local",
+            "(objectClass=user)",
+            &["sAMAccountName"],
+        );
+        assert_eq!(result[0], 0x30);
+        // Contains APPLICATION 3 (0x63) for SearchRequest
+        assert!(result.contains(&0x63));
+    }
+
+    #[test]
+    fn test_build_search_request_multiple_attrs() {
+        let result = build_search_request(1, "DC=test", "(cn=*)", &["cn", "sn", "mail"]);
+        assert!(result.contains(&0x63));
+    }
+
+    // ── LDAP response classification ──
+
+    #[test]
+    fn test_classify_ldap_message_too_short() {
+        assert_eq!(classify_ldap_message(&[0x00]), LdapMsgKind::Other);
+    }
+
+    // ── parse_bind_response_rc ──
+
+    #[test]
+    fn test_parse_bind_response_rc_success() {
+        // Build a minimal BindResponse: LDAPMessage SEQUENCE { msgID, BindResponse [APP 1] }
+        // BindResponse [APP 1]: resultCode ENUMERATED(0), matchedDN "", diagnosticMessage ""
+        let inner = {
+            let mut b = Vec::new();
+            b.extend_from_slice(&ber_enumerated(0)); // resultCode = Success
+            b.extend_from_slice(&ber_octet_string(b"")); // matchedDN
+            b.extend_from_slice(&ber_octet_string(b"")); // diagnosticMessage
+            ber_tlv(0x61, &b) // [APPLICATION 1]
+        };
+        let msg = {
+            let mut m = Vec::new();
+            m.extend_from_slice(&ber_integer(1)); // msgID
+            m.extend_from_slice(&inner);
+            ber_sequence(&m)
+        };
+        assert_eq!(parse_bind_response_rc(&msg), 0);
+    }
+
+    #[test]
+    fn test_parse_bind_response_rc_failure() {
+        let inner = {
+            let mut b = Vec::new();
+            b.extend_from_slice(&ber_enumerated(49)); // invalidCredentials
+            b.extend_from_slice(&ber_octet_string(b""));
+            b.extend_from_slice(&ber_octet_string(b""));
+            ber_tlv(0x61, &b)
+        };
+        let msg = {
+            let mut m = Vec::new();
+            m.extend_from_slice(&ber_integer(1));
+            m.extend_from_slice(&inner);
+            ber_sequence(&m)
+        };
+        assert_eq!(parse_bind_response_rc(&msg), 49);
+    }
+
+    #[test]
+    fn test_parse_bind_response_rc_garbage() {
+        assert_eq!(parse_bind_response_rc(&[0x00, 0x01, 0x02]), 80);
+    }
+
+    // ── parse_bind_response_sasl ──
+
+    #[test]
+    fn test_parse_bind_response_sasl_success() {
+        // BindResponse [APP 1] with resultCode=0 and serverSaslCreds=[7](bytes)
+        let inner = {
+            let mut b = Vec::new();
+            b.extend_from_slice(&ber_enumerated(0)); // rc=0
+            b.extend_from_slice(&ber_octet_string(b"")); // matchedDN
+            b.extend_from_slice(&ber_octet_string(b"")); // diagnosticMessage
+            b.extend_from_slice(&ber_tlv(0x87, b"test_credentials")); // serverSaslCreds
+            ber_tlv(0x61, &b)
+        };
+        let msg = {
+            let mut m = Vec::new();
+            m.extend_from_slice(&ber_integer(1));
+            m.extend_from_slice(&inner);
+            ber_sequence(&m)
+        };
+        let result = parse_bind_response_sasl(&msg);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), b"test_credentials");
+    }
+
+    #[test]
+    fn test_parse_bind_response_sasl_no_creds() {
+        let inner = {
+            let mut b = Vec::new();
+            b.extend_from_slice(&ber_enumerated(0));
+            b.extend_from_slice(&ber_octet_string(b""));
+            b.extend_from_slice(&ber_octet_string(b""));
+            ber_tlv(0x61, &b)
+        };
+        let msg = {
+            let mut m = Vec::new();
+            m.extend_from_slice(&ber_integer(1));
+            m.extend_from_slice(&inner);
+            ber_sequence(&m)
+        };
+        assert!(parse_bind_response_sasl(&msg).is_err());
+    }
+
+    #[test]
+    fn test_parse_bind_response_sasl_too_short() {
+        assert!(parse_bind_response_sasl(&[]).is_err());
+    }
+
+    // ── SID parsing ──
+
+    #[test]
+    fn test_parse_sid_standard() {
+        // S-1-5-21-12345-67890-500
+        // Revision=1, SubCount=6, Authority=5, subs=[21,12345,67890,...500]
+        let mut raw = vec![1, 6, 0, 0, 0, 0, 0, 5]; // rev, count, authority (5)
+        for sub in &[21u32, 12345, 67890, 0, 500] {
+            raw.extend_from_slice(&sub.to_le_bytes());
+        }
+        let sid = parse_sid(&raw);
+        assert_eq!(sid, "S-1-5-21-12345-67890-0-500");
+    }
+
+    #[test]
+    fn test_parse_sid_world() {
+        // S-1-1-0 (World)
+        let raw = vec![1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+        assert_eq!(parse_sid(&raw), "S-1-1-0");
+    }
+
+    #[test]
+    fn test_parse_sid_too_short() {
+        assert_eq!(parse_sid(&[1, 0]), "S-1-0-0");
+    }
+
+    #[test]
+    fn test_parse_sid_null() {
+        assert_eq!(parse_sid(&[]), "S-1-0-0");
+    }
+
+    // ── GUID formatting ──
+
+    #[test]
+    fn test_format_guid_known() {
+        // bytes 0..16 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+        let bytes: Vec<u8> = (0..16).map(|i| i as u8).collect();
+        let guid = format_guid(&bytes);
+        // bytes 0-3 LE: 0x03020100 -> "03020100"
+        // bytes 4-5 LE: 0x0504 -> "0504"
+        // bytes 6-7 LE: 0x0706 -> "0706"
+        // bytes 8-15 raw: 08 09 0a 0b 0c 0d 0e 0f
+        assert_eq!(guid, "03020100-0504-0706-0809-0a0b0c0d0e0f");
+    }
+
+    #[test]
+    fn test_format_guid_too_short() {
+        assert_eq!(
+            format_guid(&[0; 15]),
+            "00000000-0000-0000-0000-000000000000"
+        );
+    }
+
+    #[test]
+    fn test_format_guid_empty() {
+        assert_eq!(format_guid(&[]), "00000000-0000-0000-0000-000000000000");
+    }
+
+    // ── AceEntry methods ──
+
+    #[test]
+    fn test_ace_is_generic_all() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x10000000, // GenericAll flag
+            trustee_sid: "S-1-1-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_generic_all());
+        assert!(!ace.is_write_dacl());
+    }
+
+    #[test]
+    fn test_ace_is_generic_all_full_mask() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x000F01FF, // Full control (non-generic)
+            trustee_sid: "S-1-1-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_generic_all());
+    }
+
+    #[test]
+    fn test_ace_is_write_dacl() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x00040000,
+            trustee_sid: "S-1-5-21-500".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_write_dacl());
+    }
+
+    #[test]
+    fn test_ace_is_write_owner() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x00080000,
+            trustee_sid: "S-1-1-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_write_owner());
+    }
+
+    #[test]
+    fn test_ace_is_generic_write() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x40000000,
+            trustee_sid: "S-1-1-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_generic_write());
+    }
+
+    #[test]
+    fn test_ace_is_extended_right() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x00000100,
+            trustee_sid: "S-1-1-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_extended_right());
+    }
+
+    #[test]
+    fn test_ace_is_write_prop() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: 0x00000020,
+            trustee_sid: "S-1-1-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(ace.is_write_prop());
+    }
+
+    #[test]
+    fn test_ace_no_permissions() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessDenied,
+            ace_flags: 0,
+            access_mask: 0,
+            trustee_sid: "S-1-0-0".into(),
+            object_type: None,
+            inherited_object_type: None,
+        };
+        assert!(!ace.is_generic_all());
+        assert!(!ace.is_write_dacl());
+        assert!(!ace.is_write_owner());
+        assert!(!ace.is_generic_write());
+        assert!(!ace.is_extended_right());
+        assert!(!ace.is_write_prop());
+    }
+
+    // ── Enum from_raw ──
+
+    #[test]
+    fn test_trust_direction_from_raw() {
+        assert_eq!(TrustDirection::from_raw(0), TrustDirection::Disabled);
+        assert_eq!(TrustDirection::from_raw(1), TrustDirection::Inbound);
+        assert_eq!(TrustDirection::from_raw(2), TrustDirection::Outbound);
+        assert_eq!(TrustDirection::from_raw(3), TrustDirection::Bidirectional);
+        assert_eq!(TrustDirection::from_raw(99), TrustDirection::Unknown(99));
+    }
+
+    #[test]
+    fn test_trust_type_from_raw() {
+        assert_eq!(TrustType::from_raw(1), TrustType::Downlevel);
+        assert_eq!(TrustType::from_raw(2), TrustType::Uplevel);
+        assert_eq!(TrustType::from_raw(3), TrustType::Mit);
+        assert_eq!(TrustType::from_raw(4), TrustType::Dce);
+        assert_eq!(TrustType::from_raw(99), TrustType::Unknown(99));
+    }
+
+    #[test]
+    fn test_ace_type_from_raw() {
+        assert_eq!(AceType::from_raw(0x00), AceType::AccessAllowed);
+        assert_eq!(AceType::from_raw(0x01), AceType::AccessDenied);
+        assert_eq!(AceType::from_raw(0x05), AceType::AccessAllowedObject);
+        assert_eq!(AceType::from_raw(0x06), AceType::AccessDeniedObject);
+        assert_eq!(AceType::from_raw(0xFF), AceType::Unknown(0xFF));
+    }
+
+    // ── TrustFlags ──
+
+    #[test]
+    fn test_trust_flags_describe_none() {
+        assert_eq!(trust_flags::describe(0), vec!["NONE"]);
+    }
+
+    #[test]
+    fn test_trust_flags_describe_non_transitive() {
+        let flags = trust_flags::describe(1);
+        assert!(flags.contains(&"NON_TRANSITIVE"));
+    }
+
+    #[test]
+    fn test_trust_flags_describe_multiple() {
+        let flags = trust_flags::describe(0x0088); // FOREST_TRANSITIVE | USES_RC4_ENCRYPTION
+        assert!(flags.contains(&"FOREST_TRANSITIVE"));
+        assert!(flags.contains(&"RC4"));
+    }
+
+    #[test]
+    fn test_trust_flags_describe_all() {
+        let all = trust_flags::describe(
+            0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0080 | 0x0100 | 0x0400,
+        );
+        assert_eq!(all.len(), 10);
+        assert!(all.contains(&"NON_TRANSITIVE"));
+        assert!(all.contains(&"AES"));
+        assert!(all.contains(&"PIM"));
+    }
+
+    // ── UAC constants ──
+
+    #[test]
+    fn test_uac_constants() {
+        assert_eq!(UAC_ACCOUNT_DISABLE, 0x0002);
+        assert_eq!(UAC_DONT_REQ_PREAUTH, 0x400000);
+        assert_eq!(UAC_TRUSTED_FOR_DELEGATION, 0x80000);
+        assert_eq!(UAC_TRUSTED_TO_AUTH_FOR_DELEGATION, 0x1000000);
+        assert_eq!(UAC_DONT_EXPIRE_PASSWORD, 0x10000);
+        assert_eq!(UAC_NORMAL_ACCOUNT, 0x0200);
+        assert_eq!(UAC_WORKSTATION_TRUST, 0x1000);
+        assert_eq!(UAC_SERVER_TRUST, 0x2000);
+    }
+
+    // ── Control builders ──
+
+    #[test]
+    fn test_build_paged_results_control_structure() {
+        let ctrl = build_paged_results_control(500, &[]);
+        assert_eq!(ctrl.ctype, PAGED_RESULTS_OID);
+        assert!(ctrl.crit);
+        assert!(ctrl.val.is_some());
+    }
+
+    #[test]
+    fn test_build_sd_flags_control_structure() {
+        let ctrl = build_sd_flags_control(0x05);
+        assert_eq!(ctrl.ctype, SD_FLAGS_OID);
+        assert!(ctrl.crit);
+        assert!(ctrl.val.is_some());
+    }
+
+    // ── parse_search_result_entry ──
+
+    #[test]
+    fn test_parse_search_result_entry_basic() {
+        // Build a SearchResultEntry [APPLICATION 4] = 0x64
+        // SearchResultEntry ::= SEQUENCE {
+        //     objectName   OCTET STRING,
+        //     attributes   SEQUENCE OF SEQUENCE { type OCTET STRING, vals SET OF OCTET STRING }
+        // }
+        let attr = {
+            let type_oct = ber_octet_string(b"cn");
+            let val_oct = ber_octet_string(b"testuser");
+            let vals = ber_tlv(0x31, &val_oct); // SET
+            let mut seq = Vec::new();
+            seq.extend_from_slice(&type_oct);
+            seq.extend_from_slice(&vals);
+            ber_sequence(&seq) // SEQUENCE { type, vals }
+        };
+        let dn_oct = ber_octet_string(b"CN=testuser,DC=corp,DC=local");
+        let mut search_result = Vec::new();
+        search_result.extend_from_slice(&dn_oct);
+        search_result.extend_from_slice(&ber_sequence(&attr)); // SEQUENCE OF attribute
+        let op = ber_tlv(0x64, &search_result); // [APPLICATION 4]
+
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&ber_integer(1)); // msgID
+        msg.extend_from_slice(&op);
+        let full = ber_sequence(&msg);
+
+        let entry = parse_search_result_entry(&full);
+        assert!(entry.is_some());
+        let entry = entry.unwrap();
+        assert_eq!(entry.dn, "CN=testuser,DC=corp,DC=local");
+        assert_eq!(entry.attrs.get("cn"), Some(&vec!["testuser".to_string()]));
+    }
+
+    #[test]
+    fn test_parse_search_result_entry_invalid_tag() {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&ber_integer(1));
+        msg.extend_from_slice(&ber_tlv(0x65, &[])); // wrong tag
+        let full = ber_sequence(&msg);
+        assert!(parse_search_result_entry(&full).is_none());
+    }
+
+    #[test]
+    fn test_parse_search_result_entry_empty() {
+        assert!(parse_search_result_entry(&[]).is_none());
+    }
+
+    // ── Security Descriptor parsing ──
+
+    /// Build a raw SID byte array: revision + subCount + authority(6 big-endian) + subs(LE)
+    fn make_sid_bytes(revision: u8, authority: u64, sub_authorities: &[u32]) -> Vec<u8> {
+        let mut b = vec![revision, sub_authorities.len() as u8];
+        b.extend_from_slice(&authority.to_be_bytes()[2..]); // 6 bytes
+        for sa in sub_authorities {
+            b.extend_from_slice(&sa.to_le_bytes());
+        }
+        b
+    }
+
+    /// Build a simple ACCESS_ALLOWED_ACE (type 0x00) or ACCESS_DENIED_ACE (type 0x01)
+    fn make_ace(type_: u8, flags: u8, mask: u32, sid_bytes: &[u8]) -> Vec<u8> {
+        let mut ace = vec![type_, flags];
+        let size = 4 + 4 + sid_bytes.len(); // header(4) + mask(4) + sid
+        ace.extend_from_slice(&(size as u16).to_le_bytes());
+        ace.extend_from_slice(&mask.to_le_bytes());
+        ace.extend_from_slice(sid_bytes);
+        ace
+    }
+
+    /// Build an ACL header + ACEs
+    fn make_dacl(aces: &[Vec<u8>]) -> Vec<u8> {
+        let mut dacl = vec![2u8, 0, 0, 0, 0, 0, 0, 0]; // rev, sbz, size, count, sbz2
+        for ace in aces {
+            dacl.extend_from_slice(ace);
+        }
+        let total_size = dacl.len() as u16;
+        dacl[2..4].copy_from_slice(&total_size.to_le_bytes());
+        dacl[4..6].copy_from_slice(&(aces.len() as u16).to_le_bytes());
+        dacl
+    }
+
+    /// Build a complete SECURITY_DESCRIPTOR_RELATIVE
+    fn make_sd(owner_sid: Option<&[u8]>, dacl: Option<&[u8]>) -> Vec<u8> {
+        let mut sd = vec![1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut offset = 20u32;
+        // Owner
+        if let Some(owner) = owner_sid {
+            sd[4..8].copy_from_slice(&offset.to_le_bytes());
+            sd.extend_from_slice(owner);
+            offset += owner.len() as u32;
+        }
+        // DACL
+        if let Some(acl) = dacl {
+            sd[16..20].copy_from_slice(&offset.to_le_bytes());
+            sd[2..4].copy_from_slice(&0x0004u16.to_le_bytes()); // SE_DACL_PRESENT
+            sd.extend_from_slice(acl);
+        }
+        sd
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_too_short() {
+        let result = parse_security_descriptor(&[0; 19]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_no_dacl() {
+        let sd = vec![
+            1, 0, 0, 0, // revision, sbz1, control=0 (no DACL)
+            0, 0, 0, 0, // owner = 0
+            0, 0, 0, 0, // group = 0
+            0, 0, 0, 0, // sacl = 0
+            0, 0, 0, 0, // dacl = 0
+        ];
+        let (owner, aces) = parse_security_descriptor(&sd).unwrap();
+        assert_eq!(owner, "S-1-0-0");
+        assert!(aces.is_empty());
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_empty_dacl() {
+        let dacl = make_dacl(&[]);
+        let owner = make_sid_bytes(1, 5, &[21, 500]);
+        let sd = make_sd(Some(&owner), Some(&dacl));
+        let (owner_sid, aces) = parse_security_descriptor(&sd).unwrap();
+        assert!(owner_sid.contains("500"));
+        assert!(aces.is_empty());
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_single_ace() {
+        let world_sid = make_sid_bytes(1, 1, &[0]); // S-1-1-0
+        let ace = make_ace(0x00, 0, 0x10000000, &world_sid); // ACCESS_ALLOWED + GenericAll
+        let dacl = make_dacl(&[ace]);
+        let admin_sid = make_sid_bytes(1, 5, &[21, 12345, 67890, 500]); // S-1-5-21-12345-67890-500
+        let sd = make_sd(Some(&admin_sid), Some(&dacl));
+        let (owner, aces) = parse_security_descriptor(&sd).unwrap();
+        assert_eq!(owner, "S-1-5-21-12345-67890-500");
+        assert_eq!(aces.len(), 1);
+        assert_eq!(aces[0].ace_type, AceType::AccessAllowed);
+        assert_eq!(aces[0].trustee_sid, "S-1-1-0");
+        assert!(aces[0].is_generic_all());
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_multiple_aces() {
+        let world_sid = make_sid_bytes(1, 1, &[0]);
+        let admin_sid = make_sid_bytes(1, 5, &[21, 500]);
+        let ace_allow = make_ace(0x00, 0, 0x00040000, &world_sid); // WriteDacl
+        let ace_deny = make_ace(0x01, 0, 0x00080000, &admin_sid); // WriteOwner
+        let dacl = make_dacl(&[ace_allow, ace_deny]);
+        let sd = make_sd(Some(&world_sid), Some(&dacl));
+        let (_, aces) = parse_security_descriptor(&sd).unwrap();
+        assert_eq!(aces.len(), 2);
+        assert_eq!(aces[0].ace_type, AceType::AccessAllowed);
+        assert!(aces[0].is_write_dacl());
+        assert_eq!(aces[1].ace_type, AceType::AccessDenied);
+        assert_eq!(aces[1].trustee_sid, "S-1-5-21-500");
+        assert!(aces[1].is_write_owner());
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_object_ace() {
+        // ACCESS_ALLOWED_OBJECT_ACE type=0x05 with ObjectType GUID
+        let user_sid = make_sid_bytes(1, 5, &[21, 1001]);
+        let obj_guid: [u8; 16] = [
+            0x70, 0x95, 0x29, 0x00, 0x6d, 0x24, 0xd0, 0x11, 0xa7, 0x68, 0x00, 0xaa, 0x00, 0x6e,
+            0x05, 0x29,
+        ]; // ForceChangePassword GUID
+        let mut ace: Vec<u8> = vec![
+            0x05, // AccessAllowedObject
+            0x00, // flags
+            0x34, 0x00, // size = 52 (4+4+4+16+16+8)
+        ];
+        ace.extend_from_slice(&0x00000100u32.to_le_bytes()); // ControlAccess
+        ace.extend_from_slice(&0x00000001u32.to_le_bytes()); // ObjectFlags: has ObjectType
+        ace.extend_from_slice(&obj_guid); // ObjectType GUID
+        ace.extend_from_slice(&user_sid); // Trustee SID
+        let actual_size = ace.len() as u16;
+        ace[2..4].copy_from_slice(&actual_size.to_le_bytes());
+
+        let dacl = make_dacl(&[ace]);
+        let sd = make_sd(Some(&user_sid), Some(&dacl));
+        let (_, aces) = parse_security_descriptor(&sd).unwrap();
+        assert_eq!(aces.len(), 1);
+        assert_eq!(aces[0].ace_type, AceType::AccessAllowedObject);
+        assert!(aces[0].is_extended_right());
+        assert!(aces[0].object_type.is_some());
+        assert_eq!(aces[0].trustee_sid, "S-1-5-21-1001");
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_no_owner() {
+        let world_sid = make_sid_bytes(1, 1, &[0]);
+        let ace = make_ace(0x00, 0, 1, &world_sid);
+        let dacl = make_dacl(&[ace]);
+        // Set owner offset = 0
+        let mut sd = make_sd(Some(&[]), Some(&dacl));
+        sd[4..8].copy_from_slice(&0u32.to_le_bytes()); // no owner
+        let (owner, aces) = parse_security_descriptor(&sd).unwrap();
+        assert_eq!(owner, "S-1-0-0");
+        assert_eq!(aces.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_security_descriptor_unknown_ace_skipped() {
+        let world_sid = make_sid_bytes(1, 1, &[0]);
+        let ace_known = make_ace(0x00, 0, 0x10000000, &world_sid);
+        let ace_unknown: Vec<u8> = vec![0xFF, 0x00, 0x08, 0x00, 0xAA, 0xBB, 0xCC, 0xDD];
+        let dacl = make_dacl(&[ace_known, ace_unknown]);
+        let sd = make_sd(Some(&world_sid), Some(&dacl));
+        let (_, aces) = parse_security_descriptor(&sd).unwrap();
+        assert_eq!(aces.len(), 1);
+        assert_eq!(aces[0].trustee_sid, "S-1-1-0");
+    }
 }

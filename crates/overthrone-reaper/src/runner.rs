@@ -11,17 +11,26 @@ use crate::{
     acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, policy, powerview,
     snaffler, spns, trusts, users,
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Structure
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReaperConfig {
+    /// Domain controller IP address
     pub dc_ip: String,
+    /// Domain FQDN
     pub domain: String,
+    /// base dn field
     pub base_dn: String,
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: Option<String>,
+    /// Hash value
     pub nt_hash: Option<String>,
+    /// modules field
     pub modules: Vec<String>,
+    /// Size in bytes
     pub page_size: u32,
+    /// use ldaps field
     pub use_ldaps: bool,
 }
 
@@ -29,7 +38,7 @@ impl ReaperConfig {
     pub fn should_run(&self, module: &str) -> bool {
         self.modules.is_empty() || self.modules.iter().any(|m| m.eq_ignore_ascii_case(module))
     }
-
+    /// Function
     pub fn base_dn_from_domain(domain: &str) -> String {
         // Handle both FQDN (corp.local → DC=corp,DC=local) and NetBIOS-style names.
         // If the domain contains no dot it is treated as a single DC component.
@@ -47,7 +56,6 @@ impl ReaperConfig {
 }
 
 /// Hash-aware LDAP connect helper shared by all reaper modules.
-///
 /// When `config.nt_hash` is set (pass-the-hash auth) this calls
 /// `connect_with_hash`; otherwise it uses the cleartext password.
 /// This prevents all enumeration returning 0 results when the
@@ -74,26 +82,44 @@ pub async fn ldap_connect(config: &ReaperConfig) -> Result<LdapSession> {
         .await
     }
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize)]
 pub struct ReaperResult {
+    /// Domain FQDN
     pub domain: String,
+    /// base dn field
     pub base_dn: String,
+    /// Active Directory functional level.
     pub functional_level: Option<u32>,
+    /// users field
     pub users: Vec<users::UserEntry>,
+    /// groups field
     pub groups: Vec<groups::GroupEntry>,
+    /// computers field
     pub computers: Vec<computers::ComputerEntry>,
+    /// ous field
     pub ous: Vec<ous::OuEntry>,
+    /// gpos field
     pub gpos: Vec<gpos::GpoEntry>,
+    /// trusts field
     pub trusts: Vec<trusts::TrustEntry>,
+    /// policy field
     pub policy: Option<policy::PolicyResult>,
+    /// Service Principal Name
     pub spn_accounts: Vec<spns::SpnAccount>,
+    /// delegations field
     pub delegations: Vec<delegations::DelegationEntry>,
+    /// acl findings field
     pub acl_findings: Vec<acls::AclFinding>,
+    /// laps entries field
     pub laps_entries: Vec<laps::LapsEntry>,
+    /// mssql instances field
     pub mssql_instances: Vec<mssql::MssqlInstance>,
+    /// snaffle findings field
     pub snaffle_findings: Vec<snaffler::SnaffleFinding>,
+    /// powerview results field
     pub powerview_results: Option<powerview::PowerViewResult>,
+    /// adcs templates field
     pub adcs_templates: Vec<adcs::CertTemplate>,
 }
 
@@ -133,7 +159,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
         ProgressStyle::with_template(
             "{prefix:.red.bold} [{bar:40.red/dark_gray}] {pos}/{len} {msg}",
         )
-        .unwrap()
+        .map_err(|e| OverthroneError::Custom(format!("Progress bar template error: {e}")))?
         .progress_chars("━╸─"),
     );
     pb.set_prefix("REAPER");

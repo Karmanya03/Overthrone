@@ -15,7 +15,7 @@ use tracing::info;
 #[derive(Debug, Clone, Parser)]
 #[command(about = "Interactive wizard mode for AD engagements")]
 pub struct WizardArgs {
-    /// Target goal: \"Domain Admins\", \"ntds\", \"<hostname>\", \"<username>\"
+    /// Target goal: \"Domain Admins\", \"ntds\", \"`<hostname>`\", \"`<username>`\"
     #[arg(short, long)]
     pub target: Option<String>,
 
@@ -256,13 +256,13 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
 
     if result.domain_admin_achieved {
         println!("\n{}", "SUCCESS: Domain Admin achieved!".green().bold());
-        std::process::exit(0);
+        Ok(())
     } else {
         println!("\n{}", "Wizard completed (goal not achieved)".yellow());
         println!(
             "  Resume with: ovt wizard --resume {}",
             checkpoint_path.display()
         );
-        std::process::exit(1);
+        Err(anyhow::anyhow!("Wizard goal not achieved"))
     }
 }

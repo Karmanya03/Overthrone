@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! overthrone-pilot — Autonomous AD attack orchestration engine.
 //!
 //! Pilot is the "brain" of Overthrone. Given a goal (e.g., "achieve Domain Admin"),

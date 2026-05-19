@@ -277,7 +277,6 @@ impl Plugin for NativePlugin {
 use wasmtime::*;
 
 /// A sandboxed WASM plugin.
-///
 /// After `init()`, the [`Store`], [`Instance`], and [`Linker`] are cached so
 /// that `execute_command()` reuses the same WASM instance and preserves any
 /// state the guest module accumulated (globals, linear memory, etc.).
@@ -299,7 +298,6 @@ struct WasmPluginState {
     log_buffer: Vec<String>,
     graph_operations: Vec<String>,
 }
-
 pub fn load_wasm_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
     log::info!("[plugin:loader] Loading WASM plugin from {:?}", path);
 
@@ -665,7 +663,6 @@ fn default_manifest(
 
 /// Parse a WASM binary for a custom section named `"overthrone_manifest"` and
 /// deserialize its contents as JSON into a [`PluginManifest`].
-///
 /// WASM custom sections have the following layout:
 /// - Section id byte = 0x00
 /// - Section size (LEB128 u32)

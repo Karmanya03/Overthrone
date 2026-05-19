@@ -11,7 +11,6 @@ use overthrone_core::proto::smb::SmbSession;
 use tracing::info;
 
 /// Execute a command on a remote host via temporary service creation.
-///
 /// Flow:
 /// 1. RPC Bind to SVCCTL
 /// 2. OpenSCManagerW

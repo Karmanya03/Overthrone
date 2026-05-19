@@ -6,13 +6,18 @@
 use crate::trust_map::{TrustGraph, TrustKind};
 use serde::{Deserialize, Serialize};
 use tracing::info;
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowPrincipal {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Security Identifier
     pub shadow_sid: String,
+    /// member of field
     pub member_of: Vec<String>,
+    /// ttl seconds field
     pub ttl_seconds: u64,
 }
 
@@ -34,15 +39,22 @@ impl ShadowPrincipal {
         (self.is_permanent() || self.ttl_seconds > 86400) && self.is_privileged()
     }
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PamFinding {
+    /// Domain FQDN
     pub bastion_domain: String,
+    /// Domain FQDN
     pub production_domain: String,
+    /// Classification for this object.
     pub finding_type: PamFindingType,
+    /// shadow principals field
     pub shadow_principals: Vec<ShadowPrincipal>,
+    /// risk level field
     pub risk_level: String,
+    /// description field
     pub description: String,
+    /// remediation field
     pub remediation: String,
 }
 
@@ -182,4 +194,123 @@ pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFin
     );
 
     findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trust_map::{TrustDirection, TrustEdge, TrustGraph, TrustKind};
+
+    fn make_trust(is_pam: bool, filtering: bool) -> TrustEdge {
+        TrustEdge {
+            source_domain: "BASTION".into(),
+            target_domain: "PROD".into(),
+            direction: TrustDirection::Bidirectional,
+            trust_type: TrustKind::Forest,
+            transitive: true,
+            sid_filtering: filtering,
+            tgt_delegation: true,
+            is_within_forest: false,
+            uses_aes: true,
+            uses_rc4: false,
+            is_pam_trust: is_pam,
+        }
+    }
+
+    #[test]
+    fn test_shadow_principal_permanent() {
+        let sp = ShadowPrincipal {
+            name: "adm".into(),
+            distinguished_name: "CN=adm,...".into(),
+            shadow_sid: "S-1-5-21-...".into(),
+            member_of: vec!["CN=Domain Admins,...".into()],
+            ttl_seconds: 0,
+        };
+        assert!(sp.is_permanent());
+        assert!(sp.is_privileged());
+        assert!(sp.is_dangerous());
+    }
+
+    #[test]
+    fn test_shadow_principal_not_dangerous() {
+        let sp = ShadowPrincipal {
+            name: "user".into(),
+            distinguished_name: "CN=user,...".into(),
+            shadow_sid: "S-1-5-21-...".into(),
+            member_of: vec!["CN=Users,...".into()],
+            ttl_seconds: 3600,
+        };
+        assert!(!sp.is_permanent());
+        assert!(!sp.is_privileged());
+        assert!(!sp.is_dangerous());
+    }
+
+    #[test]
+    fn test_shadow_principal_long_ttl_privileged() {
+        let sp = ShadowPrincipal {
+            name: "adm".into(),
+            distinguished_name: "CN=adm,...".into(),
+            shadow_sid: "S-1-5-21-...".into(),
+            member_of: vec!["CN=Enterprise Admins,...".into()],
+            ttl_seconds: 90000,
+        };
+        assert!(sp.is_dangerous());
+    }
+
+    #[test]
+    fn test_shadow_principal_base_dn() {
+        let dn = shadow_principal_base_dn("DC=corp,DC=local");
+        assert_eq!(
+            dn,
+            "CN=Shadow Principal Configuration,CN=Services,DC=corp,DC=local"
+        );
+    }
+
+    #[test]
+    fn test_shadow_principal_filter() {
+        assert_eq!(
+            shadow_principal_filter(),
+            "(objectClass=msDS-ShadowPrincipal)"
+        );
+    }
+
+    #[test]
+    fn test_analyze_pam_trusts_no_trusts() {
+        let g = TrustGraph::new();
+        let findings = analyze_pam_trusts("CORP", &g);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_analyze_pam_trusts_with_pam() {
+        let mut g = TrustGraph::new();
+        g.add_trust(make_trust(true, false));
+        let findings = analyze_pam_trusts("BASTION", &g);
+        let crit: Vec<_> = findings
+            .iter()
+            .filter(|f| f.risk_level == "CRITICAL")
+            .collect();
+        assert_eq!(crit.len(), 1);
+    }
+
+    #[test]
+    fn test_analyze_pam_trusts_pam_with_filtering() {
+        let mut g = TrustGraph::new();
+        g.add_trust(make_trust(true, true));
+        let findings = analyze_pam_trusts("BASTION", &g);
+        let high: Vec<_> = findings.iter().filter(|f| f.risk_level == "HIGH").collect();
+        assert_eq!(high.len(), 1);
+    }
+
+    #[test]
+    fn test_analyze_pam_trusts_no_pam_found() {
+        let mut g = TrustGraph::new();
+        g.add_trust(make_trust(false, true));
+        let findings = analyze_pam_trusts("BASTION", &g);
+        assert!(
+            findings
+                .iter()
+                .any(|f| matches!(f.finding_type, PamFindingType::NoPamTrustsFound))
+        );
+    }
 }

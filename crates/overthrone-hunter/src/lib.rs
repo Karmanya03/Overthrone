@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! overthrone-hunter — Kerberos attack toolkit for Active Directory.
 //!
 //! Modules:
@@ -23,6 +22,7 @@ pub mod spray;
 pub mod tickets;
 pub mod unconstrained;
 pub mod userenum;
+pub mod xp_dirtree;
 
 // Re-exports for ergonomic use
 pub use crack::{

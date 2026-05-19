@@ -42,14 +42,17 @@ impl Default for SmbExecConfig {
 /// Result of an SMBExec command
 #[derive(Debug)]
 pub struct SmbExecResult {
+    /// Target domain FQDN
     pub target: String,
+    /// command field
     pub command: String,
+    /// success field
     pub success: bool,
+    /// output field
     pub output: String,
 }
 
 /// Escape Windows CMD shell metacharacters to prevent command injection.
-///
 /// Prefixes `^`, `&`, `|`, `<`, `>`, and `"` with a caret (`^`) so they
 /// are treated as literals when passed to `cmd.exe /C`.
 pub fn escape_cmd_metacharacters(command: &str) -> String {
@@ -71,7 +74,6 @@ pub fn escape_cmd_metacharacters(command: &str) -> String {
 // ═══════════════════════════════════════════════════════════
 
 /// Execute a command on a remote host using SMBExec.
-///
 /// This creates a temporary Windows service whose binary path is
 /// `%COMSPEC% /Q /c <command> > \\127.0.0.1\C$\<output_path> 2>&1`,
 /// starts it, reads the output file, then cleans up.
@@ -209,6 +211,7 @@ pub struct SmbExecShell<'a> {
 }
 
 impl<'a> SmbExecShell<'a> {
+    /// Runs this module operation.
     pub fn new(session: &'a SmbSession) -> Self {
         SmbExecShell {
             session,
@@ -239,12 +242,13 @@ impl<'a> SmbExecShell<'a> {
 // ═══════════════════════════════════════════════════════════
 //  Executor Implementation
 // ═══════════════════════════════════════════════════════════
-
+/// Data structure used by this module.
 pub struct SmbExecutor {
     creds: super::ExecCredentials,
 }
 
 impl SmbExecutor {
+    /// Runs this module operation.
     pub fn new(creds: super::ExecCredentials) -> Self {
         Self { creds }
     }

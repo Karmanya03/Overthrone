@@ -83,7 +83,9 @@ impl Default for Socks5Config {
 /// Username/password authentication credentials.
 #[derive(Debug, Clone)]
 pub struct Socks5Auth {
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: String,
 }
 
@@ -97,6 +99,7 @@ pub struct Socks5Server {
 }
 
 impl Socks5Server {
+    /// Runs this module operation.
     pub fn new(config: Socks5Config) -> Self {
         Self { config }
     }
@@ -420,7 +423,6 @@ async fn handle_connect(
 }
 
 /// Handle SOCKS5 BIND command (RFC 1928 §4).
-///
 /// Opens a listening TCP socket or uses an ephemeral port. Sends
 /// two replies to the client: the first with the listening address/port, and
 /// the second when an inbound connection arrives.  Then relays data
@@ -497,7 +499,6 @@ async fn handle_bind(
 }
 
 /// Handle SOCKS5 UDP ASSOCIATE command (RFC 1928 §7).
-///
 /// Opens a UDP socket and replies with its address.  Then relays
 /// SOCKS5-encapsulated UDP datagrams between the client and
 /// the destination indicated in each datagram header.  The

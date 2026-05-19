@@ -7,9 +7,11 @@
 //  DnsResolver Struct & Constants
 // ═══════════════════════════════════════════════════════════
 
+use overthrone_core::error::Result as OvtResult;
 use overthrone_core::proto::dns::{
     DnsResolver, SRV_GC, SRV_KERBEROS, SRV_KPASSWD, SRV_LDAP, SRV_LDAP_DC, SrvRecord,
 };
+use std::collections::HashMap;
 
 #[test]
 fn dns_resolver_system_creates_without_panic() {
@@ -93,7 +95,7 @@ fn srv_record_struct_fields() {
 
 #[tokio::test]
 async fn resolve_hostname_returns_error_for_bogus() {
-    let result =
+    let result: OvtResult<Vec<String>> =
         overthrone_core::proto::dns::resolve_hostname("this.host.does.not.exist.invalid.tld").await;
     // Should return an error (no DNS resolution for .invalid.tld)
     assert!(result.is_err(), "Bogus hostname should fail to resolve");
@@ -103,7 +105,7 @@ async fn resolve_hostname_returns_error_for_bogus() {
 async fn lookup_srv_returns_error_for_bogus_domain() {
     let resolver = DnsResolver::system().unwrap();
     let query = format!("{}.invalid.notreal.tld", SRV_LDAP_DC);
-    let result = resolver.lookup_srv(&query).await;
+    let result: OvtResult<Vec<SrvRecord>> = resolver.lookup_srv(&query).await;
     assert!(
         result.is_err() || result.as_ref().is_ok_and(|v| v.is_empty()),
         "SRV lookup for bogus domain should fail or return empty"
@@ -119,7 +121,8 @@ async fn lookup_srv_returns_error_for_bogus_domain() {
 async fn live_discover_domain_controllers() {
     let resolver = DnsResolver::system().unwrap();
     let domain = std::env::var("TEST_AD_DOMAIN").expect("TEST_AD_DOMAIN env var required");
-    let dcs = resolver.discover_domain_controllers(&domain).await.unwrap();
+    let dcs: Vec<(String, Vec<String>)> =
+        resolver.discover_domain_controllers(&domain).await.unwrap();
     assert!(!dcs.is_empty(), "Should discover at least one DC");
     for (hostname, ips) in &dcs {
         assert!(!hostname.is_empty());
@@ -132,6 +135,7 @@ async fn live_discover_domain_controllers() {
 async fn live_discover_all_services() {
     let resolver = DnsResolver::system().unwrap();
     let domain = std::env::var("TEST_AD_DOMAIN").expect("TEST_AD_DOMAIN env var required");
-    let services = resolver.discover_all_services(&domain).await.unwrap();
+    let services: HashMap<String, Vec<SrvRecord>> =
+        resolver.discover_all_services(&domain).await.unwrap();
     assert!(!services.is_empty(), "Should discover at least one service");
 }

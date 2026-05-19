@@ -1,8 +1,7 @@
 //! SMB2/3 client operations for share enumeration, file access, and lateral movement.
 //!
-//! On Windows: full implementation using the `smb` crate (NTLM via sspi).
-//! On Linux/macOS: stub implementation -- types are available but all operations
-//! return errors. This allows the rest of the codebase to compile cross-platform.
+//! On Windows, SMB operations use the native `smb` crate/SSPI path.
+//! On non-Windows platforms, the module uses the crate's raw SMB2 client path.
 use hmac::Hmac;
 use md5::Md5;
 
@@ -22,14 +21,13 @@ use smb::{
 use std::str::FromStr;
 
 // Constants
-
 pub const SMB_PORT: u16 = 445;
 pub const ADMIN_SHARES: &[&str] = &["C$", "ADMIN$", "IPC$"];
 #[cfg(windows)]
 const READ_BUF_SIZE: usize = 1_048_576; // 1 MiB — large enough for DCSync/Kerberos responses
 
 // Public Types (available on all platforms)
-
+/// Data structure used by this module.
 pub struct SmbSession {
     #[cfg(windows)]
     client: Option<Client>,
@@ -37,8 +35,11 @@ pub struct SmbSession {
     inner: Option<std::sync::Arc<tokio::sync::Mutex<super::smb2::Smb2Connection>>>,
     #[cfg(not(windows))]
     inner: std::sync::Arc<tokio::sync::Mutex<super::smb2::Smb2Connection>>,
+    /// Target domain FQDN
     pub target: String,
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
     /// Kerberos ticket for authentication (TGT or TGS)
     #[allow(dead_code)] // Set during ticket-based auth
@@ -80,42 +81,119 @@ impl KerberosTicket {
         }
     }
 
-    /// Load from a .kirbi file
+    /// Load raw KRB-CRED bytes from a `.kirbi` file.
+    ///
+    /// The loader accepts either raw DER or Base64-encoded Rubeus/Mimikatz
+    /// `.kirbi` content. A `.kirbi` does not reliably expose the decrypted
+    /// session key without the matching service/TGT key, so use
+    /// [`Self::from_kirbi_with_session_key`] when the ticket will be used for
+    /// SMB AP-REQ authentication.
     pub fn from_kirbi(path: &str) -> Result<Self> {
-        let data = std::fs::read(path)
-            .map_err(|e| OverthroneError::Custom(format!("Failed to read '{}': {}", path, e)))?;
-        // Parse KRB-CRED structure to extract ticket and session key
-        // For simplicity, we store the raw kirbi data
+        let data = read_kirbi_bytes(path)?;
         Ok(Self {
             data,
             session_key: Vec::new(),
-            session_key_etype: 23, // default RC4
-            is_tgt: false,
+            session_key_etype: 0,
+            is_tgt: true,
             spn: None,
         })
     }
+
+    /// Load a `.kirbi` and attach known session-key material.
+    pub fn from_kirbi_with_session_key(
+        path: &str,
+        session_key: Vec<u8>,
+        session_key_etype: i32,
+        is_tgt: bool,
+        spn: Option<String>,
+    ) -> Result<Self> {
+        if session_key.is_empty() {
+            return Err(OverthroneError::Kerberos(
+                "Kerberos ticket session key is required for AP-REQ authentication".into(),
+            ));
+        }
+        Ok(Self {
+            data: read_kirbi_bytes(path)?,
+            session_key,
+            session_key_etype,
+            is_tgt,
+            spn,
+        })
+    }
+
+    /// Validate that this ticket has enough material for SMB AP-REQ auth.
+    pub fn validate_for_ap_req(&self) -> Result<()> {
+        if self.data.is_empty() {
+            return Err(OverthroneError::Kerberos(
+                "Kerberos ticket data is empty".into(),
+            ));
+        }
+        if self.session_key.is_empty() {
+            return Err(OverthroneError::Kerberos(
+                "Kerberos ticket session key is missing; load with from_kirbi_with_session_key"
+                    .into(),
+            ));
+        }
+        if self.session_key_etype == 0 {
+            return Err(OverthroneError::Kerberos(
+                "Kerberos ticket session key etype is unknown".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
+fn read_kirbi_bytes(path: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+
+    let data = std::fs::read(path)
+        .map_err(|e| OverthroneError::Custom(format!("Failed to read '{path}': {e}")))?;
+
+    if data
+        .first()
+        .is_some_and(|byte| *byte == 0x76 || *byte == 0x30)
+    {
+        return Ok(data);
+    }
+
+    let text = std::str::from_utf8(&data)
+        .map_err(|e| OverthroneError::Kerberos(format!("Invalid kirbi file encoding: {e}")))?;
+    base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .map_err(|e| OverthroneError::Kerberos(format!("Invalid kirbi base64: {e}")))
+}
+/// Data structure used by this module.
 #[derive(Debug, Clone)]
 pub struct RemoteFileInfo {
+    /// Object or account name.
     pub name: String,
+    /// Filesystem path.
     pub path: String,
+    /// is directory field
     pub is_directory: bool,
+    /// Size in bytes
     pub size: u64,
 }
-
+/// Data structure used by this module.
 #[derive(Debug, Clone)]
 pub struct ShareAccessResult {
+    /// Object or account name.
     pub share_name: String,
+    /// readable field
     pub readable: bool,
+    /// writable field
     pub writable: bool,
+    /// is admin share field
     pub is_admin_share: bool,
 }
-
+/// Data structure used by this module.
 #[derive(Debug, Clone)]
 pub struct AdminCheckResult {
+    /// Target domain FQDN
     pub target: String,
+    /// has admin field
     pub has_admin: bool,
+    /// accessible shares field
     pub accessible_shares: Vec<String>,
 }
 
@@ -123,6 +201,7 @@ pub struct AdminCheckResult {
 
 #[cfg(windows)]
 impl SmbSession {
+    /// Runs this module operation.
     pub async fn connect(
         target: &str,
         domain: &str,
@@ -160,12 +239,10 @@ impl SmbSession {
     }
 
     /// Connect using pass-the-hash (NTLM hash instead of plaintext password).
-    ///
     /// On Windows, the `smb` crate authenticates via SSPI/NTLM, which does not
     /// natively accept raw NT hashes.  We therefore use the pure-Rust SMB2
     /// client (smb2.rs) which implements NTLMSSP directly and supports
     /// pass-the-hash natively.
-    ///
     /// Fallback for elevated users: if `LogonUserW` with
     /// `LOGON32_LOGON_NEW_CREDENTIALS` succeeds (requires SeImpersonatePrivilege),
     /// we still use the pure-Rust SMB2 client since SSPI hashes the password
@@ -197,7 +274,6 @@ impl SmbSession {
             session_key: None,
         })
     }
-
     pub fn session_key(&self) -> Option<Vec<u8>> {
         self.session_key.clone()
     }
@@ -210,7 +286,6 @@ impl SmbSession {
         UncPath::from_str(&full)
             .map_err(|e| OverthroneError::Smb(format!("Invalid UNC path '{full}': {e}")))
     }
-
     pub async fn connect_share(&self, share: &str) -> Result<()> {
         // PTH path via SMB2 client
         if let Some(inner) = &self.inner {
@@ -239,7 +314,6 @@ impl SmbSession {
         debug!("SMB: Connected to \\\\{}\\{}", self.target, share);
         Ok(())
     }
-
     pub async fn check_share_read(&self, share: &str) -> bool {
         // PTH path via SMB2 client
         if let Some(inner) = &self.inner {
@@ -272,7 +346,6 @@ impl SmbSession {
             Err(_) => false,
         }
     }
-
     pub async fn check_share_write(&self, share: &str) -> bool {
         // PTH path via SMB2 client
         if let Some(inner) = &self.inner {
@@ -321,7 +394,6 @@ impl SmbSession {
             Err(_) => false,
         }
     }
-
     pub async fn check_share_access(&self, shares: &[&str]) -> Vec<ShareAccessResult> {
         let mut results = Vec::new();
         for &share in shares {
@@ -340,7 +412,6 @@ impl SmbSession {
         }
         results
     }
-
     pub async fn check_admin_access(&self) -> AdminCheckResult {
         info!("SMB: Checking admin access on {}", self.target);
         let shares_to_check = ["C$", "ADMIN$", "IPC$"];
@@ -365,7 +436,6 @@ impl SmbSession {
             accessible_shares: accessible,
         }
     }
-
     pub async fn list_directory(
         &self,
         share: &str,
@@ -439,7 +509,6 @@ impl SmbSession {
         info!("SMB: Listed {} entries", entries.len());
         Ok(entries)
     }
-
     pub async fn read_file(&self, share: &str, remote_path: &str) -> Result<Vec<u8>> {
         info!(
             "SMB: Reading \\\\{}\\{}\\{}",
@@ -497,7 +566,6 @@ impl SmbSession {
         info!("SMB: Read {} bytes from {}", data.len(), remote_path);
         Ok(data)
     }
-
     pub async fn write_file(&self, share: &str, remote_path: &str, data: &[u8]) -> Result<()> {
         let data_len = data.len();
         info!(
@@ -549,7 +617,6 @@ impl SmbSession {
         info!("SMB: Write complete ({} bytes)", data_len);
         Ok(())
     }
-
     pub async fn delete_file(&self, share: &str, remote_path: &str) -> Result<()> {
         info!(
             "SMB: Deleting \\\\{}\\{}\\{}",
@@ -583,7 +650,6 @@ impl SmbSession {
         info!("SMB: Deleted {}", remote_path);
         Ok(())
     }
-
     pub async fn download_file(
         &self,
         share: &str,
@@ -601,7 +667,6 @@ impl SmbSession {
         );
         Ok(size)
     }
-
     pub async fn upload_file(
         &self,
         local_path: &str,
@@ -619,7 +684,6 @@ impl SmbSession {
         );
         Ok(size)
     }
-
     pub async fn pipe_transact(&self, pipe_name: &str, request: &[u8]) -> Result<Vec<u8>> {
         info!(
             "SMB: Pipe transact '{}' ({} bytes)",
@@ -671,7 +735,6 @@ impl SmbSession {
     }
 
     /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
-    ///
     /// The DC may return a DRSGetNCChanges reply in multiple RPC PDU fragments
     /// (each with `PFC_LAST_FRAG` bit 1 of pfc_flags clear except the last).
     /// This method reads all fragments and returns a synthetic single-PDU buffer:
@@ -835,7 +898,6 @@ impl SmbSession {
         );
         Ok(result)
     }
-
     pub async fn deploy_payload(
         &self,
         payload_bytes: &[u8],
@@ -861,7 +923,6 @@ impl SmbSession {
         info!("SMB: Payload at {}", full_path);
         Ok(full_path)
     }
-
     pub async fn cleanup_payload(&self, remote_filename: &str) -> Result<()> {
         let attempts = [
             ("ADMIN$", format!("Temp\\{}", remote_filename)),
@@ -878,13 +939,11 @@ impl SmbSession {
     }
 
     /// Connect using a Kerberos ticket (TGS for cifs/service).
-    ///
     /// ## Windows
     /// Injects the ticket into the current logon session's credential cache
     /// via `LsaCallAuthenticationPackage(KERB_SUBMIT_TKT_REQUEST)`, then
     /// opens the SMB share through the normal SSPI path — Windows
     /// automatically picks up the cached TGS during SMB session setup.
-    ///
     /// ## Non-Windows
     /// Builds a raw SPNEGO `NegTokenInit` wrapping the AP-REQ from the
     /// ticket data and sends it in the SMB2 `SESSION_SETUP` request.
@@ -895,6 +954,7 @@ impl SmbSession {
         username: &str,
         ticket: KerberosTicket,
     ) -> Result<Self> {
+        ticket.validate_for_ap_req()?;
         info!("SMB: Connecting to \\\\{target} with Kerberos ticket for {username}");
 
         // ── Step 1: Inject ticket into the Windows Kerberos cache ──
@@ -954,7 +1014,6 @@ impl SmbSession {
     }
 
     /// Inject a Kerberos ticket into the Windows SSPI credential cache.
-    ///
     /// Uses `LsaConnectUntrusted` + `LsaCallAuthenticationPackage` with
     /// `KERB_SUBMIT_TKT_REQUEST` to submit the ticket into the current
     /// logon session so SSPI Negotiate/Kerberos can pick it up during
@@ -1609,7 +1668,6 @@ impl SmbSession {
     }
 
     /// Open a named pipe on `\\target\IPC$` and return the file ID for persistent use.
-    ///
     /// Unlike `pipe_transact`, which opens and closes on every call, this keeps
     /// the pipe open so callers (e.g. psexec) can issue multiple DCE/RPC rounds
     /// without re-authenticating the pipe session.  Call `close_pipe` when done.
@@ -1624,7 +1682,6 @@ impl SmbSession {
     }
 
     /// Send `request` through an already-open pipe FID and receive the response.
-    ///
     /// Uses `FSCTL_PIPE_TRANSCEIVE` (one round-trip).  For multi-fragment
     /// responses prefer `ioctl_multifrag_persistent`.
     pub async fn ioctl_pipe_persistent(&self, fid: &[u8; 32], request: &[u8]) -> Result<Vec<u8>> {
@@ -1633,7 +1690,6 @@ impl SmbSession {
     }
 
     /// Read the next data chunk from an open pipe FID (SMB2 READ, not IOCTL).
-    ///
     /// Used to drain additional fragments when a DCE/RPC response spans
     /// multiple PDUs.
     pub async fn read_pipe_persistent(&self, fid: &[u8; 32], max_len: u32) -> Result<Vec<u8>> {
@@ -1648,7 +1704,6 @@ impl SmbSession {
     }
 
     /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
-    ///
     /// Issues `FSCTL_PIPE_TRANSCEIVE` for the first fragment, then loops
     /// `SMB2_READ` until `PFC_LAST_FRAG` (bit 1) is set in the PDU header.
     /// Returns a synthetic single-PDU: first-fragment header + all stubs
@@ -1779,6 +1834,7 @@ impl SmbSession {
         username: &str,
         ticket: KerberosTicket,
     ) -> Result<Self> {
+        ticket.validate_for_ap_req()?;
         info!("SMB: Kerberos ticket auth to \\\\{target} for {username}");
 
         let conn = super::smb2::Smb2Connection::connect(target, SMB_PORT).await?;
@@ -1908,7 +1964,6 @@ impl SmbSession {
 }
 
 // Bulk Operations (multi-target)
-
 pub async fn check_admin_targets(
     targets: &[String],
     domain: &str,
@@ -1932,7 +1987,13 @@ pub async fn check_admin_targets(
         let sem = Arc::clone(&sem);
 
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let Ok(_permit) = sem.acquire().await else {
+                return AdminCheckResult {
+                    target,
+                    has_admin: false,
+                    accessible_shares: Vec::new(),
+                };
+            };
             match SmbSession::connect(&target, &domain, &username, &password).await {
                 Ok(session) => session.check_admin_access().await,
                 Err(e) => {
@@ -2143,8 +2204,423 @@ fn read_ndr_wide_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
     let s = String::from_utf16_lossy(&raw[..nul]).to_string();
     // Advance past string data, align to 4 bytes
     let mut next = str_end;
-    if (!next).is_multiple_of(4) {
+    if !next.is_multiple_of(4) {
         next += 4 - (next % 4);
     }
     Some((s, next))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Constants ──
+
+    #[test]
+    fn test_smb_port() {
+        assert_eq!(SMB_PORT, 445);
+    }
+
+    #[test]
+    fn test_admin_shares() {
+        assert!(ADMIN_SHARES.contains(&"C$"));
+        assert!(ADMIN_SHARES.contains(&"ADMIN$"));
+        assert!(ADMIN_SHARES.contains(&"IPC$"));
+        assert_eq!(ADMIN_SHARES.len(), 3);
+    }
+
+    // ── KerberosTicket ──
+
+    #[test]
+    fn test_kerberos_ticket_new() {
+        let ticket = KerberosTicket::new(vec![1, 2, 3], vec![0xCD; 16], 23, true, None);
+        assert_eq!(ticket.data, vec![1, 2, 3]);
+        assert_eq!(ticket.session_key, vec![0xCD; 16]);
+        assert_eq!(ticket.session_key_etype, 23);
+        assert!(ticket.is_tgt);
+        assert!(ticket.spn.is_none());
+    }
+
+    #[test]
+    fn test_kerberos_ticket_new_with_spn() {
+        let ticket = KerberosTicket::new(
+            vec![],
+            vec![0; 16],
+            18,
+            false,
+            Some("HTTP/server.corp.local".into()),
+        );
+        assert!(!ticket.is_tgt);
+        assert_eq!(ticket.spn.as_deref(), Some("HTTP/server.corp.local"));
+    }
+
+    #[test]
+    fn test_kerberos_ticket_from_kirbi_nonexistent() {
+        let result = KerberosTicket::from_kirbi("C:\\nonexistent\\file.kirbi");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kerberos_ticket_from_raw_kirbi_requires_session_key_for_ap_req() {
+        let path =
+            std::env::temp_dir().join(format!("overthrone-raw-{}.kirbi", std::process::id()));
+        std::fs::write(&path, [0x76, 0x01, 0x02]).unwrap();
+
+        let ticket = KerberosTicket::from_kirbi(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ticket.data, vec![0x76, 0x01, 0x02]);
+        assert!(ticket.validate_for_ap_req().is_err());
+    }
+
+    #[test]
+    fn test_kerberos_ticket_from_base64_kirbi_with_session_key() {
+        let path =
+            std::env::temp_dir().join(format!("overthrone-b64-{}.kirbi", std::process::id()));
+        std::fs::write(&path, "dgEC").unwrap();
+
+        let ticket = KerberosTicket::from_kirbi_with_session_key(
+            path.to_str().unwrap(),
+            vec![0xCD; 16],
+            23,
+            false,
+            Some("cifs/dc01.corp.local".to_string()),
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ticket.data, vec![0x76, 0x01, 0x02]);
+        assert!(ticket.validate_for_ap_req().is_ok());
+    }
+    // ── ndr_conformant_string / read_ndr_wide_string (roundtrip) ──
+
+    #[test]
+    fn test_ndr_conformant_string_empty() {
+        let encoded = ndr_conformant_string("");
+        // Referent ID(4) + max_count(4) + offset(4) + actual_count(4) = 16 + 0 data, padded to 16
+        assert_eq!(encoded.len(), 16);
+        assert_eq!(encoded[4..8], 0u32.to_le_bytes()); // max_count = 0
+    }
+
+    #[test]
+    fn test_ndr_wide_string_roundtrip() {
+        let input = "hello";
+        let encoded = ndr_conformant_string(input);
+        // The encoded buffer includes a referent ID prefix (4 bytes).
+        // read_ndr_wide_string expects max_count + offset + actual_count + data.
+        // So we skip the referent ID.
+        let (decoded, next) = read_ndr_wide_string(&encoded, 4).unwrap();
+        assert_eq!(decoded, input);
+        assert_eq!(next, encoded.len());
+    }
+
+    #[test]
+    fn test_ndr_wide_string_utf16() {
+        let input = "héllo€";
+        let encoded = ndr_conformant_string(input);
+        let (decoded, _) = read_ndr_wide_string(&encoded, 4).unwrap();
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn test_ndr_wide_string_padding() {
+        // "a" is 2 bytes UTF-16, needs +2 padding to align to 4
+        let encoded = ndr_conformant_string("a");
+        let len = encoded.len();
+        assert!(len.is_multiple_of(4));
+        let (decoded, next) = read_ndr_wide_string(&encoded, 4).unwrap();
+        assert_eq!(decoded, "a");
+        assert_eq!(next, len);
+    }
+
+    #[test]
+    fn test_read_ndr_wide_string_too_short() {
+        assert_eq!(read_ndr_wide_string(&[0; 11], 0), None);
+    }
+
+    #[test]
+    fn test_read_ndr_wide_string_truncated_data() {
+        // actual_count = 10 but only 5 bytes available
+        let mut buf = vec![0u8; 12];
+        buf[8..12].copy_from_slice(&10u32.to_le_bytes()); // actual_count = 10
+        assert_eq!(read_ndr_wide_string(&buf, 0), None);
+    }
+
+    // ── build_rpc_request ──
+
+    #[test]
+    fn test_build_rpc_request_structure() {
+        let req = build_rpc_request(0, &[0x01, 0x02, 0x03]);
+        // RPC v5.0, type=Request, flags=0x03
+        assert_eq!(req[0], 5);
+        assert_eq!(req[1], 0);
+        assert_eq!(req[2], 0);
+        assert_eq!(req[3], 0x03);
+        // NDR: little-endian
+        assert_eq!(&req[4..8], &[0x10, 0x00, 0x00, 0x00]);
+        // frag_len = 24 + 3 = 27
+        let flen = u16::from_le_bytes([req[8], req[9]]);
+        assert_eq!(flen, 27);
+        // auth_len = 0
+        assert_eq!(u16::from_le_bytes([req[10], req[11]]), 0);
+        // call_id = 1
+        assert_eq!(u32::from_le_bytes([req[12], req[13], req[14], req[15]]), 1);
+        // alloc_hint = 3
+        assert_eq!(u32::from_le_bytes([req[16], req[17], req[18], req[19]]), 3);
+        // context_id = 0
+        assert_eq!(u16::from_le_bytes([req[20], req[21]]), 0);
+        // opnum = 0
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 0);
+        // stub data
+        assert_eq!(&req[24..], &[0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn test_build_rpc_request_opnum() {
+        let req = build_rpc_request(15, &[]);
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 15);
+    }
+
+    #[test]
+    fn test_build_rpc_request_frag_len() {
+        let data = vec![0xAA; 100];
+        let req = build_rpc_request(5, &data);
+        let flen = u16::from_le_bytes([req[8], req[9]]);
+        assert_eq!(flen, 24 + 100);
+    }
+
+    // ── SAMR helpers ──
+
+    #[test]
+    fn test_build_samr_bind_structure() {
+        let bind = build_samr_bind();
+        // RPC version, type=bind(11)
+        assert_eq!(bind[0], 5);
+        assert_eq!(bind[2], 11);
+        assert_eq!(bind[3], 3); // PFC flags
+        // frag_len = 72
+        let flen = u16::from_le_bytes([bind[8], bind[9]]);
+        assert_eq!(flen, 72);
+        // call_id = 1
+        assert_eq!(
+            u32::from_le_bytes([bind[12], bind[13], bind[14], bind[15]]),
+            1
+        );
+        // SAMR UUID at offset 32 (16 bytes)
+        assert_eq!(bind[32], 0x78);
+        assert_eq!(bind[33], 0x57);
+        assert_eq!(bind[46], 0x89);
+        assert_eq!(bind[47], 0xac);
+        // NDR transfer syntax at offset 52 (16 bytes)
+        assert_eq!(bind[52], 0x04);
+        assert_eq!(bind[67], 0x60);
+        // NDR version at offset 68 (4 bytes)
+        assert_eq!(
+            u32::from_le_bytes([bind[68], bind[69], bind[70], bind[71]]),
+            2
+        );
+        assert_eq!(bind.len(), 72);
+    }
+
+    #[test]
+    fn test_build_samr_connect() {
+        let req = build_samr_connect();
+        assert_eq!(req.len() as u16, 24 + 12); // header + 12 byte stub
+        // Verify opnum = 0
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 0);
+        // Stub starts at offset 24
+        // referent ID = 0x00020000
+        assert_eq!(
+            u32::from_le_bytes([req[24], req[25], req[26], req[27]]),
+            0x00020000
+        );
+        // desired access = 0
+        assert_eq!(u32::from_le_bytes([req[28], req[29], req[30], req[31]]), 0);
+        // access mask = 0x00020004
+        assert_eq!(
+            u32::from_le_bytes([req[32], req[33], req[34], req[35]]),
+            0x00020004
+        );
+    }
+
+    #[test]
+    fn test_build_samr_open_domain() {
+        let handle = [0xAA; 20];
+        let req = build_samr_open_domain(&handle, "corp.local");
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 5); // opnum 5
+        // Stub starts at 24: handle bytes first
+        assert_eq!(&req[24..44], &handle);
+    }
+
+    #[test]
+    fn test_build_samr_lookup_names() {
+        let handle = [0xBB; 20];
+        let req = build_samr_lookup_names(&handle, &["admin"]);
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 17); // opnum 17
+        // Contains NDR-encoded "admin" string
+        let encoded_admin = ndr_conformant_string("admin");
+        // The request should contain the encoded admin string
+        assert!(
+            req.windows(encoded_admin.len())
+                .any(|w| w == encoded_admin.as_slice())
+        );
+    }
+
+    #[test]
+    fn test_parse_samr_rid() {
+        // Build a minimal valid response: 52 bytes, RID at offset 48
+        let mut resp = vec![0u8; 52];
+        resp[48..52].copy_from_slice(&500u32.to_le_bytes());
+        assert_eq!(parse_samr_rid(&resp).unwrap(), 500);
+    }
+
+    #[test]
+    fn test_parse_samr_rid_too_short() {
+        assert!(parse_samr_rid(&[0; 40]).is_err());
+    }
+
+    #[test]
+    fn test_build_samr_open_user() {
+        let handle = [0xCC; 20];
+        let req = build_samr_open_user(&handle, 1000);
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 34); // opnum 34
+        // Stub: handle(20) + access_mask(4) + rid(4)
+        assert_eq!(&req[24..44], &handle);
+        // RID at offset 48
+        assert_eq!(
+            u32::from_le_bytes([req[48], req[49], req[50], req[51]]),
+            1000
+        );
+    }
+
+    #[test]
+    fn test_build_samr_set_password() {
+        let handle = [0xDD; 20];
+        let req = build_samr_set_password(&handle, "newpass123!");
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 59); // opnum 59
+        // Contains NDR-encoded password
+        let encoded_pw = ndr_conformant_string("newpass123!");
+        assert!(
+            req.windows(encoded_pw.len())
+                .any(|w| w == encoded_pw.as_slice())
+        );
+    }
+
+    #[test]
+    fn test_build_samr_close_handle() {
+        let handle = [0xEE; 20];
+        let req = build_samr_close_handle(&handle);
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 0); // opnum 0
+        assert_eq!(&req[24..], &handle);
+    }
+
+    // ── SRVSVC helpers ──
+
+    #[test]
+    fn test_build_srvsvc_bind_structure() {
+        let bind = build_srvsvc_bind();
+        assert_eq!(bind.len(), 72);
+        assert_eq!(bind[0], 5);
+        assert_eq!(bind[2], 11);
+        assert_eq!(bind[3], 3);
+        let flen = u16::from_le_bytes([bind[8], bind[9]]);
+        assert_eq!(flen, 72);
+        assert_eq!(
+            u32::from_le_bytes([bind[12], bind[13], bind[14], bind[15]]),
+            2
+        );
+        // SRVSVC UUID {c84f324b-7016-d301-1278-5a47bf6ee188}
+        assert_eq!(bind[32], 0xc8);
+        assert_eq!(bind[33], 0x4f);
+        assert_eq!(bind[45], 0x6e);
+        assert_eq!(bind[46], 0xe1);
+        assert_eq!(bind[47], 0x88);
+        assert_eq!(&bind[68..72], &[0x02, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_build_srvsvc_net_share_enum_req() {
+        let req = build_srvsvc_net_share_enum_req("dc01.corp.local");
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 15); // opnum 15
+        // Contains the UNC path \\dc01.corp.local as NDR string
+        let server_unc = "\\\\dc01.corp.local";
+        let utf16_encoded: Vec<u8> = server_unc
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        assert!(
+            req.windows(utf16_encoded.len())
+                .any(|w| w == utf16_encoded.as_slice())
+        );
+    }
+
+    // ── parse_srvsvc_share_names ──
+
+    #[test]
+    fn test_parse_srvsvc_share_names_empty_response() {
+        assert!(parse_srvsvc_share_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_parse_srvsvc_share_names_too_short() {
+        assert!(parse_srvsvc_share_names(&[0; 30]).is_empty());
+    }
+
+    #[test]
+    fn test_parse_srvsvc_share_names_wrong_level() {
+        // Build response with level=0 (minimal valid 52 bytes)
+        let mut resp = vec![0u8; 52];
+        resp[24..28].copy_from_slice(&0u32.to_le_bytes()); // level=0
+        assert!(parse_srvsvc_share_names(&resp).is_empty());
+    }
+
+    #[test]
+    fn test_parse_srvsvc_share_names_full() {
+        let hdr = 24usize;
+        // Build a realistic SRVSVC response with 2 shares
+        // ndr_conformant_string includes referent_id prefix (4 bytes)
+        // read_ndr_wide_string expects format WITHOUT referent_id: [max_count(4)+offset(4)+actual_count(4)+data]
+        // So we skip the first 4 bytes (referent_id) for deferred string data
+        let share1_raw = ndr_conformant_string("ADMIN$");
+        let share2_raw = ndr_conformant_string("C$");
+        let remark_raw = ndr_conformant_string("");
+
+        let share1_ndr = &share1_raw[4..]; // skip referent_id
+        let share2_ndr = &share2_raw[4..];
+        let remark_ndr = &remark_raw[4..];
+
+        let entry_count = 2u32;
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u32.to_le_bytes()); // level
+        buf.extend_from_slice(&0x00020004u32.to_le_bytes()); // container ref
+        buf.extend_from_slice(&0u32.to_le_bytes()); // total entries
+        buf.extend_from_slice(&0u32.to_le_bytes()); // resume
+        buf.extend_from_slice(&0u32.to_le_bytes()); // rc
+        buf.extend_from_slice(&entry_count.to_le_bytes()); // cEntries
+        buf.extend_from_slice(&0x00020008u32.to_le_bytes()); // array ref
+        buf.extend_from_slice(&entry_count.to_le_bytes()); // max_count
+
+        // Entry 0
+        buf.extend_from_slice(&0x0002000Cu32.to_le_bytes()); // name_ptr (non-null)
+        buf.extend_from_slice(&0u32.to_le_bytes()); // type
+        buf.extend_from_slice(&0x00020010u32.to_le_bytes()); // remark_ptr (non-null)
+
+        // Entry 1
+        buf.extend_from_slice(&0x00020014u32.to_le_bytes()); // name_ptr
+        buf.extend_from_slice(&0u32.to_le_bytes()); // type
+        buf.extend_from_slice(&0x00020018u32.to_le_bytes()); // remark_ptr
+
+        // Deferred strings (no referent_id prefix)
+        buf.extend_from_slice(share1_ndr); // "ADMIN$"
+        buf.extend_from_slice(remark_ndr); // ""
+        buf.extend_from_slice(share2_ndr); // "C$"
+        buf.extend_from_slice(remark_ndr); // ""
+
+        let mut full = vec![0u8; hdr];
+        full.extend_from_slice(&buf);
+
+        let names = parse_srvsvc_share_names(&full);
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], "ADMIN$");
+        assert_eq!(names[1], "C$");
+    }
 }

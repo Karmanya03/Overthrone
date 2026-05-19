@@ -42,7 +42,6 @@ impl PfxBuilder {
     }
 
     /// Build the PFX file
-    ///
     /// Returns the DER-encoded PFX file content using proper MAC and encryption.
     pub fn build(self) -> Result<Vec<u8>> {
         info!("Building PFX file");

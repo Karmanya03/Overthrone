@@ -53,7 +53,6 @@ pub struct PluginManifest {
     /// Whether this plugin requires elevated privileges
     pub needs_admin: bool,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginType {
     /// Native shared library (.dll/.so)
@@ -65,7 +64,6 @@ pub enum PluginType {
     /// Built-in (compiled into the binary)
     Builtin,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginCapability {
     /// Can execute commands on remote targets
@@ -96,23 +94,33 @@ pub struct PluginCommand {
     /// Arguments this command accepts
     pub args: Vec<PluginArgDef>,
 }
-
+/// Data structure used by this module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginArgDef {
+    /// Object or account name.
     pub name: String,
+    /// description field
     pub description: String,
+    /// required field
     pub required: bool,
+    /// Classification for this object.
     pub arg_type: PluginArgType,
+    /// default field
     pub default: Option<String>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PluginArgType {
+    /// `String` variant
     String,
+    /// `Integer` variant
     Integer,
+    /// `Boolean` variant
     Boolean,
+    /// `FilePath` variant
     FilePath,
+    /// `IpAddress` variant
     IpAddress,
+    /// `Sid` variant
     Sid,
 }
 
@@ -124,6 +132,7 @@ pub enum PluginArgType {
 pub struct PluginContext {
     /// Read-only snapshot of current config
     pub domain: String,
+    /// Domain controller IP address
     pub dc_ip: Option<String>,
     /// Credentials (if the plugin has Execution capability)
     pub credentials: Option<ExecCredentials>,
@@ -139,15 +148,12 @@ impl PluginContext {
     pub fn log_info(&self, msg: &str) {
         log::info!("[plugin:{}] {}", self.log_prefix, msg);
     }
-
     pub fn log_warn(&self, msg: &str) {
         log::warn!("[plugin:{}] {}", self.log_prefix, msg);
     }
-
     pub fn log_error(&self, msg: &str) {
         log::error!("[plugin:{}] {}", self.log_prefix, msg);
     }
-
     pub fn log_attack(&self, msg: &str) {
         log::info!("[plugin:{}] ⚡ {}", self.log_prefix, msg);
     }
@@ -170,29 +176,42 @@ impl PluginContext {
 pub enum PluginEvent {
     /// A new AD node was discovered
     NodeDiscovered {
+        /// Stable unique identifier.
         node_id: u64,
+        /// Classification for this object.
         node_type: String,
+        /// Object or account name.
         name: String,
     },
     /// A credential was recovered (hash, password, ticket)
     CredentialFound {
+        /// Username for authentication
         username: String,
+        /// Classification for this object.
         credential_type: String,
+        /// Domain FQDN
         domain: String,
     },
     /// A new attack path was identified
     AttackPathFound {
+        /// Source domain FQDN
         source: String,
+        /// Target domain FQDN
         target: String,
+        /// hops field
         hops: usize,
     },
     /// A node was compromised (code execution achieved)
+    #[allow(missing_docs)]
     NodeCompromised { hostname: String, method: String },
     /// Scan phase completed
+    #[allow(missing_docs)]
     PhaseCompleted { phase: String, duration_secs: u64 },
     /// User-triggered custom event
     Custom {
+        /// Classification for this object.
         event_type: String,
+        /// Raw byte data
         data: HashMap<String, String>,
     },
 }
@@ -200,27 +219,38 @@ pub enum PluginEvent {
 /// Result from a plugin command execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginResult {
+    /// success field
     pub success: bool,
+    /// output field
     pub output: String,
+    /// Raw byte data
     pub data: HashMap<String, serde_json::Value>,
     /// Artifacts produced (files, tickets, etc.)
     pub artifacts: Vec<PluginArtifact>,
 }
-
+/// Data structure used by this module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginArtifact {
+    /// Object or account name.
     pub name: String,
+    /// Classification for this object.
     pub artifact_type: ArtifactType,
+    /// Raw byte data
     pub data: Vec<u8>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ArtifactType {
+    /// `KerberosTicket` variant
     KerberosTicket,
+    /// `NtlmHash` variant
     NtlmHash,
+    /// `Password` variant
     Password,
+    /// `Certificate` variant
     Certificate,
+    /// `Report` variant
     Report,
+    /// `Custom` variant
     Custom(String),
 }
 
@@ -291,6 +321,7 @@ impl Default for PluginRegistry {
 }
 
 impl PluginRegistry {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
@@ -568,7 +599,6 @@ fn is_version_compatible(min_version: &str) -> bool {
 
 /// FFI-safe plugin info returned by native plugins
 /// Native .dll/.so plugins must export these C functions:
-///
 /// ```c
 /// extern "C" OverthronePluginInfo* overthrone_plugin_info();
 /// extern "C" OverthronePluginHandle* overthrone_plugin_create();
@@ -576,11 +606,17 @@ fn is_version_compatible(min_version: &str) -> bool {
 /// ```
 #[repr(C)]
 pub struct NativePluginInfo {
+    /// Stable unique identifier.
     pub id: *const std::ffi::c_char,
+    /// Object or account name.
     pub name: *const std::ffi::c_char,
+    /// version field
     pub version: *const std::ffi::c_char,
+    /// author field
     pub author: *const std::ffi::c_char,
+    /// description field
     pub description: *const std::ffi::c_char,
+    /// api version field
     pub api_version: u32,
 }
 

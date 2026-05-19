@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! overthrone-forge — Kerberos ticket forging & persistence engine.
 //!
 //! Forges Golden Tickets (krbtgt), Silver Tickets (service keys),
@@ -30,6 +29,7 @@ pub mod diamond;
 pub mod dsrm;
 pub mod exec_util;
 pub mod golden;
+pub mod nopac;
 pub mod runner;
 pub mod shadow_credentials;
 pub mod silver;

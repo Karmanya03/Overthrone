@@ -7,15 +7,14 @@
 //! - Null sessions (no credentials)
 //! - Low-privilege authenticated sessions
 //!
-//! Windows:  Uses `net rpc` or direct SMB named pipe when available
-//! Linux/macOS: Uses `rpcclient` (from samba-common-bin)
+//! Windows/Linux/macOS: Uses native LDAP/SID lookups when possible.
+//! Legacy RPC tooling is no longer required for the common path.
 //!
 //! This is the #1 unauthenticated enumeration technique for AD.
 
 use crate::error::{OverthroneError, Result};
+use crate::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
-use std::process::Command;
-use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -25,11 +24,19 @@ use tracing::{debug, info, warn};
 /// Type of account discovered via RID cycling
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RidAccountType {
+    /// `User` variant
     User,
+    /// `Computer` variant
+    Computer,
+    /// `Group` variant
     Group,
-    Alias,     // local/domain alias (built-in groups)
+    /// `Alias` variant
+    Alias, // local/domain alias (built-in groups)
+    /// `WellKnown` variant
     WellKnown, // well-known SIDs
+    /// `DeletedAccount` variant
     DeletedAccount,
+    /// `Unknown` variant
     Unknown(String),
 }
 
@@ -37,6 +44,7 @@ impl std::fmt::Display for RidAccountType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::User => write!(f, "user"),
+            Self::Computer => write!(f, "computer"),
             Self::Group => write!(f, "group"),
             Self::Alias => write!(f, "alias"),
             Self::WellKnown => write!(f, "well-known"),
@@ -49,40 +57,40 @@ impl std::fmt::Display for RidAccountType {
 /// A single RID lookup result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RidResult {
+    /// Stable unique identifier.
     pub rid: u32,
+    /// Object or account name.
     pub name: String,
+    /// Classification for this object.
     pub account_type: RidAccountType,
+    /// Security Identifier
     pub sid: String,
 }
 
 /// Configuration for RID cycling
 #[derive(Debug, Clone)]
 pub struct RidCycleConfig {
+    /// Target domain FQDN
     pub target: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: String,
+    /// null session field
     pub null_session: bool,
+    /// Stable unique identifier.
     pub start_rid: u32,
+    /// Stable unique identifier.
     pub end_rid: u32,
+    /// Size in bytes
     pub batch_size: u32,
-}
-
-static RID_TOOLING_AVAILABLE: OnceLock<bool> = OnceLock::new();
-
-fn command_available(program: &str, args: &[&str]) -> bool {
-    Command::new(program).args(args).output().is_ok()
 }
 
 /// Quick availability check for RID cycling tooling.
 pub fn tooling_available() -> bool {
-    *RID_TOOLING_AVAILABLE.get_or_init(|| {
-        if cfg!(windows) {
-            true
-        } else {
-            command_available("rpcclient", &["-V"])
-        }
-    })
+    true
 }
 
 impl Default for RidCycleConfig {
@@ -105,7 +113,6 @@ impl Default for RidCycleConfig {
 // ═══════════════════════════════════════════════════════════
 
 /// Perform RID cycling enumeration against a domain controller.
-///
 /// Connects via IPC$ / MS-SAMR and queries SamrLookupIdsInDomain
 /// for each RID in the specified range.
 pub async fn rid_cycle(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
@@ -163,32 +170,25 @@ pub async fn rid_cycle(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
 
 /// Get the domain SID via rpcclient/net command
 async fn get_domain_sid(config: &RidCycleConfig) -> Result<String> {
-    let output = run_rpcclient(config, "lsaquery").await?;
+    let mut ldap = connect_for_rid(config).await?;
+    let base_dn = ldap.base_dn.clone();
+    let results = ldap
+        .custom_search_with_base(&base_dn, "(objectClass=domainDNS)", &["objectSid"])
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: config.target.clone(),
+            reason: format!("Failed to query domain SID: {e}"),
+        })?;
 
-    // Parse: "Domain Name: CORP\nDomain Sid: S-1-5-21-..."
-    for line in output.lines() {
-        let line = line.trim();
-        if line.starts_with("Domain Sid:") || line.starts_with("Domain SID:") {
-            let sid = line
-                .split(':')
-                .nth(1)
-                .map(|s| s.trim().to_string())
-                .ok_or_else(|| OverthroneError::Rpc {
-                    target: config.target.clone(),
-                    reason: "Failed to parse domain SID from lsaquery output".to_string(),
-                })?;
-            if sid.starts_with("S-1-5-21-") {
-                return Ok(sid);
-            }
+    for entry in results {
+        if let Some(sid_bytes) = entry.bin_attrs.get("objectSid").and_then(|v| v.first()) {
+            return Ok(sid_bytes_to_string(sid_bytes));
         }
     }
 
-    Err(OverthroneError::Rpc {
+    Err(OverthroneError::Ldap {
         target: config.target.clone(),
-        reason: format!(
-            "Could not extract domain SID from lsaquery response: {}",
-            output.lines().take(5).collect::<Vec<_>>().join(" | ")
-        ),
+        reason: "Could not extract domain SID from LDAP".to_string(),
     })
 }
 
@@ -199,70 +199,88 @@ async fn lookup_rids(
     rids: &[u32],
 ) -> Result<Vec<RidResult>> {
     let mut results = Vec::new();
+    let mut ldap = connect_for_rid(config).await?;
+    let base_dn = ldap.base_dn.clone();
+    let domain_sid_bytes = sid_string_to_bytes(domain_sid);
 
-    // Use lookupsids for each SID (rpcclient supports this)
+    // Native LDAP lookups for each SID.
     for &rid in rids {
-        let full_sid = format!("{domain_sid}-{rid}");
-        let cmd = format!("lookupsids {full_sid}");
+        let full_sid = sid_string_with_rid(&domain_sid_bytes, rid);
+        let sid_filter = ldap_filter_bytes(&full_sid);
+        let filter = format!(
+            "(&(objectSid={sid_filter})(|(objectClass=user)(objectClass=group)(objectClass=computer)))"
+        );
 
-        match run_rpcclient(config, &cmd).await {
-            Ok(output) => {
-                // Parse: "S-1-5-21-...-500 CORP\Administrator (1)"
-                // Format: <SID> <DOMAIN>\<name> (<type>)
-                if let Some(result) = parse_lookupsids_line(&output, rid, &full_sid) {
-                    // Skip entries that resolve to "(unknown)" or are clearly invalid
-                    if result.name != "(unknown)" && !result.name.is_empty() {
-                        results.push(result);
-                    }
-                }
-            }
-            Err(_) => continue,
+        let entries = ldap
+            .custom_search_with_base(
+                &base_dn,
+                &filter,
+                &[
+                    "sAMAccountName",
+                    "cn",
+                    "objectClass",
+                    "userAccountControl",
+                    "groupType",
+                    "objectSid",
+                ],
+            )
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: config.target.clone(),
+                reason: format!("LDAP RID lookup failed for {rid}: {e}"),
+            })?;
+
+        for entry in entries {
+            let name = entry
+                .attrs
+                .get("sAMAccountName")
+                .and_then(|v| v.first())
+                .cloned()
+                .or_else(|| entry.attrs.get("cn").and_then(|v| v.first()).cloned())
+                .unwrap_or_else(|| format!("RID-{rid}"));
+
+            let object_classes = entry
+                .attrs
+                .get("objectClass")
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            let is_computer = object_classes.iter().any(|c| c == "computer")
+                || name.ends_with('$')
+                || entry.attrs.contains_key("userAccountControl")
+                    && entry
+                        .attrs
+                        .get("userAccountControl")
+                        .and_then(|v| v.first())
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .is_some_and(|uac| uac & 0x1000 != 0);
+            let is_group = object_classes.iter().any(|c| c == "group")
+                || entry.attrs.contains_key("groupType");
+
+            let account_type = if is_computer {
+                RidAccountType::Computer
+            } else if is_group {
+                RidAccountType::Group
+            } else {
+                RidAccountType::User
+            };
+
+            results.push(RidResult {
+                rid,
+                name,
+                account_type,
+                sid: sid_bytes_to_string(&full_sid),
+            });
         }
     }
 
     Ok(results)
 }
 
-/// Parse a lookupsids response line into a RidResult
-fn parse_lookupsids_line(output: &str, rid: u32, sid: &str) -> Option<RidResult> {
-    for line in output.lines() {
-        let line = line.trim();
-        if !line.starts_with(sid) && !line.starts_with("S-1-5-21-") {
-            continue;
-        }
-
-        // Format: "S-1-5-21-...-500 CORP\Administrator (1)"
-        let after_sid = line.strip_prefix(sid)?.trim();
-
-        // Extract the name and type
-        let (name_part, type_part) = if let Some(paren_start) = after_sid.rfind('(') {
-            let name = after_sid[..paren_start].trim();
-            let typ = after_sid[paren_start..].trim_matches(|c| c == '(' || c == ')');
-            (name, typ)
-        } else {
-            (after_sid, "")
-        };
-
-        // Name may be "DOMAIN\username" — extract just the username
-        let name = if let Some((_domain, user)) = name_part.split_once('\\') {
-            user.to_string()
-        } else {
-            name_part.to_string()
-        };
-
-        let account_type = parse_account_type(type_part);
-
-        return Some(RidResult {
-            rid,
-            name,
-            account_type,
-            sid: sid.to_string(),
-        });
-    }
-    None
-}
-
 /// Parse the rpcclient account type number to our enum
+#[cfg(test)]
 fn parse_account_type(type_str: &str) -> RidAccountType {
     match type_str.trim() {
         "1" => RidAccountType::User,
@@ -280,202 +298,133 @@ fn parse_account_type(type_str: &str) -> RidAccountType {
     }
 }
 
+async fn connect_for_rid(config: &RidCycleConfig) -> Result<LdapSession> {
+    if config.null_session || config.username.is_empty() {
+        LdapSession::connect_anonymous(&config.target, &config.domain, false).await
+    } else {
+        LdapSession::connect(
+            &config.target,
+            &config.domain,
+            &config.username,
+            &config.password,
+            false,
+        )
+        .await
+    }
+}
+
+fn sid_string_to_bytes(sid_str: &str) -> Vec<u8> {
+    let parts: Vec<&str> = sid_str.split('-').collect();
+    assert!(
+        parts.len() >= 4 && parts[0] == "S",
+        "invalid SID: {sid_str}"
+    );
+    let revision: u8 = parts[1].parse().unwrap_or(1);
+    let authority: u64 = parts[2].parse().unwrap_or(5);
+    let sub_authorities: Vec<u32> = parts[3..].iter().filter_map(|s| s.parse().ok()).collect();
+
+    let mut sid = Vec::new();
+    sid.push(revision);
+    sid.push(sub_authorities.len() as u8);
+    sid.extend_from_slice(&authority.to_be_bytes()[2..8]);
+    for sub in sub_authorities {
+        sid.extend_from_slice(&sub.to_le_bytes());
+    }
+    sid
+}
+
+fn sid_string_with_rid(domain_sid: &[u8], rid: u32) -> Vec<u8> {
+    let mut sid = domain_sid.to_vec();
+    if sid.len() < 8 {
+        return sid;
+    }
+    sid[1] = sid[1].saturating_add(1);
+    sid.extend_from_slice(&rid.to_le_bytes());
+    sid
+}
+
+fn sid_bytes_to_string(data: &[u8]) -> String {
+    if data.len() < 8 {
+        return String::from("S-0-0");
+    }
+
+    let revision = data[0];
+    let sub_auth_count = data[1] as usize;
+    let authority =
+        u64::from_be_bytes([0, 0, data[2], data[3], data[4], data[5], data[6], data[7]]);
+
+    let mut sid = format!("S-{}-{}", revision, authority);
+    for i in 0..sub_auth_count {
+        let offset = 8 + i * 4;
+        if offset + 4 > data.len() {
+            break;
+        }
+        let sub_auth = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
+        sid.push_str(&format!("-{}", sub_auth));
+    }
+    sid
+}
+
+fn ldap_filter_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("\\{:02x}", b)).collect()
+}
+
 // ═══════════════════════════════════════════════════════════
 //  rpcclient / net rpc launcher
 // ═══════════════════════════════════════════════════════════
 
-/// Run an rpcclient command and return stdout
-async fn run_rpcclient(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
-    let target = &config.target;
-    let rpc_cmd = rpc_cmd.to_string();
-    let config = config.clone();
-
-    tokio::task::spawn_blocking(move || run_rpcclient_sync(&config, &rpc_cmd))
-        .await
-        .map_err(|e| OverthroneError::Rpc {
-            target: target.clone(),
-            reason: format!("task join: {e}"),
-        })?
-}
-
-/// Synchronous rpcclient execution
-fn run_rpcclient_sync(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
-    let rpcclient_present = command_available("rpcclient", &["-V"]);
-
-    // Try rpcclient first (Linux/macOS primary path)
-    if rpcclient_present {
-        return try_rpcclient(config, rpc_cmd);
-    }
-
-    // Fallback: net rpc on Windows
-    #[cfg(windows)]
-    {
-        if let Ok(output) = try_net_rpc(config, rpc_cmd) {
-            return Ok(output);
+/// Parse an rpcclient lookupsids output line into a RidResult.
+/// The output line format from `rpcclient lookupsids <sid>` is:
+///   S-1-5-21-<domain>-<rid> DOMAIN\\Name (type_code)
+/// This function extracts the name and type from a line matching the
+/// expected `sid_prefix` (the full SID string, including the RID).
+#[cfg(test)]
+fn parse_lookupsids_line(output: &str, _expected_rid: u32, sid_prefix: &str) -> Option<RidResult> {
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-    }
+        // Split on whitespace: first token is the SID, rest is name + type
+        let (sid_part, rest) = line.split_once(' ')?;
+        if sid_part != sid_prefix {
+            continue;
+        }
+        // rest = 'DOMAIN\Name (type)' — the name may contain spaces
+        // Find the last '(' to extract the type code
+        let paren_open = rest.rfind(" (")?;
+        let type_str = rest[paren_open + 2..].trim_end_matches(')').trim();
+        let account_type = parse_account_type(type_str);
 
-    Err(OverthroneError::Rpc {
-        target: config.target.clone(),
-        reason: "Neither 'rpcclient' nor 'net rpc' is available. \
-                 Install samba-common-bin (Linux) or samba-client (macOS) \
-                 to enable RID cycling."
-            .to_string(),
-    })
-}
+        // Everything before ' (' is the qualified name (DOMAIN\Name)
+        let qualified_name = rest[..paren_open].trim();
+        // Extract just the account name after the backslash
+        let name = qualified_name
+            .split('\\')
+            .next_back()
+            .unwrap_or(qualified_name)
+            .to_string();
 
-/// Try running via rpcclient (Samba)
-fn try_rpcclient(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
-    let mut cmd = Command::new("rpcclient");
+        // Parse the RID from the SID
+        let rid = sid_prefix
+            .rsplit('-')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
 
-    if config.null_session {
-        cmd.arg("-U").arg("").arg("-N");
-    } else if !config.username.is_empty() {
-        let user_spec = if config.domain.is_empty() {
-            config.username.clone()
-        } else {
-            format!("{}\\{}", config.domain, config.username)
-        };
-        cmd.arg("-U")
-            .arg(format!("{}%{}", user_spec, config.password));
-    } else {
-        cmd.arg("-U").arg("").arg("-N");
-    }
-
-    cmd.arg(&config.target);
-    cmd.arg("-c").arg(rpc_cmd);
-
-    debug!("rpcclient -c '{}' {}", rpc_cmd, config.target);
-
-    let output = cmd.output().map_err(|e| OverthroneError::Rpc {
-        target: config.target.clone(),
-        reason: format!("rpcclient exec failed: {e}"),
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(OverthroneError::Rpc {
-            target: config.target.clone(),
-            reason: format!("rpcclient error: {}", stderr.trim()),
+        return Some(RidResult {
+            rid,
+            name,
+            account_type,
+            sid: sid_prefix.to_string(),
         });
     }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// Windows fallback: use `net rpc` / PowerShell for basic RPC operations
-#[cfg(windows)]
-fn try_net_rpc(config: &RidCycleConfig, rpc_cmd: &str) -> Result<String> {
-    fn ps_single_quote_escape(s: &str) -> String {
-        s.replace('\'', "''")
-    }
-
-    fn run_powershell(config: &RidCycleConfig, script: &str, op: &str) -> Result<String> {
-        let mut cmd = Command::new("powershell");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-        let output = cmd.output().map_err(|e| OverthroneError::Rpc {
-            target: config.target.clone(),
-            reason: format!("PowerShell {op} failed to start: {e}"),
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(OverthroneError::Rpc {
-                target: config.target.clone(),
-                reason: format!("PowerShell {op} failed: {}", stderr.trim()),
-            });
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
-
-    let server_arg = format!("/S:{}", config.target);
-
-    if rpc_cmd == "lsaquery" {
-        // Prefer Samba net rpc if available in PATH.
-        let mut cmd = Command::new("net");
-        cmd.args(["rpc", "info", &server_arg]);
-        if !config.null_session && !config.username.is_empty() {
-            cmd.arg(format!("/U:{}\\{}", config.domain, config.username));
-            cmd.arg(format!("/P:{}", config.password));
-        }
-        if let Ok(output) = cmd.output()
-            && output.status.success()
-            && !output.stdout.is_empty()
-        {
-            return Ok(String::from_utf8_lossy(&output.stdout).to_string());
-        }
-
-        // Fall back to a native PowerShell/LDAP query for the domain SID.
-        let dc = ps_single_quote_escape(&config.target);
-        let domain = ps_single_quote_escape(&config.domain);
-        let user = ps_single_quote_escape(&config.username);
-        let pass = ps_single_quote_escape(&config.password);
-
-        let script = if !config.null_session && !config.username.is_empty() {
-            format!(
-                r#"try {{
-  $dc = '{dc}';
-  $dom = '{domain}';
-  $usr = '{user}';
-  $pwd = '{pass}';
-  $bindUser = if ([string]::IsNullOrWhiteSpace($dom)) {{ $usr }} else {{ "$dom\$usr" }};
-  $root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/RootDSE", $bindUser, $pwd);
-  $base = $root.Properties['defaultNamingContext'][0];
-  if (-not $base) {{ throw 'defaultNamingContext missing' }}
-  $de = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/$base", $bindUser, $pwd);
-  $sidBytes = $de.Properties['objectSid'][0];
-  if (-not $sidBytes) {{ throw 'objectSid missing' }}
-  $sid = New-Object System.Security.Principal.SecurityIdentifier($sidBytes, 0);
-  if ([string]::IsNullOrWhiteSpace($dom)) {{ $dom = ($base -replace ',DC=', '.' -replace '^DC=', '') }}
-  Write-Output "Domain Name: $dom";
-  Write-Output "Domain Sid: $($sid.Value)";
-}} catch {{
-  throw
-}}"#
-            )
-        } else {
-            format!(
-                r#"try {{
-  $dc = '{dc}';
-  $dom = '{domain}';
-  $root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/RootDSE");
-  $base = $root.Properties['defaultNamingContext'][0];
-  if (-not $base) {{ throw 'defaultNamingContext missing' }}
-  $de = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$dc/$base");
-  $sidBytes = $de.Properties['objectSid'][0];
-  if (-not $sidBytes) {{ throw 'objectSid missing' }}
-  $sid = New-Object System.Security.Principal.SecurityIdentifier($sidBytes, 0);
-  if ([string]::IsNullOrWhiteSpace($dom)) {{ $dom = ($base -replace ',DC=', '.' -replace '^DC=', '') }}
-  Write-Output "Domain Name: $dom";
-  Write-Output "Domain Sid: $($sid.Value)";
-}} catch {{
-  throw
-}}"#
-            )
-        };
-
-        return run_powershell(config, &script, "lsaquery");
-    }
-
-    if let Some(sid) = rpc_cmd.strip_prefix("lookupsids ") {
-        // Use PowerShell SID-to-name translation and format like rpcclient output
-        let sid_escaped = ps_single_quote_escape(sid);
-        let ps_script = format!(
-            "try {{ $s=[System.Security.Principal.SecurityIdentifier]::new('{}'); \
-             $n=$s.Translate([System.Security.Principal.NTAccount]).Value; \
-             Write-Output \"$s $n (1)\" }} catch {{ Write-Output '{} *unknown* (8)' }}",
-            sid_escaped, sid_escaped
-        );
-        return run_powershell(config, &ps_script, "lookupsids");
-    }
-
-    Err(OverthroneError::Rpc {
-        target: config.target.clone(),
-        reason: format!(
-            "Windows fallback supports only lsaquery/lookupsids; unsupported rpc command: {rpc_cmd}"
-        ),
-    })
+    None
 }
 
 // ═══════════════════════════════════════════════════════════

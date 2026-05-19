@@ -28,22 +28,31 @@ use {
 /// An SCCM collection (device or user).
 #[derive(Debug, Clone)]
 pub struct SccmCollection {
+    /// Stable unique identifier.
     pub collection_id: String,
+    /// Object or account name.
     pub name: String,
+    /// Item count
     pub member_count: u32,
+    /// Classification for this object.
     pub collection_type: CollectionType,
+    /// is built in field
     pub is_built_in: bool,
 }
 
 /// SCCM collection type: 1 = User, 2 = Device.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectionType {
+    /// `User` variant
     User,
+    /// `Device` variant
     Device,
+    /// `Unknown` variant
     Unknown(u32),
 }
 
 impl CollectionType {
+    /// Runs this module operation.
     pub fn from_u32(v: u32) -> Self {
         match v {
             1 => Self::User,
@@ -70,11 +79,17 @@ impl std::fmt::Display for CollectionType {
 /// An SCCM application / package.
 #[derive(Debug, Clone)]
 pub struct SccmApplication {
+    /// Stable unique identifier.
     pub app_id: String,
+    /// Stable unique identifier.
     pub local_id: u32,
+    /// Object or account name.
     pub name: String,
+    /// software version field
     pub software_version: String,
+    /// is deployed field
     pub is_deployed: bool,
+    /// Classification for this object.
     pub deployment_types: Vec<String>,
 }
 
@@ -85,13 +100,21 @@ pub struct SccmApplication {
 /// An SCCM-managed computer.
 #[derive(Debug, Clone)]
 pub struct SccmDevice {
+    /// Stable unique identifier.
     pub resource_id: u32,
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub dns_name: String,
+    /// Object or account name.
     pub os_name: String,
+    /// last logon user field
     pub last_logon_user: String,
+    /// client version field
     pub client_version: String,
+    /// client activity field
     pub client_activity: u32,
+    /// is active field
     pub is_active: bool,
 }
 
@@ -100,7 +123,6 @@ pub struct SccmDevice {
 // ─────────────────────────────────────────────────────────────
 
 /// Enumerate all SCCM collections from the site server.
-///
 /// On Windows: queries `SMS_Collection` via native WMI.
 /// On other platforms: returns a stub and logs the equivalent PowerShell.
 pub async fn enumerate_collections(site: &SccmSite) -> Result<Vec<SccmCollection>> {
@@ -364,7 +386,6 @@ async fn enumerate_devices_native(site: &SccmSite) -> Result<Vec<SccmDevice>> {
 // ─────────────────────────────────────────────────────────────
 // PowerShell command generators (non-Windows fallback)
 // ─────────────────────────────────────────────────────────────
-
 pub fn gen_enum_collections_cmd(site: &SccmSite) -> String {
     format!(
         r#"$sc = '{sc}'
@@ -378,7 +399,6 @@ Get-WmiObject -ComputerName $srv -Namespace "root\sms\site_$sc" `
         srv = site.site_server,
     )
 }
-
 pub fn gen_enum_applications_cmd(site: &SccmSite) -> String {
     format!(
         r#"$sc = '{sc}'
@@ -392,7 +412,6 @@ Get-WmiObject -ComputerName $srv -Namespace "root\sms\site_$sc" `
         srv = site.site_server,
     )
 }
-
 pub fn gen_enum_devices_cmd(site: &SccmSite) -> String {
     format!(
         r#"$sc = '{sc}'

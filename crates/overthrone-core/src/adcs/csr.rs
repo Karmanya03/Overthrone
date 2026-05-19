@@ -19,8 +19,11 @@ use yasna::models::ObjectIdentifier;
 
 /// RSA key pair for certificate requests
 pub struct RsaKeyPair {
+    /// Key data
     pub private_key: RsaPrivateKey,
+    /// Key data
     pub public_key: RsaPublicKey,
+    /// Key data
     pub key_size: usize,
 }
 
@@ -74,12 +77,19 @@ impl RsaKeyPair {
 /// CSR Subject (Distinguished Name)
 #[derive(Debug, Clone, Default)]
 pub struct CsrSubject {
+    /// Object or account name.
     pub common_name: Option<String>,
+    /// Item count
     pub country: Option<String>,
+    /// organization field
     pub organization: Option<String>,
+    /// organizational unit field
     pub organizational_unit: Option<String>,
+    /// locality field
     pub locality: Option<String>,
+    /// state field
     pub state: Option<String>,
+    /// email field
     pub email: Option<String>,
 }
 
@@ -111,6 +121,7 @@ pub enum SanEntry {
 /// Subject Alternative Name extension
 #[derive(Debug, Clone, Default)]
 pub struct SubjectAltName {
+    /// entries field
     pub entries: Vec<SanEntry>,
 }
 
@@ -147,6 +158,7 @@ impl SubjectAltName {
 /// Extended Key Usage extension
 #[derive(Debug, Clone)]
 pub struct ExtendedKeyUsage {
+    /// purposes field
     pub purposes: Vec<ObjectIdentifier>,
 }
 
@@ -175,10 +187,15 @@ impl ExtendedKeyUsage {
 
 /// PKCS#10 Certificate Signing Request
 pub struct CertificateSigningRequest {
+    /// subject field
     pub subject: CsrSubject,
+    /// Key data
     pub key_pair: RsaKeyPair,
+    /// san field
     pub san: Option<SubjectAltName>,
+    /// eku field
     pub eku: Option<ExtendedKeyUsage>,
+    /// template field
     pub template: Option<String>,
 }
 

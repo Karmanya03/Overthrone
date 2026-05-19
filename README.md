@@ -131,7 +131,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 
 | Crate | Codename | What It Does | The Implementation |
 |---|---|---|---|
-| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC13), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto has been battle-hardened with 66 passing tests. All 13 ADCS ESC vectors are implemented. 222 unit tests. Zero clippy warnings. The borrow checker needed therapy after this one. |
+| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto has been battle-hardened with 66 passing tests. All 16 ADCS ESC vectors are implemented. 222 unit tests. Zero clippy warnings. The borrow checker needed therapy after this one. |
 | `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
 | `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, **zero-knowledge username enumeration via Kerberos AS-REQ**, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
@@ -144,12 +144,12 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 
 ### The Crate Report Card
 
-These are real numbers from `cargo test --workspace --lib` on v0.1.46. No rounding up.
+These are real numbers from `cargo test --workspace --lib` on 0.2.0-beta. No rounding up.
 
 ```
-overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  298 unit tests. ESC1-ESC13. SOCKS5 proxy (RFC 1928). Mask attack
-                                                   cracker. Graph O(N²) fixed. Zero clippy warnings. The absolute unit
-                                                   keeps getting bigger and hasn't broken yet. Suspicious.
+overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  298+ unit tests. ESC1-ESC16. SOCKS5 proxy (RFC 1928). Mask attack
+                                                    cracker. Graph O(N²) fixed. Zero clippy warnings. The absolute unit
+                                                    keeps getting bigger and hasn't broken yet. Suspicious.
 
 overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  47 unit tests. DPAPI decrypts LAPS v2 now. Full reaper_test.rs
                                                    integration suite (587 lines). Missing: a handful of edge-case GPO
@@ -252,7 +252,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~97,100 lines of Rust (~102,700 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` currently exercises 444 library tests across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~97,100 lines of Rust (~102,700 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises over 450 library tests across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
@@ -317,7 +317,7 @@ The crate with zero stubs. The only crate that did all its homework. If overthro
 |---|---|---|
 | **Kerberoasting** | Request TGS tickets for SPN accounts, crack offline with embedded wordlist or hashcat. The DC hands you encrypted tickets and says "good luck cracking these" and hashcat says "lol." | ✅ Full |
 | **AS-REP Roasting** | Request AS-REP for accounts without pre-auth. Someone unchecked "Do not require Kerberos preauthentication." That single checkbox has caused more breaches than we can count. | ✅ Full |
-| **Kerberos User Enumeration** | Zero-knowledge username discovery via AS-REQ probes. No credentials needed - the KDC error code reveals whether each account exists (`KDC_ERR_C_PRINCIPAL_UNKNOWN` = not found, `KDC_ERR_PREAUTH_REQUIRED` = valid). Automatically captures AS-REP hashes for any no-preauth accounts found during enumeration. Bring your own wordlist (SecLists, etc). | ✅ Full |
+| **Kerberos User Enumeration** | Zero-knowledge username discovery via AS-REQ probes. No credentials needed - the KDC error code reveals whether each account exists (`KDC_ERR_C_PRINCIPAL_UNKNOWN` = not found, `KDC_ERR_PREAUTH_REQUIRED` = valid). Automatically captures AS-REP hashes for any no-preauth accounts found during enumeration. Supports `--userlist`, `--use-ldap`, and a built-in embedded fallback list when no file is available. | ✅ Full |
 | **Auth Coercion** | PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce - force machines to authenticate to you. The DC does this willingly. Microsoft considers this "working as intended." | ✅ Full (5 techniques) |
 | **RBCD Abuse** | Create machine account + modify msDS-AllowedToActOnBehalfOfOtherIdentity + S4U2Self/S4U2Proxy chain. The attack with the longest name and the shortest time-to-DA. | ✅ Full |
 | **Constrained Delegation** | S4U2Self + S4U2Proxy to impersonate users to specific services. Microsoft: "You can only impersonate to these services." Attackers: "What about these other services?" | ✅ Full |
@@ -368,7 +368,7 @@ ovt graph gui -i ./graphs/
 
 The graph and tree viewers are native Rust TUIs. They parse Overthrone graph exports, Overthrone BloodHound exports, and BloodHound collection files/directories. Use `ovt graph view` for a clean relationship canvas that shows compact labels on zoom/selection while keeping full names in the side panels, and `ovt graph tree` for a GUI BloodHound-style hierarchy that expands domains, object classes, objects, inbound relationships, outbound relationships, rich details, and high-value paths. Both viewers support search, high-value and owned filters, attack-edge lensing, mouse selection/scrolling, readable detail panes, `?` help, and `q` to quit.
 
-The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once. Like BloodHound, the canvas starts blank after selection: stats are indexed, then the operator searches source/destination nodes with realtime suggestions, filters object types, finds focused paths, or renders a chunk. Render budgets are `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, and `ALL`; `ALL` prompts before rendering because giant domains deserve a seatbelt. The renderer uses a deterministic left-to-right hierarchy instead of a circular force cluster, and node details live in their own right rail so collapsing graph controls does not hide the selected object context. Node and edge detail panels include human-readable ACE/ACL guidance for GenericAll, GenericWrite, WriteDacl, WriteOwner, delegation, DCSync, LAPS/gMSA reads, GPO control, shadow credentials, ADCS enrollment, attribute-specific WriteProperty edges, and similar abuse paths. A small demo fixture lives at `docs/bloodhound-hierarchy-demo.json`.
+The browser GUI runs a local Rust HTTP server, opens a tab automatically, and serves the graph UI from your machine. Directory inputs are indexed as separate selectable JSON graphs instead of being merged and rendered all at once. Like BloodHound, the canvas starts blank after selection: stats are indexed, then the operator searches source/destination nodes with realtime suggestions, filters object types, finds focused paths, or renders a chunk. Render budgets are `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, and `ALL`; `ALL` prompts before rendering because giant domains deserve a seatbelt. The renderer uses a deterministic left-to-right hierarchy instead of a circular force cluster, and node details live in their own right rail so collapsing graph controls does not hide the selected object context. Node and edge detail panels include human-readable ACE/ACL guidance for GenericAll, GenericWrite, WriteDacl, WriteOwner, delegation, DCSync, LAPS/gMSA reads, GPO control, shadow credentials, ADCS enrollment, attribute-specific WriteProperty edges, and similar abuse paths. The rendering engine has been migrated from D3.js to Three.js for GPU-accelerated WebGL performance at scale. A small demo fixture lives at `docs/bloodhound-hierarchy-demo.json`.
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
@@ -418,6 +418,9 @@ AD Certificate Services: where Microsoft said "let's add PKI to Active Directory
 | **ESC11** | NTLM relay to ICPR (`ICertPassage`) | ✅ Implemented | Includes assessment flow and optional live WINREG/SMB checks when CA host creds are supplied. |
 | **ESC12** | CA private key exfiltration | ✅ Implemented | Generates operator workflow for backup/exfil and offline abuse where shell-level CA access exists. |
 | **ESC13** | Issuance Policy OID to privileged group link | ✅ Implemented | Full exploit flow and PKINIT usage hints for privilege pivoting via linked group policy OIDs. |
+| **ESC14** | Strong certificate mapping bypass via SAN abuse | ✅ Implemented | Bypass strong mapping enforcement when the CA issues certificates with alternative security identifiers. |
+| **ESC15** | CA Exchange metadata poisoning | ✅ Implemented | Abuses CA Exchange certificate metadata fields for privilege escalation through improper template issuance constraints. |
+| **ESC16** | Partial CA certificate chain compromise | ✅ Implemented | Exploits cross-CA trust relationships and misconfigured subordinate CA chains to forge valid certificates from a partial signing key. |
 
 ### Remote Execution (overthrone-core)
 
@@ -575,21 +578,21 @@ Grab the latest from [**Releases**](https://github.com/Karmanya03/Overthrone/rel
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-linux-x86_64) | x86_64 (musl, static) |
-| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`overthrone-windows-x86_64.exe`](https://github.com/Karmanya03/Overthrone/releases/download/v0.2.0-beta/overthrone-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`overthrone-linux-x86_64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.2.0-beta/overthrone-linux-x86_64) | x86_64 (musl, static) |
+| **macOS** | [`overthrone-macos-aarch64`](https://github.com/Karmanya03/Overthrone/releases/download/v0.2.0-beta/overthrone-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick manual install:**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.2.0-beta/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.2.0-beta/overthrone-macos-aarch64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/
 
 # Kali (you're probably already here)
-curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.1.46/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
+curl -L https://github.com/Karmanya03/Overthrone/releases/download/v0.2.0-beta/overthrone-linux-x86_64 -o ovt && chmod +x ovt && sudo mv ovt /usr/local/bin/ && sudo apt install -y smbclient
 ```
 
 ### Build from source
@@ -643,7 +646,7 @@ brew install samba
 
 ## Wordlists
 
-Overthrone does **not** bundle large wordlists - bring your own. A small embedded fallback username list is included for Kerberos user-enum/AS-REP roasting when no list is supplied or the default list is missing. `--userlist` inputs and cracking `--wordlist` inputs accept any path on your system.
+Overthrone does **not** bundle large wordlists - bring your own. A small embedded fallback username list is included for Kerberos user-enum/AS-REP roasting when no list is supplied or the default list is missing. `--userlist` inputs and cracking `--wordlist` inputs accept any path on your system, and `--use-ldap` can pull candidate usernames from anonymous LDAP enumeration first.
 
 ### Recommended: SecLists
 
@@ -671,6 +674,8 @@ git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
 
 # AD service account patterns
 /usr/share/seclists/Usernames/Names/names.txt
+
+# No list? Kerberos user-enum and auto-pwn-preauth can fall back to a small embedded candidate set.
 ```
 
 ### Password Lists
@@ -696,7 +701,11 @@ git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
 ovt kerberos user-enum -H 192.168.57.11 -d north.sevenkingdoms.local \
   --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
   --output ./loot/valid_users.txt \
-  --delay 100
+  --delay 100 --concurrency 20
+
+# LDAP-backed discovery when you do not want to ship a list
+ovt kerberos user-enum -H 192.168.57.11 -d north.sevenkingdoms.local \
+  --use-ldap --concurrency 20
 
 # 2. AS-REP roast the valid list (any no-preauth accounts get auto-captured during step 1)
 ovt kerberos asrep-roast -H 192.168.57.11 -d north.sevenkingdoms.local \
@@ -710,7 +719,7 @@ while IFS= read -r pw; do
   ovt spray -H 192.168.57.11 -d north.sevenkingdoms.local \
     --userlist ./loot/valid_users.txt \
     --password "$pw" \
-    --delay 1000 --jitter 500
+    --delay 1000 --jitter 500 --concurrency 10
 done < /usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000.txt
 ```
 
@@ -752,9 +761,12 @@ ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
 
 # Dry run - plan the attack without pulling the trigger
 ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --dry-run
+
+# No-credential bootstrap with LDAP source selection and concurrency
+ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local --use-ldap --concurrency 20
 ```
 
-That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. The spray planner now respects lockout policy and skips users already near/at lockout instead of face-planting into `KDC_ERR_CLIENT_REVOKED`. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. In stealth mode it starts with low-volume LDAP baseline and delegation probes before heavier enumeration. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. Auto-pwn and Wizard also write a single phase-wise Markdown trail under `loot/trails/overthrone_<domain>_<dc>_runNNN.md`; repeated runs detect prior trails and never overwrite. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
+That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. Kerberos user-enum supports file-backed, LDAP-backed, and embedded-fallback source selection, and spray now runs with bounded concurrency while still honoring lockout policy. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. In stealth mode it starts with low-volume LDAP baseline and delegation probes before heavier enumeration. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. Auto-pwn and Wizard also write a single phase-wise Markdown trail under `loot/trails/overthrone_<domain>_<dc>_runNNN.md`; repeated runs detect prior trails and never overwrite. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
 
 ### Manual Mode
 
@@ -788,15 +800,14 @@ ovt graph gui -i ./bloodhound-json/                      # browser GUI; blank-fi
 
 # Step 3 (zero-knowledge): Enumerate valid usernames - no creds needed
 # Uses Kerberos error codes to determine if each username exists.
-# Bring your own wordlist - see the Wordlists section below.
+# Omit --userlist to use the embedded candidate set.
 ovt kerberos user-enum -H 10.10.10.1 -d corp.local \
-  --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
-  --output ./loot/valid_users.txt \
-  --delay 100
+  --output ./loot/valid_users.txt --concurrency 20
 
-# Also works with any other list
+# Also works with any other list and optional delay/jitter
 ovt kerberos user-enum -H 10.10.10.1 -d corp.local \
-  --userlist /usr/share/seclists/Usernames/Names/names.txt
+  --userlist /usr/share/seclists/Usernames/Names/names.txt \
+  --delay 100 --concurrency 10
 
 # Step 4: Kerberoast + AS-REP against discovered users
 ovt kerberos roast -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'

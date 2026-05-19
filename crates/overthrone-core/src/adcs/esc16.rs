@@ -115,7 +115,6 @@ pub struct Esc16Result {
 // ─────────────────────────────────────────────────────────
 
 /// Check whether a template is vulnerable to ESC16.
-///
 /// Requirements:
 /// - `CT_FLAG_NO_SECURITY_EXTENSION` (0x00080000) is set on the name flag.
 /// - Template allows Client Authentication or PKINIT EKU.
@@ -202,7 +201,6 @@ impl Esc16Exploiter {
     }
 
     /// Execute the ESC16 attack — guidance-only mode (does not modify LDAP).
-    ///
     /// Produces the cert request assuming the UPN has already been poisoned.
     pub async fn exploit(&self, config: &Esc16Config) -> Result<Esc16Result> {
         info!(

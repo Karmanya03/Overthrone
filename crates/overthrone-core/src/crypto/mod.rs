@@ -1,3 +1,5 @@
+//! Cryptographic utilities (Kerberos encryption, DPAPI, GPP, ticket operations).
+
 pub mod aes_cts;
 pub mod cracker;
 pub mod dpapi;

@@ -6,34 +6,52 @@
 use overthrone_reaper::mssql::MssqlInstance;
 use serde::{Deserialize, Serialize};
 use tracing::info;
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlLink {
+    /// source server field
     pub source_server: String,
+    /// Source domain FQDN
     pub source_domain: String,
+    /// target server field
     pub target_server: String,
+    /// Target domain FQDN
     pub target_domain: Option<String>,
+    /// link login field
     pub link_login: LinkLoginType,
+    /// rpc out enabled field
     pub rpc_out_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LinkLoginType {
+    /// `CurrentContext` variant
     CurrentContext,
+    /// `MappedLogin` variant
     MappedLogin(String),
+    /// `SysAdmin` variant
     SysAdmin(String),
+    /// `Unknown` variant
     Unknown,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MssqlLinkChain {
+    /// links field
     pub links: Vec<MssqlLink>,
+    /// start server field
     pub start_server: String,
+    /// end server field
     pub end_server: String,
+    /// Item count
     pub service_account: String,
+    /// Domain FQDN
     pub crosses_domain: bool,
+    /// depth field
     pub depth: usize,
+    /// risk level field
     pub risk_level: String,
+    /// description field
     pub description: String,
 }
 
@@ -57,7 +75,6 @@ impl MssqlLinkChain {
 }
 
 /// Build potential MSSQL link chains from reaper instance data.
-///
 /// Since we can't connect to SQL servers directly, we analyze SPNs
 /// to identify cross-domain MSSQL instances and group them by
 /// service account (same account = potential link chain).
@@ -208,5 +225,129 @@ fn domain_from_hostname(hostname: &str) -> Option<String> {
         Some(parts[1].to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mssql_link_is_high_value() {
+        let chain = MssqlLinkChain {
+            links: vec![],
+            start_server: "s1".into(),
+            end_server: "s2".into(),
+            service_account: "svc".into(),
+            crosses_domain: true,
+            depth: 1,
+            risk_level: "HIGH".into(),
+            description: "".into(),
+        };
+        assert!(chain.is_high_value());
+    }
+
+    #[test]
+    fn test_mssql_link_not_high_value() {
+        let chain = MssqlLinkChain {
+            links: vec![],
+            start_server: "s1".into(),
+            end_server: "s2".into(),
+            service_account: "svc".into(),
+            crosses_domain: false,
+            depth: 1,
+            risk_level: "MEDIUM".into(),
+            description: "".into(),
+        };
+        assert!(!chain.is_high_value());
+    }
+
+    #[test]
+    fn test_to_openquery_single_hop() {
+        let chain = MssqlLinkChain {
+            links: vec![MssqlLink {
+                source_server: "SRC".into(),
+                source_domain: "D1".into(),
+                target_server: "DST".into(),
+                target_domain: Some("D2".into()),
+                link_login: LinkLoginType::Unknown,
+                rpc_out_enabled: false,
+            }],
+            start_server: "SRC".into(),
+            end_server: "DST".into(),
+            service_account: "sa".into(),
+            crosses_domain: true,
+            depth: 1,
+            risk_level: "MEDIUM".into(),
+            description: "".into(),
+        };
+        let q = chain.to_openquery("SELECT 1");
+        assert_eq!(q, "SELECT * FROM OPENQUERY([DST], 'SELECT 1')");
+    }
+
+    #[test]
+    fn test_to_openquery_nested() {
+        let chain = MssqlLinkChain {
+            links: vec![
+                MssqlLink {
+                    source_server: "A".into(),
+                    source_domain: "D1".into(),
+                    target_server: "B".into(),
+                    target_domain: Some("D2".into()),
+                    link_login: LinkLoginType::Unknown,
+                    rpc_out_enabled: false,
+                },
+                MssqlLink {
+                    source_server: "B".into(),
+                    source_domain: "D2".into(),
+                    target_server: "C".into(),
+                    target_domain: Some("D3".into()),
+                    link_login: LinkLoginType::Unknown,
+                    rpc_out_enabled: false,
+                },
+            ],
+            start_server: "A".into(),
+            end_server: "C".into(),
+            service_account: "sa".into(),
+            crosses_domain: true,
+            depth: 2,
+            risk_level: "HIGH".into(),
+            description: "".into(),
+        };
+        let q = chain.to_openquery("SELECT name FROM sys.databases");
+        assert!(q.contains("OPENQUERY([C]"));
+        assert!(q.contains("OPENQUERY([B]"));
+    }
+
+    #[test]
+    fn test_domain_from_hostname_fqdn() {
+        assert_eq!(
+            domain_from_hostname("sql01.corp.local"),
+            Some("corp.local".into())
+        );
+    }
+
+    #[test]
+    fn test_domain_from_hostname_short() {
+        assert_eq!(domain_from_hostname("sql01"), None);
+    }
+
+    #[test]
+    fn test_domain_from_hostname_multi_label() {
+        assert_eq!(
+            domain_from_hostname("dc01.child.corp.local"),
+            Some("child.corp.local".into())
+        );
+    }
+
+    #[test]
+    fn test_domain_from_hostname_empty() {
+        assert_eq!(domain_from_hostname(""), None);
+    }
+
+    #[test]
+    fn test_build_mssql_chains_empty() {
+        let chains = build_mssql_chains("CORP", &[]);
+        assert!(chains.is_empty());
     }
 }

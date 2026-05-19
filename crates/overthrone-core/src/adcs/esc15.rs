@@ -95,7 +95,6 @@ pub struct Esc15Result {
 // ─────────────────────────────────────────────────────────
 
 /// Check whether a given template is a Schema V1 template vulnerable to ESC15.
-///
 /// Returns `true` when:
 /// - `schema_version == 1`
 /// - Manager approval is not required

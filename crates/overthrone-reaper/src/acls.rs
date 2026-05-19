@@ -1,81 +1,129 @@
-//! Dangerous ACL enumeration — GenericAll, WriteDACL, WriteOwner, AllExtendedRights, etc.
+//! Dangerous ACL enumeration â€” GenericAll, WriteDACL, WriteOwner, AllExtendedRights, etc.
 //!
 //! Bugs fixed vs. original:
-//!  • SDDL abbreviation table corrected ("DC" was mapped to WP; "SW" had wrong mask; "CR" was missing; "WP" was missing)
-//!  • LAPS GUID check used `contains()` — changed to exact `==`
-//!  • `"domainDNS"` used as a GUID key in `attribute_guid_info` — removed (not a GUID)
-//!  • `AllExtendedRights` (empty object-GUID + CR mask) was silently dropped — now emitted
-//!  • `ADS_RIGHT_DS_CREATE_CHILD` detected but never surfaced in parse_sddl_ace — now handled
-//!  • `AddSelf` / `WriteSelf` (SW flag) was not handled — now handled
-//!  • Missing `DangerousRight` variants added: `AllExtendedRights`, `CreateChild`, `WriteSelf`
-//!  • Windows LAPS (ms-LAPS 2023) GUIDs added
-//!  • ADCS (userCertificate, msPKI-*) GUIDs added
-//!  • Built-in SID filter extended with well-known S-1-5-* prefixes
-//!  • `ReadLapsPassword` detection generalised to cover legacy + Windows LAPS
-//!  • `trustee` is now also looked up against SID → name if it looks like a SID string
+//!  â€¢ SDDL abbreviation table corrected ("DC" was mapped to WP; "SW" had wrong mask; "CR" was missing; "WP" was missing)
+//!  â€¢ LAPS GUID check used `contains()` â€” changed to exact `==`
+//!  â€¢ `"domainDNS"` used as a GUID key in `attribute_guid_info` â€” removed (not a GUID)
+//!  â€¢ `AllExtendedRights` (empty object-GUID + CR mask) was silently dropped â€” now emitted
+//!  â€¢ `ADS_RIGHT_DS_CREATE_CHILD` detected but never surfaced in parse_sddl_ace â€” now handled
+//!  â€¢ `AddSelf` / `WriteSelf` (SW flag) was not handled â€” now handled
+//!  â€¢ Missing `DangerousRight` variants added: `AllExtendedRights`, `CreateChild`, `WriteSelf`
+//!  â€¢ Windows LAPS (ms-LAPS 2023) GUIDs added
+//!  â€¢ ADCS (userCertificate, msPKI-*) GUIDs added
+//!  â€¢ Built-in SID filter extended with well-known S-1-5-* prefixes
+//!  â€¢ `ReadLapsPassword` detection generalised to cover legacy + Windows LAPS
+//!  â€¢ `trustee` is now also looked up against SID â†’ name if it looks like a SID string
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ─── Dangerous right taxonomy ─────────────────────────────────────────────────
+// â”€â”€â”€ Dangerous right taxonomy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum DangerousRight {
-    // ── Broad access mask bits ────────────────────────────────────────────────
+    // â”€â”€ Broad access mask bits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// `GenericAll` variant
     GenericAll,
+    /// `GenericWrite` variant
     GenericWrite,
+    /// `WriteDacl` variant
     WriteDacl,
+    /// `WriteOwner` variant
     WriteOwner,
+    /// `Owns` variant
     Owns,
+    /// `AllExtendedRights` variant
     AllExtendedRights,
+    /// `CreateChild` variant
     CreateChild,
+    /// `WriteSelf` variant
     WriteSelf,
 
-    // ── Extended rights ───────────────────────────────────────────────────────
+    // â”€â”€ Extended rights â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// `ForceChangePassword` variant
     ForceChangePassword,
+    /// `DcSync` variant
     DcSync,
+    /// `ReadLapsPassword` variant
     ReadLapsPassword,
+    /// `ReadLapsPasswordExpiry` variant
     ReadLapsPasswordExpiry,
+    /// `ReadGmsaPassword` variant
     ReadGmsaPassword,
 
-    // ── AddMembers / self-membership ──────────────────────────────────────────
+    // â”€â”€ AddMembers / self-membership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// `AddMembers` variant
     AddMembers,
+    /// `AddSelf` variant
     AddSelf,
 
-    // ── Attribute-level WriteProperty edges ───────────────────────────────────
+    // â”€â”€ Attribute-level WriteProperty edges â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// `WriteSPN` variant
     WriteSPN,
+    /// `WriteAllowedToDelegateTo` variant
     WriteAllowedToDelegateTo,
+    /// `AddAllowedToAct` variant
     AddAllowedToAct,
+    /// `WriteAccountRestrictions` variant
     WriteAccountRestrictions,
+    /// `WriteLogonScript` variant
     WriteLogonScript,
+    /// `WriteProfilePath` variant
     WriteProfilePath,
+    /// `WriteScriptPath` variant
     WriteScriptPath,
+    /// `WriteDnsHostName` variant
     WriteDnsHostName,
+    /// `WriteServicePrincipalName` variant
     WriteServicePrincipalName,
+    /// `WriteKeyCredentialLink` variant
     WriteKeyCredentialLink,
+    /// `WriteMsDsKeyCredentialLink` variant
     WriteMsDsKeyCredentialLink,
+    /// `WriteAltSecurityIdentities` variant
     WriteAltSecurityIdentities,
+    /// `WriteUserParameters` variant
     WriteUserParameters,
+    /// `WritePwdProperties` variant
     WritePwdProperties,
+    /// `WriteLockoutThreshold` variant
     WriteLockoutThreshold,
+    /// `WriteMinPwdLength` variant
     WriteMinPwdLength,
+    /// `WritePwdHistoryLength` variant
     WritePwdHistoryLength,
+    /// `WritePwdComplexity` variant
     WritePwdComplexity,
+    /// `WritePwdReversibleEncryption` variant
     WritePwdReversibleEncryption,
+    /// `WritePwdAge` variant
     WritePwdAge,
+    /// `WriteLockoutDuration` variant
     WriteLockoutDuration,
+    /// `WriteLockoutObservationWindow` variant
     WriteLockoutObservationWindow,
+    /// `WriteGPLink` variant
     WriteGPLink,
+    /// `AddKeyCredentialLink` variant
     AddKeyCredentialLink,
 
-    // ── ADCS / certificate abuse ──────────────────────────────────────────────
+    // â”€â”€ ADCS / certificate abuse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// `WriteUserCertificate` variant
     WriteUserCertificate,
+    /// `EnrollCertificate` variant
     EnrollCertificate,
 
-    // ── Generic catch-all ─────────────────────────────────────────────────────
-    WriteProperty { attribute: String, guid: String },
+    // â”€â”€ Generic catch-all â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// `WriteProperty` variant
+    WriteProperty {
+        /// AD attribute to write
+        attribute: String,
+        /// GUID of the property set
+        guid: String,
+    },
+    /// `Custom` variant
     Custom(String),
 }
 
@@ -106,53 +154,57 @@ impl DangerousRight {
     pub fn abuse_info(&self) -> &'static str {
         match self {
             Self::GenericAll => {
-                "Full control — can reset password, modify group membership, write DACL, take ownership"
+                "Full control â€” can reset password, modify group membership, write DACL, take ownership"
             }
             Self::GenericWrite => {
-                "Write arbitrary non-protected attributes — often leads to Kerberoast or Shadow Creds"
+                "Write arbitrary non-protected attributes â€” often leads to Kerberoast or Shadow Creds"
             }
-            Self::WriteDacl => "Modify DACL → grant yourself GenericAll",
-            Self::WriteOwner => "Take ownership → modify DACL → GenericAll",
-            Self::Owns => "Already owner → modify DACL → GenericAll",
+            Self::WriteDacl => "Modify DACL â†’ grant yourself GenericAll",
+            Self::WriteOwner => "Take ownership â†’ modify DACL â†’ GenericAll",
+            Self::Owns => "Already owner â†’ modify DACL â†’ GenericAll",
             Self::AllExtendedRights => {
                 "All extended rights: ForceChangePassword, DCSync, LAPS read, etc."
             }
             Self::CreateChild => {
-                "Create child objects in container/OU — leads to GPO / computer account abuse"
+                "Create child objects in container/OU â€” leads to GPO / computer account abuse"
             }
-            Self::WriteSelf => "Self-write validated permission — can add yourself as member",
+            Self::WriteSelf => "Self-write validated permission â€” can add yourself as member",
             Self::ForceChangePassword => "Reset target password without knowing current password",
-            Self::DcSync => "Replicate directory secrets (DCSync) → dump all NTLM hashes",
+            Self::DcSync => "Replicate directory secrets (DCSync) â†’ dump all NTLM hashes",
             Self::ReadLapsPassword => "Read legacy LAPS local admin password (ms-Mcs-AdmPwd)",
             Self::ReadLapsPasswordExpiry => {
-                "Read Windows LAPS encrypted password — decrypt with DPAPI to get cleartext"
+                "Read Windows LAPS encrypted password â€” decrypt with DPAPI to get cleartext"
             }
             Self::ReadGmsaPassword => {
-                "Read gMSA password blob — lateral movement as managed service account"
+                "Read gMSA password blob â€” lateral movement as managed service account"
             }
             Self::AddMembers => "Add arbitrary principals to the group",
             Self::AddSelf => "Add your own account to the group (self-write validated right)",
-            Self::WriteSPN => "Set arbitrary SPN → Kerberoast target account offline",
+            Self::WriteSPN => "Set arbitrary SPN â†’ Kerberoast target account offline",
             Self::WriteAllowedToDelegateTo => {
-                "Write constrained delegation SPN → S4U2Self / S4U2Proxy TGT"
+                "Write constrained delegation SPN â†’ S4U2Self / S4U2Proxy TGT"
             }
             Self::AddAllowedToAct => {
-                "Write msDS-AllowedToActOnBehalfOfOtherIdentity → RBCD → impersonate any user to target"
+                "Write msDS-AllowedToActOnBehalfOfOtherIdentity â†’ RBCD â†’ impersonate any user to target"
             }
             Self::WriteAccountRestrictions => {
-                "Flip DONT_REQ_PREAUTH → AS-REP roast; or enable/disable/unlock account"
+                "Flip DONT_REQ_PREAUTH â†’ AS-REP roast; or enable/disable/unlock account"
             }
-            Self::WriteLogonScript => "Plant logon script → exec on next user logon",
-            Self::WriteProfilePath => "Redirect profile to UNC → NTLM relay or RCE",
-            Self::WriteScriptPath => "Write scriptPath → exec on next logon",
-            Self::WriteDnsHostName => "Change dNSHostName → PKINIT auth confusion / silver ticket",
-            Self::WriteServicePrincipalName => "Arbitrary SPN write — same as WriteSPN",
+            Self::WriteLogonScript => "Plant logon script â†’ exec on next user logon",
+            Self::WriteProfilePath => "Redirect profile to UNC â†’ NTLM relay or RCE",
+            Self::WriteScriptPath => "Write scriptPath â†’ exec on next logon",
+            Self::WriteDnsHostName => {
+                "Change dNSHostName â†’ PKINIT auth confusion / silver ticket"
+            }
+            Self::WriteServicePrincipalName => "Arbitrary SPN write â€” same as WriteSPN",
             Self::WriteKeyCredentialLink
             | Self::WriteMsDsKeyCredentialLink
             | Self::AddKeyCredentialLink => {
-                "Shadow Credentials (Whisker/PyWhisker) → PKINIT → TGT without password"
+                "Shadow Credentials (Whisker/PyWhisker) â†’ PKINIT â†’ TGT without password"
             }
-            Self::WriteAltSecurityIdentities => "Map external cert identity → SAML / PKINIT bypass",
+            Self::WriteAltSecurityIdentities => {
+                "Map external cert identity â†’ SAML / PKINIT bypass"
+            }
             Self::WriteUserParameters => "RDP desktop shadowing or COM object hijack",
             Self::WritePwdProperties
             | Self::WritePwdComplexity
@@ -164,28 +216,37 @@ impl DangerousRight {
             | Self::WriteLockoutDuration
             | Self::WriteLockoutObservationWindow => "Disable or weaken account lockout policy",
             Self::WriteGPLink => {
-                "Link malicious GPO to OU → immediate RCE on next Group Policy refresh"
+                "Link malicious GPO to OU â†’ immediate RCE on next Group Policy refresh"
             }
             Self::WriteUserCertificate => {
-                "Write userCertificate → ADCS ESC abuse / certificate-based auth"
+                "Write userCertificate â†’ ADCS ESC abuse / certificate-based auth"
             }
-            Self::EnrollCertificate => "Enroll in certificate template → ADCS privilege escalation",
-            Self::WriteProperty { .. } => "Write non-standard property — review GUID for impact",
-            Self::Custom(_) => "Custom/delegation right — review carefully",
+            Self::EnrollCertificate => {
+                "Enroll in certificate template â†’ ADCS privilege escalation"
+            }
+            Self::WriteProperty { .. } => "Write non-standard property â€” review GUID for impact",
+            Self::Custom(_) => "Custom/delegation right â€” review carefully",
         }
     }
 }
 
-// ─── Finding struct ───────────────────────────────────────────────────────────
-
+// â”€â”€â”€ Finding struct â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AclFinding {
+    /// principal field
     pub principal: String,
+    /// Security Identifier
     pub principal_sid: Option<String>,
+    /// Target domain FQDN
     pub target: String,
+    /// target dn field
     pub target_dn: String,
+    /// right field
     pub right: DangerousRight,
+    /// is inherited field
     pub is_inherited: bool,
+    /// severity field
     pub severity: u8,
 }
 
@@ -211,7 +272,7 @@ impl AclFinding {
     }
 }
 
-// ─── ACE bitmask constants ────────────────────────────────────────────────────
+// â”€â”€â”€ ACE bitmask constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const GENERIC_ALL: u32 = 0x1000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
@@ -219,29 +280,29 @@ const WRITE_DACL: u32 = 0x0004_0000;
 const WRITE_OWNER: u32 = 0x0008_0000;
 /// ADS_RIGHT_DS_CREATE_CHILD
 const ADS_RIGHT_DS_CREATE_CHILD: u32 = 0x0000_0001;
-/// ADS_RIGHT_DS_SELF — validated writes (self-write)
+/// ADS_RIGHT_DS_SELF â€” validated writes (self-write)
 const ADS_RIGHT_DS_SELF: u32 = 0x0000_0008;
 /// ADS_RIGHT_DS_WRITE_PROP
 const ADS_RIGHT_DS_WRITE_PROP: u32 = 0x0000_0020;
-/// ADS_RIGHT_DS_CONTROL_ACCESS — extended rights
+/// ADS_RIGHT_DS_CONTROL_ACCESS â€” extended rights
 const ADS_RIGHT_DS_CONTROL_ACCESS: u32 = 0x0000_0100;
 /// READ_CONTROL
 const READ_CONTROL: u32 = 0x0002_0000;
 
-// ─── Well-known extended-right GUIDs ─────────────────────────────────────────
+// â”€â”€â”€ Well-known extended-right GUIDs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const GUID_USER_FORCE_CHANGE_PASSWORD: &str = "00299570-246d-11d0-a768-00aa006e0529";
 const GUID_REPLICATING_DIRECTORY_CHANGES: &str = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_REPLICATING_DIRECTORY_CHANGES_ALL: &str = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_REPLICATING_DIRECTORY_CHANGES_IN_FILTERED_SET: &str =
     "89e95b76-444d-4c62-991a-0facbeda640c";
-/// Member attribute (bf9679c0) — AddMembers via WriteProperty
+/// Member attribute (bf9679c0) â€” AddMembers via WriteProperty
 const GUID_MEMBER: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
-/// Legacy LAPS — ms-Mcs-AdmPwd read extended right
+/// Legacy LAPS â€” ms-Mcs-AdmPwd read extended right
 const GUID_MS_MCS_ADMPWD: &str = "faa13209-962c-4e55-8cfe-1b99ae3f1169";
-/// Windows LAPS 2023 — ms-LAPS-Password read extended right
+/// Windows LAPS 2023 â€” ms-LAPS-Password read extended right
 const GUID_MS_LAPS_PASSWORD: &str = "a5b3b0f3-49d3-4c69-8de1-e6d42ec35bfa";
-/// Windows LAPS 2023 — ms-LAPS-EncryptedPassword expiry
+/// Windows LAPS 2023 â€” ms-LAPS-EncryptedPassword expiry
 const GUID_MS_LAPS_ENC_PASSWORD_EXPIRY: &str = "be2bb7b5-5e42-4f5c-b14f-cf7b2afa5b9d";
 /// Self-membership validated write (add self to group)
 const GUID_SELF_MEMBERSHIP: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
@@ -250,116 +311,115 @@ const GUID_CERTIFICATE_ENROLLMENT: &str = "0e10c968-78fb-11d2-90d4-00c04f79dc55"
 /// Certificate auto-enrolment
 const GUID_CERTIFICATE_AUTO_ENROLLMENT: &str = "a05b8cc2-17bc-4802-a710-e7c15ab866a2";
 
-// ─── Attribute GUID registry ──────────────────────────────────────────────────
+// â”€â”€â”€ Attribute GUID registry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Maps well-known attribute schema GUIDs to
 /// `(attribute_ldap_name, edge_label, severity_cost, is_traversable_in_path, abuse_notes)`.
-///
 /// **All keys are lowercase GUIDs.**
 fn attribute_guid_info(guid: &str) -> Option<(&'static str, &'static str, u8, bool, &'static str)> {
     match guid.to_lowercase().as_str() {
-        // ── SPN / Kerberoasting ───────────────────────────────────────────────
+        // â”€â”€ SPN / Kerberoasting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "f3a64788-5306-11d1-a9c5-0000f80367c1" => Some((
             "servicePrincipalName",
             "WriteSPN",
             2,
             true,
-            "Write SPN → targeted Kerberoast (crack TGS offline)",
+            "Write SPN â†’ targeted Kerberoast (crack TGS offline)",
         )),
-        // ── Shadow Credentials / Whisker ──────────────────────────────────────
+        // â”€â”€ Shadow Credentials / Whisker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "5b84175e-4d8d-4f50-9c68-0e1565f643c7" => Some((
             "msDS-KeyCredentialLink",
             "AddKeyCredentialLink",
             2,
             true,
-            "Add keyCredentialLink → Shadow Credentials (PKINIT) → getTGT without password",
+            "Add keyCredentialLink â†’ Shadow Credentials (PKINIT) â†’ getTGT without password",
         )),
-        // ── RBCD ──────────────────────────────────────────────────────────────
+        // â”€â”€ RBCD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf967a8a-0de6-11d0-a285-00aa003049e2" => Some((
             "msDS-AllowedToActOnBehalfOfOtherIdentity",
             "AddAllowedToAct",
             1,
             true,
-            "Write RBCD attribute → RBCD attack → impersonate any user to target",
+            "Write RBCD attribute â†’ RBCD attack â†’ impersonate any user to target",
         )),
         "bf967a9c-0de6-11d0-a285-00aa003049e2" => Some((
             "msDS-AllowedToDelegateTo",
             "WriteAllowedToDelegateTo",
             1,
             true,
-            "Write constrained delegation SPN → abuse S4U2Self → getTGT",
+            "Write constrained delegation SPN â†’ abuse S4U2Self â†’ getTGT",
         )),
-        // ── Account restrictions / UAC ────────────────────────────────────────
+        // â”€â”€ Account restrictions / UAC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf9679ac-0de6-11d0-a285-00aa003049e2" => Some((
             "userAccountControl",
             "WriteAccountRestrictions",
             1,
             true,
-            "Flip DONT_REQ_PREAUTH → AS-REP roast; enable/disable/unlock account",
+            "Flip DONT_REQ_PREAUTH â†’ AS-REP roast; enable/disable/unlock account",
         )),
-        // ── Logon script / profile path ───────────────────────────────────────
+        // â”€â”€ Logon script / profile path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf967a0c-0de6-11d0-a285-00aa003049e2" => Some((
             "scriptPath",
             "WriteScriptPath",
             3,
             true,
-            "Write scriptPath → command execution on next user logon",
+            "Write scriptPath â†’ command execution on next user logon",
         )),
         "bf967a0e-0de6-11d0-a285-00aa003049e2" => Some((
             "profilePath",
             "WriteProfilePath",
             3,
             true,
-            "Write profilePath → UNC redirect / NTLM relay / command execution",
+            "Write profilePath â†’ UNC redirect / NTLM relay / command execution",
         )),
-        // ── GPO / OU link ─────────────────────────────────────────────────────
+        // â”€â”€ GPO / OU link â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "f30e3bbf-9ff0-11d1-b603-0000f80367c1" => Some((
             "gPLink",
             "WriteGPLink",
             2,
             true,
-            "Write gPLink → link malicious GPO → immediate exec on GP refresh",
+            "Write gPLink â†’ link malicious GPO â†’ immediate exec on GP refresh",
         )),
         "f30e3bc1-9ff0-11d1-b603-0000f80367c1" => Some((
             "gPCFileSysPath",
             "WriteGPLink",
             2,
             true,
-            "Write GPO fileSysPath → plant malicious scripts / scheduled tasks",
+            "Write GPO fileSysPath â†’ plant malicious scripts / scheduled tasks",
         )),
-        // ── DNS hostname ──────────────────────────────────────────────────────
+        // â”€â”€ DNS hostname â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "72e39547-7b18-11d1-adef-00c04fd8d5cd" => Some((
             "dNSHostName",
             "WriteDnsHostName",
             2,
             true,
-            "Write dNSHostName → Kerberos PKINIT auth bypass / silver ticket abuse",
+            "Write dNSHostName â†’ Kerberos PKINIT auth bypass / silver ticket abuse",
         )),
-        // ── userParameters (RDP / COM) ────────────────────────────────────────
+        // â”€â”€ userParameters (RDP / COM) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf967a6d-0de6-11d0-a285-00aa003049e2" => Some((
             "userParameters",
             "WriteUserParameters",
             2,
             true,
-            "Write userParameters → RDP desktop shadowing / COM hijack",
+            "Write userParameters â†’ RDP desktop shadowing / COM hijack",
         )),
-        // ── altSecurityIdentities (cert mapping) ──────────────────────────────
+        // â”€â”€ altSecurityIdentities (cert mapping) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf967a05-0de6-11d0-a285-00aa003049e2" => Some((
             "altSecurityIdentities",
             "WriteAltSecurityIdentities",
             1,
             true,
-            "Write altSecurityIdentities → SAML / cert-based auth bypass / PKINIT",
+            "Write altSecurityIdentities â†’ SAML / cert-based auth bypass / PKINIT",
         )),
-        // ── msDS-GroupMSAMembership (gMSA read) ───────────────────────────────
+        // â”€â”€ msDS-GroupMSAMembership (gMSA read) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "7b8b558a-93a5-4af7-adca-c017e67f1057" => Some((
             "msDS-GroupMSAMembership",
             "ReadGmsaPassword",
             2,
             true,
-            "Read gMSA password blob → lateral movement as managed service account",
+            "Read gMSA password blob â†’ lateral movement as managed service account",
         )),
-        // ── Legacy LAPS attribute (ms-Mcs-AdmPwd) ────────────────────────────
+        // â”€â”€ Legacy LAPS attribute (ms-Mcs-AdmPwd) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "8d3bca50-1d7e-11d0-a081-00aa006c33ed" => Some((
             "ms-Mcs-AdmPwd",
             "ReadLapsPassword",
@@ -367,7 +427,7 @@ fn attribute_guid_info(guid: &str) -> Option<(&'static str, &'static str, u8, bo
             true,
             "Read cleartext LAPS local admin password",
         )),
-        // ── Windows LAPS 2023 (ms-LAPS-Password) ─────────────────────────────
+        // â”€â”€ Windows LAPS 2023 (ms-LAPS-Password) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "e362ed86-b728-0842-b27d-2dea7a9df218" => Some((
             "ms-LAPS-Password",
             "ReadLapsPassword",
@@ -382,50 +442,50 @@ fn attribute_guid_info(guid: &str) -> Option<(&'static str, &'static str, u8, bo
             true,
             "Read Windows LAPS encrypted local admin password",
         )),
-        // ── ADCS / userCertificate ────────────────────────────────────────────
+        // â”€â”€ ADCS / userCertificate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf967a7f-0de6-11d0-a285-00aa003049e2" => Some((
             "userCertificate",
             "WriteUserCertificate",
             2,
             true,
-            "Write userCertificate → ADCS certificate-based auth / ESC abuse",
+            "Write userCertificate â†’ ADCS certificate-based auth / ESC abuse",
         )),
-        // ── pwdLastSet (forced password change) ───────────────────────────────
+        // â”€â”€ pwdLastSet (forced password change) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf9679a8-0de6-11d0-a285-00aa003049e2" => Some((
             "pwdLastSet",
             "WriteAccountRestrictions",
             2,
             true,
-            "Write pwdLastSet → force password expiry / bypass MaxPwdAge",
+            "Write pwdLastSet â†’ force password expiry / bypass MaxPwdAge",
         )),
-        // ── logonHours ────────────────────────────────────────────────────────
+        // â”€â”€ logonHours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "bf9679ab-0de6-11d0-a285-00aa003049e2" => Some((
             "logonHours",
             "WriteAccountRestrictions",
             3,
             false,
-            "Write logonHours → lock account out of time window",
+            "Write logonHours â†’ lock account out of time window",
         )),
-        // ── Advanced ADCS GUIDs ──────────────────────────────────────────────
+        // â”€â”€ Advanced ADCS GUIDs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         "0e10c968-78fb-11d2-90d4-00c04f79dc55" => Some((
             "msPKI-Cert-Template-OID",
             "EnrollCertificate",
             2,
             true,
-            "Enroll in certificate template → ADCS privilege escalation",
+            "Enroll in certificate template â†’ ADCS privilege escalation",
         )),
         "bf967a8b-0de6-11d0-a285-00aa003049e2" => Some((
             "msPKI-Certificate-Name-Flag",
             "WriteProperty",
             2,
             true,
-            "Modify certificate name flag → ESC1/ESC9 abuse",
+            "Modify certificate name flag â†’ ESC1/ESC9 abuse",
         )),
         _ => None,
     }
 }
 
-// ─── Main enumeration entry point ─────────────────────────────────────────────
+// â”€â”€â”€ Main enumeration entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFinding>> {
     info!(
@@ -436,7 +496,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
     let mut conn = crate::runner::ldap_connect(config).await?;
     let mut findings: Vec<AclFinding> = Vec::new();
 
-    // ── 1. nTSecurityDescriptor on high-value objects ─────────────────────────
+    // â”€â”€ 1. nTSecurityDescriptor on high-value objects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let hv_filters = [
         // High-value admin groups
         "(&(objectCategory=group)(|(sAMAccountName=Domain Admins)(sAMAccountName=Enterprise Admins)(sAMAccountName=Schema Admins)(sAMAccountName=Administrators)(sAMAccountName=Account Operators)(sAMAccountName=Backup Operators)(sAMAccountName=Print Operators)(sAMAccountName=Server Operators)(sAMAccountName=Group Policy Creator Owners)(sAMAccountName=DnsAdmins)(sAMAccountName=Protected Users)))",
@@ -486,7 +546,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         }
     }
 
-    // ── 2. RBCD — msDS-AllowedToActOnBehalfOfOtherIdentity ────────────────────
+    // â”€â”€ 2. RBCD â€” msDS-AllowedToActOnBehalfOfOtherIdentity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     match conn
         .custom_search(
             "(&(objectCategory=computer)(msDS-AllowedToActOnBehalfOfOtherIdentity=*))",
@@ -509,7 +569,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
                     .unwrap_or_else(|| target_dn.clone());
 
                 findings.push(AclFinding::new(
-                    "(encoded in msDS-AllowedToActOnBehalfOfOtherIdentity — parse SD blob)",
+                    "(encoded in msDS-AllowedToActOnBehalfOfOtherIdentity â€” parse SD blob)",
                     None,
                     target_name,
                     target_dn,
@@ -521,7 +581,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         Err(e) => warn!("[acls] RBCD query failed: {}", e),
     }
 
-    // ── 3. Constrained delegation — msDS-AllowedToDelegateTo ─────────────────
+    // â”€â”€ 3. Constrained delegation â€” msDS-AllowedToDelegateTo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     match conn
         .custom_search(
             "(msDS-AllowedToDelegateTo=*)",
@@ -562,11 +622,11 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
 
                 for spn in &spns {
                     let label = if protocol_transition {
-                        format!("Constrained delegation (any protocol) → {}", spn)
+                        format!("Constrained delegation (any protocol) â†’ {}", spn)
                     } else if unconstrained {
-                        format!("Unconstrained delegation → {}", spn)
+                        format!("Unconstrained delegation â†’ {}", spn)
                     } else {
-                        format!("Constrained delegation (Kerberos only) → {}", spn)
+                        format!("Constrained delegation (Kerberos only) â†’ {}", spn)
                     };
 
                     findings.push(AclFinding::new(
@@ -583,7 +643,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         Err(e) => warn!("[acls] Delegation query failed: {}", e),
     }
 
-    // ── 4. Unconstrained delegation ───────────────────────────────────────────
+    // â”€â”€ 4. Unconstrained delegation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     match conn
         .custom_search(
             // UAC flag 0x80000 = TRUSTED_FOR_DELEGATION; exclude DCs (userAccountControl & 8192)
@@ -607,7 +667,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
                     None,
                     principal.clone(),
                     target_dn,
-                    DangerousRight::Custom("Unconstrained Kerberos delegation (non-DC) — printer bug / coerce attack target".into()),
+                    DangerousRight::Custom("Unconstrained Kerberos delegation (non-DC) â€” printer bug / coerce attack target".into()),
                     false,
                 ));
             }
@@ -615,7 +675,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         Err(e) => warn!("[acls] Unconstrained delegation query failed: {}", e),
     }
 
-    // ── 5. Shadow credentials — existing msDS-KeyCredentialLink ──────────────
+    // â”€â”€ 5. Shadow credentials â€” existing msDS-KeyCredentialLink â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     match conn
         .custom_search(
             "(&(objectCategory=person)(objectClass=user)(msDS-KeyCredentialLink=*))",
@@ -644,12 +704,12 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
                     .unwrap_or(0);
 
                 findings.push(AclFinding::new(
-                    format!("(existing — {} credential key(s) enrolled)", count),
+                    format!("(existing â€” {} credential key(s) enrolled)", count),
                     None,
                     target_name,
                     target_dn,
                     DangerousRight::Custom(
-                        "Pre-existing msDS-KeyCredentialLink — may indicate Shadow Credentials backdoor".into(),
+                        "Pre-existing msDS-KeyCredentialLink â€” may indicate Shadow Credentials backdoor".into(),
                     ),
                     false,
                 ));
@@ -667,7 +727,7 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
     Ok(findings)
 }
 
-// ─── SDDL parsing ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ SDDL parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Parse the DACL section of an SDDL string and return all dangerous ACE findings.
 fn parse_sddl_acl(sddl: &str, target: &str, target_dn: &str) -> Vec<AclFinding> {
@@ -712,7 +772,6 @@ fn parse_sddl_acl(sddl: &str, target: &str, target_dn: &str) -> Vec<AclFinding> 
 }
 
 /// Parse a single SDDL ACE string.
-///
 /// Format: `ace_type;ace_flags;rights;object_guid;inherit_object_guid;trustee`
 fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding> {
     let parts: Vec<&str> = ace.splitn(6, ';').collect();
@@ -727,7 +786,7 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
     // parts[4] = inherit object guid (unused here)
     let trustee = parts[5];
 
-    // Only process Allow ACEs (A) — skip Deny (D), Audit (AU/AL), etc.
+    // Only process Allow ACEs (A) â€” skip Deny (D), Audit (AU/AL), etc.
     if ace_type != "A" {
         return None;
     }
@@ -740,7 +799,7 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
 
     let is_inherited = ace_flags.contains('I');
 
-    // Parse the rights field — may be hex (0x…) or SDDL abbreviations
+    // Parse the rights field â€” may be hex (0xâ€¦) or SDDL abbreviations
     let rights_mask: u32 = if rights_str.starts_with("0x") || rights_str.starts_with("0X") {
         u32::from_str_radix(
             rights_str.trim_start_matches("0x").trim_start_matches("0X"),
@@ -751,7 +810,7 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
         sddl_abbrev_to_mask(rights_str)
     };
 
-    // ── Map rights to a DangerousRight ───────────────────────────────────────
+    // â”€â”€ Map rights to a DangerousRight â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     // GenericAll subsumes everything else
     if rights_mask & GENERIC_ALL != 0 || rights_str.contains("GA") {
@@ -917,7 +976,7 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
                         },
                     }
                 } else {
-                    // Unknown GUID — record it for later triage
+                    // Unknown GUID â€” record it for later triage
                     DangerousRight::WriteProperty {
                         attribute: object_guid.clone(),
                         guid: object_guid.clone(),
@@ -938,10 +997,9 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
     None
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Returns `true` for well-known built-in principals that should not be flagged.
-///
 /// Covers both SDDL two-letter aliases and common well-known SID strings.
 fn is_builtin_trustee(trustee: &str) -> bool {
     // SDDL short aliases
@@ -976,7 +1034,6 @@ fn is_builtin_trustee(trustee: &str) -> bool {
 }
 
 /// Convert SDDL abbreviated rights tokens to a 32-bit access mask.
-///
 /// Reference: <https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-strings>
 fn sddl_abbrev_to_mask(s: &str) -> u32 {
     let mut mask = 0u32;
@@ -994,15 +1051,15 @@ fn sddl_abbrev_to_mask(s: &str) -> u32 {
             "WO" => WRITE_OWNER,                 // 0x00080000
             "RC" => READ_CONTROL,                // 0x00020000
             "SD" => 0x0001_0000u32,              // Delete
-            "CC" => ADS_RIGHT_DS_CREATE_CHILD,   // 0x00000001 — BUG FIX: was WP in original
-            "DC" => 0x0000_0002u32, // ADS_RIGHT_DS_DELETE_CHILD — BUG FIX: was WP in original
+            "CC" => ADS_RIGHT_DS_CREATE_CHILD,   // 0x00000001 â€” BUG FIX: was WP in original
+            "DC" => 0x0000_0002u32, // ADS_RIGHT_DS_DELETE_CHILD â€” BUG FIX: was WP in original
             "LC" => 0x0000_0004u32, // ADS_RIGHT_ACTRL_DS_LIST
-            "SW" => ADS_RIGHT_DS_SELF, // 0x00000008 — BUG FIX: was 0x80 in original
+            "SW" => ADS_RIGHT_DS_SELF, // 0x00000008 â€” BUG FIX: was 0x80 in original
             "RP" => 0x0000_0010u32, // ADS_RIGHT_DS_READ_PROP
-            "WP" => ADS_RIGHT_DS_WRITE_PROP, // 0x00000020 — BUG FIX: "DC" was used in original
+            "WP" => ADS_RIGHT_DS_WRITE_PROP, // 0x00000020 â€” BUG FIX: "DC" was used in original
             "DT" => 0x0000_0040u32, // ADS_RIGHT_DS_DELETE_TREE
             "LO" => 0x0000_0080u32, // ADS_RIGHT_DS_LIST_OBJECT
-            "CR" => ADS_RIGHT_DS_CONTROL_ACCESS, // 0x00000100 — BUG FIX: missing in original
+            "CR" => ADS_RIGHT_DS_CONTROL_ACCESS, // 0x00000100 â€” BUG FIX: missing in original
             _ => 0,
         };
         i += 2;
@@ -1010,7 +1067,7 @@ fn sddl_abbrev_to_mask(s: &str) -> u32 {
     mask
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[cfg(test)]
 mod tests {
@@ -1028,7 +1085,7 @@ mod tests {
 
     #[test]
     fn test_sddl_abbrev_cr_is_control_access() {
-        // CR must map to ADS_RIGHT_DS_CONTROL_ACCESS — this was missing in the original
+        // CR must map to ADS_RIGHT_DS_CONTROL_ACCESS â€” this was missing in the original
         assert_eq!(sddl_abbrev_to_mask("CR"), ADS_RIGHT_DS_CONTROL_ACCESS);
     }
 
@@ -1051,7 +1108,7 @@ mod tests {
 
     #[test]
     fn test_parse_generic_all_ace() {
-        // A;;GA;;;S-1-5-21-1234-5678-9012-1001 → GenericAll
+        // A;;GA;;;S-1-5-21-1234-5678-9012-1001 â†’ GenericAll
         let findings = parse_sddl_acl(
             "D:(A;;GA;;;S-1-5-21-1234-5678-9012-1001)",
             "Domain Admins",
@@ -1100,7 +1157,7 @@ mod tests {
 
     #[test]
     fn test_builtin_trustee_filtered() {
-        // BA = BUILTIN\Administrators — should be filtered
+        // BA = BUILTIN\Administrators â€” should be filtered
         let findings = parse_sddl_acl(
             "D:(A;;GA;;;BA)",
             "Domain Admins",

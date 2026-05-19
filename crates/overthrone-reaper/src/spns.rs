@@ -4,20 +4,79 @@ use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Structure
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SpnAccount {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Object or account name.
     pub service_principal_names: Vec<String>,
+    /// enabled field
     pub enabled: bool,
+    /// Item count
     pub admin_count: bool,
+    /// Password for authentication
     pub password_last_set: Option<String>,
 }
 
 impl SpnAccount {
     pub fn is_high_value_target(&self) -> bool {
         self.enabled && self.admin_count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spn_filter() {
+        assert_eq!(
+            spn_filter(),
+            "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        );
+    }
+
+    #[test]
+    fn test_is_high_value_target_enabled_admin() {
+        let s = SpnAccount {
+            enabled: true,
+            admin_count: true,
+            ..Default::default()
+        };
+        assert!(s.is_high_value_target());
+    }
+
+    #[test]
+    fn test_is_high_value_target_disabled_admin() {
+        let s = SpnAccount {
+            enabled: false,
+            admin_count: true,
+            ..Default::default()
+        };
+        assert!(!s.is_high_value_target());
+    }
+
+    #[test]
+    fn test_is_high_value_target_enabled_not_admin() {
+        let s = SpnAccount {
+            enabled: true,
+            admin_count: false,
+            ..Default::default()
+        };
+        assert!(!s.is_high_value_target());
+    }
+
+    #[test]
+    fn test_is_high_value_target_disabled_not_admin() {
+        let s = SpnAccount {
+            enabled: false,
+            admin_count: false,
+            ..Default::default()
+        };
+        assert!(!s.is_high_value_target());
     }
 }
 

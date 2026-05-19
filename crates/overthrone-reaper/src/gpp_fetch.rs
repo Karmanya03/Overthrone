@@ -28,14 +28,17 @@ const GPP_CONTEXTS: &[&str] = &["Machine", "User"];
 /// Result of a full GPP SYSVOL scan.
 #[derive(Debug, Clone)]
 pub struct GppScanResult {
+    /// credentials field
     pub credentials: Vec<GppCredential>,
+    /// gpos scanned field
     pub gpos_scanned: usize,
+    /// xml files found field
     pub xml_files_found: usize,
+    /// Error information
     pub errors: Vec<String>,
 }
 
 /// Enumerate GPP passwords from live SYSVOL via SMB.
-///
 /// Connects to `\\<dc_ip>\SYSVOL`, lists all GPO GUID directories,
 /// then reads every known GPP XML file path and decrypts any
 /// cpassword values found.
@@ -168,7 +171,6 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
 }
 
 /// Enumerate GPP passwords with null/anonymous session fallback.
-///
 /// Some environments leave SYSVOL readable to anonymous users.
 /// This tries the provided creds first, then falls back to a null session.
 pub async fn enumerate_gpp_passwords_with_fallback(config: &ReaperConfig) -> Result<GppScanResult> {

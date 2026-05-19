@@ -96,21 +96,37 @@ pub use web_enrollment::{CaInfo, CertificateResponse, ResponseStatus, WebEnrollm
 /// Certificate template configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateConfig {
+    /// Object or account name.
     pub name: String,
+    /// schema version field
     pub schema_version: u32,
+    /// Stable unique identifier.
     pub validity_period_days: u32,
+    /// renewal period days field
     pub renewal_period_days: u32,
+    /// ekus field
     pub ekus: Vec<String>, // Extended Key Usages
+    /// Object or account name.
     pub subject_name_flag: u32,
+    /// enrollment flag field
     pub enrollment_flag: u32,
+    /// Key data
     pub private_key_flag: u32,
+    /// requires manager approval field
     pub requires_manager_approval: bool,
+    /// authorized signatures required field
     pub authorized_signatures_required: u32,
+    /// application policies field
     pub application_policies: Vec<String>,
+    /// issuance policies field
     pub issuance_policies: Vec<String>,
+    /// security descriptor field
     pub security_descriptor: String,
+    /// Object or account name.
     pub certificate_name_flag: u32,
+    /// Key data
     pub private_key_usage_period_flag: u32,
+    /// Key data
     pub private_key_usage_period: Option<u32>,
 }
 
@@ -228,28 +244,46 @@ impl TemplateConfig {
 /// Certificate request structure
 #[derive(Debug, Clone)]
 pub struct CertificateRequest {
+    /// ca server field
     pub ca_server: String,
+    /// template field
     pub template: String,
+    /// subject field
     pub subject: String,
+    /// san field
     pub san: Option<String>, // Subject Alternative Name
+    /// Key data
     pub key_usage: Vec<String>,
+    /// Key data
     pub key_size: u32,
+    /// Key data
     pub key_algorithm: String,
+    /// Object or account name.
     pub certificate_name_flag: u32,
 }
 
 /// Issued certificate
 #[derive(Debug, Clone)]
 pub struct IssuedCertificate {
+    /// Raw byte data
     pub pfx_data: Vec<u8>,
+    /// thumbprint field
     pub thumbprint: String,
+    /// serial number field
     pub serial_number: String,
+    /// Stable unique identifier.
     pub valid_from: String,
+    /// Stable unique identifier.
     pub valid_to: String,
+    /// template field
     pub template: String,
+    /// subject field
     pub subject: String,
+    /// issuer field
     pub issuer: String,
+    /// Key data
     pub public_key_algorithm: String,
+    /// signature algorithm field
     pub signature_algorithm: String,
     /// Private key in PEM format
     pub private_key_pem: String,
@@ -270,37 +304,55 @@ impl IssuedCertificate {
 /// ESC vulnerability information
 #[derive(Debug, Clone)]
 pub struct EscVulnerability {
+    /// esc number field
     pub esc_number: u8,
+    /// description field
     pub description: String,
+    /// severity field
     pub severity: EscSeverity,
+    /// remediation field
     pub remediation: String,
+    /// affected templates field
     pub affected_templates: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum EscSeverity {
+    /// `Critical` variant
     Critical,
+    /// `High` variant
     High,
+    /// `Medium` variant
     Medium,
+    /// `Low` variant
     Low,
 }
 
 /// CA configuration vulnerability
 #[derive(Debug, Clone)]
 pub struct CaVulnerability {
+    /// Classification for this object.
     pub config_type: String,
+    /// description field
     pub description: String,
+    /// severity field
     pub severity: EscSeverity,
+    /// Key data
     pub registry_key: Option<String>,
+    /// registry value field
     pub registry_value: Option<String>,
 }
 
 /// CA permission vulnerability
 #[derive(Debug, Clone)]
 pub struct CaPermissionVulnerability {
+    /// Stable unique identifier.
     pub identity: String,
+    /// Classification for this object.
     pub permission_type: String,
+    /// description field
     pub description: String,
+    /// security descriptor field
     pub security_descriptor: String,
 }
 
@@ -338,7 +390,6 @@ impl AdcsClient {
     // ─────────────────────────────────────────────────────────
 
     /// Execute ESC1 attack - request certificate with arbitrary SAN
-    ///
     /// This allows impersonation of any user when the template:
     /// - Has "Any Purpose" EKU or no EKU restrictions
     /// - Allows the enrollee to supply subject (CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT)
@@ -399,7 +450,6 @@ impl AdcsClient {
     // ─────────────────────────────────────────────────────────
 
     /// Execute ESC2 attack - use template with any purpose EKU
-    ///
     /// Similar to ESC1 but without SAN abuse - can still get useful certs.
     pub async fn attack_esc2(&self, template: &str, subject_cn: &str) -> Result<IssuedCertificate> {
         info!(
@@ -445,7 +495,6 @@ impl AdcsClient {
     // ─────────────────────────────────────────────────────────
 
     /// Execute ESC3 attack - Enrollment Agent abuse
-    ///
     /// Step 1: Request enrollment agent certificate
     /// Step 2: Use the agent cert to request a certificate on behalf of another user
     pub async fn attack_esc3(
@@ -530,7 +579,6 @@ impl AdcsClient {
     // ─────────────────────────────────────────────────────────
 
     /// Execute ESC6 attack - abuse EDITF_ATTRIBUTESUBJECTALTNAME2 flag
-    ///
     /// When this flag is set on the CA, any template can have SAN specified
     /// via the request attributes, even if the template doesn't allow it.
     pub async fn attack_esc6(&self, template: &str, target_upn: &str) -> Result<IssuedCertificate> {
@@ -722,7 +770,6 @@ fn extract_serial(cert_der: &[u8]) -> Result<String> {
 // ═══════════════════════════════════════════════════════════
 
 /// SCCM/MECM client for configuration management abuse.
-///
 /// Enumerates site configuration via the SMS Provider WMI web service
 /// (`/AdminService/wmi/`). Falls back to legacy
 /// `CMSiteInfo` endpoint when the modern API is unavailable.
@@ -731,6 +778,7 @@ pub struct SccmClient {
 }
 
 impl SccmClient {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self {
             http_client: reqwest::ClientBuilder::new()
@@ -742,7 +790,6 @@ impl SccmClient {
     }
 
     /// Enumerate SCCM site configuration from `site_server`.
-    ///
     /// Uses the *AdminService* REST API exposed on the SMS Provider
     /// (default: `https://<server>/AdminService/wmi/SMS_Site`).
     /// When the admin service is unreachable we attempt legacy HTTP
@@ -959,11 +1006,17 @@ impl Default for SccmClient {
 /// SCCM configuration structure
 #[derive(Debug, Clone, Default)]
 pub struct SccmConfig {
+    /// Status or error code
     pub site_code: String,
+    /// site server field
     pub site_server: String,
+    /// collections field
     pub collections: Vec<String>,
+    /// applications field
     pub applications: Vec<String>,
+    /// vulnerable settings field
     pub vulnerable_settings: Vec<String>,
+    /// site systems field
     pub site_systems: Vec<String>,
 }
 

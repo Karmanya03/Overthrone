@@ -7,32 +7,45 @@ use crate::runner::{ReaperConfig, ldap_connect};
 use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::info;
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpoDetailedInfo {
+    /// Object or account name.
     pub display_name: String,
+    /// Stable unique identifier.
     pub gpo_guid: String,
+    /// Filesystem path.
     pub path: String,
+    /// status field
     pub status: String,
+    /// linked to field
     pub linked_to: Vec<String>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserDetailedInfo {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Security Identifier
     pub sid: String,
+    /// pwd last set field
     pub pwd_last_set: String,
+    /// last logon field
     pub last_logon: String,
+    /// member of field
     pub member_of: Vec<String>,
+    /// properties field
     pub properties: std::collections::HashMap<String, String>,
 }
-
+/// Structure
 pub struct PowerView {
     config: ReaperConfig,
 }
 
 impl PowerView {
+    /// Runs this module operation.
     pub fn new(config: ReaperConfig) -> Self {
         Self { config }
     }
@@ -168,7 +181,12 @@ impl PowerView {
                 .unwrap_or_default();
 
             // Convert SID bytes to string if available
-            let sid = "S-1-5-...".to_string(); // Placeholder for actual SID parsing logic
+            let sid = entry
+                .attrs
+                .get("objectSid")
+                .and_then(|v| v.first())
+                .map(|raw| sid_bytes_to_string(raw.as_bytes()))
+                .unwrap_or_else(|| "S-1-5-...".to_string());
 
             let mut properties = std::collections::HashMap::new();
             for (k, v) in &entry.attrs {
@@ -213,9 +231,40 @@ pub async fn run_powerview(config: &ReaperConfig) -> Result<PowerViewResult> {
         user_details: users,
     })
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PowerViewResult {
+    /// gpo details field
     pub gpo_details: Vec<GpoDetailedInfo>,
+    /// user details field
     pub user_details: Vec<UserDetailedInfo>,
+}
+
+/// Convert raw binary SID bytes (from LDAP objectSid) into standard string format S-R-IA-SA-...
+/// Binary SID structure:
+///   bytes[0] = Revision (usually 1)
+///   bytes[1] = SubAuthorityCount
+///   bytes[2..8] = IdentifierAuthority (6 bytes, big-endian)
+///   bytes[8..] = SubAuthorities (4 bytes each, little-endian)
+fn sid_bytes_to_string(raw: &[u8]) -> String {
+    if raw.len() < 8 {
+        return format!("S-{:?}", hex::encode(raw));
+    }
+    let revision = raw[0];
+    let count = raw[1] as usize;
+    let ia = u64::from_be_bytes([0, 0, raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]]);
+    let mut sid = format!("S-{}-{}", revision, ia);
+    for i in 0..count {
+        let offset = 8 + i * 4;
+        if offset + 4 <= raw.len() {
+            let sub_auth = u32::from_le_bytes([
+                raw[offset],
+                raw[offset + 1],
+                raw[offset + 2],
+                raw[offset + 3],
+            ]);
+            sid.push_str(&format!("-{}", sub_auth));
+        }
+    }
+    sid
 }

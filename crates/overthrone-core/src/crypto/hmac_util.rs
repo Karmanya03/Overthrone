@@ -8,7 +8,6 @@ use md5::Md5;
 use sha1::Sha1;
 
 /// HMAC-MD5: keyed hash used for RC4-HMAC PAC checksums and NTLMSSP session keys.
-///
 /// Returns a 16-byte MAC.
 pub fn hmac_md5(key: &[u8], data: &[u8]) -> [u8; 16] {
     let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
@@ -42,10 +41,8 @@ pub fn hmac_sha1(key: &[u8], data: &[u8]) -> [u8; 20] {
 }
 
 /// HMAC-SHA1-96-AES256: truncated 12-byte HMAC used for AES PAC checksums (etype 17/18).
-///
 /// Per RFC 3962 / MS-PAC §2.8, the PAC checksum for AES etypes is
 /// `HMAC-SHA1-96-AES256` (checksum type 16) — the first 12 bytes of HMAC-SHA1.
-///
 /// The `key` should be the Kerberos session key (32 bytes for AES-256, 16 for AES-128).
 pub fn hmac_sha1_96_aes(key: &[u8], data: &[u8]) -> [u8; 12] {
     let full = hmac_sha1(key, data);
@@ -86,14 +83,12 @@ pub fn hmac_sha1_96_verify(key: &[u8], data: &[u8], expected: &[u8]) -> bool {
 }
 
 /// Derive an NTLMSSP session base key: `HMAC-MD5(NT_hash, NTProofStr)`.
-///
 /// This is the NTLMv2 Session Base Key used in SMB signing and session key derivation.
 pub fn ntlmssp_session_base_key(nt_hash: &[u8], nt_proof_str: &[u8]) -> [u8; 16] {
     hmac_md5(nt_hash, nt_proof_str)
 }
 
 /// Compute the NTLMv2 response: `HMAC-MD5(NTOWFv2, ServerChallenge || blob)`.
-///
 /// `nt_owf_v2` = `HMAC-MD5(NTHash, UPPERCASE(username) || domain)` (all UTF-16LE).
 pub fn ntlmv2_response(nt_owf_v2: &[u8], server_challenge: &[u8], blob: &[u8]) -> [u8; 16] {
     hmac_md5_multi(nt_owf_v2, &[server_challenge, blob])
@@ -140,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_hmac_md5_multi() {
-        let key = b"secret";
+        let key = b"test_hmac_key";
         let a = b"hello ";
         let b_data = b"world";
         let combined = hmac_md5(key, b"hello world");

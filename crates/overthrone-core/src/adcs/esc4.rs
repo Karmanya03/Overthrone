@@ -118,8 +118,11 @@ impl TemplateBackup {
 
 /// Target for ESC4 template modification attack
 pub struct Esc4Target {
+    /// Object or account name.
     pub template_name: String,
+    /// Domain FQDN
     pub domain: String,
+    /// current user field
     pub current_user: String,
     /// Saved backup for restoration
     backup: Option<TemplateBackup>,
@@ -128,6 +131,7 @@ pub struct Esc4Target {
 }
 
 impl Esc4Target {
+    /// Runs this module operation.
     pub fn new(
         template_name: impl Into<String>,
         domain: impl Into<String>,
@@ -249,15 +253,13 @@ impl Esc4Target {
     // ─────────────────────────────────────────────────────────
 
     /// Execute the ESC4 exploit — modify template to be vulnerable to ESC1.
-    ///
     /// Requires the attacker to have WriteProperty over the template object.
     /// This method:
-    /// 1. Resolves the template DN
-    /// 2. Takes a backup snapshot (saved to `{template}_backup.json`)
-    /// 3. Modifies the template to allow enrollee-supplied SAN
-    /// 4. Bumps the minor revision so AD propagates the change
-    ///
-    /// After this, use the ADCS ESC1 flow to request a cert with arbitrary UPN.
+    ///   1. Resolves the template DN
+    ///   2. Takes a backup snapshot (saved to `{template}_backup.json`)
+    ///   3. Modifies the template to allow enrollee-supplied SAN
+    ///   4. Bumps the minor revision so AD propagates the change
+    ///      After this, use the ADCS ESC1 flow to request a cert with arbitrary UPN.
     pub async fn execute(&mut self, ldap: &mut LdapSession, base_dn: &str) -> Result<()> {
         info!(
             "=== ESC4 Attack: Modifying template '{}' ===",
@@ -379,7 +381,6 @@ impl Esc4Target {
     // ─────────────────────────────────────────────────────────
 
     /// Restore the template to its original configuration from backup.
-    ///
     /// Can restore from:
     /// - In-memory backup (if `execute()` was called in this session)
     /// - A backup file path
@@ -463,7 +464,6 @@ impl Esc4Target {
     // ─────────────────────────────────────────────────────────
 
     /// Generate exploit commands for manual execution (Certipy / PowerView)
-    ///
     /// Use this when LDAP write access is not available or as a reference.
     pub fn generate_exploit_commands(&self) -> Result<String> {
         info!(
@@ -553,7 +553,6 @@ impl Esc4Target {
 // ═══════════════════════════════════════════════════════════
 
 /// LDAP modify operation type.
-///
 /// Maps to ldap3::Mod variants. This enum exists so that
 /// esc4.rs doesn't need to import ldap3 directly — the
 /// LdapSession translates these.

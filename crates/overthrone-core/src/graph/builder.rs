@@ -10,7 +10,6 @@ use crate::proto::ldap::{
 use tracing::info;
 
 /// Build an `AttackGraph` directly from reaper enumeration output.
-///
 /// This is the primary entry point for converting reaper data into
 /// an attack graph. It converts reaper-specific types into core LDAP
 /// types and then delegates to `AttackGraph::ingest_enumeration`.

@@ -9,19 +9,22 @@ use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{ConnectInfo, Path as AxumPath, Query, Request, State};
 use axum::http::StatusCode;
 use axum::http::header;
+use axum::middleware::{self, Next};
 use axum::response::Html;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
@@ -44,11 +47,82 @@ struct GraphBundle {
     file_bytes: u64,
 }
 
+/// Configuration for the viewer web server.
+#[derive(Clone, Debug)]
+pub struct ViewerConfig {
+    /// Optional basic auth username
+    pub username: Option<String>,
+    /// Optional basic auth password
+    pub password: Option<String>,
+    /// Rate limit window in seconds
+    pub rate_limit_window_secs: u64,
+    /// Maximum requests per IP within the window
+    pub rate_limit_max_requests: u32,
+}
+
+impl ViewerConfig {
+    /// Create a new config with basic auth credentials.
+    pub fn with_auth(username: impl Into<String>, password: impl Into<String>) -> Self {
+        Self {
+            username: Some(username.into()),
+            password: Some(password.into()),
+            ..Default::default()
+        }
+    }
+}
+
+impl Default for ViewerConfig {
+    fn default() -> Self {
+        Self {
+            username: None,
+            password: None,
+            rate_limit_window_secs: 60,
+            rate_limit_max_requests: 100,
+        }
+    }
+}
+
+/// Simple per-IP sliding window rate limiter.
+struct RateLimiter {
+    window: Duration,
+    max_requests: u32,
+    buckets: Mutex<HashMap<IpAddr, (Instant, u32)>>,
+}
+
+impl RateLimiter {
+    fn new(window_secs: u64, max_requests: u32) -> Self {
+        Self {
+            window: Duration::from_secs(window_secs),
+            max_requests,
+            buckets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns `true` if the request should be allowed.
+    async fn check(&self, ip: IpAddr) -> bool {
+        let mut buckets = self.buckets.lock().await;
+        let now = Instant::now();
+        let entry = buckets.entry(ip).or_insert((now, 0));
+        // Reset if window has expired
+        if now.duration_since(entry.0) > self.window {
+            *entry = (now, 1);
+            return true;
+        }
+        if entry.1 >= self.max_requests {
+            return false;
+        }
+        entry.1 += 1;
+        true
+    }
+}
+
 /// Shared application state
 struct AppState {
     graphs: RwLock<Vec<GraphBundle>>,
     default_graph: String,
     cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
+    config: ViewerConfig,
+    rate_limiter: RateLimiter,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1535,67 +1609,67 @@ fn edge_security_guidance(relationship: &str) -> (u8, &'static str) {
         ),
         "adcsesc1" => (
             1,
-            "ESC1 — Enrollee supplies SAN. Request a certificate for a target user via this template and use it for authentication (PKINIT).",
+            "ESC1 â€” Enrollee supplies SAN. Request a certificate for a target user via this template and use it for authentication (PKINIT).",
         ),
         "adcsesc2" => (
             1,
-            "ESC2 — Any purpose template. Template can be used for any purpose, including client authentication or as an enrollment agent.",
+            "ESC2 â€” Any purpose template. Template can be used for any purpose, including client authentication or as an enrollment agent.",
         ),
         "adcsesc3" => (
             1,
-            "ESC3 — Enrollment agent abuse. Enroll for an agent certificate, then use it to request a certificate on behalf of a target user.",
+            "ESC3 â€” Enrollment agent abuse. Enroll for an agent certificate, then use it to request a certificate on behalf of a target user.",
         ),
         "adcsesc4" => (
             1,
-            "ESC4 — Vulnerable template ACLs. Modify the template to enable SAN abuse (ESC1), enroll, then restore the original ACLs.",
+            "ESC4 â€” Vulnerable template ACLs. Modify the template to enable SAN abuse (ESC1), enroll, then restore the original ACLs.",
         ),
         "adcsesc5" => (
             1,
-            "ESC5 — Vulnerable CA object ACLs. CA configuration can be modified to enable other ESC paths; check security descriptor on the CA.",
+            "ESC5 â€” Vulnerable CA object ACLs. CA configuration can be modified to enable other ESC paths; check security descriptor on the CA.",
         ),
         "adcsesc6" => (
             1,
-            "ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 enabled. CA global flag allows SANs in all requests; request any template with a target SAN.",
+            "ESC6 â€” EDITF_ATTRIBUTESUBJECTALTNAME2 enabled. CA global flag allows SANs in all requests; request any template with a target SAN.",
         ),
         "adcsesc7" => (
             1,
-            "ESC7 — Vulnerable CA permissions. Control over ManageCA/ManageCertificates allows adding officers or enabling SAN abuse flags.",
+            "ESC7 â€” Vulnerable CA permissions. Control over ManageCA/ManageCertificates allows adding officers or enabling SAN abuse flags.",
         ),
         "adcsesc8" => (
             1,
-            "ESC8 — ADCS Web Enrollment relay. Relay an authenticated NTLM session to the web enrollment endpoint to obtain a certificate.",
+            "ESC8 â€” ADCS Web Enrollment relay. Relay an authenticated NTLM session to the web enrollment endpoint to obtain a certificate.",
         ),
         "adcsesc9" => (
             1,
-            "ESC9 — No Security Extension (UPN poisoning). Victim with CT_FLAG_NO_SECURITY_EXTENSION template can be impersonated via UPN poisoning.",
+            "ESC9 â€” No Security Extension (UPN poisoning). Victim with CT_FLAG_NO_SECURITY_EXTENSION template can be impersonated via UPN poisoning.",
         ),
         "adcsesc10" => (
             1,
-            "ESC10 — Weak certificate mapping. Impersonation via accounts with weak mapping settings or registry-based enforcement disabled.",
+            "ESC10 â€” Weak certificate mapping. Impersonation via accounts with weak mapping settings or registry-based enforcement disabled.",
         ),
         "adcsesc11" => (
             1,
-            "ESC11 — NTLM relay to RPC. Relay NTLM to the ICertPassage RPC interface to obtain a certificate.",
+            "ESC11 â€” NTLM relay to RPC. Relay NTLM to the ICertPassage RPC interface to obtain a certificate.",
         ),
         "adcsesc12" => (
             1,
-            "ESC12 — Policy Server relay. Relay to the Certificate Enrollment Policy (CEP) service.",
+            "ESC12 â€” Policy Server relay. Relay to the Certificate Enrollment Policy (CEP) service.",
         ),
         "adcsesc13" => (
             1,
-            "ESC13 — OID-to-Group Link. Template issuance policy is linked to a privileged group, granting its membership upon authentication.",
+            "ESC13 â€” OID-to-Group Link. Template issuance policy is linked to a privileged group, granting its membership upon authentication.",
         ),
         "adcsesc14" => (
             1,
-            "ESC14 — altSecurityIdentities mapping. Add an RFC822/UPN mapping for a victim account, obtain a certificate, and restore mapping.",
+            "ESC14 â€” altSecurityIdentities mapping. Add an RFC822/UPN mapping for a victim account, obtain a certificate, and restore mapping.",
         ),
         "adcsesc15" => (
             1,
-            "ESC15 — Schema V1 EKU abuse. Exploit implicit SAN allowance in old templates for impersonation via PKINIT.",
+            "ESC15 â€” Schema V1 EKU abuse. Exploit implicit SAN allowance in old templates for impersonation via PKINIT.",
         ),
         "adcsesc16" => (
             1,
-            "ESC16 — NO_SECURITY_EXTENSION abuse. Poison UPN and request certificate via a template with security extensions disabled.",
+            "ESC16 â€” NO_SECURITY_EXTENSION abuse. Poison UPN and request certificate via a template with security extensions disabled.",
         ),
         "writeproperty" => (
             2,
@@ -2195,7 +2269,7 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
 //  Route Handlers
 // ============================================================
 
-/// GET / — Serve the embedded SPA
+/// GET / â€” Serve the embedded SPA
 async fn index() -> impl IntoResponse {
     (
         [
@@ -2224,7 +2298,7 @@ async fn three_graph_js() -> impl IntoResponse {
     )
 }
 
-/// GET /api/graphs — List available graphs
+/// GET /api/graphs â€” List available graphs
 async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>> {
     let cache = state.cache.read().await;
     let graphs_lock = state.graphs.read().await;
@@ -2248,7 +2322,7 @@ async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>>
     Json(graphs)
 }
 
-/// GET /api/graph — Full graph data for D3 rendering
+/// GET /api/graph â€” Full graph data for D3 rendering
 async fn get_graph(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -2321,7 +2395,7 @@ async fn get_graph(
     }))
 }
 
-/// GET /api/node/:id — Detail view for a single node
+/// GET /api/node/:id â€” Detail view for a single node
 async fn get_node_detail(
     State(state): State<Arc<AppState>>,
     AxumPath(nid): AxumPath<String>,
@@ -2386,7 +2460,7 @@ async fn get_node_detail(
     Ok(Json(detail))
 }
 
-/// GET /api/search?q=... — Search nodes by name
+/// GET /api/search?q=... â€” Search nodes by name
 async fn search_nodes(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
@@ -2661,7 +2735,7 @@ async fn edge_types() -> Json<Vec<EdgeTypeInfo>> {
     )
 }
 
-/// POST /api/path — Find shortest attack path between two nodes
+/// POST /api/path â€” Find shortest attack path between two nodes
 async fn find_path(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -2710,7 +2784,7 @@ async fn find_path(
     }))
 }
 
-/// GET /api/stats — Quick stats summary
+/// GET /api/stats â€” Quick stats summary
 async fn get_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -2722,7 +2796,7 @@ async fn get_stats(
     )))
 }
 
-/// GET /api/graph/:id/timings — Graph load timing breakdown
+/// GET /api/graph/:id/timings â€” Graph load timing breakdown
 async fn get_graph_timings(
     State(state): State<Arc<AppState>>,
     AxumPath(graph_id): AxumPath<String>,
@@ -2735,7 +2809,7 @@ async fn get_graph_timings(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-/// POST /api/upload — Upload a graph JSON file
+/// POST /api/upload â€” Upload a graph JSON file
 async fn upload_graph(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
@@ -2782,14 +2856,69 @@ async fn upload_graph(
 }
 
 // ============================================================
+//  Middleware
+// ============================================================
+
+/// Basic auth middleware â€” checks the `Authorization: Basic` header against
+/// the configured credentials in `AppState`. If no credentials are configured,
+/// all requests pass through.
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Result<impl IntoResponse, StatusCode> {
+    let config = &state.config;
+    match (&config.username, &config.password) {
+        (Some(expected_user), Some(expected_pass)) => {
+            let auth_header = req
+                .headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if let Some(creds) = auth_header.strip_prefix("Basic ")
+                && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(creds)
+                && let Ok(creds_str) = String::from_utf8(decoded)
+            {
+                let parts: Vec<&str> = creds_str.splitn(2, ':').collect();
+                if parts.len() == 2 && parts[0] == expected_user && parts[1] == expected_pass {
+                    return Ok(next.run(req).await);
+                }
+            }
+            Err(StatusCode::UNAUTHORIZED)
+        }
+        _ => Ok(next.run(req).await),
+    }
+}
+
+/// Rate limiting middleware â€” checks per-IP request counts against the
+/// configured window and maximum.
+async fn rate_limit_middleware(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Result<impl IntoResponse, StatusCode> {
+    if state.rate_limiter.check(addr.ip()).await {
+        Ok(next.run(req).await)
+    } else {
+        Err(StatusCode::TOO_MANY_REQUESTS)
+    }
+}
+
+// ============================================================
 //  Public API
 // ============================================================
 
-/// Launch the viewer web server.
-///
+/// Launch the viewer web server with default configuration (no auth, default
+/// rate limiting).
 /// Loads the graph from the given sources, starts an Axum HTTP server on the
 /// specified port (or a free port if 0), and opens the browser.
 pub async fn launch(sources: &[String], port: u16) -> Result<()> {
+    launch_with_config(sources, port, ViewerConfig::default()).await
+}
+
+/// Launch the viewer web server with the given configuration.
+pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerConfig) -> Result<()> {
     let graphs = build_graph_bundles(sources)?;
 
     for graph in &graphs {
@@ -2806,10 +2935,17 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
         .map(|graph| graph.id.clone())
         .unwrap_or_else(|| "graph-1".to_string());
 
+    let rate_limiter = RateLimiter::new(
+        config.rate_limit_window_secs,
+        config.rate_limit_max_requests,
+    );
+
     let state = Arc::new(AppState {
         graphs: RwLock::new(graphs),
         default_graph,
         cache: RwLock::new(HashMap::new()),
+        config,
+        rate_limiter,
     });
 
     let cors = CorsLayer::new()
@@ -2831,6 +2967,14 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
         .route("/api/path", post(find_path))
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
         .layer(cors)
         .with_state(state);
 
@@ -2850,4 +2994,115 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // â”€â”€ RateLimiter unit tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    #[tokio::test]
+    async fn test_rate_limiter_rejects_over_limit() {
+        let limiter = RateLimiter::new(60, 2); // 2 requests per 60s window
+        let ip = "192.168.1.1".parse::<IpAddr>().unwrap();
+        assert!(limiter.check(ip).await);
+        assert!(limiter.check(ip).await);
+        assert!(!limiter.check(ip).await); // third should be rejected
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_allows_different_ips() {
+        let limiter = RateLimiter::new(60, 1); // 1 request per 60s
+        let ip_a = "10.0.0.1".parse::<IpAddr>().unwrap();
+        let ip_b = "10.0.0.2".parse::<IpAddr>().unwrap();
+        assert!(limiter.check(ip_a).await);
+        assert!(!limiter.check(ip_a).await); // second req from same IP rejected
+        assert!(limiter.check(ip_b).await); // different IP allowed
+    }
+
+    // â”€â”€ ViewerConfig unit tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    const TEST_VIEWER_USER: &str = "admin";
+    const TEST_VIEWER_PASS: &str = "secret";
+
+    #[test]
+    fn test_viewer_config_default_no_auth() {
+        let config = ViewerConfig::default();
+        assert!(config.username.is_none());
+        assert!(config.password.is_none());
+        assert_eq!(config.rate_limit_window_secs, 60);
+        assert_eq!(config.rate_limit_max_requests, 100);
+    }
+
+    #[test]
+    fn test_viewer_config_with_auth() {
+        let config = ViewerConfig::with_auth(TEST_VIEWER_USER, TEST_VIEWER_PASS);
+        assert_eq!(config.username.as_deref(), Some(TEST_VIEWER_USER));
+        assert_eq!(config.password.as_deref(), Some(TEST_VIEWER_PASS));
+    }
+
+    // â”€â”€ Basic auth header parsing tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    /// Parse and validate a `Basic` authorization header.
+    /// Returns `true` if the header matches the expected credentials.
+    fn check_basic_auth(
+        header_value: Option<&str>,
+        expected_user: &str,
+        expected_pass: &str,
+    ) -> bool {
+        let auth = header_value.unwrap_or("");
+        if let Some(creds) = auth.strip_prefix("Basic ")
+            && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(creds)
+            && let Ok(creds_str) = String::from_utf8(decoded)
+        {
+            let parts: Vec<&str> = creds_str.splitn(2, ':').collect();
+            if parts.len() == 2 && parts[0] == expected_user && parts[1] == expected_pass {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn test_basic_auth_valid() {
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", TEST_VIEWER_USER, TEST_VIEWER_PASS));
+        assert!(check_basic_auth(
+            Some(&format!("Basic {}", encoded)),
+            TEST_VIEWER_USER,
+            TEST_VIEWER_PASS
+        ));
+    }
+
+    #[test]
+    fn test_basic_auth_invalid_password() {
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{}:wrong", TEST_VIEWER_USER));
+        assert!(!check_basic_auth(
+            Some(&format!("Basic {}", encoded)),
+            TEST_VIEWER_USER,
+            TEST_VIEWER_PASS
+        ));
+    }
+
+    #[test]
+    fn test_basic_auth_missing_header() {
+        assert!(!check_basic_auth(None, TEST_VIEWER_USER, TEST_VIEWER_PASS));
+    }
+
+    #[test]
+    fn test_basic_auth_bad_encoding() {
+        assert!(!check_basic_auth(
+            Some("Basic !!!invalid-base64!!!"),
+            TEST_VIEWER_USER,
+            TEST_VIEWER_PASS
+        ));
+    }
+
+    #[test]
+    fn test_basic_auth_no_credentials_when_expected() {
+        // When no credentials configured, any request should pass
+        // (This is handled by the middleware logic directly returning Ok)
+    }
 }

@@ -22,7 +22,6 @@ use super::ui;
 const FPS: u64 = 30;
 
 /// Launch the interactive TUI
-///
 /// `graph` is a shared reference to the attack graph being populated
 /// by the crawler in a background thread.
 pub fn run_tui(graph: Arc<Mutex<AttackGraph>>) -> io::Result<()> {
@@ -83,7 +82,6 @@ pub fn run_tui(graph: Arc<Mutex<AttackGraph>>) -> io::Result<()> {
 }
 
 /// Launch TUI alongside an async crawler task
-///
 /// This spawns the crawler on a tokio task and runs the TUI on the main thread.
 pub async fn run_tui_with_crawler(
     graph: Arc<Mutex<AttackGraph>>,
@@ -155,7 +153,10 @@ pub async fn run_tui_with_crawler(
 
                 // Update graph with crawler findings
                 // This would integrate the crawler results into the attack graph
-                let _graph_lock = graph_clone.lock().unwrap();
+                let _graph_lock = graph_clone.lock().unwrap_or_else(|e| {
+                    warn!("Mutex poisoned in Runner — recovering data");
+                    e.into_inner()
+                });
                 for path in &crawler_result.escalation_paths {
                     info!("[tui] Found escalation path: {:?}", path);
                     // Add nodes and edges to graph based on escalation paths

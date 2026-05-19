@@ -6,7 +6,6 @@
 
 // The helper constants and functions below are used only on Windows;
 // they are kept for completeness but not yet wired up on all targets.
-#![allow(dead_code)]
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::smb::SmbSession;
@@ -55,10 +54,15 @@ impl Default for WmiExecConfig {
 /// Result of a WMIExec command
 #[derive(Debug)]
 pub struct WmiExecResult {
+    /// Target domain FQDN
     pub target: String,
+    /// command field
     pub command: String,
+    /// success field
     pub success: bool,
+    /// output field
     pub output: String,
+    /// Status or error code
     pub return_code: Option<u32>,
 }
 
@@ -72,7 +76,6 @@ pub struct WmiExecResult {
 // with WMI-style command wrapping for stealth.
 
 /// Execute a command via WMI-style execution.
-///
 /// Uses `wmic.exe` process call or falls back to SCM-based execution
 /// with WMI-compatible command wrapping.
 pub async fn exec_command(session: &SmbSession, command: &str) -> Result<WmiExecResult> {
@@ -143,7 +146,6 @@ pub async fn execute(
 }
 
 /// Attempt WMI process creation via DCOM activation over named pipes.
-///
 /// Implements the full 5-phase DCOM/WMI protocol:
 /// 1. Endpoint Mapper resolution
 /// 2. DCOM activation (RemoteCreateInstance)
@@ -314,7 +316,6 @@ fn random_causality_id() -> [u8; 16] {
 }
 
 /// Build ORPC_THIS header for DCOM calls.
-///
 /// Layout: version(2+2), flags(4), reserved1(4), causality_id(16), extensions(ptr=0)
 fn build_orpc_this() -> Vec<u8> {
     let mut buf = Vec::with_capacity(40);
@@ -403,7 +404,6 @@ fn build_scm_activator_bind() -> Vec<u8> {
 }
 
 /// Build RemoteCreateInstance request (IRemoteSCMActivator opnum 4).
-///
 /// This creates an instance of WbemLocator and returns an OBJREF
 /// for IWbemLevel1Login.
 fn build_remote_create_instance() -> Vec<u8> {
@@ -426,7 +426,6 @@ fn build_remote_create_instance() -> Vec<u8> {
 }
 
 /// Build DCOM Activation Properties for RemoteCreateInstance.
-///
 /// Contains:
 /// - SpecialPropertiesData
 /// - InstantiationInfoData (CLSID_WbemLocator)
@@ -462,7 +461,6 @@ fn build_activation_properties() -> Vec<u8> {
 }
 
 /// Build IWbemLevel1Login::NTLMLogin request (opnum 6).
-///
 /// Parameters: locale("en-US"), namespace("root\\cimv2"), flags, context
 fn build_ntlm_login_request(login_ipid: &[u8; 16]) -> Vec<u8> {
     let mut stub = Vec::new();
@@ -503,7 +501,6 @@ fn build_ntlm_login_request(login_ipid: &[u8; 16]) -> Vec<u8> {
 }
 
 /// Build IWbemServices::ExecMethod request (opnum 24).
-///
 /// Calls Win32_Process.Create with the specified CommandLine.
 fn build_exec_method_request(services_ipid: &[u8; 16], command: &str) -> Vec<u8> {
     let mut stub = Vec::new();
@@ -542,13 +539,11 @@ fn build_exec_method_request(services_ipid: &[u8; 16], command: &str) -> Vec<u8>
 }
 
 /// Encode Win32_Process.Create parameters as IWbemClassObject (simplified OBMSDATA).
-///
 /// Win32_Process.Create takes:
 ///   - CommandLine (string) — required
 ///   - CurrentDirectory (string) — optional
 ///   - ProcessStartupInformation (object) — optional
-///
-/// Returns OBMSDATA blob with CommandLine set.
+///     Returns OBMSDATA blob with CommandLine set.
 fn build_win32_process_create_params(command: &str) -> Vec<u8> {
     let mut data = Vec::new();
 
@@ -615,7 +610,6 @@ fn write_bstr(buf: &mut Vec<u8>, s: &str) {
 }
 
 /// Build IRemUnknown2::RemRelease request to free DCOM interface references.
-///
 /// Releases the specified OIDs to prevent server-side resource leaks.
 fn build_rem_release(ipid: &[u8; 16], oids: &[u64]) -> Vec<u8> {
     let mut stub = Vec::new();
@@ -648,7 +642,6 @@ fn build_rem_release(ipid: &[u8; 16], oids: &[u64]) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// Parse an OBJREF (marshaled interface pointer) from a DCOM response.
-///
 /// Returns `(IPID [16 bytes], OXID, OID)`.
 /// The IPID is used to address subsequent calls to this interface.
 fn parse_objref(response: &[u8]) -> std::result::Result<([u8; 16], u64, u64), String> {
@@ -713,7 +706,6 @@ fn parse_objref(response: &[u8]) -> std::result::Result<([u8; 16], u64, u64), St
 }
 
 /// Parse the ept_map response to extract a dynamic TCP port.
-///
 /// Returns the port number if found, or 0 if the response cannot be parsed.
 fn parse_ept_map_port(response: &[u8]) -> u16 {
     // The ept_map response contains tower data with protocol floors.
@@ -775,7 +767,6 @@ fn find_pattern(data: &[u8], pattern: &[u8]) -> Option<usize> {
 }
 
 /// Build an ept_map DCE/RPC request to resolve IRemoteSCMActivator.
-///
 /// The ept_map operation queries the endpoint mapper for the binding
 /// information of a given interface (IRemoteSCMActivator in our case).
 fn build_ept_map_request() -> Vec<u8> {
@@ -991,6 +982,7 @@ pub struct WmiExecShell<'a> {
 }
 
 impl<'a> WmiExecShell<'a> {
+    /// Runs this module operation.
     pub fn new(session: &'a SmbSession) -> Self {
         WmiExecShell {
             session,
@@ -998,7 +990,7 @@ impl<'a> WmiExecShell<'a> {
             history: Vec::new(),
         }
     }
-
+    /// Runs this module operation.
     pub fn with_config(session: &'a SmbSession, config: WmiExecConfig) -> Self {
         WmiExecShell {
             session,
@@ -1022,12 +1014,13 @@ impl<'a> WmiExecShell<'a> {
 // ═══════════════════════════════════════════════════════════
 //  Executor Implementation
 // ═══════════════════════════════════════════════════════════
-
+/// Data structure used by this module.
 pub struct WmiExecutor {
     creds: super::ExecCredentials,
 }
 
 impl WmiExecutor {
+    /// Runs this module operation.
     pub fn new(creds: super::ExecCredentials) -> Self {
         Self { creds }
     }

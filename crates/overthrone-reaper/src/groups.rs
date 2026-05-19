@@ -5,29 +5,44 @@ use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Structure
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GroupEntry {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// description field
     pub description: Option<String>,
+    /// members field
     pub members: Vec<String>,
+    /// member of field
     pub member_of: Vec<String>,
+    /// Classification for this object.
     pub group_type: GroupKind,
+    /// Item count
     pub admin_count: bool,
+    /// Security Identifier
     pub sid: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum GroupKind {
-    DomainLocal,
+    /// `Global` variant
+    #[default]
     Global,
+    /// `DomainLocal` variant
+    DomainLocal,
+    /// `Universal` variant
     Universal,
+    /// `BuiltIn` variant
     BuiltIn,
+    /// `Unknown` variant
     Unknown(i64),
 }
 
 impl GroupKind {
+    /// Runs this module operation.
     pub fn from_group_type(gt: i64) -> Self {
         // The high bit (0x80000000) is the GROUP_TYPE_SECURITY_ENABLED flag.
         // Mask it off with 0x7FFFFFFF to isolate the group scope/type bits.
@@ -115,17 +130,20 @@ pub async fn enumerate_groups(config: &ReaperConfig) -> Result<Vec<GroupEntry>> 
 }
 
 /// Resolve all groups a principal (user or group DN) is a *transitive* member of.
-///
 /// Uses the AD-specific `LDAP_MATCHING_RULE_IN_CHAIN` OID
 /// (1.2.840.113556.1.4.1941) which AD evaluates server-side and returns
 /// every group in the ancestry chain, including nested parents.
-///
 /// Returns a `Vec<String>` of distinguished names of every group the
 /// principal is a member of (directly or indirectly).
 pub async fn resolve_nested_memberships(
     config: &ReaperConfig,
     principal_dn: &str,
 ) -> Result<Vec<String>> {
+    if principal_dn.is_empty() {
+        tracing::warn!("[groups] resolve_nested_memberships called with empty DN");
+        return Ok(Vec::new());
+    }
+
     let mut conn = crate::runner::ldap_connect(config).await?;
 
     // The LDAP_MATCHING_RULE_IN_CHAIN OID resolves transitive group membership.
@@ -186,4 +204,152 @@ pub fn parse_group_entry(attrs: &HashMap<String, Vec<String>>) -> GroupEntry {
 
 fn first_val(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
     attrs.get(key).and_then(|v| v.first().cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_group_filter() {
+        assert_eq!(group_filter(), "(objectCategory=group)");
+    }
+
+    #[test]
+    fn test_from_group_type_global() {
+        assert!(matches!(GroupKind::from_group_type(2), GroupKind::Global));
+    }
+
+    #[test]
+    fn test_from_group_type_domain_local() {
+        assert!(matches!(
+            GroupKind::from_group_type(4),
+            GroupKind::DomainLocal
+        ));
+    }
+
+    #[test]
+    fn test_from_group_type_universal() {
+        assert!(matches!(
+            GroupKind::from_group_type(8),
+            GroupKind::Universal
+        ));
+    }
+
+    #[test]
+    fn test_from_group_type_builtin() {
+        assert!(matches!(GroupKind::from_group_type(1), GroupKind::BuiltIn));
+    }
+
+    #[test]
+    fn test_from_group_type_security_enabled() {
+        assert!(matches!(
+            GroupKind::from_group_type(0x8000_0002),
+            GroupKind::Global
+        ));
+        assert!(matches!(
+            GroupKind::from_group_type(0x8000_0004),
+            GroupKind::DomainLocal
+        ));
+        assert!(matches!(
+            GroupKind::from_group_type(0x8000_0008),
+            GroupKind::Universal
+        ));
+    }
+
+    #[test]
+    fn test_from_group_type_negative() {
+        let neg = -2147483646i64;
+        assert!(matches!(GroupKind::from_group_type(neg), GroupKind::Global));
+    }
+
+    #[test]
+    fn test_from_group_type_unknown() {
+        assert!(matches!(
+            GroupKind::from_group_type(99),
+            GroupKind::Unknown(99)
+        ));
+    }
+
+    #[test]
+    fn test_from_group_type_zero() {
+        assert!(matches!(
+            GroupKind::from_group_type(0),
+            GroupKind::Unknown(0)
+        ));
+    }
+
+    #[test]
+    fn test_is_privileged_domain_admins() {
+        let g = GroupEntry {
+            sam_account_name: "Domain Admins".into(),
+            ..Default::default()
+        };
+        assert!(g.is_privileged());
+    }
+
+    #[test]
+    fn test_is_privileged_case_insensitive() {
+        let g = GroupEntry {
+            sam_account_name: "DOMAIN ADMINS".into(),
+            ..Default::default()
+        };
+        assert!(g.is_privileged());
+    }
+
+    #[test]
+    fn test_is_privileged_non_privileged() {
+        let g = GroupEntry {
+            sam_account_name: "Sales Team".into(),
+            ..Default::default()
+        };
+        assert!(!g.is_privileged());
+    }
+
+    #[test]
+    fn test_is_privileged_admin_count() {
+        let g = GroupEntry {
+            sam_account_name: "Custom Group".into(),
+            admin_count: true,
+            ..Default::default()
+        };
+        assert!(g.is_privileged());
+    }
+
+    #[test]
+    fn test_ldap_escape_dn_parentheses() {
+        assert_eq!(ldap_escape_dn("CN=Test(User)"), "CN=Test\\28User\\29");
+    }
+
+    #[test]
+    fn test_ldap_escape_dn_backslash() {
+        assert_eq!(ldap_escape_dn("CN=Test\\User"), "CN=Test\\5cUser");
+    }
+
+    #[test]
+    fn test_ldap_escape_dn_asterisk() {
+        assert_eq!(ldap_escape_dn("CN=*Test"), "CN=\\2aTest");
+    }
+
+    #[test]
+    fn test_ldap_escape_dn_null() {
+        assert_eq!(ldap_escape_dn("CN=Test\0"), "CN=Test\\00");
+    }
+
+    #[test]
+    fn test_ldap_escape_dn_noop() {
+        assert_eq!(
+            ldap_escape_dn("CN=Normal,DC=contoso,DC=com"),
+            "CN=Normal,DC=contoso,DC=com"
+        );
+    }
+
+    #[test]
+    fn test_group_attributes_contains_key_fields() {
+        let attrs = group_attributes();
+        assert!(attrs.contains(&"sAMAccountName".to_string()));
+        assert!(attrs.contains(&"groupType".to_string()));
+        assert!(attrs.contains(&"objectSid".to_string()));
+        assert!(attrs.contains(&"member".to_string()));
+    }
 }

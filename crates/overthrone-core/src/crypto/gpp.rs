@@ -26,14 +26,17 @@ const GPP_KEY: [u8; 32] = [
 /// A credential extracted from GPP XML
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GppCredential {
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: String,
+    /// source file field
     pub source_file: String,
+    /// changed field
     pub changed: String,
 }
 
 /// Decrypt a GPP cpassword string.
-///
 /// The cpassword is base64-encoded, AES-256-CBC encrypted with
 /// the well-known Microsoft key (MS14-025) and a zero IV.
 pub fn decrypt_gpp_password(cpassword: &str) -> Result<String> {

@@ -23,7 +23,6 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 /// Cobalt Strike teamserver connection.
-///
 /// Uses `Arc<Mutex<...>>` for shared TCP stream access so that all
 /// `C2Channel` trait methods (which take `&self`) can send commands.
 pub struct CobaltStrikeChannel {
@@ -62,6 +61,7 @@ impl Default for CobaltStrikeChannel {
 }
 
 impl CobaltStrikeChannel {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self {
             stream: Arc::new(Mutex::new(None)),
@@ -72,7 +72,6 @@ impl CobaltStrikeChannel {
     }
 
     /// Send a raw Aggressor Script command to the teamserver and read the response.
-    ///
     /// Protocol: 4-byte big-endian length prefix + UTF-8 command data.
     /// Response: 4-byte big-endian length prefix + UTF-8 response data.
     async fn send_aggressor(&self, command: &str) -> Result<String> {
@@ -122,7 +121,6 @@ impl CobaltStrikeChannel {
     }
 
     /// Task a beacon and poll for results.
-    ///
     /// Sends an Aggressor command, then polls `bdata()` every 2 seconds
     /// until output is available or the timeout (5 min) is exceeded.
     async fn task_beacon(&self, beacon_id: &str, aggressor_cmd: &str) -> Result<C2TaskResult> {

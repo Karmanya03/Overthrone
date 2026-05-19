@@ -95,7 +95,6 @@ impl Esc11Exploiter {
 
     /// Assess the CA for ESC11 vulnerability by reading `InterfaceFlags` from
     /// the remote registry of the CA server via WINREG RPC.
-    ///
     /// This performs a **live** registry read and returns an accurate
     /// `is_vulnerable` value.  Requires an authenticated `SmbSession` to the
     /// CA server with at least `winreg` read access.
@@ -161,12 +160,10 @@ impl Esc11Exploiter {
     }
 
     /// Assess the CA for ESC11 vulnerability.
-    ///
     /// This is a **detection / guidance** method.  It reads the `InterfaceFlags`
     /// registry value from the remote CA via `proto::registry` (MS-RRP) if a
     /// registry session is provided, then produces remediation and exploitation
     /// guidance.
-    ///
     /// For live exploitation the caller should:
     /// 1. Use `overthrone-relay` → HTTP relay chain pointed at the ICPR endpoint.
     /// 2. Coerce a privileged NTLM authentication event.

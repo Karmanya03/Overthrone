@@ -6,6 +6,7 @@ use crate::coerce::{CoerceConfig, CoerceResult};
 use crate::constrained::{ConstrainedConfig, ConstrainedResult};
 use crate::kerberoast::{KerberoastConfig, KerberoastResult};
 use crate::rbcd::{RbcdConfig, RbcdResult};
+use crate::spray::{SprayConfig, SprayResult};
 use crate::tickets::TicketRequest;
 use crate::unconstrained::{UnconstrainedConfig, UnconstrainedResult};
 use crate::userenum::{UserEnumConfig, UserEnumResult};
@@ -79,6 +80,8 @@ pub enum HuntAction {
     AsRepRoast(AsRepRoastConfig),
     /// Enumerate SPN accounts & extract TGS hashes
     Kerberoast(KerberoastConfig),
+    /// Perform a lockout-safe password spray
+    Spray(SprayConfig),
     /// Abuse constrained delegation via S4U chain
     ConstrainedDelegation(ConstrainedConfig),
     /// Discover unconstrained delegation hosts
@@ -102,17 +105,31 @@ pub enum HuntAction {
 /// Unified report from all hunt actions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HuntReport {
+    /// Domain FQDN
     pub domain: String,
+    /// Domain controller IP address
     pub dc_ip: String,
+    /// started at field
     pub started_at: DateTime<Utc>,
+    /// completed at field
     pub completed_at: Option<DateTime<Utc>>,
+    /// asreproast field
     pub asreproast: Option<AsRepRoastResult>,
+    /// kerberoast field
     pub kerberoast: Option<KerberoastResult>,
+    /// spray field
+    pub spray: Option<SprayResult>,
+    /// constrained field
     pub constrained: Option<ConstrainedResult>,
+    /// unconstrained field
     pub unconstrained: Option<UnconstrainedResult>,
+    /// rbcd field
     pub rbcd: Option<RbcdResult>,
+    /// coerce field
     pub coerce: Option<CoerceResult>,
+    /// user enum field
     pub user_enum: Option<UserEnumResult>,
+    /// Error information
     pub errors: Vec<String>,
 }
 
@@ -125,6 +142,7 @@ impl HuntReport {
             completed_at: None,
             asreproast: None,
             kerberoast: None,
+            spray: None,
             constrained: None,
             unconstrained: None,
             rbcd: None,
@@ -142,6 +160,9 @@ impl HuntReport {
         }
         if let Some(ref r) = self.kerberoast {
             count += r.hashes.len();
+        }
+        if let Some(ref r) = self.spray {
+            count += r.valid_creds.len();
         }
         if let Some(ref r) = self.constrained {
             count += r.delegatable_accounts.len();
@@ -200,6 +221,19 @@ impl HuntReport {
                 },
                 r.hashes.len().to_string().bold(),
                 r.spns_checked,
+            );
+        }
+        if let Some(ref r) = self.spray {
+            println!(
+                "  {} Spray:        {} valid creds, {} lockouts, {} attempts",
+                if r.valid_creds.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
+                r.valid_creds.len().to_string().bold(),
+                r.locked_out.len(),
+                r.attempts,
             );
         }
         if let Some(ref r) = self.constrained {
@@ -304,6 +338,13 @@ pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<Hun
                 Err(e) => {
                     error!("Kerberoast failed: {e}");
                     report.errors.push(format!("kerberoast: {e}"));
+                }
+            },
+            HuntAction::Spray(sc) => match crate::spray::run_spray(config, sc).await {
+                Ok(result) => report.spray = Some(result),
+                Err(e) => {
+                    error!("Spray failed: {e}");
+                    report.errors.push(format!("spray: {e}"));
                 }
             },
             HuntAction::ConstrainedDelegation(cc) => {

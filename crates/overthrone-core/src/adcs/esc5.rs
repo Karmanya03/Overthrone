@@ -40,13 +40,18 @@ const EDITFLAGS_REG_PATH: &str = r"SYSTEM\CurrentControlSet\Services\CertSvc\Con
 
 /// Target for ESC5 PKI object ACL abuse
 pub struct Esc5Target {
+    /// Object or account name.
     pub ca_name: String,
+    /// ca server field
     pub ca_server: String,
+    /// Domain FQDN
     pub domain: String,
+    /// current user field
     pub current_user: String,
 }
 
 impl Esc5Target {
+    /// Runs this module operation.
     pub fn new(
         ca_name: impl Into<String>,
         ca_server: impl Into<String>,
@@ -62,7 +67,6 @@ impl Esc5Target {
     }
 
     /// Check if the CA enrollment service has weak ACLs via LDAP.
-    ///
     /// Reads the nTSecurityDescriptor of the enrollment service object
     /// and checks for overly permissive entries (Everyone, Authenticated Users,
     /// Domain Users, Domain Computers having write access).
@@ -137,7 +141,6 @@ impl Esc5Target {
     }
 
     /// Check NTAuthCertificates object ACLs.
-    ///
     /// If an attacker can write to NTAuthCertificates, they can add a rogue CA
     /// certificate and have certificates issued by their CA trusted for domain auth.
     pub async fn check_ntauth_acls(
@@ -314,10 +317,15 @@ impl Esc5Target {
 /// Result of ESC5 ACL check
 #[derive(Debug, Clone)]
 pub struct Esc5AclResult {
+    /// Object or account name.
     pub ca_name: String,
+    /// ca dn field
     pub ca_dn: String,
+    /// vulnerable field
     pub vulnerable: bool,
+    /// findings field
     pub findings: Vec<String>,
+    /// security descriptor raw field
     pub security_descriptor_raw: String,
 }
 
@@ -341,9 +349,7 @@ impl std::fmt::Display for Esc5AclResult {
 
 /// Read the `EditFlags` DWORD from the CA policy module registry key via
 /// native WINREG RPC (MS-RRP protocol over SMB `\pipe\winreg`).
-///
 /// Caller must have already connected `smb` to the CA server.
-///
 /// Flow: Bind → OpenLocalMachine → OpenKey(policy_path) →
 ///       QueryValue("EditFlags") → CloseKey × 2
 pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32> {
@@ -393,7 +399,6 @@ pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32>
 }
 
 /// Write a new `EditFlags` DWORD to the CA policy module registry key via WINREG RPC.
-///
 /// To enable ESC6, OR in `EDITF_ATTRIBUTESUBJECTALTNAME2`.
 /// To restore, AND NOT the same flag.
 pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32) -> Result<()> {

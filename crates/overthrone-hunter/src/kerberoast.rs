@@ -29,7 +29,7 @@ const UAC_NORMAL_ACCOUNT: u32 = 0x00000200;
 // ═══════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone)]
 pub struct KerberoastConfig {
     /// Specific SPNs to target (skip LDAP enumeration if provided)
@@ -46,6 +46,9 @@ pub struct KerberoastConfig {
     pub admin_only: bool,
     /// Downgrade to RC4 (request only etype 23) for easier cracking
     pub downgrade_to_rc4: bool,
+    /// SPN filter glob pattern (e.g. "http/*", "MSSQL*", "CIFS/*")
+    /// Only SPNs matching this pattern will be targeted.
+    pub spn_filter: Option<String>,
 }
 
 impl Default for KerberoastConfig {
@@ -62,6 +65,7 @@ impl Default for KerberoastConfig {
             output_file: None,
             admin_only: false,
             downgrade_to_rc4: false,
+            spn_filter: None,
         }
     }
 }
@@ -69,24 +73,36 @@ impl Default for KerberoastConfig {
 // ═══════════════════════════════════════════════════════════
 // Result
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KerberoastResult {
+    /// Hash value
     pub hashes: Vec<RoastedService>,
+    /// Service Principal Name
     pub spns_checked: usize,
+    /// skipped field
     pub skipped: Vec<(String, String)>,
+    /// Error information
     pub errors: Vec<(String, String)>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoastedService {
+    /// Username for authentication
     pub username: String,
+    /// Service Principal Name
     pub spn: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Classification for this object.
     pub etype: String,
+    /// Hash value
     pub hash_string: String,
+    /// Object or account name.
     pub distinguished_name: Option<String>,
+    /// Item count
     pub admin_count: bool,
+    /// Password for authentication
     pub password_last_set: Option<String>,
 }
 
@@ -158,6 +174,27 @@ async fn enumerate_spn_accounts(
 
         // Admin-only filter
         if kc.admin_only && !u.admin_count {
+            continue;
+        }
+
+        // SPN filter glob matching (supports * and ? wildcards)
+        if let Some(ref filter) = kc.spn_filter {
+            let matched: Vec<String> = u
+                .service_principal_names
+                .iter()
+                .filter(|spn| wildcard_match(spn, filter))
+                .cloned()
+                .collect();
+            if matched.is_empty() {
+                continue;
+            }
+            accounts.push(SpnAccount {
+                sam_account_name: u.sam_account_name.clone(),
+                spns: matched,
+                distinguished_name: u.distinguished_name.clone(),
+                admin_count: u.admin_count,
+                password_last_set: u.pwd_last_set.clone(),
+            });
             continue;
         }
 
@@ -238,7 +275,10 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.yellow} [{bar:40.yellow/dim}] {pos}/{len} Kerberoasting {msg}")
-            .unwrap()
+            .unwrap_or_else(|e| {
+                warn!("Progress bar template error: {e}");
+                ProgressStyle::default_bar()
+            })
             .progress_chars("█▓░"),
     );
 
@@ -326,4 +366,78 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
         skipped,
         errors,
     })
+}
+
+/// Simple wildcard pattern matching (* matches any chars, ? matches single char)
+fn wildcard_match(text: &str, pattern: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let pat_bytes = pattern.as_bytes();
+    let mut ti = 0;
+    let mut pi = 0;
+    let mut star_ti: Option<usize> = None;
+    let mut star_pi: Option<usize> = None;
+
+    while ti < text_bytes.len() {
+        if pi < pat_bytes.len() && (pat_bytes[pi] == b'?' || pat_bytes[pi] == text_bytes[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < pat_bytes.len() && pat_bytes[pi] == b'*' {
+            star_ti = Some(ti);
+            star_pi = Some(pi);
+            pi += 1;
+        } else if let (Some(st), Some(sp)) = (star_ti, star_pi) {
+            ti = st + 1;
+            star_ti = Some(ti);
+            pi = sp + 1;
+        } else {
+            return false;
+        }
+    }
+    while pi < pat_bytes.len() && pat_bytes[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pat_bytes.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wildcard_match_exact() {
+        assert!(wildcard_match(
+            "HTTP/dc01.corp.local",
+            "HTTP/dc01.corp.local"
+        ));
+    }
+
+    #[test]
+    fn test_wildcard_match_star() {
+        assert!(wildcard_match("HTTP/dc01.corp.local", "HTTP/*"));
+    }
+
+    #[test]
+    fn test_wildcard_match_prefix_star() {
+        assert!(wildcard_match(
+            "MSSQLSvc/sql01.corp.local:1433",
+            "MSSQLSvc/*"
+        ));
+    }
+
+    #[test]
+    fn test_wildcard_match_no_match() {
+        assert!(!wildcard_match("HTTP/dc01.corp.local", "LDAP/*"));
+    }
+
+    #[test]
+    fn test_wildcard_match_question_mark() {
+        assert!(wildcard_match("CIFS/dc01", "CIFS/dc?1"));
+        assert!(!wildcard_match("CIFS/dc01", "CIFS/dc?2"));
+    }
+
+    #[test]
+    fn test_wildcard_match_empty() {
+        assert!(wildcard_match("", ""));
+        assert!(!wildcard_match("a", ""));
+    }
 }

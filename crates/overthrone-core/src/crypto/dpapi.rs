@@ -1,8 +1,9 @@
+//! DPAPI (Data Protection API) credential decryption.
+
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 
 /// LAPS v2 encrypted blob structure
-///
 /// Format:
 /// - Offset 0x00 (4 bytes): Version (0x00000001)
 /// - Offset 0x04 (4 bytes): Flags
@@ -11,27 +12,37 @@ use serde::{Deserialize, Serialize};
 /// - Offset 0x14 (N bytes): DPAPI Blob
 #[derive(Debug, Clone)]
 pub struct LapsEncryptedBlob {
+    /// version field
     pub version: u32,
+    /// flags field
     pub flags: u32,
+    /// update timestamp field
     pub update_timestamp: u64,
+    /// Size in bytes
     pub payload_size: u32,
+    /// dpapi blob field
     pub dpapi_blob: Vec<u8>,
 }
 
 /// DPAPI backup key for decryption
 #[derive(Debug, Clone)]
 pub struct DpapiBackupKey {
+    /// Stable unique identifier.
     pub guid: [u8; 16],
+    /// Key data
     pub key_material: Vec<u8>,
 }
 
 /// Decrypted LAPS credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LapsCredentials {
+    /// Object or account name.
     #[serde(rename = "n")]
     pub account_name: String,
+    /// Password for authentication
     #[serde(rename = "p")]
     pub password: String,
+    /// update timestamp field
     #[serde(rename = "t")]
     pub update_timestamp: u64,
 }
@@ -41,10 +52,8 @@ pub struct LapsDecryptor;
 
 impl LapsDecryptor {
     /// Parse LAPS v2 encrypted blob from bytes
-    ///
     /// # Arguments
     /// * `data` - Raw encrypted blob bytes
-    ///
     /// # Returns
     /// * `Ok(LapsEncryptedBlob)` - Parsed blob structure
     /// * `Err(OverthroneError)` - If blob is malformed or too short
@@ -84,11 +93,9 @@ impl LapsDecryptor {
     }
 
     /// Decrypt LAPS v2 encrypted blob using DPAPI backup key
-    ///
     /// # Arguments
     /// * `blob` - Parsed encrypted blob
     /// * `backup_key` - DPAPI backup key
-    ///
     /// # Returns
     /// * `Ok(LapsCredentials)` - Decrypted credentials
     /// * `Err(OverthroneError)` - If decryption fails
@@ -111,7 +118,6 @@ impl LapsDecryptor {
     }
 
     /// Extract master key GUID from DPAPI blob
-    ///
     /// DPAPI blob structure:
     /// - Offset 0x00 (4 bytes): Version
     /// - Offset 0x04 (16 bytes): Master Key GUID
@@ -134,7 +140,6 @@ impl LapsDecryptor {
     }
 
     /// Derive decryption key from backup key and master key GUID
-    ///
     /// Uses HMAC-SHA512(backup_key, master_key_guid) to derive the key
     fn derive_decryption_key(backup_key: &[u8], master_key_guid: &[u8; 16]) -> Result<Vec<u8>> {
         use hmac::{Hmac, Mac};
@@ -156,7 +161,6 @@ impl LapsDecryptor {
     }
 
     /// Decrypt payload using AES-256-GCM
-    ///
     /// Extracts nonce and encrypted data from DPAPI blob, then decrypts
     fn decrypt_payload(dpapi_blob: &[u8], key: &[u8]) -> Result<Vec<u8>> {
         use aes_gcm::{
@@ -196,7 +200,6 @@ impl LapsDecryptor {
     }
 
     /// Parse decrypted JSON payload
-    ///
     /// Expected JSON format:
     /// ```json
     /// {

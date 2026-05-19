@@ -17,7 +17,7 @@ use crate::foreign::{ForeignMembership, TrustRelationship, analyze_foreign_membe
 use crate::trust_map::{TrustEdge, TrustGraph, TrustKind};
 use overthrone_reaper::runner::ReaperResult;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 // ─────────────────────────────────────────────────────────────
 // Attack opportunity model
@@ -55,7 +55,9 @@ pub enum CrossForestTechnique {
     NoSelectiveAuth,
     /// Privileged foreign user in a local privileged group.
     ForeignPrivilegedMembership {
+        /// principal field
         principal: String,
+        /// local group field
         local_group: String,
     },
     /// PAM (Privileged Access Management) trust — shadow principal abuse.
@@ -86,10 +88,15 @@ impl std::fmt::Display for CrossForestTechnique {
 /// Simple severity enum.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
+    /// `Informational` variant
     Informational,
+    /// `Low` variant
     Low,
+    /// `Medium` variant
     Medium,
+    /// `High` variant
     High,
+    /// `Critical` variant
     Critical,
 }
 
@@ -120,6 +127,13 @@ pub fn find_cross_forest_opportunities(
 
     // ── Foreign privileged memberships ──
     for fm in foreign_memberships.iter().filter(|m| m.is_privileged_group) {
+        if fm.foreign_domain.is_empty() || fm.local_domain.is_empty() {
+            debug!(
+                "[cross-forest] Skipping foreign membership with empty domain (principal='{}')",
+                fm.foreign_principal
+            );
+            continue;
+        }
         opps.push(CrossForestOpportunity {
             source_domain: fm.foreign_domain.clone(),
             target_domain: fm.local_domain.clone(),
@@ -132,7 +146,7 @@ pub fn find_cross_forest_opportunities(
                 "Foreign principal '{}' ({}) is a member of privileged local group '{}'",
                 fm.foreign_principal, fm.foreign_domain, fm.local_group
             ),
-            steps: vec![
+            steps: clean_steps(vec![
                 format!(
                     "Compromise the account '{}/{}' (phishing, spray, etc.)",
                     fm.foreign_domain, fm.foreign_principal
@@ -142,13 +156,17 @@ pub fn find_cross_forest_opportunities(
                     fm.local_group, fm.local_domain
                 ),
                 "Escalate within the local domain using the inherited privileges.".to_string(),
-            ],
+            ]),
             sid_filtering_blocks: false,
         });
     }
 
     // ── Trust edge analysis ──
     for trust in &trust_graph.trusts {
+        if trust.source_domain.is_empty() || trust.target_domain.is_empty() {
+            debug!("[cross-forest] Skipping trust edge with empty domain");
+            continue;
+        }
         if !trust.direction.allows_outbound() {
             continue; // skip inbound-only trusts (we can't leverage them outbound)
         }
@@ -170,7 +188,7 @@ pub fn find_cross_forest_opportunities(
                     "SID filtering DISABLED on {} → {} trust — inter-realm TGT with ExtraSids can escalate to target Enterprise Admins",
                     trust.source_domain, trust.target_domain
                 ),
-                steps: build_sid_history_steps(trust),
+                steps: clean_steps(build_sid_history_steps(trust)),
                 sid_filtering_blocks: false,
             });
         }
@@ -183,11 +201,11 @@ pub fn find_cross_forest_opportunities(
                 technique: CrossForestTechnique::TgtDelegationAbuse,
                 severity: Severity::Medium,
                 description: "TGT delegation enabled with SID filtering — S4U2Proxy may allow cross-trust delegation abuse".to_string(),
-                steps: vec![
+                steps: clean_steps(vec![
                     "Find a service account with constrained delegation configured across the trust.".to_string(),
                     format!("Run S4U2Self + S4U2Proxy to impersonate a privileged user in {}", trust.target_domain),
                     "Use the issued service ticket to access target resources.".to_string(),
-                ],
+                ]),
                 sid_filtering_blocks: false,
             });
         }
@@ -203,11 +221,11 @@ pub fn find_cross_forest_opportunities(
                     "Forest trust {} ↔ {} has no selective authentication — any authenticated user can access all resources",
                     trust.source_domain, trust.target_domain
                 ),
-                steps: vec![
+                steps: clean_steps(vec![
                     "Obtain any valid credential in the source domain.".to_string(),
                     format!("Access target domain ({}) resources directly via SMB/RPC.", trust.target_domain),
                     "Look for readable shares, LDAP null sessions, or kerberoastable SPNs.".to_string(),
-                ],
+                ]),
                 sid_filtering_blocks: false,
             });
         }
@@ -223,7 +241,7 @@ pub fn find_cross_forest_opportunities(
                     "External trust to {} with SID filtering DISABLED — SID history injection possible",
                     trust.target_domain
                 ),
-                steps: build_sid_history_steps(trust),
+                steps: clean_steps(build_sid_history_steps(trust)),
                 sid_filtering_blocks: false,
             });
         }
@@ -232,6 +250,15 @@ pub fn find_cross_forest_opportunities(
     // Sort: highest severity first
     opps.sort_by(|a, b| b.severity.cmp(&a.severity));
     opps
+}
+
+/// Deduplicate and filter empty steps, preserving order.
+fn clean_steps(steps: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    steps
+        .into_iter()
+        .filter(|s| !s.is_empty() && seen.insert(s.clone()))
+        .collect()
 }
 
 /// Build ordered steps for the inter-realm TGT / SID-History attack.
@@ -258,14 +285,18 @@ fn build_sid_history_steps(trust: &TrustEdge) -> Vec<String> {
 // ─────────────────────────────────────────────────────────────
 
 /// Detailed guidance for extracting trust key credentials via DCSync.
-///
 /// This generates the operator commands needed before forging an inter-realm TGT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustKeyGuidance {
+    /// Source domain FQDN
     pub source_domain: String,
+    /// Target domain FQDN
     pub target_domain: String,
+    /// dcsync command field
     pub dcsync_command: String,
+    /// Secret value
     pub secretsdump_command: String,
+    /// notes field
     pub notes: Vec<String>,
 }
 
@@ -314,11 +345,11 @@ pub fn build_trust_key_guidance(
 /// Guidance for building the ExtraSids list for a cross-forest golden ticket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtraSidsGuidance {
-    /// Enterprise Admins SID for the target domain  (S-1-5-21-<target>-519)
+    /// Enterprise Admins SID for the target domain  (S-1-5-21-`<target>`-519)
     pub enterprise_admins_sid: String,
-    /// Domain Admins SID for the target domain  (S-1-5-21-<target>-512)
+    /// Domain Admins SID for the target domain  (S-1-5-21-`<target>`-512)
     pub domain_admins_sid: String,
-    /// Schema Admins SID for the target domain  (S-1-5-21-<target>-518)
+    /// Schema Admins SID for the target domain  (S-1-5-21-`<target>`-518)
     pub schema_admins_sid: String,
     /// How to get the target domain SID if not known.
     pub sid_discovery_command: String,
@@ -405,7 +436,6 @@ impl CrossForestAssessment {
 }
 
 /// Run a full cross-forest assessment using reaper output + trust graph.
-///
 /// This is the main entry point for CLI integration and the autonomous pilot.
 pub async fn run_cross_forest_assessment(
     source_domain: &str,
@@ -413,6 +443,21 @@ pub async fn run_cross_forest_assessment(
     reaper: &ReaperResult,
     trust_graph: &TrustGraph,
 ) -> CrossForestAssessment {
+    if source_domain.is_empty() || dc_ip.is_empty() {
+        warn!(
+            "[cross-forest] Empty source_domain or dc_ip — returning empty assessment (domain='{src}', dc='{dc}')",
+            src = source_domain,
+            dc = dc_ip
+        );
+        return CrossForestAssessment {
+            source_domain: source_domain.to_string(),
+            trusts: Vec::new(),
+            foreign_memberships: Vec::new(),
+            opportunities: Vec::new(),
+            key_guidance: Vec::new(),
+        };
+    }
+
     info!(
         "[cross-forest] Starting assessment for {} (DC: {})",
         source_domain, dc_ip
@@ -454,4 +499,92 @@ pub async fn run_cross_forest_assessment(
 
     assessment.log_summary();
     assessment
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_severity_ordering() {
+        assert!(Severity::Critical > Severity::High);
+        assert!(Severity::High > Severity::Medium);
+        assert!(Severity::Medium > Severity::Low);
+        assert!(Severity::Low > Severity::Informational);
+    }
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(Severity::Critical.to_string(), "CRITICAL");
+        assert_eq!(Severity::High.to_string(), "HIGH");
+        assert_eq!(Severity::Medium.to_string(), "MEDIUM");
+        assert_eq!(Severity::Low.to_string(), "LOW");
+        assert_eq!(Severity::Informational.to_string(), "INFO");
+    }
+
+    #[test]
+    fn test_technique_display_sid_history() {
+        let t = CrossForestTechnique::SidHistoryGoldenTicket;
+        assert_eq!(t.to_string(), "SID-History Golden Ticket");
+    }
+
+    #[test]
+    fn test_technique_display_tgt_delegation() {
+        let t = CrossForestTechnique::TgtDelegationAbuse;
+        assert_eq!(t.to_string(), "TGT Delegation Abuse");
+    }
+
+    #[test]
+    fn test_technique_display_external_trust() {
+        let t = CrossForestTechnique::ExternalTrustNoFilter;
+        assert_eq!(t.to_string(), "External Trust — No SID Filtering");
+    }
+
+    #[test]
+    fn test_technique_display_no_selective_auth() {
+        let t = CrossForestTechnique::NoSelectiveAuth;
+        assert_eq!(t.to_string(), "Selective Auth Disabled");
+    }
+
+    #[test]
+    fn test_technique_display_foreign_privileged() {
+        let t = CrossForestTechnique::ForeignPrivilegedMembership {
+            principal: "admin@other.corp".into(),
+            local_group: "Domain Admins".into(),
+        };
+        let s = t.to_string();
+        assert!(s.contains("admin@other.corp"));
+        assert!(s.contains("Domain Admins"));
+    }
+
+    #[test]
+    fn test_technique_display_pam() {
+        let t = CrossForestTechnique::PamTrustAbuse;
+        assert_eq!(t.to_string(), "PAM Trust Shadow-Principal Abuse");
+    }
+
+    #[test]
+    fn test_build_trust_key_guidance() {
+        let g = build_trust_key_guidance("corp.local", "10.0.0.1", "other.corp");
+        assert_eq!(g.source_domain, "corp.local");
+        assert_eq!(g.target_domain, "other.corp");
+        assert!(g.dcsync_command.contains("OTHER$"));
+        assert!(g.secretsdump_command.contains("OTHER$"));
+        assert!(!g.notes.is_empty());
+    }
+
+    #[test]
+    fn test_build_extra_sids_guidance_with_sid() {
+        let g = build_extra_sids_guidance("target.corp", Some("S-1-5-21-1000"));
+        assert_eq!(g.enterprise_admins_sid, "S-1-5-21-1000-519");
+        assert_eq!(g.domain_admins_sid, "S-1-5-21-1000-512");
+        assert_eq!(g.schema_admins_sid, "S-1-5-21-1000-518");
+        assert!(g.sid_discovery_command.contains("target.corp"));
+    }
+
+    #[test]
+    fn test_build_extra_sids_guidance_without_sid() {
+        let g = build_extra_sids_guidance("unk.local", None);
+        assert_eq!(g.enterprise_admins_sid, "S-1-5-21-<unk.local-SID>-519");
+    }
 }

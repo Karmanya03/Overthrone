@@ -30,12 +30,10 @@ impl Esc1Exploiter {
     }
 
     /// Execute ESC1 attack — request a certificate with an arbitrary SAN UPN.
-    ///
     /// # Arguments
     /// * `template` - Vulnerable template name (e.g. "ESC1-Vulnerable")
     /// * `target_upn` - UPN to impersonate (e.g. "administrator@corp.local")
     /// * `subject_cn` - Optional CN for the CSR subject (defaults to "overthrone-attack")
-    ///
     /// # Returns
     /// * `Ok(IssuedCertificate)` with PFX data, thumbprint, serial, and private key
     pub async fn exploit(
@@ -96,7 +94,6 @@ impl Esc1Exploiter {
 
     /// Verify that the issued certificate contains the expected UPN in its
     /// Subject Alternative Name (SAN) extension.
-    ///
     /// OID 2.5.29.17 = subjectAltName
     /// We look for the target UPN anywhere in the SAN DER bytes as a simple
     /// heuristic (full ASN.1 SAN parsing would use x509-parser).

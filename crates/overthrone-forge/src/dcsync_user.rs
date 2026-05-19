@@ -64,13 +64,21 @@ fn next_call_id() -> u32 {
 /// Extracted secrets from DCSync
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DcSyncSecrets {
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Stable unique identifier.
     pub user_rid: u32,
+    /// Hash value
     pub nt_hash: Option<String>,
+    /// Hash value
     pub lm_hash: Option<String>,
+    /// Key data
     pub aes256_key: Option<String>,
+    /// Key data
     pub aes128_key: Option<String>,
+    /// Password for authentication
     pub cleartext_password: Option<String>,
 }
 
@@ -244,11 +252,9 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 // ═══════════════════════════════════════════════════════════
 
 /// Perform an RPC pipe transaction with multi-fragment PDU reassembly.
-///
 /// The DC may respond with multiple RPC response fragments when the reply
 /// exceeds the max_recv_frag size (4096 bytes). Each fragment has the same
 /// call_id but only the last one has pfc_flags bit 1 (PFC_LAST_FRAG) set.
-///
 /// We accumulate all fragment stub data into a single contiguous buffer.
 async fn pipe_transact_reassemble(
     smb: &SmbSession,
@@ -521,10 +527,8 @@ struct DcSyncCursor {
 }
 
 /// Build DRSGetNCChanges request (opnum 3) for full-domain replication
-///
 /// Unlike the single-object variant, this does NOT set EXOP_REPL_OBJ,
 /// uses `base_dn` as the replicating DN, and requests up to 500 objects.
-///
 /// When `cursor` is `Some`, sets `uuidInvocIdSrc` and `usnvecFrom` from
 /// the previous response's cursor to continue replication from where we left off.
 fn build_drs_get_nc_changes_domain(
@@ -591,10 +595,8 @@ fn build_drs_get_nc_changes_domain(
 }
 
 /// Perform full-domain DCSync — replicate all objects in the domain NC.
-///
 /// This is the equivalent of `dcsync_single_user` but without the
 /// EXOP_REPL_OBJ flag, replicating every object in the domain.
-///
 /// Returns both the `ForgeResult` for display and the raw `Vec<DcSyncSecrets>`
 /// for programmatic consumption (e.g., by the ntds-dump module).
 pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, ForgeResult)> {
@@ -762,7 +764,6 @@ fn build_rpc_request_pdu(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// Compute the DRS session key used for decrypting replicated secrets.
-///
 /// The DRS protocol uses the NTLMSSP exported session key from the SMB
 /// authentication.  The fallback path (deriving from NT hash via MD4)
 /// was incorrect and has been removed — NT-hash alone cannot reproduce

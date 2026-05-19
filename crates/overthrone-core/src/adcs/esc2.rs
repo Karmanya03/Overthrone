@@ -24,12 +24,10 @@ impl Esc2Exploiter {
     }
 
     /// Execute ESC2 attack
-    ///
     /// # Arguments
     /// * `template` - Template name with Any Purpose EKU
     /// * `subject_cn` - Subject Common Name for the certificate
     /// * `custom_eku` - Optional custom EKU values to request
-    ///
     /// # Returns
     /// * `Ok(IssuedCertificate)` - Successfully issued certificate
     /// * `Err(OverthroneError)` - If the attack fails

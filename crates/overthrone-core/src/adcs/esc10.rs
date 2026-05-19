@@ -138,7 +138,6 @@ impl Esc10Exploiter {
     }
 
     /// Execute the ESC10 attack.
-    ///
     /// Both variants follow the same certificate-request path; the caller
     /// is responsible for temporarily modifying the victim's UPN (Variant B)
     /// via an LDAP session before invoking this method.
@@ -223,17 +222,14 @@ impl Esc10Exploiter {
     }
 
     /// Perform an ESC10 Variant B attack end-to-end with a live LDAP session.
-    ///
     /// Variant B requires temporarily overwriting a victim user's `userPrincipalName`
     /// so that a certificate requested while the UPN is poisoned maps to `target_upn`
     /// when the DC resolves it via the `CertificateMappingMethods` UPN match bit.
-    ///
     /// This method:
-    /// 1. Writes `target_upn` to the victim's `userPrincipalName` via LDAP.
-    /// 2. Calls `exploit()` to request the certificate.
-    /// 3. Restores the original UPN (even on error paths).
-    ///
-    /// For Variant A the `exploit()` method is sufficient (no UPN modification needed).
+    ///   1. Writes `target_upn` to the victim's `userPrincipalName` via LDAP.
+    ///   2. Calls `exploit()` to request the certificate.
+    ///   3. Restores the original UPN (even on error paths).
+    ///      For Variant A the `exploit()` method is sufficient (no UPN modification needed).
     pub async fn exploit_with_ldap(
         &self,
         config: &Esc10Config,
@@ -280,7 +276,6 @@ impl Esc10Exploiter {
     }
 
     /// Check whether the DC registry indicates ESC10 Variant A
-    ///
     /// Returns guidance text for the operator.  Actual registry read requires
     /// an authenticated `RegistrySession` to the target DC (see `proto::registry`).
     pub fn variant_a_check_command(dc_ip: &str) -> String {

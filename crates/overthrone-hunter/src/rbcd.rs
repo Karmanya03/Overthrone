@@ -19,7 +19,7 @@ use tracing::{error, info, warn};
 // ═══════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone)]
 pub struct RbcdConfig {
     /// The account we control that will do the impersonation
@@ -39,6 +39,7 @@ pub struct RbcdConfig {
     pub cleanup: bool,
     /// Password/hash of the controlled account for TGT request
     pub controlled_secret: Option<String>,
+    /// Hash value
     pub controlled_use_hash: bool,
 }
 
@@ -61,15 +62,22 @@ impl Default for RbcdConfig {
 // ═══════════════════════════════════════════════════════════
 // Result
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RbcdResult {
+    /// target computer field
     pub target_computer: String,
+    /// Item count
     pub controlled_account: String,
+    /// attribute written field
     pub attribute_written: bool,
+    /// s4u success field
     pub s4u_success: bool,
+    /// cleaned up field
     pub cleaned_up: bool,
+    /// success field
     pub success: bool,
+    /// Error information
     pub error: Option<String>,
 }
 
@@ -79,7 +87,6 @@ pub struct RbcdResult {
 
 /// Build a minimal security descriptor (DACL) that grants the controlled
 /// account's SID the right to act on behalf of other identities.
-///
 /// Format: raw binary SECURITY_DESCRIPTOR with a single ACE allowing
 /// the controlled SID full delegation rights.
 fn build_rbcd_security_descriptor(sid_string: &str) -> Result<Vec<u8>> {
@@ -166,7 +173,6 @@ fn parse_sid_string(sid_str: &str) -> Result<Vec<u8>> {
 // ═══════════════════════════════════════════════════════════
 
 /// Write msDS-AllowedToActOnBehalfOfOtherIdentity on the target computer
-///
 /// NOTE: You must add `modify_replace` to your LdapSession impl in
 /// overthrone-core/src/proto/ldap.rs for this to compile. See bottom of file.
 async fn write_rbcd_attribute(config: &HuntConfig, target_dn: &str, sd_bytes: &[u8]) -> Result<()> {
@@ -208,7 +214,6 @@ async fn write_rbcd_attribute(config: &HuntConfig, target_dn: &str, sd_bytes: &[
 }
 
 /// Remove msDS-AllowedToActOnBehalfOfOtherIdentity from the target
-///
 /// NOTE: You must add `modify_delete` to your LdapSession impl in
 /// overthrone-core/src/proto/ldap.rs for this to compile. See bottom of file.
 async fn clear_rbcd_attribute(config: &HuntConfig, target_dn: &str) -> Result<()> {

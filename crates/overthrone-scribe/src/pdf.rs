@@ -4,7 +4,8 @@
 //! severity badges, MITRE ATT&CK table, and remediation roadmap.
 
 use crate::narrative;
-use crate::session::{EngagementSession, Finding, Severity};
+use crate::session::{EngagementSession, EvidenceType, Finding, Severity};
+use anyhow::Context;
 use printpdf::*;
 
 /// PDF page dimensions (A4)
@@ -40,7 +41,6 @@ struct PdfContext {
     /// Font ID for bold text
     font_bold_id: FontId,
     /// Font ID for monospace text
-    #[allow(dead_code)] // Kept for write_mono method
     font_mono_id: FontId,
 }
 
@@ -130,7 +130,6 @@ impl PdfContext {
         self.current_y -= LINE_HEIGHT;
     }
 
-    #[allow(dead_code)] // PDF mono text writer kept for report formatting
     fn write_mono(&mut self, text: &str) {
         self.check_page_break();
         let y = self.current_y;
@@ -194,16 +193,59 @@ impl PdfContext {
 // ═══════════════════════════════════════════════════════════
 
 /// Render a PDF report and return the raw bytes
-pub fn render(session: &EngagementSession) -> Vec<u8> {
+pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(!session.title.is_empty(), "Session title must not be empty");
+
     let mut doc = PdfDocument::new(&session.title);
 
     // Load fonts — use system TTF files for Helvetica-like fonts.
-    // printpdf 0.9 requires ParsedFont; builtin fonts are no longer available.
-    // We embed Liberation Sans (metrically identical to Helvetica) or fall back
-    // to whatever sans-serif is available on the system.
-    let font_regular = load_builtin_font_regular();
-    let font_bold = load_builtin_font_bold();
-    let font_mono = load_builtin_font_mono();
+    // Gracefully fall back through font styles, then all paths combined.
+    let font_regular = load_builtin_font_regular()
+        .or_else(|| {
+            tracing::warn!("No regular sans-serif font found, trying bold font");
+            load_builtin_font_bold()
+        })
+        .or_else(|| {
+            tracing::warn!("No bold font found, trying monospace font");
+            load_builtin_font_mono()
+        })
+        .or_else(|| {
+            tracing::warn!("No preferred font found, scanning all font paths");
+            let all_candidates = &[
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/Library/Fonts/Arial.ttf",
+                "C:\\Windows\\Fonts\\arial.ttf",
+                "C:\\Windows\\Fonts\\calibri.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/Library/Fonts/Arial Bold.ttf",
+                "C:\\Windows\\Fonts\\arialbd.ttf",
+                "C:\\Windows\\Fonts\\calibrib.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+                "C:\\Windows\\Fonts\\cour.ttf",
+                "C:\\Windows\\Fonts\\consola.ttf",
+            ];
+            load_font_from_paths(all_candidates)
+        })
+        .context("Could not find any usable font on this system")?;
+
+    let font_bold = load_builtin_font_bold()
+        .or_else(|| {
+            tracing::warn!("No bold font found, reusing regular font");
+            Some(font_regular.clone())
+        })
+        .context("Could not load bold font")?;
+
+    let font_mono = load_builtin_font_mono()
+        .or_else(|| {
+            tracing::warn!("No monospace font found, reusing regular font");
+            Some(font_regular.clone())
+        })
+        .context("Could not load monospace font")?;
 
     let font_id = doc.add_font(&font_regular);
     let font_bold_id = doc.add_font(&font_bold);
@@ -285,8 +327,9 @@ pub fn render(session: &EngagementSession) -> Vec<u8> {
     // Finalize all pages and save
     let pages = ctx.finish();
     let mut warnings = Vec::new();
-    doc.with_pages(pages)
-        .save(&PdfSaveOptions::default(), &mut warnings)
+    Ok(doc
+        .with_pages(pages)
+        .save(&PdfSaveOptions::default(), &mut warnings))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -294,8 +337,8 @@ pub fn render(session: &EngagementSession) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// Attempt to load a regular sans-serif font from common system paths.
-/// Falls back to an embedded minimal font if nothing is found.
-fn load_builtin_font_regular() -> ParsedFont {
+/// Returns `None` if no font is found (caller should fall back).
+fn load_builtin_font_regular() -> Option<ParsedFont> {
     let candidates = [
         // Linux
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -308,10 +351,14 @@ fn load_builtin_font_regular() -> ParsedFont {
         "C:\\Windows\\Fonts\\arial.ttf",
         "C:\\Windows\\Fonts\\calibri.ttf",
     ];
-    load_font_from_paths(&candidates).expect("Could not find any sans-serif font on this system")
+    let font = load_font_from_paths(&candidates);
+    if font.is_none() {
+        tracing::warn!("Could not load regular sans-serif font from any known path");
+    }
+    font
 }
 
-fn load_builtin_font_bold() -> ParsedFont {
+fn load_builtin_font_bold() -> Option<ParsedFont> {
     let candidates = [
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
@@ -321,11 +368,14 @@ fn load_builtin_font_bold() -> ParsedFont {
         "C:\\Windows\\Fonts\\arialbd.ttf",
         "C:\\Windows\\Fonts\\calibrib.ttf",
     ];
-    load_font_from_paths(&candidates)
-        .expect("Could not find any bold sans-serif font on this system")
+    let font = load_font_from_paths(&candidates);
+    if font.is_none() {
+        tracing::warn!("Could not load bold sans-serif font from any known path");
+    }
+    font
 }
 
-fn load_builtin_font_mono() -> ParsedFont {
+fn load_builtin_font_mono() -> Option<ParsedFont> {
     let candidates = [
         "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
         "/usr/share/fonts/TTF/LiberationMono-Regular.ttf",
@@ -339,9 +389,11 @@ fn load_builtin_font_mono() -> ParsedFont {
         "C:\\Windows\\Fonts\\cour.ttf",
         "C:\\Windows\\Fonts\\consola.ttf",
     ];
-    // Fall back to the regular sans-serif font if no mono font is found — better
-    // than panicking in CI environments without mono fonts installed.
-    load_font_from_paths(&candidates).unwrap_or_else(load_builtin_font_regular)
+    let font = load_font_from_paths(&candidates);
+    if font.is_none() {
+        tracing::warn!("Could not load monospace font from any known path");
+    }
+    font
 }
 
 fn load_font_from_paths(paths: &[&str]) -> Option<ParsedFont> {
@@ -401,6 +453,9 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         finding.id, finding.severity, finding.cvss_score
     ));
     ctx.write_body(&format!("Category: {}", finding.category));
+    if let Some(ref vector) = finding.cvss_vector {
+        ctx.write_body(&format!("Vector: {}", vector));
+    }
     ctx.skip_lines(1);
 
     ctx.write_heading2("Description");
@@ -423,10 +478,59 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         ctx.skip_lines(1);
     }
 
+    // Evidence (redacted for credentials, truncated for long content)
+    if !finding.evidence.is_empty() {
+        ctx.write_heading2("Evidence");
+        for ev in &finding.evidence {
+            ctx.write_body(&format!("{} ({:?})", ev.label, ev.content_type));
+            let display = if ev.content_type == EvidenceType::Credential {
+                "[REDACTED — see secure appendix]".to_string()
+            } else if ev.content.len() > 500 {
+                format!(
+                    "{}…\n(truncated — {} total characters)",
+                    &ev.content[..500],
+                    ev.content.len()
+                )
+            } else {
+                ev.content.clone()
+            };
+            for line in display.lines() {
+                ctx.write_mono(line);
+            }
+            ctx.skip_lines(1);
+        }
+    }
+
+    // MITRE ATT&CK
+    if !finding.mitre.is_empty() {
+        ctx.write_heading2("MITRE ATT&CK");
+        for m in &finding.mitre {
+            ctx.write_body(&format!(
+                "  • {} — {} ({})",
+                m.technique_id, m.technique_name, m.tactic
+            ));
+        }
+        ctx.skip_lines(1);
+    }
+
+    // Recommendations with full details
     if !finding.mitigations.is_empty() {
         ctx.write_heading2("Recommendations");
         for mit in &finding.mitigations {
-            ctx.write_body(&format!("  • {} [{}]", mit.title, mit.priority));
+            ctx.write_body(&format!(
+                "  • {} [{}] [Effort: {}]",
+                mit.title, mit.priority, mit.effort
+            ));
+            ctx.write_body_wrapped(&format!("    {}", mit.description));
+            ctx.skip_lines(1);
+        }
+    }
+
+    // References
+    if !finding.references.is_empty() {
+        ctx.write_heading2("References");
+        for r in &finding.references {
+            ctx.write_body(&format!("  • {}", r));
         }
     }
 }

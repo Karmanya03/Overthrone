@@ -2,6 +2,7 @@ use overthrone_core::graph::{AttackGraph, EdgeId, EdgeRef, NodeId, NodeType};
 use overthrone_reaper::acls::AclFinding;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use tracing::warn;
 
 /// Application state for the TUI
 pub struct App {
@@ -161,7 +162,10 @@ impl App {
     /// Update layout positions using force-directed algorithm
     pub fn update_layout(&mut self) {
         let (nodes, edges) = {
-            let graph = self.graph.lock().unwrap();
+            let graph = self.graph.lock().unwrap_or_else(|e| {
+                warn!("Mutex poisoned in App — recovering data");
+                e.into_inner()
+            });
             (
                 graph.nodes().map(|(id, _)| id).collect::<Vec<_>>(),
                 graph
@@ -294,7 +298,10 @@ impl App {
     }
 
     pub fn refresh_stats(&mut self) {
-        let graph = self.graph.lock().unwrap();
+        let graph = self.graph.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in App — recovering data");
+            e.into_inner()
+        });
         self.stats = GraphStats {
             total_nodes: graph.node_count(),
             users: graph.nodes_of_type(NodeType::User).count(),

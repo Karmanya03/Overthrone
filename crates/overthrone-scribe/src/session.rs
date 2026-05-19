@@ -18,10 +18,15 @@ use uuid::Uuid;
 /// Finding severity aligned with CVSS v3.1 qualitative ratings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Severity {
+    /// `Informational` variant
     Informational,
+    /// `Low` variant
     Low,
+    /// `Medium` variant
     Medium,
+    /// `High` variant
     High,
+    /// `Critical` variant
     Critical,
 }
 
@@ -37,6 +42,7 @@ impl Severity {
         }
     }
 
+    /// Display color hex code for this severity level
     pub fn color_code(&self) -> &'static str {
         match self {
             Self::Informational => "#3498db",
@@ -47,6 +53,7 @@ impl Severity {
         }
     }
 
+    /// Human-readable short label for this severity level
     pub fn label(&self) -> &'static str {
         match self {
             Self::Informational => "INFO",
@@ -106,17 +113,29 @@ pub struct Finding {
 /// Finding categories
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FindingCategory {
+    /// `WeakAuthentication` variant
     WeakAuthentication,
+    /// `KerberosAbuse` variant
     KerberosAbuse,
+    /// `PrivilegeEscalation` variant
     PrivilegeEscalation,
+    /// `LateralMovement` variant
     LateralMovement,
+    /// `CredentialExposure` variant
     CredentialExposure,
+    /// `Misconfiguration` variant
     Misconfiguration,
+    /// `InsufficientLogging` variant
     InsufficientLogging,
+    /// `DelegationAbuse` variant
     DelegationAbuse,
+    /// `WeakEncryption` variant
     WeakEncryption,
+    /// `DefaultCredentials` variant
     DefaultCredentials,
+    /// `PasswordPolicy` variant
     PasswordPolicy,
+    /// `Other` variant
     Other(String),
 }
 
@@ -142,19 +161,29 @@ impl std::fmt::Display for FindingCategory {
 /// Evidence item attached to a finding
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceItem {
+    /// label field
     pub label: String,
+    /// content field
     pub content: String,
+    /// Classification for this object.
     pub content_type: EvidenceType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvidenceType {
+    /// `CommandOutput` variant
     CommandOutput,
+    /// `Hash` variant
     Hash,
+    /// `Credential` variant
     Credential,
+    /// `LogEntry` variant
     LogEntry,
+    /// `Screenshot` variant
     Screenshot,
+    /// `Configuration` variant
     Configuration,
+    /// `NetworkCapture` variant
     NetworkCapture,
 }
 
@@ -166,44 +195,69 @@ pub enum EvidenceType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngagementSession {
     // ── Metadata ──
+    /// Stable unique identifier.
     pub id: String,
+    /// title field
     pub title: String,
+    /// Object or account name.
     pub client_name: String,
+    /// Object or account name.
     pub assessor_name: String,
+    /// assessor company field
     pub assessor_company: String,
+    /// Classification for this object.
     pub engagement_type: EngagementType,
+    /// classification field
     pub classification: String,
+    /// version field
     pub version: String,
 
     // ── Timeline ──
+    /// started at field
     pub started_at: DateTime<Utc>,
+    /// finished at field
     pub finished_at: Option<DateTime<Utc>>,
 
     // ── Scope ──
+    /// scope field
     pub scope: EngagementScope,
 
     // ── Findings ──
+    /// findings field
     pub findings: Vec<Finding>,
 
     // ── Raw data from pilot ──
+    /// engagement state field
     pub engagement_state: Option<EngagementState>,
+    /// autopwn result field
     pub autopwn_result: Option<AutoPwnResult>,
 
     // ── Summary stats ──
+    /// Domain FQDN
     pub domain_admin_achieved: bool,
+    /// Total count
     pub total_users_enumerated: usize,
+    /// Total count
     pub total_computers_enumerated: usize,
+    /// Total count
     pub total_credentials_compromised: usize,
+    /// Total count
     pub total_admin_hosts: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngagementType {
+    /// `InternalPentest` variant
     InternalPentest,
+    /// `ExternalPentest` variant
     ExternalPentest,
+    /// `RedTeam` variant
     RedTeam,
+    /// `PurpleTeam` variant
     PurpleTeam,
+    /// `AdAssessment` variant
     AdAssessment,
+    /// `Custom` variant
     Custom(String),
 }
 
@@ -221,11 +275,17 @@ impl std::fmt::Display for EngagementType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Data structure used by this module.
 pub struct EngagementScope {
+    /// Domain FQDN
     pub domains: Vec<String>,
+    /// ip ranges field
     pub ip_ranges: Vec<String>,
+    /// excluded hosts field
     pub excluded_hosts: Vec<String>,
+    /// rules of engagement field
     pub rules_of_engagement: Vec<String>,
+    /// objectives field
     pub objectives: Vec<String>,
 }
 
@@ -612,5 +672,156 @@ impl EngagementSession {
         } else {
             Severity::Informational
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_severity_cvss_min() {
+        assert_eq!(Severity::Informational.cvss_min(), 0.0);
+        assert_eq!(Severity::Low.cvss_min(), 0.1);
+        assert_eq!(Severity::Medium.cvss_min(), 4.0);
+        assert_eq!(Severity::High.cvss_min(), 7.0);
+        assert_eq!(Severity::Critical.cvss_min(), 9.0);
+    }
+
+    #[test]
+    fn test_severity_color_code() {
+        assert_eq!(Severity::Critical.color_code(), "#8e44ad");
+        assert_eq!(Severity::High.color_code(), "#e74c3c");
+        assert_eq!(Severity::Informational.color_code(), "#3498db");
+    }
+
+    #[test]
+    fn test_severity_label() {
+        assert_eq!(Severity::Critical.label(), "CRITICAL");
+        assert_eq!(Severity::High.label(), "HIGH");
+        assert_eq!(Severity::Medium.label(), "MEDIUM");
+        assert_eq!(Severity::Low.label(), "LOW");
+        assert_eq!(Severity::Informational.label(), "INFO");
+    }
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(Severity::Critical.to_string(), "CRITICAL");
+    }
+
+    #[test]
+    fn test_severity_ordering() {
+        assert!(Severity::Critical > Severity::High);
+        assert!(Severity::High > Severity::Medium);
+        assert!(Severity::Medium > Severity::Low);
+        assert!(Severity::Low > Severity::Informational);
+    }
+
+    #[test]
+    fn test_finding_category_display() {
+        assert_eq!(
+            FindingCategory::WeakAuthentication.to_string(),
+            "Weak Authentication"
+        );
+        assert_eq!(FindingCategory::KerberosAbuse.to_string(), "Kerberos Abuse");
+        assert_eq!(
+            FindingCategory::Other("Custom".into()).to_string(),
+            "Custom"
+        );
+    }
+
+    #[test]
+    fn test_engagement_session_severity_counts_empty() {
+        let session = EngagementSession {
+            id: "test".into(),
+            title: "".into(),
+            client_name: "".into(),
+            assessor_name: "".into(),
+            assessor_company: "".into(),
+            engagement_type: EngagementType::InternalPentest,
+            classification: "".into(),
+            version: "".into(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            scope: EngagementScope {
+                domains: vec![],
+                ip_ranges: vec![],
+                excluded_hosts: vec![],
+                objectives: vec![],
+                rules_of_engagement: vec![],
+            },
+            findings: vec![],
+            engagement_state: None,
+            autopwn_result: None,
+            domain_admin_achieved: false,
+            total_users_enumerated: 0,
+            total_computers_enumerated: 0,
+            total_credentials_compromised: 0,
+            total_admin_hosts: 0,
+        };
+        let counts = session.severity_counts();
+        assert_eq!(counts.get(&Severity::Informational).unwrap_or(&0), &0);
+    }
+
+    #[test]
+    fn test_engagement_session_overall_risk() {
+        let mut session = EngagementSession {
+            id: "test".into(),
+            title: "".into(),
+            client_name: "".into(),
+            assessor_name: "".into(),
+            assessor_company: "".into(),
+            engagement_type: EngagementType::InternalPentest,
+            classification: "".into(),
+            version: "".into(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            scope: EngagementScope {
+                domains: vec![],
+                ip_ranges: vec![],
+                excluded_hosts: vec![],
+                objectives: vec![],
+                rules_of_engagement: vec![],
+            },
+            findings: vec![],
+            engagement_state: None,
+            autopwn_result: None,
+            domain_admin_achieved: false,
+            total_users_enumerated: 0,
+            total_computers_enumerated: 0,
+            total_credentials_compromised: 0,
+            total_admin_hosts: 0,
+        };
+        assert_eq!(session.overall_risk(), Severity::Informational);
+        session.findings.push(Finding {
+            id: "F1".into(),
+            title: "".into(),
+            severity: Severity::Critical,
+            cvss_score: 0.0,
+            cvss_vector: None,
+            category: FindingCategory::WeakAuthentication,
+            description: "".into(),
+            affected_assets: vec![],
+            proof_of_concept: vec![],
+            evidence: vec![],
+            mitre: vec![],
+            mitigations: vec![],
+            business_impact: "".into(),
+            references: vec![],
+            discovered_at: chrono::Utc::now(),
+        });
+        assert_eq!(session.overall_risk(), Severity::Critical);
+    }
+
+    #[test]
+    fn test_engagement_type_display() {
+        assert_eq!(
+            EngagementType::InternalPentest.to_string(),
+            "Internal Penetration Test"
+        );
+        assert_eq!(
+            EngagementType::ExternalPentest.to_string(),
+            "External Penetration Test"
+        );
     }
 }

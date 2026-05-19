@@ -123,7 +123,6 @@ pub fn linked_oid_ldap_filter() -> &'static str {
 }
 
 /// Build the LDAP base DN for OID objects given the forest root domain NC.
-///
 /// Example: for `dc=corp,dc=local` → `CN=OID,CN=Public Key Services,
 /// CN=Services,CN=Configuration,DC=corp,DC=local`
 pub fn oid_container_dn(forest_root_nc: &str) -> String {
@@ -237,7 +236,6 @@ impl Esc13Exploiter {
 
     /// Emit a warning if the specified OID is not found inside the
     /// Certificate Policies extension (OID 2.5.29.32) of the issued certificate.
-    ///
     /// The method scans the raw DER bytes of the extension value for the expected
     /// OID string encoded as UTF-8 (a best-effort heuristic; a correct approach
     /// would fully parse the CertificatePolicies ASN.1 sequence).

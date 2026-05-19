@@ -1,30 +1,30 @@
 //! TUI graph canvas and node-detail panel rendering.
 //!
 //! Bugs fixed vs. original:
-//!  • `EdgeRef` imported but never used — removed dead import
-//!  • `highlighted` colour was `LightRed` — same as critical edges, invisible on path;
+//!  â€¢ `EdgeRef` imported but never used â€” removed dead import
+//!  â€¢ `highlighted` colour was `LightRed` â€” same as critical edges, invisible on path;
 //!    changed to `LightYellow` for contrast
-//!  • `graph` MutexGuard held across `f.render_widget` — potential deadlock;
+//!  â€¢ `graph` MutexGuard held across `f.render_widget` â€” potential deadlock;
 //!    data is now cloned out before the lock is released
-//!  • `Some(match { return None; ... })` pattern caused rustc delimiter mismatch —
+//!  â€¢ `Some(match { return None; ... })` pattern caused rustc delimiter mismatch â€”
 //!    `edge_abuse_info` rewritten so every arm returns `Option<&'static str>` directly,
 //!    no wrapping `Some(match {...})` and no `return` inside the match
-//!  • `Box::leak` for Custom edge string caused unbounded memory leak — removed;
+//!  â€¢ `Box::leak` for Custom edge string caused unbounded memory leak â€” removed;
 //!    Custom/MemberOf/Contains arms now return `None`
-//!  • `let Some(x) = ... else { ... }` let-else replaced with explicit `match` to
+//!  â€¢ `let Some(x) = ... else { ... }` let-else replaced with explicit `match` to
 //!    avoid indentation-mismatch false positives from rust-analyzer
-//!  • Severity-coloured ACL findings summary in the graph overview panel
+//!  â€¢ Severity-coloured ACL findings summary in the graph overview panel
 //!
 //! New features:
-//!  • `render_acl_findings` — scrollable ACL findings panel
-//!  • `render_paths` — attack-path panel with per-hop abuse notes
-//!  • `render_legend` — colour-coded edge-type legend overlay
-//!  • Scroll offset support via `app.graph_scroll`, `app.detail_scroll`,
+//!  â€¢ `render_acl_findings` â€” scrollable ACL findings panel
+//!  â€¢ `render_paths` â€” attack-path panel with per-hop abuse notes
+//!  â€¢ `render_legend` â€” colour-coded edge-type legend overlay
+//!  â€¢ Scroll offset support via `app.graph_scroll`, `app.detail_scroll`,
 //!    `app.acl_scroll`, `app.path_scroll`
-//!  • `node_color()` helper covering GPO / OU / CertTemplate node types
-//!  • `edge_color_by_name()` for statistics view
-//!  • Visual graph canvas with clean node/edge rendering
-//!  • Node type visibility toggles (users/computers/groups/etc.)
+//!  â€¢ `node_color()` helper covering GPO / OU / CertTemplate node types
+//!  â€¢ `edge_color_by_name()` for statistics view
+//!  â€¢ Visual graph canvas with clean node/edge rendering
+//!  â€¢ Node type visibility toggles (users/computers/groups/etc.)
 
 use crate::tui::app::App;
 use overthrone_core::graph::{EdgeRef, EdgeType, NodeId, NodeType};
@@ -36,11 +36,11 @@ use ratatui::widgets::{
 };
 use std::collections::HashMap;
 use std::time::Instant;
+use tracing::warn;
 
-// ─── Colour helpers ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Colour helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Map an edge type to its display colour.
-///
 /// When `highlighted` is `true` (the edge lies on the current attack path) the
 /// colour is overridden to `LightYellow` so it contrasts against the `LightRed`
 /// already used for high-severity edges like `GenericAll` / `AdminTo`.
@@ -182,65 +182,67 @@ fn edge_color_by_name(name: &str) -> Color {
 }
 
 /// Short abuse description for an edge type.
-///
 /// Returns `None` for non-abusable traversal edges (MemberOf, Contains, Custom).
-///
 /// **Key fix:** every arm returns `Option<&'static str>` directly.  The original
 /// code used `Some(match { ... })` with `return None` / `return Some(...)` inside
 /// the match body, which confused rustc's brace balancer and produced the
 /// "unexpected closing delimiter" error at the last `}` of the file.
 fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
     match edge_type {
-        EdgeType::AdminTo => Some("Local admin — exec via WMI / WinRM / SMB / PsExec"),
-        EdgeType::GenericAll => Some("Full control — reset password, modify DACL, add to group"),
+        EdgeType::AdminTo => Some("Local admin â€” exec via WMI / WinRM / SMB / PsExec"),
+        EdgeType::GenericAll => Some("Full control â€” reset password, modify DACL, add to group"),
         EdgeType::GenericWrite => {
-            Some("Write non-protected attributes — SPN, KeyCredentialLink, etc.")
+            Some("Write non-protected attributes â€” SPN, KeyCredentialLink, etc.")
         }
-        EdgeType::WriteDacl => Some("Modify DACL → grant yourself GenericAll"),
-        EdgeType::WriteOwner => Some("Take ownership → modify DACL → GenericAll"),
-        EdgeType::Owns => Some("Already owner — modify DACL to gain GenericAll"),
+        EdgeType::WriteDacl => Some("Modify DACL â†’ grant yourself GenericAll"),
+        EdgeType::WriteOwner => Some("Take ownership â†’ modify DACL â†’ GenericAll"),
+        EdgeType::Owns => Some("Already owner â€” modify DACL to gain GenericAll"),
         EdgeType::ForceChangePassword => {
             Some("net rpc password / Set-ADAccountPassword (no current pw needed)")
         }
         EdgeType::AddMembers => Some("Add yourself / controlled account to the group"),
-        EdgeType::AddSelf => Some("Self-write validated right — add your own account to the group"),
+        EdgeType::AddSelf => {
+            Some("Self-write validated right â€” add your own account to the group")
+        }
         EdgeType::AllowedToDelegate => {
-            Some("S4U2Self + S4U2Proxy → impersonate any user to target service")
+            Some("S4U2Self + S4U2Proxy â†’ impersonate any user to target service")
         }
         EdgeType::AllowedToAct => {
-            Some("RBCD → getST.py to impersonate Domain Admin to target computer")
+            Some("RBCD â†’ getST.py to impersonate Domain Admin to target computer")
         }
-        EdgeType::DcSync => Some("secretsdump.py -just-dc → dump NTDS + all NTLM hashes"),
+        EdgeType::DcSync => Some("secretsdump.py -just-dc â†’ dump NTDS + all NTLM hashes"),
         EdgeType::GetChanges | EdgeType::GetChangesAll => {
-            Some("Part of DCSync right — principal needs both GetChanges flags")
+            Some("Part of DCSync right â€” principal needs both GetChanges flags")
         }
         EdgeType::ReadLapsPassword => {
-            Some("Read ms-Mcs-AdmPwd / ms-LAPS-Password → cleartext local admin cred")
+            Some("Read ms-Mcs-AdmPwd / ms-LAPS-Password â†’ cleartext local admin cred")
         }
         EdgeType::ReadGmsaPassword => {
-            Some("GMSAPasswordReader → NT hash for lateral movement as gMSA")
+            Some("GMSAPasswordReader â†’ NT hash for lateral movement as gMSA")
         }
         EdgeType::HasSidHistory => {
-            Some("SID in SIDHistory → principal implicitly member of historical group")
+            Some("SID in SIDHistory â†’ principal implicitly member of historical group")
         }
-        EdgeType::CanRDP => Some("xfreerdp / mstsc — GUI access; local admin may not be required"),
-        EdgeType::CanPSRemote => Some("Enter-PSSession / evil-winrm — PowerShell remoting"),
+        EdgeType::CanRDP => {
+            Some("xfreerdp / mstsc â€” GUI access; local admin may not be required")
+        }
+        EdgeType::CanPSRemote => Some("Enter-PSSession / evil-winrm â€” PowerShell remoting"),
         EdgeType::ExecuteDCOM => Some("Invoke-DCOM / MMC20.Application lateral movement"),
-        EdgeType::SQLAdmin => Some("SQL Server sysadmin → xp_cmdshell / CLR assembly RCE"),
+        EdgeType::SQLAdmin => Some("SQL Server sysadmin â†’ xp_cmdshell / CLR assembly RCE"),
         EdgeType::HasSession => {
             Some("Token impersonation if admin on host (Incognito / mimikatz tokens)")
         }
-        EdgeType::HasSpn => Some("GetUserSPNs.py → offline TGS crack (Kerberoast)"),
-        EdgeType::DontReqPreauth => Some("GetNPUsers.py → AS-REP roast (DONT_REQ_PREAUTH set)"),
-        EdgeType::GpoLink => Some("Link GPO to OU → immediate exec on Group Policy refresh"),
+        EdgeType::HasSpn => Some("GetUserSPNs.py â†’ offline TGS crack (Kerberoast)"),
+        EdgeType::DontReqPreauth => Some("GetNPUsers.py â†’ AS-REP roast (DONT_REQ_PREAUTH set)"),
+        EdgeType::GpoLink => Some("Link GPO to OU â†’ immediate exec on Group Policy refresh"),
         EdgeType::TrustedBy => {
-            Some("Cross-domain trust — SID injection / trust escalation potential")
+            Some("Cross-domain trust â€” SID injection / trust escalation potential")
         }
         EdgeType::AdcsEsc1 | EdgeType::AdcsEsc6 | EdgeType::AdcsEsc16 => {
             Some("ADCS: Impersonate any user via SAN / UPN poisoning")
         }
-        EdgeType::AdcsEsc3 => Some("ADCS: Enrollment agent path — request on behalf of others"),
-        EdgeType::AdcsEsc4 => Some("ADCS: Template modification — grant yourself enroll rights"),
+        EdgeType::AdcsEsc3 => Some("ADCS: Enrollment agent path â€” request on behalf of others"),
+        EdgeType::AdcsEsc4 => Some("ADCS: Template modification â€” grant yourself enroll rights"),
         EdgeType::AdcsEsc9 | EdgeType::AdcsEsc15 => {
             Some("ADCS: No-security-extension abuse / UPN poisoning")
         }
@@ -254,7 +256,7 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
         | EdgeType::AdcsEsc12
         | EdgeType::AdcsEsc13 => Some("ADCS: Configuration-based certificate abuse path"),
 
-        // Non-abusable traversal / membership edges — no abuse note
+        // Non-abusable traversal / membership edges â€” no abuse note
         EdgeType::Custom(name) => edge_abuse_info_by_name(name),
         EdgeType::MemberOf | EdgeType::Contains => None,
     }
@@ -683,10 +685,9 @@ fn push_edge_guidance<'a>(lines: &mut Vec<Line<'a>>, edge_type: &EdgeType, inden
     }
 }
 
-// ─── Graph overview panel ─────────────────────────────────────────────────────
+// â”€â”€â”€ Graph overview panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the graph-overview canvas (left pane of the Graph tab).
-///
 /// The `graph` Mutex is locked only long enough to copy out the data we need.
 /// The lock is released before any call to `f.render_widget`, preventing a
 /// deadlock when the background collector thread contends the same lock.
@@ -694,7 +695,10 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
     let render_started = Instant::now();
     // Collect stats under the lock, then drop it immediately.
     let (stats, hv_targets, _nodes, _edges) = {
-        let graph = app.graph.lock().unwrap();
+        let graph = app.graph.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in GraphView â€” recovering data");
+            e.into_inner()
+        });
         let stats = graph.stats();
         let hv = graph.high_value_targets(8);
         // Clone node positions for rendering
@@ -731,7 +735,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
 
     // Header
     lines.push(Line::from(vec![Span::styled(
-        " ⚡ Graph Overview ",
+        " âš¡ Graph Overview ",
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -923,7 +927,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
                 format!("{}", acls.len()),
                 Style::default().fg(Color::Yellow),
             ),
-            Span::raw("   Critical (sev ≤ 2): "),
+            Span::raw("   Critical (sev â‰¤ 2): "),
             Span::styled(
                 format!("{}", critical_count),
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -932,9 +936,9 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
         for finding in acls.iter().filter(|f| f.severity == 1).take(5) {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("⚠ ", Style::default().fg(Color::Red)),
+                Span::styled("âš  ", Style::default().fg(Color::Red)),
                 Span::styled(
-                    format!("{} → {:?}", finding.principal, finding.right),
+                    format!("{} â†’ {:?}", finding.principal, finding.right),
                     Style::default().fg(Color::LightRed),
                 ),
                 Span::raw("  on "),
@@ -964,7 +968,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(Span::styled(
-                    " Graph Canvas [↑/↓ scroll] ",
+                    " Graph Canvas [â†‘/â†“ scroll] ",
                     Style::default().fg(Color::Cyan),
                 ))
                 .borders(Borders::ALL)
@@ -1009,7 +1013,7 @@ fn is_node_visible(
     true
 }
 
-// ─── Node detail panel ────────────────────────────────────────────────────────
+// â”€â”€â”€ Node detail panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the node-detail panel for the currently selected node.
 pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
@@ -1020,7 +1024,7 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(Span::styled(
-                    " Node Details [↑/↓ scroll] ",
+                    " Node Details [â†‘/â†“ scroll] ",
                     Style::default().fg(Color::Yellow),
                 ))
                 .borders(Borders::ALL)
@@ -1033,8 +1037,8 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
 
     let scrollbar = Scrollbar::default()
         .orientation(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"));
+        .begin_symbol(Some("â†‘"))
+        .end_symbol(Some("â†“"));
     let mut scrollbar_state = ScrollbarState::new(lines.len()).position(scroll);
     f.render_stateful_widget(
         scrollbar,
@@ -1047,11 +1051,13 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Build the line buffer for `render_node_detail`.
-///
 /// Uses explicit `match` instead of `let-else` to avoid the rust-analyzer
 /// indentation-mismatch false positive that triggered the original error.
 fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
-    let graph = app.graph.lock().unwrap();
+    let graph = app.graph.lock().unwrap_or_else(|e| {
+        warn!("Mutex poisoned in GraphView â€” recovering data");
+        e.into_inner()
+    });
     let mut lines: Vec<Line> = Vec::new();
 
     // Guard: no node selected
@@ -1076,7 +1082,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
         Some(n) => n,
         None => {
             lines.push(Line::from(Span::styled(
-                "  ⚠ Selected node no longer exists in graph",
+                "  âš  Selected node no longer exists in graph",
                 Style::default().fg(Color::Red),
             )));
             return lines;
@@ -1085,7 +1091,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
 
     let name_color = node_color(&node.node_type);
 
-    // ── Identity section ──────────────────────────────────────────────────────
+    // â”€â”€ Identity section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     lines.push(Line::from(vec![Span::styled(
         format!("  {}", node.name),
         Style::default().fg(name_color).add_modifier(Modifier::BOLD),
@@ -1129,7 +1135,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
         ]));
     }
 
-    // ── Properties section ────────────────────────────────────────────────────
+    // â”€â”€ Properties section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if !node.properties.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -1151,7 +1157,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
         }
     }
 
-    // ── Outbound edges ────────────────────────────────────────────────────────
+    // â”€â”€ Outbound edges â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Outbound Edges",
@@ -1182,7 +1188,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     format!("{:<30}", format!("{:?}", edge.weight())),
                     Style::default().fg(color).add_modifier(modifier),
                 ),
-                Span::styled("→ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("â†’ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     target_node.name.clone(),
                     Style::default().fg(node_color(&target_node.node_type)),
@@ -1192,7 +1198,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
         }
     }
 
-    // ── Inbound edges ─────────────────────────────────────────────────────────
+    // â”€â”€ Inbound edges â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Inbound Edges",
@@ -1223,7 +1229,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     src_node.name.clone(),
                     Style::default().fg(node_color(&src_node.node_type)),
                 ),
-                Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" â†’ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:?}", edge.weight()),
                     Style::default().fg(color).add_modifier(modifier),
@@ -1233,7 +1239,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
         }
     }
 
-    // ── MemberOf details (clear grouping) ──────────────────────────────────────
+    // â”€â”€ MemberOf details (clear grouping) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let member_of_out: Vec<_> = outbound
         .iter()
         .filter(|e| *e.weight() == EdgeType::MemberOf)
@@ -1262,7 +1268,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
             for edge in &member_of_out {
                 if let Some(target) = graph.get_node(edge.target()) {
                     lines.push(Line::from(vec![
-                        Span::raw("      → "),
+                        Span::raw("      â†’ "),
                         Span::styled(
                             target.name.clone(),
                             Style::default().fg(node_color(&target.node_type)),
@@ -1287,7 +1293,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
             for edge in &member_of_in {
                 if let Some(src) = graph.get_node(edge.source()) {
                     lines.push(Line::from(vec![
-                        Span::raw("      ← "),
+                        Span::raw("      â† "),
                         Span::styled(
                             src.name.clone(),
                             Style::default().fg(node_color(&src.node_type)),
@@ -1303,7 +1309,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
         }
     }
 
-    // ── Abuse summary for unique outbound edge types ───────────────────────────
+    // â”€â”€ Abuse summary for unique outbound edge types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Edge Abuse Summary",
@@ -1333,7 +1339,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
     lines
 }
 
-// ─── ACL findings panel ───────────────────────────────────────────────────────
+// â”€â”€â”€ ACL findings panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the full ACL findings list in a scrollable panel.
 #[allow(dead_code)]
@@ -1342,7 +1348,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
 
     let items: Vec<ListItem> = match &app.acl_findings {
         None => vec![ListItem::new(Span::styled(
-            "  No ACL findings loaded — run 'acls' scan first",
+            "  No ACL findings loaded â€” run 'acls' scan first",
             Style::default().fg(Color::DarkGray),
         ))],
         Some(findings) => findings
@@ -1360,7 +1366,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
                         format!("{:<30}", f.principal),
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(" â†’ ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<35}", format!("{:?}", f.right)),
                         Style::default().fg(color),
@@ -1379,7 +1385,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let total = app.acl_findings.as_ref().map(|v| v.len()).unwrap_or(0);
-    let title = format!(" ACL Findings ({} total) [↑/↓ scroll] ", total);
+    let title = format!(" ACL Findings ({} total) [â†‘/â†“ scroll] ", total);
 
     let widget = List::new(items)
         .block(
@@ -1397,7 +1403,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(widget, area);
 }
 
-// ─── Attack-path panel ────────────────────────────────────────────────────────
+// â”€â”€â”€ Attack-path panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the current computed attack path.
 #[allow(dead_code)]
@@ -1454,7 +1460,7 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
                 let ecolor = edge_color(edge_type, true);
                 lines.push(Line::from(vec![
                     Span::raw("       "),
-                    Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("â”‚ ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:?}", edge_type),
                         Style::default().fg(ecolor).add_modifier(Modifier::BOLD),
@@ -1463,9 +1469,9 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
                 if let Some(abuse) = edge_abuse_info(edge_type) {
                     lines.push(Line::from(vec![
                         Span::raw("       "),
-                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("â”‚ ", Style::default().fg(Color::DarkGray)),
                         Span::styled(
-                            format!("  ↳ {}", abuse),
+                            format!("  â†³ {}", abuse),
                             Style::default()
                                 .fg(Color::Gray)
                                 .add_modifier(Modifier::ITALIC),
@@ -1510,7 +1516,7 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(Span::styled(
-                    " Attack Path [↑/↓ scroll] ",
+                    " Attack Path [â†‘/â†“ scroll] ",
                     Style::default().fg(Color::LightRed),
                 ))
                 .borders(Borders::ALL)
@@ -1521,7 +1527,7 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(widget, area);
 }
 
-// ─── Legend overlay ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Legend overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render a colour-coded edge-type legend in the given area.
 #[allow(dead_code)]
@@ -1537,12 +1543,12 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
         (
             "WriteDacl",
             Color::LightRed,
-            "Modify DACL → grant GenericAll",
+            "Modify DACL â†’ grant GenericAll",
         ),
         (
             "WriteOwner",
             Color::LightRed,
-            "Take ownership → modify DACL",
+            "Take ownership â†’ modify DACL",
         ),
         ("DcSync", Color::Magenta, "Replicate all secrets from DC"),
         (
@@ -1558,7 +1564,7 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
         (
             "AllowedToDelegate",
             Color::Magenta,
-            "Constrained delegation → TGT",
+            "Constrained delegation â†’ TGT",
         ),
         (
             "HasSession",
@@ -1568,11 +1574,11 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
         (
             "HasSpn / Kerberoast",
             Color::Yellow,
-            "Account has SPN → offline crack",
+            "Account has SPN â†’ offline crack",
         ),
         ("AddMembers", Color::Yellow, "Add members to group"),
         ("CanRDP", Color::Cyan, "Remote Desktop access"),
-        ("GpoLink", Color::Green, "GPO linked to OU → policy exec"),
+        ("GpoLink", Color::Green, "GPO linked to OU â†’ policy exec"),
         (
             "MemberOf / Contains",
             Color::DarkGray,

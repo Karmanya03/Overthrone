@@ -77,7 +77,6 @@ impl WebEnrollmentClient {
     // ─────────────────────────────────────────────────────────
 
     /// Submit a certificate request (CSR) to the CA
-    ///
     /// This is the main entry point for requesting certificates via Web Enrollment.
     /// Returns the raw response body containing the certificate or error.
     pub async fn submit_request(
@@ -436,7 +435,6 @@ impl WebEnrollmentClient {
     }
 
     /// Check if ESC6 is possible (EDITF_ATTRIBUTESUBJECTALTNAME2)
-    ///
     /// This checks if the CA accepts the san attribute in the request.
     pub async fn check_esc6_vulnerable(&self) -> Result<bool> {
         // Create a test request with SAN attribute
@@ -549,19 +547,28 @@ impl WebEnrollmentClient {
 /// Status of a certificate request
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResponseStatus {
+    /// `Issued` variant
     Issued,
+    /// `Pending` variant
     Pending,
+    /// `Denied` variant
     Denied,
+    /// `Error` variant
     Error,
+    /// `Unknown` variant
     Unknown,
 }
 
 /// Parsed certificate response
 #[derive(Debug, Clone)]
 pub struct CertificateResponse {
+    /// status field
     pub status: ResponseStatus,
+    /// Stable unique identifier.
     pub request_id: Option<u32>,
+    /// certificate field
     pub certificate: Option<Vec<u8>>,
+    /// message field
     pub message: String,
 }
 
@@ -596,9 +603,13 @@ impl CertificateResponse {
 /// CA Information
 #[derive(Debug, Clone)]
 pub struct CaInfo {
+    /// Object or account name.
     pub ca_name: String,
+    /// server field
     pub server: String,
+    /// web enrollment url field
     pub web_enrollment_url: String,
+    /// available templates field
     pub available_templates: Vec<String>,
 }
 

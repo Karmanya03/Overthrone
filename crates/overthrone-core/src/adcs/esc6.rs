@@ -31,7 +31,6 @@ impl Esc6Exploiter {
     }
 
     /// Probe whether the CA has `EDITF_ATTRIBUTESUBJECTALTNAME2` enabled.
-    ///
     /// Delegates to [`WebEnrollmentClient::check_esc6_vulnerable`] which sends
     /// a crafted request and inspects the response.
     pub async fn check_vulnerable(&self) -> Result<bool> {
@@ -41,11 +40,9 @@ impl Esc6Exploiter {
 
     /// Execute ESC6 attack — submit a certificate request with the target UPN
     /// in the SAN request attribute.
-    ///
     /// # Arguments
     /// * `template` - Any template with Client Authentication EKU
     /// * `target_upn` - UPN to impersonate (e.g. "administrator@corp.local")
-    ///
     /// # Returns
     /// * `Ok(IssuedCertificate)` on success
     pub async fn exploit(&self, template: &str, target_upn: &str) -> Result<IssuedCertificate> {

@@ -12,33 +12,75 @@ use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EscalationTechnique {
+    /// `SidHistoryInjection` variant
     SidHistoryInjection,
-    UnconstrainedDelegation { computer: String },
-    ConstrainedDelegation { source: String, target_spn: String },
-    ResourceBasedConstrainedDelegation { target_computer: String },
-    ForeignGroupMembership { principal: String, group: String },
+    /// `UnconstrainedDelegation` variant
+    UnconstrainedDelegation {
+        #[allow(missing_docs)]
+        computer: String,
+    },
+    /// `ConstrainedDelegation` variant
+    ConstrainedDelegation {
+        #[allow(missing_docs)]
+        source: String,
+        #[allow(missing_docs)]
+        target_spn: String,
+    },
+    /// `ResourceBasedConstrainedDelegation` variant
+    ResourceBasedConstrainedDelegation {
+        #[allow(missing_docs)]
+        target_computer: String,
+    },
+    /// `ForeignGroupMembership` variant
+    ForeignGroupMembership {
+        #[allow(missing_docs)]
+        principal: String,
+        #[allow(missing_docs)]
+        group: String,
+    },
+    /// `PamTrustAbuse` variant
     PamTrustAbuse,
+    /// `TrustKeyForging` variant
     TrustKeyForging,
-    MssqlLinkChain { service_account: String },
-    CrossDomainAdcs { template: String },
+    /// `MssqlLinkChain` variant
+    MssqlLinkChain {
+        #[allow(missing_docs)]
+        service_account: String,
+    },
+    /// `CrossDomainAdcs` variant
+    CrossDomainAdcs {
+        #[allow(missing_docs)]
+        template: String,
+    },
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscalationHop {
+    /// Domain FQDN
     pub from_domain: String,
+    /// Domain FQDN
     pub to_domain: String,
+    /// technique field
     pub technique: EscalationTechnique,
+    /// prerequisite field
     pub prerequisite: String,
+    /// risk level field
     pub risk_level: String,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscalationPath {
+    /// Source domain FQDN
     pub source_domain: String,
+    /// Target domain FQDN
     pub target_domain: String,
+    /// hops field
     pub hops: Vec<EscalationHop>,
+    /// Total count
     pub total_hops: usize,
+    /// requires da field
     pub requires_da: bool,
+    /// description field
     pub description: String,
 }
 
@@ -330,5 +372,113 @@ fn domain_from_hostname(hostname: &str) -> Option<String> {
         Some(parts[1].to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escalation_path_difficulty_easy() {
+        let path = EscalationPath {
+            source_domain: "A".into(),
+            target_domain: "B".into(),
+            hops: vec![EscalationHop {
+                from_domain: "A".into(),
+                to_domain: "B".into(),
+                technique: EscalationTechnique::SidHistoryInjection,
+                prerequisite: "".into(),
+                risk_level: "CRITICAL".into(),
+            }],
+            total_hops: 1,
+            requires_da: false,
+            description: "".into(),
+        };
+        assert_eq!(path.difficulty(), "EASY");
+    }
+
+    #[test]
+    fn test_escalation_path_difficulty_hard() {
+        let path = EscalationPath {
+            source_domain: "A".into(),
+            target_domain: "B".into(),
+            hops: vec![],
+            total_hops: 1,
+            requires_da: true,
+            description: "".into(),
+        };
+        assert_eq!(path.difficulty(), "HARD");
+    }
+
+    #[test]
+    fn test_escalation_path_difficulty_medium() {
+        let path = EscalationPath {
+            source_domain: "A".into(),
+            target_domain: "B".into(),
+            hops: vec![],
+            total_hops: 3,
+            requires_da: false,
+            description: "".into(),
+        };
+        assert_eq!(path.difficulty(), "MEDIUM");
+    }
+
+    #[test]
+    fn test_spn_hostname_with_port() {
+        assert_eq!(
+            spn_hostname("MSSQLSvc/sql01.corp.local:1433"),
+            "sql01.corp.local"
+        );
+    }
+
+    #[test]
+    fn test_spn_hostname_without_port() {
+        assert_eq!(spn_hostname("HTTP/web01.corp.local"), "web01.corp.local");
+    }
+
+    #[test]
+    fn test_spn_hostname_no_slash() {
+        assert_eq!(spn_hostname("plain-hostname"), "plain-hostname");
+    }
+
+    #[test]
+    fn test_spn_hostname_empty() {
+        assert_eq!(spn_hostname(""), "");
+    }
+
+    #[test]
+    fn test_domain_from_hostname_fqdn() {
+        assert_eq!(
+            domain_from_hostname("dc01.corp.local"),
+            Some("corp.local".into())
+        );
+    }
+
+    #[test]
+    fn test_domain_from_hostname_short() {
+        assert_eq!(domain_from_hostname("localhost"), None);
+    }
+
+    #[test]
+    fn test_domain_from_hostname_child() {
+        assert_eq!(
+            domain_from_hostname("srv.child.corp.com"),
+            Some("child.corp.com".into())
+        );
+    }
+
+    #[test]
+    fn test_technique_display_sid_history() {
+        let t = EscalationTechnique::SidHistoryInjection;
+        let _ = format!("{t:?}");
+    }
+
+    #[test]
+    fn test_technique_display_unconstrained() {
+        let t = EscalationTechnique::UnconstrainedDelegation {
+            computer: "PC01$".into(),
+        };
+        let _ = format!("{t:?}");
     }
 }

@@ -35,6 +35,7 @@ pub struct Esc8RelayTarget {
 }
 
 impl Esc8RelayTarget {
+    /// Runs this module operation.
     pub fn new(ca_server: impl Into<String>, template: impl Into<String>) -> Self {
         Self {
             ca_server: ca_server.into(),
@@ -80,6 +81,7 @@ pub struct Esc8AttackConfig {
 }
 
 impl Esc8AttackConfig {
+    /// Runs this module operation.
     pub fn new(
         listener_ip: impl Into<String>,
         target: Esc8RelayTarget,
@@ -100,7 +102,6 @@ impl Esc8AttackConfig {
     }
 
     /// Validate that the web enrollment endpoint is reachable.
-    ///
     /// Makes an unauthenticated HTTP request to /certsrv/ and checks
     /// for the expected 401 (NTLM required) or 200 response.
     pub async fn check_endpoint_reachable(&self) -> Result<EndpointCheckResult> {
@@ -263,10 +264,15 @@ impl Esc8AttackConfig {
 /// Result of endpoint reachability check
 #[derive(Debug, Clone)]
 pub struct EndpointCheckResult {
+    /// url field
     pub url: String,
+    /// Status or error code
     pub status_code: u16,
+    /// Port number
     pub ntlm_supported: bool,
+    /// epa enforced field
     pub epa_enforced: bool,
+    /// vulnerable field
     pub vulnerable: bool,
 }
 

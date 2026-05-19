@@ -5,11 +5,16 @@ use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum TrustDirection {
+    /// `Inbound` variant
+    #[default]
     Inbound,
+    /// `Outbound` variant
     Outbound,
+    /// `Bidirectional` variant
     Bidirectional,
+    /// `Unknown` variant
     Unknown(u32),
 }
 
@@ -24,12 +29,18 @@ impl std::fmt::Display for TrustDirection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum TrustType {
+    /// `ParentChild` variant
+    #[default]
     ParentChild,
+    /// `External` variant
     External,
+    /// `Forest` variant
     Forest,
+    /// `CrossLink` variant
     CrossLink,
+    /// `Unknown` variant
     Unknown(u32),
 }
 
@@ -44,14 +55,20 @@ impl std::fmt::Display for TrustType {
         }
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Structure
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TrustEntry {
+    /// Target domain FQDN
     pub target_domain: String,
+    /// direction field
     pub direction: TrustDirection,
+    /// Classification for this object.
     pub trust_type: TrustType,
+    /// transitive field
     pub transitive: bool,
+    /// Security Identifier
     pub sid_filtering_enabled: bool,
+    /// tgt delegation enabled field
     pub tgt_delegation_enabled: bool,
 }
 
@@ -66,6 +83,64 @@ const TRUST_ATTR_FOREST_TRANSITIVE: u32 = 0x00000008;
 const TRUST_ATTR_CROSS_ORG: u32 = 0x00000010;
 const TRUST_ATTR_WITHIN_FOREST: u32 = 0x00000020;
 const TRUST_ATTR_TGT_DELEGATION: u32 = 0x00000200;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trust_filter() {
+        assert_eq!(trust_filter(), "(objectClass=trustedDomain)");
+    }
+
+    #[test]
+    fn test_trust_direction_display_inbound() {
+        assert_eq!(format!("{}", TrustDirection::Inbound), "Inbound");
+    }
+
+    #[test]
+    fn test_trust_direction_display_outbound() {
+        assert_eq!(format!("{}", TrustDirection::Outbound), "Outbound");
+    }
+
+    #[test]
+    fn test_trust_direction_display_bidirectional() {
+        assert_eq!(
+            format!("{}", TrustDirection::Bidirectional),
+            "Bidirectional"
+        );
+    }
+
+    #[test]
+    fn test_trust_direction_display_unknown() {
+        assert_eq!(format!("{}", TrustDirection::Unknown(99)), "Unknown(99)");
+    }
+
+    #[test]
+    fn test_trust_type_display_parent_child() {
+        assert_eq!(format!("{}", TrustType::ParentChild), "ParentChild");
+    }
+
+    #[test]
+    fn test_trust_type_display_external() {
+        assert_eq!(format!("{}", TrustType::External), "External");
+    }
+
+    #[test]
+    fn test_trust_type_display_forest() {
+        assert_eq!(format!("{}", TrustType::Forest), "Forest");
+    }
+
+    #[test]
+    fn test_trust_type_display_cross_link() {
+        assert_eq!(format!("{}", TrustType::CrossLink), "CrossLink");
+    }
+
+    #[test]
+    fn test_trust_type_display_unknown() {
+        assert_eq!(format!("{}", TrustType::Unknown(42)), "Unknown(42)");
+    }
+}
 
 pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> {
     info!("[trusts] Querying {} for domain trusts", config.dc_ip);

@@ -49,21 +49,37 @@ pub const CT_FLAG_STRONG_KEY_PROTECTION: u32 = 0x00000200;
 /// LDAP Certificate Template with full configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LdapCertificateTemplate {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub display_name: String,
+    /// Stable unique identifier.
     pub oid: String,
+    /// flags field
     pub flags: u32,
+    /// Object or account name.
     pub subject_name_flags: u32,
+    /// enrollment flags field
     pub enrollment_flags: u32,
+    /// Key data
     pub private_key_flags: u32,
+    /// schema version field
     pub schema_version: u32,
+    /// Stable unique identifier.
     pub validity_period: String,
+    /// renewal period field
     pub renewal_period: String,
+    /// Key data
     pub extended_key_usage: Vec<String>,
+    /// application policies field
     pub application_policies: Vec<String>,
+    /// issuance policies field
     pub issuance_policies: Vec<String>,
+    /// authorized signatures required field
     pub authorized_signatures_required: u32,
+    /// security descriptor field
     pub security_descriptor: String,
+    /// dn field
     pub dn: String,
 }
 
@@ -140,12 +156,19 @@ impl LdapCertificateTemplate {
 /// Certification Authority from LDAP
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LdapCertificationAuthority {
+    /// Object or account name.
     pub name: String,
+    /// dn field
     pub dn: String,
+    /// ca certificate field
     pub ca_certificate: Option<Vec<u8>>,
+    /// certificate templates field
     pub certificate_templates: Vec<String>,
+    /// security descriptor field
     pub security_descriptor: String,
+    /// enrollment endpoints field
     pub enrollment_endpoints: Vec<String>,
+    /// disabled extensions field
     #[serde(default)]
     pub disabled_extensions: Vec<String>,
 }
@@ -162,7 +185,9 @@ impl LdapCertificationAuthority {
 /// CA Configuration Flags
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaConfiguration {
+    /// Object or account name.
     pub ca_name: String,
+    /// dn field
     pub dn: String,
     /// EDITF_ATTRIBUTESUBJECTALTNAME2 flag (ESC6)
     pub allows_san_attribute: bool,
@@ -189,13 +214,18 @@ impl CaConfiguration {
 /// CA Vulnerability Information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaVulnerabilityInfo {
+    /// esc number field
     pub esc_number: u8,
+    /// description field
     pub description: String,
+    /// severity field
     pub severity: String,
+    /// remediation field
     pub remediation: String,
 }
 
 impl CaVulnerabilityInfo {
+    /// Runs this module operation.
     pub fn new(esc_number: u8, description: &str, severity: &str, remediation: &str) -> Self {
         Self {
             esc_number,
@@ -612,9 +642,13 @@ impl LdapAdcsEnumerator {
 /// Enrollment Service from LDAP
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollmentService {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub dns_host_name: String,
+    /// certificate templates field
     pub certificate_templates: Vec<String>,
+    /// security descriptor field
     pub security_descriptor: String,
 }
 

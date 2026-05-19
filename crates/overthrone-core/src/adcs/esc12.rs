@@ -96,7 +96,6 @@ impl Esc12Exploiter {
     }
 
     /// Generate exploitation guidance for ESC12.
-    ///
     /// This method does NOT perform any live action.  It generates
     /// operator-ready commands and file paths based on the configuration.
     pub fn assess(&self) -> Esc12Assessment {

@@ -208,3 +208,115 @@ pub fn methodology_description() -> String {
 
 All activities were performed using the **Overthrone** framework, a Rust-based Active Directory assessment toolkit."#.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::*;
+    use overthrone_pilot::goals::EngagementState;
+
+    fn sample_session() -> EngagementSession {
+        EngagementSession {
+            id: "test-id".into(),
+            title: "Test Engagement".into(),
+            client_name: "TestCorp".into(),
+            assessor_name: "Tester".into(),
+            assessor_company: "Overthrone".into(),
+            engagement_type: EngagementType::InternalPentest,
+            classification: "CONFIDENTIAL".into(),
+            version: "1.0".into(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            scope: EngagementScope {
+                domains: vec!["testcorp.local".into()],
+                ip_ranges: vec!["10.0.0.0/24".into()],
+                excluded_hosts: vec![],
+                objectives: vec!["Find DA".into()],
+                rules_of_engagement: vec![],
+            },
+            findings: vec![Finding {
+                id: "F1".into(),
+                title: "Kerberoast".into(),
+                severity: Severity::Critical,
+                cvss_score: 9.1,
+                cvss_vector: Some("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H".into()),
+                category: FindingCategory::KerberosAbuse,
+                description: "Kerberos ticket susceptible to offline cracking".into(),
+                affected_assets: vec!["DC01.testcorp.local".into()],
+                proof_of_concept: vec![],
+                evidence: vec![],
+                mitre: vec![],
+                mitigations: vec![],
+                business_impact: "Full domain compromise".into(),
+                references: vec![],
+                discovered_at: chrono::Utc::now(),
+            }],
+            engagement_state: None,
+            autopwn_result: None,
+            domain_admin_achieved: true,
+            total_users_enumerated: 100,
+            total_computers_enumerated: 50,
+            total_credentials_compromised: 5,
+            total_admin_hosts: 1,
+        }
+    }
+
+    #[test]
+    fn test_executive_summary_includes_finding_counts() {
+        let session = sample_session();
+        let summary = executive_summary(&session);
+        assert!(summary.contains("1 Critical"));
+    }
+
+    #[test]
+    fn test_executive_summary_empty_findings() {
+        let mut session = sample_session();
+        session.findings.clear();
+        let summary = executive_summary(&session);
+        assert!(summary.contains("0 Critical"));
+    }
+
+    #[test]
+    fn test_executive_summary_mentions_domain_admin() {
+        let session = sample_session();
+        let summary = executive_summary(&session);
+        assert!(summary.contains("Domain Admin privileges were achieved"));
+    }
+
+    #[test]
+    fn test_scope_description_includes_domains() {
+        let session = sample_session();
+        let desc = scope_description(&session);
+        assert!(desc.contains("testcorp.local"));
+        assert!(desc.contains("10.0.0.0/24"));
+    }
+
+    #[test]
+    fn test_finding_narrative_includes_description() {
+        let finding = &sample_session().findings[0];
+        let narrative = finding_narrative(finding);
+        assert!(narrative.contains("Kerberos ticket"));
+    }
+
+    #[test]
+    fn test_attack_chain_narrative_no_state() {
+        let session = sample_session();
+        let narrative = attack_chain_narrative(&session);
+        assert_eq!(narrative, "No attack chain data available.");
+    }
+
+    #[test]
+    fn test_attack_chain_narrative_with_state() {
+        let mut session = sample_session();
+        session.engagement_state = Some(EngagementState::default());
+        let narrative = attack_chain_narrative(&session);
+        assert_eq!(narrative, "No actions were logged during the engagement.");
+    }
+
+    #[test]
+    fn test_methodology_description_is_non_empty() {
+        let desc = methodology_description();
+        assert!(!desc.is_empty());
+        assert!(desc.contains("Overthrone"));
+    }
+}

@@ -36,12 +36,19 @@ pub use petgraph::visit::EdgeRef;
 /// Type of an AD object in the graph
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NodeType {
+    /// `User` variant
     User,
+    /// `Computer` variant
     Computer,
+    /// `Group` variant
     Group,
+    /// `Domain` variant
     Domain,
+    /// `Gpo` variant
     Gpo,
+    /// `Ou` variant
     Ou,
+    /// `CertTemplate` variant
     CertTemplate,
 }
 
@@ -62,10 +69,15 @@ impl std::fmt::Display for NodeType {
 /// An AD object node in the attack graph
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdNode {
+    /// Object or account name.
     pub name: String,
+    /// Classification for this object.
     pub node_type: NodeType,
+    /// Domain FQDN
     pub domain: String,
+    /// Object or account name.
     pub distinguished_name: Option<String>,
+    /// enabled field
     pub enabled: bool,
     /// Custom properties (UAC flags, SPNs, OS, etc.)
     pub properties: HashMap<String, String>,
@@ -81,68 +93,113 @@ impl std::fmt::Display for AdNode {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EdgeType {
     // -- Group Membership --
+    /// `MemberOf` variant
     MemberOf,
 
     // -- Local Admin / Sessions --
+    /// `AdminTo` variant
     AdminTo,
+    /// `HasSession` variant
     HasSession,
+    /// `CanRDP` variant
     CanRDP,
+    /// `CanPSRemote` variant
     CanPSRemote,
+    /// `ExecuteDCOM` variant
     ExecuteDCOM,
+    /// `SQLAdmin` variant
     SQLAdmin,
 
     // -- ACL-Based --
+    /// `GenericAll` variant
     GenericAll,
+    /// `GenericWrite` variant
     GenericWrite,
+    /// `WriteOwner` variant
     WriteOwner,
+    /// `WriteDacl` variant
     WriteDacl,
+    /// `ForceChangePassword` variant
     ForceChangePassword,
+    /// `AddMembers` variant
     AddMembers,
+    /// `AddSelf` variant
     AddSelf,
+    /// `ReadLapsPassword` variant
     ReadLapsPassword,
+    /// `ReadGmsaPassword` variant
     ReadGmsaPassword,
 
     // -- Kerberos Delegation --
+    /// `AllowedToDelegate` variant
     AllowedToDelegate,
+    /// `AllowedToAct` variant
     AllowedToAct,
+    /// `HasSidHistory` variant
     HasSidHistory,
 
     // -- DCSync / Replication --
+    /// `DcSync` variant
     DcSync,
+    /// `GetChanges` variant
     GetChanges,
+    /// `GetChangesAll` variant
     GetChangesAll,
 
     // -- Domain Trust --
+    /// `TrustedBy` variant
     TrustedBy,
 
     // -- Kerberoasting / AS-REP --
+    /// `HasSpn` variant
     HasSpn,
+    /// `DontReqPreauth` variant
     DontReqPreauth,
 
     // -- GPO --
+    /// `GpoLink` variant
     GpoLink,
+    /// `Contains` variant
     Contains,
 
     // -- ADCS --
+    /// `AdcsEsc1` variant
     AdcsEsc1,
+    /// `AdcsEsc2` variant
     AdcsEsc2,
+    /// `AdcsEsc3` variant
     AdcsEsc3,
+    /// `AdcsEsc4` variant
     AdcsEsc4,
+    /// `AdcsEsc5` variant
     AdcsEsc5,
+    /// `AdcsEsc6` variant
     AdcsEsc6,
+    /// `AdcsEsc7` variant
     AdcsEsc7,
+    /// `AdcsEsc8` variant
     AdcsEsc8,
+    /// `AdcsEsc9` variant
     AdcsEsc9,
+    /// `AdcsEsc10` variant
     AdcsEsc10,
+    /// `AdcsEsc11` variant
     AdcsEsc11,
+    /// `AdcsEsc12` variant
     AdcsEsc12,
+    /// `AdcsEsc13` variant
     AdcsEsc13,
+    /// `AdcsEsc14` variant
     AdcsEsc14,
+    /// `AdcsEsc15` variant
     AdcsEsc15,
+    /// `AdcsEsc16` variant
     AdcsEsc16,
 
     // -- Generic --
+    /// `Owns` variant
     Owns,
+    /// `Custom` variant
     Custom(String),
 }
 
@@ -242,21 +299,32 @@ impl std::fmt::Display for EdgeType {
 /// A single hop in an attack path
 #[derive(Debug, Clone, Serialize)]
 pub struct PathHop {
+    /// Source domain FQDN
     pub source: String,
+    /// Classification for this object.
     pub source_type: NodeType,
+    /// edge field
     pub edge: EdgeType,
+    /// Target domain FQDN
     pub target: String,
+    /// Classification for this object.
     pub target_type: NodeType,
+    /// cost field
     pub cost: u32,
 }
 
 /// A complete attack path from source to target
 #[derive(Debug, Clone, Serialize)]
 pub struct AttackPath {
+    /// Source domain FQDN
     pub source: String,
+    /// Target domain FQDN
     pub target: String,
+    /// Total count
     pub total_cost: u32,
+    /// Item count
     pub hop_count: usize,
+    /// hops field
     pub hops: Vec<PathHop>,
 }
 
@@ -284,15 +352,25 @@ impl std::fmt::Display for AttackPath {
 /// Statistics about the attack graph
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphStats {
+    /// Total count
     pub total_nodes: usize,
+    /// Total count
     pub total_edges: usize,
+    /// users field
     pub users: usize,
+    /// computers field
     pub computers: usize,
+    /// groups field
     pub groups: usize,
+    /// gpos field
     pub gpos: usize,
+    /// ous field
     pub ous: usize,
+    /// Domain FQDN
     pub domains: usize,
+    /// cert templates field
     pub cert_templates: usize,
+    /// Classification for this object.
     pub edge_type_counts: HashMap<String, usize>,
 }
 
@@ -357,6 +435,7 @@ impl Default for AttackGraph {
 }
 
 impl AttackGraph {
+    /// Runs this module operation.
     pub fn new() -> Self {
         AttackGraph {
             graph: DiGraph::new(),
@@ -433,11 +512,17 @@ impl AttackGraph {
             let key = node_key(&other_node.name, &other_node.domain);
             let this_idx = if let Some(&existing_idx) = self.node_index.get(&key) {
                 // Node already exists, merge properties (prefer non-empty values)
-                let existing = self.graph.node_weight_mut(existing_idx).unwrap();
-                for (k, v) in &other_node.properties {
-                    if !v.is_empty() && !existing.properties.contains_key::<String>(k) {
-                        existing.properties.insert(k.clone(), v.clone());
+                if let Some(existing) = self.graph.node_weight_mut(existing_idx) {
+                    for (k, v) in &other_node.properties {
+                        if !v.is_empty() && !existing.properties.contains_key::<String>(k) {
+                            existing.properties.insert(k.clone(), v.clone());
+                        }
                     }
+                } else {
+                    return Err(OverthroneError::Graph(format!(
+                        "node index for '{}' no longer exists during merge",
+                        key
+                    )));
                 }
                 existing_idx
             } else {
@@ -468,7 +553,6 @@ impl AttackGraph {
 
         Ok(())
     }
-
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
     }
@@ -585,7 +669,6 @@ impl AttackGraph {
 
         None
     }
-
     pub fn get_node(&self, idx: NodeIndex) -> Option<&AdNode> {
         self.graph.node_weight(idx)
     }
@@ -1026,8 +1109,12 @@ impl AttackGraph {
 
         let hops = self.reconstruct_path(src_idx, tgt_idx, &costs)?;
 
-        let src_node = self.get_node(src_idx).unwrap();
-        let tgt_node = self.get_node(tgt_idx).unwrap();
+        let src_node = self.get_node(src_idx).ok_or_else(|| {
+            OverthroneError::Graph("source node disappeared during path lookup".into())
+        })?;
+        let tgt_node = self.get_node(tgt_idx).ok_or_else(|| {
+            OverthroneError::Graph("target node disappeared during path lookup".into())
+        })?;
 
         Ok(AttackPath {
             source: src_node.name.clone(),
@@ -1059,8 +1146,12 @@ impl AttackGraph {
                 if let Some(&neighbor_cost) = costs.get(&neighbor)
                     && neighbor_cost + edge_cost == current_cost
                 {
-                    let src_node = self.get_node(neighbor).unwrap();
-                    let tgt_node = self.get_node(current).unwrap();
+                    let Some(src_node) = self.get_node(neighbor) else {
+                        continue;
+                    };
+                    let Some(tgt_node) = self.get_node(current) else {
+                        continue;
+                    };
 
                     path.push(PathHop {
                         source: src_node.name.clone(),
@@ -1108,7 +1199,9 @@ impl AttackGraph {
         // Paths to each DA member
         for edge in self.graph.edges_directed(da_idx, Direction::Incoming) {
             if *edge.weight() == EdgeType::MemberOf {
-                let member = self.get_node(edge.source()).unwrap();
+                let Some(member) = self.get_node(edge.source()) else {
+                    continue;
+                };
                 if let Ok(p) =
                     self.shortest_path(from, &format!("{}@{}", member.name, member.domain))
                 {
@@ -1120,7 +1213,6 @@ impl AttackGraph {
         paths.sort_by_key(|p| p.total_cost);
         paths
     }
-
     pub fn reachable_kerberoastable(&self, from: &str) -> Vec<String> {
         let src_idx = match self.find_node(from) {
             Some(idx) => idx,
@@ -1147,7 +1239,6 @@ impl AttackGraph {
         kerberoastable.sort();
         kerberoastable
     }
-
     pub fn reachable_unconstrained_delegation(&self, from: &str) -> Vec<String> {
         let src_idx = match self.find_node(from) {
             Some(idx) => idx,
@@ -1218,7 +1309,6 @@ impl AttackGraph {
             edge_type_counts: edge_counts,
         }
     }
-
     pub fn high_value_targets(&self, top_n: usize) -> Vec<(String, NodeType, usize)> {
         let mut degrees: Vec<(NodeIndex, usize)> = self
             .graph
@@ -1247,13 +1337,14 @@ impl AttackGraph {
             })
             .collect()
     }
-
     pub fn export_json(&self) -> Result<String> {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
 
         for idx in self.graph.node_indices() {
-            let node = self.graph.node_weight(idx).unwrap();
+            let Some(node) = self.graph.node_weight(idx) else {
+                continue;
+            };
             nodes.push(serde_json::json!({
                 "id": format!("{}@{}", node.name, node.domain),
                 "label": node.name,
@@ -1266,8 +1357,12 @@ impl AttackGraph {
         }
 
         for edge in self.graph.edge_references() {
-            let src = self.graph.node_weight(edge.source()).unwrap();
-            let tgt = self.graph.node_weight(edge.target()).unwrap();
+            let (Some(src), Some(tgt)) = (
+                self.graph.node_weight(edge.source()),
+                self.graph.node_weight(edge.target()),
+            ) else {
+                continue;
+            };
             edges.push(serde_json::json!({
                 "source": format!("{}@{}", src.name, src.domain),
                 "target": format!("{}@{}", tgt.name, tgt.domain),
@@ -1314,7 +1409,9 @@ impl AttackGraph {
 
         // Categorize nodes by type
         for idx in self.graph.node_indices() {
-            let node = self.graph.node_weight(idx).unwrap();
+            let Some(node) = self.graph.node_weight(idx) else {
+                continue;
+            };
             let object_id = format!("{}@{}", node.name, node.domain);
 
             let props = &node.properties;
@@ -1387,8 +1484,12 @@ impl AttackGraph {
         let mut all_edges = Vec::new();
 
         for edge in self.graph.edge_references() {
-            let src = self.graph.node_weight(edge.source()).unwrap();
-            let tgt = self.graph.node_weight(edge.target()).unwrap();
+            let (Some(src), Some(tgt)) = (
+                self.graph.node_weight(edge.source()),
+                self.graph.node_weight(edge.target()),
+            ) else {
+                continue;
+            };
             let src_id = format!("{}@{}", src.name, src.domain);
             let tgt_id = format!("{}@{}", tgt.name, tgt.domain);
 
@@ -1613,7 +1714,6 @@ impl AttackGraph {
     }
 
     /// Find shortest paths to a target from all reachable nodes (reverse Dijkstra).
-    ///
     /// Instead of running N separate forward Dijkstras (O(N * E log V)),
     /// we reverse all edges and run a single Dijkstra from the target outward.
     /// This gives us O(E log V) -- the same cost as a single shortest-path query.
@@ -1800,9 +1900,7 @@ fn json_value_to_string(value: Value) -> String {
 }
 
 /// Extract the CN (Common Name) from an AD Distinguished Name.
-///
 /// Example: `"CN=Domain Admins,CN=Users,DC=corp,DC=local"` -> `"Domain Admins"`
-///
 /// Returns `None` if no CN= component is found.
 fn extract_cn(dn: &str) -> Option<String> {
     for part in dn.split(',') {
@@ -1823,7 +1921,6 @@ mod tests {
     use super::*;
 
     /// Helper: build a small AD-like graph for testing.
-    ///
     /// ```text
     /// jdoe (User) --MemberOf--> HelpDesk (Group) --MemberOf--> Domain Admins (Group)
     /// jdoe (User) --HasSession--> WS01$ (Computer) --AdminTo--> DC01$ (Computer)

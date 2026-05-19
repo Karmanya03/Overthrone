@@ -17,31 +17,54 @@ pub const UAC_TRUSTED_FOR_DELEGATION: u32 = 0x80000;
 pub const UAC_NOT_DELEGATED: u32 = 0x100000;
 pub const UAC_USE_DES_KEY_ONLY: u32 = 0x200000;
 pub const UAC_TRUSTED_TO_AUTH_FOR_DELEGATION: u32 = 0x1000000;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Structure
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserEntry {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// Object or account name.
     pub display_name: Option<String>,
+    /// description field
     pub description: Option<String>,
+    /// Object or account name.
     pub user_principal_name: Option<String>,
+    /// mail field
     pub mail: Option<String>,
+    /// member of field
     pub member_of: Vec<String>,
+    /// uac flags field
     pub uac_flags: u32,
+    /// enabled field
     pub enabled: bool,
+    /// Item count
     pub admin_count: bool,
+    /// last logon field
     pub last_logon: Option<String>,
+    /// Password for authentication
     pub last_password_change: Option<String>,
+    /// Item count
     pub bad_pwd_count: Option<u32>,
+    /// bad pwd time field
     pub bad_pwd_time: Option<String>,
+    /// lockout time field
     pub lockout_time: Option<String>,
+    /// Item count
     pub account_expires: Option<String>,
+    /// Item count
     pub logon_count: Option<u32>,
+    /// when created field
     pub when_created: Option<String>,
+    /// when changed field
     pub when_changed: Option<String>,
+    /// Password for authentication
     pub password_never_expires: bool,
+    /// dont require preauth field
     pub dont_require_preauth: bool,
+    /// Object or account name.
     pub service_principal_names: Vec<String>,
+    /// Security Identifier
     pub sid: Option<String>,
     /// msDS-AllowedToDelegateTo — constrained delegation targets for this user.
     pub allowed_to_delegate_to: Vec<String>,
@@ -70,7 +93,7 @@ impl UserEntry {
                     || lower.contains("backup operators")
             })
     }
-
+    /// Function
     pub fn from_uac(uac: u32) -> (bool, bool, bool) {
         let enabled = uac & UAC_DISABLED == 0;
         let pwd_never_expires = uac & UAC_DONT_EXPIRE_PASSWD != 0;
@@ -186,4 +209,184 @@ pub fn parse_user_entry(attrs: &HashMap<String, Vec<String>>) -> UserEntry {
 
 fn first_val(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
     attrs.get(key).and_then(|v| v.first().cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_filter() {
+        assert_eq!(
+            user_filter(),
+            "(&(objectCategory=person)(objectClass=user))"
+        );
+    }
+
+    #[test]
+    fn test_from_uac_normal() {
+        let (enabled, pwd_never, no_preauth) = UserEntry::from_uac(0x0200);
+        assert!(enabled);
+        assert!(!pwd_never);
+        assert!(!no_preauth);
+    }
+
+    #[test]
+    fn test_from_uac_disabled() {
+        let (enabled, pwd_never, no_preauth) = UserEntry::from_uac(0x0202);
+        assert!(!enabled);
+        assert!(!pwd_never);
+        assert!(!no_preauth);
+    }
+
+    #[test]
+    fn test_from_uac_dont_expire() {
+        let (enabled, pwd_never, no_preauth) = UserEntry::from_uac(0x10200);
+        assert!(enabled);
+        assert!(pwd_never);
+        assert!(!no_preauth);
+    }
+
+    #[test]
+    fn test_from_uac_no_preauth() {
+        let (enabled, pwd_never, no_preauth) = UserEntry::from_uac(0x400200);
+        assert!(enabled);
+        assert!(!pwd_never);
+        assert!(no_preauth);
+    }
+
+    #[test]
+    fn test_from_uac_all_flags() {
+        let (enabled, pwd_never, no_preauth) = UserEntry::from_uac(0x410202);
+        assert!(!enabled);
+        assert!(pwd_never);
+        assert!(no_preauth);
+    }
+
+    #[test]
+    fn test_from_uac_zero() {
+        let (enabled, pwd_never, no_preauth) = UserEntry::from_uac(0);
+        assert!(enabled);
+        assert!(!pwd_never);
+        assert!(!no_preauth);
+    }
+
+    #[test]
+    fn test_is_kerberoastable_enabled_with_spns() {
+        let u = UserEntry {
+            enabled: true,
+            service_principal_names: vec!["HTTP/srv.contoso.com".into()],
+            ..Default::default()
+        };
+        assert!(u.is_kerberoastable());
+    }
+
+    #[test]
+    fn test_is_kerberoastable_enabled_no_spns() {
+        let u = UserEntry {
+            enabled: true,
+            service_principal_names: vec![],
+            ..Default::default()
+        };
+        assert!(!u.is_kerberoastable());
+    }
+
+    #[test]
+    fn test_is_kerberoastable_disabled_with_spns() {
+        let u = UserEntry {
+            enabled: false,
+            service_principal_names: vec!["HTTP/srv.contoso.com".into()],
+            ..Default::default()
+        };
+        assert!(!u.is_kerberoastable());
+    }
+
+    #[test]
+    fn test_is_asrep_roastable_enabled_no_preauth() {
+        let u = UserEntry {
+            enabled: true,
+            dont_require_preauth: true,
+            ..Default::default()
+        };
+        assert!(u.is_asrep_roastable());
+    }
+
+    #[test]
+    fn test_is_asrep_roastable_enabled_with_preauth() {
+        let u = UserEntry {
+            enabled: true,
+            dont_require_preauth: false,
+            ..Default::default()
+        };
+        assert!(!u.is_asrep_roastable());
+    }
+
+    #[test]
+    fn test_is_asrep_roastable_disabled_no_preauth() {
+        let u = UserEntry {
+            enabled: false,
+            dont_require_preauth: true,
+            ..Default::default()
+        };
+        assert!(!u.is_asrep_roastable());
+    }
+
+    #[test]
+    fn test_is_high_value_admin_count() {
+        let u = UserEntry {
+            admin_count: true,
+            ..Default::default()
+        };
+        assert!(u.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_member_of_domain_admins() {
+        let u = UserEntry {
+            admin_count: false,
+            member_of: vec!["CN=Domain Admins,CN=Users,DC=contoso,DC=com".into()],
+            ..Default::default()
+        };
+        assert!(u.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_member_of_enterprise_admins() {
+        let u = UserEntry {
+            admin_count: false,
+            member_of: vec!["CN=Enterprise Admins,CN=Builtin,DC=contoso,DC=com".into()],
+            ..Default::default()
+        };
+        assert!(u.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_no_match() {
+        let u = UserEntry {
+            admin_count: false,
+            member_of: vec!["CN=Sales,CN=Users,DC=contoso,DC=com".into()],
+            ..Default::default()
+        };
+        assert!(!u.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_empty_member_of() {
+        let u = UserEntry {
+            admin_count: false,
+            member_of: vec![],
+            ..Default::default()
+        };
+        assert!(!u.is_high_value());
+    }
+
+    #[test]
+    fn test_user_attributes_contains_key_fields() {
+        let attrs = user_attributes();
+        assert!(attrs.contains(&"sAMAccountName".to_string()));
+        assert!(attrs.contains(&"userAccountControl".to_string()));
+        assert!(attrs.contains(&"servicePrincipalName".to_string()));
+        assert!(attrs.contains(&"objectSid".to_string()));
+        assert!(attrs.contains(&"adminCount".to_string()));
+    }
 }

@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Trust relationship model
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Complete trust relationship with all attack-relevant attributes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,9 +59,9 @@ pub mod trust_attrs {
     pub const PIM_TRUST: u32 = 0x0000_0400;
 }
 
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Foreign Security Principal
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// A user/group from another forest with local group membership.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,19 +78,26 @@ pub struct ForeignSecurityPrincipal {
     pub source_domain: Option<String>,
 }
 
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Foreign group membership (offline, from reaper GroupEntry data)
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// A cross-domain group membership found by DN analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForeignMembership {
+    /// foreign principal field
     pub foreign_principal: String,
+    /// Domain FQDN
     pub foreign_domain: String,
+    /// Security Identifier
     pub foreign_sid: Option<String>,
+    /// local group field
     pub local_group: String,
+    /// local group dn field
     pub local_group_dn: String,
+    /// Domain FQDN
     pub local_domain: String,
+    /// is privileged group field
     pub is_privileged_group: bool,
 }
 
@@ -119,25 +126,29 @@ const PRIVILEGED_GROUPS: &[&str] = &[
     "organization management",
 ];
 
-// ─────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Cross-forest group membership
-// ─────────────────────────────────────────────────
-
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossForestMembership {
+    /// Object or account name.
     pub local_group_name: String,
+    /// local group dn field
     pub local_group_dn: String,
+    /// Classification for this object.
     pub group_type: i32,
+    /// Security Identifier
     pub foreign_member_sids: Vec<String>,
+    /// is privileged field
     pub is_privileged: bool,
 }
 
-// ═══════════════════════════════════════════════════
-// OFFLINE ANALYSIS — works with reaper GroupEntry data (no LDAP needed)
-// ═══════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// OFFLINE ANALYSIS â€” works with reaper GroupEntry data (no LDAP needed)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Analyze reaper group data for foreign (cross-domain) memberships.
-///
 /// This is the primary offline analysis function that works purely from
 /// reaper enumeration data without needing live LDAP connectivity.
 pub fn analyze_foreign_memberships(
@@ -169,7 +180,7 @@ pub fn analyze_foreign_memberships(
                     is_privileged_group_name(&group.sam_account_name) || group.admin_count;
 
                 debug!(
-                    "[foreign] {} ({}) → {} ({}) [privileged={}]",
+                    "[foreign] {} ({}) â†’ {} ({}) [privileged={}]",
                     member_name, member_domain, group.sam_account_name, group_domain, is_privileged
                 );
 
@@ -198,14 +209,13 @@ pub fn analyze_foreign_memberships(
     findings
 }
 
-// ═══════════════════════════════════════════════════
-// LIVE ENUMERATION — requires LDAP connectivity
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// LIVE ENUMERATION â€” requires LDAP connectivity
 // These functions are gated because overthrone_core::proto::ldap
 // doesn't export search/LdapEntry yet.
-// ═══════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Enumerate all trust relationships from the current domain (LIVE LDAP).
-///
 /// Queries the trustedDomain objects in AD and parses trustAttributes
 /// to determine SID filtering status, TGT delegation, and other
 /// attack-relevant configuration.
@@ -250,27 +260,28 @@ pub async fn enumerate_trusts(domain: &str, dc_ip: &str) -> Result<Vec<TrustRela
         let mut attack_notes = Vec::new();
 
         if !sid_filtering {
-            attack_notes
-                .push("⚠️ SID filtering is DISABLED - full domain compromise possible".to_string());
+            attack_notes.push(
+                "âš ï¸ SID filtering is DISABLED - full domain compromise possible".to_string(),
+            );
         }
 
         if tgt_delegation && sid_filtering {
             attack_notes.push(
-                "⚠️ TGT delegation enabled with SID filtering - potential bypass via delegation"
+                "âš ï¸ TGT delegation enabled with SID filtering - potential bypass via delegation"
                     .to_string(),
             );
         }
 
         if trust.trust_direction.to_string().contains("Bidirectional") {
             attack_notes.push(
-                "ℹ️ Bidirectional trust - compromise in either direction affects both domains"
+                "â„¹ï¸ Bidirectional trust - compromise in either direction affects both domains"
                     .to_string(),
             );
         }
 
         if forest_transitive {
             attack_notes.push(
-                "ℹ️ Forest-transitive trust - access may extend to entire forest".to_string(),
+                "â„¹ï¸ Forest-transitive trust - access may extend to entire forest".to_string(),
             );
         }
 
@@ -383,9 +394,9 @@ pub async fn resolve_foreign_sids(
                     principal.source_domain = Some(domain_fqdn.clone());
                     resolved_count += 1;
                     debug!(
-                        "[foreign] Resolved {} → {}",
+                        "[foreign] Resolved {} â†’ {}",
                         principal.sid,
-                        principal.resolved_name.as_ref().unwrap()
+                        principal.resolved_name.as_deref().unwrap_or("<resolved>")
                     );
                 }
                 Err(e) => {
@@ -535,12 +546,12 @@ pub async fn enumerate_cross_forest_memberships(
     Ok(results)
 }
 
-// ═══════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // HELPER FUNCTIONS
-// ═══════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Convert domain FQDN to Distinguished Name.
-/// "child.corp.local" → "DC=child,DC=corp,DC=local"
+/// "child.corp.local" â†’ "DC=child,DC=corp,DC=local"
 fn domain_to_dn(domain: &str) -> String {
     domain
         .split('.')
@@ -550,7 +561,7 @@ fn domain_to_dn(domain: &str) -> String {
 }
 
 /// Extract domain from a Distinguished Name.
-/// "CN=jdoe,OU=Users,DC=child,DC=corp,DC=local" → "child.corp.local"
+/// "CN=jdoe,OU=Users,DC=child,DC=corp,DC=local" â†’ "child.corp.local"
 fn domain_from_dn(dn: &str) -> String {
     dn.split(',')
         .filter_map(|part| {
@@ -566,7 +577,7 @@ fn domain_from_dn(dn: &str) -> String {
 }
 
 /// Extract CN (common name) from a Distinguished Name.
-/// "CN=John Doe,OU=Users,DC=corp,DC=local" → "John Doe"
+/// "CN=John Doe,OU=Users,DC=corp,DC=local" â†’ "John Doe"
 fn cn_from_dn(dn: &str) -> String {
     dn.split(',')
         .find(|part| part.trim().to_uppercase().starts_with("CN="))
@@ -608,13 +619,13 @@ fn extract_domain_sid(sid: &str) -> String {
 /// Extract domain SID portion from a full SID (strip last RID).
 fn _extract_domain_from_sid(_sid: &Sid) -> Option<String> {
     // Can't resolve domain name from SID alone without a lookup table.
-    // Return None — the caller maps via foreign_domains HashMap.
+    // Return None â€” the caller maps via foreign_domains HashMap.
     None
 }
 
 /// Extract a SID from a Foreign Security Principal DN.
 /// "CN=S-1-5-21-123456-789012-345678-1104,CN=ForeignSecurityPrincipals,DC=corp,DC=local"
-/// → Some(Sid)
+/// â†’ Some(Sid)
 fn _extract_sid_from_fsp_dn(dn: &str) -> Option<Sid> {
     dn.split(',')
         .next()
@@ -650,9 +661,9 @@ fn _is_privileged_group(name: &str, dn: &str) -> bool {
         || dn.to_lowercase().contains("cn=builtin,")
 }
 
-// ═══════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // TESTS
-// ═══════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(test)]
 mod tests {

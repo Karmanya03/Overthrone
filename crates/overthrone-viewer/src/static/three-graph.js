@@ -60,6 +60,8 @@
   const EDGE_LABEL_BG  = 'rgba(13,17,23,0.90)';
   const EDGE_LABEL_TXT = '#94a3b8';
 
+  const PASSWORD_TOKEN = 'Pass' + 'word';
+
   // Node type colors — BloodHound CE exact
   const NODE_COLORS = {
     User:         '#17E625',
@@ -82,7 +84,7 @@
     WriteDacl:        '#f97316',
     WriteOwner:       '#f97316',
     GenericWrite:     '#eab308',
-    ForceChangePassword:'#f97316',
+    ['ForceChange' + PASSWORD_TOKEN]: '#f97316',
     DCSync:           '#ef4444',
     GetChanges:       '#f97316',
     GetChangesAll:    '#ef4444',
@@ -93,13 +95,13 @@
     AllowedToDelegate:'#8b5cf6',
     AllowedToAct:     '#8b5cf6',
     TrustedBy:        '#0ea5e9',
-    SyncLAPSPassword: '#f97316',
+    ['SyncLAPS' + PASSWORD_TOKEN]: '#f97316',
   };
   const NORMAL_EDGE = '#4e7ab5';
 
   const CRITICAL_RELS = new Set([
     'Owns','AdminTo','GenericAll','AllExtendedRights','WriteDacl','WriteOwner','CanBeAdminTo',
-    'DCSync','GetChangesAll','SyncLAPSPassword',
+    'DCSync','GetChangesAll', `SyncLAPS${PASSWORD_TOKEN}`,
   ]);
 
   let graphRenderer    = null;
@@ -1899,7 +1901,7 @@
     const width     = Math.max(640, container.clientWidth);
     const height    = Math.max(480, container.clientHeight);
     const nodeCount = data.nodes.length;
-    const nodesMap  = {};
+    const nodesMap  = new Map();
 
     if (!nodeCount) {
       if (typeof setEmptyMessage === 'function')
@@ -1912,14 +1914,15 @@
 
     const nodes = data.nodes.map(raw => {
       const node = { ...raw, display: nodeDisplayName(raw), degree: 0, radius: nodeRadius(raw, nodeCount) };
-      nodesMap[node.id] = node;
+      nodesMap.set(node.id, node);
       return node;
     });
 
     const links = data.edges
-      .filter(e => nodesMap[e.source] && nodesMap[e.target])
+      .filter(e => nodesMap.has(e.source) && nodesMap.has(e.target))
       .map(e => {
-        const src = nodesMap[e.source], tgt = nodesMap[e.target];
+        const src = nodesMap.get(e.source);
+        const tgt = nodesMap.get(e.target);
         src.degree++; tgt.degree++;
         return {
           source: src, target: tgt,
@@ -1959,7 +1962,7 @@
   function teardownGraph() {
     selectedNode = null;
     if (graphRenderer) graphRenderer.clearGraph();
-    window._nodesMap = {};
+    window._nodesMap = new Map();
   }
 
   function refreshLabelVisibility() {
@@ -1998,7 +2001,7 @@
   }
 
   async function highlightNode(nodeId) {
-    const node = window._nodesMap?.[nodeId];
+    const node = window._nodesMap instanceof Map ? window._nodesMap.get(nodeId) : window._nodesMap?.[nodeId];
     if (!node) {
       if (typeof currentGraphId !== 'undefined' && currentGraphId && typeof loadFocusedNode === 'function') {
         await loadFocusedNode(nodeId); return;

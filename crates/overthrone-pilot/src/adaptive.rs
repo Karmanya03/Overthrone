@@ -145,6 +145,7 @@ impl std::fmt::Display for FailureClass {
 
 /// What the adaptive engine decided to do after a step outcome
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(missing_docs)]
 pub enum AdaptiveDecision {
     /// Continue to the next step as planned
     Continue,
@@ -208,6 +209,7 @@ pub struct AdaptiveEngine {
 }
 
 impl AdaptiveEngine {
+    /// Runs this module operation.
     pub fn new(stealth: bool) -> Self {
         Self {
             max_retries: 3,
@@ -889,9 +891,13 @@ fn normalize_failure_output(output: &str) -> String {
 /// Summary of all adaptive decisions for reporting
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveSummary {
+    /// Total count
     pub total_replans: u32,
+    /// dead hosts field
     pub dead_hosts: Vec<String>,
+    /// blocked methods field
     pub blocked_methods: Vec<(String, String)>,
+    /// blacklisted actions field
     pub blacklisted_actions: Vec<String>,
 }
 

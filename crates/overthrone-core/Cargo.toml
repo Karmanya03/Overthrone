@@ -65,7 +65,7 @@ pem = "3.0"             # PEM encoding/decoding for certificates and keys
 
 # Networking
 hickory-resolver.workspace = true
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 
 async-trait = "0.1"
 rcgen = "0.14.7"

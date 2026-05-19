@@ -1,3 +1,5 @@
+//! Output formatting and console presentation.
+
 use crate::error::Result;
 use colored::Colorize;
 use serde::Serialize;
@@ -64,10 +66,15 @@ pub fn finding(severity: Severity, title: &str, detail: &str) {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Severity {
+    /// `Critical` variant
     Critical,
+    /// `High` variant
     High,
+    /// `Medium` variant
     Medium,
+    /// `Low` variant
     Low,
+    /// `Info` variant
     Info,
 }
 

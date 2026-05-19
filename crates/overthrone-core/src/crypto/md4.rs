@@ -6,9 +6,7 @@
 use md4::{Digest, Md4};
 
 /// Compute the NTLM hash of a password string.
-///
 /// NTLM hash = `MD4(UTF-16LE(password))`.
-///
 /// # Example
 /// ```
 /// let hash = overthrone_core::crypto::md4::ntlm_hash("Password123");
@@ -23,7 +21,6 @@ pub fn ntlm_hash(password: &str) -> [u8; 16] {
 }
 
 /// Compute the NTLM hash from raw UTF-16LE bytes.
-///
 /// Use this when you already have the password in UTF-16LE encoding.
 pub fn ntlm_hash_from_bytes(utf16le: &[u8]) -> [u8; 16] {
     let mut hasher = Md4::new();
@@ -40,7 +37,6 @@ pub fn ntlm_hash_hex(password: &str) -> String {
 }
 
 /// Compute the NTLM hash from a password and compare with an expected hash.
-///
 /// Both NT hash bytes and hex strings are accepted for comparison.
 pub fn ntlm_verify(password: &str, expected_hash: &[u8; 16]) -> bool {
     ntlm_hash(password) == *expected_hash

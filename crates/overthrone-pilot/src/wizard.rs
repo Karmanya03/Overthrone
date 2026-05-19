@@ -1,12 +1,12 @@
-//! Interactive Wizard Mode — Guides users through AD attacks with
+//! Interactive Wizard Mode â€” Guides users through AD attacks with
 //! pause points, decision prompts, and manual intervention options.
 //!
 //! Flow:
-//!   1. Enumerate → Show results → Prompt to continue
-//!   2. Attack    → Show captured hashes → Prompt to crack
-//!   3. Escalate  → Show new creds → Prompt to switch
-//!   4. Lateral   → Show admin access → Prompt to exploit
-//!   5. Loot      → Show compromised data → Complete
+//!   1. Enumerate â†’ Show results â†’ Prompt to continue
+//!   2. Attack    â†’ Show captured hashes â†’ Prompt to crack
+//!   3. Escalate  â†’ Show new creds â†’ Prompt to switch
+//!   4. Lateral   â†’ Show admin access â†’ Prompt to exploit
+//!   5. Loot      â†’ Show compromised data â†’ Complete
 //!
 //! Features:
 //!   - Real-time progress indicators (indicatif)
@@ -35,9 +35,9 @@ use std::time::Instant;
 use tokio::fs;
 use tracing::{error, info, warn};
 
-// ═══════════════════════════════════════════════════════════
-// Wizard Session — serializable checkpoint form
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Wizard Session â€” serializable checkpoint form
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Serializable snapshot of a WizardSession (for checkpoint save/load).
 /// Uses AutoPwnConfigSnapshot so Credentials private field is captured.
@@ -55,24 +55,35 @@ struct WizardSessionSnapshot {
     max_pause_secs: Option<u64>,
 }
 
-// ═══════════════════════════════════════════════════════════
-// Wizard Session — Main interactive controller
-// ═══════════════════════════════════════════════════════════
-
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Wizard Session â€” Main interactive controller
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/// Structure
 pub struct WizardSession {
+    /// Stable unique identifier.
     pub session_id: String,
+    /// config field
     pub config: AutoPwnConfig,
+    /// state field
     pub state: EngagementState,
+    /// current stage field
     pub current_stage: Stage,
+    /// completed stages field
     pub completed_stages: Vec<Stage>,
+    /// Filesystem path.
     pub checkpoint_path: PathBuf,
+    /// started at field
     pub started_at: DateTime<Utc>,
+    /// pause after stage field
     pub pause_after_stage: bool,
+    /// auto crack field
     pub auto_crack: bool,
+    /// max pause secs field
     pub max_pause_secs: Option<u64>,
 }
 
 impl WizardSession {
+    /// Runs this module operation.
     pub fn new(config: AutoPwnConfig, checkpoint_dir: Option<PathBuf>) -> Self {
         let session_id = format!("wiz_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
         let checkpoint_path = checkpoint_dir
@@ -107,7 +118,7 @@ impl WizardSession {
 
         let config = AutoPwnConfig::from_snapshot(snap.config);
         info!(
-            "✓ Resumed session: {} from {}",
+            "âœ“ Resumed session: {} from {}",
             snap.session_id.bold(),
             path.display()
         );
@@ -154,13 +165,13 @@ impl WizardSession {
             .map_err(|e| OverthroneError::custom(format!("Failed to write checkpoint: {}", e)))?;
 
         info!(
-            "💾 Checkpoint saved: {}",
+            "ðŸ’¾ Checkpoint saved: {}",
             self.checkpoint_path.display().to_string().dimmed()
         );
         Ok(())
     }
 
-    // ── Main wizard run ──
+    // â”€â”€ Main wizard run â”€â”€
     pub async fn run(&mut self) -> Result<AutoPwnResult> {
         let wall_start = Instant::now();
         print_wizard_banner(&self.config);
@@ -194,7 +205,7 @@ impl WizardSession {
                 let ql =
                     AdaptiveQLearner::load(self.config.stealth, self.config.q_table_path.clone());
                 println!(
-                    "  {} Wizard Q-learner loaded (mode={:?}, states={}, ε={:.3})",
+                    "  {} Wizard Q-learner loaded (mode={:?}, states={}, Îµ={:.3})",
                     "QL".bold().magenta(),
                     self.config.adaptive_mode,
                     ql.q_table_size(),
@@ -206,7 +217,7 @@ impl WizardSession {
         };
         let mut ctx = self.config.exec_context();
 
-        // ── LDAP Pre-flight Check ──
+        // â”€â”€ LDAP Pre-flight Check â”€â”€
         if !self.config.dry_run {
             println!(
                 "  {} Pre-flight LDAP connectivity check...",
@@ -225,13 +236,13 @@ impl WizardSession {
                     Ok(mut session) => {
                         println!(
                             "  {} LDAP NTLM bind OK ({})",
-                            "✓".green().bold(),
+                            "âœ“".green().bold(),
                             session.bind_type
                         );
                         let _ = session.disconnect().await;
                     }
                     Err(e) => {
-                        println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
+                        println!("  {} LDAP pre-flight failed: {}", "âœ—".red().bold(), e);
                         println!(
                             "  {} LDAP-dependent enumeration steps will be skipped.",
                             "!".yellow().bold()
@@ -252,13 +263,13 @@ impl WizardSession {
                     Ok(mut session) => {
                         println!(
                             "  {} LDAP bind OK ({})",
-                            "✓".green().bold(),
+                            "âœ“".green().bold(),
                             session.bind_type
                         );
                         let _ = session.disconnect().await;
                     }
                     Err(e) => {
-                        println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
+                        println!("  {} LDAP pre-flight failed: {}", "âœ—".red().bold(), e);
                         println!(
                             "  {} LDAP-dependent enumeration steps will be skipped.",
                             "!".yellow().bold()
@@ -284,12 +295,12 @@ impl WizardSession {
         for stage in all_stages {
             // Skip already-completed stages (resume support)
             if self.completed_stages.contains(&stage) {
-                info!("⏭  Skipping completed stage: {}", stage);
+                info!("Skipping completed stage: {}", stage);
                 continue;
             }
 
             if stage > self.config.max_stage {
-                info!("⊘ Stage {} exceeds max_stage, stopping", stage);
+                info!("âŠ˜ Stage {} exceeds max_stage, stopping", stage);
                 break;
             }
 
@@ -313,7 +324,7 @@ impl WizardSession {
                 .collect();
 
             if stage_steps.is_empty() {
-                info!("  {} No actions planned for stage {}", "ℹ".blue(), stage);
+                info!("  {} No actions planned for stage {}", "â„¹".blue(), stage);
                 self.completed_stages.push(stage);
                 self.save_checkpoint().await?;
                 continue;
@@ -332,10 +343,12 @@ impl WizardSession {
             // Progress bar for stage
             let pb = ProgressBar::new(stage_steps.len() as u64);
             pb.set_style(
-                ProgressStyle::default_bar()
+                match ProgressStyle::default_bar()
                     .template("  {spinner:.cyan} [{bar:30.cyan/dim}] {pos}/{len} {msg}")
-                    .unwrap()
-                    .progress_chars("█▓░"),
+                {
+                    Ok(style) => style.progress_chars("â–ˆâ–“â–‘"),
+                    Err(_) => ProgressStyle::default_bar(),
+                },
             );
 
             let mut need_replan = false;
@@ -374,7 +387,7 @@ impl WizardSession {
                     let state_snapshot = AdaptiveQLearner::format_state_snapshot(key, ql.epsilon());
                     println!(
                         "  {}  {} state={{{}}}",
-                        "│".dimmed(),
+                        "â”‚".dimmed(),
                         "[QL]".magenta().bold(),
                         state_snapshot.dimmed(),
                     );
@@ -400,7 +413,7 @@ impl WizardSession {
                         AdaptiveQLearner::format_decision(action, *q_val, *exploring);
                     println!(
                         "  {}  {} -> {}",
-                        "│".dimmed(),
+                        "â”‚".dimmed(),
                         "[QL]".magenta().bold(),
                         decision_snapshot.cyan(),
                     );
@@ -427,7 +440,7 @@ impl WizardSession {
                         format!("reward={:+.1} table={} states", reward, ql.q_table_size());
                     println!(
                         "  {}  {} reward={:+.1} table={} states",
-                        "│".dimmed(),
+                        "â”‚".dimmed(),
                         "[QL]".magenta().bold(),
                         reward,
                         ql.q_table_size(),
@@ -443,12 +456,12 @@ impl WizardSession {
 
                 match decision {
                     AdaptiveDecision::Replan { reason } => {
-                        warn!("  🔄 Re-planning: {}", reason);
+                        warn!("  ðŸ”„ Re-planning: {}", reason);
                         need_replan = true;
                         break;
                     }
                     AdaptiveDecision::Abort { reason } => {
-                        error!("  ✗ Aborting: {}", reason);
+                        error!("  âœ— Aborting: {}", reason);
                         pb.finish_with_message("Aborted".to_string());
                         if let Some(writer) = &trail {
                             writer.append_final(
@@ -494,7 +507,7 @@ impl WizardSession {
             if self.state.evaluate_goal(&goal).is_success() {
                 info!(
                     "\n  {} {} achieved!",
-                    "🎯".bold(),
+                    "ðŸŽ¯".bold(),
                     goal.describe().green().bold()
                 );
                 break;
@@ -506,15 +519,15 @@ impl WizardSession {
                 match decision {
                     StageDecision::Continue => continue,
                     StageDecision::Skip => {
-                        info!("  ⏭ Skipping to next stage");
+                        info!("  Skipping to next stage");
                         continue;
                     }
                     StageDecision::Abort => {
-                        info!("  ⏹ User aborted");
+                        info!("  â¹ User aborted");
                         break;
                     }
                     StageDecision::SwitchCreds(cred) => {
-                        info!("  🔑 Switching to: {}", cred.username.bold());
+                        info!("  ðŸ”‘ Switching to: {}", cred.username.bold());
                         ctx.override_creds = Some((
                             cred.username.clone(),
                             cred.secret.clone(),
@@ -522,7 +535,7 @@ impl WizardSession {
                         ));
                     }
                     StageDecision::Replan => {
-                        info!("  🔄 Re-planning from current state");
+                        info!("  ðŸ”„ Re-planning from current state");
                     }
                 }
             }
@@ -561,9 +574,9 @@ impl WizardSession {
         .await
     }
 
-    // ── Stage results display ──
+    // â”€â”€ Stage results display â”€â”€
     async fn display_stage_results(&self, stage: Stage) -> Result<()> {
-        println!("\n{}", "═══ STAGE RESULTS ═══".bold().cyan());
+        println!("\n{}", "â•â•â• STAGE RESULTS â•â•â•".bold().cyan());
 
         match stage {
             Stage::Enumerate => {
@@ -576,7 +589,7 @@ impl WizardSession {
                     Cell::new("Users").fg(TableColor::Cyan),
                     Cell::new(self.state.users.len()),
                     Cell::new(format!(
-                        "{} admin★",
+                        "{} adminâ˜…",
                         self.state.users.iter().filter(|u| u.admin_count).count()
                     ))
                     .fg(TableColor::Yellow),
@@ -686,7 +699,7 @@ impl WizardSession {
                     }
                     println!("{}", table);
                     info!(
-                        "  ✓ Total credentials captured: {}",
+                        "  âœ“ Total credentials captured: {}",
                         new_creds.len().to_string().bold().green()
                     );
 
@@ -700,16 +713,16 @@ impl WizardSession {
                         .count();
 
                     if hash_count > 0 && self.auto_crack {
-                        println!("\n🔓 Found {} hashes", hash_count.to_string().bold());
+                        println!("\nðŸ”“ Found {} hashes", hash_count.to_string().bold());
                         if self
                             .prompt_yes_no("Attempt offline cracking?", true)
                             .await?
                         {
-                            info!("  ⚙  Cracking queued — runs as part of CrackHashes step");
+                            info!("  âš™  Cracking queued â€” runs as part of CrackHashes step");
                         }
                     }
                 } else {
-                    info!("  {} No new credentials captured", "ℹ".blue());
+                    info!("  {} No new credentials captured", "â„¹".blue());
                 }
             }
 
@@ -738,7 +751,7 @@ impl WizardSession {
                     }
                     println!("{}", table);
                 } else {
-                    info!("  {} No admin access gained yet", "ℹ".yellow());
+                    info!("  {} No admin access gained yet", "â„¹".yellow());
                 }
             }
 
@@ -750,11 +763,11 @@ impl WizardSession {
                 if dc_access {
                     info!(
                         "  {} {} DC ACCESS ACHIEVED",
-                        "✓".green().bold(),
-                        "🎯".bold()
+                        "âœ“".green().bold(),
+                        "ðŸŽ¯".bold()
                     );
                 } else {
-                    info!("  {} Lateral movement in progress", "ℹ".yellow());
+                    info!("  {} Lateral movement in progress", "â„¹".yellow());
                 }
             }
 
@@ -783,7 +796,7 @@ impl WizardSession {
 
                     let total_entries: usize = self.state.loot.iter().map(|l| l.entries).sum();
                     info!(
-                        "  💰 Total loot: {} items, {} entries",
+                        "  ðŸ’° Total loot: {} items, {} entries",
                         self.state.loot.len().to_string().bold().green(),
                         total_entries.to_string().bold().yellow()
                     );
@@ -791,15 +804,18 @@ impl WizardSession {
             }
 
             Stage::Cleanup => {
-                info!("  🧹 Cleanup stage");
+                info!("  ðŸ§¹ Cleanup stage");
             }
         }
 
-        println!("{}", "══════════════════════".cyan());
+        println!(
+            "{}",
+            "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•".cyan()
+        );
         Ok(())
     }
 
-    // ── Interactive stage transition prompt ──
+    // â”€â”€ Interactive stage transition prompt â”€â”€
     async fn prompt_stage_transition(
         &self,
         completed_stage: Stage,
@@ -818,7 +834,7 @@ impl WizardSession {
 
         if !available_creds.is_empty() && completed_stage == Stage::Attack {
             println!(
-                "🔑 {} new credential(s) available",
+                "ðŸ”‘ {} new credential(s) available",
                 available_creds.len().to_string().bold()
             );
             if self
@@ -838,14 +854,14 @@ impl WizardSession {
         };
 
         println!(
-            "\n{} {} → {}",
+            "\n{} {} â†’ {}",
             "Next:".bold(),
             completed_stage.to_string().dimmed(),
             next_stage.to_string().bold().cyan()
         );
 
         print!("Continue? [Y/n/skip/abort/replan]: ");
-        io::stdout().flush().unwrap();
+        io::stdout().flush().unwrap_or(());
 
         let input = self.read_input_with_timeout().await?;
         match input.trim().to_lowercase().as_str() {
@@ -872,7 +888,7 @@ impl WizardSession {
                 format!("{:?} hash", cred.secret_type)
             };
             println!(
-                "  {} {} → {} ({})",
+                "  {} {} â†’ {} ({})",
                 format!("[{}]", idx + 1).bold().cyan(),
                 cred.username.bold(),
                 preview.red(),
@@ -881,7 +897,7 @@ impl WizardSession {
         }
         println!("  {} Keep current", "[0]".bold().dimmed());
         print!("\nSelect [0-{}]: ", creds.len());
-        io::stdout().flush().unwrap();
+        io::stdout().flush().unwrap_or(());
 
         let input = self.read_input_with_timeout().await?;
         let choice = input.trim().parse::<usize>().unwrap_or(0);
@@ -900,7 +916,7 @@ impl WizardSession {
             format!("{} [y/N]: ", question)
         };
         print!("{}", prompt);
-        io::stdout().flush().unwrap();
+        io::stdout().flush().unwrap_or(());
 
         let input = self.read_input_with_timeout().await?;
         Ok(match input.trim().to_lowercase().as_str() {
@@ -930,7 +946,7 @@ impl WizardSession {
                 Ok(Ok(input)) => Ok(input),
                 Ok(Err(e)) => Err(e),
                 Err(_) => {
-                    warn!("\n  ⏱ Input timeout ({}s), auto-continuing", timeout_secs);
+                    warn!("\n  â± Input timeout ({}s), auto-continuing", timeout_secs);
                     Ok(String::new())
                 }
             }
@@ -960,19 +976,19 @@ impl WizardSession {
 
         println!(
             "\n{}",
-            "╔══════════════════════════════════════════════╗"
+            "â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—"
                 .bold()
                 .green()
         );
         println!(
             "{}",
-            "║         WIZARD — FINAL REPORT                ║"
+            "â•‘         WIZARD â€” FINAL REPORT                â•‘"
                 .bold()
                 .green()
         );
         println!(
             "{}",
-            "╚══════════════════════════════════════════════╝"
+            "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
                 .bold()
                 .green()
         );
@@ -980,7 +996,7 @@ impl WizardSession {
         self.state.print_summary();
 
         println!(
-            "  Goal:       {} → {}",
+            "  Goal:       {} â†’ {}",
             goal.describe().bold(),
             if da_achieved {
                 "ACHIEVED".green().bold()
@@ -1020,7 +1036,7 @@ impl WizardSession {
 
         if da_achieved {
             let _ = fs::remove_file(&self.checkpoint_path).await;
-            info!("  🗑  Checkpoint cleaned up (goal achieved)");
+            info!("  ðŸ—‘  Checkpoint cleaned up (goal achieved)");
         }
 
         Ok(AutoPwnResult {
@@ -1043,39 +1059,44 @@ impl WizardSession {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Stage Decision
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[derive(Debug, Clone)]
 pub enum StageDecision {
+    /// `Continue` variant
     Continue,
+    /// `Skip` variant
     Skip,
+    /// `Abort` variant
     Abort,
+    /// `SwitchCreds` variant
     SwitchCreds(CompromisedCred),
+    /// `Replan` variant
     Replan,
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // UI Helpers
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 fn print_wizard_banner(config: &AutoPwnConfig) {
     println!(
         "\n{}",
-        "╔══════════════════════════════════════════════╗"
+        "â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—"
             .bold()
             .magenta()
     );
     println!(
         "{}",
-        "║      OVERTHRONE — INTERACTIVE WIZARD         ║"
+        "â•‘      OVERTHRONE â€” INTERACTIVE WIZARD         â•‘"
             .bold()
             .magenta()
     );
     println!(
         "{}",
-        "╚══════════════════════════════════════════════╝"
+        "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
             .bold()
             .magenta()
     );
@@ -1096,13 +1117,16 @@ fn print_wizard_banner(config: &AutoPwnConfig) {
 
 fn print_stage_banner(stage: Stage) {
     let (icon, color_fn): (&str, fn(String) -> colored::ColoredString) = match stage {
-        Stage::Enumerate => ("🔍", |s| s.blue()),
-        Stage::Attack => ("⚔️ ", |s| s.yellow()),
-        Stage::Escalate => ("📈", |s| s.red()),
-        Stage::Lateral => ("🔀", |s| s.magenta()),
-        Stage::Loot => ("💰", |s| s.red()),
-        Stage::Cleanup => ("🧹", |s| s.green()),
+        Stage::Enumerate => ("ðŸ”", |s| s.blue()),
+        Stage::Attack => ("âš”ï¸ ", |s| s.yellow()),
+        Stage::Escalate => ("ðŸ“ˆ", |s| s.red()),
+        Stage::Lateral => ("ðŸ”€", |s| s.magenta()),
+        Stage::Loot => ("ðŸ’°", |s| s.red()),
+        Stage::Cleanup => ("ðŸ§¹", |s| s.green()),
     };
-    let banner = format!("══════ {} STAGE: {} ══════", icon, stage);
+    let banner = format!(
+        "â•â•â•â•â•â• {} STAGE: {} â•â•â•â•â•â•",
+        icon, stage
+    );
     println!("\n{}", color_fn(banner).bold());
 }

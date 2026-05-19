@@ -18,9 +18,13 @@ use tracing::info;
 /// Output format for the report
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportFormat {
+    /// `Markdown` variant
     Markdown,
+    /// `Pdf` variant
     Pdf,
+    /// `Json` variant
     Json,
+    /// `All` variant
     All,
 }
 
@@ -297,7 +301,7 @@ async fn generate_pdf(
     session: &EngagementSession,
     config: &ReportConfig,
 ) -> anyhow::Result<PathBuf> {
-    let bytes = pdf::render(session);
+    let bytes = pdf::render(session)?;
     let path = config
         .output_dir
         .join(format!("{}.pdf", config.filename_base));
@@ -788,7 +792,7 @@ mod tests {
     #[test]
     fn test_pdf_render_produces_bytes() {
         let session = mock_session();
-        let bytes = crate::pdf::render(&session);
+        let bytes = crate::pdf::render(&session).unwrap();
         // PDF magic bytes: %PDF
         assert!(bytes.len() > 100);
         assert_eq!(&bytes[0..5], b"%PDF-");

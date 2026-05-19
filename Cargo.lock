@@ -4013,7 +4013,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4026,6 +4026,7 @@ dependencies = [
  "crossterm 0.28.1",
  "directories",
  "dirs 5.0.1",
+ "futures",
  "hex",
  "indicatif",
  "kerberos_asn1",
@@ -4044,6 +4045,7 @@ dependencies = [
  "rand 0.10.1",
  "ratatui",
  "rpassword",
+ "rustls",
  "rustyline",
  "rustyline-derive",
  "serde",
@@ -4058,7 +4060,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-core"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -4128,14 +4130,17 @@ dependencies = [
 
 [[package]]
 name = "overthrone-crawler"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "colored",
+ "hex",
  "indicatif",
  "log",
  "overthrone-core",
+ "overthrone-forge",
  "overthrone-reaper",
  "pretty_assertions",
  "serde",
@@ -4149,7 +4154,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-forge"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "base64",
@@ -4179,12 +4184,13 @@ dependencies = [
 
 [[package]]
 name = "overthrone-hunter"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "base64",
  "chrono",
  "colored",
+ "futures",
  "hex",
  "indicatif",
  "kerberos_asn1",
@@ -4203,7 +4209,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-pilot"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4229,7 +4235,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-reaper"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "base64",
@@ -4251,7 +4257,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-relay"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4284,7 +4290,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-scribe"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "base64",
@@ -4304,10 +4310,11 @@ dependencies = [
 
 [[package]]
 name = "overthrone-viewer"
-version = "0.1.47"
+version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
+ "base64",
  "chrono",
  "open",
  "serde",
@@ -5751,7 +5758,9 @@ dependencies = [
  "cookie",
  "cookie_store",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",

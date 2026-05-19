@@ -96,11 +96,9 @@ pub struct DcSyncResult {
 // ═══════════════════════════════════════════════════════════
 
 /// Parse a DRSGetNCChanges (opnum 3) RPC response and extract credentials.
-///
 /// # Arguments
 /// * `response`    — Raw RPC response bytes (including PDU header)
 /// * `session_key` — DRS session key from DRSBind (used to decrypt attributes)
-///
 /// # Returns
 /// Parsed objects with decrypted NT hashes and supplemental credentials.
 pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result<DcSyncResult> {
@@ -135,10 +133,8 @@ pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result
 }
 
 /// Parse DRS_MSG_GETCHGREPLY_V6 (also handles V1/V2/V7 with offset adjustments).
-///
 /// DRS_MSG_GETCHGREPLY_V6 fixed inline header layout (offsets within stub_data,
 /// which starts *after* the 24-byte DCE/RPC PDU header):
-///
 ///  [0..4]    dwOutVersion
 ///  [4..8]    pNC                  (pointer referent ID)
 ///  [8..24]   uuidDsaObjSrc        (16 bytes)
@@ -158,7 +154,6 @@ pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result
 ///  [128..136] cNumNcSizeData      (u64)
 ///  [136..140] dwDRSError
 ///  = 140 bytes total fixed inline header
-///
 /// All deferred (pointer-referent) data follows after offset 140.
 fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result<DcSyncResult> {
     const CNUMOBJECTS_OFF: usize = 108;
@@ -230,7 +225,6 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
 }
 
 /// Scan the NDR response for REPLENTINFLIST entries.
-///
 /// Starts at `start_offset` (after the fixed inline header) and walks forward
 /// looking for NDR-encoded ENTINF attribute-block patterns.  Stops after
 /// `target_count` valid objects are found or the buffer is exhausted.

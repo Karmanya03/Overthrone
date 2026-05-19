@@ -6,23 +6,29 @@
 //! Optimized for speed with parallel share scanning and depth-limited recursion.
 
 use crate::runner::{ReaperConfig, ldap_connect};
-use overthrone_core::error::Result;
+use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info};
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnaffleFinding {
+    /// Object or account name.
     pub hostname: String,
+    /// share field
     pub share: String,
+    /// Filesystem path.
     pub path: String,
+    /// reason field
     pub reason: String,
+    /// severity field
     pub severity: u8, // 1 = Critical (Passwords, Keys), 2 = High (Config), 3 = Medium (Backups)
+    /// Size in bytes
     pub size: u64,
 }
-
+/// Structure
 pub struct Snaffler {
     config: ReaperConfig,
     patterns: Vec<SnafflePattern>,
@@ -37,6 +43,7 @@ struct SnafflePattern {
 }
 
 impl Snaffler {
+    /// Runs this module operation.
     pub fn new(config: ReaperConfig) -> Self {
         let patterns = vec![
             // --- CRITICAL (Severity 1) ---
@@ -150,12 +157,12 @@ impl Snaffler {
                 continue;
             }
 
-            let permit = self
+            let permit: OwnedSemaphorePermit = self
                 .concurrency_limit
                 .clone()
                 .acquire_owned()
                 .await
-                .unwrap();
+                .map_err(|e| OverthroneError::Custom(format!("Snaffler semaphore error: {e}")))?;
             let config = self.config.clone();
             let patterns = self
                 .patterns
@@ -281,4 +288,45 @@ impl Snaffler {
 pub async fn run_snaffler(config: &ReaperConfig) -> Result<Vec<SnaffleFinding>> {
     let snaffler = Snaffler::new(config.clone());
     snaffler.run().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_snaffler_new_pattern_counts() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        assert_eq!(s.patterns.len(), 11);
+    }
+
+    #[test]
+    fn test_snaffler_new_has_critical_patterns() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let extensions: Vec<Option<String>> =
+            s.patterns.iter().map(|p| p.extension.clone()).collect();
+        assert!(extensions.contains(&Some("pfx".to_string())));
+        assert!(extensions.contains(&Some("kdbx".to_string())));
+        assert!(extensions.contains(&Some("key".to_string())));
+    }
+
+    #[test]
+    fn test_snaffler_new_severity_1_count() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let critical = s.patterns.iter().filter(|p| p.severity == 1).count();
+        assert_eq!(critical, 4);
+    }
+
+    #[test]
+    fn test_snaffler_new_ssh_key_pattern() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let names: Vec<Option<String>> =
+            s.patterns.iter().map(|p| p.name_contains.clone()).collect();
+        assert!(names.contains(&Some("id_rsa".to_string())));
+        assert!(names.contains(&Some("password".to_string())));
+    }
 }

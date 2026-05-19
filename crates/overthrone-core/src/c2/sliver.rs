@@ -154,6 +154,7 @@ impl Default for SliverChannel {
 }
 
 impl SliverChannel {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self {
             client: None,

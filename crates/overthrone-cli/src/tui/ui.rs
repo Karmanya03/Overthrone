@@ -7,6 +7,7 @@ use ratatui::widgets::{
     Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
     Tabs,
 };
+use tracing::warn;
 
 /// Main UI draw function — called every frame
 pub fn draw(f: &mut Frame, app: &App) {
@@ -88,7 +89,10 @@ fn draw_graph_tab(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
-    let graph = app.graph.lock().unwrap();
+    let graph = app.graph.lock().unwrap_or_else(|e| {
+        warn!("Mutex poisoned in UI — recovering data");
+        e.into_inner()
+    });
     let mut rows = Vec::new();
 
     for (node_id, node) in graph.nodes() {
@@ -194,7 +198,10 @@ fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
-    let graph = app.graph.lock().unwrap();
+    let graph = app.graph.lock().unwrap_or_else(|e| {
+        warn!("Mutex poisoned in UI — recovering data");
+        e.into_inner()
+    });
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -345,7 +352,10 @@ fn draw_logs_tab(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_trusts_tab(f: &mut Frame, area: Rect, app: &App) {
-    let graph = app.graph.lock().unwrap();
+    let graph = app.graph.lock().unwrap_or_else(|e| {
+        warn!("Mutex poisoned in UI — recovering data");
+        e.into_inner()
+    });
 
     let mut rows = Vec::new();
 

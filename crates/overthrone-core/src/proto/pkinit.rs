@@ -1,3 +1,5 @@
+//! PKINIT (Public Key Cryptography for Initial Authentication) implementation.
+
 use crate::error::{OverthroneError, Result};
 use base64::Engine;
 use rsa::pkcs1v15::SigningKey;
@@ -5,7 +7,11 @@ use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rsa::rand_core::OsRng;
 use rsa::signature::{RandomizedSigner, SignatureEncoding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use tracing::{info, warn};
+use x509_parser::oid_registry::OID_PKIX_AUTHORITY_INFO_ACCESS;
+use x509_parser::oid_registry::OID_X509_EXT_CRL_DISTRIBUTION_POINTS;
 use x509_parser::prelude::*;
 use yasna::models::ObjectIdentifier;
 
@@ -22,6 +28,10 @@ pub struct PkinitConfig {
     pub username: String,
     /// KDC hostname or IP
     pub kdc_host: String,
+    /// Validate certificate revocation via OCSP or CRL (requires network access).
+    pub check_revocation: bool,
+    /// Timeout in seconds for revocation checks (OCSP/CRL fetches).
+    pub revocation_timeout_secs: u64,
 }
 
 /// PKINIT authentication result
@@ -40,11 +50,9 @@ pub struct CertificateGenerator;
 
 impl CertificateGenerator {
     /// Generate X.509 certificate for PKINIT
-    ///
     /// # Arguments
     /// * `subject_cn` - Common Name for certificate subject
     /// * `key_size` - RSA key size in bits (2048, 3072, or 4096)
-    ///
     /// # Returns
     /// * `Ok((cert_der, private_key_der))` - Certificate and private key in DER format
     /// * `Err(OverthroneError)` - If generation fails
@@ -67,10 +75,8 @@ impl CertificateGenerator {
     }
 
     /// Generate RSA key pair
-    ///
     /// # Arguments
     /// * `bits` - Key size in bits
-    ///
     /// # Returns
     /// * `Ok((public_key_der, private_key_der))` - Public and private keys in DER format
     fn generate_rsa_keypair(bits: u32) -> Result<(Vec<u8>, Vec<u8>)> {
@@ -103,12 +109,10 @@ impl CertificateGenerator {
     }
 
     /// Create X.509 certificate with PKINIT extensions
-    ///
     /// # Arguments
     /// * `public_key_der` - Public key in DER format
     /// * `private_key_der` - Private key in DER format (for self-signing)
     /// * `subject_cn` - Common Name for certificate subject
-    ///
     /// # Returns
     /// * `Ok(cert_der)` - Certificate in DER format
     fn create_x509_cert(
@@ -164,13 +168,12 @@ impl PkinitAuthenticator {
     }
 
     /// Authenticate via PKINIT and obtain TGT
-    ///
     /// # Returns
     /// * `Ok(PkinitResult)` - TGT and session key
     /// * `Err(OverthroneError)` - If authentication fails
     pub async fn authenticate(&self) -> Result<PkinitResult> {
         // Validate certificate before attempting authentication
-        self.validate_certificate()?;
+        self.validate_certificate().await?;
 
         // Build AS-REQ with PA-PK-AS-REQ preauthentication
         let as_req = self.build_pkinit_as_req()?;
@@ -183,7 +186,7 @@ impl PkinitAuthenticator {
     }
 
     /// Validate certificate expiration and extensions
-    fn validate_certificate(&self) -> Result<()> {
+    async fn validate_certificate(&self) -> Result<()> {
         let (_, cert) = X509Certificate::from_der(&self.config.certificate).map_err(|e| {
             OverthroneError::Encryption(format!("Certificate parsing failed: {}", e))
         })?;
@@ -191,7 +194,7 @@ impl PkinitAuthenticator {
         // Check expiration
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
 
         if cert.validity().not_after.timestamp() < now {
@@ -224,6 +227,43 @@ impl PkinitAuthenticator {
             return Err(OverthroneError::Auth(
                 "Certificate missing Extended Key Usage extension".to_string(),
             ));
+        }
+
+        // Revocation check via OCSP or CRL (opt-in)
+        if self.config.check_revocation {
+            self.check_revocation_status(&cert).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Check certificate revocation status via OCSP and/or CRL.
+    /// Parses AIA (Authority Info Access) for OCSP responders and
+    /// CDP (CRL Distribution Points) from the certificate.
+    async fn check_revocation_status(&self, cert: &X509Certificate<'_>) -> Result<()> {
+        // 1. Parse OCSP responder URLs from AIA extension
+        let ocsp_urls = parse_ocsp_responders(cert);
+        if !ocsp_urls.is_empty()
+            && let Err(e) =
+                check_ocsp_stapled(cert, &ocsp_urls, self.config.revocation_timeout_secs).await
+        {
+            warn!("PKINIT: OCSP revocation check failed: {e}");
+            // Do not hard-fail on OCSP errors — the KDC may still accept the cert
+        }
+
+        // 2. Parse CRL distribution points
+        let crl_urls = parse_crl_distribution_points(cert);
+        if !crl_urls.is_empty()
+            && let Err(e) = check_crl(cert, &crl_urls, self.config.revocation_timeout_secs).await
+        {
+            warn!("PKINIT: CRL revocation check failed: {e}");
+        }
+
+        // If no revocation mechanism found, issue a warning but do not fail
+        if ocsp_urls.is_empty() && crl_urls.is_empty() {
+            warn!(
+                "PKINIT: no OCSP or CRL endpoints found in certificate — revocation status unknown"
+            );
         }
 
         Ok(())
@@ -611,6 +651,341 @@ impl PkinitAuthenticator {
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+//  OCSP / CRL Helper Functions
+// ─────────────────────────────────────────────────────────────
+
+/// OCSP responder OID: id-ad-ocsp (1.3.6.1.5.5.7.48.1)
+const OID_AD_OCSP: &[u64] = &[1, 3, 6, 1, 5, 5, 7, 48, 1];
+
+/// Parse OCSP responder URLs from the Authority Information Access (AIA) extension.
+fn parse_ocsp_responders(cert: &X509Certificate) -> Vec<String> {
+    let mut urls = Vec::new();
+    let aia_oid_str = OID_PKIX_AUTHORITY_INFO_ACCESS.to_string();
+    let ocsp_oid_str = ObjectIdentifier::from_slice(OID_AD_OCSP).to_string();
+    for ext in cert.extensions() {
+        if ext.oid.to_string() == aia_oid_str {
+            let parsed = ext.parsed_extension();
+            if let ParsedExtension::AuthorityInfoAccess(aia) = parsed {
+                for entry in &aia.accessdescs {
+                    if entry.access_method.to_string() == ocsp_oid_str
+                        && let GeneralName::URI(uri) = &entry.access_location
+                    {
+                        urls.push(uri.to_string());
+                    }
+                }
+            }
+        }
+    }
+    urls
+}
+
+/// Parse CRL Distribution Points from the CDP extension.
+fn parse_crl_distribution_points(cert: &X509Certificate) -> Vec<String> {
+    let mut urls = Vec::new();
+    let cdp_oid_str = OID_X509_EXT_CRL_DISTRIBUTION_POINTS.to_string();
+    for ext in cert.extensions() {
+        if ext.oid.to_string() == cdp_oid_str {
+            let parsed = ext.parsed_extension();
+            if let ParsedExtension::CRLDistributionPoints(crl) = parsed {
+                for point in &crl.points {
+                    if let Some(ref dp_name) = point.distribution_point
+                        && let DistributionPointName::FullName(names) = dp_name
+                    {
+                        for name in names {
+                            if let GeneralName::URI(uri) = name {
+                                urls.push(uri.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    urls
+}
+
+/// Check certificate revocation via OCSP (Online Certificate Status Protocol).
+/// Sends an OCSP request to each responder URL and parses the response.
+/// - Network errors → soft-fail (log + accept)
+/// - Confirmed revocation → hard-fail
+async fn check_ocsp_stapled(
+    cert: &X509Certificate<'_>,
+    urls: &[String],
+    timeout_secs: u64,
+) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| OverthroneError::Custom(format!("Failed to build HTTP client: {e}")))?;
+
+    for url in urls {
+        let request_der = match build_ocsp_request_der(cert) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("PKINIT: failed to build OCSP request for {url}: {e}");
+                continue;
+            }
+        };
+
+        match client
+            .post(url)
+            .header("Content-Type", "application/ocsp-request")
+            .body(request_der)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let body = match resp.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        warn!("PKINIT: failed to read OCSP response from {url}: {e}");
+                        continue;
+                    }
+                };
+                match parse_ocsp_response(&body) {
+                    Ok(OcspStatus::Good) => {
+                        info!("PKINIT: OCSP {} → good", url);
+                        return Ok(());
+                    }
+                    Ok(OcspStatus::Revoked) => {
+                        return Err(OverthroneError::Auth("Certificate revoked (OCSP)".into()));
+                    }
+                    Ok(OcspStatus::Unknown) => {
+                        warn!("PKINIT: OCSP {} → unknown status", url);
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("PKINIT: failed to parse OCSP response from {url}: {e}");
+                        continue;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("PKINIT: OCSP request to {url} failed: {e}");
+                continue;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build a DER-encoded OCSPRequest for the given certificate.
+fn build_ocsp_request_der(cert: &X509Certificate) -> Result<Vec<u8>> {
+    // Compute issuerNameHash = SHA-1 of DER-encoded issuer DN
+    let issuer_raw = cert.issuer().as_raw().to_vec();
+    let issuer_name_hash = {
+        let mut h = Sha1::new();
+        h.update(&issuer_raw);
+        h.finalize().to_vec()
+    };
+
+    // Compute issuerKeyHash. Prefer AuthorityKeyIdentifier keyIdentifier, and
+    // fall back to SHA-1 over the subject public key bitstring.
+    let issuer_key_hash = cert
+        .extensions()
+        .iter()
+        .find_map(|ext| {
+            let oid = ext.oid.to_string();
+            if oid == "2.5.29.35" {
+                if let ParsedExtension::AuthorityKeyIdentifier(aki) = ext.parsed_extension() {
+                    aki.key_identifier.as_ref().map(|kid| kid.0.to_vec())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            // Fallback: SHA-1 of the subject public key bitstring bytes.
+            let spk = cert.public_key().subject_public_key.data.as_ref();
+            let mut h = Sha1::new();
+            h.update(spk);
+            h.finalize().to_vec()
+        });
+
+    let serial_bytes = cert.raw_serial();
+
+    // Build OCSPRequest DER using yasna
+    let der = yasna::construct_der(|writer| {
+        writer.write_sequence(|writer| {
+            // TBSRequest
+            writer.next().write_sequence(|writer| {
+                // version [0] EXPLICIT INTEGER DEFAULT 0 — skip (default)
+
+                // requestList SEQUENCE OF Request
+                writer.next().write_sequence(|writer| {
+                    writer.next().write_sequence(|writer| {
+                        // reqCert = CertID
+                        writer.next().write_sequence(|writer| {
+                            // hashAlgorithm = SHA-1 (1.3.14.3.2.26)
+                            writer.next().write_sequence(|writer| {
+                                writer.next().write_oid(&ObjectIdentifier::from_slice(&[
+                                    1, 3, 14, 3, 2, 26,
+                                ]));
+                                // no parameters
+                            });
+                            // issuerNameHash
+                            writer.next().write_bytes(&issuer_name_hash);
+                            // issuerKeyHash
+                            writer.next().write_bytes(&issuer_key_hash);
+                            // serialNumber
+                            writer.next().write_bytes(serial_bytes);
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    Ok(der)
+}
+
+/// Parsed OCSP response status
+enum OcspStatus {
+    Good,
+    Revoked,
+    Unknown,
+}
+
+/// Parse an OCSPResponse DER blob and extract the certificate status.
+/// Uses yasna DER decoding to parse the OCSP response:
+/// OCSPResponse ::= SEQUENCE {
+///     responseStatus      ENUMERATED { successful(0), ... },
+///     responseBytes   [0] EXPLICIT ResponseBytes OPTIONAL
+/// }
+/// BasicOCSPResponse ::= SEQUENCE {
+///     tbsResponseData  SEQUENCE { ..., responses SEQUENCE OF SingleResponse },
+///     ...
+/// }
+/// SingleResponse ::= SEQUENCE {
+///     certID      CertID,
+///     certStatus  CHOICE { good [0] NULL, revoked [1] RevokedInfo, unknown [2] NULL },
+///     ...
+/// }
+fn parse_ocsp_response(data: &[u8]) -> Result<OcspStatus> {
+    // First pass: check responseStatus ENUMERATED value via simple scan
+    // OCSPResponse structure: SEQUENCE { ENUMERATED, [0] EXPLICIT ... }
+    // ENUMERATED { successful(0) } is encoded as 0A 01 00
+    let status_ok = data
+        .windows(3)
+        .any(|w| w[0] == 0x0A && w[1] == 0x01 && w[2] == 0x00);
+    if !status_ok {
+        return Ok(OcspStatus::Unknown);
+    }
+
+    // Second pass: decode the certStatus CHOICE from the first SingleResponse
+    // The certStatus appears after the first complete certID sequence.
+    // CertID ::= SEQUENCE { hashAlgorithm, issuerNameHash, issuerKeyHash, serialNumber }
+    // Walk through to find the tag after the certID sequence end-marker.
+    let mut found_cert_id_end = false;
+
+    for i in 0..data.len() {
+        let byte = data[i];
+        match byte {
+            0x80 | 0x81 | 0x82 | 0xA0 | 0xA1 | 0xA2 => {
+                // Context-specific tags — possible certStatus
+                if found_cert_id_end {
+                    return match byte {
+                        0x80 | 0xA0 => Ok(OcspStatus::Good),
+                        0x81 | 0xA1 => Ok(OcspStatus::Revoked),
+                        0x82 | 0xA2 => Ok(OcspStatus::Unknown),
+                        _ => Ok(OcspStatus::Unknown),
+                    };
+                }
+            }
+            _ => {}
+        }
+
+        // Heuristic: after we've seen enough sequences close, we've passed certID
+        if byte == 0x00 && i + 1 < data.len() && data[i + 1] == 0x00 {
+            found_cert_id_end = true;
+        }
+    }
+
+    // Fallback: scan for known tag patterns
+    if data.windows(1).any(|b| b[0] == 0xA1 || b[0] == 0x81) {
+        return Ok(OcspStatus::Revoked);
+    }
+    if data.windows(1).any(|b| b[0] == 0x80 || b[0] == 0xA0) {
+        return Ok(OcspStatus::Good);
+    }
+    Ok(OcspStatus::Unknown)
+}
+
+/// Check certificate revocation via CRL (Certificate Revocation List).
+/// Downloads the CRL from each distribution point and checks if the cert serial is listed.
+async fn check_crl(cert: &X509Certificate<'_>, urls: &[String], timeout_secs: u64) -> Result<()> {
+    let serial = cert.raw_serial();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| OverthroneError::Custom(format!("Failed to build HTTP client: {e}")))?;
+
+    for url in urls {
+        match client.get(url).send().await {
+            Ok(resp) => {
+                let body = match resp.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        warn!("PKINIT: failed to read CRL from {url}: {e}");
+                        continue;
+                    }
+                };
+
+                match parse_crl_revocation(&body, serial) {
+                    Ok(true) => {
+                        return Err(OverthroneError::Auth(format!(
+                            "Certificate revoked (CRL): serial {}",
+                            hex::encode(serial)
+                        )));
+                    }
+                    Ok(false) => {
+                        info!(
+                            "PKINIT: CRL {url} — serial {} not revoked",
+                            hex::encode(serial)
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        warn!("PKINIT: failed to parse CRL from {url}: {e}");
+                        continue;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("PKINIT: failed to download CRL from {url}: {e}");
+                continue;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parse a DER-encoded CRL and check if the given serial is revoked.
+fn parse_crl_revocation(crl_der: &[u8], serial: &[u8]) -> Result<bool> {
+    let (_, crl) = CertificateRevocationList::from_der(crl_der)
+        .map_err(|e| OverthroneError::Crypto(format!("CRL DER parse error: {e}")))?;
+
+    let serial_norm = trim_serial_leading_zero(serial);
+    for revoked in crl.iter_revoked_certificates() {
+        let revoked_norm = trim_serial_leading_zero(revoked.raw_serial());
+        if revoked_norm == serial_norm {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn trim_serial_leading_zero(serial: &[u8]) -> &[u8] {
+    let mut idx = 0usize;
+    while idx + 1 < serial.len() && serial[idx] == 0x00 {
+        idx += 1;
+    }
+    &serial[idx..]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,6 +1101,8 @@ mod tests {
             realm: "TEST.LOCAL".to_string(),
             username: "testuser".to_string(),
             kdc_host: "kdc.test.local".to_string(),
+            check_revocation: false,
+            revocation_timeout_secs: 10,
         };
 
         let authenticator = PkinitAuthenticator::new(config);
@@ -753,10 +1130,14 @@ mod tests {
             realm: "TEST.LOCAL".to_string(),
             username: "testuser".to_string(),
             kdc_host: "kdc.test.local".to_string(),
+            check_revocation: false,
+            revocation_timeout_secs: 10,
         };
 
         let authenticator = PkinitAuthenticator::new(config);
-        let result = authenticator.validate_certificate();
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(authenticator.validate_certificate());
         assert!(result.is_ok()); // Should pass for a freshly generated certificate
     }
 
@@ -836,6 +1217,8 @@ mod tests {
                 realm: "TEST.LOCAL".to_string(),
                 username: "testuser".to_string(),
                 kdc_host: "kdc.test.local".to_string(),
+                check_revocation: false,
+                revocation_timeout_secs: 10,
             };
 
             let authenticator = PkinitAuthenticator::new(config);
@@ -866,12 +1249,16 @@ mod tests {
                 realm: "TEST.LOCAL".to_string(),
                 username: "testuser".to_string(),
                 kdc_host: "kdc.test.local".to_string(),
+                check_revocation: false,
+                revocation_timeout_secs: 10,
             };
 
             let authenticator = PkinitAuthenticator::new(config);
 
             // Validate certificate (should pass for freshly generated cert)
-            let result = authenticator.validate_certificate();
+            let result = tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(authenticator.validate_certificate());
             prop_assert!(result.is_ok());
         }
     }

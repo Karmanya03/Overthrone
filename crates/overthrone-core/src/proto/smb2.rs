@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 type HmacMd5 = Hmac<Md5>;
 
@@ -243,6 +243,26 @@ impl Smb2Connection {
         Ok(buf)
     }
 
+    /// Receive a response and verify its SMB2 signature (if signing is required).
+    async fn recv_verified(&self) -> Result<Vec<u8>> {
+        let buf = self.recv().await?;
+
+        if self
+            .sign_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && let Some(ref key) = *self.session_key.lock().await
+        {
+            let dialect = self.dialect.load(Ordering::Relaxed);
+            if !Self::verify_packet(&buf, key, dialect, true) {
+                return Err(OverthroneError::Smb(
+                    "SMB2 packet signature verification failed".into(),
+                ));
+            }
+        }
+
+        Ok(buf)
+    }
+
     /// Get the next message ID.
     fn next_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, Ordering::Relaxed)
@@ -287,7 +307,6 @@ impl Smb2Connection {
     }
 
     /// Sign an SMB2/3 packet (MS-SMB2 §3.1.4.1).
-    ///
     /// SMB 2.x uses HMAC-SHA256(session_key, packet)[0:16].
     /// SMB 3.x+ derives a signing key via SP800-108 KDF and uses AES-128-CMAC.
     fn sign_packet(pkt: &mut [u8], session_key: &[u8], dialect: u16) {
@@ -313,6 +332,57 @@ impl Smb2Connection {
             let result = mac.finalize().into_bytes();
             pkt[48..64].copy_from_slice(&result[..16]);
         }
+    }
+
+    /// Verify an SMB2/3 packet signature (MS-SMB2 §3.1.4.1).
+    /// Returns true if the signature is valid or if signing is not enabled.
+    fn verify_packet(pkt: &[u8], session_key: &[u8], dialect: u16, sign_required: bool) -> bool {
+        if pkt.len() < 64 {
+            return !sign_required;
+        }
+
+        // Check if the packet has the SIGNED flag set
+        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
+        if flags & SMB2_FLAGS_SIGNED == 0 {
+            return !sign_required;
+        }
+
+        // Extract the claimed signature
+        let claimed_sig = &pkt[48..64];
+
+        // Compute the expected signature over the header-only portion
+        // MS-SMB2: signature covers the entire packet, with sig field zeroed
+        let mut verify_buf = pkt.to_vec();
+        verify_buf[48..64].fill(0);
+
+        let expected_sig: [u8; 16] = if dialect >= SMB2_DIALECT_300 {
+            // SMB 3.x: AES-CMAC-16
+            let signing_key =
+                sp800_108_counter_kdf(session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
+            let cmac = aes_cmac_16(&signing_key, &verify_buf);
+            let mut sig = [0u8; 16];
+            sig.copy_from_slice(&cmac);
+            sig
+        } else {
+            // SMB 2.x: HMAC-SHA256[0:16]
+            let mut mac =
+                HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
+            mac.update(&verify_buf);
+            let result = mac.finalize().into_bytes();
+            let mut sig = [0u8; 16];
+            sig.copy_from_slice(&result[..16]);
+            sig
+        };
+
+        if claimed_sig != expected_sig {
+            warn!(
+                "SMB2 signature mismatch! claimed={:02x?}, expected={:02x?}",
+                claimed_sig, expected_sig
+            );
+            return false;
+        }
+
+        true
     }
 
     /// Send a packet, signing it first if signing is required and a session key is available.
@@ -386,7 +456,7 @@ impl Smb2Connection {
         pkt.extend_from_slice(&body);
 
         self.send(&pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         // Validate response
         if resp.len() < SMB2_HEADER_SIZE + 65 {
@@ -435,7 +505,6 @@ impl Smb2Connection {
     // ───────────────── Session Setup (NTLMSSP) ─────────────────
 
     /// Authenticate via NTLMSSP (NTLMv2) inside SPNEGO.
-    ///
     /// Returns the 16-byte session base key on success.
     pub async fn session_setup(
         &self,
@@ -478,7 +547,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send(&pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         if resp.len() < SMB2_HEADER_SIZE + 9 {
             return Err(OverthroneError::Smb(
@@ -541,7 +610,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send(&pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -599,7 +668,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send(&pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_MORE_PROCESSING_REQUIRED {
@@ -646,7 +715,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send(&pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -691,7 +760,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send(&pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         if resp.len() < SMB2_HEADER_SIZE {
             return Err(OverthroneError::Smb(
@@ -748,7 +817,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -772,7 +841,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let _resp = self.recv().await?;
+        let _resp = self.recv_verified().await?;
         *self.tree_id.lock().await = 0;
         Ok(())
     }
@@ -836,7 +905,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -939,7 +1008,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let _resp = self.recv().await?;
+        let _resp = self.recv_verified().await?;
         Ok(())
     }
 
@@ -977,7 +1046,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -1067,7 +1136,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -1143,7 +1212,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let resp = self.recv().await?;
+        let resp = self.recv_verified().await?;
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
@@ -1208,7 +1277,7 @@ impl Smb2Connection {
             let mut pkt = hdr;
             pkt.extend_from_slice(&body);
             self.send_signed(&mut pkt).await?;
-            let resp = self.recv().await?;
+            let resp = self.recv_verified().await?;
 
             let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
             if status == STATUS_NO_MORE_FILES {
@@ -1287,7 +1356,7 @@ impl Smb2Connection {
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
         self.send_signed(&mut pkt).await?;
-        let _resp = self.recv().await?;
+        let _resp = self.recv_verified().await?;
         *self.session_id.lock().await = 0;
         Ok(())
     }
@@ -1664,11 +1733,9 @@ fn asn1_application_tag(tag: u8, data: &[u8]) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// NIST SP800-108 Counter Mode KDF using HMAC-SHA256.
-///
 /// Derives a 16-byte key from `key_in`, `label` (null-terminated), and
 /// `context` (null-terminated).  Used to produce SMB 3.x signing and
 /// encryption keys from the exported session key.
-///
 /// Input to one HMAC iteration:
 ///   `\x00\x00\x00\x01` || label || `\x00` || context || `\x00\x00\x00\x80`
 fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {

@@ -4,17 +4,31 @@ use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OuEntry {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// description field
     pub description: Option<String>,
+    /// linked gpos field
     pub linked_gpos: Vec<String>,
 }
 
 pub fn ou_filter() -> String {
     "(objectCategory=organizationalUnit)".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ou_filter() {
+        assert_eq!(ou_filter(), "(objectCategory=organizationalUnit)");
+    }
 }
 
 pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {

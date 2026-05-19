@@ -83,10 +83,15 @@ impl Default for PsExecConfig {
 /// Result of a PSExec operation
 #[derive(Debug)]
 pub struct PsExecResult {
+    /// Target domain FQDN
     pub target: String,
+    /// Object or account name.
     pub service_name: String,
+    /// command field
     pub command: String,
+    /// success field
     pub success: bool,
+    /// output field
     pub output: Option<String>,
 }
 
@@ -314,7 +319,6 @@ fn extract_handle(response: &[u8]) -> Result<[u8; 20]> {
 // ═══════════════════════════════════════════════════════════
 
 /// Execute a command on a remote host using PSExec-style SCM service creation.
-///
 /// Requires local admin access (C$ or ADMIN$ share writable).
 pub async fn execute(session: &SmbSession, config: &PsExecConfig) -> Result<PsExecResult> {
     info!(
@@ -479,12 +483,13 @@ pub async fn exec_command(session: &SmbSession, command: &str) -> Result<PsExecR
 // ═══════════════════════════════════════════════════════════
 //  Executor Implementation
 // ═══════════════════════════════════════════════════════════
-
+/// Data structure used by this module.
 pub struct PsExecutor {
     creds: super::ExecCredentials,
 }
 
 impl PsExecutor {
+    /// Runs this module operation.
     pub fn new(creds: super::ExecCredentials) -> Self {
         Self { creds }
     }

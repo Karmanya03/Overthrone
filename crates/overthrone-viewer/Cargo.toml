@@ -17,3 +17,4 @@ anyhow.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 open = "5"
+base64.workspace = true

@@ -208,7 +208,6 @@ pub fn build_rfc822_mapping(upn: &str) -> String {
 
 /// Generate the LDAP filter to find accounts with writable
 /// `altSecurityIdentities` by a specific principal SID.
-///
 /// This is a simplification — full ACL parsing requires SDDL analysis;
 /// this filter finds accounts that already have the attribute populated.
 pub fn alt_security_identities_filter() -> &'static str {
@@ -273,7 +272,6 @@ impl Esc14Exploiter {
     }
 
     /// Generate operator guidance for ESC14 exploitation.
-    ///
     /// ESC14 is primarily an ACL-dependent attack: the attacker must have
     /// write access to `altSecurityIdentities` on the target account.  This
     /// method produces the concrete commands and steps for the operator.
@@ -350,7 +348,6 @@ impl Esc14Exploiter {
     }
 
     /// Execute the full ESC14 attack with live LDAP modification.
-    ///
     /// This writes the mapping, but the caller must authenticate with the
     /// certificate separately (PKINIT is out-of-band).
     pub async fn exploit_with_ldap(

@@ -351,6 +351,18 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
                 ));
             }
         }
+        crate::runner::ForgeAction::NoPac { target_dc } => {
+            if target_dc.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "Target DC name cannot be empty for noPac".into(),
+                ));
+            }
+            if config.password.is_none() && config.nt_hash.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "Password required for noPac LDAP operations".into(),
+                ));
+            }
+        }
     }
 
     debug!("ForgeConfig validation passed");

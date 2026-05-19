@@ -6,18 +6,27 @@ use serde::{Deserialize, Serialize};
 /// A single mitigation recommendation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mitigation {
+    /// title field
     pub title: String,
+    /// description field
     pub description: String,
+    /// priority field
     pub priority: MitigationPriority,
+    /// effort field
     pub effort: ImplementationEffort,
+    /// category field
     pub category: MitigationCategory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum MitigationPriority {
+    /// `Immediate` variant
     Immediate,
+    /// `ShortTerm` variant
     ShortTerm,
+    /// `MediumTerm` variant
     MediumTerm,
+    /// `LongTerm` variant
     LongTerm,
 }
 
@@ -34,8 +43,11 @@ impl std::fmt::Display for MitigationPriority {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ImplementationEffort {
+    /// `Low` variant
     Low,
+    /// `Medium` variant
     Medium,
+    /// `High` variant
     High,
 }
 
@@ -51,12 +63,19 @@ impl std::fmt::Display for ImplementationEffort {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MitigationCategory {
+    /// `Configuration` variant
     Configuration,
+    /// `Policy` variant
     Policy,
+    /// `Architecture` variant
     Architecture,
+    /// `Monitoring` variant
     Monitoring,
+    /// `PatchManagement` variant
     PatchManagement,
+    /// `AccessControl` variant
     AccessControl,
+    /// `CredentialHygiene` variant
     CredentialHygiene,
 }
 
@@ -273,6 +292,56 @@ pub fn get_mitigations(finding_type: &str) -> Vec<Mitigation> {
         ],
 
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mitigation_priority_display() {
+        assert_eq!(
+            MitigationPriority::Immediate.to_string(),
+            "Immediate (0–48 hours)"
+        );
+        assert_eq!(
+            MitigationPriority::ShortTerm.to_string(),
+            "Short-Term (1–2 weeks)"
+        );
+        assert_eq!(
+            MitigationPriority::MediumTerm.to_string(),
+            "Medium-Term (1–3 months)"
+        );
+        assert_eq!(
+            MitigationPriority::LongTerm.to_string(),
+            "Long-Term (3–12 months)"
+        );
+    }
+
+    #[test]
+    fn test_implementation_effort_display() {
+        assert_eq!(ImplementationEffort::Low.to_string(), "Low");
+        assert_eq!(ImplementationEffort::Medium.to_string(), "Medium");
+        assert_eq!(ImplementationEffort::High.to_string(), "High");
+    }
+
+    #[test]
+    fn test_get_mitigations_kerberoast() {
+        let m = get_mitigations("kerberoast");
+        assert!(!m.is_empty());
+    }
+
+    #[test]
+    fn test_get_mitigations_unknown() {
+        let m = get_mitigations("UnknownType");
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn test_aggregate_mitigations_empty() {
+        let m = aggregate_mitigations(&[]);
+        assert!(m.is_empty());
     }
 }
 

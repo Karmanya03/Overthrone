@@ -13,10 +13,12 @@ use tracing::{debug, info, warn};
 // ═══════════════════════════════════════════════════════════
 //  Types
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LapsEntry {
+    /// Object or account name.
     pub computer_name: String,
+    /// Object or account name.
     pub distinguished_name: String,
     /// Decrypted/readable password (from v1 or v2-plaintext).
     pub password: Option<String>,
@@ -24,6 +26,7 @@ pub struct LapsEntry {
     pub expiration: Option<String>,
     /// Raw expiration value (Windows FILETIME) before conversion.
     pub expiration_raw: Option<String>,
+    /// is laps v2 field
     pub is_laps_v2: bool,
     /// For v2 plaintext JSON: the managed account name (e.g. "Administrator").
     pub managed_account: Option<String>,
@@ -58,7 +61,6 @@ impl std::fmt::Display for LapsSource {
 }
 
 /// Parsed LAPS v2 plaintext JSON from `msLAPS-Password`.
-///
 /// Microsoft's schema:
 /// ```json
 /// {"n":"Administrator","t":"2024-01-15T12:00:00.0000000Z","p":"RandomP@ss!"}
@@ -312,7 +314,6 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
 // ═══════════════════════════════════════════════════════════
 
 /// Parse the `msLAPS-Password` JSON blob.
-///
 /// Format: `{"n":"Administrator","t":"2024-01-15T12:00:00Z","p":"P@ssw0rd!"}`
 fn parse_laps_v2_json(json_str: &str) -> Result<LapsV2Json> {
     serde_json::from_str::<LapsV2Json>(json_str)
@@ -324,7 +325,6 @@ fn parse_laps_v2_json(json_str: &str) -> Result<LapsV2Json> {
 // ═══════════════════════════════════════════════════════════
 
 /// Convert the LDAP string representation of `msLAPS-EncryptedPassword` to raw bytes.
-///
 /// LDAP may return this as a base64 string or as a hex-encoded octet string,
 /// depending on the client library. We try both.
 fn parse_encrypted_blob_bytes(raw: &str) -> Vec<u8> {
@@ -348,7 +348,6 @@ fn parse_encrypted_blob_bytes(raw: &str) -> Vec<u8> {
 }
 
 /// Parse the header of a LAPS v2 encrypted blob.
-///
 /// Structure:
 /// ```text
 /// [0..8]   : Update timestamp (FILETIME, little-endian i64)
@@ -372,11 +371,9 @@ pub fn parse_laps_v2_encrypted_header(blob: &[u8]) -> Option<LapsV2EncryptedHead
 }
 
 /// Attempt to decrypt a LAPS v2 encrypted blob using a DPAPI backup key.
-///
 /// Uses the DPAPI module from overthrone-core to decrypt LAPS v2 encrypted passwords.
 /// After DCSync or LSA secrets extraction, the DPAPI domain backup key
 /// can be used to decrypt these blobs.
-///
 /// The inner CNG-DPAPI structure contains:
 /// 1. DPAPI blob header (version, provider GUID)
 /// 2. Master Key GUID reference
@@ -422,7 +419,6 @@ pub fn decrypt_laps_v2_blob(blob: &[u8], dpapi_backup_key: &[u8]) -> Result<Laps
 // ═══════════════════════════════════════════════════════════
 
 /// Convert a Windows FILETIME string to a human-readable UTC timestamp.
-///
 /// Windows FILETIME = 100-nanosecond intervals since 1601-01-01 00:00:00 UTC.
 /// Unix epoch starts at 1970-01-01 00:00:00 UTC = 11644473600 seconds later.
 pub fn filetime_to_string(filetime_str: &str) -> Option<String> {

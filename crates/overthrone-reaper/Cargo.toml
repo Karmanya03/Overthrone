@@ -7,7 +7,7 @@ license.workspace = true
 description = "Autonomous AD enumeration engine"
 
 [dependencies]
-overthrone-core = { version = "0.1.46", path = "../overthrone-core" }
+overthrone-core = { version = "0.2.0-beta", path = "../overthrone-core" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

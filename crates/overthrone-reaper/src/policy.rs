@@ -8,10 +8,12 @@ use tracing::{info, warn};
 
 const DOMAIN_PASSWORD_COMPLEX: i64 = 0x1;
 const DOMAIN_PASSWORD_STORE_CLEARTEXT: i64 = 0x10;
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyResult {
+    /// Domain FQDN
     pub domain_policy: Option<DomainPasswordPolicy>,
+    /// fine grained field
     pub fine_grained: Vec<FineGrainedPasswordPolicy>,
 }
 
@@ -20,35 +22,58 @@ impl PolicyResult {
         usize::from(self.domain_policy.is_some()) + self.fine_grained.len()
     }
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainPasswordPolicy {
+    /// Password for authentication
     pub min_password_length: Option<u32>,
+    /// lockout threshold field
     pub lockout_threshold: Option<u32>,
+    /// lockout duration field
     pub lockout_duration: Option<String>,
+    /// lockout observation window field
     pub lockout_observation_window: Option<String>,
+    /// Password for authentication
     pub max_password_age: Option<String>,
+    /// Password for authentication
     pub min_password_age: Option<String>,
+    /// Password for authentication
     pub password_history_length: Option<u32>,
+    /// Password for authentication
     pub password_complexity_enabled: bool,
+    /// reversible encryption enabled field
     pub reversible_encryption_enabled: bool,
+    /// raw field
     pub raw: HashMap<String, Vec<String>>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FineGrainedPasswordPolicy {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// precedence field
     pub precedence: Option<u32>,
+    /// Password for authentication
     pub min_password_length: Option<u32>,
+    /// lockout threshold field
     pub lockout_threshold: Option<u32>,
+    /// lockout duration field
     pub lockout_duration: Option<String>,
+    /// lockout observation window field
     pub lockout_observation_window: Option<String>,
+    /// Password for authentication
     pub max_password_age: Option<String>,
+    /// Password for authentication
     pub min_password_age: Option<String>,
+    /// Password for authentication
     pub password_history_length: Option<u32>,
+    /// Password for authentication
     pub password_complexity_enabled: Option<bool>,
+    /// reversible encryption enabled field
     pub reversible_encryption_enabled: Option<bool>,
+    /// applies to field
     pub applies_to: Vec<String>,
 }
 

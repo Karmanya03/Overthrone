@@ -31,10 +31,15 @@ pub const SRV_LDAP: &str = "_ldap._tcp";
 /// A single SRV record result
 #[derive(Debug, Clone)]
 pub struct SrvRecord {
+    /// Object or account name.
     pub hostname: String,
+    /// Port number
     pub port: u16,
+    /// priority field
     pub priority: u16,
+    /// weight field
     pub weight: u16,
+    /// ips field
     pub ips: Vec<String>,
 }
 
@@ -256,7 +261,6 @@ impl DnsResolver {
     // ─────────────────────────────────────────────────────────
 
     /// Attempt a DNS zone transfer (AXFR) against the configured nameserver.
-    ///
     /// Most production DNS servers refuse AXFR to unauthorized clients, so a
     /// failure is expected and logged at `warn` level.
     pub async fn attempt_zone_transfer(&self, domain: &str) -> Result<Vec<String>> {

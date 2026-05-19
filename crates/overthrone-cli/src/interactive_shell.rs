@@ -350,7 +350,36 @@ impl Hinter for OverthroneCompleter {
 }
 
 impl Validator for OverthroneCompleter {
-    fn validate(&self, _ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        let input = ctx.input();
+        // Detect incomplete input for multi-line paste support:
+        // - Unmatched single quotes
+        // - Unmatched double quotes (not inside single quotes)
+        // - Line ends with backslash (continuation)
+        // - Unmatched open brackets/parens (simple heuristic)
+        if input.len() > 2 {
+            let trimmed = input.trim_end();
+            if trimmed.ends_with('\\') {
+                return Ok(ValidationResult::Incomplete);
+            }
+            let mut in_single = false;
+            let mut in_double = false;
+            let mut bracket_depth = 0i32;
+            for ch in trimmed.chars() {
+                match ch {
+                    '\'' if !in_double => in_single = !in_single,
+                    '"' if !in_single => in_double = !in_double,
+                    '(' | '[' | '{' if !in_single && !in_double => bracket_depth += 1,
+                    ')' if bracket_depth > 0 && !in_single && !in_double => bracket_depth -= 1,
+                    ']' if bracket_depth > 0 && !in_single && !in_double => bracket_depth -= 1,
+                    '}' if bracket_depth > 0 && !in_single && !in_double => bracket_depth -= 1,
+                    _ => {}
+                }
+            }
+            if in_single || in_double || bracket_depth > 0 {
+                return Ok(ValidationResult::Incomplete);
+            }
+        }
         Ok(ValidationResult::Valid(None))
     }
 }
@@ -528,16 +557,33 @@ impl InteractiveSession {
         println!();
 
         // Setup rustyline editor
-        let config = Config::builder()
+        let config = match Config::builder()
             .history_ignore_space(true)
             .completion_type(CompletionType::List)
             .edit_mode(EditMode::Emacs)
             .max_history_size(MAX_HISTORY)
-            .expect("Invalid max history size")
-            .build();
+        {
+            Ok(builder) => builder.auto_add_history(true).bracketed_paste(true).build(),
+            Err(_) => Config::builder()
+                .history_ignore_space(true)
+                .completion_type(CompletionType::List)
+                .edit_mode(EditMode::Emacs)
+                .auto_add_history(true)
+                .bracketed_paste(true)
+                .build(),
+        };
 
-        let mut rl: Editor<OverthroneCompleter, DefaultHistory> =
-            Editor::with_config(config).expect("Failed to create editor");
+        let mut rl: Editor<OverthroneCompleter, DefaultHistory> = match Editor::with_config(config)
+        {
+            Ok(editor) => editor,
+            Err(e) => {
+                banner::print_fail(&format!("Failed to create terminal editor: {}", e));
+                return Err(overthrone_core::error::OverthroneError::Internal(
+                    "Failed to create interactive editor - terminal may not be available"
+                        .to_string(),
+                ));
+            }
+        };
 
         // Setup helper with completion
         let helper = OverthroneCompleter::new(self.sessions.clone());
@@ -2172,6 +2218,7 @@ impl InteractiveSession {
                     output_file: None,
                     save_asrep_hashes: true,
                     concurrency: 10,
+                    use_ldap: false,
                 };
                 match overthrone_hunter::userenum::run(&dc_ip, &domain, &uc, delay).await {
                     Ok(result) => {

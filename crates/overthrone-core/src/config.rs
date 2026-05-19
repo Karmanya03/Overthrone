@@ -1,3 +1,5 @@
+//! Configuration types for Overthrone (authentication, output format, global settings).
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -29,23 +31,32 @@ pub struct OverthroneConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthConfig {
     /// Plaintext username + password
+    #[allow(missing_docs)]
     Password { username: String, password: String },
     /// Pass-the-Hash with NTLM hash
+    #[allow(missing_docs)]
     NtlmHash { username: String, hash: String },
     /// Pass-the-Ticket with .kirbi or .ccache file
+    #[allow(missing_docs)]
     Ticket { path: PathBuf },
     /// Certificate-based auth (PKINIT) with PFX file
+    #[allow(missing_docs)]
     Certificate { pfx_path: PathBuf, password: String },
 }
 
 /// Output format for tool results
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub enum OutputFormat {
+    /// `Json` variant
     #[default]
     Json,
+    /// `Table` variant
     Table,
+    /// `Raw` variant
     Raw,
+    /// `BloodHound` variant
     BloodHound,
+    /// `Csv` variant
     Csv,
 }
 

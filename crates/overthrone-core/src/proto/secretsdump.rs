@@ -26,24 +26,33 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Credential extracted from SAM database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamCredential {
+    /// Username for authentication
     pub username: String,
+    /// Stable unique identifier.
     pub rid: Option<u32>,
+    /// Hash value
     pub lm_hash: Option<String>,
+    /// Hash value
     pub nt_hash: Option<String>,
 }
 
 /// Credential extracted from LSA secrets
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LsaCredential {
+    /// Username for authentication
     pub username: String,
+    /// Hash value
     pub nt_hash: Option<String>,
+    /// plaintext field
     pub plaintext: Option<String>,
 }
 
 /// Credential extracted from DCC2 cached domain logons
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dcc2Credential {
+    /// Username for authentication
     pub username: String,
+    /// Hash value
     pub nt_hash: Option<String>,
 }
 
@@ -52,7 +61,6 @@ pub struct Dcc2Credential {
 // ═══════════════════════════════════════════════════════════
 
 /// Parse SAM database hive and extract local account NTLM hashes.
-///
 /// Takes raw bytes of the SAM and SYSTEM registry hives (from `reg save`).
 /// Returns a list of local account credentials with LM/NT hashes.
 pub fn dump_sam(sam_data: &[u8], system_data: &[u8]) -> Result<Vec<SamCredential>> {
@@ -97,7 +105,6 @@ pub fn dump_sam(sam_data: &[u8], system_data: &[u8]) -> Result<Vec<SamCredential
 }
 
 /// Parse SECURITY hive and extract LSA secrets.
-///
 /// Takes raw bytes of the SECURITY and SYSTEM registry hives.
 /// Returns service account passwords, machine account credentials, DPAPI keys, etc.
 pub fn dump_lsa(security_data: &[u8], system_data: &[u8]) -> Result<Vec<LsaCredential>> {
@@ -146,7 +153,6 @@ pub fn dump_lsa(security_data: &[u8], system_data: &[u8]) -> Result<Vec<LsaCrede
 }
 
 /// Parse SECURITY hive and extract DCC2 (mscash2) cached domain credentials.
-///
 /// Takes raw bytes of the SECURITY and SYSTEM registry hives.
 /// Returns cached domain logon credentials in hashcat-compatible format.
 pub fn dump_dcc2(security_data: &[u8], system_data: &[u8]) -> Result<Vec<Dcc2Credential>> {
@@ -528,7 +534,6 @@ fn enumerate_subkeys(data: &[u8], nk_offset: usize) -> Result<Vec<(usize, String
 // ═══════════════════════════════════════════════════════════
 
 /// Extract boot key (SysKey) from SYSTEM registry hive.
-///
 /// The boot key is derived from the class names of four keys under
 /// HKLM\SYSTEM\CurrentControlSet\Control\Lsa: JD, Skew1, GBG, Data.
 fn extract_boot_key(system_data: &[u8]) -> Result<[u8; 16]> {
@@ -662,7 +667,6 @@ fn enumerate_sam_users(sam_data: &[u8]) -> Result<Vec<(u32, String, Vec<u8>)>> {
 }
 
 /// Extract the username from the SAM V value structure.
-///
 /// The V value has a header with offsets:
 ///   +0x0C: username offset (relative to 0xCC)
 ///   +0x10: username length
@@ -686,7 +690,6 @@ fn extract_username_from_v(v_data: &[u8]) -> Option<String> {
 }
 
 /// Decrypt SAM hash data using the boot key and RID.
-///
 /// Returns (lm_hash, nt_hash) as 16-byte vectors.
 fn decrypt_sam_hash(boot_key: &[u8; 16], rid: u32, v_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     // SAM V value hash offsets (varies by SAM version):
@@ -1043,6 +1046,7 @@ pub enum SecretCategory {
 /// A single extracted credential (legacy struct with `account` field)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedSecret {
+    /// Classification for this object.
     pub secret_type: SecretCategory,
     /// Domain\Username or machine account
     pub account: String,
@@ -1063,14 +1067,23 @@ pub struct ExtractedSecret {
 /// Options controlling what to extract
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DumpOptions {
+    /// dump sam field
     pub dump_sam: bool,
+    /// dump lsa field
     pub dump_lsa: bool,
+    /// dump ntds field
     pub dump_ntds: bool,
+    /// dump cached field
     pub dump_cached: bool,
+    /// target users field
     pub target_users: Vec<String>,
+    /// use vss field
     pub use_vss: bool,
+    /// replication threads field
     pub replication_threads: u32,
+    /// Item count
     pub include_machine_accounts: bool,
+    /// include history field
     pub include_history: bool,
 }
 
@@ -1093,12 +1106,19 @@ impl Default for DumpOptions {
 /// Result of a secrets extraction operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DumpResult {
+    /// Target host address
     pub target_host: String,
+    /// Secret value
     pub secrets: Vec<ExtractedSecret>,
+    /// Item count
     pub sam_count: usize,
+    /// Item count
     pub lsa_count: usize,
+    /// Item count
     pub ntds_count: usize,
+    /// Item count
     pub cached_count: usize,
+    /// Error information
     pub errors: Vec<String>,
 }
 
@@ -1109,6 +1129,7 @@ pub struct DumpResult {
 /// Boot key (SysKey) extracted from the SYSTEM registry hive
 #[derive(Debug, Clone)]
 pub struct BootKey {
+    /// Key data
     pub key: [u8; 16],
 }
 

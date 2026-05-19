@@ -89,7 +89,6 @@ pub enum AdaptiveMode {
 // ═══════════════════════════════════════════════════════════
 
 /// Discretized snapshot of the engagement state used as a Q-table key.
-///
 /// Fields are bucketed to keep the state space manageable while preserving
 /// the most decision-relevant information.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -331,21 +330,31 @@ fn bucket_failures(n: u32) -> u8 {
 // ═══════════════════════════════════════════════════════════
 
 /// Discrete actions the Q-learner can select.
-///
 /// Each maps back to an `AdaptiveDecision` variant when executed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AdaptiveAction {
-    Continue,             // 0
-    RetryPlain,           // 1
-    RetrySwapCreds,       // 2
-    RetryExtendTimeout,   // 3
-    RetryReduceNoise,     // 4
-    RetryAltMethod,       // 5
-    Skip,                 // 6
-    SubstituteLowerPriv,  // 7
-    SubstituteStealthier, // 8
-    Replan,               // 9
-    Abort,                // 10
+    /// Continue with current strategy
+    Continue,
+    /// Retry with plain authentication
+    RetryPlain,
+    /// Retry with alternate credentials
+    RetrySwapCreds,
+    /// Retry with extended timeout
+    RetryExtendTimeout,
+    /// Retry with reduced noise
+    RetryReduceNoise,
+    /// Retry with alternative method
+    RetryAltMethod,
+    /// Skip this target
+    Skip,
+    /// Substitute with lower-privilege equivalent
+    SubstituteLowerPriv,
+    /// Substitute with stealthier equivalent
+    SubstituteStealthier,
+    /// Replan the entire attack
+    Replan,
+    /// Abort the attack
+    Abort,
 }
 
 impl AdaptiveAction {
@@ -385,7 +394,6 @@ impl State for EngagementStateKey {
 }
 
 /// Agent that tracks the current state and selected action.
-///
 /// This is used for rurel trait compatibility; actual Q-value updates
 /// happen outside the rurel training loop (online learning).
 pub struct AdaptiveAgent {
@@ -394,6 +402,7 @@ pub struct AdaptiveAgent {
 }
 
 impl AdaptiveAgent {
+    /// Create a new agent in the given engagement state.
     pub fn new(state: EngagementStateKey) -> Self {
         Self {
             current: state,
@@ -401,10 +410,12 @@ impl AdaptiveAgent {
         }
     }
 
+    /// Update the agent's current engagement state.
     pub fn set_state(&mut self, state: EngagementStateKey) {
         self.current = state;
     }
 
+    /// Get the agent's last selected action, if any.
     pub fn last_action(&self) -> Option<&AdaptiveAction> {
         self.last_action.as_ref()
     }
@@ -425,7 +436,6 @@ impl Agent<EngagementStateKey> for AdaptiveAgent {
 // ═══════════════════════════════════════════════════════════
 
 /// Persistent Q-value table for online reinforcement learning.
-///
 /// Internally stores a `HashMap` but serializes as a `Vec` of entries
 /// because JSON map keys must be strings.
 #[derive(Debug, Clone)]
@@ -549,7 +559,6 @@ impl QTable {
 
 /// Q-learning adaptive engine that wraps the heuristic `AdaptiveEngine`
 /// and gradually learns optimal responses to step outcomes.
-///
 /// In ε-greedy mode:
 /// - With probability ε → delegate to heuristic (exploration)
 /// - With probability 1−ε → pick the highest Q-value action (exploitation)
@@ -610,7 +619,6 @@ impl AdaptiveQLearner {
     }
 
     /// Load a previously saved Q-table from disk.
-    ///
     /// If the file doesn't exist or is corrupt, starts fresh with a warning.
     pub fn load(stealth: bool, path: PathBuf) -> Self {
         let mut learner = Self::new(stealth, path.clone());
@@ -694,7 +702,6 @@ impl AdaptiveQLearner {
     }
 
     /// Evaluate a step result and decide what to do next.
-    ///
     /// ε-greedy policy:
     /// - With probability ε → delegate to heuristic engine (exploration)
     /// - Otherwise → pick the highest Q-value action (exploitation)
@@ -831,7 +838,6 @@ impl AdaptiveQLearner {
     }
 
     /// Record the outcome of an action for Q-table update.
-    ///
     /// Should be called after every step execution with the computed reward.
     pub fn record_outcome(
         &mut self,
@@ -849,7 +855,6 @@ impl AdaptiveQLearner {
     }
 
     /// Compute the reward for a step result.
-    ///
     /// Reward table:
     /// - Goal achieved: +100
     /// - New credential: +10 per credential
@@ -914,7 +919,6 @@ impl AdaptiveQLearner {
     }
 
     /// Signal the end of an engagement episode.
-    ///
     /// Decays ε and increments the episode counter.
     /// Call `save()` after this to persist.
     pub fn end_episode(&mut self) {
@@ -1144,6 +1148,8 @@ mod tests {
             result: None,
             retries: 0,
             max_retries: 3,
+            reversible: false,
+            compensation: None,
         }
     }
 

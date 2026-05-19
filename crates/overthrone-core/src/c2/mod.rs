@@ -50,9 +50,13 @@ pub struct C2Config {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum C2Framework {
+    /// `CobaltStrike` variant
     CobaltStrike,
+    /// `Sliver` variant
     Sliver,
+    /// `Havoc` variant
     Havoc,
+    /// `Custom` variant
     Custom(String),
 }
 
@@ -70,16 +74,22 @@ impl std::fmt::Display for C2Framework {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum C2Auth {
     /// Password-based (Cobalt Strike teamserver)
+    #[allow(missing_docs)]
     Password { password: String },
     /// mTLS certificate (Sliver)
     MtlsCert {
+        /// Filesystem path.
         cert_path: String,
+        /// Key data
         key_path: String,
+        /// Filesystem path.
         ca_path: String,
     },
     /// Token-based (Havoc, custom)
+    #[allow(missing_docs)]
     Token { token: String },
     /// Sliver operator config file
+    #[allow(missing_docs)]
     SliverConfig { config_path: String },
 }
 
@@ -283,20 +293,25 @@ pub trait C2Channel: Send + Sync {
     /// Get framework-specific info (version, operators, etc.)
     async fn server_info(&self) -> Result<HashMap<String, String>>;
 }
-
+/// Data structure used by this module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct C2Listener {
+    /// Object or account name.
     pub name: String,
+    /// Classification for this object.
     pub listener_type: String,
+    /// Target host address
     pub host: String,
+    /// Port number
     pub port: u16,
+    /// active field
     pub active: bool,
 }
 
 // ──────────────────────────────────────────────────────────
 // C2 Manager — manages connections to multiple C2 frameworks
 // ──────────────────────────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct C2Manager {
     channels: HashMap<String, Box<dyn C2Channel>>,
     /// Which channel is the default for operations
@@ -310,6 +325,7 @@ impl Default for C2Manager {
 }
 
 impl C2Manager {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self {
             channels: HashMap::new(),
@@ -377,6 +393,30 @@ impl C2Manager {
             .iter()
             .map(|(name, ch)| (name.as_str(), ch.framework(), ch.is_connected()))
             .collect()
+    }
+
+    /// Build a list of C2-backed RemoteExecutor instances for all active sessions.
+    /// Each executor wraps a C2 session and can be passed to
+    /// `auto_exec_with_c2()` for OPSEC-first execution ordering.
+    /// Executors created by this method have no bound channel and will
+    /// only be used for hostname matching.
+    pub async fn get_executors(&self) -> Vec<Box<dyn crate::exec::RemoteExecutor>> {
+        let mut executors: Vec<Box<dyn crate::exec::RemoteExecutor>> = Vec::new();
+        for channel in self.channels.values() {
+            if !channel.is_connected() {
+                continue;
+            }
+            if let Ok(sessions) = channel.list_sessions().await {
+                for session in sessions {
+                    executors.push(Box::new(crate::exec::C2Executor::new(
+                        channel.framework().to_string(),
+                        session.id.clone(),
+                        session.hostname.clone(),
+                    )));
+                }
+            }
+        }
+        executors
     }
 
     /// Find a session across all connected C2 frameworks by hostname

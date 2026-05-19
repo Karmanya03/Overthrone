@@ -91,7 +91,6 @@ impl Credentials {
     }
 
     /// Build an ExecContext for overthrone-pilot
-    #[allow(dead_code)] // Used by interactive shell
     pub fn to_exec_context(
         &self,
         dc_host: &str,
@@ -129,16 +128,14 @@ impl Credentials {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn ticket_path(&self) -> Option<&str> {
+    pub fn _ticket_path(&self) -> Option<&str> {
         match &self.auth {
             AuthData::KerberosTicket(p) => Some(p),
             _ => None,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn display_summary(&self) -> String {
+    pub fn _display_summary(&self) -> String {
         let method = match &self.auth {
             AuthData::Password(_) => "password",
             AuthData::NtlmHash(_) => "NT hash",

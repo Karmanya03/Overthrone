@@ -52,8 +52,7 @@ pub fn print_warn(msg: &str) {
 // ═══════════════════════════════════════════════════════
 
 /// Print a detailed error with context and remediation hint
-#[allow(dead_code)] // Available for future CLI error reporting
-pub fn print_fail_detail(context: &str, error: &str, hint: &str) {
+pub fn _print_fail_detail(context: &str, error: &str, hint: &str) {
     println!();
     println!("  {} {}", "✗ ERROR:".red().bold(), context.red());
     println!("  {} {}", "  Cause:".bright_black(), error.white());
@@ -62,8 +61,7 @@ pub fn print_fail_detail(context: &str, error: &str, hint: &str) {
 }
 
 /// Print a critical finding (high-value target, DA access, etc.)
-#[allow(dead_code)]
-pub fn print_critical(title: &str, details: &str) {
+pub fn _print_critical(title: &str, details: &str) {
     println!();
     println!(
         "  {} {}",
@@ -75,8 +73,7 @@ pub fn print_critical(title: &str, details: &str) {
 }
 
 /// Print a high-value finding
-#[allow(dead_code)]
-pub fn print_high_value(title: &str, details: &str) {
+pub fn _print_high_value(title: &str, details: &str) {
     println!(
         "  {} {}: {}",
         "💎".cyan(),
@@ -86,8 +83,7 @@ pub fn print_high_value(title: &str, details: &str) {
 }
 
 /// Print an attack path discovery
-#[allow(dead_code)]
-pub fn print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
+pub fn _print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
     println!();
     println!("  {} ATTACK PATH FOUND", "🎯".green().bold());
     println!("  {} {} → {}", "•".white(), from.cyan(), to.red().bold());
@@ -101,8 +97,7 @@ pub fn print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
 }
 
 /// Print credential capture
-#[allow(dead_code)]
-pub fn print_credential(username: &str, cred_type: &str, source: &str) {
+pub fn _print_credential(username: &str, cred_type: &str, source: &str) {
     println!(
         "  {} {}: {} ({})",
         "🔑".green(),
@@ -113,8 +108,7 @@ pub fn print_credential(username: &str, cred_type: &str, source: &str) {
 }
 
 /// Print hash capture for cracking
-#[allow(dead_code)]
-pub fn print_hash_capture(hash_type: &str, username: &str, hash_preview: &str) {
+pub fn _print_hash_capture(hash_type: &str, username: &str, hash_preview: &str) {
     println!(
         "  {} {} hash: {} → {}",
         "🔓".red(),

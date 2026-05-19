@@ -45,7 +45,7 @@ struct HavocServerInfoResp {
 }
 
 // ── Channel ───────────────────────────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct HavocChannel {
     /// Shared HTTP client (reuses connections)
     client: Option<reqwest::Client>,
@@ -62,6 +62,7 @@ impl Default for HavocChannel {
 }
 
 impl HavocChannel {
+    /// Runs this module operation.
     pub fn new() -> Self {
         Self {
             client: None,

@@ -35,10 +35,8 @@ pub const CHECKSUM_HMAC_SHA1_96_AES256: i32 = 16;
 // ═══════════════════════════════════════════════════════════
 
 /// Compute a PAC checksum for the given etype.
-///
 /// Returns `(checksum_type_le32 || checksum_bytes)` — the format used in
 /// `PAC_SIGNATURE_DATA`.
-///
 /// - etype 23 (RC4-HMAC): `HMAC-MD5(key, data)` → 16-byte checksum, type -138.
 /// - etype 17 (AES-128):  `HMAC-SHA1-96(key, data)` → 12-byte checksum, type 15.
 /// - etype 18 (AES-256):  `HMAC-SHA1-96(key, data)` → 12-byte checksum, type 16.
@@ -68,7 +66,6 @@ pub fn compute_pac_checksum(etype: i32, key: &[u8], data: &[u8]) -> Result<Vec<u
 }
 
 /// Compute the raw PAC checksum bytes (without the type prefix).
-///
 /// Useful when you want just the checksum value for PAC_SIGNATURE_DATA fields.
 pub fn compute_pac_checksum_raw(etype: i32, key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     match etype {
@@ -94,7 +91,6 @@ pub fn checksum_type_for_etype(etype: i32) -> Result<i32> {
 
 /// Encrypt a Kerberos ticket part (EncTicketPart, EncTGSRepPart, etc.)
 /// using the appropriate cipher for the given etype.
-///
 /// - etype 23: RC4-HMAC with key_usage
 /// - etype 17: AES-128-CTS
 /// - etype 18: AES-256-CTS
@@ -132,7 +128,6 @@ pub fn decrypt_ticket_part(
 // ═══════════════════════════════════════════════════════════
 
 /// Detect the etype from key length.
-///
 /// - 16 bytes → etype 23 (RC4-HMAC / NTLM hash)
 /// - 32 bytes → etype 18 (AES-256)
 /// - Other → error
@@ -183,7 +178,6 @@ pub fn etype_name(etype: i32) -> &'static str {
 // ═══════════════════════════════════════════════════════════
 
 /// Encode raw KRB-CRED bytes into Base64 `.kirbi` format.
-///
 /// A `.kirbi` file is the Base64 encoding of the ASN.1 DER-encoded KRB-CRED
 /// structure, used by tools like Rubeus and Mimikatz.
 pub fn build_kirbi(krb_cred_der: &[u8]) -> String {
@@ -213,7 +207,6 @@ pub fn read_kirbi_file(path: &std::path::Path) -> Result<Vec<u8>> {
 }
 
 /// Encode raw ticket data into a `.ccache` (MIT Kerberos credential cache) format.
-///
 /// This is a simplified ccache builder for a single ticket.
 #[allow(clippy::too_many_arguments)]
 pub fn build_ccache(

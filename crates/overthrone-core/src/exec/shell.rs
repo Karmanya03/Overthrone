@@ -42,8 +42,11 @@ impl std::fmt::Display for ShellType {
 /// Shell configuration
 #[derive(Debug, Clone)]
 pub struct ShellConfig {
+    /// Target domain FQDN
     pub target: String,
+    /// Classification for this object.
     pub shell_type: ShellType,
+    /// Timeout in seconds
     pub timeout: Duration,
     /// Credentials for authentication (required for real connections)
     pub credentials: Option<ExecCredentials>,
@@ -75,9 +78,13 @@ pub struct InteractiveShell {
 /// Shell command result
 #[derive(Debug, Clone)]
 pub struct ShellResult {
+    /// success field
     pub success: bool,
+    /// output field
     pub output: String,
+    /// Status or error code
     pub exit_code: Option<i32>,
+    /// execution time ms field
     pub execution_time_ms: u64,
 }
 
@@ -372,9 +379,13 @@ impl InteractiveShell {
 /// Shell session information
 #[derive(Debug, Clone)]
 pub struct ShellSessionInfo {
+    /// Stable unique identifier.
     pub session_id: String,
+    /// Target domain FQDN
     pub target: String,
+    /// Classification for this object.
     pub shell_type: ShellType,
+    /// Item count
     pub command_count: u32,
 }
 
@@ -389,6 +400,7 @@ pub struct ShellPool {
 }
 
 impl ShellPool {
+    /// Runs this module operation.
     pub fn new(max_sessions: usize) -> Self {
         Self {
             sessions: HashMap::new(),

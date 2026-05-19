@@ -54,6 +54,7 @@ pub struct PortForward {
 }
 
 impl PortForward {
+    /// Runs this module operation.
     pub fn new(config: PortForwardConfig) -> Self {
         Self { config }
     }

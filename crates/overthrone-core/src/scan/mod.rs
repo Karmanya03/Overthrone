@@ -42,21 +42,32 @@ impl std::fmt::Display for ScanType {
 /// Scan configuration
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
+    /// targets field
     pub targets: String,
+    /// Port number
     pub ports: String,
+    /// Classification for this object.
     pub scan_type: ScanType,
+    /// Timeout in seconds
     pub timeout_ms: u64,
+    /// concurrency field
     pub concurrency: usize,
 }
 
 /// Scan result for a single port
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanResult {
+    /// Target host address
     pub host: String,
+    /// Port number
     pub port: u16,
+    /// open field
     pub open: bool,
+    /// service field
     pub service: Option<String>,
+    /// response time ms field
     pub response_time_ms: u64,
+    /// banner field
     pub banner: Option<String>,
 }
 
@@ -68,9 +79,13 @@ pub struct PortScanner {
 /// Target specification
 #[derive(Debug, Clone)]
 pub enum TargetSpec {
+    /// `Single` variant
     Single(String),
+    /// `Range` variant
     Range(Ipv4Addr, Ipv4Addr),
+    /// `Cidr` variant
     Cidr(Ipv4Addr, u8),
+    /// `List` variant
     List(Vec<String>),
 }
 
@@ -79,6 +94,7 @@ pub enum TargetSpec {
 // ═══════════════════════════════════════════════════════════
 
 impl PortScanner {
+    /// Runs this module operation.
     pub fn new(config: ScanConfig) -> Self {
         Self { config }
     }

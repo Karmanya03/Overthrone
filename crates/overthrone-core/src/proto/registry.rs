@@ -885,10 +885,8 @@ fn build_rpc_header(_packet_type: u8, call_id: u32) -> Vec<u8> {
 // ═══════════════════════════════════════════════════════════
 
 /// Read a remote registry value via WINREG DCE/RPC over SMB named pipe.
-///
 /// Orchestrates the full WINREG RPC conversation: Bind → OpenHive → OpenKey
 /// (for each path segment) → QueryValue → CloseKey (all handles).
-///
 /// # Arguments
 /// * `smb_session` - Active SMB session with IPC$ access
 /// * `hive` - Predefined hive (HKLM, HKCU, etc.)
@@ -1019,8 +1017,11 @@ pub mod registry_paths {
 /// Secrets entry returned by `dump_lsa_secrets`
 #[derive(Debug, Clone)]
 pub struct LsaSecret {
+    /// Object or account name.
     pub name: String,
+    /// current value field
     pub current_value: Vec<u8>,
+    /// old value field
     pub old_value: Vec<u8>,
 }
 
@@ -1036,12 +1037,10 @@ pub struct CachedCredential {
 }
 
 /// Dump LSA secrets from a live target via WINREG RPC.
-///
 /// Reads the encrypted blobs under `SECURITY\Policy\Secrets\*\CurrVal` and
 /// `OldVal`.  The returned blobs are AES-256-CBC encrypted and require the
 /// `_LSAD_` session key from the Policy object to decrypt (full LSA secrets
 /// decryption is done by the reaper crate).
-///
 /// Requires SYSTEM-level access (SeBackupPrivilege or local administrator).
 pub async fn dump_lsa_secrets(
     smb_session: &mut crate::proto::smb::SmbSession,
@@ -1106,7 +1105,6 @@ pub async fn dump_lsa_secrets(
 }
 
 /// Dump NL$Cache (DCC2 / mscash2) cached domain credentials via WINREG RPC.
-///
 /// Reads `SECURITY\Cache\NL$n` values (n = 1..max_slots).  Each blob is
 /// a 528-byte structure: [72-byte header][448-byte encrypted DCC2 hash].
 /// Full DCC2 hash extraction requires the SYSTEM boot key; the raw blobs

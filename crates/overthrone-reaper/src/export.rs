@@ -10,9 +10,13 @@ use tracing::info;
 
 #[derive(Debug, Clone)]
 pub enum ExportFormat {
+    /// `Json` variant
     Json,
+    /// `JsonPretty` variant
     JsonPretty,
+    /// `Csv` variant
     Csv,
+    /// `BloodHoundV4` variant
     BloodHoundV4,
 }
 
@@ -102,62 +106,123 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
 //  BloodHound v4 Export
 // ═══════════════════════════════════════════════════════════
 
+fn right_to_bloodhound_name(right: &DangerousRight) -> String {
+    match right {
+        DangerousRight::GenericAll => "GenericAll".to_string(),
+        DangerousRight::GenericWrite => "GenericWrite".to_string(),
+        DangerousRight::WriteDacl => "WriteDacl".to_string(),
+        DangerousRight::WriteOwner => "WriteOwner".to_string(),
+        DangerousRight::Owns => "Owns".to_string(),
+        DangerousRight::AllExtendedRights => "AllExtendedRights".to_string(),
+        DangerousRight::CreateChild => "CreateChild".to_string(),
+        DangerousRight::WriteSelf => "WriteSelf".to_string(),
+        DangerousRight::ForceChangePassword => "ForceChangePassword".to_string(),
+        DangerousRight::DcSync => "DcSync".to_string(),
+        DangerousRight::ReadLapsPassword => "ReadLapsPassword".to_string(),
+        DangerousRight::ReadLapsPasswordExpiry => "ReadLapsPasswordExpiry".to_string(),
+        DangerousRight::ReadGmsaPassword => "ReadGmsaPassword".to_string(),
+        DangerousRight::AddMembers => "AddMembers".to_string(),
+        DangerousRight::AddSelf => "AddSelf".to_string(),
+        DangerousRight::WriteSPN => "WriteSPN".to_string(),
+        DangerousRight::WriteAllowedToDelegateTo => "WriteAllowedToDelegateTo".to_string(),
+        DangerousRight::AddAllowedToAct => "AddAllowedToAct".to_string(),
+        DangerousRight::WriteAccountRestrictions => "WriteAccountRestrictions".to_string(),
+        DangerousRight::WriteLogonScript => "WriteLogonScript".to_string(),
+        DangerousRight::WriteProfilePath => "WriteProfilePath".to_string(),
+        DangerousRight::WriteScriptPath => "WriteScriptPath".to_string(),
+        DangerousRight::WriteDnsHostName => "WriteDnsHostName".to_string(),
+        DangerousRight::WriteServicePrincipalName => "WriteServicePrincipalName".to_string(),
+        DangerousRight::WriteKeyCredentialLink => "WriteKeyCredentialLink".to_string(),
+        DangerousRight::WriteMsDsKeyCredentialLink => "WriteMsDsKeyCredentialLink".to_string(),
+        DangerousRight::WriteAltSecurityIdentities => "WriteAltSecurityIdentities".to_string(),
+        DangerousRight::WriteUserParameters => "WriteUserParameters".to_string(),
+        DangerousRight::WritePwdProperties => "WritePwdProperties".to_string(),
+        DangerousRight::WriteLockoutThreshold => "WriteLockoutThreshold".to_string(),
+        DangerousRight::WriteMinPwdLength => "WriteMinPwdLength".to_string(),
+        DangerousRight::WritePwdHistoryLength => "WritePwdHistoryLength".to_string(),
+        DangerousRight::WritePwdComplexity => "WritePwdComplexity".to_string(),
+        DangerousRight::WritePwdReversibleEncryption => "WritePwdReversibleEncryption".to_string(),
+        DangerousRight::WritePwdAge => "WritePwdAge".to_string(),
+        DangerousRight::WriteLockoutDuration => "WriteLockoutDuration".to_string(),
+        DangerousRight::WriteLockoutObservationWindow => {
+            "WriteLockoutObservationWindow".to_string()
+        }
+        DangerousRight::WriteGPLink => "WriteGPLink".to_string(),
+        DangerousRight::AddKeyCredentialLink => "AddKeyCredentialLink".to_string(),
+        DangerousRight::WriteUserCertificate => "WriteUserCertificate".to_string(),
+        DangerousRight::EnrollCertificate => "EnrollCertificate".to_string(),
+        DangerousRight::WriteProperty { attribute, guid: _ } => attribute.clone(),
+        DangerousRight::Custom(s) => s.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_right_to_bloodhound_name_generic_all() {
+        assert_eq!(
+            right_to_bloodhound_name(&DangerousRight::GenericAll),
+            "GenericAll"
+        );
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_dcsync() {
+        assert_eq!(right_to_bloodhound_name(&DangerousRight::DcSync), "DcSync");
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_write_property() {
+        assert_eq!(
+            right_to_bloodhound_name(&DangerousRight::WriteProperty {
+                attribute: "servicePrincipalName".into(),
+                guid: String::new(),
+            }),
+            "servicePrincipalName"
+        );
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_custom() {
+        assert_eq!(
+            right_to_bloodhound_name(&DangerousRight::Custom("CustomRight".into())),
+            "CustomRight"
+        );
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_roundtrip() {
+        let cases = [
+            (DangerousRight::GenericAll, "GenericAll"),
+            (DangerousRight::GenericWrite, "GenericWrite"),
+            (DangerousRight::WriteDacl, "WriteDacl"),
+            (DangerousRight::WriteOwner, "WriteOwner"),
+            (DangerousRight::Owns, "Owns"),
+            (DangerousRight::AllExtendedRights, "AllExtendedRights"),
+            (DangerousRight::CreateChild, "CreateChild"),
+            (DangerousRight::WriteSelf, "WriteSelf"),
+            (DangerousRight::ForceChangePassword, "ForceChangePassword"),
+            (DangerousRight::DcSync, "DcSync"),
+            (DangerousRight::ReadLapsPassword, "ReadLapsPassword"),
+            (DangerousRight::ReadGmsaPassword, "ReadGmsaPassword"),
+            (DangerousRight::AddMembers, "AddMembers"),
+            (DangerousRight::AddSelf, "AddSelf"),
+            (DangerousRight::WriteSPN, "WriteSPN"),
+            (DangerousRight::AddAllowedToAct, "AddAllowedToAct"),
+            (DangerousRight::EnrollCertificate, "EnrollCertificate"),
+            (DangerousRight::WriteGPLink, "WriteGPLink"),
+        ];
+        for (right, expected) in &cases {
+            assert_eq!(right_to_bloodhound_name(right), *expected);
+        }
+    }
+}
+
 async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> {
     let dir = base.parent().unwrap_or(Path::new("."));
     let timestamp = chrono::Utc::now().timestamp();
-
-    // ── ACL findings distribution ───────────────────────────────────────────────
-    fn right_to_bloodhound_name(right: &DangerousRight) -> String {
-        match right {
-            DangerousRight::GenericAll => "GenericAll".to_string(),
-            DangerousRight::GenericWrite => "GenericWrite".to_string(),
-            DangerousRight::WriteDacl => "WriteDacl".to_string(),
-            DangerousRight::WriteOwner => "WriteOwner".to_string(),
-            DangerousRight::Owns => "Owns".to_string(),
-            DangerousRight::AllExtendedRights => "AllExtendedRights".to_string(),
-            DangerousRight::CreateChild => "CreateChild".to_string(),
-            DangerousRight::WriteSelf => "WriteSelf".to_string(),
-            DangerousRight::ForceChangePassword => "ForceChangePassword".to_string(),
-            DangerousRight::DcSync => "DcSync".to_string(),
-            DangerousRight::ReadLapsPassword => "ReadLapsPassword".to_string(),
-            DangerousRight::ReadLapsPasswordExpiry => "ReadLapsPasswordExpiry".to_string(),
-            DangerousRight::ReadGmsaPassword => "ReadGmsaPassword".to_string(),
-            DangerousRight::AddMembers => "AddMembers".to_string(),
-            DangerousRight::AddSelf => "AddSelf".to_string(),
-            DangerousRight::WriteSPN => "WriteSPN".to_string(),
-            DangerousRight::WriteAllowedToDelegateTo => "WriteAllowedToDelegateTo".to_string(),
-            DangerousRight::AddAllowedToAct => "AddAllowedToAct".to_string(),
-            DangerousRight::WriteAccountRestrictions => "WriteAccountRestrictions".to_string(),
-            DangerousRight::WriteLogonScript => "WriteLogonScript".to_string(),
-            DangerousRight::WriteProfilePath => "WriteProfilePath".to_string(),
-            DangerousRight::WriteScriptPath => "WriteScriptPath".to_string(),
-            DangerousRight::WriteDnsHostName => "WriteDnsHostName".to_string(),
-            DangerousRight::WriteServicePrincipalName => "WriteServicePrincipalName".to_string(),
-            DangerousRight::WriteKeyCredentialLink => "WriteKeyCredentialLink".to_string(),
-            DangerousRight::WriteMsDsKeyCredentialLink => "WriteMsDsKeyCredentialLink".to_string(),
-            DangerousRight::WriteAltSecurityIdentities => "WriteAltSecurityIdentities".to_string(),
-            DangerousRight::WriteUserParameters => "WriteUserParameters".to_string(),
-            DangerousRight::WritePwdProperties => "WritePwdProperties".to_string(),
-            DangerousRight::WriteLockoutThreshold => "WriteLockoutThreshold".to_string(),
-            DangerousRight::WriteMinPwdLength => "WriteMinPwdLength".to_string(),
-            DangerousRight::WritePwdHistoryLength => "WritePwdHistoryLength".to_string(),
-            DangerousRight::WritePwdComplexity => "WritePwdComplexity".to_string(),
-            DangerousRight::WritePwdReversibleEncryption => {
-                "WritePwdReversibleEncryption".to_string()
-            }
-            DangerousRight::WritePwdAge => "WritePwdAge".to_string(),
-            DangerousRight::WriteLockoutDuration => "WriteLockoutDuration".to_string(),
-            DangerousRight::WriteLockoutObservationWindow => {
-                "WriteLockoutObservationWindow".to_string()
-            }
-            DangerousRight::WriteGPLink => "WriteGPLink".to_string(),
-            DangerousRight::AddKeyCredentialLink => "AddKeyCredentialLink".to_string(),
-            DangerousRight::WriteUserCertificate => "WriteUserCertificate".to_string(),
-            DangerousRight::EnrollCertificate => "EnrollCertificate".to_string(),
-            DangerousRight::WriteProperty { attribute, guid: _ } => attribute.clone(),
-            DangerousRight::Custom(s) => s.clone(),
-        }
-    }
 
     let mut user_aces: Vec<Value> = Vec::new();
     let mut computer_aces: Vec<Value> = Vec::new();

@@ -18,34 +18,49 @@ use tracing::{info, warn};
 /// A successfully cracked credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrackedCredential {
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// Password for authentication
     pub password: String,
+    /// Classification for this object.
     pub hash_type: String,
+    /// Source domain FQDN
     pub source: CrackSource,
 }
 
 /// Source of the cracked hash
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CrackSource {
+    /// `AsRepRoast` variant
     AsRepRoast,
+    /// `Kerberoast` variant
     Kerberoast,
+    /// `Ntlm` variant
     Ntlm,
 }
 
 /// Result of batch cracking operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrackReport {
+    /// Hash value
     pub total_hashes: usize,
+    /// cracked field
     pub cracked: Vec<CrackedCredential>,
+    /// failed field
     pub failed: Vec<FailedHash>,
+    /// time ms field
     pub time_ms: u64,
 }
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailedHash {
+    /// Username for authentication
     pub username: Option<String>,
+    /// Classification for this object.
     pub hash_type: String,
+    /// Stable unique identifier.
     pub candidates_tried: usize,
 }
 

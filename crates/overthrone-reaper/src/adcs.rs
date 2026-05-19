@@ -65,20 +65,30 @@ const CT_FLAG_PEND_ALL_REQUESTS: u32 = 0x00000002;
 // ═══════════════════════════════════════════════════════════
 //  CertTemplate
 // ═══════════════════════════════════════════════════════════
-
+/// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertTemplate {
+    /// Object or account name.
     pub name: String,
+    /// Object or account name.
     pub display_name: Option<String>,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// schema version field
     pub schema_version: u32,
+    /// Stable unique identifier.
     pub oid: Option<String>,
     /// Raw nTSecurityDescriptor strings (SDDL or base64-encoded binary).
     pub enroll_permissions: Vec<String>,
+    /// enrollee supplies subject field
     pub enrollee_supplies_subject: bool,
+    /// Key data
     pub extended_key_usage: Vec<String>,
+    /// requires manager approval field
     pub requires_manager_approval: bool,
+    /// authorized signatures required field
     pub authorized_signatures_required: u32,
+    /// vulnerabilities field
     pub vulnerabilities: Vec<String>,
 }
 
@@ -138,7 +148,6 @@ impl CertTemplate {
     /// flag templates where low-privilege principals have WriteProperty or
     /// GenericAll on the template *and* the template is published to a CA
     /// (indicated by non-empty enroll_permissions).
-    ///
     /// Full ESC5 detection requires CA-level enumeration beyond templates.
     pub fn check_esc5(&self) -> bool {
         // Heuristic: if a low-priv principal has GenericAll, the broader
@@ -157,12 +166,10 @@ impl CertTemplate {
 
     // ──────────────────────────────────── ESC6 ─────────────────
     /// ESC6: Template-level indicator for EDITF_ATTRIBUTESUBJECTALTNAME2.
-    ///
     /// At the template level: the template does NOT let the enrollee supply
     /// the subject, but it has a client-auth EKU and no approval — meaning
     /// that if the CA has the EDITF flag, any user can inject a SAN via
     /// request attributes.
-    ///
     /// Confirmed exploitation requires checking the CA config separately.
     pub fn check_esc6(&self) -> bool {
         !self.enrollee_supplies_subject
@@ -175,7 +182,6 @@ impl CertTemplate {
     /// ESC7: Template associated with ManageCA-level enrollment. If a low-
     /// privilege user can manage the CA (ManageCA right on the CA object),
     /// they can enable SubCA templates and issue certificates.
-    ///
     /// At the template level: flag SubCA-capable or wildcard templates
     /// (empty EKU) since they are the targets of an ESC7 attack after the
     /// attacker gains ManageCA rights.
@@ -200,7 +206,6 @@ impl CertTemplate {
     /// ESC8: HTTP-based enrollment (AD CS Web Enrollment / CES). Templates
     /// that allow enrollment with client-auth EKU and no manager approval
     /// are exploitable via NTLM relay to the web enrollment endpoint.
-    ///
     /// Full ESC8 detection requires confirming the CA has an HTTP endpoint;
     /// at the template level we flag templates that *would be* vulnerable.
     pub fn check_esc8(&self) -> bool {
@@ -343,7 +348,6 @@ impl SddlAce {
 }
 
 /// Parse SDDL ACE entries from the raw nTSecurityDescriptor strings.
-///
 /// nTSecurityDescriptor may be returned as:
 /// 1. SDDL string: `O:SYG:SYD:(A;;RPWPCCDCLCSWRCWDWO;;;AU)(A;;GA;;;BA)...`
 /// 2. Base64-encoded binary SD (not parsed here — we'd need full SD binary decoder)

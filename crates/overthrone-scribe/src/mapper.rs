@@ -10,14 +10,20 @@ use serde::{Deserialize, Serialize};
 /// A single MITRE ATT&CK technique mapping
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MitreMapping {
+    /// Stable unique identifier.
     pub technique_id: String,
+    /// Object or account name.
     pub technique_name: String,
+    /// tactic field
     pub tactic: String,
+    /// Stable unique identifier.
     pub sub_technique_id: Option<String>,
+    /// url field
     pub url: String,
 }
 
 impl MitreMapping {
+    /// Runs this module operation.
     pub fn new(
         technique_id: &str,
         technique_name: &str,
@@ -231,6 +237,66 @@ pub fn extract_tactics(mappings: &[MitreMapping]) -> Vec<String> {
     tactics.sort();
     tactics.dedup();
     tactics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mitre_mapping_new_without_sub() {
+        let m = MitreMapping::new("T1558", "Kerberoast", "TA0006", None);
+        assert_eq!(m.technique_id, "T1558");
+        assert_eq!(m.technique_name, "Kerberoast");
+        assert_eq!(m.sub_technique_id, None);
+        assert!(m.url.contains("T1558"));
+    }
+
+    #[test]
+    fn test_mitre_mapping_new_with_sub() {
+        let m = MitreMapping::new("T1558", "Kerberoast", "TA0006", Some("003"));
+        assert_eq!(m.technique_id, "T1558");
+        assert_eq!(m.sub_technique_id, Some("003".into()));
+        assert!(m.url.contains("T1558/003"));
+    }
+
+    #[test]
+    fn test_mitre_mapping_display() {
+        let m = MitreMapping::new("T1558", "Steal", "TA0006", None);
+        let s = m.to_string();
+        assert!(s.contains("T1558"));
+    }
+
+    #[test]
+    fn test_map_technique_kerberoast() {
+        let mapped = map_technique("kerberoast");
+        assert!(!mapped.is_empty());
+        assert!(mapped.iter().any(|m| m.technique_id == "T1558"));
+    }
+
+    #[test]
+    fn test_map_technique_asrep_roast() {
+        let mapped = map_technique("asrep_roast");
+        assert!(!mapped.is_empty());
+    }
+
+    #[test]
+    fn test_map_technique_unknown() {
+        let mapped = map_technique("UnknownAttackType");
+        assert!(mapped.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tactics_empty() {
+        let tactics = extract_tactics(&[]);
+        assert!(tactics.is_empty());
+    }
+
+    #[test]
+    fn test_build_attack_matrix_empty() {
+        let matrix = build_attack_matrix(&[]);
+        assert!(matrix.is_empty());
+    }
 }
 
 /// Build a MITRE ATT&CK matrix summary from all findings

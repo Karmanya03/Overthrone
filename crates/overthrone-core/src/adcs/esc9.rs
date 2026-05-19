@@ -84,21 +84,18 @@ impl Esc9Exploiter {
     }
 
     /// Execute the ESC9 attack.
-    ///
     /// This is an **offline** / **dry-run** implementation — the LDAP UPN
     /// modification is **not** performed here (that requires a live LDAP session
     /// and appropriate permissions that go beyond the CA web enrollment path).
     /// Instead, the method:
-    ///
     /// 1. Documents the LDAP commands that the operator must execute (or that a
     ///    higher-level orchestrator can call directly via `proto::ldap`).
-    /// 2. Generates a CSR with `target_upn` in the SAN.
-    /// 3. Submits the CSR to the CA web enrollment endpoint.
-    /// 4. Returns the issued certificate plus restoration guidance.
-    ///
-    /// The operator is responsible for performing the LDAP UPN modification before
-    /// calling this method and restoring the UPN afterwards (guidance is included
-    /// in the returned `Esc9Result`).
+    ///   2. Generates a CSR with `target_upn` in the SAN.
+    ///   3. Submits the CSR to the CA web enrollment endpoint.
+    ///   4. Returns the issued certificate plus restoration guidance.
+    ///      The operator is responsible for performing the LDAP UPN modification before
+    ///      calling this method and restoring the UPN afterwards (guidance is included
+    ///      in the returned `Esc9Result`).
     pub async fn exploit(&self, config: &Esc9Config) -> Result<Esc9Result> {
         info!(
             "ESC9 attack: template={}, victim={}, target_upn={}",
@@ -176,7 +173,6 @@ impl Esc9Exploiter {
     }
 
     /// Return `true` when the certificate does NOT contain `szOID_NTDS_CA_SECURITY_EXT`.
-    ///
     /// An absent security extension confirms the CA is vulnerable.
     pub fn check_security_extension_absent(cert_der: &[u8]) -> bool {
         use x509_parser::parse_x509_certificate;
@@ -212,14 +208,12 @@ impl Esc9Exploiter {
     }
 
     /// Perform the full ESC9 attack end-to-end with a live LDAP session.
-    ///
-    /// Unlike [`exploit`], this method:
-    /// 1. Sets `victim_dn`'s `userPrincipalName` to `target_upn` via LDAP.
-    /// 2. Requests the certificate from the CA web enrollment endpoint.
-    /// 3. Restores the original UPN via LDAP (even on error paths).
-    ///
-    /// Returns the issued certificate.  `Esc9Result::upn_restored` will be
-    /// `true` if the restoration write succeeded.
+    /// Unlike `exploit`, this method:
+    ///   1. Sets `victim_dn`'s `userPrincipalName` to `target_upn` via LDAP.
+    ///   2. Requests the certificate from the CA web enrollment endpoint.
+    ///   3. Restores the original UPN via LDAP (even on error paths).
+    ///      Returns the issued certificate.  `Esc9Result::upn_restored` will be
+    ///      `true` if the restoration write succeeded.
     pub async fn exploit_with_ldap(
         &self,
         config: &Esc9Config,

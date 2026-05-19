@@ -54,7 +54,6 @@ const GUID_USER_FORCE_CHANGE_PASSWORD: &str = "00299570-246d-11d0-a768-00aa006e0
 const ADS_RIGHT_DS_CONTROL_ACCESS: u32 = 0x00000100;
 
 /// Install an ACL-based backdoor on an AD object.
-///
 /// Resolves the trustee's SID from AD, reads the target object's current
 /// `nTSecurityDescriptor` via LDAP, appends the appropriate ACE(s), and
 /// writes the modified descriptor back — producing a real persistent ACL entry.
@@ -67,6 +66,22 @@ pub async fn install_acl_backdoor(
         "[acl] Installing ACL backdoor on {} for {}",
         target_dn, trustee
     );
+
+    if target_dn.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "Target DN cannot be empty for ACL backdoor".into(),
+        ));
+    }
+    if trustee.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "Trustee cannot be empty for ACL backdoor".into(),
+        ));
+    }
+    if config.dc_ip.trim().is_empty() {
+        return Err(OverthroneError::TicketForge(
+            "DC IP cannot be empty for ACL backdoor".into(),
+        ));
+    }
 
     let realm = config.domain.to_uppercase();
     let base_dn = realm
@@ -91,13 +106,19 @@ pub async fn install_acl_backdoor(
     };
 
     // Build cleanup commands (always generated for operator reference)
+    if config.password.is_none() {
+        warn!(
+            "[acl] Password not provided — cleanup commands will contain '<PASSWORD>' placeholder; replace before use."
+        );
+    }
+    let cleanup_password = config.password.as_deref().unwrap_or("<PASSWORD>");
     let cleanup_cmds = generate_cleanup_commands(
         &backdoor_type,
         &effective_target,
         trustee,
         &config.domain,
         &config.username,
-        config.password.as_deref().unwrap_or("<PASSWORD>"),
+        cleanup_password,
         &config.dc_ip,
     );
 
@@ -261,7 +282,6 @@ fn build_aces_for_backdoor_type(
 }
 
 /// Append raw ACE bytes to the DACL of an NT Security Descriptor.
-///
 /// Handles the binary SECURITY_DESCRIPTOR_RELATIVE layout:
 /// - Reads OffsetDacl from the SD header (bytes 16–19)
 /// - Reads AclSize and AceCount from the ACL header at OffsetDacl
@@ -395,7 +415,6 @@ fn describe_aces(
 }
 
 /// Install an ACL backdoor on AdminSDHolder for protected-object propagation.
-///
 /// The SDProp process runs every 60 minutes and copies the AdminSDHolder
 /// ACL to all protected objects (Domain Admins, Enterprise Admins, etc.).
 pub async fn install_adminsdholder_backdoor(
@@ -523,16 +542,21 @@ pub fn build_ace_bytes(
 /// Parse a GUID string "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" into
 /// the mixed-endian binary format used in LDAP/ACE structures.
 pub fn guid_string_to_bytes(guid: &str) -> Result<[u8; 16]> {
+    if guid.is_empty() {
+        return Err(OverthroneError::TicketForge("GUID string is empty".into()));
+    }
     let clean = guid.replace('-', "");
     if clean.len() != 32 {
         return Err(OverthroneError::TicketForge(format!(
-            "Invalid GUID length: expected 32 hex chars, got {}",
+            "Invalid GUID '{}': expected 32 hex chars after removing hyphens, got {}",
+            guid,
             clean.len()
         )));
     }
 
-    let raw = hex::decode(&clean)
-        .map_err(|e| OverthroneError::TicketForge(format!("Invalid GUID hex: {e}")))?;
+    let raw = hex::decode(&clean).map_err(|e| {
+        OverthroneError::TicketForge(format!("Invalid GUID hex in '{}': {e}", guid))
+    })?;
 
     // Microsoft GUIDs are mixed-endian:
     // - First 3 components (4-2-2 bytes) are little-endian

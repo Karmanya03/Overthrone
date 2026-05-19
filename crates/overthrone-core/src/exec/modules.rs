@@ -1,3 +1,5 @@
+//! Execution module definitions and plugin interface.
+
 use crate::error::Result;
 use crate::exec::RemoteExecutor;
 use crate::proto::smb::SmbSession;
@@ -10,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{info, warn};
 
-use super::{ExecCredentials, ExecOutput};
+use super::{ExecCredentials, ExecMethod, ExecOutput};
 
 // ═══════════════════════════════════════════════════════════
 // Module Category & Metadata
@@ -19,12 +21,19 @@ use super::{ExecCredentials, ExecOutput};
 /// High-level category for grouping modules in CLI and help output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModuleCategory {
+    /// `Execute` variant
     Execute,
+    /// `Dump` variant
     Dump,
+    /// `Enum` variant
     Enum,
+    /// `Kerberos` variant
     Kerberos,
+    /// `Secrets` variant
     Secrets,
+    /// `Scan` variant
     Scan,
+    /// `Coerce` variant
     Coerce,
 }
 
@@ -51,10 +60,15 @@ impl std::fmt::Display for ModuleCategory {
 /// Rich metadata returned by each module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleMetadata {
+    /// Object or account name.
     pub name: &'static str,
+    /// description field
     pub description: &'static str,
+    /// category field
     pub category: ModuleCategory,
+    /// requires creds field
     pub requires_creds: bool,
+    /// requires target field
     pub requires_target: bool,
 }
 
@@ -63,18 +77,14 @@ pub struct ModuleMetadata {
 // ═══════════════════════════════════════════════════════════
 
 /// Trait implemented by built-in or plugin-like modules.
-///
 /// # Example
-///
 /// ```ignore
 /// use async_trait::async_trait;
 /// use overthrone_core::exec::modules::{ModuleCategory, OvtModule};
 /// use overthrone_core::exec::{ExecCredentials, ExecOutput};
 /// use overthrone_core::Result;
 /// use serde_json::Value;
-///
 /// pub struct HelloModule;
-///
 /// #[async_trait]
 /// impl OvtModule for HelloModule {
 ///     fn name(&self) -> &'static str {
@@ -186,17 +196,24 @@ pub async fn module_count() -> usize {
 /// Result of running a module against a single target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleRunResult {
+    /// Target domain FQDN
     pub target: String,
+    /// Object or account name.
     pub module_name: String,
+    /// success field
     pub success: bool,
+    /// output field
     pub output: ExecOutput,
+    /// Error information
     pub error: Option<String>,
 }
 
 /// Configuration for parallel module execution.
 #[derive(Debug, Clone)]
 pub struct ParallelModuleConfig {
+    /// concurrency field
     pub concurrency: usize,
+    /// Timeout in seconds
     pub timeout_secs: u64,
 }
 
@@ -228,7 +245,22 @@ pub async fn run_module_parallel(
         let sem = Arc::clone(&semaphore);
 
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let Ok(_permit) = sem.acquire().await else {
+                return ModuleRunResult {
+                    target: t,
+                    module_name: m.name().to_string(),
+                    success: false,
+                    output: ExecOutput {
+                        stdout: String::new(),
+                        stderr: "parallel module semaphore closed".to_string(),
+                        exit_code: Some(1),
+                        method: ExecMethod::Plugin {
+                            plugin_id: m.name().to_string(),
+                        },
+                    },
+                    error: Some("parallel module semaphore closed".to_string()),
+                };
+            };
             match m.run(&t, c, p).await {
                 Ok(output) => ModuleRunResult {
                     target: t,
@@ -278,20 +310,13 @@ fn get_param_str(params: &Option<Value>, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-fn get_param_bool(params: &Option<Value>, key: &str, default: bool) -> bool {
-    params
-        .as_ref()
-        .and_then(|v| v.get(key).and_then(|c| c.as_bool()))
-        .unwrap_or(default)
-}
-
 // ═══════════════════════════════════════════════════════════
 // BUILT-IN EXECUTION MODULES
 // These modules depend only on crate-internal executors
 // ═══════════════════════════════════════════════════════════
 
 // ── WinRM Exec Module ────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct WinRmExecModule;
 
 #[async_trait]
@@ -319,7 +344,7 @@ impl OvtModule for WinRmExecModule {
 }
 
 // ── SMB Exec Module ──────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct SmbExecModule;
 
 #[async_trait]
@@ -360,7 +385,7 @@ impl OvtModule for SmbExecModule {
 }
 
 // ── PsExec Module ────────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct PsExecModule;
 
 #[async_trait]
@@ -388,7 +413,7 @@ impl OvtModule for PsExecModule {
 }
 
 // ── WMI Exec Module ──────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct WmiExecModule;
 
 #[async_trait]
@@ -429,7 +454,7 @@ impl OvtModule for WmiExecModule {
 }
 
 // ── AtExec Module ────────────────────────────────────────
-
+/// Data structure used by this module.
 pub struct AtExecModule;
 
 #[async_trait]
@@ -457,7 +482,7 @@ impl OvtModule for AtExecModule {
 }
 
 // ── RDP Scanner Module ───────────────────────────────────
-
+/// Data structure used by this module.
 pub struct RdpModule;
 
 #[async_trait]

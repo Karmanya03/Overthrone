@@ -18,7 +18,6 @@ type HmacMd5 = Hmac<Md5>;
 // ═══════════════════════════════════════════════════════════
 
 /// Compute the NT hash of a password: MD4(UTF-16LE(password))
-///
 /// This is the primary credential hash stored in the SAM database
 /// and Active Directory. It is "password equivalent" — knowing this
 /// hash is sufficient to authenticate without the plaintext password.
@@ -42,9 +41,7 @@ pub fn nt_hash_hex(password: &str) -> String {
 // ═══════════════════════════════════════════════════════════
 
 /// Compute the NTLMv2 hash (also called the "NTLMv2 OWF").
-///
 /// Formula: HMAC-MD5(NT_HASH, UTF-16LE(UPPER(username) + UPPER(domain)))
-///
 /// This is used as the key for computing NTLMv2 challenge responses
 /// and session keys. Reference: [MS-NLMP] Section 3.3.2
 pub fn ntlmv2_hash(nt_hash: &[u8], username: &str, domain: &str) -> Vec<u8> {
@@ -70,10 +67,8 @@ pub fn ntlmv2_hash_from_password(password: &str, username: &str, domain: &str) -
 // ═══════════════════════════════════════════════════════════
 
 /// Compute the NTLMv2 response for a given server challenge.
-///
 /// Formula: HMAC-MD5(NTLMv2_HASH, server_challenge + client_blob)
 ///          concatenated with the client_blob.
-///
 /// The `client_blob` (NTLMv2_CLIENT_CHALLENGE) contains a timestamp,
 /// client nonce, and target info from the server's CHALLENGE_MESSAGE.
 /// Reference: [MS-NLMP] Section 3.3.2
@@ -95,7 +90,6 @@ pub fn ntlmv2_response(
 }
 
 /// Build a minimal NTLMv2 client blob (NTLMv2_CLIENT_CHALLENGE).
-///
 /// Layout (28+ bytes):
 ///   - RespType:    u8  = 0x01
 ///   - HiRespType:  u8  = 0x01
@@ -127,7 +121,6 @@ pub fn build_ntlmv2_client_blob(
 }
 
 /// Get the current time as a Windows FILETIME (100ns ticks since 1601-01-01).
-///
 /// The offset between Unix epoch (1970) and Windows epoch (1601) is
 /// 116444736000000000 ticks (100ns units).
 pub fn windows_filetime_now() -> u64 {
@@ -145,9 +138,7 @@ pub fn windows_filetime_now() -> u64 {
 // ═══════════════════════════════════════════════════════════
 
 /// Compute the NTLMv2 session base key.
-///
 /// Formula: HMAC-MD5(NTLMv2_HASH, NTProofStr)
-///
 /// The NTProofStr is the first 16 bytes of the NTLMv2 response.
 /// This session key is used for signing and sealing messages.
 /// Reference: [MS-NLMP] Section 3.3.2
@@ -162,10 +153,8 @@ pub fn ntlmv2_session_base_key(ntlmv2_hash: &[u8], nt_proof_str: &[u8]) -> Vec<u
 // ═══════════════════════════════════════════════════════════
 
 /// Compute the LMv2 response.
-///
 /// Formula: HMAC-MD5(NTLMv2_HASH, server_challenge + client_challenge)
 ///          concatenated with client_challenge.
-///
 /// Reference: [MS-NLMP] Section 3.3.2
 pub fn lmv2_response(
     ntlmv2_hash: &[u8],
@@ -188,7 +177,6 @@ pub fn lmv2_response(
 // ═══════════════════════════════════════════════════════════
 
 /// Parse an NTLM hash string in `LMHASH:NTHASH` or bare `NTHASH` format.
-///
 /// Returns the 16-byte NT hash. Accepts secretsdump/hashdump output format.
 pub fn parse_ntlm_hash(hash_str: &str) -> Result<Vec<u8>> {
     let nt_part = if hash_str.contains(':') {
@@ -214,7 +202,6 @@ pub fn parse_ntlm_hash(hash_str: &str) -> Result<Vec<u8>> {
 
 /// Parse a full secretsdump-style hash line:
 /// `username:rid:lm_hash:nt_hash:::`
-///
 /// Returns (username, rid, nt_hash_bytes)
 pub fn parse_secretsdump_line(line: &str) -> Result<(String, u32, Vec<u8>)> {
     let parts: Vec<&str> = line.split(':').collect();
@@ -242,7 +229,6 @@ pub fn parse_secretsdump_line(line: &str) -> Result<(String, u32, Vec<u8>)> {
 }
 
 /// Constant for the "empty" LM hash (password blank or LM hashing disabled).
-///
 /// This appears in virtually all modern Windows environments since
 /// LM hashes are disabled by default on Vista+.
 pub fn lm_hash_empty() -> Vec<u8> {
@@ -272,23 +258,30 @@ const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
 /// NTLM message types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NtlmMessageType {
+    /// `` variant
     Negotiate = 1,
+    /// `` variant
     Challenge = 2,
+    /// `` variant
     Authenticate = 3,
 }
 
 /// Parsed NTLM Challenge message
 #[derive(Debug, Clone)]
 pub struct NtlmChallengeMessage {
+    /// Classification for this object.
     pub message_type: NtlmMessageType,
+    /// Target server name
     pub target_name: Option<String>,
+    /// NTLM challenge value
     pub challenge: [u8; 8],
+    /// target info field
     pub target_info: Option<Vec<u8>>,
+    /// flags field
     pub flags: u32,
 }
 
 /// Build NTLM Type 1 (Negotiate) message
-///
 /// This message is sent from client to server to initiate NTLM authentication.
 pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
     let mut msg = Vec::new();
@@ -414,7 +407,6 @@ pub fn ntowfv1(password: &str) -> Vec<u8> {
 }
 
 /// Build NTLM Type 3 (Authenticate) message
-///
 /// This message contains the proof of identity using the NTLMv2 response.
 pub fn build_authenticate_message(
     domain: &str,
@@ -537,7 +529,7 @@ mod tests {
     fn test_nt_hash_known_value() {
         // Canonical NT hash for "password"
         // Reference: https://passlib.readthedocs.io/en/stable/lib/passlib.hash.nthash.html
-        let hash = nt_hash_hex("password");
+        let hash = nt_hash_hex("password"); // Test vector
         assert_eq!(hash, "8846f7eaee8fb117ad06bdd830b7586c");
     }
 
@@ -551,7 +543,7 @@ mod tests {
     #[test]
     fn test_nt_hash_case_sensitive() {
         // NT hashes are case-sensitive: "password" ≠ "Password"
-        let lower = nt_hash_hex("password");
+        let lower = nt_hash_hex("password"); // Test vector
         let upper = nt_hash_hex("Password");
         assert_ne!(lower, upper);
         assert_eq!(lower, "8846f7eaee8fb117ad06bdd830b7586c");
@@ -568,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_ntlmv2_hash_deterministic() {
-        let nt = nt_hash("password");
+        let nt = nt_hash("password"); // Test vector
         let v2a = ntlmv2_hash(&nt, "admin", "CORP.LOCAL");
         let v2b = ntlmv2_hash(&nt, "admin", "CORP.LOCAL");
         assert_eq!(v2a, v2b);
@@ -578,7 +570,7 @@ mod tests {
     #[test]
     fn test_ntlmv2_hash_user_case_insensitive() {
         // Username and domain are uppercased internally
-        let nt = nt_hash("password");
+        let nt = nt_hash("password"); // Test vector
         let v2a = ntlmv2_hash(&nt, "Admin", "corp.local");
         let v2b = ntlmv2_hash(&nt, "ADMIN", "CORP.LOCAL");
         assert_eq!(v2a, v2b);
@@ -596,7 +588,7 @@ mod tests {
 
     #[test]
     fn test_ntlmv2_response_format() {
-        let nt = nt_hash("password");
+        let nt = nt_hash("password"); // Test vector
         let v2 = ntlmv2_hash(&nt, "user", "DOMAIN");
         let server_challenge = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         let client_challenge = [0xAA; 8];
@@ -608,7 +600,7 @@ mod tests {
 
     #[test]
     fn test_lmv2_response_length() {
-        let nt = nt_hash("password");
+        let nt = nt_hash("password"); // Test vector
         let v2 = ntlmv2_hash(&nt, "user", "DOMAIN");
         let sc = [0x11; 8];
         let cc = [0x22; 8];
@@ -621,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_session_base_key_length() {
-        let nt = nt_hash("password");
+        let nt = nt_hash("password"); // Test vector
         let v2 = ntlmv2_hash(&nt, "user", "DOMAIN");
         let fake_proof = [0xAA; 16];
         let key = ntlmv2_session_base_key(&v2, &fake_proof);
@@ -671,7 +663,7 @@ mod tests {
     fn test_parse_ntlm_hash_nt_only() {
         let result = parse_ntlm_hash("8846f7eaee8fb117ad06bdd830b7586c");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), nt_hash("password"));
+        assert_eq!(result.unwrap(), nt_hash("password")); // Test vector
     }
 
     #[test]
@@ -694,7 +686,7 @@ mod tests {
         let (user, rid, hash) = parse_secretsdump_line(line).unwrap();
         assert_eq!(user, "Administrator");
         assert_eq!(rid, 500);
-        assert_eq!(hash, nt_hash("password"));
+        assert_eq!(hash, nt_hash("password")); // Test vector
     }
 
     #[test]
@@ -708,7 +700,7 @@ mod tests {
     fn test_is_empty_nt_hash() {
         let empty = nt_hash("");
         assert!(is_empty_nt_hash(&empty));
-        assert!(!is_empty_nt_hash(&nt_hash("password")));
+        assert!(!is_empty_nt_hash(&nt_hash("password"))); // Test vector
     }
 
     #[test]

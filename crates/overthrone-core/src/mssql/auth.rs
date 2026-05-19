@@ -12,20 +12,28 @@ use tracing::debug;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MssqlAuth {
     /// SQL Server authentication (username/password)
+    #[allow(missing_docs)]
     Sql { username: String, password: String },
     /// Windows/NTLM authentication
     Ntlm {
+        /// Domain FQDN
         domain: String,
+        /// Username for authentication
         username: String,
+        /// Password for authentication
         password: String,
     },
     /// Windows/NTLM with hash (pass-the-hash)
     NtlmHash {
+        /// Domain FQDN
         domain: String,
+        /// Username for authentication
         username: String,
+        /// Hash value
         nt_hash: Vec<u8>,
     },
     /// Access token (Azure AD, etc.)
+    #[allow(missing_docs)]
     Token { token: String },
     /// Trusted/Integrated (use current Windows credentials)
     Trusted,
@@ -223,6 +231,9 @@ pub fn deobfuscate_password(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    const TEST_MSSQL_USER: &str = "admin";
+    const TEST_MSSQL_PASS: &str = "password";
+
     #[test]
     fn test_mssql_auth_sql() {
         let auth = MssqlAuth::sql("sa", "password123");
@@ -233,10 +244,10 @@ mod tests {
 
     #[test]
     fn test_mssql_auth_ntlm() {
-        let auth = MssqlAuth::ntlm("DOMAIN", "admin", "password");
+        let auth = MssqlAuth::ntlm("DOMAIN", TEST_MSSQL_USER, TEST_MSSQL_PASS);
         assert!(!auth.is_sql());
         assert!(auth.is_ntlm());
-        assert_eq!(auth.username(), Some("admin"));
+        assert_eq!(auth.username(), Some(TEST_MSSQL_USER));
         assert_eq!(auth.domain(), Some("DOMAIN"));
     }
 
@@ -250,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_ntlm_auth_handler() {
-        let mut handler = NtlmAuthHandler::new("DOMAIN", "user", "password");
+        let mut handler = NtlmAuthHandler::new("DOMAIN", "user", TEST_MSSQL_PASS);
         let negotiate = handler.build_negotiate().unwrap();
 
         // Check NTLM signature

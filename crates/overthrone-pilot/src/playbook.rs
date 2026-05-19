@@ -1,16 +1,16 @@
-//! Predefined attack playbooks — curated sequences for common AD attack paths.
+//! Predefined attack playbooks â€” curated sequences for common AD attack paths.
 //!
 //! Each playbook is a named template that generates plan steps.
-//! Think of them as "recipes" — the planner can invoke a playbook
+//! Think of them as "recipes" â€” the planner can invoke a playbook
 //! when it detects the right conditions.
 
 use crate::planner::{NoiseLevel, PlanStep, PlannedAction};
 use crate::runner::Stage;
 use serde::{Deserialize, Serialize};
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Playbook Identifiers
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlaybookId {
@@ -18,19 +18,19 @@ pub enum PlaybookId {
     FullRecon,
     /// Kerberoast + AS-REP roast + crack
     RoastAndCrack,
-    /// Constrained delegation → S4U → impersonate admin
+    /// Constrained delegation â†’ S4U â†’ impersonate admin
     DelegationAbuse,
-    /// RBCD → S4U → service ticket as admin
+    /// RBCD â†’ S4U â†’ service ticket as admin
     RbcdChain,
-    /// Coerce DC → relay → compromise DC
+    /// Coerce DC â†’ relay â†’ compromise DC
     CoerceAndRelay,
-    /// PSExec/SMBExec to target → dump creds → pivot
+    /// PSExec/SMBExec to target â†’ dump creds â†’ pivot
     LateralPivot,
     /// DCSync once DA is achieved
     DcSyncDump,
     /// Golden ticket persistence
     GoldenTicketPersist,
-    /// Full automated chain: recon → roast → lateral → DA → loot
+    /// Full automated chain: recon â†’ roast â†’ lateral â†’ DA â†’ loot
     FullAutoPwn,
 }
 
@@ -50,18 +50,24 @@ impl std::fmt::Display for PlaybookId {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Playbook Definition
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// A playbook is a named, described collection of plan steps
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Playbook {
+    /// Stable unique identifier.
     pub id: PlaybookId,
+    /// Object or account name.
     pub name: String,
+    /// description field
     pub description: String,
+    /// noise level field
     pub noise_level: NoiseLevel,
+    /// steps field
     pub steps: Vec<PlanStep>,
+    /// tags field
     pub tags: Vec<String>,
 }
 
@@ -101,17 +107,17 @@ impl Playbook {
             ),
             (
                 PlaybookId::RbcdChain,
-                "RBCD write → S4U → impersonate",
+                "RBCD write â†’ S4U â†’ impersonate",
                 NoiseLevel::Medium,
             ),
             (
                 PlaybookId::CoerceAndRelay,
-                "Auth coercion → NTLM relay",
+                "Auth coercion â†’ NTLM relay",
                 NoiseLevel::Medium,
             ),
             (
                 PlaybookId::LateralPivot,
-                "Exec on host → dump creds → move",
+                "Exec on host â†’ dump creds â†’ move",
                 NoiseLevel::High,
             ),
             (
@@ -126,15 +132,15 @@ impl Playbook {
             ),
             (
                 PlaybookId::FullAutoPwn,
-                "Full chain: recon → escalate → DA → loot",
+                "Full chain: recon â†’ escalate â†’ DA â†’ loot",
                 NoiseLevel::Critical,
             ),
         ]
     }
 
-    // ═══════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // Playbook Builders
-    // ═══════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     fn make_step(
         id: &str,
@@ -157,6 +163,8 @@ impl Playbook {
             result: None,
             retries: 0,
             max_retries: 2,
+            reversible: false,
+            compensation: None,
         }
     }
 
@@ -272,7 +280,7 @@ impl Playbook {
             ),
             Self::make_step(
                 "deleg_2",
-                "S4U2Self → S4U2Proxy impersonation chain",
+                "S4U2Self â†’ S4U2Proxy impersonation chain",
                 Stage::Attack,
                 PlannedAction::ConstrainedDelegation {
                     account: String::new(),
@@ -459,7 +467,7 @@ impl Playbook {
     fn dcsync_dump() -> Self {
         let steps = vec![Self::make_step(
             "dc_1",
-            "DCSync — replicate all domain credentials",
+            "DCSync â€” replicate all domain credentials",
             Stage::Loot,
             PlannedAction::DcsSync { target_user: None },
             100,
@@ -541,8 +549,9 @@ impl Playbook {
         Self {
             id: PlaybookId::FullAutoPwn,
             name: "Full AutoPwn".to_string(),
-            description: "Automated full chain: recon → roast → delegate → lateral → DA → loot"
-                .to_string(),
+            description:
+                "Automated full chain: recon â†’ roast â†’ delegate â†’ lateral â†’ DA â†’ loot"
+                    .to_string(),
             noise_level: NoiseLevel::Critical,
             steps,
             tags: vec!["autopwn".to_string(), "full_chain".to_string()],

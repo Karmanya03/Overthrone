@@ -305,6 +305,7 @@ impl OvtModule for NtdsDumpModule {
             lifetime_hours: 0,
             output_path: None,
             payload_path: None,
+            skeleton_master_password: None,
         };
 
         let mut output = String::new();
@@ -503,6 +504,7 @@ impl OvtModule for KerberoastModule {
             output_file: Some(outpath.clone()),
             admin_only: false,
             downgrade_to_rc4: true,
+            spn_filter: None,
         };
 
         let actions = vec![overthrone_hunter::runner::HuntAction::Kerberoast(kc)];
@@ -579,7 +581,11 @@ impl OvtModule for AsreproastModule {
             target_users: vec![],
             skip_disabled: true,
             output_file: Some(outpath.clone()),
-            preferred_etype: None,
+            target_etypes: vec![
+                overthrone_core::crypto::ticket::ETYPE_RC4_HMAC,
+                overthrone_core::crypto::ticket::ETYPE_AES256_CTS,
+                overthrone_core::crypto::ticket::ETYPE_AES128_CTS,
+            ],
             target_ous: vec![],
         };
 
@@ -790,6 +796,7 @@ impl OvtModule for CoerceModule {
                 }
             }],
             listener_path: None,
+            mssql_port: 1433,
         };
 
         let result = overthrone_hunter::coerce::run(&hunt_config, &cc).await?;

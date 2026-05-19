@@ -106,7 +106,7 @@ pub struct MssqlQueryResult {
     pub columns: Vec<String>,
     /// Column types (SQL type names)
     pub column_types: Vec<String>,
-    /// Result rows (each row is Vec<Option<String>> for nullable columns)
+    /// Result rows (each row is `Vec<Option<String>>` for nullable columns)
     pub rows: Vec<Vec<Option<String>>>,
     /// Number of rows affected (for INSERT/UPDATE/DELETE)
     pub rows_affected: u64,
@@ -267,7 +267,6 @@ impl MssqlClient {
     // ───────────────────────────────────────────────────────
 
     /// Build PreLogin TDS message (MS-TDS 2.2.6.5)
-    ///
     /// Token format: [type:1][offset:2][length:2] per token, terminated by 0xFF.
     /// Offsets are relative to the start of the payload (byte 0 of the first token).
     fn build_prelogin(&mut self) -> Vec<u8> {
@@ -347,13 +346,11 @@ impl MssqlClient {
     // ───────────────────────────────────────────────────────
 
     /// Build Login7 TDS message (MS-TDS 2.2.6.4)
-    ///
     /// The Login7 message consists of:
     ///   - Fixed-length header (94 bytes: 36 bytes fixed + 13 offset/length pairs * 4 bytes + 6 bytes extension)
     ///   - Variable-length data section (UTF-16LE encoded strings)
-    ///
-    /// Offset/length pairs use character counts (not byte counts) for the length field,
-    /// and byte offsets from the start of the Login7 payload for the offset field.
+    ///     Offset/length pairs use character counts (not byte counts) for the length field,
+    ///     and byte offsets from the start of the Login7 payload for the offset field.
     fn build_login_message(&mut self) -> Result<Vec<u8>> {
         // ── Collect field values ──
         let hostname = "OVERTHRONE";
@@ -690,7 +687,6 @@ impl MssqlClient {
     }
 
     /// Receive a complete TDS message, reassembling multiple packets until EOM.
-    ///
     /// TDS messages can span multiple TCP packets. Each packet has an 8-byte
     /// header where byte[1] (status) bit 0x01 indicates End-Of-Message.
     /// We must loop until we see EOM.
@@ -782,7 +778,6 @@ impl MssqlClient {
     }
 
     /// Build SQL Batch TDS message (MS-TDS 2.2.6.7)
-    ///
     /// Format: TDS Header(8) + ALL_HEADERS(22) + SQL_TEXT(UTF-16LE)
     fn build_sql_batch(&mut self, sql: &str) -> Vec<u8> {
         // Convert SQL to UTF-16LE
@@ -987,7 +982,6 @@ impl MssqlClient {
     }
 
     /// Parse COLMETADATA token (MS-TDS 2.2.7.4)
-    ///
     /// Returns (bytes_consumed, column_names, type_names, type_ids)
     #[allow(clippy::type_complexity)]
     fn parse_colmetadata(&self, data: &[u8]) -> Result<(usize, Vec<String>, Vec<String>, Vec<u8>)> {
@@ -1194,7 +1188,6 @@ impl MssqlClient {
     }
 
     /// Parse ROW token data (MS-TDS 2.2.7.17)
-    ///
     /// Each column value is length-prefixed according to its type:
     /// - Fixed-length types: inline (1/2/4/8 bytes based on type)
     /// - Variable-length (bytelen): 1 byte length, 0xFF = NULL

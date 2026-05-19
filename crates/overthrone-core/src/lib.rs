@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![doc = "Core types, protocols, and utilities for Overthrone AD assessment framework."]
 pub mod adcs;
 pub mod c2; // ← Export C2 module
 pub mod config;

@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(clippy::items_after_test_module)]
 //! overthrone-reaper — Active Directory enumeration engine.
 //!
 //! Queries LDAP to enumerate users, groups, computers, OUs, GPOs,

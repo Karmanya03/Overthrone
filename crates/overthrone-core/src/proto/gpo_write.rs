@@ -17,10 +17,8 @@ use uuid::Uuid;
 
 /// Build a Windows ImmediateTask XML blob that runs `command` **once** right
 /// after the next GP refresh cycle (no logon required — machine policy).
-///
 /// `task_name` — display name shown in Task Scheduler (e.g. `"Overthrone-<timestamp>"`)  
 /// `command`   — full command line, e.g. `r"cmd.exe /c whoami > C:\out.txt"`
-///
 /// The resulting XML should be written to:
 /// `SYSVOL\{domain}\Policies\{gpo-cn}\Machine\Preferences\ScheduledTasks\ScheduledTasks.xml`
 pub fn build_immediate_task_xml(task_name: &str, command: &str) -> String {
@@ -109,7 +107,6 @@ pub fn build_immediate_task_xml(task_name: &str, command: &str) -> String {
 // ── SYSVOL helpers ───────────────────────────────────────────────────────────
 
 /// Write an ImmediateTask XML file to SYSVOL and return the written path.
-///
 /// `smb`          — authenticated `SmbSession` connected to the DC  
 /// `domain_fqdn`  — e.g. `"sevenkingdoms.local"`  
 /// `gpo_cn`       — raw CN from `GpoInfo::cn`, e.g. `"{31B2F340-016D-11D2-945F-00C04FB984F9}"`  
@@ -166,7 +163,6 @@ pub async fn cleanup_gpo_task(
 // ── GPO LDAP metadata update ────────────────────────────────────────────────
 
 /// Group Policy Preferences CSE GUID blocks required for ScheduledTasks.
-///
 /// Machine and User tiers share the same pair of blocks (sorted order):
 ///   `[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]`
 ///   `[{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}{AADCED64-746C-4633-A97C-D61349046527}]`
@@ -175,7 +171,6 @@ const CSE_SCHED_TASKS_BLOCKS: &str = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D0
 /// Update `gPCMachineExtensionNames` (or `gPCUserExtensionNames`) on a GPO
 /// to include the ScheduledTasks CSE GUIDs, then bump `versionNumber` to force
 /// Group Policy refresh on domain clients.
-///
 /// `ldap`       — authenticated `LdapSession`  
 /// `gpo_dn`     — full DN of the GPO container, e.g.
 ///               `"CN={GUID},CN=Policies,CN=System,DC=corp,DC=local"`  

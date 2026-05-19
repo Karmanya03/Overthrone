@@ -286,26 +286,47 @@ pub fn fixed_type_length(type_id: u8) -> Option<usize> {
 
 /// Environment change types
 pub mod env_change_types {
+    /// Database change notification
     pub const DATABASE: u8 = 1;
+    /// Language change notification
     pub const LANGUAGE: u8 = 2;
+    /// Packet size change notification
     pub const PACKET_SIZE: u8 = 3;
+    /// Sort order change notification
     pub const SORT_ORDER: u8 = 4;
+    /// Unicode sort order change notification
     pub const UNICODE_SORT_ORDER: u8 = 5;
+    /// LCID change notification
     pub const LCID: u8 = 6;
+    /// Collation change notification
     pub const COLLATION: u8 = 7;
+    /// Begin transaction notification
     pub const BEGIN_TXN: u8 = 8;
+    /// Commit transaction notification
     pub const COMMIT_TXN: u8 = 9;
+    /// Rollback transaction notification
     pub const ROLLBACK_TXN: u8 = 10;
+    /// Enlist DTC transaction notification
     pub const ENLIST_DTC: u8 = 11;
+    /// Defect DTC transaction notification
     pub const DEFECT_DTC: u8 = 12;
+    /// Realigned DTC transaction notification
     pub const REALIGNED_DTC: u8 = 13;
+    /// Promote DTC transaction notification
     pub const PROMOTE_DTC: u8 = 14;
+    /// Transaction ended notification
     pub const TXN_ENDED: u8 = 15;
+    /// Reset complete notification
     pub const RESET_COMPLETE: u8 = 16;
+    /// User info notification
     pub const USER_INFO: u8 = 17;
+    /// SST transaction state notification
     pub const SST_TXN_STATE: u8 = 18;
+    /// SST transaction ended notification
     pub const SST_TXN_ENDED: u8 = 19;
+    /// SST transaction recovery ended notification
     pub const SST_TXN_RECOVERY_ENDED: u8 = 20;
+    /// Routing change notification
     pub const ROUTING_CHANGE: u8 = 21;
 }
 

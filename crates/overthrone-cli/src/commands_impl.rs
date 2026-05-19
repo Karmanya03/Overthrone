@@ -119,6 +119,8 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         result: None,
         retries: 0,
         max_retries: 1,
+        reversible: false,
+        compensation: None,
     };
 
     println!("  {} {}", "▸".bright_black(), description.cyan());
@@ -194,7 +196,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
 // cmd_doctor — Environment Diagnostics
 // ═══════════════════════════════════════════════════════
 
-pub async fn cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
+pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
     banner::print_module_banner("DOCTOR");
 
     let check_list = if checks.is_empty() {
@@ -404,7 +406,13 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
         ReportFormat::Pdf => {
             println!("  {} Generating PDF report...", "▸".bright_black());
 
-            let pdf_bytes = overthrone_scribe::pdf::render(&session);
+            let pdf_bytes = match overthrone_scribe::pdf::render(&session) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    banner::print_fail(&format!("PDF rendering failed: {}", e));
+                    return 1;
+                }
+            };
 
             if let Err(e) = tokio::fs::write(output, &pdf_bytes).await {
                 banner::print_fail(&format!("Failed to write PDF report: {}", e));
@@ -1203,6 +1211,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
             for result in &results {
                 let type_str = match result.account_type {
                     RidAccountType::User => "User".green(),
+                    RidAccountType::Computer => "Computer".bright_blue(),
                     RidAccountType::Group => "Group".cyan(),
                     RidAccountType::Alias => "Alias".yellow(),
                     RidAccountType::WellKnown => "WellKnown".magenta(),
@@ -3274,7 +3283,35 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             if let Some(san_val) = san {
                 println!("    SAN: {}", san_val.cyan());
             }
-            println!("  {} Certificate saved to: {}", "✓".green(), output.cyan());
+
+            let client = match overthrone_core::adcs::AdcsClient::new(ca) {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("ADCS client init failed: {}", e));
+                    return 1;
+                }
+            };
+
+            let subj_cn = subject.as_deref().unwrap_or("overthrone-request");
+            match client
+                .request_certificate(subj_cn, template, san.as_deref())
+                .await
+            {
+                Ok(cert) => {
+                    if let Err(e) = tokio::fs::write(output, &cert.pfx_data).await {
+                        banner::print_fail(&format!("Failed to write PFX: {}", e));
+                        return 1;
+                    }
+                    println!("  {} Certificate obtained!", "✓".green());
+                    println!("    Saved to: {}", output.cyan());
+                    println!("    Thumbprint: {}", cert.thumbprint.yellow());
+                    println!("    Serial: {}", cert.serial_number.dimmed());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Certificate request failed: {}", e));
+                    return 1;
+                }
+            }
         }
     }
 
@@ -3920,8 +3957,12 @@ pub async fn cmd_plugin(
                 path.cyan()
             );
             registry.add_search_path(&path);
-            let _ = registry.discover_and_load(ctx).await;
-            banner::print_success(&format!("Plugin loaded from {}", path));
+            match registry.discover_and_load(ctx).await {
+                Ok(_) => banner::print_success(&format!("Plugin loaded from {}", path)),
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to load plugin from {}: {}", path, e))
+                }
+            }
         }
         PluginAction::Unload { plugin_id } => {
             println!(

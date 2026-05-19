@@ -6,22 +6,36 @@ use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Structure
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComputerEntry {
+    /// Object or account name.
     pub sam_account_name: String,
+    /// Object or account name.
     pub dns_hostname: Option<String>,
+    /// Object or account name.
     pub distinguished_name: String,
+    /// operating system field
     pub operating_system: Option<String>,
+    /// os version field
     pub os_version: Option<String>,
+    /// enabled field
     pub enabled: bool,
+    /// uac flags field
     pub uac_flags: u32,
+    /// unconstrained delegation field
     pub unconstrained_delegation: bool,
+    /// constrained delegation field
     pub constrained_delegation: bool,
+    /// allowed to delegate to field
     pub allowed_to_delegate_to: Vec<String>,
+    /// Object or account name.
     pub service_principal_names: Vec<String>,
+    /// last logon field
     pub last_logon: Option<String>,
+    /// Security Identifier
     pub sid: Option<String>,
+    /// Domain FQDN
     pub is_domain_controller: bool,
     /// LAPS v1 password expiration (ms-Mcs-AdmPwdExpirationTime as Windows FILETIME string).
     pub laps_expiry: Option<String>,
@@ -145,4 +159,134 @@ pub fn parse_computer_entry(attrs: &HashMap<String, Vec<String>>) -> ComputerEnt
 
 fn first_val(attrs: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
     attrs.get(key).and_then(|v| v.first().cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_computer_filter() {
+        assert_eq!(computer_filter(), "(objectCategory=computer)");
+    }
+
+    #[test]
+    fn test_is_high_value_domain_controller() {
+        let c = ComputerEntry {
+            is_domain_controller: true,
+            ..Default::default()
+        };
+        assert!(c.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_unconstrained_delegation() {
+        let c = ComputerEntry {
+            unconstrained_delegation: true,
+            ..Default::default()
+        };
+        assert!(c.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_server_os() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows Server 2022".into()),
+            ..Default::default()
+        };
+        assert!(c.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_workstation() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows 10 Pro".into()),
+            is_domain_controller: false,
+            unconstrained_delegation: false,
+            ..Default::default()
+        };
+        assert!(!c.is_high_value());
+    }
+
+    #[test]
+    fn test_is_high_value_no_os() {
+        let c = ComputerEntry {
+            operating_system: None,
+            ..Default::default()
+        };
+        assert!(!c.is_high_value());
+    }
+
+    #[test]
+    fn test_is_legacy_os_2008() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows Server 2008 R2".into()),
+            ..Default::default()
+        };
+        assert!(c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_is_legacy_os_2003() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows Server 2003".into()),
+            ..Default::default()
+        };
+        assert!(c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_is_legacy_os_xp() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows XP Professional".into()),
+            ..Default::default()
+        };
+        assert!(c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_is_legacy_os_windows_7() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows 7 Enterprise".into()),
+            ..Default::default()
+        };
+        assert!(c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_is_legacy_os_vista() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows Vista".into()),
+            ..Default::default()
+        };
+        assert!(c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_is_legacy_os_modern() {
+        let c = ComputerEntry {
+            operating_system: Some("Windows 10 Enterprise".into()),
+            ..Default::default()
+        };
+        assert!(!c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_is_legacy_os_none() {
+        let c = ComputerEntry {
+            operating_system: None,
+            ..Default::default()
+        };
+        assert!(!c.is_legacy_os());
+    }
+
+    #[test]
+    fn test_computer_attributes_contains_key_fields() {
+        let attrs = computer_attributes();
+        assert!(attrs.contains(&"sAMAccountName".to_string()));
+        assert!(attrs.contains(&"dNSHostName".to_string()));
+        assert!(attrs.contains(&"operatingSystem".to_string()));
+        assert!(attrs.contains(&"userAccountControl".to_string()));
+        assert!(attrs.contains(&"objectSid".to_string()));
+    }
 }
