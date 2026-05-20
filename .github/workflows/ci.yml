@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, develop]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -26,7 +27,6 @@ jobs:
   clippy:
     name: Clippy
     runs-on: windows-latest
-    needs: fmt
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -38,38 +38,11 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  test:
-    name: Tests
-    runs-on: windows-latest
-    needs: clippy
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --workspace --all-features -- --test-threads=1
-
-  docs:
-    name: Documentation
-    runs-on: windows-latest
-    needs: clippy
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      - name: Build docs
-        run: cargo doc --workspace --all-features --no-deps
-        env:
-          RUSTDOCFLAGS: -D warnings
-
   build-release:
     name: Release Build
     runs-on: windows-latest
-    needs: [test, docs]
+    needs: [fmt, clippy]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust

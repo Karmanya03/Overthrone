@@ -5225,12 +5225,12 @@ mod cli_parse_tests {
             "example.local",
             "-U",
             "users.txt",
-            "--output",
+            "-o",
             "valid-users.txt",
             "--delay",
             "10",
         ])
-        .expect("kerberos user-enum should parse --output without clap type mismatch");
+        .expect("kerberos user-enum should parse -o/--output without clap type mismatch");
 
         match *cli.command {
             Commands::Kerberos {
@@ -5249,7 +5249,7 @@ mod cli_parse_tests {
                 assert_eq!(concurrency, 10);
                 assert!(!use_ldap);
             }
-            _ => panic!("expected parsed kerberos user-enum command"),
+            _other => panic!("expected Kerberos::UserEnum, got different variant"),
         }
     }
 }
