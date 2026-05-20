@@ -32,7 +32,7 @@ const EDITF_ATTRIBUTESUBJECTALTNAME2: u32 = 0x00040000;
 const EDITF_ATTRIBUTEENDDATE: u32 = 0x00100000;
 
 /// Registry path template for CA policy module EditFlags
-const EDITFLAGS_REG_PATH: &str = r"SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\{CA_NAME}\PolicyModules\CertificateAuthority_MicrosoftDefault.Policy";
+pub const EDITFLAGS_REG_PATH: &str = r"SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\{CA_NAME}\PolicyModules\CertificateAuthority_MicrosoftDefault.Policy";
 
 // ═══════════════════════════════════════════════════════════
 // ESC5 — PKI Object ACL Abuse (LDAP-based)

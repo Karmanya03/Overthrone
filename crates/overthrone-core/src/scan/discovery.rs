@@ -1,13 +1,14 @@
 //! Unauthenticated discovery and reconnaissance.
 //!
 //! Performs checks that do not require credentials:
+//! - LDAP rootDSE pre-bind probe (works even when anonymous bind is disabled)
 //! - LDAP Null Session (rootDSE, namingContexts)
 //! - SMB Null Session (shares, sessions)
 //! - NetBIOS Name Service (NBNS) enumeration
 //! - RPC Endpoint Mapper (epmapper) dump
 
 use crate::error::Result;
-use crate::proto::ldap::LdapSession;
+use crate::proto::ldap::{LdapSession, probe_rootdse_raw};
 use crate::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -18,10 +19,16 @@ pub struct DiscoveryResult {
     pub target: String,
     /// ldap null session field
     pub ldap_null_session: bool,
+    /// ldap rootdse probe succeeded (pre-bind, no auth)
+    pub ldap_rootdse_probe: bool,
     /// smb null session field
     pub smb_null_session: bool,
     /// naming contexts field
     pub naming_contexts: Vec<String>,
+    /// dns host name from rootDSE
+    pub dns_hostname: Option<String>,
+    /// supported SASL mechanisms
+    pub supported_sasl_mechs: Vec<String>,
     /// Object or account name.
     pub netbios_name: Option<String>,
     /// accessible shares field
@@ -49,25 +56,46 @@ impl UnauthDiscovery {
         let mut result = DiscoveryResult {
             target: self.target.clone(),
             ldap_null_session: false,
+            ldap_rootdse_probe: false,
             smb_null_session: false,
             naming_contexts: Vec::new(),
+            dns_hostname: None,
+            supported_sasl_mechs: Vec::new(),
             netbios_name: None,
             accessible_shares: Vec::new(),
         };
 
-        // 1. LDAP Null Session check
-        if let Ok(mut ldap) = LdapSession::connect(&self.target, "", "", "", false).await {
+        // 1. LDAP rootDSE pre-bind probe (works without any bind, even on Windows 2025)
+        match probe_rootdse_raw(&self.target, false).await {
+            Ok(rootdse) => {
+                result.ldap_rootdse_probe = true;
+                result.dns_hostname = rootdse.dns_domain_name.clone();
+                result.supported_sasl_mechs = rootdse.supported_sasl_mechanisms.clone();
+                result.naming_contexts = rootdse.naming_contexts.clone();
+                info!(
+                    "[discovery] rootDSE probe OK on {}: domain={:?}, sasl={:?}",
+                    self.target, rootdse.dns_domain_name, rootdse.supported_sasl_mechanisms
+                );
+            }
+            Err(e) => {
+                info!("[discovery] rootDSE probe failed on {}: {}", self.target, e);
+            }
+        }
+
+        // 2. LDAP Null Session check (anonymous bind — may fail on Windows 2025)
+        if let Ok(mut ldap) = LdapSession::connect_anonymous(&self.target, "", false).await {
             result.ldap_null_session = true;
             info!("[discovery] LDAP Null Session OK on {}", self.target);
 
-            // Try to read rootDSE
-            if let Ok(entries) = ldap
-                .custom_search_with_base(
-                    "",
-                    "(objectClass=*)",
-                    &["namingContexts", "defaultNamingContext"],
-                )
-                .await
+            // Try to read rootDSE for naming contexts
+            if result.naming_contexts.is_empty()
+                && let Ok(entries) = ldap
+                    .custom_search_with_base(
+                        "",
+                        "(objectClass=*)",
+                        &["namingContexts", "defaultNamingContext"],
+                    )
+                    .await
                 && let Some(entry) = entries.first()
                 && let Some(contexts) = entry.attrs.get("namingContexts")
             {
@@ -76,7 +104,7 @@ impl UnauthDiscovery {
             let _ = ldap.disconnect().await;
         }
 
-        // 2. SMB Null Session check
+        // 3. SMB Null Session check
         // Use guest/null credentials: empty domain + empty username + empty password
         // Some Windows servers allow null session connections to IPC$.
         let smb_result = SmbSession::connect(&self.target, "", "", "").await;

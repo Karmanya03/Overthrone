@@ -33,6 +33,144 @@ pub enum AuthData {
     KerberosTicket(#[allow(dead_code)] String),
 }
 
+/// Resolve credentials from CLI args, supporting both single creds and credential lists.
+/// Returns a Vec of Credentials to iterate over.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_credentials(
+    domain: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    nt_hash: Option<&str>,
+    ticket_path: Option<&str>,
+    auth_method: Option<AuthMethod>,
+    user_list: Option<&str>,
+    pass_list: Option<&str>,
+    user_pass_list: Option<&str>,
+) -> Result<Vec<Credentials>, String> {
+    // Priority 1: user:pass list file
+    if let Some(path) = user_pass_list {
+        return load_user_pass_file(path, domain, auth_method.clone());
+    }
+
+    // Priority 2: separate user list + password list (cartesian product)
+    if let (Some(ufile), Some(pfile)) = (user_list, pass_list) {
+        let users = load_lines(ufile)?;
+        let passwords = load_lines(pfile)?;
+        let mut creds = Vec::new();
+        for user in &users {
+            for pass in &passwords {
+                let c = Credentials::from_args(
+                    domain,
+                    user,
+                    Some(pass),
+                    None,
+                    None,
+                    auth_method.clone(),
+                )?;
+                creds.push(c);
+            }
+        }
+        return Ok(creds);
+    }
+
+    // Priority 3: user list only (with single password or hash)
+    if let Some(ufile) = user_list {
+        let users = load_lines(ufile)?;
+        let mut creds = Vec::new();
+        for user in &users {
+            let c = Credentials::from_args(
+                domain,
+                user,
+                password,
+                nt_hash,
+                ticket_path,
+                auth_method.clone(),
+            )?;
+            creds.push(c);
+        }
+        return Ok(creds);
+    }
+
+    // Priority 4: password list only (with single username)
+    if let Some(pfile) = pass_list {
+        let passwords = load_lines(pfile)?;
+        let user = username.ok_or("--username required when using --pass-list")?;
+        let mut creds = Vec::new();
+        for pass in &passwords {
+            let c =
+                Credentials::from_args(domain, user, Some(pass), None, None, auth_method.clone())?;
+            creds.push(c);
+        }
+        return Ok(creds);
+    }
+
+    // Priority 5: single credential
+    let user = username.ok_or("No credentials provided. Use --username/--password, --user-list, --pass-list, or --user-pass-list")?;
+    let c = Credentials::from_args(domain, user, password, nt_hash, ticket_path, auth_method)?;
+    Ok(vec![c])
+}
+
+fn load_lines(path: &str) -> Result<Vec<String>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
+    let lines: Vec<String> = content
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    if lines.is_empty() {
+        return Err(format!(
+            "File '{}' is empty or contains no valid entries",
+            path
+        ));
+    }
+    Ok(lines)
+}
+
+fn load_user_pass_file(
+    path: &str,
+    default_domain: &str,
+    auth_method: Option<AuthMethod>,
+) -> Result<Vec<Credentials>, String> {
+    let lines = load_lines(path)?;
+    let mut creds = Vec::new();
+    for line in &lines {
+        if let Some((user, secret)) = line.split_once(':') {
+            let user = user.trim();
+            let secret = secret.trim();
+            if user.is_empty() || secret.is_empty() {
+                continue;
+            }
+            // Determine if secret is NT hash (32 hex chars) or password
+            let is_hash = secret.len() == 32 && secret.chars().all(|c| c.is_ascii_hexdigit());
+            let c = if is_hash && matches!(auth_method, Some(AuthMethod::Hash) | None) {
+                Credentials::from_args(
+                    default_domain,
+                    user,
+                    None,
+                    Some(secret),
+                    None,
+                    Some(AuthMethod::Hash),
+                )?
+            } else {
+                Credentials::from_args(
+                    default_domain,
+                    user,
+                    Some(secret),
+                    None,
+                    None,
+                    auth_method.clone(),
+                )?
+            };
+            creds.push(c);
+        }
+    }
+    if creds.is_empty() {
+        return Err(format!("No valid user:pass pairs found in '{}'", path));
+    }
+    Ok(creds)
+}
+
 impl Credentials {
     pub fn from_args(
         domain: &str,

@@ -445,6 +445,42 @@ impl SmbSession {
             "SMB: Listing \\\\{}\\{}\\{}",
             self.target, share, remote_path
         );
+
+        // Primary path: pure-Rust SMB2 client (works on all platforms)
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&share_path).await?;
+
+            let dir_path = remote_path.replace('/', "\\");
+            let dir_id = conn.open_directory(&dir_path).await?;
+            let entries = conn.query_directory(&dir_id).await?;
+            conn.close(&dir_id).await?;
+
+            let base = dir_path.trim_start_matches('\\').to_string();
+            let results = entries
+                .into_iter()
+                .map(|(name, is_directory, size)| {
+                    let path = if base.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}\\{}", base, name)
+                    };
+                    RemoteFileInfo {
+                        name,
+                        path,
+                        is_directory,
+                        size,
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            info!("SMB: Listed {} entries (pure-Rust)", results.len());
+            return Ok(results);
+        }
+
+        // Fallback path: smbclient CLI (only when pure-Rust path is unavailable)
+        warn!("SMB: pure-Rust directory listing unavailable, falling back to smbclient");
         let smb_path = remote_path
             .replace('/', "\\")
             .trim_start_matches('\\')
@@ -506,7 +542,7 @@ impl SmbSession {
                 size,
             });
         }
-        info!("SMB: Listed {} entries", entries.len());
+        info!("SMB: Listed {} entries (smbclient)", entries.len());
         Ok(entries)
     }
     pub async fn read_file(&self, share: &str, remote_path: &str) -> Result<Vec<u8>> {
@@ -1240,7 +1276,7 @@ impl SmbSession {
 }
 
 /// Build SAMR RPC bind
-fn build_samr_bind() -> Vec<u8> {
+pub fn build_samr_bind() -> Vec<u8> {
     // SAMR UUID: 12345778-1234-abcd-ef00-0123456789ac
     let uuid: [u8; 16] = [
         0x78, 0x57, 0x34, 0x12, 0x34, 0x12, 0xcd, 0xab, 0xef, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89,
@@ -1274,7 +1310,7 @@ fn build_samr_bind() -> Vec<u8> {
 }
 
 /// Build SAMR connect request (opnum 0)
-fn build_samr_connect() -> Vec<u8> {
+pub fn build_samr_connect() -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent ID
     stub.extend_from_slice(&0u32.to_le_bytes()); // desired access
@@ -1283,7 +1319,7 @@ fn build_samr_connect() -> Vec<u8> {
 }
 
 /// Build SAMR open domain request (opnum 5)
-fn build_samr_open_domain(sam_handle: &[u8], domain: &str) -> Vec<u8> {
+pub fn build_samr_open_domain(sam_handle: &[u8], domain: &str) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(sam_handle);
     stub.extend_from_slice(&0x00020000u32.to_le_bytes());
@@ -1293,7 +1329,7 @@ fn build_samr_open_domain(sam_handle: &[u8], domain: &str) -> Vec<u8> {
 }
 
 /// Build SAMR lookup names request (opnum 17)
-fn build_samr_lookup_names(domain_handle: &[u8], names: &[&str]) -> Vec<u8> {
+pub fn build_samr_lookup_names(domain_handle: &[u8], names: &[&str]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(domain_handle);
     stub.extend_from_slice(&1u32.to_le_bytes()); // count
@@ -1306,7 +1342,7 @@ fn build_samr_lookup_names(domain_handle: &[u8], names: &[&str]) -> Vec<u8> {
 }
 
 /// Parse RID from SAMR lookup response
-fn parse_samr_rid(resp: &[u8]) -> Result<u32> {
+pub fn parse_samr_rid(resp: &[u8]) -> Result<u32> {
     // RID is typically at offset 48+ after the header
     if resp.len() < 52 {
         return Err(OverthroneError::Smb(
@@ -1317,7 +1353,7 @@ fn parse_samr_rid(resp: &[u8]) -> Result<u32> {
 }
 
 /// Build SAMR open user request (opnum 34)
-fn build_samr_open_user(domain_handle: &[u8], rid: u32) -> Vec<u8> {
+pub fn build_samr_open_user(domain_handle: &[u8], rid: u32) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(domain_handle);
     stub.extend_from_slice(&0x00020004u32.to_le_bytes()); // access mask
@@ -1326,7 +1362,7 @@ fn build_samr_open_user(domain_handle: &[u8], rid: u32) -> Vec<u8> {
 }
 
 /// Build SAMR set password request (opnum 59)
-fn build_samr_set_password(user_handle: &[u8], password: &str) -> Vec<u8> {
+pub fn build_samr_set_password(user_handle: &[u8], password: &str) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(user_handle);
     stub.extend_from_slice(&ndr_conformant_string(password));
@@ -1334,10 +1370,194 @@ fn build_samr_set_password(user_handle: &[u8], password: &str) -> Vec<u8> {
 }
 
 /// Build SAMR close handle request (opnum 0)
-fn build_samr_close_handle(handle: &[u8]) -> Vec<u8> {
+pub fn build_samr_close_handle(handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(handle);
     build_rpc_request(0, &stub)
+}
+
+/// Build SAMR LookupIdsInDomain request (opnum 18).
+/// Converts RIDs to names — the core of RID cycling.
+pub fn build_samr_lookup_ids(domain_handle: &[u8], rids: &[u32]) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(domain_handle);
+    stub.extend_from_slice(&(rids.len() as u32).to_le_bytes()); // count
+    for &rid in rids {
+        stub.extend_from_slice(&rid.to_le_bytes());
+    }
+    build_rpc_request(18, &stub)
+}
+
+/// Parse names from SAMR LookupIdsInDomain response.
+/// Returns Vec of (rid, name, account_type).
+pub fn parse_samr_lookup_ids(resp: &[u8], rids: &[u32]) -> Vec<(u32, String, u32)> {
+    let mut results = Vec::new();
+
+    // DCE/RPC response structure:
+    // After the RPC header, the stub contains:
+    // - status code (4 bytes)
+    // - count of names (4 bytes)
+    // - array of name pointers and types
+    // - array of name strings (NDR conformant strings)
+
+    // Find the name count (typically around offset 28-32 from stub start)
+    if resp.len() < 32 {
+        return results;
+    }
+
+    // Skip RPC response header (24 bytes) + status (4 bytes) = 28
+    let stub_start = 24usize;
+    if resp.len() < stub_start + 4 {
+        return results;
+    }
+
+    let name_count = u32::from_le_bytes([
+        resp[stub_start],
+        resp[stub_start + 1],
+        resp[stub_start + 2],
+        resp[stub_start + 3],
+    ]) as usize;
+
+    if name_count == 0 || name_count > 1000 {
+        return results;
+    }
+
+    // Names are stored as NDR strings after the count and pointer array
+    // Each entry: 4-byte pointer (referent ID) + 4-byte type code
+    // Then the actual strings at the end
+    let ptr_array_start = stub_start + 4;
+    let string_array_start = ptr_array_start + name_count * 8; // 8 bytes per entry (ptr + type)
+
+    for (i, &rid) in rids.iter().take(name_count).enumerate() {
+        let type_offset = ptr_array_start + i * 8 + 4;
+        if type_offset + 4 > resp.len() {
+            break;
+        }
+        let account_type = u32::from_le_bytes([
+            resp[type_offset],
+            resp[type_offset + 1],
+            resp[type_offset + 2],
+            resp[type_offset + 3],
+        ]);
+
+        // Try to find the string at the expected offset
+        // NDR string: max_count(4) + offset(4) + actual_count(4) + string + null terminator + padding
+        let str_offset = string_array_start + i * 12; // rough estimate
+        if str_offset + 12 <= resp.len() {
+            let actual_count = u32::from_le_bytes([
+                resp[str_offset + 8],
+                resp[str_offset + 9],
+                resp[str_offset + 10],
+                resp[str_offset + 11],
+            ]) as usize;
+
+            if actual_count > 0 && str_offset + 12 + actual_count <= resp.len() {
+                let name_bytes = &resp[str_offset + 12..str_offset + 12 + actual_count];
+                // NDR strings are UTF-16LE
+                let name = String::from_utf16_lossy(
+                    &name_bytes
+                        .chunks_exact(2)
+                        .filter_map(|chunk| {
+                            if chunk.len() == 2 {
+                                Some(u16::from_le_bytes([chunk[0], chunk[1]]))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                if !name.is_empty() {
+                    results.push((rid, name, account_type));
+                    continue;
+                }
+            }
+        }
+
+        // Fallback: if we couldn't parse the string, still return the RID with empty name
+        results.push((rid, String::new(), account_type));
+    }
+
+    results
+}
+
+/// Build SAMR EnumerateDomainsInSamServer request (opnum 6).
+/// Returns list of domains on the SAM server.
+pub fn build_samr_enumerate_domains(server_handle: &[u8]) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(server_handle);
+    stub.extend_from_slice(&0u32.to_le_bytes()); // resume handle
+    stub.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // max size
+    build_rpc_request(6, &stub)
+}
+
+/// Parse domain names from SAMR EnumerateDomainsInSamServer response.
+pub fn parse_samr_enumerate_domains(resp: &[u8]) -> Vec<String> {
+    let mut domains = Vec::new();
+    if resp.len() < 32 {
+        return domains;
+    }
+
+    let stub_start = 24usize;
+    let count = u32::from_le_bytes([
+        resp[stub_start],
+        resp[stub_start + 1],
+        resp[stub_start + 2],
+        resp[stub_start + 3],
+    ]) as usize;
+
+    if count == 0 || count > 100 {
+        return domains;
+    }
+
+    // Each domain entry: pointer(4) + sid pointer(4) + name string
+    // Strings are at the end of the stub
+    let entry_start = stub_start + 4;
+    let string_start = entry_start + count * 8;
+
+    for i in 0..count {
+        let str_offset = string_start + i * 12;
+        if str_offset + 12 > resp.len() {
+            break;
+        }
+        let actual_count = u32::from_le_bytes([
+            resp[str_offset + 8],
+            resp[str_offset + 9],
+            resp[str_offset + 10],
+            resp[str_offset + 11],
+        ]) as usize;
+
+        if actual_count > 0 && str_offset + 12 + actual_count * 2 <= resp.len() {
+            let name_bytes = &resp[str_offset + 12..str_offset + 12 + actual_count * 2];
+            let name = String::from_utf16_lossy(
+                &name_bytes
+                    .chunks_exact(2)
+                    .filter_map(|chunk| {
+                        if chunk.len() == 2 {
+                            Some(u16::from_le_bytes([chunk[0], chunk[1]]))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            if !name.is_empty() {
+                domains.push(name);
+            }
+        }
+    }
+
+    domains
+}
+
+/// Build SAMR OpenDomain request by SID (opnum 5).
+pub fn build_samr_open_domain_by_sid(sam_handle: &[u8], domain_sid: &[u8]) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(sam_handle);
+    stub.extend_from_slice(&0x00020000u32.to_le_bytes()); // max size
+    // SID: revision(1) + sub_authority_count(1) + authority(6) + sub_authorities(N*4)
+    stub.extend_from_slice(domain_sid);
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes()); // access mask
+    build_rpc_request(5, &stub)
 }
 
 /// Build generic RPC request PDU

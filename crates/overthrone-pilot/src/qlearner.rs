@@ -239,6 +239,7 @@ fn action_family_index(action: &PlannedAction) -> u8 {
         PlannedAction::AdcsEsc12 { .. } => 26,
         PlannedAction::AdcsEsc13 { .. } => 27,
         PlannedAction::ForgeGoldenTicket { .. } | PlannedAction::ForgeSilverTicket { .. } => 28,
+        PlannedAction::DeploySkeletonKey { .. } => 28,
         PlannedAction::RunPlaybook { .. } => 29,
         PlannedAction::Sleep { .. } | PlannedAction::Checkpoint { .. } => 30,
         PlannedAction::AdcsEsc14 => 31,

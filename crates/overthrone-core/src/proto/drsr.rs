@@ -860,3 +860,114 @@ mod tests {
         assert_eq!(normalize_attid(0x0001005A), ATTID_UNICODE_PWD);
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// DCSync Pagination Runner
+// ═══════════════════════════════════════════════════════════
+
+/// Full DCSync pagination state for incremental replication.
+#[derive(Debug, Clone)]
+pub struct DcSyncPaginationState {
+    /// USN high-water mark from last successful batch
+    pub usn_high: u64,
+    /// Invocation ID of source DC
+    pub uuid_invoc_id_src: [u8; 16],
+    /// Total objects replicated so far
+    pub total_replicated: u32,
+    /// Whether the last batch had more data
+    pub has_more: bool,
+}
+
+impl Default for DcSyncPaginationState {
+    fn default() -> Self {
+        Self {
+            usn_high: 0,
+            uuid_invoc_id_src: [0u8; 16],
+            total_replicated: 0,
+            has_more: true,
+        }
+    }
+}
+
+/// Build a DRSGetNCChanges request with pagination cursor.
+/// Supports both initial sync (usn_high=0) and incremental sync.
+pub fn build_drs_get_nc_changes_paginated(
+    drs_handle: &[u8; 20],
+    nc_dn: &str,
+    usn_high: u64,
+    uuid_invoc_id: &[u8; 16],
+    max_objects: u32,
+    single_object: bool,
+) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(drs_handle);
+    stub.extend_from_slice(&8u32.to_le_bytes()); // dwInVersion = 8
+
+    // DRS_MSG_GETCHGREQ_V8
+    stub.extend_from_slice(&build_dsname(nc_dn)); // pNC
+    stub.extend_from_slice(&usn_high.to_le_bytes()); // usnvecFrom.usnHighObjUpdate
+    stub.extend_from_slice(&0u64.to_le_bytes()); // usnvecFrom.usnHighPropUpdate (unused)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // pUpToDateVecDest (NULL)
+
+    let mut flags = 1u32 | 0x20 | 0x80000; // DRS_INIT_SYNC | DRS_WRIT_REP | DRS_GET_ALL_GROUP_MEMBERSHIP
+    if single_object {
+        flags |= 0x400; // DRS_GET_ANC
+    }
+    stub.extend_from_slice(&flags.to_le_bytes()); // ulFlags
+    stub.extend_from_slice(&max_objects.to_le_bytes()); // cMaxObjects
+    stub.extend_from_slice(&0u32.to_le_bytes()); // cMaxBytes (unlimited)
+
+    if single_object {
+        stub.extend_from_slice(&7u32.to_le_bytes()); // ulExtendedOp: EXOP_REPL_OBJ
+    } else {
+        stub.extend_from_slice(&0u32.to_le_bytes()); // ulExtendedOp: normal replication
+    }
+
+    // For incremental sync, include the invocation ID
+    if usn_high > 0 {
+        stub.extend_from_slice(uuid_invoc_id);
+    }
+
+    build_rpc_request(3, &stub)
+}
+
+/// Build DSNAME structure for DRS requests.
+fn build_dsname(dn: &str) -> Vec<u8> {
+    let utf16: Vec<u16> = dn.encode_utf16().chain(std::iter::once(0u16)).collect();
+    let name_bytes: Vec<u8> = utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+    let struct_len = 28u32 + name_bytes.len() as u32;
+    let char_count = utf16.len() as u32;
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x00020004u32.to_le_bytes()); // NDR referent ID
+    buf.extend_from_slice(&char_count.to_le_bytes()); // max_count
+    buf.extend_from_slice(&struct_len.to_le_bytes()); // structLen
+    buf.extend_from_slice(&0u32.to_le_bytes()); // SidLen
+    buf.extend_from_slice(&[0u8; 16]); // Guid
+    buf.extend_from_slice(&[0u8; 28]); // Sid
+    buf.extend_from_slice(&char_count.to_le_bytes()); // NameLen
+    buf.extend_from_slice(&name_bytes); // Name[]
+    while !buf.len().is_multiple_of(4) {
+        buf.push(0);
+    }
+    buf
+}
+
+/// Build RPC request header.
+fn build_rpc_request(opnum: u32, stub: &[u8]) -> Vec<u8> {
+    let mut req = Vec::new();
+    let stub_len = stub.len() as u32;
+    let frag_len = 24 + stub_len;
+
+    req.extend_from_slice(&[5, 0, 0, 3]); // version 5.0, packet type Request, flags first+last
+    req.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data representation
+    req.extend_from_slice(&(frag_len as u16).to_le_bytes()); // frag length
+    req.extend_from_slice(&0u16.to_le_bytes()); // auth length
+    req.extend_from_slice(&1u32.to_le_bytes()); // call ID
+    req.extend_from_slice(&stub_len.to_le_bytes()); // alloc hint
+    req.extend_from_slice(&0u16.to_le_bytes()); // context ID
+    req.extend_from_slice(&opnum.to_le_bytes()); // opnum
+    req.extend_from_slice(stub);
+
+    req
+}

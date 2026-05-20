@@ -10,6 +10,7 @@ pub mod graph;
 pub mod mssql;
 pub mod output;
 pub mod plugin; // ← NEW: wire in the plugin module
+pub mod postex; // ← Post-exploitation modules (skeleton key, etc.)
 pub mod proto;
 pub mod proxy; // ← NEW: SOCKS5 proxy & port forwarding
 pub mod scan;

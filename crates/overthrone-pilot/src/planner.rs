@@ -392,6 +392,13 @@ pub enum PlannedAction {
         /// Service Principal Name
         spn: String,
     },
+    /// Skeleton key deployment on DC
+    DeploySkeletonKey {
+        /// Target domain controller
+        target_dc: String,
+        /// Master password
+        master_password: String,
+    },
 
     // â”€â”€ Playbook â”€â”€
     /// `` variant
@@ -467,6 +474,7 @@ impl PlannedAction {
             Self::AdcsEsc16 { .. } => "adcs_esc16",
             Self::ForgeGoldenTicket { .. } => "forge_golden_ticket",
             Self::ForgeSilverTicket { .. } => "forge_silver_ticket",
+            Self::DeploySkeletonKey { .. } => "deploy_skeleton_key",
             Self::RunPlaybook { .. } => "run_playbook",
             Self::Sleep { .. } => "sleep",
             Self::Checkpoint { .. } => "checkpoint",
@@ -707,6 +715,13 @@ impl PlannedAction {
             Self::ForgeSilverTicket { spn, .. } => vec![format!(
                 "ovt forge silver --domain-sid <sid> --spn {spn} --service-hash <hash>"
             )],
+            Self::DeploySkeletonKey {
+                target_dc,
+                master_password,
+            } => vec![
+                format!("ovt postex skeleton-key --dc {target_dc} --password {master_password}"),
+                format!("ovt postex skeleton-key --dc {target_dc} --method reflective-dll"),
+            ],
             Self::RunPlaybook { playbook_id } => vec![format!(
                 "ovt auto-pwn --playbook {playbook_id:?} -H <dc> -d <domain> -u <user> -p <pass>"
             )],

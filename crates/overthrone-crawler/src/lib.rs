@@ -9,6 +9,7 @@ pub mod escalation;
 pub mod foreign;
 pub mod mssql_links;
 pub mod pam;
+pub mod pivot;
 pub mod runner;
 pub mod sid_filter;
 pub mod trust_map;

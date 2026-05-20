@@ -652,6 +652,174 @@ pub struct EnrollmentService {
     pub security_descriptor: String,
 }
 
+/// Result of a write-access check on an ADCS object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdcsWriteAccess {
+    /// Whether the trustee has write access.
+    pub can_write: bool,
+    /// Type of access granted (GenericAll, WriteProperty, WriteDacl, etc.).
+    pub access_type: String,
+    /// Specific rights granted.
+    pub granted_rights: Vec<String>,
+    /// DN of the checked object.
+    pub object_dn: String,
+    /// Trustee SID that was checked.
+    pub trustee_sid: String,
+}
+
+impl LdapAdcsEnumerator {
+    /// Check whether a given trustee SID has write access to a template or CA object.
+    /// Used for ESC5 (PKI object ACL abuse) and ESC7 (CA permission abuse).
+    pub async fn check_write_access(
+        &mut self,
+        object_dn: &str,
+        trustee_sid: &str,
+    ) -> Result<AdcsWriteAccess> {
+        info!(
+            "Checking write access for trustee {} on object {}",
+            trustee_sid, object_dn
+        );
+
+        let entries = self
+            .ldap
+            .custom_search_with_base(
+                object_dn,
+                "(objectClass=*)",
+                &["nTSecurityDescriptor", "distinguishedName", "objectClass"],
+            )
+            .await?;
+
+        let entry = entries.first().ok_or_else(|| {
+            crate::error::OverthroneError::Adcs(format!("Object not found: {}", object_dn))
+        })?;
+
+        let sd = entry
+            .attrs
+            .get("nTSecurityDescriptor")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+
+        let object_class = entry.attrs.get("objectClass").cloned().unwrap_or_default();
+
+        let is_template = object_class.iter().any(|c| c == PKI_CERT_TEMPLATE_CLASS);
+        let is_ca = object_class
+            .iter()
+            .any(|c| c == CERT_AUTHORITY_CLASS || c == ENROLLMENT_SERVICE_CLASS);
+
+        let (can_write, access_type, granted_rights) =
+            Self::parse_sd_for_write_access(&sd, trustee_sid, is_template, is_ca);
+
+        let result = AdcsWriteAccess {
+            can_write,
+            access_type,
+            granted_rights,
+            object_dn: entry.dn.clone(),
+            trustee_sid: trustee_sid.to_string(),
+        };
+
+        info!(
+            "Write access check: can_write={}, access_type={}",
+            result.can_write, result.access_type
+        );
+
+        Ok(result)
+    }
+
+    /// Parse a security descriptor string for write access by a trustee SID.
+    fn parse_sd_for_write_access(
+        sd: &str,
+        trustee_sid: &str,
+        is_template: bool,
+        is_ca: bool,
+    ) -> (bool, String, Vec<String>) {
+        let mut can_write = false;
+        let mut access_type = String::new();
+        let mut granted_rights = Vec::new();
+
+        // Check for GenericAll (full control)
+        if sd.contains(trustee_sid) {
+            // Look for ACE entries containing the trustee SID
+            for part in sd.split('(') {
+                if !part.contains(trustee_sid) {
+                    continue;
+                }
+
+                // Extract rights mask (hex value after the semicolals before the SID)
+                if let Some(rights_start) = part.find(';') {
+                    let remainder = &part[rights_start..];
+                    let parts: Vec<&str> = remainder.split(';').collect();
+                    if parts.len() >= 3
+                        && let Ok(rights) =
+                            u32::from_str_radix(parts[1].trim_start_matches("0x"), 16)
+                    {
+                        // 0xF01FF = GenericAll
+                        if rights & 0xF01FF == 0xF01FF || rights == 0x1F01FF {
+                            can_write = true;
+                            access_type = "GenericAll".to_string();
+                            granted_rights.push("Full Control".to_string());
+                            break;
+                        }
+                        // 0x20 = WriteProperty
+                        if rights & 0x20 != 0 {
+                            can_write = true;
+                            if access_type.is_empty() {
+                                access_type = "WriteProperty".to_string();
+                            }
+                            if is_template {
+                                granted_rights.push("Write template attributes".to_string());
+                            }
+                            if is_ca {
+                                granted_rights.push("Write CA configuration".to_string());
+                            }
+                        }
+                        // 0x40000 = WriteDacl
+                        if rights & 0x40000 != 0 {
+                            can_write = true;
+                            if access_type.is_empty() {
+                                access_type = "WriteDacl".to_string();
+                            }
+                            granted_rights.push("Modify permissions".to_string());
+                        }
+                        // 0x8 = WriteOwner
+                        if rights & 0x8 != 0 {
+                            can_write = true;
+                            if access_type.is_empty() {
+                                access_type = "WriteOwner".to_string();
+                            }
+                            granted_rights.push("Take ownership".to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: check for well-known SIDs
+        if !can_write {
+            let well_known_write_sids = [
+                "S-1-5-11",     // Authenticated Users
+                "S-1-1-0",      // Everyone
+                "S-1-5-32-544", // Administrators
+                "S-1-5-32-548", // Account Operators
+            ];
+            for wk_sid in &well_known_write_sids {
+                if trustee_sid == *wk_sid && sd.contains(wk_sid) {
+                    can_write = true;
+                    access_type = format!("WellKnownSID ({})", wk_sid);
+                    granted_rights.push("Inherited write access".to_string());
+                    break;
+                }
+            }
+        }
+
+        if access_type.is_empty() && !can_write {
+            access_type = "NoAccess".to_string();
+        }
+
+        (can_write, access_type, granted_rights)
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════

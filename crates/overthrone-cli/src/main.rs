@@ -95,6 +95,33 @@ struct Cli {
     )]
     auth_method: AuthMethod,
 
+    // Credential list/file options
+    #[arg(
+        short = 'U',
+        long,
+        global = true,
+        value_name = "FILE",
+        help = "File with usernames (one per line)"
+    )]
+    user_list: Option<String>,
+
+    #[arg(
+        short = 'P',
+        long,
+        global = true,
+        value_name = "FILE",
+        help = "File with passwords (one per line)"
+    )]
+    pass_list: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "FILE",
+        help = "File with user:pass or user:ntlm_hash pairs (one per line)"
+    )]
+    user_pass_list: Option<String>,
+
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
@@ -2096,50 +2123,47 @@ fn make_plugin_context(cli: &Cli) -> PluginContext {
 // ──────────────────────────────────────────────────────────
 
 fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
-    let domain = match cli.domain.as_deref() {
-        Some(d) => d,
-        None => {
-            banner::print_fail("--domain is required");
-            return Err(1);
-        }
-    };
-
-    let username = match cli.username.as_deref() {
-        Some(u) => u,
-        None => {
-            banner::print_fail("--username is required");
-            return Err(1);
-        }
-    };
-
-    Credentials::from_args(
-        domain,
-        username,
-        cli.password.as_deref(),
-        cli.nt_hash.as_deref(),
-        cli.ticket.as_deref(),
-        Some(cli.auth_method.clone()),
-    )
-    .map_err(|e| {
+    let creds = resolve_credentials_from_cli(cli).map_err(|e| {
         banner::print_fail(&format!("Auth error: {}", e));
+        1
+    })?;
+    creds.into_iter().next().ok_or_else(|| {
+        banner::print_fail("No credentials resolved");
         1
     })
 }
 
 /// Retrieve credentials if available without terminating on missing arguments
 fn require_creds_silent(cli: &Cli) -> std::result::Result<Credentials, String> {
-    let domain = cli.domain.as_deref().ok_or("Missing --domain")?;
-    let username = cli.username.as_deref().ok_or("Missing --username")?;
+    let creds = resolve_credentials_from_cli(cli)?;
+    creds
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No credentials resolved".to_string())
+}
 
-    Credentials::from_args(
+/// Resolve all credentials from CLI args, supporting credential lists.
+/// Returns a Vec of Credentials to iterate over.
+fn require_creds_list(cli: &Cli) -> std::result::Result<Vec<Credentials>, i32> {
+    resolve_credentials_from_cli(cli).map_err(|e| {
+        banner::print_fail(&format!("Auth error: {}", e));
+        1
+    })
+}
+
+fn resolve_credentials_from_cli(cli: &Cli) -> std::result::Result<Vec<Credentials>, String> {
+    let domain = cli.domain.as_deref().unwrap_or("");
+    auth::resolve_credentials(
         domain,
-        username,
+        cli.username.as_deref(),
         cli.password.as_deref(),
         cli.nt_hash.as_deref(),
         cli.ticket.as_deref(),
         Some(cli.auth_method.clone()),
+        cli.user_list.as_deref(),
+        cli.pass_list.as_deref(),
+        cli.user_pass_list.as_deref(),
     )
-    .map_err(|e| e.to_string())
 }
 
 /// Require credentials for operations that need domain and DC access
@@ -2988,71 +3012,41 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
         EnumTarget::Pre => {
             println!(
                 "{}",
-                "Running no-credential AD service triage...".bright_black()
+                "Running unified pre-authentication discovery...".bright_black()
             );
-            let mut ldap_open = false;
-            let mut ldaps_open = false;
-            let mut smb_open = false;
-            match overthrone_core::scan::quick_scan(&dc).await {
-                Ok(mut results) => {
-                    results.sort_by_key(|result| result.port);
-                    for result in &results {
-                        let status = if result.open {
-                            ldap_open |= result.port == 389;
-                            ldaps_open |= result.port == 636;
-                            smb_open |= result.port == 445;
-                            "open".green()
-                        } else {
-                            "closed".bright_black()
-                        };
-                        println!(
-                            "  {} {:>5}/tcp {:<7} {}",
-                            "▸".bright_black(),
-                            result.port,
-                            status,
-                            ad_port_label(result.port)
-                        );
+
+            match overthrone_core::scan::preauth_discovery::run_preauth_discovery(&dc).await {
+                Ok(result) => {
+                    print_preauth_result(&result);
+
+                    // Save to loot directory
+                    let loot_dir = std::path::PathBuf::from("./loot");
+                    let _ = std::fs::create_dir_all(&loot_dir);
+                    let summary_path = loot_dir.join("preauth_discovery.json");
+                    if let Ok(json) = serde_json::to_string_pretty(&result) {
+                        let _ = std::fs::write(&summary_path, json);
+                        banner::print_info(&format!(
+                            "Full discovery results saved to {}",
+                            summary_path.display()
+                        ));
                     }
+
+                    banner::print_success(&format!(
+                        "Pre-auth discovery completed in {}ms (risk score: {}/10)",
+                        result.duration_ms, result.summary.risk_score
+                    ));
+                    0
                 }
                 Err(e) => {
-                    banner::print_fail(&format!("Pre-enum port triage failed: {}", e));
-                    return 1;
+                    banner::print_fail(&format!("Pre-auth discovery failed: {e}"));
+                    1
                 }
             }
-
-            if ldap_open {
-                let _ = anonymous_ldap_probe(&dc).await;
-            } else {
-                banner::print_info("LDAP/389 is not open; skipping anonymous RootDSE probe.");
-            }
-
-            if ldaps_open {
-                let _ = anonymous_ldaps_probe(&dc).await;
-            } else {
-                banner::print_info("LDAPS/636 is not open; skipping anonymous LDAPS probe.");
-            }
-
-            if smb_open {
-                let _ = smb_null_probe(&dc).await;
-            } else {
-                banner::print_info("SMB/445 is not open; skipping null-session SMB probe.");
-            }
-
-            if overthrone_core::proto::rid::tooling_available() {
-                banner::print_info("RID tooling check: rpcclient/net-rpc path is available.");
-            } else {
-                banner::print_warn(
-                    "RID tooling check: rpcclient/net-rpc not found. Install samba-common-bin (Kali/Linux).",
-                );
-            }
-
-            banner::print_success("Pre-enum triage completed");
-            0
         }
         EnumTarget::Anonymous => match anonymous_ldap_probe(&dc).await {
             Ok(_) => 0,
             Err(e) => {
-                banner::print_fail(&format!("Anonymous LDAP probe failed: {}", e));
+                banner::print_fail(&format!("Anonymous LDAP probe failed: {e}"));
                 1
             }
         },
@@ -3064,6 +3058,204 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
         }
         _ => unreachable!(),
     }
+}
+
+fn print_preauth_result(result: &overthrone_core::scan::preauth_discovery::PreAuthDiscoveryResult) {
+    #[allow(unused_imports)]
+    use overthrone_core::scan::preauth_discovery::*;
+
+    println!();
+    println!("  {}", "PORT TRIAGE".bright_cyan().bold());
+    if result.port_triage.success {
+        for port in &result.port_triage.open_ports {
+            let service = port.service.as_deref().unwrap_or("unknown");
+            println!(
+                "    {} {:>5}/tcp {:<7} {}",
+                "▸".bright_black(),
+                port.port,
+                "open".green(),
+                service
+            );
+        }
+    } else {
+        println!("    {}", "Port scan failed or timed out".bright_black());
+    }
+
+    println!();
+    println!("  {}", "NETBIOS / SMB".bright_cyan().bold());
+    if let Some(nbns) = &result.netbios_smb.nbns {
+        println!(
+            "    {} NBNS: computer={}, domain={}, mac={}",
+            "▸".bright_black(),
+            nbns.computer_name,
+            nbns.domain_name,
+            nbns.mac_address
+        );
+    }
+    if let Some(smb_neg) = &result.netbios_smb.smb_negotiate {
+        println!(
+            "    {} SMB dialect: {}, signing_required={}, signing_enabled={}",
+            "▸".bright_black(),
+            smb_neg.highest_dialect,
+            smb_neg.signing_required,
+            smb_neg.signing_enabled
+        );
+        if let Some(os) = &smb_neg.os_name {
+            println!("    {} OS: {}", "▸".bright_black(), os);
+        }
+    }
+    let sess = &result.netbios_smb.smb_session;
+    let shares_str = if sess.accessible_shares.is_empty() {
+        "none".to_string()
+    } else {
+        sess.accessible_shares.join(", ")
+    };
+    println!(
+        "    {} SMB session: {}, shares={}",
+        "▸".bright_black(),
+        sess.session_type,
+        shares_str
+    );
+
+    println!();
+    println!("  {}", "LDAP".bright_cyan().bold());
+    if let Some(rootdse) = &result.ldap.rootdse_probe {
+        if let Some(domain) = &rootdse.dns_domain_name {
+            println!("    {} Domain: {}", "▸".bright_black(), domain);
+        }
+        if let Some(host) = &rootdse.dns_host_name {
+            println!("    {} DC Host: {}", "▸".bright_black(), host);
+        }
+        if let Some(func) = &rootdse.domain_functionality {
+            println!("    {} Functionality: {}", "▸".bright_black(), func);
+        }
+        if !rootdse.supported_sasl_mechanisms.is_empty() {
+            println!(
+                "    {} SASL: {}",
+                "▸".bright_black(),
+                rootdse.supported_sasl_mechanisms.join(", ")
+            );
+        }
+    }
+    println!(
+        "    {} Anonymous bind: {}",
+        "▸".bright_black(),
+        if result.ldap.anonymous_bind {
+            "allowed".yellow()
+        } else {
+            "denied".bright_black()
+        }
+    );
+
+    println!();
+    println!("  {}", "RPC NULL SESSION".bright_cyan().bold());
+    if let Some(lsa) = &result.rpc_null_session.lsa_domain_info {
+        println!(
+            "    {} LSA domain: {}, SID={}",
+            "▸".bright_black(),
+            lsa.name,
+            lsa.domain_sid.as_deref().unwrap_or("unknown")
+        );
+    }
+    if !result.rpc_null_session.srvsvc_shares.is_empty() {
+        println!(
+            "    {} SRVSVC shares: {}",
+            "▸".bright_black(),
+            result.rpc_null_session.srvsvc_shares.len()
+        );
+    }
+    if !result.rpc_null_session.epmapper_endpoints.is_empty() {
+        println!(
+            "    {} EPMAPPER endpoints: {}",
+            "▸".bright_black(),
+            result.rpc_null_session.epmapper_endpoints.len()
+        );
+    }
+
+    println!();
+    println!("  {}", "COERCION ENDPOINTS".bright_cyan().bold());
+    if result.coercion.attempted {
+        println!(
+            "    {} MS-RPRN: {}",
+            "▸".bright_black(),
+            if result.coercion.rprn_available {
+                "available".red()
+            } else {
+                "not available".bright_black()
+            }
+        );
+        println!(
+            "    {} MS-EFSR: {}",
+            "▸".bright_black(),
+            if result.coercion.efsr_available {
+                "available".red()
+            } else {
+                "not available".bright_black()
+            }
+        );
+        println!(
+            "    {} DFS-RPC: {}",
+            "▸".bright_black(),
+            if result.coercion.dfs_available {
+                "available".red()
+            } else {
+                "not available".bright_black()
+            }
+        );
+    } else {
+        println!("    {}", "Not attempted (RPC port not open)".bright_black());
+    }
+
+    println!();
+    println!("  {}", "SUMMARY".bright_cyan().bold());
+    let summary = &result.summary;
+    if let Some(domain) = &summary.domain {
+        println!("    {} Domain: {}", "▸".bright_black(), domain);
+    }
+    if let Some(host) = &summary.dc_hostname {
+        println!("    {} DC: {}", "▸".bright_black(), host);
+    }
+    if let Some(os) = &summary.os_name {
+        println!("    {} OS: {}", "▸".bright_black(), os);
+    }
+    println!(
+        "    {} SMB signing required: {}",
+        "▸".bright_black(),
+        summary.smb_signing_required
+    );
+    println!(
+        "    {} Null session: {}",
+        "▸".bright_black(),
+        if summary.null_session_allowed {
+            "allowed".yellow()
+        } else {
+            "denied".bright_black()
+        }
+    );
+    println!(
+        "    {} Anonymous LDAP: {}",
+        "▸".bright_black(),
+        if summary.anonymous_ldap {
+            "allowed".yellow()
+        } else {
+            "denied".bright_black()
+        }
+    );
+    println!(
+        "    {} Coercion possible: {}",
+        "▸".bright_black(),
+        if summary.coercion_possible {
+            "yes".red()
+        } else {
+            "no".green()
+        }
+    );
+    println!(
+        "    {} Risk score: {}/10",
+        "▸".bright_black(),
+        summary.risk_score
+    );
+    println!();
 }
 
 async fn anonymous_ldap_probe(dc: &str) -> std::result::Result<bool, String> {
@@ -3136,6 +3328,7 @@ async fn anonymous_ldap_probe(dc: &str) -> std::result::Result<bool, String> {
     Ok(true)
 }
 
+#[allow(dead_code)]
 async fn anonymous_ldaps_probe(dc: &str) -> std::result::Result<bool, String> {
     use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 
@@ -3200,6 +3393,7 @@ async fn anonymous_ldaps_probe(dc: &str) -> std::result::Result<bool, String> {
     Ok(true)
 }
 
+#[allow(dead_code)]
 async fn smb_null_probe(dc: &str) -> std::result::Result<bool, String> {
     let session = overthrone_core::proto::smb::SmbSession::connect(dc, "", "", "")
         .await
@@ -3326,6 +3520,7 @@ async fn run_preauth_snaffler(dc: &str, domain: &str) {
     }
 }
 
+#[allow(dead_code)]
 fn ad_port_label(port: u16) -> &'static str {
     match port {
         88 => "Kerberos",

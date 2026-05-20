@@ -153,6 +153,17 @@ pub enum OverthroneError {
     #[error("Relay error: {0}")]
     Relay(String),
 
+    // Post-Exploitation Errors
+    /// Post-exploitation operation failed.
+    #[error("Post-exploitation error: {0}")]
+    PostExploitation(String),
+    /// LSASS manipulation failed.
+    #[error("LSASS error: {0}")]
+    Lsass(String),
+    /// Memory injection failed.
+    #[error("Injection error: {0}")]
+    Injection(String),
+
     // I/O & Serialization
     /// Network I/O error.
     #[error("Network error: {0}")]

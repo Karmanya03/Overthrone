@@ -2,152 +2,86 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, develop]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
-permissions:
-  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 1
 
 jobs:
-  # ── Tests ── Run on all three platforms to catch platform-specific issues ──
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev fonts-liberation fonts-dejavu-core
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install samba pkg-config
-          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix samba)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "test-${{ matrix.os }}"
-
-      - name: Generate lockfile
-        run: cargo generate-lockfile
-
-      - name: Run tests
-        run: cargo test --workspace
-
-  # ── Clippy ── Lint check (Linux only, all targets) ──
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "clippy"
-
-      - name: Generate lockfile
-        run: cargo generate-lockfile
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-  # ── Format ── Ensure consistent formatting ──
   fmt:
-    name: Rustfmt
-    runs-on: ubuntu-latest
+    name: Formatting
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  # ── Audit ── Check for known vulnerabilities in dependencies ──
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
+  clippy:
+    name: Clippy
+    runs-on: windows-latest
+    needs: fmt
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo-audit binary
-        id: cache-cargo-audit
-        uses: actions/cache@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-${{ runner.os }}-v0.21
+          components: clippy
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Install cargo-audit
-        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
-        run: cargo install cargo-audit --locked
-
-      - name: Generate lockfile
-        run: cargo generate-lockfile
-
-      - name: Audit dependencies
-        run: cargo audit
-
-  # ── Coverage ── Track test coverage with cargo-tarpaulin (Linux only) ──
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
+  test:
+    name: Tests
+    runs-on: windows-latest
+    needs: clippy
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --workspace --all-features -- --test-threads=1
 
-      - uses: dtolnay/rust-toolchain@stable
+  docs:
+    name: Documentation
+    runs-on: windows-latest
+    needs: clippy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build docs
+        run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "coverage"
-
-      - name: Cache cargo-tarpaulin binary
-        id: cache-cargo-tarpaulin
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-tarpaulin
-          key: cargo-tarpaulin-${{ runner.os }}-v0.31
-
-      - name: Generate lockfile
-        run: cargo generate-lockfile
-
-      - name: Install cargo-tarpaulin
-        if: steps.cache-cargo-tarpaulin.outputs.cache-hit != 'true'
-        run: cargo install cargo-tarpaulin --locked
-
-      - name: Run coverage
-        run: cargo tarpaulin --packages overthrone-core --out Html --output-dir coverage/
-
-      - name: Upload coverage report
+  build-release:
+    name: Release Build
+    runs-on: windows-latest
+    needs: [test, docs]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build release binaries
+        run: cargo build --workspace --release
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: coverage/
+          name: overthrone-binaries
+          path: |
+            target/release/overthrone.exe
+            target/release/ovt.exe

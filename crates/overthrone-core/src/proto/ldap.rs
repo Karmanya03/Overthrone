@@ -8,6 +8,7 @@
 use crate::error::{OverthroneError, Result};
 use ldap3::controls::{Control, ControlType, PagedResults, RawControl};
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -1192,8 +1193,286 @@ pub mod trust_flags {
 //  Connection & Authentication
 // ═══════════════════════════════════════════════════════════
 
+/// RootDSE information obtained without any bind (pre-auth discovery).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootDseInfo {
+    /// DNS domain name from rootDSE
+    pub dns_domain_name: Option<String>,
+    /// DNS host name from rootDSE
+    pub dns_host_name: Option<String>,
+    /// Default naming context
+    pub default_naming_context: Option<String>,
+    /// All naming contexts
+    pub naming_contexts: Vec<String>,
+    /// Supported SASL mechanisms
+    pub supported_sasl_mechanisms: Vec<String>,
+    /// Supported LDAP versions
+    pub supported_ldap_versions: Vec<String>,
+    /// Server name
+    pub server_name: Option<String>,
+    /// Domain controller functionality level
+    pub domain_functionality: Option<String>,
+    /// Forest functionality level
+    pub forest_functionality: Option<String>,
+    /// Is the DC a global catalog
+    pub is_global_catalog_ready: Option<bool>,
+}
+
+/// Probe rootDSE without performing any LDAP bind.
+/// Works even when anonymous/simple binds are disabled (Windows 2025).
+/// This is the "LDAP ping" technique used by traditional tools.
+pub async fn probe_rootdse_raw(dc_ip: &str, use_tls: bool) -> Result<RootDseInfo> {
+    use tokio::io::AsyncWriteExt;
+
+    let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
+    info!("Probing rootDSE on {dc_ip}:{port} (no bind)");
+
+    let mut stream = tokio::net::TcpStream::connect(format!("{dc_ip}:{port}"))
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: dc_ip.to_string(),
+            reason: format!("TCP connect failed: {e}"),
+        })?;
+
+    // Build LDAP SearchRequest for rootDSE:
+    //   base = "" (empty), scope = base (0), filter = (objectClass=*)
+    let mut msg = Vec::new();
+
+    // Message ID = 1
+    msg.extend_from_slice(&ber_integer(1));
+
+    // SearchRequest [APPLICATION 3]
+    let mut search = Vec::new();
+    search.extend_from_slice(&ber_octet_string(b"")); // base DN = ""
+    search.extend_from_slice(&ber_enumerated(0)); // scope = base
+    search.extend_from_slice(&ber_enumerated(0)); // deref = never
+    search.extend_from_slice(&ber_integer(0)); // sizeLimit = unlimited
+    search.extend_from_slice(&ber_integer(10)); // timeLimit = 10s
+    search.extend_from_slice(&ber_boolean(false)); // typesOnly = FALSE
+
+    // Filter: (objectClass=*)
+    let mut filter_data = Vec::new();
+    filter_data.extend_from_slice(&ber_octet_string(b"objectClass"));
+    filter_data.extend_from_slice(&ber_octet_string(b"*"));
+    let filter = ber_tlv(0xA3, &filter_data); // equality filter [APPLICATION 3]
+    search.extend_from_slice(&filter);
+
+    // Attributes to request
+    let attrs = [
+        "dnsHostName",
+        "defaultNamingContext",
+        "namingContexts",
+        "supportedSASLMechanisms",
+        "supportedLDAPVersion",
+        "serverName",
+        "domainFunctionality",
+        "forestFunctionality",
+        "isGlobalCatalogReady",
+    ];
+    let mut attr_seq = Vec::new();
+    for a in &attrs {
+        attr_seq.extend_from_slice(&ber_octet_string(a.as_bytes()));
+    }
+    search.extend_from_slice(&ber_sequence(&attr_seq));
+
+    let search_req = ber_tlv(0x63, &search); // [APPLICATION 3]
+    msg.extend_from_slice(&search_req);
+    let ldap_msg = ber_sequence(&msg);
+
+    stream
+        .write_all(&ldap_msg)
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: dc_ip.to_string(),
+            reason: format!("Send rootDSE probe failed: {e}"),
+        })?;
+
+    // Parse response
+    let mut info = RootDseInfo {
+        dns_domain_name: None,
+        dns_host_name: None,
+        default_naming_context: None,
+        naming_contexts: Vec::new(),
+        supported_sasl_mechanisms: Vec::new(),
+        supported_ldap_versions: Vec::new(),
+        server_name: None,
+        domain_functionality: None,
+        forest_functionality: None,
+        is_global_catalog_ready: None,
+    };
+
+    // Read and parse LDAP response messages
+    let mut response_buf = Vec::new();
+    let mut done = false;
+    while !done {
+        let Ok(msg_bytes) = raw_ldap_recv_from_buf(&mut stream, &mut response_buf).await else {
+            break;
+        };
+        // Parse the message
+        let mut off = 0usize;
+        if let Some((_, seq_data)) = ber_read_tlv(&msg_bytes, &mut off) {
+            let mut inner = 0usize;
+            // Skip messageID
+            let _ = ber_read_tlv(&seq_data, &mut inner);
+            // Get protocolOp
+            if let Some((op_tag, op_data)) = ber_read_tlv(&seq_data, &mut inner) {
+                match op_tag {
+                    0x64 => {
+                        // SearchResultEntry — parse attributes
+                        let mut entry_off = 0usize;
+                        let _ = ber_read_tlv(&op_data, &mut entry_off); // DN
+                        if let Some((_, attrs_data)) = ber_read_tlv(&op_data, &mut entry_off) {
+                            parse_rootdse_attrs(&attrs_data, &mut info);
+                        }
+                    }
+                    0x65 => {
+                        // SearchResultDone — check resultCode
+                        let mut oi = 0usize;
+                        if let Some((0x0A, rc_data)) = ber_read_tlv(&op_data, &mut oi) {
+                            let rc = rc_data.first().copied().unwrap_or(80);
+                            if rc != 0 && rc != 4 {
+                                // rc=4 is sizeLimitExceeded (partial results OK)
+                                debug!("rootDSE probe done with rc={rc}");
+                            }
+                        }
+                        done = true;
+                    }
+                    _ => {
+                        // Other message, keep reading
+                    }
+                }
+            }
+        }
+    }
+
+    info!(
+        "rootDSE probe complete: domain={:?}, sasl_mechs={:?}",
+        info.dns_domain_name, info.supported_sasl_mechanisms
+    );
+
+    Ok(info)
+}
+
+/// Read a single LDAP message from stream, accumulating into buffer.
+async fn raw_ldap_recv_from_buf(
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut Vec<u8>,
+) -> std::result::Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+
+    // Read tag
+    if buf.is_empty() {
+        let mut tag_buf = [0u8; 1];
+        stream
+            .read_exact(&mut tag_buf)
+            .await
+            .map_err(|e| e.to_string())?;
+        buf.push(tag_buf[0]);
+    }
+
+    // Read length
+    if buf.len() < 2 {
+        let mut len_first = [0u8; 1];
+        stream
+            .read_exact(&mut len_first)
+            .await
+            .map_err(|e| e.to_string())?;
+        buf.push(len_first[0]);
+
+        let extra = if len_first[0] < 0x80 {
+            0
+        } else {
+            (len_first[0] & 0x7F) as usize
+        };
+        for _ in 0..extra {
+            let mut b = [0u8; 1];
+            stream.read_exact(&mut b).await.map_err(|e| e.to_string())?;
+            buf.push(b[0]);
+        }
+    }
+
+    // Calculate expected total length
+    let total_len = if buf.len() >= 2 {
+        let first_len = buf[1];
+        if first_len < 0x80 {
+            2 + first_len as usize
+        } else {
+            let extra = (first_len & 0x7F) as usize;
+            let mut l: usize = 0;
+            for i in 0..extra {
+                l = (l << 8) | (buf[2 + i] as usize);
+            }
+            2 + extra + l
+        }
+    } else {
+        return Err("incomplete header".to_string());
+    };
+
+    // Read remaining data
+    while buf.len() < total_len {
+        let mut chunk = vec![0u8; total_len - buf.len()];
+        let n = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("connection closed".to_string());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+
+    let msg = buf.clone();
+    buf.clear();
+    Ok(msg)
+}
+
+/// Parse rootDSE attributes from BER-encoded data.
+fn parse_rootdse_attrs(data: &[u8], info: &mut RootDseInfo) {
+    let mut off = 0usize;
+    while off < data.len() {
+        if let Some((_, seq_inner)) = ber_read_tlv(data, &mut off) {
+            let mut pair_off = 0usize;
+            if let Some((_, type_data)) = ber_read_tlv(&seq_inner, &mut pair_off) {
+                let attr_name = String::from_utf8_lossy(&type_data);
+                if let Some((_, set_data)) = ber_read_tlv(&seq_inner, &mut pair_off) {
+                    let mut val_off = 0usize;
+                    while val_off < set_data.len() {
+                        if let Some((_, val_data)) = ber_read_tlv(&set_data, &mut val_off) {
+                            let val = String::from_utf8_lossy(&val_data);
+                            match attr_name.as_ref() {
+                                "dnsHostName" => info.dns_host_name = Some(val.into_owned()),
+                                "defaultNamingContext" => {
+                                    info.default_naming_context = Some(val.into_owned())
+                                }
+                                "namingContexts" => info.naming_contexts.push(val.into_owned()),
+                                "supportedSASLMechanisms" => {
+                                    info.supported_sasl_mechanisms.push(val.into_owned())
+                                }
+                                "supportedLDAPVersion" => {
+                                    info.supported_ldap_versions.push(val.into_owned())
+                                }
+                                "serverName" => info.server_name = Some(val.into_owned()),
+                                "domainFunctionality" => {
+                                    info.domain_functionality = Some(val.into_owned())
+                                }
+                                "forestFunctionality" => {
+                                    info.forest_functionality = Some(val.into_owned())
+                                }
+                                "isGlobalCatalogReady" => {
+                                    info.is_global_catalog_ready =
+                                        Some(val.eq_ignore_ascii_case("TRUE"));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl LdapSession {
     /// Connect and bind to an LDAP server using simple authentication.
+    /// Automatically falls back to SASL NTLM bind if simple bind is rejected
+    /// (e.g., Windows Server 2025 with LDAP signing required).
     /// `domain` should be like "corp.local", `username` like "admin" or "CORP\\admin".
     pub async fn connect(
         dc_ip: &str,
@@ -1229,43 +1508,92 @@ impl LdapSession {
 
         info!("LDAP bind as: {bind_dn}");
 
-        let result =
-            ldap.simple_bind(&bind_dn, password)
-                .await
-                .map_err(|e| OverthroneError::Ldap {
-                    target: dc_ip.to_string(),
-                    reason: format!("Bind failed: {e}"),
-                })?;
+        let result = ldap.simple_bind(&bind_dn, password).await;
 
-        let bind_type = if result.rc != 0 {
-            let auth_err = format!(
-                "Bind rejected (rc={}): {}",
-                result.rc,
-                ldap_rc_to_string(result.rc)
-            );
-            warn!("LDAP authenticated bind failed: {auth_err}");
-            return Err(OverthroneError::Ldap {
-                target: dc_ip.to_string(),
-                reason: auth_err,
-            });
-        } else {
-            BindType::Authenticated
-        };
+        match result {
+            Ok(res) if res.rc == 0 => {
+                let base_dn = domain_to_base_dn(domain);
+                info!(
+                    "LDAP bind successful ({}). Base DN: {base_dn}",
+                    BindType::Authenticated
+                );
+                Ok(LdapSession {
+                    ldap: Some(ldap),
+                    raw: None,
+                    base_dn,
+                    domain: domain.to_string(),
+                    dc_ip: dc_ip.to_string(),
+                    bind_type: BindType::Authenticated,
+                })
+            }
+            Ok(res) => {
+                let rc = res.rc;
+                let reason = ldap_rc_to_string(rc);
+                warn!("LDAP simple bind rejected (rc={rc}): {reason}");
+
+                if rc == 8 {
+                    info!("Attempting SASL NTLM bind fallback (strong auth required)");
+                    drop(ldap);
+                    Self::connect_with_sasl_ntlm(dc_ip, domain, username, password, use_tls).await
+                } else {
+                    let auth_err = format!("Bind rejected (rc={rc}): {reason}");
+                    Err(OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: auth_err,
+                    })
+                }
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("Strong")
+                    || err_str.contains("strong auth")
+                    || err_str.contains("rc=8")
+                {
+                    info!("Simple bind failed with strong auth requirement, trying SASL NTLM");
+                    drop(ldap);
+                    Self::connect_with_sasl_ntlm(dc_ip, domain, username, password, use_tls).await
+                } else {
+                    Err(OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: format!("Bind failed: {e}"),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Connect using SASL NTLM bind via raw TCP.
+    /// Used as fallback when simple bind is rejected (Windows 2025 LDAP signing).
+    pub async fn connect_with_sasl_ntlm(
+        dc_ip: &str,
+        domain: &str,
+        username: &str,
+        password: &str,
+        _use_tls: bool,
+    ) -> Result<Self> {
+        let addr = format!("{dc_ip}:{LDAP_PORT}");
+        info!("Connecting to LDAP (SASL NTLM): {addr}");
+
+        // Convert password to NT hash for raw NTLM bind
+        let nt_hash = crate::proto::ntlm::nt_hash(password);
+
+        let mut raw = RawLdapConn::connect(&addr).await?;
+        raw.ntlm_bind(domain, username, &nt_hash).await?;
 
         let base_dn = domain_to_base_dn(domain);
-        info!("LDAP bind successful ({}). Base DN: {base_dn}", bind_type);
-
+        info!("SASL NTLM bind successful. Base DN: {base_dn}");
         Ok(LdapSession {
-            ldap: Some(ldap),
-            raw: None,
+            ldap: None,
+            raw: Some(Box::new(raw)),
             base_dn,
             domain: domain.to_string(),
             dc_ip: dc_ip.to_string(),
-            bind_type,
+            bind_type: BindType::Authenticated,
         })
     }
 
     /// Connect anonymously to LDAP/LDAPS.
+    /// Falls back to rootDSE pre-bind probe if anonymous bind is rejected.
     pub async fn connect_anonymous(dc_ip: &str, domain: &str, use_tls: bool) -> Result<Self> {
         let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
         let scheme = if use_tls { "ldaps" } else { "ldap" };
@@ -1283,36 +1611,98 @@ impl LdapSession {
 
         drive!(conn);
 
-        let result = ldap
-            .simple_bind("", "")
-            .await
-            .map_err(|e| OverthroneError::Ldap {
-                target: dc_ip.to_string(),
-                reason: format!("Anonymous bind failed: {e}"),
-            })?;
+        let result = ldap.simple_bind("", "").await;
 
-        if result.rc != 0 {
-            return Err(OverthroneError::Ldap {
-                target: dc_ip.to_string(),
-                reason: format!(
-                    "Anonymous bind rejected (rc={}): {}",
-                    result.rc,
-                    ldap_rc_to_string(result.rc)
-                ),
-            });
+        match result {
+            Ok(res) if res.rc == 0 => {
+                let base_dn = domain_to_base_dn(domain);
+                info!("Anonymous LDAP bind successful. Base DN: {base_dn}");
+                Ok(LdapSession {
+                    ldap: Some(ldap),
+                    raw: None,
+                    base_dn,
+                    domain: domain.to_string(),
+                    dc_ip: dc_ip.to_string(),
+                    bind_type: BindType::Anonymous,
+                })
+            }
+            Ok(res) => {
+                let rc = res.rc;
+                let reason = ldap_rc_to_string(rc);
+                warn!("Anonymous bind rejected (rc={rc}): {reason}");
+
+                // Fallback: try rootDSE pre-bind probe
+                info!("Attempting rootDSE pre-bind probe as fallback");
+                drop(ldap);
+                match probe_rootdse_raw(dc_ip, use_tls).await {
+                    Ok(rootdse) => {
+                        let base_dn = rootdse
+                            .default_naming_context
+                            .clone()
+                            .or_else(|| {
+                                if domain.is_empty() {
+                                    rootdse
+                                        .dns_domain_name
+                                        .clone()
+                                        .map(|d| domain_to_base_dn(&d))
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| domain_to_base_dn(domain));
+                        info!(
+                            "rootDSE probe succeeded (no bind). Domain: {:?}, Base DN: {}",
+                            rootdse.dns_domain_name, base_dn
+                        );
+                        // Return a session with no usable ldap connection but with rootDSE info
+                        Ok(LdapSession {
+                            ldap: None,
+                            raw: None,
+                            base_dn,
+                            domain: rootdse
+                                .dns_domain_name
+                                .unwrap_or_else(|| domain.to_string()),
+                            dc_ip: dc_ip.to_string(),
+                            bind_type: BindType::Anonymous,
+                        })
+                    }
+                    Err(e) => Err(OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: format!(
+                            "Anonymous bind rejected (rc={rc}): {reason}. rootDSE probe also failed: {e}"
+                        ),
+                    }),
+                }
+            }
+            Err(e) => {
+                warn!("Anonymous bind connection error: {e}");
+                // Try rootDSE pre-bind probe as fallback
+                info!("Attempting rootDSE pre-bind probe as fallback");
+                match probe_rootdse_raw(dc_ip, use_tls).await {
+                    Ok(rootdse) => {
+                        let base_dn = rootdse
+                            .default_naming_context
+                            .clone()
+                            .unwrap_or_else(|| domain_to_base_dn(domain));
+                        info!("rootDSE probe succeeded (no bind). Base DN: {base_dn}");
+                        Ok(LdapSession {
+                            ldap: None,
+                            raw: None,
+                            base_dn,
+                            domain: rootdse
+                                .dns_domain_name
+                                .unwrap_or_else(|| domain.to_string()),
+                            dc_ip: dc_ip.to_string(),
+                            bind_type: BindType::Anonymous,
+                        })
+                    }
+                    Err(_) => Err(OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: format!("Anonymous bind failed: {e}"),
+                    }),
+                }
+            }
         }
-
-        let base_dn = domain_to_base_dn(domain);
-        info!("Anonymous LDAP bind successful. Base DN: {base_dn}");
-
-        Ok(LdapSession {
-            ldap: Some(ldap),
-            raw: None,
-            base_dn,
-            domain: domain.to_string(),
-            dc_ip: dc_ip.to_string(),
-            bind_type: BindType::Anonymous,
-        })
     }
 
     /// Connect and bind using an NT hash (pass-the-hash) via raw NTLM SASL over TCP.

