@@ -1,4 +1,4 @@
-//! AD trust relationship mapping â€” builds a directed graph of domain trusts
+//! AD trust relationship mapping — builds a directed graph of domain trusts
 //! from reaper enumeration data.
 
 use overthrone_reaper::trusts::{
@@ -7,7 +7,7 @@ use overthrone_reaper::trusts::{
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// â”€â”€ Trust attribute constants â”€â”€
+// ── Trust attribute constants ──
 pub const TRUST_ATTR_NON_TRANSITIVE: u32 = 0x0001;
 pub const TRUST_ATTR_QUARANTINED: u32 = 0x0004;
 pub const TRUST_ATTR_FOREST_TRANSITIVE: u32 = 0x0008;
@@ -141,7 +141,7 @@ impl TrustEdge {
             sid_filtering: entry.sid_filtering_enabled,
             tgt_delegation: entry.tgt_delegation_enabled,
             is_within_forest,
-            // Default assumptions â€” refined when raw attrs are available
+            // Default assumptions — refined when raw attrs are available
             uses_aes: true,
             uses_rc4: !entry.tgt_delegation_enabled, // heuristic
             is_pam_trust: false,
@@ -194,7 +194,7 @@ impl TrustGraph {
 
     pub fn add_domain(&mut self, node: DomainNode) {
         if node.name.is_empty() {
-            warn!("[trust_map] Attempted to add domain with empty name â€” skipping");
+            warn!("[trust_map] Attempted to add domain with empty name — skipping");
             return;
         }
         let upper = node.name.to_uppercase();
@@ -206,7 +206,7 @@ impl TrustGraph {
     pub fn add_trust(&mut self, edge: TrustEdge) {
         if edge.source_domain.is_empty() || edge.target_domain.is_empty() {
             warn!(
-                "[trust_map] Attempted to add trust with empty source/target domain â€” skipping (src='{}', tgt='{}')",
+                "[trust_map] Attempted to add trust with empty source/target domain — skipping (src='{}', tgt='{}')",
                 edge.source_domain, edge.target_domain
             );
             return;
@@ -233,7 +233,7 @@ impl TrustGraph {
                 .any(|t| t.source_domain == start || t.target_domain == start)
         {
             debug!(
-                "[trust_map] Domain '{}' not found in graph â€” returning self-only",
+                "[trust_map] Domain '{}' not found in graph — returning self-only",
                 domain
             );
         }
@@ -360,13 +360,11 @@ pub fn build_trust_graph(source_domain: &str, trust_entries: &[TrustEntry]) -> T
     );
 
     if trust_entries.is_empty() {
-        debug!(
-            "[trust_map] No trust entries provided â€” graph will contain only the source domain"
-        );
+        debug!("[trust_map] No trust entries provided — graph will contain only the source domain");
     }
 
     if source_domain.is_empty() {
-        warn!("[trust_map] Empty source_domain â€” graph will have no source node");
+        warn!("[trust_map] Empty source_domain — graph will have no source node");
     }
 
     // Add the source domain as a node

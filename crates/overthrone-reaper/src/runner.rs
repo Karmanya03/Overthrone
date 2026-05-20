@@ -273,18 +273,18 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                 result.policy = Some(data);
                 let count_str = count.to_string();
                 pb.println(format!(
-                    "  {} {} â†’ {} found",
-                    "âœ“".green().bold(),
+                    "  {} {} → {} found",
+                    "✓".green().bold(),
                     "policy".bright_white(),
                     count_str.as_str().bright_green()
                 ));
-                info!("[reaper] policy â†’ {count} entries");
+                info!("[reaper] policy → {count} entries");
             }
             Err(e) => {
                 let err_str = format!("{e}");
                 pb.println(format!(
-                    "  {} {} â†’ {}",
-                    "âœ—".red().bold(),
+                    "  {} {} → {}",
+                    "✗".red().bold(),
                     "policy".bright_white(),
                     err_str.as_str().red()
                 ));

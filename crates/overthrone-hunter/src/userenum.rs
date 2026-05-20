@@ -1,12 +1,12 @@
-//! Kerberos Username Enumeration â€” Zero-knowledge user discovery via AS-REQ probes.
+//! Kerberos Username Enumeration — Zero-knowledge user discovery via AS-REQ probes.
 //!
 //! Sends AS-REQ without pre-authentication data for each candidate username.
 //! The KDC error code reveals whether the account exists:
-//! - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  â†’ user does NOT exist
-//! - `KDC_ERR_PREAUTH_REQUIRED` (25)    â†’ user EXISTS
-//! - Full AS-REP                        â†’ user EXISTS + no pre-auth (hash auto-captured)
+//! - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  → user does NOT exist
+//! - `KDC_ERR_PREAUTH_REQUIRED` (25)    → user EXISTS
+//! - Full AS-REP                        → user EXISTS + no pre-auth (hash auto-captured)
 //!
-//! This is the #1 technique for zero-knowledge AD engagements â€” no credentials required.
+//! This is the #1 technique for zero-knowledge AD engagements — no credentials required.
 
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -17,9 +17,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Configuration
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 const EMBEDDED_USERLIST: &str = r#"# Common AD usernames and service accounts
 administrator
@@ -208,9 +208,9 @@ async fn load_usernames(userlist_path: &Path) -> Result<(Vec<String>, String)> {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Result
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserEnumResult {
@@ -236,24 +236,19 @@ pub struct AsRepCapture {
     pub hash_string: String,
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Public Runner
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Run Kerberos username enumeration against the target DC.
-/// No credentials required â€” uses only AS-REQ error code analysis.
+/// No credentials required — uses only AS-REQ error code analysis.
 pub async fn run(
     dc_ip: &str,
     domain: &str,
     uc: &UserEnumConfig,
     jitter_ms: u64,
 ) -> Result<UserEnumResult> {
-    info!(
-        "{}",
-        "â•â•â• KERBEROS USER ENUMERATION â•â•â•"
-            .bold()
-            .magenta()
-    );
+    info!("{}", "═══ KERBEROS USER ENUMERATION ═══".bold().magenta());
 
     // Load username wordlist (fallback to embedded list if default is missing)
     let (usernames, source) = load_usernames(&uc.userlist).await?;
@@ -284,7 +279,7 @@ pub async fn run(
                 warn!("Progress bar template error: {e}");
                 ProgressStyle::default_bar()
             })
-            .progress_chars("â–ˆâ–“â–‘"),
+            .progress_chars("█▓░"),
     );
 
     let mut valid_users = Vec::new();
@@ -300,18 +295,13 @@ pub async fn run(
 
         match status {
             UserEnumStatus::Valid => {
-                info!(
-                    " {} {} â€” {}",
-                    "âœ“".green(),
-                    username.bold(),
-                    "VALID".green()
-                );
+                info!(" {} {} — {}", "✓".green(), username.bold(), "VALID".green());
                 valid_users.push((*username).to_string());
             }
             UserEnumStatus::ValidNoPreauth(hash) => {
                 info!(
-                    " {} {} â€” {} (AS-REP hash captured!)",
-                    "â˜…".bright_yellow(),
+                    " {} {} — {} (AS-REP hash captured!)",
+                    "★".bright_yellow(),
                     username.bold(),
                     "VALID + NO PREAUTH".bright_yellow()
                 );
@@ -323,19 +313,19 @@ pub async fn run(
             }
             UserEnumStatus::Disabled => {
                 info!(
-                    " {} {} â€” {}",
-                    "âš ".yellow(),
+                    " {} {} — {}",
+                    "⚠".yellow(),
                     username.bold(),
                     "DISABLED".yellow()
                 );
                 disabled_users.push((*username).to_string());
             }
             UserEnumStatus::NotFound => {
-                debug!(" {} {} â€” not found", "âœ—".dimmed(), username);
+                debug!(" {} {} — not found", "✗".dimmed(), username);
                 not_found += 1;
             }
             UserEnumStatus::Error(e) => {
-                debug!(" {} {} â€” {}", "âœ—".red(), username, e);
+                debug!(" {} {} — {}", "✗".red(), username, e);
                 errors.push(((*username).to_string(), e));
             }
         }
@@ -388,35 +378,32 @@ pub async fn run(
     }
 
     // Summary
-    println!(
-        "\n{}",
-        "â•â•â• USER ENUMERATION RESULTS â•â•â•".bold().cyan()
-    );
+    println!("\n{}", "═══ USER ENUMERATION RESULTS ═══".bold().cyan());
     println!(
         "  {} Valid users:       {}",
-        "âœ“".green(),
+        "✓".green(),
         valid_users.len().to_string().bold().green()
     );
     if !no_preauth_users.is_empty() {
         println!(
             "  {} No pre-auth (hash): {}",
-            "â˜…".bright_yellow(),
+            "★".bright_yellow(),
             no_preauth_users.len().to_string().bold().bright_yellow()
         );
     }
     if !disabled_users.is_empty() {
         println!(
             "  {} Disabled accounts:  {}",
-            "âš ".yellow(),
+            "⚠".yellow(),
             disabled_users.len().to_string().bold()
         );
     }
-    println!("  {} Not found:         {}", "âœ—".dimmed(), not_found);
-    println!("  {} Total tested:      {}", "â†’".cyan(), usernames.len());
+    println!("  {} Not found:         {}", "✗".dimmed(), not_found);
+    println!("  {} Total tested:      {}", "→".cyan(), usernames.len());
     if !errors.is_empty() {
-        println!("  {} Errors:            {}", "âš ".red(), errors.len());
+        println!("  {} Errors:            {}", "⚠".red(), errors.len());
     }
-    println!("{}\n", "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•".cyan());
+    println!("{}\n", "════════════════════════════════".cyan());
 
     Ok(UserEnumResult {
         valid_users,

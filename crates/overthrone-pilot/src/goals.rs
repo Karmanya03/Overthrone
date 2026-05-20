@@ -1,4 +1,4 @@
-//! Attack goals â€” Define what the pilot is trying to achieve.
+//! Attack goals — Define what the pilot is trying to achieve.
 //!
 //! Goals are high-level objectives like "become Domain Admin" or
 //! "dump NTDS.dit". Each goal has success criteria that can be
@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Goal Definitions
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// A high-level attack objective
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,9 +113,9 @@ pub enum PersistenceMethod {
     AdminSDHolder,
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Goal Status / Evaluation
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Current status of a goal
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +129,7 @@ pub enum GoalStatus {
     Achieved,
     /// Goal failed, but alternative paths may exist
     Blocked { reason: String },
-    /// Goal definitively failed â€” no remaining paths
+    /// Goal definitively failed — no remaining paths
     Failed { reason: String },
     /// Skipped (dry-run or dependency not met)
     Skipped,
@@ -158,11 +158,11 @@ impl std::fmt::Display for GoalStatus {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// Engagement State â€” everything we know so far
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
+// Engagement State — everything we know so far
+// ═══════════════════════════════════════════════════════════
 
-/// Accumulated knowledge from the engagement â€” updated after each step
+/// Accumulated knowledge from the engagement — updated after each step
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EngagementState {
     /// Domain info
@@ -310,7 +310,7 @@ pub enum SecretType {
     Dcc2,
 }
 
-// â”€â”€â”€ Display impl for SecretType (fixes E0277 in autopwn.rs) â”€â”€â”€
+// ─── Display impl for SecretType (fixes E0277 in autopwn.rs) ───
 impl std::fmt::Display for SecretType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -758,7 +758,7 @@ impl EngagementState {
 
     /// Pretty-print current state summary
     pub fn print_summary(&self) {
-        println!("\n{}", "â•â•â• ENGAGEMENT STATE â•â•â•".bold().cyan());
+        println!("\n{}", "═══ ENGAGEMENT STATE ═══".bold().cyan());
         println!(
             "  Domain:      {}",
             self.domain.as_deref().unwrap_or("unknown")
@@ -804,9 +804,6 @@ impl EngagementState {
             "  Spray Guard: {}",
             self.spray_risk_summary().bright_black()
         );
-        println!(
-            "{}\n",
-            "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•".cyan()
-        );
+        println!("{}\n", "════════════════════════".cyan());
     }
 }

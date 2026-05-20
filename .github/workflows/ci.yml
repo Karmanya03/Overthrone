@@ -9,7 +9,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 1
 
 jobs:
   fmt:
@@ -49,8 +48,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-      - name: Build release binaries
-        run: cargo build --workspace --release
+      - name: Build release binary
+        run: cargo build --release -p overthrone
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

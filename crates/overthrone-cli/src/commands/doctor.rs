@@ -266,6 +266,12 @@ pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
     // Clock skew check via LDAP RootDSE
     results.push(check_clock_skew(dc).await);
 
+    // LDAP channel binding enforcement check
+    results.push(check_ldap_channel_binding(dc).await);
+
+    // NTLM authentication policy check
+    results.push(check_ntlm_policy(dc).await);
+
     results
 }
 
@@ -399,6 +405,297 @@ async fn check_clock_skew(dc_ip: &str) -> CheckResult {
             name: "clock_skew".to_string(),
             passed: true,
             message: format!("{skew_mins}m {skew_secs}s skew (within Kerberos tolerance)"),
+            hint: None,
+        }
+    }
+}
+
+/// Check LDAP channel binding enforcement policy on a DC.
+/// Queries RootDSE for supportedCapabilities and domain functionality level
+/// to determine if channel binding is likely enforced.
+///
+/// Windows Server 2025 (functionality level 7+) defaults to "Required" for
+/// LDAP channel binding. Older servers default to "When supported" (Negotiate).
+async fn check_ldap_channel_binding(dc_ip: &str) -> CheckResult {
+    let url = format!("ldap://{}:389", dc_ip);
+    let ldap_result = ldap3::LdapConnAsync::new(&url).await;
+    let (conn, mut ldap) = match ldap_result {
+        Ok(pair) => pair,
+        Err(e) => {
+            return CheckResult {
+                name: "ldap_channel_binding".to_string(),
+                passed: false,
+                message: format!("LDAP connect failed: {e}"),
+                hint: Some("Ensure port 389 is reachable on the DC".to_string()),
+            };
+        }
+    };
+    tokio::spawn(async move {
+        if let Err(e) = conn.drive().await {
+            tracing::debug!("LDAP connection driver error: {e}");
+        }
+    });
+
+    if let Err(e) = ldap.simple_bind("", "").await {
+        return CheckResult {
+            name: "ldap_channel_binding".to_string(),
+            passed: false,
+            message: format!("LDAP anonymous bind failed: {e}"),
+            hint: Some("DC may not allow anonymous LDAP binds".to_string()),
+        };
+    }
+
+    let search = ldap
+        .search(
+            "",
+            ldap3::Scope::Base,
+            "(objectClass=*)",
+            vec![
+                "supportedCapabilities",
+                "supportedExtension",
+                "domainFunctionality",
+                "forestFunctionality",
+                "domainControllerFunctionality",
+            ],
+        )
+        .await;
+    let _ = ldap.unbind().await;
+
+    let (entries, _) = match search {
+        Ok(result) => match result.success() {
+            Ok(r) => r,
+            Err(e) => {
+                return CheckResult {
+                    name: "ldap_channel_binding".to_string(),
+                    passed: false,
+                    message: format!("RootDSE search failed: {e}"),
+                    hint: None,
+                };
+            }
+        },
+        Err(e) => {
+            return CheckResult {
+                name: "ldap_channel_binding".to_string(),
+                passed: false,
+                message: format!("RootDSE search error: {e}"),
+                hint: None,
+            };
+        }
+    };
+
+    let entry = match entries.first() {
+        Some(e) => ldap3::SearchEntry::construct(e.clone()),
+        None => {
+            return CheckResult {
+                name: "ldap_channel_binding".to_string(),
+                passed: false,
+                message: "Empty RootDSE response".to_string(),
+                hint: None,
+            };
+        }
+    };
+
+    // Check domain functionality level
+    let dc_functionality = entry
+        .attrs
+        .get("domainControllerFunctionality")
+        .and_then(|v| v.first())
+        .map(|s| s.parse::<u32>().unwrap_or(0))
+        .unwrap_or(0);
+
+    // Check for policy hints OID (1.2.840.113556.1.4.2237)
+    let has_policy_hints = entry
+        .attrs
+        .get("supportedExtension")
+        .map(|exts| exts.iter().any(|e| e.contains("1.2.840.113556.1.4.2237")))
+        .unwrap_or(false);
+
+    // Check for LDAP signing policy OID (1.2.840.113556.1.4.1791)
+    let _has_signing_policy = entry
+        .attrs
+        .get("supportedExtension")
+        .map(|exts| exts.iter().any(|e| e.contains("1.2.840.113556.1.4.1791")))
+        .unwrap_or(false);
+
+    // Determine channel binding enforcement level
+    // Functionality levels: 0=2000, 1=2003, 2=2008, 3=2008R2, 4=2012, 5=2012R2, 6=2016, 7=2025
+    let cb_status = if dc_functionality >= 7 {
+        // WS 2025: defaults to "Required" for channel binding
+        "Required"
+    } else if dc_functionality >= 6 {
+        // WS 2016/2019/2022: defaults to "When supported" (Negotiate)
+        "Negotiate"
+    } else {
+        // Older: typically "Never" or "When supported"
+        "Negotiate (likely)"
+    };
+
+    let os_label = match dc_functionality {
+        0 => "Windows 2000",
+        1 => "Windows 2003",
+        2 => "Windows 2008",
+        3 => "Windows 2008 R2",
+        4 => "Windows 2012",
+        5 => "Windows 2012 R2",
+        6 => "Windows 2016/2019/2022",
+        7 => "Windows Server 2025",
+        _ => "Unknown",
+    };
+
+    if cb_status == "Required" {
+        CheckResult {
+            name: "ldap_channel_binding".to_string(),
+            passed: false,
+            message: format!("CB={cb_status} on {os_label} (level {dc_functionality}) — relay to LDAPS will fail"),
+            hint: Some("Channel binding is REQUIRED. NTLM relay to LDAPS is cryptographically impossible. Use pure Kerberos paths (Kerberoast, ASREPRoast, DCSync) instead.".to_string()),
+        }
+    } else {
+        CheckResult {
+            name: "ldap_channel_binding".to_string(),
+            passed: true,
+            message: format!(
+                "CB={cb_status} on {os_label} (level {dc_functionality}) — relay bypass should work"
+            ),
+            hint: if has_policy_hints {
+                Some("Server supports policy hints OID. Our relay strips MsvAvChannelBindings AV_PAIRs to bypass CBT in Negotiate mode.".to_string())
+            } else {
+                None
+            },
+        }
+    }
+}
+
+/// Check NTLM authentication policy on a DC.
+/// Queries RootDSE for domain functionality level and security-relevant
+/// attributes to assess NTLM relay viability.
+///
+/// Note: NTLM blocking is a domain policy (GPO) that cannot be reliably
+/// detected remotely. This check provides guidance based on the DC's
+/// functionality level and known defaults.
+async fn check_ntlm_policy(dc_ip: &str) -> CheckResult {
+    let url = format!("ldap://{}:389", dc_ip);
+    let ldap_result = ldap3::LdapConnAsync::new(&url).await;
+    let (conn, mut ldap) = match ldap_result {
+        Ok(pair) => pair,
+        Err(e) => {
+            return CheckResult {
+                name: "ntlm_policy".to_string(),
+                passed: false,
+                message: format!("LDAP connect failed: {e}"),
+                hint: Some("Ensure port 389 is reachable on the DC".to_string()),
+            };
+        }
+    };
+    tokio::spawn(async move {
+        if let Err(e) = conn.drive().await {
+            tracing::debug!("LDAP connection driver error: {e}");
+        }
+    });
+
+    if let Err(e) = ldap.simple_bind("", "").await {
+        return CheckResult {
+            name: "ntlm_policy".to_string(),
+            passed: false,
+            message: format!("LDAP anonymous bind failed: {e}"),
+            hint: Some("DC may not allow anonymous LDAP binds".to_string()),
+        };
+    }
+
+    let search = ldap
+        .search(
+            "",
+            ldap3::Scope::Base,
+            "(objectClass=*)",
+            vec![
+                "domainFunctionality",
+                "forestFunctionality",
+                "domainControllerFunctionality",
+                "supportedSASLMechanisms",
+            ],
+        )
+        .await;
+    let _ = ldap.unbind().await;
+
+    let (entries, _) = match search {
+        Ok(result) => match result.success() {
+            Ok(r) => r,
+            Err(e) => {
+                return CheckResult {
+                    name: "ntlm_policy".to_string(),
+                    passed: false,
+                    message: format!("RootDSE search failed: {e}"),
+                    hint: None,
+                };
+            }
+        },
+        Err(e) => {
+            return CheckResult {
+                name: "ntlm_policy".to_string(),
+                passed: false,
+                message: format!("RootDSE search error: {e}"),
+                hint: None,
+            };
+        }
+    };
+
+    let entry = match entries.first() {
+        Some(e) => ldap3::SearchEntry::construct(e.clone()),
+        None => {
+            return CheckResult {
+                name: "ntlm_policy".to_string(),
+                passed: false,
+                message: "Empty RootDSE response".to_string(),
+                hint: None,
+            };
+        }
+    };
+
+    let dc_functionality = entry
+        .attrs
+        .get("domainControllerFunctionality")
+        .and_then(|v| v.first())
+        .map(|s| s.parse::<u32>().unwrap_or(0))
+        .unwrap_or(0);
+
+    let sasl_mechs = entry
+        .attrs
+        .get("supportedSASLMechanisms")
+        .map(|v| v.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let has_gssapi = sasl_mechs.iter().any(|m| m.contains("gssapi"));
+    let has_ntlm = sasl_mechs
+        .iter()
+        .any(|m| m.contains("ntlm") || m.contains("gss-spnego"));
+
+    let os_label = match dc_functionality {
+        7 => "Windows Server 2025",
+        6 => "Windows 2016/2019/2022",
+        5 => "Windows 2012 R2",
+        4 => "Windows 2012",
+        _ => "Older",
+    };
+
+    if dc_functionality >= 7 && !has_ntlm {
+        // WS 2025 without NTLM in SASL mechanisms = likely NTLM blocked
+        CheckResult {
+            name: "ntlm_policy".to_string(),
+            passed: false,
+            message: format!("NTLM likely BLOCKED on {os_label} (no NTLM in SASL mechanisms)"),
+            hint: Some("NTLM relay will not work. Pure Kerberos paths (Kerberoast, ASREPRoast, DCSync via RPC, LDAP with GSSAPI) still function.".to_string()),
+        }
+    } else if has_gssapi {
+        CheckResult {
+            name: "ntlm_policy".to_string(),
+            passed: true,
+            message: format!("GSSAPI available on {os_label} — Kerberos auth works; NTLM status depends on domain policy"),
+            hint: Some("If NTLM is blocked by GPO, use Kerberos-based tools (kerberoast, asreproast, dcsync). NTLM relay requires NTLM to be accepted by the target.".to_string()),
+        }
+    } else {
+        CheckResult {
+            name: "ntlm_policy".to_string(),
+            passed: true,
+            message: format!("NTLM appears available on {os_label}"),
             hint: None,
         }
     }

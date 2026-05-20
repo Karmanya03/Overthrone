@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ────────────────────────────────────────────────────────
 // Output helpers
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ────────────────────────────────────────────────────────
 
 /// Emit result as JSON to stdout (and optionally to a file), then return 0.
 /// Callers should return the result of this function directly.
@@ -45,9 +45,9 @@ fn wants_json(cli: &Cli) -> bool {
     matches!(cli.stdout_format, OutputFormat::Json)
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_dump â€” Credential Dumping
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_dump — Credential Dumping
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     banner::print_module_banner("DUMP");
@@ -79,7 +79,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     state.dc_ip = Some(target.to_string());
     state.domain = Some(creds.domain.clone());
 
-    // Map DumpSource â†’ PlannedAction
+    // Map DumpSource → PlannedAction
     let (action, description) = match source {
         DumpSource::Sam => (
             overthrone_pilot::planner::PlannedAction::DumpSam {
@@ -155,15 +155,15 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
 
         println!(
             "  {} Credentials extracted: {}",
-            "âœ“".green(),
+            "✓".green(),
             result.new_credentials.to_string().yellow()
         );
 
         // Print any loot collected
         for loot in &state.loot {
             println!(
-                "  {} [{}] {} â€” {} entries",
-                "â—†".cyan(),
+                "  {} [{}] {} — {} entries",
+                "◆".cyan(),
                 loot.loot_type.yellow(),
                 loot.source.cyan(),
                 loot.entries.to_string().green()
@@ -171,7 +171,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         }
 
         banner::print_success(&format!(
-            "Dump completed â€” {} credential(s) extracted",
+            "Dump completed — {} credential(s) extracted",
             result.new_credentials
         ));
         0
@@ -192,9 +192,9 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_doctor â€” Environment Diagnostics
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_doctor — Environment Diagnostics
+// ═══════════════════════════════════════════════════════
 
 pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
     banner::print_module_banner("DOCTOR");
@@ -224,18 +224,18 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
             "â–¸".bright_black()
         );
         match tokio::net::TcpStream::connect(format!("{}:445", dc_host)).await {
-            Ok(_) => println!("    {} SMB (445): Reachable", "âœ“".green()),
-            Err(e) => println!("    {} SMB (445): Unreachable - {}", "âœ—".red(), e),
+            Ok(_) => println!("    {} SMB (445): Reachable", "✓".green()),
+            Err(e) => println!("    {} SMB (445): Unreachable - {}", "✗".red(), e),
         }
 
         match tokio::net::TcpStream::connect(format!("{}:389", dc_host)).await {
-            Ok(_) => println!("    {} LDAP (389): Reachable", "âœ“".green()),
-            Err(e) => println!("    {} LDAP (389): Unreachable - {}", "âœ—".red(), e),
+            Ok(_) => println!("    {} LDAP (389): Reachable", "✓".green()),
+            Err(e) => println!("    {} LDAP (389): Unreachable - {}", "✗".red(), e),
         }
 
         match tokio::net::TcpStream::connect(format!("{}:88", dc_host)).await {
-            Ok(_) => println!("    {} Kerberos (88): Reachable", "âœ“".green()),
-            Err(e) => println!("    {} Kerberos (88): Unreachable - {}", "âœ—".red(), e),
+            Ok(_) => println!("    {} Kerberos (88): Reachable", "✓".green()),
+            Err(e) => println!("    {} Kerberos (88): Unreachable - {}", "✗".red(), e),
         }
     }
 
@@ -250,15 +250,15 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
         {
             Ok(o) if o.status.success() => {
                 let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                println!("    {} Rust toolchain: {}", "âœ“".green(), ver);
+                println!("    {} Rust toolchain: {}", "✓".green(), ver);
             }
-            _ => println!("    {} Rust toolchain: not found", "âœ—".red()),
+            _ => println!("    {} Rust toolchain: not found", "✗".red()),
         }
 
         // OpenSSL / crypto
         #[cfg(windows)]
         {
-            println!("    {} Crypto: native Windows CNG/SSPI", "âœ“".green());
+            println!("    {} Crypto: native Windows CNG/SSPI", "✓".green());
         }
         #[cfg(not(windows))]
         {
@@ -268,11 +268,11 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
             {
                 Ok(o) if o.status.success() => {
                     let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    println!("    {} OpenSSL: {}", "âœ“".green(), ver);
+                    println!("    {} OpenSSL: {}", "✓".green(), ver);
                 }
                 _ => println!(
                     "    {} OpenSSL: not found (needed on Linux/macOS)",
-                    "âœ—".red()
+                    "✗".red()
                 ),
             }
 
@@ -296,9 +296,9 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
                     .map(|o| o.status.success())
                     .unwrap_or(false);
                 if found {
-                    println!("    {} {}: available ({})", "âœ“".green(), tool, purpose);
+                    println!("    {} {}: available ({})", "✓".green(), tool, purpose);
                 } else {
-                    println!("    {} {}: not found ({})", "âœ—".red(), tool, purpose);
+                    println!("    {} {}: not found ({})", "✗".red(), tool, purpose);
                 }
             }
         }
@@ -306,7 +306,7 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
         // Kerberos
         #[cfg(windows)]
         {
-            println!("    {} Kerberos: native Windows SSPI", "âœ“".green());
+            println!("    {} Kerberos: native Windows SSPI", "✓".green());
         }
         #[cfg(not(windows))]
         {
@@ -319,9 +319,9 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
                     .map(|o| o.status.success())
                     .unwrap_or(false);
             if krb_found {
-                println!("    {} Kerberos: configured", "âœ“".green());
+                println!("    {} Kerberos: configured", "✓".green());
             } else {
-                println!("    {} Kerberos: krb5.conf not found", "âœ—".red());
+                println!("    {} Kerberos: krb5.conf not found", "✗".red());
             }
         }
     }
@@ -330,9 +330,9 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_report â€” Report Generation
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_report — Report Generation
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFormat) -> i32 {
     banner::print_module_banner("REPORT");
@@ -379,7 +379,7 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
             println!(
                 "  {} Markdown generated ({:.1} KB, {} findings)",
-                "âœ“".green(),
+                "✓".green(),
                 report_content.len() as f64 / 1024.0,
                 session.findings.len()
             );
@@ -401,7 +401,7 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
             println!(
                 "  {} JSON generated ({:.1} KB, {} findings)",
-                "âœ“".green(),
+                "✓".green(),
                 report_json.len() as f64 / 1024.0,
                 session.findings.len()
             );
@@ -424,7 +424,7 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
             println!(
                 "  {} PDF generated ({:.1} KB, {} findings)",
-                "âœ“".green(),
+                "✓".green(),
                 pdf_bytes.len() as f64 / 1024.0,
                 session.findings.len()
             );
@@ -435,9 +435,9 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
     0
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ──────────────────────────────────────────────────────────
 // Module command handlers
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ──────────────────────────────────────────────────────────
 
 pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
     use overthrone_core::exec::modules;
@@ -489,7 +489,7 @@ pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
     println!("\n{}", "Available Modules:".yellow().bold());
     println!(
         "{}",
-        "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€".dimmed()
+        "─────────────────────────────────────────────────".dimmed()
     );
 
     let mut current_cat = String::new();
@@ -499,7 +499,7 @@ pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
             current_cat = cat_label.to_string();
             println!(
                 "\n  {} {} {}",
-                "â– ".cyan(),
+                "■".cyan(),
                 cat_label.cyan().bold(),
                 format!(
                     "({})",
@@ -567,7 +567,7 @@ pub async fn cmd_module_info(cli: &Cli, name: String) -> i32 {
         return emit_json(cli, serde_json::json!({"module": meta}));
     }
 
-    let sep = "â”â”â”".dimmed();
+    let sep = "━━━".dimmed();
     println!("\n{} {} {}", sep, meta.name.yellow().bold(), sep);
     println!(
         "  {}    {}",
@@ -690,7 +690,7 @@ pub async fn cmd_module_run(
             }
             if !out.stdout.is_empty() || !out.stderr.is_empty() {
                 println!("\n{}", "Output:".yellow().bold());
-                println!("{}", "â”€â”€â”€â”€â”€â”€â”€".dimmed());
+                println!("{}", "───────".dimmed());
                 if !out.stdout.is_empty() {
                     println!("{}", out.stdout);
                 }
@@ -798,15 +798,15 @@ pub async fn cmd_module_run_parallel(
     }
 
     println!("\n{}", "Results:".yellow().bold());
-    println!("{}", "â”€â”€â”€â”€â”€â”€â”€â”€".dimmed());
+    println!("{}", "────────".dimmed());
     for r in &results {
         let icon = if r.success {
-            "[âœ“]".green()
+            "[✓]".green()
         } else {
-            "[âœ—]".red()
+            "[✗]".red()
         };
         println!(
-            "  {} {} â€” {}",
+            "  {} {} — {}",
             icon,
             r.target.cyan(),
             r.module_name.dimmed()
@@ -820,9 +820,9 @@ pub async fn cmd_module_run_parallel(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_forge â€” Ticket Forging
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_forge — Ticket Forging
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
     banner::print_module_banner("FORGE");
@@ -959,9 +959,9 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_crack â€” Hash Cracking
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_crack — Hash Cracking
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_crack(
     _cli: &Cli,
@@ -1030,7 +1030,7 @@ pub async fn cmd_crack(
             Ok(hash_type) => {
                 let result = cracker.crack(&hash_type);
                 if result.cracked {
-                    println!("\n  {} Hash cracked successfully!", "âœ“".green());
+                    println!("\n  {} Hash cracked successfully!", "✓".green());
                     if let Some(u) = result.username {
                         println!("    User:      {}", u.cyan());
                     }
@@ -1084,7 +1084,7 @@ pub async fn cmd_crack(
                     return 1;
                 }
 
-                println!("  {} Loaded {} valid hash(es)", "âœ“".green(), hashes.len());
+                println!("  {} Loaded {} valid hash(es)", "✓".green(), hashes.len());
                 println!("  {} Starting parallel crack...", "â–¸".bright_black());
 
                 let results = cracker.crack_batch(&hashes);
@@ -1096,7 +1096,7 @@ pub async fn cmd_crack(
                         let user = result.username.as_deref().unwrap_or("unknown");
                         println!(
                             "    {} {} ({}) -> {}",
-                            "âœ“".green(),
+                            "✓".green(),
                             user.cyan(),
                             result.hash_type.dimmed(),
                             result.password.as_deref().unwrap_or("").yellow()
@@ -1107,7 +1107,7 @@ pub async fn cmd_crack(
                 println!(
                     "\n  {} Summary: Cracked {}/{} hashes",
                     if cracked_count > 0 {
-                        "âœ“".green()
+                        "✓".green()
                     } else {
                         "!".yellow()
                     },
@@ -1129,9 +1129,9 @@ pub async fn cmd_crack(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_rid â€” RID Cycling
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_rid — RID Cycling
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool) -> i32 {
     banner::print_module_banner("RID CYCLING");
@@ -1285,11 +1285,11 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
     println!("\n{}", "RID Cycling Results:".yellow().bold());
     println!(
         "{}",
-        "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€".dimmed()
+        "─────────────────────────────────────────────────".dimmed()
     );
     println!(
         "  {} Total: {} | Users: {} | Groups: {} | Aliases: {}",
-        "â—†".cyan(),
+        "◆".cyan(),
         results.len().to_string().green().bold(),
         users.to_string().green(),
         groups.to_string().yellow(),
@@ -1303,7 +1303,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         .filter(|r| r.account_type == RidAccountType::User)
         .collect();
     if !user_results.is_empty() {
-        println!("  {} Users:", "â– ".green());
+        println!("  {} Users:", "■".green());
         for r in &user_results {
             println!(
                 "    {} RID {:>5}: {}",
@@ -1321,7 +1321,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         .filter(|r| r.account_type == RidAccountType::Group)
         .collect();
     if !group_results.is_empty() {
-        println!("  {} Groups:", "â– ".yellow());
+        println!("  {} Groups:", "■".yellow());
         for r in &group_results {
             println!(
                 "    {} RID {:>5}: {}",
@@ -1339,7 +1339,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         .filter(|r| r.account_type == RidAccountType::Alias)
         .collect();
     if !alias_results.is_empty() {
-        println!("  {} Aliases:", "â– ".yellow());
+        println!("  {} Aliases:", "■".yellow());
         for r in &alias_results {
             println!(
                 "    {} RID {:>5}: {}",
@@ -1351,14 +1351,14 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
     }
 
     banner::print_success(&format!(
-        "RID cycling complete â€” {} accounts discovered",
+        "RID cycling complete — {} accounts discovered",
         results.len()
     ));
     0
 }
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_move â€” Lateral Movement
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_move — Lateral Movement
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
     banner::print_module_banner("MOVE");
@@ -1406,7 +1406,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
                 Ok(reaper_result) => {
                     let trust_count = reaper_result.trusts.len();
-                    println!("  {} Found {} trust(s)", "âœ“".green(), trust_count);
+                    println!("  {} Found {} trust(s)", "✓".green(), trust_count);
 
                     for trust in &reaper_result.trusts {
                         println!(
@@ -1470,11 +1470,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                     match run_crawler(&crawler_config, &reaper_result).await {
                         Ok(crawler_result) => {
                             let path_count = crawler_result.escalation_paths.len();
-                            println!(
-                                "  {} Found {} escalation path(s)",
-                                "âœ“".green(),
-                                path_count
-                            );
+                            println!("  {} Found {} escalation path(s)", "✓".green(), path_count);
 
                             for (i, path) in crawler_result.escalation_paths.iter().enumerate() {
                                 println!(
@@ -1550,7 +1546,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                         let chain_count = crawler_result.mssql_chains.len();
                         println!(
                             "  {} Found {} MSSQL link chain(s)",
-                            "âœ“".green(),
+                            "✓".green(),
                             chain_count
                         );
 
@@ -1609,7 +1605,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                 Ok(reaper_result) => {
                     match run_crawler(&crawler_config, &reaper_result).await {
                         Ok(crawler_result) => {
-                            println!("  {} Trust map generated", "âœ“".green());
+                            println!("  {} Trust map generated", "✓".green());
 
                             // Print ASCII art trust map
                             let graph = &crawler_result.trust_map;
@@ -1689,9 +1685,9 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_gpp â€” GPP Password Decryption
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_gpp — GPP Password Decryption
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> i32 {
     banner::print_module_banner("GPP");
@@ -1718,7 +1714,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
                 }
                 println!(
                     "  {} Decrypted password: {}",
-                    "âœ“".green(),
+                    "✓".green(),
                     password.yellow()
                 );
                 banner::print_success("GPP decryption completed");
@@ -1790,7 +1786,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
                     );
                 }
 
-                println!("  {} Found {} credential(s)", "âœ“".green(), creds.len());
+                println!("  {} Found {} credential(s)", "✓".green(), creds.len());
                 for cred in &creds {
                     println!("    {}: {}", cred.username.cyan(), cred.password.yellow());
                     if !cred.changed.is_empty() {
@@ -1835,9 +1831,9 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_laps â€” LAPS Password Reading
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_laps — LAPS Password Reading
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     banner::print_module_banner("LAPS");
@@ -1931,7 +1927,7 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
                 for entry in &filtered {
                     println!(
                         "  {} {} ({})",
-                        "âœ“".green(),
+                        "✓".green(),
                         entry.computer_name.cyan(),
                         if entry.is_laps_v2 {
                             "LAPSv2".dimmed()
@@ -1950,16 +1946,16 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
             } else {
                 println!(
                     "  {} Found {} LAPS-enabled computers ({} readable)",
-                    "âœ“".green(),
+                    "✓".green(),
                     total,
                     readable.len()
                 );
 
                 for entry in &entries {
                     let status = if entry.password.is_some() {
-                        "âœ“".green()
+                        "✓".green()
                     } else {
-                        "âœ—".red()
+                        "✗".red()
                     };
                     println!(
                         "  {} {} ({})",
@@ -1998,9 +1994,9 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_secrets â€” Secrets Dumping
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_secrets — Secrets Dumping
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
     banner::print_module_banner("SECRETS");
@@ -2033,7 +2029,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
                 Ok(credentials) => {
                     println!(
                         "  {} Extracted {} account(s)",
-                        "âœ“".green(),
+                        "✓".green(),
                         credentials.len()
                     );
                     for cred in &credentials {
@@ -2092,7 +2088,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
                 Ok(credentials) => {
                     println!(
                         "  {} Extracted {} secret(s)",
-                        "âœ“".green(),
+                        "✓".green(),
                         credentials.len()
                     );
                     for cred in &credentials {
@@ -2141,7 +2137,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
                 Ok(credentials) => {
                     println!(
                         "  {} Extracted {} cached credential(s)",
-                        "âœ“".green(),
+                        "✓".green(),
                         credentials.len()
                     );
                     for cred in &credentials {
@@ -2164,9 +2160,9 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_adcs â€” ADCS Certificate Abuse
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_adcs — ADCS Certificate Abuse
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
     banner::print_module_banner("ADCS");
@@ -2262,7 +2258,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             for ca_info in &cas {
                 println!(
                     "    {} {} ({})",
-                    "âœ“".green(),
+                    "✓".green(),
                     ca_info.name.cyan(),
                     ca_info.dn.dimmed()
                 );
@@ -2292,9 +2288,9 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 let icon = if vuln.is_some() {
                     "!".red()
                 } else {
-                    "âœ“".green()
+                    "✓".green()
                 };
-                println!("    {} {} â€” {}", icon, tmpl.name.cyan(), vuln_str);
+                println!("    {} {} — {}", icon, tmpl.name.cyan(), vuln_str);
                 if !tmpl.extended_key_usage.is_empty() {
                     println!("      EKU: {}", tmpl.extended_key_usage.join(", ").dimmed());
                 }
@@ -2366,7 +2362,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained!", "âœ“".green());
+                    println!("  {} Certificate obtained!", "✓".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     println!("    Serial: {}", cert.serial_number.dimmed());
@@ -2411,7 +2407,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained!", "âœ“".green());
+                    println!("  {} Certificate obtained!", "✓".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     if wants_json(cli) {
@@ -2462,7 +2458,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     let _ = tokio::fs::write(&agent_path, &agent_cert.pfx_data).await;
                     let _ = tokio::fs::write(&user_path, &user_cert.pfx_data).await;
 
-                    println!("  {} Obtained 2 certificate(s)", "âœ“".green());
+                    println!("  {} Obtained 2 certificate(s)", "✓".green());
                     println!(
                         "    Agent cert: {} ({})",
                         agent_path.cyan(),
@@ -2511,7 +2507,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     }
                     println!(
                         "  {} Template ACLs modified successfully (command generated)",
-                        "âœ“".green()
+                        "✓".green()
                     );
                 }
                 Err(e) => {
@@ -2584,8 +2580,8 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         }
                     } else {
                         println!(
-                            "  {} CA '{}' â€” no ESC5 ACL weaknesses found",
-                            "âœ“".green(),
+                            "  {} CA '{}' — no ESC5 ACL weaknesses found",
+                            "✓".green(),
                             ca.cyan()
                         );
                     }
@@ -2660,7 +2656,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained via ESC6!", "âœ“".green());
+                    println!("  {} Certificate obtained via ESC6!", "✓".green());
                     println!("    Saved to: {}", pfx_path.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     if wants_json(cli) {
@@ -2707,7 +2703,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     }
                     println!(
                         "  {} CA permissions modified successfully (command generated)",
-                        "âœ“".green()
+                        "✓".green()
                     );
                 }
                 Err(e) => {
@@ -2739,7 +2735,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     println!("\n{}", commands.yellow());
                     println!(
                         "  {} Certificate obtained via ESC8 relay (command generated)",
-                        "âœ“".green()
+                        "✓".green()
                     );
                 }
                 Err(e) => {
@@ -2809,7 +2805,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             };
 
             let result = if let Some((dc_ip, user, pass, domain, dn)) = live_ldap {
-                // â”€ LIVE MODE: connect LDAP and auto-poison/restore UPN â”€
+                // ─ LIVE MODE: connect LDAP and auto-poison/restore UPN ─
                 println!(
                     "  {} Live LDAP mode: auto-poisoning UPN via {}",
                     "â–¸".bright_black(),
@@ -2835,7 +2831,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     .exploit_with_ldap(&live_config, &mut ldap_session)
                     .await
             } else {
-                // â”€ GUIDANCE MODE: print operator commands, do CSR only â”€
+                // ─ GUIDANCE MODE: print operator commands, do CSR only ─
                 let (set_cmd, restore_cmd) =
                     overthrone_core::adcs::Esc9Exploiter::generate_ldap_commands(&config);
                 println!("\n  {} LDAP Setup Commands:", "â–¸".bright_black());
@@ -2857,11 +2853,11 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             match result {
                 Ok(result) => {
-                    println!("\n  {} Certificate obtained!", "âœ“".green());
+                    println!("\n  {} Certificate obtained!", "✓".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     if result.upn_restored {
-                        println!("    UPN: {} restored", "âœ“".green());
+                        println!("    UPN: {} restored", "✓".green());
                     } else {
                         println!(
                             "    UPN: {} restore pending (see LDAP commands above)",
@@ -2953,7 +2949,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             };
 
             let result = if let Some((dc_ip, user, pass, domain, dn, orig)) = live_ldap_b {
-                // â”€ LIVE MODE (Variant B): connect LDAP and auto-poison/restore UPN â”€
+                // ─ LIVE MODE (Variant B): connect LDAP and auto-poison/restore UPN ─
                 println!(
                     "  {} Live LDAP mode (Variant B): auto-poisoning UPN via {}",
                     "â–¸".bright_black(),
@@ -2979,7 +2975,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     .exploit_with_ldap(&live_config, &mut ldap_session)
                     .await
             } else {
-                // â”€ STANDARD MODE: Variant A always works; Variant B without creds prints a hint â”€
+                // ─ STANDARD MODE: Variant A always works; Variant B without creds prints a hint ─
                 if esc_variant == overthrone_core::adcs::Esc10Variant::UPNMappingEnabled {
                     println!(
                         "  {} Tip: supply --target-dc/--ldap-user/--ldap-pass/--ldap-domain/--victim-dn/--original-upn for fully automated Variant B",
@@ -2991,7 +2987,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             match result {
                 Ok(result) => {
-                    println!("\n  {} Certificate obtained!", "âœ“".green());
+                    println!("\n  {} Certificate obtained!", "✓".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Auth: {}", result.auth_hints.certipy_command.yellow());
@@ -3044,7 +3040,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             };
 
             let assessment = if let Some((user, pass, domain)) = live_smb {
-                // â”€ LIVE MODE: read InterfaceFlags via WINREG RPC â”€
+                // ─ LIVE MODE: read InterfaceFlags via WINREG RPC ─
                 println!(
                     "  {} Live mode: connecting SMB to {} for registry read...",
                     "â–¸".bright_black(),
@@ -3068,7 +3064,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     }
                 }
             } else {
-                // â”€ GUIDANCE MODE: assessment without live registry read â”€
+                // ─ GUIDANCE MODE: assessment without live registry read ─
                 println!(
                     "  {} Tip: supply --smb-user/--smb-pass/--smb-domain for live InterfaceFlags registry read",
                     "i".dimmed()
@@ -3085,7 +3081,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             if assessment.is_vulnerable {
                 println!(
                     "  {} CA is VULNERABLE to ESC11 (IF_ENFORCEENCRYPTICERTREQUEST disabled)",
-                    "â˜…".red().bold()
+                    "★".red().bold()
                 );
                 if let Some(flags) = assessment.interface_flags {
                     println!("    InterfaceFlags: 0x{:08X}", flags);
@@ -3093,7 +3089,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             } else if assessment.interface_flags.is_some() {
                 println!(
                     "  {} CA appears NOT vulnerable (IF_ENFORCEENCRYPTICERTREQUEST is set)",
-                    "âœ“".green()
+                    "✓".green()
                 );
             }
             println!("\n  {} Registry path checked:", "â–¸".bright_black());
@@ -3175,7 +3171,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             match exploiter.exploit(&config).await {
                 Ok(result) => {
-                    println!("\n  {} Certificate obtained!", "âœ“".green());
+                    println!("\n  {} Certificate obtained!", "✓".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Granted Group: {}", result.granted_group_dn.yellow());
@@ -3237,10 +3233,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     .await
                 {
                     Ok(result) => {
-                        println!(
-                            "\n  {} Mapping written successfully via LDAP!",
-                            "âœ“".green()
-                        );
+                        println!("\n  {} Mapping written successfully via LDAP!", "✓".green());
                         println!("    PKINIT: {}", result.pkinit_command.cyan());
                         println!("    Impact: {}", result.impact_description.yellow());
                         println!("\n  {} CLEANUP COMMAND:", "i".dimmed());
@@ -3306,7 +3299,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("\n  {} Certificate obtained via ESC15!", "âœ“".green());
+                    println!("\n  {} Certificate obtained via ESC15!", "✓".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    PKINIT: {}", result.pkinit_command.cyan());
@@ -3361,7 +3354,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("\n  {} Certificate obtained via ESC16!", "âœ“".green());
+                    println!("\n  {} Certificate obtained via ESC16!", "✓".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    PKINIT: {}", result.pkinit_command.cyan());
@@ -3412,7 +3405,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained!", "âœ“".green());
+                    println!("  {} Certificate obtained!", "✓".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     println!("    Serial: {}", cert.serial_number.dimmed());
@@ -3429,9 +3422,9 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_shell â€” Interactive Shell
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_shell — Interactive Shell
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
     banner::print_module_banner("SHELL");
@@ -3456,9 +3449,9 @@ pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_sccm â€” SCCM Abuse
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_sccm — SCCM Abuse
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
     use overthrone_core::sccm;
@@ -3515,7 +3508,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
             for site in &sites {
                 println!(
                     "\n  {} Site {} @ {} ({})",
-                    "âœ“".green(),
+                    "✓".green(),
                     site.site_code.cyan(),
                     site.site_server.cyan(),
                     site.version.dimmed()
@@ -3535,7 +3528,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                         }
                     }
                     Ok(_) => println!(
-                        "  {} Collections: (WMI requires Windows â€” see debug log for PowerShell)",
+                        "  {} Collections: (WMI requires Windows — see debug log for PowerShell)",
                         "â–¸".bright_black()
                     ),
                     Err(e) => println!("  {} Collections: {}", "!".yellow(), e),
@@ -3659,7 +3652,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                             } else {
                                 println!(
                                     "  {} {} NAA credential(s):",
-                                    "âœ“".green(),
+                                    "✓".green(),
                                     res.credentials.len()
                                 );
                                 for c in &res.credentials {
@@ -3689,7 +3682,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                     {
                         Ok(res) => {
                             if let Some(output) = &res.command_output {
-                                println!("  {} AdminService results:", "âœ“".green());
+                                println!("  {} AdminService results:", "✓".green());
                                 for line in output.lines() {
                                     println!("    {}", line);
                                 }
@@ -3754,7 +3747,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
             if sites.is_empty() {
                 banner::print_fail(&format!(
-                    "No SCCM site found on {} â€” run 'sccm enum' first",
+                    "No SCCM site found on {} — run 'sccm enum' first",
                     target
                 ));
                 return 1;
@@ -3782,9 +3775,9 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_scan â€” Port Scanner
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_scan — Port Scanner
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_scan(
     cli: &Cli,
@@ -3920,7 +3913,7 @@ pub async fn cmd_scan(
 
             println!(
                 "  {} Scan complete: {} open ports found",
-                "âœ“".green(),
+                "✓".green(),
                 open_ports
             );
 
@@ -3958,9 +3951,9 @@ pub async fn cmd_scan(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_tui â€” Interactive TUI
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_tui — Interactive TUI
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -> i32 {
     let graph = Arc::new(Mutex::new(if let Some(path) = load {
@@ -4015,9 +4008,9 @@ pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_plugin â€” Plugin System
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_plugin — Plugin System
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_plugin(
     _cli: &Cli,
@@ -4052,7 +4045,7 @@ pub async fn cmd_plugin(
         PluginAction::Info { plugin_id } => {
             println!(
                 "{} Querying plugin: {}",
-                "â„¹".bright_black(),
+                "ℹ".bright_black(),
                 plugin_id.cyan()
             );
             if let Some(plugin) = registry.get(&plugin_id) {
@@ -4069,7 +4062,7 @@ pub async fn cmd_plugin(
         PluginAction::Exec { command, args } => {
             println!(
                 "{} Executing plugin command: {} {}",
-                "âš¡".bright_black(),
+                "⚡".bright_black(),
                 command.cyan(),
                 args.join(" ").yellow()
             );
@@ -4126,7 +4119,7 @@ pub async fn cmd_plugin(
         PluginAction::Enable { plugin_id } => {
             println!(
                 "{} Enabling plugin: {}",
-                "âœ“".bright_black(),
+                "✓".bright_black(),
                 plugin_id.cyan()
             );
             registry.enable(&plugin_id);
@@ -4135,7 +4128,7 @@ pub async fn cmd_plugin(
         PluginAction::Disable { plugin_id } => {
             println!(
                 "{} Disabling plugin: {}",
-                "âœ—".bright_black(),
+                "✗".bright_black(),
                 plugin_id.cyan()
             );
             registry.disable(&plugin_id);
@@ -4145,9 +4138,9 @@ pub async fn cmd_plugin(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_c2 â€” C2 Integration
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═══════════════════════════════════════════════════════
+// cmd_c2 — C2 Integration
+// ═══════════════════════════════════════════════════════
 
 pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
     banner::print_module_banner("C2 INTEGRATION");
@@ -4165,13 +4158,13 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
         } => {
             println!(
                 "{} Connecting to {} at {}:{}...",
-                "âš¡".bright_black(),
+                "⚡".bright_black(),
                 framework.to_uppercase().cyan(),
                 host.cyan(),
                 port.to_string().cyan()
             );
             if skip_verify {
-                println!("{}", "  âš  TLS verification disabled".yellow());
+                println!("{}", "  ⚠ TLS verification disabled".yellow());
             }
             let channel_name = name.clone().unwrap_or_else(|| "default".to_string());
 
@@ -4238,7 +4231,7 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
             let mode = if powershell { "PowerShell" } else { "Shell" };
             println!(
                 "{} {} on session {}: {}",
-                "âš¡".bright_black(),
+                "⚡".bright_black(),
                 mode,
                 session_id.cyan(),
                 command.yellow()
@@ -4267,7 +4260,7 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
         } => {
             println!(
                 "{} Deploying implant to {} via {} (listener: {})...",
-                "âš¡".bright_black(),
+                "⚡".bright_black(),
                 target.cyan(),
                 channel.cyan(),
                 listener.yellow()
