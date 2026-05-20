@@ -579,7 +579,8 @@ impl OvtModule for AsreproastModule {
             })
             .ok_or_else(|| {
                 OverthroneError::custom(
-                    "AS-REP roast requires a domain via params.domain or module credentials".to_string(),
+                    "AS-REP roast requires a domain via params.domain or module credentials"
+                        .to_string(),
                 )
             })?;
 

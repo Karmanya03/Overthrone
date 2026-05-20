@@ -1780,36 +1780,36 @@ impl Planner {
 
         // Enforce maximum step cap to prevent runaway plans
 
-            #[cfg(test)]
-            mod tests {
-                use super::*;
+        #[cfg(test)]
+        mod tests {
+            use super::*;
 
-                #[test]
-                fn user_enum_uses_embedded_fallback_when_no_userlist_is_provided() {
-                    let planner = Planner::new(false, None);
-                    let state = EngagementState::new();
-                    let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
+            #[test]
+            fn user_enum_uses_embedded_fallback_when_no_userlist_is_provided() {
+                let planner = Planner::new(false, None);
+                let state = EngagementState::new();
+                let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
 
-                    match &plan.steps[0].action {
-                        PlannedAction::UserEnum { wordlist } => assert!(wordlist.is_empty()),
-                        other => panic!("expected UserEnum step, got {:?}", other),
-                    }
-                }
-
-                #[test]
-                fn user_enum_uses_explicit_userlist_when_provided() {
-                    let planner = Planner::new(false, Some("custom-users.txt".to_string()));
-                    let state = EngagementState::new();
-                    let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
-
-                    match &plan.steps[0].action {
-                        PlannedAction::UserEnum { wordlist } => {
-                            assert_eq!(wordlist, "custom-users.txt")
-                        }
-                        other => panic!("expected UserEnum step, got {:?}", other),
-                    }
+                match &plan.steps[0].action {
+                    PlannedAction::UserEnum { wordlist } => assert!(wordlist.is_empty()),
+                    other => panic!("expected UserEnum step, got {:?}", other),
                 }
             }
+
+            #[test]
+            fn user_enum_uses_explicit_userlist_when_provided() {
+                let planner = Planner::new(false, Some("custom-users.txt".to_string()));
+                let state = EngagementState::new();
+                let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
+
+                match &plan.steps[0].action {
+                    PlannedAction::UserEnum { wordlist } => {
+                        assert_eq!(wordlist, "custom-users.txt")
+                    }
+                    other => panic!("expected UserEnum step, got {:?}", other),
+                }
+            }
+        }
         if steps.len() > self.max_steps {
             warn!(
                 "Plan has {} steps, truncating to {} (bail-out)",
