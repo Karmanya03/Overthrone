@@ -209,6 +209,7 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         jitter_ms: args.jitter_ms,
         use_ldaps: args.ldaps,
         timeout: args.timeout,
+        userlist: None,
         #[cfg(feature = "qlearn")]
         adaptive_mode: overthrone_pilot::qlearner::AdaptiveMode::Hybrid,
         #[cfg(feature = "qlearn")]

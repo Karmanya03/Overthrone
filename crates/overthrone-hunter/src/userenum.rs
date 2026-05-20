@@ -160,7 +160,7 @@ pub struct UserEnumConfig {
 impl Default for UserEnumConfig {
     fn default() -> Self {
         Self {
-            userlist: PathBuf::from("assets/ad_usernames.txt"),
+            userlist: PathBuf::new(),
             output_file: None,
             save_asrep_hashes: true,
             concurrency: 10,

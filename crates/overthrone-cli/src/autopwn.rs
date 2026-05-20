@@ -140,6 +140,7 @@ pub async fn run(
         jitter_ms: args.jitter_ms,
         use_ldaps: args.ldaps,
         timeout: args.timeout,
+        userlist: args.userlist.clone(),
         #[cfg(feature = "qlearn")]
         adaptive_mode: match args.adaptive {
             AdaptiveModeArg::Heuristic => overthrone_pilot::qlearner::AdaptiveMode::Heuristic,

@@ -1879,7 +1879,7 @@ async fn async_main() -> i32 {
                     config: config.clone(),
                     resume: resume.clone(),
                     bootstrap_no_creds: false,
-                    userlist: None,
+                    userlist: cli.user_list.clone(),
                     use_ldap: false,
                     concurrency: 10,
                 },
@@ -1921,7 +1921,7 @@ async fn async_main() -> i32 {
                     config: config.clone(),
                     resume: resume.clone(),
                     bootstrap_no_creds: true,
-                    userlist: userlist.clone(),
+                    userlist: userlist.clone().or_else(|| cli.user_list.clone()),
                     use_ldap,
                     concurrency,
                 },
@@ -3600,9 +3600,9 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             }
         };
 
+        let effective_userlist = userlist.as_deref().or(cli.user_list.as_deref());
         let uc = overthrone_hunter::UserEnumConfig {
-            userlist: userlist
-                .as_ref()
+            userlist: effective_userlist
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default(),
             output_file: output.as_ref().map(std::path::PathBuf::from),
@@ -3751,10 +3751,10 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             let loot_dir = std::path::PathBuf::from("./loot");
             let _ = std::fs::create_dir_all(&loot_dir);
             let output_path = loot_dir.join("asrep_hashes.txt");
+            let userlist = userlist.as_deref().or(cli.user_list.as_deref());
 
-            let roast_users = |users: Vec<String>| {
+            let roast_users = |users: Vec<String>, domain: String| {
                 let dc = dc.clone();
-                let domain = creds.domain.clone();
                 let output_path = output_path.clone();
                 async move {
                     if users.is_empty() {
@@ -3798,6 +3798,14 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             };
 
             if let Some(path) = userlist {
+                let domain = match cli.domain.as_deref() {
+                    Some(domain) => domain.to_string(),
+                    None => {
+                        banner::print_fail("--domain is required for AS-REP roasting");
+                        return 1;
+                    }
+                };
+
                 let users: Vec<String> = match std::fs::read_to_string(&path) {
                     Ok(content) => content
                         .lines()
@@ -3813,8 +3821,24 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     }
                 };
 
-                return roast_users(users).await;
+                return roast_users(users, domain).await;
             }
+
+            let creds = match require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let dc = match require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+            let (secret, use_hash) = match creds.secret_and_hash_flag() {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             // No userlist provided — try LDAP enumeration first, then fall back.
             let hunt_config = overthrone_hunter::HuntConfig {
@@ -3858,7 +3882,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             }
 
             let users = overthrone_hunter::userenum::embedded_usernames();
-            return roast_users(users).await;
+            return roast_users(users, creds.domain.clone()).await;
         }
         KerberosAction::GetTgt => {
             use overthrone_core::proto::kerberos;
@@ -4928,7 +4952,8 @@ async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
         let ue_cfg = overthrone_hunter::UserEnumConfig {
             userlist: args
                 .userlist
-                .as_ref()
+                .as_deref()
+                .or(cli.user_list.as_deref())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default(),
             output_file: None,

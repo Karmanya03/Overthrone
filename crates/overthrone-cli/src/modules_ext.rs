@@ -546,6 +546,9 @@ impl OvtModule for AsreproastModule {
     fn category(&self) -> ModuleCategory {
         ModuleCategory::Kerberos
     }
+    fn requires_creds(&self) -> bool {
+        false
+    }
 
     async fn run(
         &self,
@@ -562,9 +565,50 @@ impl OvtModule for AsreproastModule {
 
         let outpath = std::path::PathBuf::from(&outdir).join("asrep_hashes.txt");
 
+        let domain = params
+            .as_ref()
+            .and_then(|v| v.get("domain").and_then(|c| c.as_str()))
+            .filter(|domain| !domain.trim().is_empty())
+            .map(|domain| domain.trim().to_string())
+            .or_else(|| {
+                if creds.domain.trim().is_empty() {
+                    None
+                } else {
+                    Some(creds.domain.trim().to_string())
+                }
+            })
+            .ok_or_else(|| {
+                OverthroneError::custom(
+                    "AS-REP roast requires a domain via params.domain or module credentials".to_string(),
+                )
+            })?;
+
+        let target_users: Vec<String> = params
+            .as_ref()
+            .and_then(|v| v.get("target_users"))
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let has_bind_creds = !creds.domain.trim().is_empty()
+            && !creds.username.trim().is_empty()
+            && (!creds.password.trim().is_empty() || creds.nt_hash.is_some());
+
+        if target_users.is_empty() && !has_bind_creds {
+            return Err(OverthroneError::custom(
+                "AS-REP roast needs either target_users in params or usable module credentials for LDAP enumeration".to_string(),
+            ));
+        }
+
         let hunt_config = overthrone_hunter::runner::HuntConfig {
             dc_ip: target.to_string(),
-            domain: creds.domain.clone(),
+            domain: domain.clone(),
             username: creds.username.clone(),
             secret: creds.nt_hash.clone().unwrap_or(creds.password.clone()),
             use_hash: creds.nt_hash.is_some(),
@@ -578,7 +622,7 @@ impl OvtModule for AsreproastModule {
         };
 
         let ac = overthrone_hunter::asreproast::AsRepRoastConfig {
-            target_users: vec![],
+            target_users,
             skip_disabled: true,
             output_file: Some(outpath.clone()),
             target_etypes: vec![

@@ -787,11 +787,12 @@ pub struct Planner {
     max_noise: NoiseLevel,
     /// Maximum total steps before bail-out
     max_steps: usize,
+    userlist: Option<String>,
 }
 
 impl Planner {
     /// Runs this module operation.
-    pub fn new(stealth: bool) -> Self {
+    pub fn new(stealth: bool, userlist: Option<String>) -> Self {
         Self {
             stealth,
             max_noise: if stealth {
@@ -800,6 +801,7 @@ impl Planner {
                 NoiseLevel::Critical
             },
             max_steps: 60,
+            userlist,
         }
     }
 
@@ -899,10 +901,10 @@ impl Planner {
                 if !failed("user_enum") {
                     steps.push(PlanStep {
                         id: next_id(),
-                        description: "Kerberos User Enumeration (wordlist fallback)".to_string(),
+                        description: "Kerberos User Enumeration".to_string(),
                         stage: Stage::Enumerate,
                         action: PlannedAction::UserEnum {
-                            wordlist: "assets/ad_usernames.txt".to_string(),
+                            wordlist: self.userlist.clone().unwrap_or_default(),
                         },
                         priority: 105, // Higher priority as it's our only way to get users
                         noise: NoiseLevel::Low,
@@ -1777,6 +1779,37 @@ impl Planner {
         });
 
         // Enforce maximum step cap to prevent runaway plans
+
+            #[cfg(test)]
+            mod tests {
+                use super::*;
+
+                #[test]
+                fn user_enum_uses_embedded_fallback_when_no_userlist_is_provided() {
+                    let planner = Planner::new(false, None);
+                    let state = EngagementState::new();
+                    let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
+
+                    match &plan.steps[0].action {
+                        PlannedAction::UserEnum { wordlist } => assert!(wordlist.is_empty()),
+                        other => panic!("expected UserEnum step, got {:?}", other),
+                    }
+                }
+
+                #[test]
+                fn user_enum_uses_explicit_userlist_when_provided() {
+                    let planner = Planner::new(false, Some("custom-users.txt".to_string()));
+                    let state = EngagementState::new();
+                    let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
+
+                    match &plan.steps[0].action {
+                        PlannedAction::UserEnum { wordlist } => {
+                            assert_eq!(wordlist, "custom-users.txt")
+                        }
+                        other => panic!("expected UserEnum step, got {:?}", other),
+                    }
+                }
+            }
         if steps.len() > self.max_steps {
             warn!(
                 "Plan has {} steps, truncating to {} (bail-out)",

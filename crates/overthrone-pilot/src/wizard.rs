@@ -197,7 +197,7 @@ impl WizardSession {
                 None
             }
         };
-        let planner = Planner::new(self.config.stealth);
+        let planner = Planner::new(self.config.stealth, None);
         let mut adaptive = AdaptiveEngine::new(self.config.stealth);
         #[cfg(feature = "qlearn")]
         let mut qlearner: Option<AdaptiveQLearner> = match self.config.adaptive_mode {

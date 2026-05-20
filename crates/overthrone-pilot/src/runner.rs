@@ -202,6 +202,8 @@ pub struct AutoPwnConfigSnapshot {
     pub use_ldaps: bool,
     /// Timeout in seconds
     pub timeout: u64,
+    /// Optional username wordlist used by Kerberos enumeration stages
+    pub userlist: Option<String>,
 }
 
 /// Configuration for the autonomous attack runner
@@ -227,6 +229,8 @@ pub struct AutoPwnConfig {
     pub use_ldaps: bool,
     /// Operation timeout per step (seconds)
     pub timeout: u64,
+    /// Optional username wordlist used by Kerberos enumeration stages
+    pub userlist: Option<String>,
     /// Adaptive engine mode (only used with `qlearn` feature)
     #[cfg(feature = "qlearn")]
     pub adaptive_mode: AdaptiveMode,
@@ -300,6 +304,7 @@ impl AutoPwnConfig {
             jitter_ms: self.jitter_ms,
             use_ldaps: self.use_ldaps,
             timeout: self.timeout,
+            userlist: self.userlist.clone(),
         }
     }
 
@@ -316,6 +321,7 @@ impl AutoPwnConfig {
             jitter_ms: snap.jitter_ms,
             use_ldaps: snap.use_ldaps,
             timeout: snap.timeout,
+            userlist: snap.userlist,
             #[cfg(feature = "qlearn")]
             adaptive_mode: AdaptiveMode::default(),
             #[cfg(feature = "qlearn")]
@@ -439,7 +445,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     };
 
-    let planner = Planner::new(config.stealth);
+    let planner = Planner::new(config.stealth, config.userlist.clone());
     let mut adaptive = AdaptiveEngine::new(config.stealth);
     let mut ctx = config.exec_context();
 
