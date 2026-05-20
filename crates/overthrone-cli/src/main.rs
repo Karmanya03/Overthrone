@@ -3806,7 +3806,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     }
                 };
 
-                let users: Vec<String> = match std::fs::read_to_string(&path) {
+                let users: Vec<String> = match std::fs::read_to_string(path) {
                     Ok(content) => content
                         .lines()
                         .map(|line| line.trim().to_string())
