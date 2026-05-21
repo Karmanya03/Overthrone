@@ -1858,7 +1858,7 @@ async function init() {
       }
       await loadGraphList();
       document.getElementById('graph-select').value = newGraph.id;
-      loadGraph(newGraph.id);
+      await loadGraph(newGraph.id);
     } catch (e) {
       const msg = e.message || String(e);
       console.error("Upload error:", e);
@@ -2026,9 +2026,9 @@ async function loadGraphList() {
     select.value = previousValue;
   }
 
-  select.onchange = event => {
+  select.onchange = async event => {
     if (event.target.value) {
-      loadGraph(event.target.value);
+      await loadGraph(event.target.value);
     } else {
       renderEmptyState();
     }
@@ -2038,7 +2038,7 @@ async function loadGraphList() {
   if (graphList.length === 1 && !previousValue) {
     const firstId = graphList[0].id;
     select.value = firstId;
-    loadGraph(firstId);
+    await loadGraph(firstId);
   } else if (!select.value) {
     setEmptyMessage('Select a JSON graph', `${graphList.length} JSON file${graphList.length === 1 ? '' : 's'} available. Select one to begin analysis.`);
   }
@@ -2129,8 +2129,12 @@ async function loadGraph(graphId) {
   updateRenderBadge(graphData);
   updateChunkControls(graphData);
   setInteractiveEnabled(true);
-  setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
-  document.getElementById('empty-state').classList.remove('hidden');
+  if (stats.total_nodes > 0) {
+    await renderSelectedChunk({ warnAll: false });
+  } else {
+    setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
+    document.getElementById('empty-state').classList.remove('hidden');
+  }
 }
 
 function teardownGraph() {
