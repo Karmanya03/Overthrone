@@ -30,7 +30,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use crate::graph_data::{
-    GraphLoadMetrics, PathResult, ViewerEdge, ViewerGraph, ViewerNode, ViewerStats,
+    GraphLoadMetrics, PathResult, RelationshipStat, ViewerEdge, ViewerGraph, ViewerNode,
+    ViewerStats,
 };
 
 /// Embedded HTML content (built from static/index.html)
@@ -242,7 +243,7 @@ const MAX_EDGE_LIMIT: usize = 120000;
 //  API Response Types
 // ============================================================
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct GraphInfo {
     id: String,
     label: String,
@@ -276,10 +277,12 @@ struct GraphResponse {
     edges: Vec<EdgeResponse>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 struct StatsResponse {
     total_nodes: usize,
     total_edges: usize,
+    relationship_types: usize,
+    top_relationships: Vec<RelationshipStat>,
     users: usize,
     computers: usize,
     groups: usize,
@@ -291,6 +294,21 @@ struct StatsResponse {
     owned: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     load_metrics: Option<GraphLoadMetrics>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiError {
+    error: String,
+    code: &'static str,
+}
+
+impl ApiError {
+    fn new(code: &'static str, error: impl Into<String>) -> Self {
+        Self {
+            code,
+            error: error.into(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -531,6 +549,8 @@ fn stats_response(stats: &ViewerStats, load_metrics: Option<GraphLoadMetrics>) -
     StatsResponse {
         total_nodes: stats.total_nodes,
         total_edges: stats.total_edges,
+        relationship_types: stats.relationship_types,
+        top_relationships: stats.top_relationships.clone(),
         users: stats.users,
         computers: stats.computers,
         groups: stats.groups,
@@ -2788,8 +2808,10 @@ async fn find_path(
 async fn get_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
-) -> Result<Json<StatsResponse>, StatusCode> {
-    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
+) -> Result<Json<StatsResponse>, (StatusCode, Json<ApiError>)> {
+    let (_bundle, graph) = load_graph(&state, query.graph.as_deref())
+        .await
+        .map_err(json_load_error)?;
     Ok(Json(stats_response(
         graph.stats(),
         graph.load_metrics.clone(),
@@ -2813,26 +2835,56 @@ async fn get_graph_timings(
 async fn upload_graph(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
-) -> Result<Json<GraphInfo>, StatusCode> {
+) -> Result<Json<GraphInfo>, (StatusCode, Json<ApiError>)> {
+    if body.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "empty_upload",
+                "Uploaded graph JSON was empty",
+            )),
+        ));
+    }
+
+    if let Err(e) = serde_json::from_slice::<serde_json::Value>(&body) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "invalid_json",
+                format!("Uploaded file is not valid JSON: {e}"),
+            )),
+        ));
+    }
+
     let temp_dir = std::env::temp_dir();
     let file_id = uuid::Uuid::new_v4();
     let temp_file = temp_dir.join(format!("overthrone_upload_{}.json", file_id));
     if let Err(e) = fs::write(&temp_file, &body) {
         warn!("Failed to write uploaded graph: {}", e);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new(
+                "upload_write_failed",
+                format!("Failed to store uploaded graph: {e}"),
+            )),
+        ));
     }
 
     let source = temp_file.display().to_string();
+    let label = format!("Uploaded {}", &file_id.to_string()[..8]);
     let bundle = GraphBundle {
         id: format!("upload-{}", file_id),
-        label: "Uploaded JSON".to_string(),
+        label,
         sources: vec![source],
         file_bytes: body.len() as u64,
     };
 
     let graph = ViewerGraph::from_sources(&bundle.sources).map_err(|e| {
         warn!("Failed to parse uploaded graph: {}", e);
-        StatusCode::BAD_REQUEST
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("graph_parse_failed", e)),
+        )
     })?;
 
     let info = GraphInfo {
@@ -2853,6 +2905,18 @@ async fn upload_graph(
     state.graphs.write().await.push(bundle);
 
     Ok(Json(info))
+}
+
+fn json_load_error(status: StatusCode) -> (StatusCode, Json<ApiError>) {
+    let (code, message) = match status {
+        StatusCode::NOT_FOUND => ("graph_not_found", "The requested graph is not registered"),
+        StatusCode::UNPROCESSABLE_ENTITY => (
+            "graph_load_failed",
+            "The selected graph could not be parsed",
+        ),
+        _ => ("graph_error", "The graph request failed"),
+    };
+    (status, Json(ApiError::new(code, message)))
 }
 
 // ============================================================
@@ -3108,5 +3172,74 @@ mod tests {
     fn test_basic_auth_no_credentials_when_expected() {
         // When no credentials configured, any request should pass
         // (This is handled by the middleware logic directly returning Ok)
+    }
+
+    fn test_state() -> Arc<AppState> {
+        Arc::new(AppState {
+            graphs: RwLock::new(Vec::new()),
+            default_graph: "graph-1".to_string(),
+            cache: RwLock::new(HashMap::new()),
+            config: ViewerConfig::default(),
+            rate_limiter: RateLimiter::new(60, 100),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_upload_graph_registers_selector_entry_and_stats() {
+        let state = test_state();
+        let body = axum::body::Bytes::from_static(
+            br#"{
+              "nodes": [
+                {"id":"u1","label":"alice","type":"User"},
+                {"id":"c1","label":"dc01","type":"Computer"}
+              ],
+              "edges": [
+                {"source":"u1","target":"c1","relationship":"AdminTo"}
+              ]
+            }"#,
+        );
+
+        let Json(info) = upload_graph(State(state.clone()), body)
+            .await
+            .expect("upload should succeed");
+
+        assert!(info.id.starts_with("upload-"));
+        assert!(info.loaded);
+        assert_eq!(info.stats.as_ref().unwrap().total_nodes, 2);
+        assert_eq!(info.stats.as_ref().unwrap().total_edges, 1);
+        assert_eq!(state.graphs.read().await.len(), 1);
+        assert!(state.cache.read().await.contains_key(&info.id));
+
+        let Json(stats) = get_stats(
+            State(state),
+            Query(GraphQuery {
+                graph: Some(info.id),
+                limit: None,
+                offset: None,
+                edges: None,
+                types: None,
+                focus: None,
+                relationship: None,
+            }),
+        )
+        .await
+        .expect("stats should resolve uploaded graph");
+        assert_eq!(stats.relationship_types, 1);
+        assert_eq!(stats.top_relationships[0].relationship, "AdminTo");
+    }
+
+    #[tokio::test]
+    async fn test_upload_graph_rejects_invalid_json_with_structured_error() {
+        let state = test_state();
+        let err = upload_graph(
+            State(state),
+            axum::body::Bytes::from_static(b"{not valid json"),
+        )
+        .await
+        .expect_err("invalid JSON must fail");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(err.1.0.code, "invalid_json");
+        assert!(err.1.0.error.contains("valid JSON"));
     }
 }

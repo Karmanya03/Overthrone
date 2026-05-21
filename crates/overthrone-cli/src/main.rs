@@ -913,7 +913,7 @@ enum GraphAction {
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
         /// Port to bind (0 selects a free port).
-        #[arg(short = 'P', long = "port", default_value = "0")]
+        #[arg(long = "port", default_value = "0")]
         port: u16,
     },
     /// Launch the local Rust BloodHound-style interactive tree explorer.

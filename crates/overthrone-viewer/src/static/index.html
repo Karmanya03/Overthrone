@@ -1782,6 +1782,17 @@ let pathFromId = '';
 let pathToId = '';
 let activeQuery = '';
 
+async function readApiError(resp) {
+  const text = await resp.text();
+  if (!text) return `HTTP ${resp.status}`;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed.error || parsed.message || text;
+  } catch (_) {
+    return text;
+  }
+}
+
 const QUERY_CHIPS = [
   ['Kerberos', 'attack:kerberos'],
   ['AS-REP', 'attack:asrep'],
@@ -1838,12 +1849,10 @@ async function init() {
     document.getElementById('graph-badge').textContent = 'Uploading...';
     try {
       const resp = await fetch('/api/upload', { method: 'POST', body: file });
-      const text = await resp.text();
       if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try { msg = JSON.parse(text).error || text; } catch(e) {}
-        throw new Error(msg);
+        throw new Error(await readApiError(resp));
       }
+      const text = await resp.text();
       let newGraph;
       try {
         newGraph = JSON.parse(text);
@@ -1854,9 +1863,10 @@ async function init() {
       if (typeof ensureGraphOption === 'function') {
         ensureGraphOption(newGraph);
       }
-      await loadGraphList();
+      graphList = [newGraph, ...graphList.filter(graph => graph.id !== newGraph.id)];
+      await loadGraphList({ preserve: newGraph.id });
       document.getElementById('graph-select').value = newGraph.id;
-      loadGraph(newGraph.id);
+      await loadGraph(newGraph.id);
     } catch (e) {
       const msg = e.message || String(e);
       console.error("Upload error:", e);
@@ -1973,10 +1983,10 @@ async function init() {
 await loadGraphList();
 }
 
-async function loadGraphList() {
+async function loadGraphList(options = {}) {
   const select = document.getElementById('graph-select');
   if (!select) return;
-  const previousValue = select.value || '';
+  const previousValue = options.preserve || select.value || '';
   
   // Show loading state if the control is already disabled.
   if (select.disabled) {
@@ -1990,7 +2000,7 @@ async function loadGraphList() {
 
   try {
     const resp = await fetch('/api/graphs');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) throw new Error(await readApiError(resp));
     graphList = await resp.json();
   } catch (error) {
     console.error("Failed to load graph list:", error);
@@ -2014,7 +2024,7 @@ async function loadGraphList() {
   }
 
   select.disabled = false;
-  const options = graphList.map(graph => {
+  const optionEls = graphList.map(graph => {
     const statsStr = graph.stats ? `${graph.stats.total_nodes.toLocaleString()} nodes` : formatBytes(graph.file_bytes);
     const opt = document.createElement('option');
     opt.value = graph.id;
@@ -2028,7 +2038,7 @@ async function loadGraphList() {
   placeholder.selected = true;
   placeholder.textContent = 'Choose JSON file...';
 
-  select.replaceChildren(placeholder, ...options);
+  select.replaceChildren(placeholder, ...optionEls);
   
   // Restore selection if possible
   if (previousValue && graphList.some(graph => graph.id === previousValue)) {
@@ -2099,9 +2109,7 @@ async function loadGraph(graphId) {
 
   try {
     const resp = await fetch(`/api/stats?graph=${encodeURIComponent(graphId)}`);
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
-    }
+    if (!resp.ok) throw new Error(await readApiError(resp));
     const stats = await resp.json();
     graphData = {
       graph_id: graphId,
@@ -2287,6 +2295,10 @@ function updateGraphMeta(data, graphInfo) {
 
 function emptyStats() {
   return {
+    total_nodes: 0,
+    total_edges: 0,
+    relationship_types: 0,
+    top_relationships: [],
     users: 0,
     computers: 0,
     groups: 0,
@@ -2296,8 +2308,6 @@ function emptyStats() {
     cert_templates: 0,
     high_value: 0,
     owned: 0,
-    total_nodes: 0,
-    total_edges: 0,
   };
 }
 
@@ -2305,6 +2315,9 @@ function renderStats(stats) {
   const grid = document.getElementById('stats-grid');
   if (!stats) stats = emptyStats();
   const items = [
+    { value: stats.total_nodes || 0, label: 'Nodes', color: 'var(--text)' },
+    { value: stats.total_edges || 0, label: 'Edges', color: 'var(--soft)' },
+    { value: stats.relationship_types || 0, label: 'Edge Types', color: 'var(--cyan)' },
     { value: stats.users || 0, label: 'Users', color: 'var(--node-user)' },
     { value: stats.computers || 0, label: 'Computers', color: 'var(--node-computer)' },
     { value: stats.groups || 0, label: 'Groups', color: 'var(--node-group)' },
@@ -2322,6 +2335,24 @@ function renderStats(stats) {
       <div class="label">${item.label}</div>
     </div>
   `).join('');
+
+  const top = Array.isArray(stats.top_relationships) ? stats.top_relationships.slice(0, 6) : [];
+  if (top.length) {
+    const relWrap = document.createElement('div');
+    relWrap.className = 'stat-card';
+    relWrap.style.gridColumn = '1 / -1';
+    relWrap.innerHTML = `<div class="label">Top Relationships</div>`;
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:8px';
+    top.forEach(item => {
+      const chip = document.createElement('span');
+      chip.className = 'source-chip';
+      chip.textContent = `${item.relationship}: ${item.edge_count}`;
+      list.appendChild(chip);
+    });
+    relWrap.appendChild(list);
+    grid.appendChild(relWrap);
+  }
 
   // Ensure the Graph Stats panel is expanded and visible when stats are rendered
   try {
@@ -2579,9 +2610,7 @@ async function loadAttackQuery(relationship) {
 
 async function fetchGraphSlice(options = {}) {
   const resp = await fetch(`/api/graph?${buildGraphParams(options).toString()}`);
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}`);
-  }
+  if (!resp.ok) throw new Error(await readApiError(resp));
   return resp.json();
 }
 

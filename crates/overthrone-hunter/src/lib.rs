@@ -12,6 +12,7 @@
 //! - `runner`        — Top-level orchestrator dispatching all hunt actions
 
 pub mod asreproast;
+pub mod bad_successor;
 pub mod coerce;
 pub mod constrained;
 pub mod crack;
@@ -25,6 +26,7 @@ pub mod userenum;
 pub mod xp_dirtree;
 
 // Re-exports for ergonomic use
+pub use bad_successor::{BadSuccessorExposure, DmsaObjectSignal, assess_bad_successor_exposure};
 pub use crack::{
     CrackReport, CrackSource, CrackedCredential, crack_asrep_hashes, crack_hash, crack_hashes,
     crack_kerberoast_hashes,

@@ -12,5 +12,7 @@ pub mod skeleton_key_dll;
 
 pub use skeleton_key::{
     DEFAULT_SKELETON_KEY, DeploymentMethod, SkeletonKeyConfig, SkeletonKeyExploiter,
-    SkeletonKeyResult,
+    SkeletonKeyPreflight, SkeletonKeyPreflightStatus, SkeletonKeyResult,
+    assess_lsa_protection_values, assess_lsa_protection_values_with_isolated_secret,
+    assess_skeleton_key_preflight_from_registry,
 };

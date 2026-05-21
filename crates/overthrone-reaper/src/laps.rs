@@ -146,6 +146,16 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
         }
     };
 
+    if entries.is_empty() && !config.use_ldaps && is_ws2025_dc(&mut conn).await.unwrap_or(false) {
+        warn!(
+            "[laps] WS2025 DC detected and plaintext LDAP returned no LAPS attributes; retrying over LDAPS"
+        );
+        let _ = conn.disconnect().await;
+        let mut ldaps_config = config.clone();
+        ldaps_config.use_ldaps = true;
+        return Box::pin(enumerate_laps(&ldaps_config)).await;
+    }
+
     let mut results = Vec::new();
 
     for entry in &entries {
@@ -307,6 +317,38 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
     );
 
     Ok(results)
+}
+
+async fn is_ws2025_dc(conn: &mut overthrone_core::proto::ldap::LdapSession) -> Result<bool> {
+    let entries = conn
+        .custom_search(
+            "(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))",
+            &["operatingSystem", "operatingSystemVersion", "dNSHostName"],
+        )
+        .await?;
+
+    Ok(entries.iter().any(|entry| {
+        let os = entry
+            .attrs
+            .get("operatingSystem")
+            .and_then(|v| v.first())
+            .map(String::as_str);
+        let version = entry
+            .attrs
+            .get("operatingSystemVersion")
+            .and_then(|v| v.first())
+            .map(String::as_str);
+        is_ws2025_os_hint(os, version)
+    }))
+}
+
+fn is_ws2025_os_hint(os: Option<&str>, version: Option<&str>) -> bool {
+    os.is_some_and(|value| value.contains("2025"))
+        || version.is_some_and(|value| {
+            value.starts_with("10.0 (26100")
+                || value.starts_with("10.0.26100")
+                || value.starts_with("26100")
+        })
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -611,6 +653,17 @@ mod tests {
     fn test_encrypted_header_too_short() {
         let blob = vec![0u8; 10]; // less than 16 bytes
         assert!(parse_laps_v2_encrypted_header(&blob).is_none());
+    }
+
+    #[test]
+    fn test_ws2025_os_hint_detects_server_2025() {
+        assert!(is_ws2025_os_hint(Some("Windows Server 2025"), None));
+        assert!(is_ws2025_os_hint(None, Some("10.0 (26100)")));
+        assert!(is_ws2025_os_hint(None, Some("10.0.26100.1")));
+        assert!(!is_ws2025_os_hint(
+            Some("Windows Server 2022"),
+            Some("10.0 (20348)")
+        ));
     }
 
     #[test]

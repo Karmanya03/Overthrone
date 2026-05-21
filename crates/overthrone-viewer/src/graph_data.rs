@@ -179,6 +179,8 @@ pub struct ViewerEdge {
 pub struct ViewerStats {
     pub total_nodes: usize,
     pub total_edges: usize,
+    pub relationship_types: usize,
+    pub top_relationships: Vec<RelationshipStat>,
     pub users: usize,
     pub computers: usize,
     pub groups: usize,
@@ -188,6 +190,12 @@ pub struct ViewerStats {
     pub cert_templates: usize,
     pub high_value: usize,
     pub owned: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RelationshipStat {
+    pub relationship: String,
+    pub edge_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -978,12 +986,26 @@ impl GraphBuilder {
             });
         }
 
+        let mut top_relationships: Vec<RelationshipStat> = rel_counts
+            .iter()
+            .map(|(relationship, edge_count)| RelationshipStat {
+                relationship: relationship.clone(),
+                edge_count: *edge_count,
+            })
+            .collect();
+        top_relationships.sort_by_key(|item| (Reverse(item.edge_count), item.relationship.clone()));
+        if top_relationships.len() > 12 {
+            top_relationships.truncate(12);
+        }
+
         let mut relationships: Vec<String> = rel_counts.into_keys().collect();
         relationships.sort_by_key(|a| a.to_ascii_lowercase());
 
         let mut stats = ViewerStats {
             total_nodes: self.nodes.len(),
             total_edges: visual_edges.len(),
+            relationship_types: relationships.len(),
+            top_relationships,
             ..ViewerStats::default()
         };
 
@@ -2157,6 +2179,38 @@ fn truncate_owned(mut s: String, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::ViewerGraph;
+
+    #[test]
+    fn flat_graph_stats_include_relationship_summary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("graph.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "nodes": [
+                {"id":"u1","label":"alice","type":"User"},
+                {"id":"g1","label":"Domain Admins","type":"Group"},
+                {"id":"d1","label":"corp.local","type":"Domain"}
+              ],
+              "edges": [
+                {"source":"u1","target":"g1","relationship":"MemberOf"},
+                {"source":"g1","target":"d1","relationship":"AdminTo"},
+                {"source":"u1","target":"d1","relationship":"AdminTo"}
+              ]
+            }"#,
+        )
+        .expect("write fixture");
+
+        let graph = ViewerGraph::from_sources(&[path.display().to_string()])
+            .expect("flat graph should load");
+        let stats = graph.stats();
+
+        assert_eq!(stats.total_nodes, 3);
+        assert_eq!(stats.total_edges, 3);
+        assert_eq!(stats.relationship_types, 2);
+        assert_eq!(stats.top_relationships[0].relationship, "AdminTo");
+        assert_eq!(stats.top_relationships[0].edge_count, 2);
+    }
 
     #[test]
     fn demo_bloodhound_hierarchy_fixture_loads_and_paths() {
