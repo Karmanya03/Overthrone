@@ -369,7 +369,10 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
     match format {
         ReportFormat::Markdown => {
-            println!("  {} Generating Markdown report...", "Ã¢â€“Â¸".bright_black());
+            println!(
+                "  {} Generating Markdown report...",
+                "Ã¢â€“Â¸".bright_black()
+            );
             let report_content = overthrone_scribe::markdown::render(&session);
 
             if let Err(e) = tokio::fs::write(output, &report_content).await {
@@ -1142,7 +1145,11 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         start_rid,
         end_rid
     );
-    println!("  {} Null session: {}", "Ã¢â€“Â¸".bright_black(), null_session);
+    println!(
+        "  {} Null session: {}",
+        "Ã¢â€“Â¸".bright_black(),
+        null_session
+    );
 
     let dc = match crate::require_dc(cli) {
         Ok(d) => d,
@@ -1390,7 +1397,10 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 
     match action {
         MoveAction::Trusts => {
-            println!("  {} Enumerating domain trusts...", "Ã¢â€“Â¸".bright_black());
+            println!(
+                "  {} Enumerating domain trusts...",
+                "Ã¢â€“Â¸".bright_black()
+            );
             // Run reaper first to get trust data
             let reaper_config = ReaperConfig {
                 dc_ip: dc.clone(),
@@ -1471,7 +1481,11 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                     match run_crawler(&crawler_config, &reaper_result).await {
                         Ok(crawler_result) => {
                             let path_count = crawler_result.escalation_paths.len();
-                            println!("  {} Found {} escalation path(s)", "âœ“".green(), path_count);
+                            println!(
+                                "  {} Found {} escalation path(s)",
+                                "âœ“".green(),
+                                path_count
+                            );
 
                             for (i, path) in crawler_result.escalation_paths.iter().enumerate() {
                                 println!(
@@ -1490,7 +1504,10 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 
                             // Also show foreign memberships
                             if !crawler_result.foreign_memberships.is_empty() {
-                                println!("\n  {} Foreign group memberships:", "Ã¢â€“Â¸".bright_black());
+                                println!(
+                                    "\n  {} Foreign group memberships:",
+                                    "Ã¢â€“Â¸".bright_black()
+                                );
                                 for fm in &crawler_result.foreign_memberships {
                                     println!(
                                         "    {}\\{} -> {} ({})",
@@ -3234,7 +3251,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     .await
                 {
                     Ok(result) => {
-                        println!("\n  {} Mapping written successfully via LDAP!", "âœ“".green());
+                        println!(
+                            "\n  {} Mapping written successfully via LDAP!",
+                            "âœ“".green()
+                        );
                         println!("    PKINIT: {}", result.pkinit_command.cyan());
                         println!("    Impact: {}", result.impact_description.yellow());
                         println!("\n  {} CLEANUP COMMAND:", "i".dimmed());
@@ -3517,7 +3537,11 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
                 match sccm::wmi::enumerate_collections(site).await {
                     Ok(cols) if !cols.is_empty() => {
-                        println!("  {} Collections ({}):", "Ã¢â€“Â¸".bright_black(), cols.len());
+                        println!(
+                            "  {} Collections ({}):",
+                            "Ã¢â€“Â¸".bright_black(),
+                            cols.len()
+                        );
                         for c in &cols {
                             println!(
                                 "    - [{}] {} ({} members, {})",
@@ -3551,7 +3575,11 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
                 match sccm::wmi::enumerate_applications(site).await {
                     Ok(apps) if !apps.is_empty() => {
-                        println!("  {} Applications ({}):", "Ã¢â€“Â¸".bright_black(), apps.len());
+                        println!(
+                            "  {} Applications ({}):",
+                            "Ã¢â€“Â¸".bright_black(),
+                            apps.len()
+                        );
                         for a in apps.iter().take(20) {
                             println!(
                                 "    - {} [{}]{}",
@@ -3647,7 +3675,11 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                     .await
                     {
                         Ok(res) => {
-                            println!("  {} Technique: {}", "Ã¢â€“Â¸".bright_black(), res.technique);
+                            println!(
+                                "  {} Technique: {}",
+                                "Ã¢â€“Â¸".bright_black(),
+                                res.technique
+                            );
                             if res.credentials.is_empty() {
                                 println!("  {} No NAA credentials extracted", "!".yellow());
                             } else {
@@ -3757,7 +3789,10 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
             match sccm::deploy_malicious_application(&sites[0], collection, payload).await {
                 Ok(res) => {
                     if let Some(ps) = &res.command_output {
-                        println!("  {} PowerShell deployment script:", "Ã¢â€“Â¸".bright_black());
+                        println!(
+                            "  {} PowerShell deployment script:",
+                            "Ã¢â€“Â¸".bright_black()
+                        );
                         println!("{}", ps);
                     }
                     for note in &res.notes {
@@ -3811,7 +3846,11 @@ pub async fn cmd_scan(
                 );
                 if res.ldap_rootdse_probe {
                     if let Some(ref dns) = res.dns_hostname {
-                        println!("    {} DNS Hostname: {}", "Ã¢â€“Â¸".bright_black(), dns.cyan());
+                        println!(
+                            "    {} DNS Hostname: {}",
+                            "Ã¢â€“Â¸".bright_black(),
+                            dns.cyan()
+                        );
                     }
                     if !res.supported_sasl_mechs.is_empty() {
                         println!(

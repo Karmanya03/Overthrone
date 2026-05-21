@@ -950,6 +950,9 @@ mod tests {
     #[test]
     fn smb2_negotiate_too_short_is_classified_as_network_error() {
         let output = "SMB2 Negotiate response too short: 72 bytes";
-        assert!(matches!(FailureClass::classify(output), FailureClass::NetworkError));
+        assert!(matches!(
+            FailureClass::classify(output),
+            FailureClass::NetworkError
+        ));
     }
 }

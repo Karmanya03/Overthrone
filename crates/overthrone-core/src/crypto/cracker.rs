@@ -67,18 +67,20 @@ const FALLBACK_WORDLIST: &[&str] = &[
 
 /// Decompress and return the embedded wordlist
 pub fn get_embedded_wordlist() -> Vec<String> {
-    decode_wordlist_bytes("embedded wordlist", EMBEDDED_WORDLIST_ZST)
-        .unwrap_or_else(|e| {
-            warn!("Falling back to minimal built-in wordlist: {}", e);
-            // Fallback to minimal built-in list
-            FALLBACK_WORDLIST.iter().map(|s| s.to_string()).collect()
-        })
+    decode_wordlist_bytes("embedded wordlist", EMBEDDED_WORDLIST_ZST).unwrap_or_else(|e| {
+        warn!("Falling back to minimal built-in wordlist: {}", e);
+        // Fallback to minimal built-in list
+        FALLBACK_WORDLIST.iter().map(|s| s.to_string()).collect()
+    })
 }
 
 fn decode_wordlist_bytes(source: &str, bytes: &[u8]) -> Result<Vec<String>> {
     let payload = if is_zstd_compressed(bytes) {
         zstd::decode_all(bytes).map_err(|e| {
-            OverthroneError::custom(format!("Wordlist decompression failed for {}: {}", source, e))
+            OverthroneError::custom(format!(
+                "Wordlist decompression failed for {}: {}",
+                source, e
+            ))
         })?
     } else {
         bytes.to_vec()
@@ -417,7 +419,8 @@ impl HashType {
     /// Parse an AS-REP hash string (hashcat format)
     /// Format: $krb5asrep${etype}${user}@{domain}:{checksum_hex}${edata2_hex}
     pub fn parse_asrep(hash_str: &str) -> Result<Self> {
-        let rest = hash_str.trim()
+        let rest = hash_str
+            .trim()
             .strip_prefix("$krb5asrep$")
             .ok_or_else(|| OverthroneError::custom("Invalid AS-REP hash format"))?;
         let (etype_str, principal_and_cipher) = rest
@@ -461,7 +464,8 @@ impl HashType {
     /// Parse a Kerberoast hash string (hashcat format)
     /// Format: $krb5tgs${etype}$*{user}${domain}${spn}*${checksum_hex}${edata2_hex}
     pub fn parse_kerberoast(hash_str: &str) -> Result<Self> {
-        let rest = hash_str.trim()
+        let rest = hash_str
+            .trim()
             .strip_prefix("$krb5tgs$")
             .ok_or_else(|| OverthroneError::custom("Invalid Kerberoast hash format"))?;
         let (etype_str, principal_and_cipher) = rest

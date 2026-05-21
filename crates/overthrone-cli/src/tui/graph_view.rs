@@ -201,7 +201,9 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
             Some("net rpc password / Set-ADAccountPassword (no current pw needed)")
         }
         EdgeType::AddMembers => Some("Add yourself / controlled account to the group"),
-        EdgeType::AddSelf => Some("Self-write validated right â€” add your own account to the group"),
+        EdgeType::AddSelf => {
+            Some("Self-write validated right â€” add your own account to the group")
+        }
         EdgeType::AllowedToDelegate => {
             Some("S4U2Self + S4U2Proxy â†’ impersonate any user to target service")
         }
@@ -221,7 +223,9 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::HasSidHistory => {
             Some("SID in SIDHistory â†’ principal implicitly member of historical group")
         }
-        EdgeType::CanRDP => Some("xfreerdp / mstsc â€” GUI access; local admin may not be required"),
+        EdgeType::CanRDP => {
+            Some("xfreerdp / mstsc â€” GUI access; local admin may not be required")
+        }
         EdgeType::CanPSRemote => Some("Enter-PSSession / evil-winrm â€” PowerShell remoting"),
         EdgeType::ExecuteDCOM => Some("Invoke-DCOM / MMC20.Application lateral movement"),
         EdgeType::SQLAdmin => Some("SQL Server sysadmin â†’ xp_cmdshell / CLR assembly RCE"),

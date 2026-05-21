@@ -3059,7 +3059,10 @@ async fn cmd_enum(
             match persist_enumeration_results(&result, &loot_dir) {
                 Ok(files) => {
                     for file in files {
-                        banner::print_info(&format!("Enumeration results saved to {}", file.display()));
+                        banner::print_info(&format!(
+                            "Enumeration results saved to {}",
+                            file.display()
+                        ));
                     }
                 }
                 Err(e) => {
