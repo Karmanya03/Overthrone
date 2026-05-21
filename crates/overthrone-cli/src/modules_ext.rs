@@ -597,15 +597,11 @@ impl OvtModule for AsreproastModule {
             })
             .unwrap_or_default();
 
-        let has_bind_creds = !creds.domain.trim().is_empty()
-            && !creds.username.trim().is_empty()
-            && (!creds.password.trim().is_empty() || creds.nt_hash.is_some());
-
-        if target_users.is_empty() && !has_bind_creds {
-            return Err(OverthroneError::custom(
-                "AS-REP roast needs either target_users in params or usable module credentials for LDAP enumeration".to_string(),
-            ));
-        }
+        let target_users = if target_users.is_empty() {
+            overthrone_hunter::userenum::embedded_usernames()
+        } else {
+            target_users
+        };
 
         let hunt_config = overthrone_hunter::runner::HuntConfig {
             dc_ip: target.to_string(),

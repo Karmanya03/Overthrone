@@ -71,7 +71,7 @@ Checks your environment for dependencies and connectivity. Run this first when t
 ```bash
 ovt doctor                           # Check all environment deps
 ovt doctor -c smb,kerberos           # Check specific components
-ovt doctor --dc 10.10.10.1           # Test connectivity to a DC
+ovt doctor --dc-ip 10.10.10.1        # Test connectivity to a DC
 ```
 
 **What it checks:**

@@ -1037,7 +1037,7 @@ Check dependencies, connectivity, and environment before an engagement.
 ovt doctor
 
 # Specific checks
-ovt doctor --checks smb,kerberos,winrm,network --dc 10.10.10.1
+ovt doctor --checks smb,kerberos,winrm,network --dc-ip 10.10.10.1
 ```
 
 ---

