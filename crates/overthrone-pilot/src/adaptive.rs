@@ -73,6 +73,10 @@ impl FailureClass {
             || lower.contains("cannot reach")
             || lower.contains("connect failed")
             || lower.contains("network error")
+            || lower.contains("smb2 negotiate response too short")
+            || lower.contains("smb error")
+            || lower.contains("smb session")
+            || lower.contains("protocol error")
             || lower.contains("no route")
             || lower.contains("reset by peer")
             || lower.contains("service unavailable")
@@ -937,4 +941,15 @@ pub fn rotate_credential(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FailureClass;
+
+    #[test]
+    fn smb2_negotiate_too_short_is_classified_as_network_error() {
+        let output = "SMB2 Negotiate response too short: 72 bytes";
+        assert!(matches!(FailureClass::classify(output), FailureClass::NetworkError));
+    }
 }

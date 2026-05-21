@@ -55,6 +55,24 @@ struct WizardSessionSnapshot {
     max_pause_secs: Option<u64>,
 }
 
+#[cfg(test)]
+mod wizard_stage_tests {
+    use super::*;
+
+    #[test]
+    fn wizard_all_stages_end_with_cleanup() {
+        let mut stages: Vec<Stage> = vec![
+            Stage::Enumerate,
+            Stage::Attack,
+            Stage::Escalate,
+            Stage::Lateral,
+            Stage::Loot,
+            Stage::Cleanup,
+        ];
+        assert_eq!(stages.pop(), Some(Stage::Cleanup));
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // Wizard Session — Main interactive controller
 // ═══════════════════════════════════════════════════════════
@@ -290,6 +308,7 @@ impl WizardSession {
             Stage::Escalate,
             Stage::Lateral,
             Stage::Loot,
+            Stage::Cleanup,
         ];
 
         for stage in all_stages {

@@ -15,7 +15,6 @@
 
 use crate::error::{OverthroneError, Result};
 use rayon::prelude::*;
-use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, info, warn};
@@ -24,8 +23,13 @@ use tracing::{debug, info, warn};
 // Embedded Wordlist (Top 10K + common passwords)
 // ═══════════════════════════════════════════════════════════
 
-/// Relative path to the shared compressed top-10K password wordlist.
-const WORDLIST_REL_PATH: &str = "../../assets/wordlist_top10k.txt.zst";
+/// Shared compressed top-10K password wordlist bundled with the crate.
+const EMBEDDED_WORDLIST_ZST: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/wordlist_top10k.txt.zst"
+));
+
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Fallback minimal wordlist if decompression fails
 const FALLBACK_WORDLIST: &[&str] = &[
@@ -63,8 +67,7 @@ const FALLBACK_WORDLIST: &[&str] = &[
 
 /// Decompress and return the embedded wordlist
 pub fn get_embedded_wordlist() -> Vec<String> {
-    load_wordlist_bytes()
-        .and_then(|bytes| decompress_wordlist(&bytes))
+    decode_wordlist_bytes("embedded wordlist", EMBEDDED_WORDLIST_ZST)
         .unwrap_or_else(|e| {
             warn!("Falling back to minimal built-in wordlist: {}", e);
             // Fallback to minimal built-in list
@@ -72,28 +75,25 @@ pub fn get_embedded_wordlist() -> Vec<String> {
         })
 }
 
-fn load_wordlist_bytes() -> Result<Vec<u8>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(WORDLIST_REL_PATH);
-    std::fs::read(&path).map_err(|e| {
-        OverthroneError::custom(format!(
-            "Failed to read wordlist at {}: {}",
-            path.display(),
-            e
-        ))
-    })
-}
+fn decode_wordlist_bytes(source: &str, bytes: &[u8]) -> Result<Vec<String>> {
+    let payload = if is_zstd_compressed(bytes) {
+        zstd::decode_all(bytes).map_err(|e| {
+            OverthroneError::custom(format!("Wordlist decompression failed for {}: {}", source, e))
+        })?
+    } else {
+        bytes.to_vec()
+    };
 
-/// Decompress a zstd-compressed wordlist
-fn decompress_wordlist(compressed: &[u8]) -> Result<Vec<String>> {
-    let decompressed = zstd::decode_all(compressed)
-        .map_err(|e| OverthroneError::custom(format!("Wordlist decompression failed: {}", e)))?;
-
-    let text = String::from_utf8_lossy(&decompressed);
+    let text = String::from_utf8_lossy(&payload);
     Ok(text
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect())
+}
+
+fn is_zstd_compressed(bytes: &[u8]) -> bool {
+    bytes.len() >= ZSTD_MAGIC.len() && bytes[..ZSTD_MAGIC.len()] == ZSTD_MAGIC
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -417,7 +417,7 @@ impl HashType {
     /// Parse an AS-REP hash string (hashcat format)
     /// Format: $krb5asrep${etype}${user}@{domain}:{checksum_hex}${edata2_hex}
     pub fn parse_asrep(hash_str: &str) -> Result<Self> {
-        let rest = hash_str
+        let rest = hash_str.trim()
             .strip_prefix("$krb5asrep$")
             .ok_or_else(|| OverthroneError::custom("Invalid AS-REP hash format"))?;
         let (etype_str, principal_and_cipher) = rest
@@ -461,7 +461,7 @@ impl HashType {
     /// Parse a Kerberoast hash string (hashcat format)
     /// Format: $krb5tgs${etype}$*{user}${domain}${spn}*${checksum_hex}${edata2_hex}
     pub fn parse_kerberoast(hash_str: &str) -> Result<Self> {
-        let rest = hash_str
+        let rest = hash_str.trim()
             .strip_prefix("$krb5tgs$")
             .ok_or_else(|| OverthroneError::custom("Invalid Kerberoast hash format"))?;
         let (etype_str, principal_and_cipher) = rest
@@ -1014,14 +1014,10 @@ impl HashCracker {
 
 /// Load a wordlist from a file
 fn load_wordlist_from_file(path: &str) -> Result<Vec<String>> {
-    let content = std::fs::read_to_string(path)
+    let bytes = std::fs::read(path)
         .map_err(|e| OverthroneError::custom(format!("Cannot read wordlist: {}", e)))?;
 
-    Ok(content
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect())
+    decode_wordlist_bytes(path, &bytes)
 }
 
 /// Verify if a password candidate matches the hash
@@ -1294,7 +1290,7 @@ mod tests {
     #[test]
     fn test_asrep_hashcat_format_parsing() {
         let hash = HashType::parse_asrep(
-            "$krb5asrep$23$alice@CORP.LOCAL:00112233445566778899aabbccddeeff$deadbeef",
+            "  $krb5asrep$23$alice@CORP.LOCAL:00112233445566778899aabbccddeeff$deadbeef\n",
         )
         .unwrap();
 
@@ -1317,7 +1313,7 @@ mod tests {
     #[test]
     fn test_kerberoast_hashcat_format_parsing() {
         let hash = HashType::parse_kerberoast(
-            "$krb5tgs$23$*alice$CORP.LOCAL$cifs/dc01.corp.local*$00112233445566778899aabbccddeeff$deadbeef",
+            "\t$krb5tgs$23$*alice$CORP.LOCAL$cifs/dc01.corp.local*$00112233445566778899aabbccddeeff$deadbeef\r\n",
         )
         .unwrap();
 
@@ -1350,6 +1346,25 @@ mod tests {
 
         assert!(result.cracked);
         assert_eq!(result.password, Some("Password123".to_string()));
+    }
+
+    #[test]
+    fn test_custom_wordlist_accepts_non_utf8_bytes() {
+        let path = std::env::temp_dir().join(format!(
+            "overthrone-wordlist-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        std::fs::write(&path, b"alpha\nbeta\xff\n\n gamma \n").unwrap();
+
+        let loaded = load_wordlist_from_file(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(loaded, vec!["alpha", "beta\u{fffd}", "gamma"]);
     }
 
     #[test]

@@ -2992,7 +2992,11 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
     // Open browser (non-blocking, ignore errors)
     let _ = open::that(&url);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

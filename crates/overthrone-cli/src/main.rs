@@ -27,6 +27,7 @@ use overthrone_core::exec::modules as ovt_modules;
 use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 fn install_rustls_provider() -> Result<(), String> {
@@ -2943,6 +2944,67 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
 }
 
 // cmd_enum
+fn persist_enumeration_results(
+    result: &overthrone_reaper::runner::ReaperResult,
+    loot_dir: &Path,
+) -> std::io::Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(loot_dir)?;
+
+    let mut written_files = Vec::new();
+
+    let summary_path = loot_dir.join("enumeration_results.json");
+    let summary_json = serde_json::to_string_pretty(result)
+        .map_err(|e| std::io::Error::other(format!("serialization failure: {e}")))?;
+    std::fs::write(&summary_path, summary_json)?;
+    written_files.push(summary_path);
+
+    if let Some(powerview_results) = &result.powerview_results {
+        let powerview_path = loot_dir.join("powerview_results.json");
+        let powerview_json = serde_json::to_string_pretty(powerview_results)
+            .map_err(|e| std::io::Error::other(format!("serialization failure: {e}")))?;
+        std::fs::write(&powerview_path, powerview_json)?;
+        written_files.push(powerview_path);
+    }
+
+    Ok(written_files)
+}
+
+fn print_powerview_summary(result: &overthrone_reaper::runner::ReaperResult) {
+    if let Some(pv) = &result.powerview_results {
+        println!();
+        println!("  {} PowerView details:", "▸".bright_black());
+        println!(
+            "    GPOs: {} | Users: {}",
+            pv.gpo_details.len().to_string().green(),
+            pv.user_details.len().to_string().green()
+        );
+
+        if !pv.gpo_details.is_empty() {
+            println!("    {} GPO detail samples:", "▸".bright_black());
+            for gpo in pv.gpo_details.iter().take(5) {
+                println!(
+                    "      - {} [{}] {}",
+                    gpo.display_name.cyan(),
+                    gpo.status.yellow(),
+                    gpo.path.dimmed()
+                );
+            }
+        }
+
+        if !pv.user_details.is_empty() {
+            println!("    {} User detail samples:", "▸".bright_black());
+            for user in pv.user_details.iter().take(5) {
+                println!(
+                    "      - {} ({}) SID: {}",
+                    user.sam_account_name.cyan(),
+                    user.distinguished_name.dimmed(),
+                    user.sid.dimmed()
+                );
+            }
+        }
+    }
+}
+
 async fn cmd_enum(
     cli: &Cli,
     target: EnumTarget,
@@ -2992,7 +3054,25 @@ async fn cmd_enum(
     }
 
     match overthrone_reaper::runner::run_reaper(&config).await {
-        Ok(_) => {
+        Ok(result) => {
+            let loot_dir = std::path::PathBuf::from("./loot");
+            match persist_enumeration_results(&result, &loot_dir) {
+                Ok(files) => {
+                    for file in files {
+                        banner::print_info(&format!("Enumeration results saved to {}", file.display()));
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warn: failed to write enumeration results to '{}': {}",
+                        loot_dir.display(),
+                        e
+                    );
+                }
+            }
+
+            print_powerview_summary(&result);
+
             banner::print_success("Enumeration completed");
             0
         }
@@ -5243,6 +5323,8 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
 #[cfg(test)]
 mod cli_parse_tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn report_output_flag_keeps_string_type_and_public_name() {
@@ -5309,5 +5391,68 @@ mod cli_parse_tests {
             }
             _other => panic!("expected Kerberos::UserEnum, got different variant"),
         }
+    }
+
+    #[test]
+    fn persist_enumeration_results_writes_dedicated_powerview_artifact() {
+        let loot_root = std::env::temp_dir().join(format!(
+            "ovt-enum-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after UNIX epoch")
+                .as_nanos()
+        ));
+
+        let result = overthrone_reaper::runner::ReaperResult {
+            domain: "example.local".to_string(),
+            base_dn: "DC=example,DC=local".to_string(),
+            functional_level: Some(7),
+            users: Vec::new(),
+            groups: Vec::new(),
+            computers: Vec::new(),
+            ous: Vec::new(),
+            gpos: Vec::new(),
+            trusts: Vec::new(),
+            policy: None,
+            spn_accounts: Vec::new(),
+            delegations: Vec::new(),
+            acl_findings: Vec::new(),
+            laps_entries: Vec::new(),
+            mssql_instances: Vec::new(),
+            snaffle_findings: Vec::new(),
+            powerview_results: Some(overthrone_reaper::powerview::PowerViewResult {
+                gpo_details: vec![overthrone_reaper::powerview::GpoDetailedInfo {
+                    display_name: "Default Domain Policy".to_string(),
+                    gpo_guid: "{11111111-1111-1111-1111-111111111111}".to_string(),
+                    path: "\\\\example.local\\SysVol\\Policies\\{11111111-1111-1111-1111-111111111111}".to_string(),
+                    status: "Enabled".to_string(),
+                    linked_to: vec!["DC=example,DC=local".to_string()],
+                }],
+                user_details: vec![overthrone_reaper::powerview::UserDetailedInfo {
+                    sam_account_name: "alice".to_string(),
+                    distinguished_name: "CN=Alice,CN=Users,DC=example,DC=local".to_string(),
+                    sid: "S-1-5-21-1-2-3-1001".to_string(),
+                    pwd_last_set: "13371337".to_string(),
+                    last_logon: "0".to_string(),
+                    member_of: vec!["CN=Domain Users,CN=Users,DC=example,DC=local".to_string()],
+                    properties: HashMap::new(),
+                }],
+            }),
+            adcs_templates: Vec::new(),
+        };
+
+        let written_files = persist_enumeration_results(&result, &loot_root)
+            .expect("should write enumeration results to temp loot directory");
+
+        assert!(loot_root.join("enumeration_results.json").exists());
+        assert!(loot_root.join("powerview_results.json").exists());
+        assert_eq!(written_files.len(), 2);
+
+        let powerview_json = std::fs::read_to_string(loot_root.join("powerview_results.json"))
+            .expect("powerview artifact should be readable");
+        assert!(powerview_json.contains("Default Domain Policy"));
+        assert!(powerview_json.contains("alice"));
+
+        let _ = std::fs::remove_dir_all(&loot_root);
     }
 }
