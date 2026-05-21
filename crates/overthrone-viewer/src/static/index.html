@@ -1711,8 +1711,6 @@ const NODE_COLORS = {
   Unknown: '#74747d',
 };
 
-const PASSWORD_TOKEN = 'Pass' + 'word';
-
 const EDGE_COLORS = {
   MemberOf: '#a9b0bd',
   AdminTo: '#ff6666',
@@ -1725,7 +1723,7 @@ const EDGE_COLORS = {
   AllExtendedRights: '#ffe66d',
   CreateChild: '#d6d8df',
   WriteSelf: '#ffe66d',
-  ['ForceChange' + PASSWORD_TOKEN]: '#ff7f50',
+  ForceChangePassword: '#ff7f50',
   AddMembers: '#ffe66d',
   AddSelf: '#ffe66d',
   AllowedToDelegate: '#bd8cff',
@@ -1743,9 +1741,9 @@ const EDGE_COLORS = {
   WriteGPLink: '#bd8cff',
   Contains: '#d6d8df',
   Owns: '#ff6666',
-  ['ReadLaps' + PASSWORD_TOKEN]: '#ff8fd0',
-  ['ReadLaps' + PASSWORD_TOKEN + 'Expiry']: '#ff8fd0',
-  ['ReadGmsa' + PASSWORD_TOKEN]: '#ff8fd0',
+  ReadLapsPassword: '#ff8fd0',
+  ReadLapsPasswordExpiry: '#ff8fd0',
+  ReadGmsaPassword: '#ff8fd0',
   WriteSPN: '#ff8fd0',
   WriteServicePrincipalName: '#ff8fd0',
   WriteKeyCredentialLink: '#ff6666',
@@ -1858,7 +1856,7 @@ async function init() {
       }
       await loadGraphList();
       document.getElementById('graph-select').value = newGraph.id;
-      await loadGraph(newGraph.id);
+      loadGraph(newGraph.id);
     } catch (e) {
       const msg = e.message || String(e);
       console.error("Upload error:", e);
@@ -1980,11 +1978,14 @@ async function loadGraphList() {
   if (!select) return;
   const previousValue = select.value || '';
   
-  // Show loading state if empty
+  // Show loading state if the control is already disabled.
   if (select.disabled) {
-      select.replaceChildren(
-        createOption('', 'Refreshing list...', { disabled: true, selected: true })
-      );
+    const refreshing = document.createElement('option');
+    refreshing.value = '';
+    refreshing.disabled = true;
+    refreshing.selected = true;
+    refreshing.textContent = 'Refreshing list...';
+    select.replaceChildren(refreshing);
   }
 
   try {
@@ -1993,14 +1994,20 @@ async function loadGraphList() {
     graphList = await resp.json();
   } catch (error) {
     console.error("Failed to load graph list:", error);
-    select.replaceChildren(createOption('', 'Unable to read graph list'));
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Unable to read graph list';
+    select.replaceChildren(opt);
     select.disabled = true;
     setEmptyMessage('Viewer API error', 'Make sure the backend server is running. ' + error.message);
     return;
   }
 
   if (!graphList || !graphList.length) {
-    select.replaceChildren(createOption('', 'No JSON files found'));
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No JSON files found';
+    select.replaceChildren(opt);
     select.disabled = true;
     setEmptyMessage('No JSON files found', 'Point the GUI command at a directory or file containing BloodHound-compatible JSON, or use the upload button.');
     return;
@@ -2009,26 +2016,28 @@ async function loadGraphList() {
   select.disabled = false;
   const options = graphList.map(graph => {
     const statsStr = graph.stats ? `${graph.stats.total_nodes.toLocaleString()} nodes` : formatBytes(graph.file_bytes);
-    return createOption(
-      graph.id,
-      `${graph.label} (${statsStr})`,
-      { selected: graph.id === previousValue }
-    );
+    const opt = document.createElement('option');
+    opt.value = graph.id;
+    opt.textContent = `${graph.label} (${statsStr})`;
+    return opt;
   });
-  const placeholderSelected = !previousValue || !graphList.some(graph => graph.id === previousValue);
-  select.replaceChildren(
-    createOption('', 'Choose JSON file...', { disabled: true, selected: placeholderSelected }),
-    ...options
-  );
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  placeholder.textContent = 'Choose JSON file...';
+
+  select.replaceChildren(placeholder, ...options);
   
   // Restore selection if possible
   if (previousValue && graphList.some(graph => graph.id === previousValue)) {
     select.value = previousValue;
   }
 
-  select.onchange = async event => {
+  select.onchange = event => {
     if (event.target.value) {
-      await loadGraph(event.target.value);
+      loadGraph(event.target.value);
     } else {
       renderEmptyState();
     }
@@ -2038,7 +2047,7 @@ async function loadGraphList() {
   if (graphList.length === 1 && !previousValue) {
     const firstId = graphList[0].id;
     select.value = firstId;
-    await loadGraph(firstId);
+    loadGraph(firstId);
   } else if (!select.value) {
     setEmptyMessage('Select a JSON graph', `${graphList.length} JSON file${graphList.length === 1 ? '' : 's'} available. Select one to begin analysis.`);
   }
@@ -2080,10 +2089,9 @@ async function loadGraph(graphId) {
   document.getElementById('render-badge').textContent = 'Parsing JSON';
   teardownGraph();
   clearNodeDetail();
-  clearElement(document.getElementById('path-result'));
-  const queryResults = document.getElementById('query-results');
-  queryResults.classList.remove('active');
-  clearElement(queryResults);
+  document.getElementById('path-result').innerHTML = '';
+  document.getElementById('query-results').classList.remove('active');
+  document.getElementById('query-results').innerHTML = '';
   document.getElementById('query-input').value = '';
   document.getElementById('query-preset').value = '';
   pathFromId = '';
@@ -2129,19 +2137,15 @@ async function loadGraph(graphId) {
   updateRenderBadge(graphData);
   updateChunkControls(graphData);
   setInteractiveEnabled(true);
-  if (stats.total_nodes > 0) {
-    await renderSelectedChunk({ warnAll: false });
-  } else {
-    setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
-    document.getElementById('empty-state').classList.remove('hidden');
-  }
+  setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
+  document.getElementById('empty-state').classList.remove('hidden');
 }
 
 function teardownGraph() {
    if (graphRenderer) {
      graphRenderer.clearGraph();
    }
-   window._nodesMap = new Map();
+   window._nodesMap = {};
  }
 
 function renderEmptyState() {
@@ -2153,9 +2157,8 @@ function renderEmptyState() {
   renderStats(emptyStats());
   updateGraphMeta(null, null);
   clearNodeDetail();
-  const queryResults = document.getElementById('query-results');
-  queryResults.classList.remove('active');
-  clearElement(queryResults);
+  document.getElementById('query-results').classList.remove('active');
+  document.getElementById('query-results').innerHTML = '';
   document.getElementById('query-input').value = '';
   document.getElementById('query-preset').value = '';
   setInteractiveEnabled(false);
@@ -2264,15 +2267,15 @@ function updateGraphMeta(data, graphInfo) {
     label.textContent = 'None';
     size.textContent = '0 B';
     count.textContent = '0';
-    clearElement(sources);
-    clearElement(document.getElementById('path-result'));
+    clearNode(sources);
+    clearNode(document.getElementById('path-result'));
     return;
   }
 
   label.textContent = data.label || 'Graph';
   size.textContent = graphInfo ? formatBytes(graphInfo.file_bytes) : 'Loaded';
   count.textContent = (data.sources || []).length;
-  clearElement(sources);
+  clearNode(sources);
   (data.sources || []).forEach(src => {
     const chip = document.createElement('span');
     chip.className = 'source-chip';
@@ -2313,10 +2316,12 @@ function renderStats(stats) {
     { value: stats.owned || 0, label: 'Owned', color: 'var(--green)' },
   ];
 
-  clearElement(grid);
-  items.forEach(item => {
-    grid.appendChild(createStatCard(item.value, item.label, item.color));
-  });
+  grid.innerHTML = items.map(item => `
+    <div class="stat-card">
+      <div class="value" style="color:${item.color}">${item.value}</div>
+      <div class="label">${item.label}</div>
+    </div>
+  `).join('');
 
   // Ensure the Graph Stats panel is expanded and visible when stats are rendered
   try {
@@ -2417,9 +2422,14 @@ function buildGraphParams({ focus = null, relationship = null, limit = currentRe
 function buildQueryChips() {
   const chips = document.getElementById('query-chips');
   if (!chips) return;
-  clearElement(chips);
+  chips.replaceChildren();
   QUERY_CHIPS.forEach(([label, query]) => {
-    chips.appendChild(createQueryChip(label, query));
+    const button = document.createElement('button');
+    button.className = 'query-chip';
+    button.type = 'button';
+    button.dataset.query = query;
+    button.textContent = label;
+    chips.appendChild(button);
   });
   chips.querySelectorAll('.query-chip').forEach(button => {
     button.addEventListener('click', () => {
@@ -2494,18 +2504,7 @@ async function runCustomQuery(value = null) {
   document.querySelectorAll('.query-chip').forEach(chip => {
     chip.classList.toggle('active', chip.dataset.query === query);
   });
-  results.replaceChildren(
-    (() => {
-      const row = document.createElement('div');
-      row.className = 'query-result';
-      row.appendChild(createBadgeSpan('Query'));
-      const main = document.createElement('span');
-      main.className = 'query-result-main';
-      main.textContent = 'Running...';
-      row.appendChild(main);
-      return row;
-    })()
-  );
+  results.innerHTML = '<div class="query-result"><span class="badge">Query</span><span class="query-result-main">Running...</span></div>';
   results.classList.add('active');
 
   try {
@@ -2521,84 +2520,33 @@ async function runCustomQuery(value = null) {
     const data = await resp.json();
     renderQueryResults(data);
   } catch (error) {
-    const row = document.createElement('div');
-    row.className = 'query-result';
-    row.appendChild(createBadgeSpan('Error', 'var(--red)'));
-    const main = document.createElement('span');
-    main.className = 'query-result-main';
-    main.style.color = 'var(--red)';
-    main.textContent = error.message;
-    row.appendChild(main);
-    results.replaceChildren(row);
+    results.innerHTML = `<div class="query-result"><span class="badge" style="color:var(--red);border-color:var(--red)">Error</span><span class="query-result-main">${escapeHtml(error.message)}</span></div>`;
     results.classList.add('active');
   }
 }
 
 function renderQueryResults(data) {
   const results = document.getElementById('query-results');
-  const rows = [];
-
-  (data.relationships || []).forEach(item => {
-    const row = document.createElement('button');
-    row.className = 'query-result';
-    row.type = 'button';
-    row.dataset.relationship = textValue(item.relationship);
-
+  const relationshipRows = (data.relationships || []).map(item => {
     const color = EDGE_COLORS[item.relationship] || 'var(--soft)';
-    row.appendChild(createBadgeSpan('Edge', color));
-
-    const main = document.createElement('span');
-    main.className = 'query-result-main';
-    main.textContent = `${textValue(item.relationship)} `;
-
-    const count = document.createElement('span');
-    count.style.color = 'var(--muted)';
-    count.style.fontWeight = '700';
-    count.textContent = `(${textValue(item.edge_count)} edges)`;
-    main.appendChild(count);
-    row.appendChild(main);
-
-    const meta = document.createElement('span');
-    meta.className = 'query-result-meta';
-    meta.textContent = `${textValue(item.category)} | ${severityText(item.severity)} | ${textValue(item.guidance)}`;
-    row.appendChild(meta);
-
-    rows.push(row);
+    return `<button class="query-result" data-relationship="${escapeAttr(item.relationship)}">
+      <span class="badge" style="color:${color};border-color:${color}66">Edge</span>
+      <span class="query-result-main">${escapeHtml(item.relationship)} <span style="color:var(--muted);font-weight:700">(${escapeHtml(item.edge_count)} edges)</span></span>
+      <span class="query-result-meta">${escapeHtml(item.category)} | ${escapeHtml(severityText(item.severity))} | ${escapeHtml(item.guidance)}</span>
+    </button>`;
   });
-
-  (data.nodes || []).forEach(item => {
-    const row = document.createElement('button');
-    row.className = 'query-result';
-    row.type = 'button';
-    row.dataset.node = textValue(item.id);
-
+  const nodeRows = (data.nodes || []).map(item => {
     const color = NODE_COLORS[item.type] || NODE_COLORS.Unknown;
-    row.appendChild(createBadgeSpan(textValue(item.type), color));
-
-    const main = document.createElement('span');
-    main.className = 'query-result-main';
-    main.textContent = textValue(item.display_name);
-    row.appendChild(main);
-
-    const meta = document.createElement('span');
-    meta.className = 'query-result-meta';
-    meta.textContent = `${textValue(item.domain || 'Global')} | ${textValue(item.label || item.id)}`;
-    row.appendChild(meta);
-
-    rows.push(row);
+    return `<button class="query-result" data-node="${escapeAttr(item.id)}">
+      <span class="badge" style="color:${color};border-color:${color}66">${escapeHtml(item.type)}</span>
+      <span class="query-result-main">${escapeHtml(item.display_name)}</span>
+      <span class="query-result-meta">${escapeHtml(item.domain || 'Global')} | ${escapeHtml(item.label || item.id)}</span>
+    </button>`;
   });
-
-  if (!rows.length) {
-    const row = document.createElement('div');
-    row.className = 'query-result';
-    row.appendChild(createBadgeSpan('None'));
-    const main = document.createElement('span');
-    main.className = 'query-result-main';
-    main.textContent = 'No query matches';
-    row.appendChild(main);
-    results.replaceChildren(row);
+  if (!relationshipRows.length && !nodeRows.length) {
+    results.innerHTML = '<div class="query-result"><span class="badge">None</span><span class="query-result-main">No query matches</span></div>';
   } else {
-    results.replaceChildren(...rows);
+    results.innerHTML = relationshipRows.concat(nodeRows).join('');
   }
   results.classList.add('active');
   results.querySelectorAll('[data-relationship]').forEach(button => {
@@ -2674,7 +2622,7 @@ async function renderSelectedChunk({ focus = null, relationship = null, warnAll 
 
 async function loadFocusedNode(nodeId) {
   await renderSelectedChunk({ focus: nodeId });
-  const node = getNodeById(nodeId);
+  const node = window._nodesMap ? window._nodesMap[nodeId] : null;
   if (node) {
     selectNode(node);
     zoomToNode(node);
@@ -2688,7 +2636,7 @@ function renderGraph(data) {
    const width = Math.max(640, container.clientWidth);
    const height = Math.max(480, container.clientHeight);
    const nodeCount = data.nodes.length;
-  const nodesMap = new Map();
+   const nodesMap = {};
 
    if (!nodeCount) {
      setEmptyMessage('No nodes rendered', 'No nodes matched the current filter or chunk selection.');
@@ -2705,15 +2653,15 @@ function renderGraph(data) {
        degree: 0,
        radius: nodeRadius(raw, nodeCount),
      };
-     nodesMap.set(node.id, node);
+     nodesMap[node.id] = node;
      return node;
    });
 
    const links = data.edges
-     .filter(edge => nodesMap.has(edge.source) && nodesMap.has(edge.target))
+     .filter(edge => nodesMap[edge.source] && nodesMap[edge.target])
      .map(edge => {
-       const source = nodesMap.get(edge.source);
-       const target = nodesMap.get(edge.target);
+       const source = nodesMap[edge.source];
+       const target = nodesMap[edge.target];
        source.degree += 1;
        target.degree += 1;
        return {
@@ -3023,153 +2971,116 @@ async function showNodeDetail(nodeId) {
     const detail = await resp.json();
     const color = NODE_COLORS[detail.type] || NODE_COLORS.Unknown;
     const enabled = detail.enabled === null || detail.enabled === undefined ? 'Unknown' : (detail.enabled ? 'Yes' : 'No');
-    const detailCard = document.createElement('div');
-    detailCard.className = 'detail-card';
+
+    const card = document.createElement('div');
+    card.className = 'detail-card';
 
     const pillRow = document.createElement('div');
     pillRow.className = 'pill-row';
-    if (detail.high_value) pillRow.appendChild(createPill('High Value', 'high'));
-    if (detail.owned) pillRow.appendChild(createPill('Owned', 'owned'));
-    detailCard.appendChild(pillRow);
+    if (detail.high_value) pillRow.appendChild(createTextEl('span', 'pill high', 'High Value'));
+    if (detail.owned) pillRow.appendChild(createTextEl('span', 'pill owned', 'Owned'));
+    card.appendChild(pillRow);
 
-    const name = document.createElement('div');
-    name.className = 'detail-name';
+    const name = createTextEl('div', 'detail-name', detail.display_name);
     name.style.color = color;
-    name.textContent = textValue(detail.display_name);
-    detailCard.appendChild(name);
+    card.appendChild(name);
+    card.appendChild(createTextEl('div', 'detail-row', '', {}));
+    card.lastChild.replaceChildren(createTextEl('span', 'key', 'Object ID'), createTextEl('span', 'val', detail.id));
+    card.appendChild(createDetailRow('Type', detail.type));
+    card.appendChild(createDetailRow('Domain', detail.domain));
+    if (detail.distinguished_name) card.appendChild(createDetailRow('DN', detail.distinguished_name));
+    card.appendChild(createDetailRow('Enabled', enabled));
+    card.appendChild(createDetailRow('Out Degree', detail.out_degree ?? 0));
+    card.appendChild(createDetailRow('In Degree', detail.in_degree ?? 0));
+    card.appendChild(createDetailRow('Retrieval', `${detail.retrieval_ms ?? 0} ms`));
 
-    detailCard.appendChild(createTextRow('Object ID', textValue(detail.id)));
-    detailCard.appendChild(createTextRow('Type', textValue(detail.type)));
-    detailCard.appendChild(createTextRow('Domain', textValue(detail.domain)));
-    if (detail.distinguished_name) {
-      detailCard.appendChild(createTextRow('DN', textValue(detail.distinguished_name)));
-    }
-    detailCard.appendChild(createTextRow('Enabled', enabled));
-    detailCard.appendChild(createTextRow('Out Degree', textValue(detail.out_degree ?? 0)));
-    detailCard.appendChild(createTextRow('In Degree', textValue(detail.in_degree ?? 0)));
-    detailCard.appendChild(createTextRow('Retrieval', `${textValue(detail.retrieval_ms ?? 0)} ms`));
-
-    const notes = detail.security_notes || [];
+    const notes = (detail.security_notes || []).slice(0, 40);
     if (notes.length) {
-      detailCard.appendChild(createSectionTitle('ACL / ACE Guidance'));
+      card.appendChild(createTextEl('div', 'detail-section-title', 'ACL / ACE Guidance'));
       notes.forEach(note => {
         const noteCard = document.createElement('div');
         noteCard.className = 'detail-note';
-
         const title = document.createElement('div');
         title.className = 'detail-note-title';
-
-        const noteTitle = document.createElement('span');
-        noteTitle.textContent = textValue(note.title);
-
-        const severity = document.createElement('span');
-        severity.className = `severity ${severityClass(note.severity)}`;
-        severity.textContent = severityText(note.severity);
-
-        title.append(noteTitle, severity);
-
-        const body = document.createElement('div');
-        body.className = 'detail-note-body';
-        body.textContent = textValue(note.body);
-
-        noteCard.append(title, body);
-        detailCard.appendChild(noteCard);
+        title.append(
+          createTextEl('span', '', note.title),
+          createTextEl('span', `severity ${severityClass(note.severity)}`, severityText(note.severity))
+        );
+        noteCard.append(title, createTextEl('div', 'detail-note-body', note.body));
+        card.appendChild(noteCard);
       });
     }
 
     const props = Object.entries(detail.properties || {}).slice(0, 80);
     if (props.length) {
-      detailCard.appendChild(createSectionTitle('Properties'));
-      props.forEach(([key, value]) => {
-        detailCard.appendChild(createTextRow(textValue(key), textValue(value)));
-      });
+      card.appendChild(createTextEl('div', 'detail-section-title', 'Properties'));
+      props.forEach(([key, value]) => card.appendChild(createDetailRow(key, value)));
     }
 
+    const connections = (detail.connections || []).slice(0, 160);
     const connectionList = document.createElement('div');
     connectionList.className = 'connection-list';
-    const connections = (detail.connections || []).slice(0, 160);
-    connectionList.appendChild(createSectionTitle(`Connections (${(detail.connections || []).length})`));
+    connectionList.appendChild(createTextEl('div', 'detail-section-title', `Connections (${(detail.connections || []).length})`));
 
-    if (connections.length) {
+    if (!connections.length) {
+      const emptyCard = document.createElement('div');
+      emptyCard.className = 'detail-card';
+      emptyCard.appendChild(createDetailRow('Edges', 'None'));
+      connectionList.appendChild(emptyCard);
+    } else {
       connections.forEach(conn => {
         const edgeColor = EDGE_COLORS[conn.relationship] || '#b5b5bc';
         const direction = conn.direction === 'incoming' ? 'in' : 'out';
-
+        const sev = severityClass(conn.severity);
         const button = document.createElement('button');
         button.className = 'conn';
         button.type = 'button';
-        button.dataset.target = textValue(conn.target_id);
+        button.dataset.target = conn.target_id;
 
-        const title = document.createElement('span');
-        title.style.color = edgeColor;
-        title.style.fontWeight = '900';
-        title.textContent = `${textValue(direction)} ${textValue(conn.relationship)}`;
-        button.appendChild(title);
+        const header = document.createElement('span');
+        header.style.color = edgeColor;
+        header.style.fontWeight = '900';
+        header.textContent = `${direction} ${conn.relationship}`;
 
-        const target = document.createElement('span');
-        target.textContent = textValue(conn.target_display);
-        button.appendChild(target);
-
+        const target = createTextEl('span', '', conn.target_display);
         const guidance = document.createElement('span');
         guidance.className = 'conn-guidance';
+        guidance.append(
+          createTextEl('span', `severity ${sev}`, severityText(conn.severity)),
+          document.createTextNode(` cost ${conn.cost} | ${conn.guidance || 'Review relationship details before acting.'}`)
+        );
 
-        const severity = document.createElement('span');
-        severity.className = `severity ${severityClass(conn.severity)}`;
-        severity.textContent = severityText(conn.severity);
-        guidance.appendChild(severity);
-        guidance.appendChild(document.createTextNode(` cost ${textValue(conn.cost)} | ${textValue(conn.guidance || 'Review relationship details before acting.')}`));
-        button.appendChild(guidance);
-
-        if (conn.ace_details) {
-          const aceDetails = document.createElement('div');
-          aceDetails.className = 'conn-ace';
-          aceDetails.textContent = textValue(conn.ace_details);
-          button.appendChild(aceDetails);
-        }
-
-        if (conn.ovt_command) {
-          const commandLine = document.createElement('div');
-          commandLine.className = 'conn-command';
-          commandLine.textContent = `$ ${textValue(conn.ovt_command)}`;
-          button.appendChild(commandLine);
-        }
-
-        if (conn.ovt_command_desc) {
-          const commandDesc = document.createElement('div');
-          commandDesc.className = 'conn-command-desc';
-          commandDesc.textContent = textValue(conn.ovt_command_desc);
-          button.appendChild(commandDesc);
-        }
-
-        button.addEventListener('click', () => highlightNode(button.dataset.target));
+        button.append(header, target, guidance);
+        if (conn.ace_details) button.appendChild(createTextEl('div', 'conn-ace', conn.ace_details));
+        if (conn.ovt_command) button.appendChild(createTextEl('div', 'conn-command', `$ ${conn.ovt_command}`));
+        if (conn.ovt_command_desc) button.appendChild(createTextEl('div', 'conn-command-desc', conn.ovt_command_desc));
         connectionList.appendChild(button);
       });
-    } else {
-      const emptyCard = document.createElement('div');
-      emptyCard.className = 'detail-card';
-      emptyCard.appendChild(createTextRow('Edges', 'None'));
-      connectionList.appendChild(emptyCard);
     }
 
-    panel.replaceChildren(detailCard, connectionList);
+    panel.replaceChildren(card, connectionList);
+
+    panel.querySelectorAll('.conn').forEach(button => {
+      button.addEventListener('click', () => highlightNode(button.dataset.target));
+    });
   } catch (error) {
-    const errorCard = document.createElement('div');
-    errorCard.className = 'detail-card';
-    errorCard.appendChild(createTextRow('Error', textValue(error.message)));
-    panel.replaceChildren(errorCard);
+    const card = document.createElement('div');
+    card.className = 'detail-card';
+    card.appendChild(createDetailRow('Error', error.message));
+    panel.replaceChildren(card);
   }
 }
 
 function clearNodeDetail() {
-  const panel = document.getElementById('node-detail');
-  const card = document.createElement('div');
-  card.className = 'detail-card';
-  card.appendChild(createTextRow('Selection', 'None'));
-  panel.replaceChildren(card);
+  document.getElementById('node-detail').innerHTML = `
+    <div class="detail-card">
+      <div class="detail-row"><span class="key">Selection</span><span class="val">None</span></div>
+    </div>
+  `;
 }
 
 async function highlightNode(nodeId) {
-  const node = getNodeById(nodeId);
+  const node = window._nodesMap ? window._nodesMap[nodeId] : null;
   if (!node) {
     if (currentGraphId) {
       await loadFocusedNode(nodeId);
@@ -3209,30 +3120,12 @@ function zoomIn() {
  function showTooltip(event, d) {
    const tooltip = document.getElementById('tooltip');
    const color = NODE_COLORS[d.type] || NODE_COLORS.Unknown;
-  clearElement(tooltip);
-
-  const name = document.createElement('div');
-  name.className = 'tt-name';
-  name.style.color = color;
-  name.textContent = textValue(d.display);
-  tooltip.appendChild(name);
-
-  const meta = document.createElement('div');
-  meta.className = 'tt-meta';
-  meta.textContent = `${textValue(d.type)} | ${textValue(d.domain || 'UNKNOWN')}`;
-  tooltip.appendChild(meta);
-
-  if (d.distinguished_name) {
-    const dn = document.createElement('div');
-    dn.className = 'tt-meta';
-    dn.textContent = textValue(d.distinguished_name);
-    tooltip.appendChild(dn);
-  }
-
-  const id = document.createElement('div');
-  id.className = 'tt-meta';
-  id.textContent = textValue(d.id);
-  tooltip.appendChild(id);
+   tooltip.innerHTML = `
+     <div class="tt-name" style="color:${color}">${escapeHtml(d.display)}</div>
+     <div class="tt-meta">${escapeHtml(d.type)} | ${escapeHtml(d.domain || 'UNKNOWN')}</div>
+     ${d.distinguished_name ? `<div class="tt-meta">${escapeHtml(d.distinguished_name)}</div>` : ''}
+     <div class="tt-meta">${escapeHtml(d.id)}</div>
+   `;
    tooltip.style.display = 'block';
    moveTooltip(event);
  }
@@ -3274,22 +3167,37 @@ function zoomIn() {
         const resp = await fetch(`/api/search?${params.toString()}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const items = await resp.json();
-        const nodes = renderSuggestItems(items, 'No matching nodes', item => onPick(item));
-        results.replaceChildren(...nodes);
+        renderSuggestItems(results, items);
+        results.querySelectorAll('.search-result').forEach(button => {
+          button.addEventListener('click', () => {
+            const item = items.find(candidate => candidate.id === button.dataset.node);
+            if (item) onPick(item);
+          });
+        });
         results.classList.add('active');
       } catch (error) {
-        results.replaceChildren(createInlineMessage(error.message, 'var(--red)'));
+        results.replaceChildren(createTextEl('div', '', error.message, { style: { padding: '10px', color: 'var(--red)', fontSize: '13px' } }));
         results.classList.add('active');
       }
     }, 70);
   });
 }
 
-function renderSuggestItems(items, emptyText, onPick) {
+function renderSuggestItems(results, items) {
   if (!items.length) {
-    return [createInlineMessage(emptyText)];
+    results.replaceChildren(createTextEl('div', '', 'No matching nodes', { style: { padding: '10px', color: 'var(--muted)', fontSize: '13px' } }));
+    return;
   }
-  return items.map(item => createSearchResultButton(item, onPick));
+
+  const nodes = items.map(item => {
+    const color = NODE_COLORS[item.type] || NODE_COLORS.Unknown;
+    const button = document.createElement('button');
+    button.className = 'search-result';
+    button.dataset.node = item.id;
+    button.append(createBadge(item.type, color), createTextEl('span', '', item.display_name));
+    return button;
+  });
+  results.replaceChildren(...nodes);
 }
 
 let searchTimeout;
@@ -3306,15 +3214,29 @@ function onSearchInput(event) {
     try {
       const resp = await fetch(`/api/search?graph=${encodeURIComponent(currentGraphId)}&q=${encodeURIComponent(query)}`);
       const items = await resp.json();
-      const nodes = renderSuggestItems(items, 'No results', item => {
-        document.getElementById('search-input').value = '';
-        hideSearchResults();
-        highlightNode(item.id);
-      });
-      results.replaceChildren(...nodes);
+      if (!items.length) {
+        results.replaceChildren(createTextEl('div', '', 'No results', { style: { padding: '10px', color: 'var(--muted)', fontSize: '13px' } }));
+      } else {
+        const nodes = items.map(item => {
+          const color = NODE_COLORS[item.type] || NODE_COLORS.Unknown;
+          const button = document.createElement('button');
+          button.className = 'search-result';
+          button.dataset.node = item.id;
+          button.append(createBadge(item.type, color), createTextEl('span', '', item.display_name));
+          return button;
+        });
+        results.replaceChildren(...nodes);
+        results.querySelectorAll('.search-result').forEach(button => {
+          button.addEventListener('click', () => {
+            document.getElementById('search-input').value = '';
+            hideSearchResults();
+            highlightNode(button.dataset.node);
+          });
+        });
+      }
       results.classList.add('active');
     } catch (error) {
-      results.replaceChildren(createInlineMessage(error.message, 'var(--red)'));
+      results.replaceChildren(createTextEl('div', '', error.message, { style: { padding: '10px', color: 'var(--red)', fontSize: '13px' } }));
       results.classList.add('active');
     }
   }, 160);
@@ -3333,7 +3255,7 @@ function submitPathOnEnter(event) {
 async function findAttackPath() {
   const resultDiv = document.getElementById('path-result');
   if (!currentGraphId) {
-    resultDiv.replaceChildren(createInlineText('Select a graph first.', 'var(--yellow)'));
+    resultDiv.replaceChildren(createTextEl('span', '', 'Select a graph first.', { style: { color: 'var(--yellow)' } }));
     return;
   }
 
@@ -3342,7 +3264,7 @@ async function findAttackPath() {
   const from = pathFromId || fromInput;
   const to = pathToId || toInput;
   if (!from || !to) {
-    resultDiv.replaceChildren(createInlineText('Enter a source and target node.', 'var(--yellow)'));
+    resultDiv.replaceChildren(createTextEl('span', '', 'Enter a source and target node.', { style: { color: 'var(--yellow)' } }));
     return;
   }
 
@@ -3354,76 +3276,43 @@ async function findAttackPath() {
     });
     const result = await resp.json();
     if (!result.found) {
-      resultDiv.replaceChildren(createInlineText(`No path found from ${textValue(fromInput || from)} to ${textValue(toInput || to)}.`, 'var(--red)'));
+      resultDiv.replaceChildren(createTextEl('span', '', `No path found from ${fromInput || from} to ${toInput || to}.`, { style: { color: 'var(--red)' } }));
       return;
     }
 
-    const timingLine = result.pathfinding_ms ? ` | pathfinding ${result.pathfinding_ms}ms` : '';
-    const summary = document.createElement('div');
-    summary.style.color = 'var(--red)';
-    summary.style.fontWeight = '900';
-    summary.textContent = `${textValue(result.hop_count)} hops | total cost ${textValue(result.total_cost)}${timingLine}`;
-
-    const hopNodes = result.hops.map(hop => {
+    const hops = result.hops.map(hop => {
       const edgeColor = EDGE_COLORS[hop.relationship] || '#ff4d4d';
+      const sev = severityClass(hop.severity);
       const hopEl = document.createElement('div');
       hopEl.className = 'hop';
 
-      const source = document.createElement('span');
-      source.textContent = textValue(hop.source_display);
-      hopEl.appendChild(source);
+      hopEl.appendChild(createTextEl('span', '', hop.source_display));
 
-      const edge = document.createElement('span');
-      edge.className = 'hop-edge';
-      edge.style.color = edgeColor;
-      edge.appendChild(document.createTextNode(`--[${textValue(hop.relationship)}]--> `));
+      const edgeSpan = document.createElement('span');
+      edgeSpan.className = 'hop-edge';
+      edgeSpan.style.color = edgeColor;
+      edgeSpan.append(
+        document.createTextNode(`--[${hop.relationship}]--> `),
+        createTextEl('span', `severity ${sev}`, severityText(hop.severity))
+      );
+      hopEl.appendChild(edgeSpan);
 
-      const severity = document.createElement('span');
-      severity.className = `severity ${severityClass(hop.severity)}`;
-      severity.textContent = severityText(hop.severity);
-      edge.appendChild(severity);
-      hopEl.appendChild(edge);
+      const targetSpan = document.createElement('span');
+      targetSpan.append(
+        document.createTextNode(hop.target_display + ' '),
+        createTextEl('span', '', `cost ${hop.cost}`, { style: { color: 'var(--muted)' } })
+      );
+      hopEl.appendChild(targetSpan);
 
-      const target = document.createElement('span');
-      target.appendChild(document.createTextNode(`${textValue(hop.target_display)} `));
-      const cost = document.createElement('span');
-      cost.style.color = 'var(--muted)';
-      cost.textContent = `cost ${textValue(hop.cost)}`;
-      target.appendChild(cost);
-      hopEl.appendChild(target);
-
-      if (hop.guidance) {
-        const guidance = document.createElement('span');
-        guidance.className = 'conn-guidance';
-        guidance.textContent = textValue(hop.guidance);
-        hopEl.appendChild(guidance);
-      }
-
-      if (hop.ace_details) {
-        const aceDetails = document.createElement('div');
-        aceDetails.className = 'conn-ace';
-        aceDetails.textContent = textValue(hop.ace_details);
-        hopEl.appendChild(aceDetails);
-      }
-
-      if (hop.ovt_command) {
-        const commandLine = document.createElement('div');
-        commandLine.className = 'conn-command';
-        commandLine.textContent = `$ ${textValue(hop.ovt_command)}`;
-        hopEl.appendChild(commandLine);
-      }
-
-      if (hop.ovt_command_desc) {
-        const commandDesc = document.createElement('div');
-        commandDesc.className = 'conn-command-desc';
-        commandDesc.textContent = textValue(hop.ovt_command_desc);
-        hopEl.appendChild(commandDesc);
-      }
-
+      if (hop.guidance) hopEl.appendChild(createTextEl('span', 'conn-guidance', hop.guidance));
+      if (hop.ace_details) hopEl.appendChild(createTextEl('div', 'conn-ace', hop.ace_details));
+      if (hop.ovt_command) hopEl.appendChild(createTextEl('div', 'conn-command', `$ ${hop.ovt_command}`));
+      if (hop.ovt_command_desc) hopEl.appendChild(createTextEl('div', 'conn-command-desc', hop.ovt_command_desc));
       return hopEl;
     });
-
-    resultDiv.replaceChildren(summary, ...hopNodes);
+    const timingLine = result.pathfinding_ms ? ` | pathfinding ${result.pathfinding_ms}ms` : '';
+    const summary = createTextEl('div', '', `${result.hop_count} hops | total cost ${result.total_cost}${timingLine}`, { style: { color: 'var(--red)', fontWeight: '900' } });
+    resultDiv.replaceChildren(summary, ...hops);
     const graphInfo = activeGraphInfo();
     graphData = {
       ...result,
@@ -3438,12 +3327,12 @@ async function findAttackPath() {
     renderGraph(graphData);
     highlightPath(result.hops);
   } catch (error) {
-    resultDiv.replaceChildren(createInlineText(error.message, 'var(--red)'));
+    resultDiv.replaceChildren(createTextEl('span', '', error.message, { style: { color: 'var(--red)' } }));
   }
 }
 
 function highlightNode(nodeId) {
-  const node = getNodeById(nodeId);
+  const node = window._nodesMap ? window._nodesMap[nodeId] : null;
   if (!node) {
     if (currentGraphId) {
       loadFocusedNode(nodeId);
@@ -3459,30 +3348,12 @@ function highlightNode(nodeId) {
 function showTooltip(event, d) {
   const tooltip = document.getElementById('tooltip');
   const color = NODE_COLORS[d.type] || NODE_COLORS.Unknown;
-  clearElement(tooltip);
-
-  const name = document.createElement('div');
-  name.className = 'tt-name';
-  name.style.color = color;
-  name.textContent = textValue(d.display);
-  tooltip.appendChild(name);
-
-  const meta = document.createElement('div');
-  meta.className = 'tt-meta';
-  meta.textContent = `${textValue(d.type)} | ${textValue(d.domain || 'UNKNOWN')}`;
-  tooltip.appendChild(meta);
-
-  if (d.distinguished_name) {
-    const dn = document.createElement('div');
-    dn.className = 'tt-meta';
-    dn.textContent = textValue(d.distinguished_name);
-    tooltip.appendChild(dn);
-  }
-
-  const id = document.createElement('div');
-  id.className = 'tt-meta';
-  id.textContent = textValue(d.id);
-  tooltip.appendChild(id);
+  const title = createTextEl('div', 'tt-name', d.display);
+  title.style.color = color;
+  const meta = createTextEl('div', 'tt-meta', `${d.type} | ${d.domain || 'UNKNOWN'}`);
+  tooltip.replaceChildren(title, meta);
+  if (d.distinguished_name) tooltip.appendChild(createTextEl('div', 'tt-meta', d.distinguished_name));
+  tooltip.appendChild(createTextEl('div', 'tt-meta', d.id));
   tooltip.style.display = 'block';
   moveTooltip(event);
 }
@@ -3537,132 +3408,34 @@ function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
-function clearElement(element) {
-  if (element) {
-    element.replaceChildren();
-  }
+function clearNode(node) {
+  if (node) node.replaceChildren();
 }
 
-function createInlineMessage(text, color = 'var(--muted)') {
-  const box = document.createElement('div');
-  box.style.padding = '10px';
-  box.style.color = color;
-  box.style.fontSize = '13px';
-  box.textContent = text;
-  return box;
+function createTextEl(tagName, className, text, attrs = {}) {
+  const el = document.createElement(tagName);
+  if (className) el.className = className;
+  el.textContent = text;
+  Object.entries(attrs).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    if (key === 'style' && typeof value === 'object') {
+      Object.assign(el.style, value);
+    } else if (key in el) {
+      el[key] = value;
+    } else {
+      el.setAttribute(key, String(value));
+    }
+  });
+  return el;
 }
 
-function createInlineText(text, color = 'var(--muted)') {
-  const span = document.createElement('span');
-  span.style.color = color;
-  span.textContent = text;
-  return span;
-}
-
-function createOption(value, label, { disabled = false, selected = false } = {}) {
-  const option = document.createElement('option');
-  option.value = value;
-  option.textContent = label;
-  option.disabled = disabled;
-  option.selected = selected;
-  return option;
-}
-
-function createBadgeSpan(text, color = null) {
-  const badge = document.createElement('span');
-  badge.className = 'badge';
-  badge.textContent = text;
+function createBadge(text, color) {
+  const badge = createTextEl('span', 'badge', text);
   if (color) {
     badge.style.color = color;
     badge.style.borderColor = `${color}66`;
   }
   return badge;
-}
-
-function createQueryChip(label, query) {
-  const button = document.createElement('button');
-  button.className = 'query-chip';
-  button.type = 'button';
-  button.dataset.query = query;
-  button.textContent = label;
-  return button;
-}
-
-function createStatCard(value, label, color) {
-  const card = document.createElement('div');
-  card.className = 'stat-card';
-
-  const valueEl = document.createElement('div');
-  valueEl.className = 'value';
-  valueEl.style.color = color;
-  valueEl.textContent = String(value);
-
-  const labelEl = document.createElement('div');
-  labelEl.className = 'label';
-  labelEl.textContent = label;
-
-  card.append(valueEl, labelEl);
-  return card;
-}
-
-function createTextRow(keyText, valueText) {
-  const row = document.createElement('div');
-  row.className = 'detail-row';
-
-  const key = document.createElement('span');
-  key.className = 'key';
-  key.textContent = keyText;
-
-  const value = document.createElement('span');
-  value.className = 'val';
-  value.textContent = valueText;
-
-  row.append(key, value);
-  return row;
-}
-
-function createSectionTitle(text) {
-  const title = document.createElement('div');
-  title.className = 'detail-section-title';
-  title.textContent = text;
-  return title;
-}
-
-function createPill(text, className) {
-  const pill = document.createElement('span');
-  pill.className = `pill ${className}`;
-  pill.textContent = text;
-  return pill;
-}
-
-function textValue(value) {
-  return String(value ?? '');
-}
-
-function createSearchResultButton(item, onPick) {
-  const button = document.createElement('button');
-  button.className = 'search-result';
-  button.type = 'button';
-  button.dataset.node = textValue(item.id);
-
-  const color = NODE_COLORS[item.type] || NODE_COLORS.Unknown;
-  button.appendChild(createBadgeSpan(textValue(item.type), color));
-
-  const label = document.createElement('span');
-  label.textContent = textValue(item.display_name);
-  button.appendChild(label);
-
-  if (onPick) {
-    button.addEventListener('click', () => onPick(item));
-  }
-
-  return button;
-}
-
-function getNodeById(nodeId) {
-  if (!window._nodesMap) return null;
-  if (window._nodesMap instanceof Map) return window._nodesMap.get(nodeId);
-  return window._nodesMap[nodeId] || null;
 }
 
 function togglePanel(panelId) {
