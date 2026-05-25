@@ -1507,8 +1507,8 @@ input:disabled {
               <button class="secondary-button" id="refresh-list-btn" style="padding:10px;flex-shrink:0" title="Refresh graph list">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
               </button>
-              <input type="file" id="json-upload" accept=".json,application/json" style="display:none">
-              <label for="json-upload" class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON">
+              <input type="file" id="json-upload" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" style="display:none">
+              <label for="json-upload" class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON or ZIP">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               </label>
         </div>
@@ -1838,8 +1838,11 @@ async function init() {
   document.getElementById('json-upload').addEventListener('change', async (event) => {
     const file = event.target.files[0];
     if (!file) return;
-    if (file.type !== "application/json" && !file.name.endsWith(".json")) {
-        alert("Only JSON files are allowed");
+    const lowerName = file.name.toLowerCase();
+    const isJson = file.type === "application/json" || lowerName.endsWith(".json");
+    const isZip = file.type === "application/zip" || file.type === "application/x-zip-compressed" || lowerName.endsWith(".zip");
+    if (!isJson && !isZip) {
+        alert("Only JSON or ZIP files are allowed");
         return;
     }
     if (file.size > 200 * 1024 * 1024) {
@@ -1848,7 +1851,15 @@ async function init() {
     }
     document.getElementById('graph-badge').textContent = 'Uploading...';
     try {
-      const resp = await fetch('/api/upload', { method: 'POST', body: file });
+      const resp = await fetch('/api/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': isZip ? 'application/zip' : 'application/json',
+          'X-Overthrone-Filename': encodeURIComponent(file.name),
+          'X-Overthrone-Upload-Type': isZip ? 'zip' : 'json',
+        },
+        body: file
+      });
       if (!resp.ok) {
         throw new Error(await readApiError(resp));
       }
@@ -2729,7 +2740,7 @@ function renderGraph(data) {
 }
 
 function nodeRadius(node, total) {
-  return 24;
+  return 32;
 }
 
 function computeHierarchicalLayout(nodes, links, width, height, hops) {
@@ -2982,6 +2993,16 @@ function selectNode(node) {
    showNodeDetail(node.id);
  }
 
+function createDetailRow(key, value) {
+  const row = document.createElement('div');
+  row.className = 'detail-row';
+  row.replaceChildren(
+    createTextEl('span', 'key', key),
+    createTextEl('span', 'val', value === null || value === undefined || value === '' ? 'None' : String(value))
+  );
+  return row;
+}
+
  function deselectAll() {
    selectedNode = null;
    if (graphRenderer) {
@@ -2994,8 +3015,18 @@ function selectNode(node) {
 
 async function showNodeDetail(nodeId) {
   const panel = document.getElementById('node-detail');
+  const detailRow = (key, value) => {
+    const row = document.createElement('div');
+    row.className = 'detail-row';
+    row.replaceChildren(
+      createTextEl('span', 'key', key),
+      createTextEl('span', 'val', value === null || value === undefined || value === '' ? 'None' : String(value))
+    );
+    return row;
+  };
   try {
-    const resp = await fetch(`/api/node/${encodeURIComponent(nodeId)}?graph=${encodeURIComponent(currentGraphId)}`);
+    const params = new URLSearchParams({ id: nodeId, graph: currentGraphId });
+    const resp = await fetch(`/api/node-detail?${params.toString()}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const detail = await resp.json();
     const color = NODE_COLORS[detail.type] || NODE_COLORS.Unknown;
@@ -3015,13 +3046,13 @@ async function showNodeDetail(nodeId) {
     card.appendChild(name);
     card.appendChild(createTextEl('div', 'detail-row', '', {}));
     card.lastChild.replaceChildren(createTextEl('span', 'key', 'Object ID'), createTextEl('span', 'val', detail.id));
-    card.appendChild(createDetailRow('Type', detail.type));
-    card.appendChild(createDetailRow('Domain', detail.domain));
-    if (detail.distinguished_name) card.appendChild(createDetailRow('DN', detail.distinguished_name));
-    card.appendChild(createDetailRow('Enabled', enabled));
-    card.appendChild(createDetailRow('Out Degree', detail.out_degree ?? 0));
-    card.appendChild(createDetailRow('In Degree', detail.in_degree ?? 0));
-    card.appendChild(createDetailRow('Retrieval', `${detail.retrieval_ms ?? 0} ms`));
+    card.appendChild(detailRow('Type', detail.type));
+    card.appendChild(detailRow('Domain', detail.domain));
+    if (detail.distinguished_name) card.appendChild(detailRow('DN', detail.distinguished_name));
+    card.appendChild(detailRow('Enabled', enabled));
+    card.appendChild(detailRow('Out Degree', detail.out_degree ?? 0));
+    card.appendChild(detailRow('In Degree', detail.in_degree ?? 0));
+    card.appendChild(detailRow('Retrieval', `${detail.retrieval_ms ?? 0} ms`));
 
     const notes = (detail.security_notes || []).slice(0, 40);
     if (notes.length) {
@@ -3043,7 +3074,7 @@ async function showNodeDetail(nodeId) {
     const props = Object.entries(detail.properties || {}).slice(0, 80);
     if (props.length) {
       card.appendChild(createTextEl('div', 'detail-section-title', 'Properties'));
-      props.forEach(([key, value]) => card.appendChild(createDetailRow(key, value)));
+      props.forEach(([key, value]) => card.appendChild(detailRow(key, value)));
     }
 
     const connections = (detail.connections || []).slice(0, 160);
@@ -3054,7 +3085,7 @@ async function showNodeDetail(nodeId) {
     if (!connections.length) {
       const emptyCard = document.createElement('div');
       emptyCard.className = 'detail-card';
-      emptyCard.appendChild(createDetailRow('Edges', 'None'));
+      emptyCard.appendChild(detailRow('Edges', 'None'));
       connectionList.appendChild(emptyCard);
     } else {
       connections.forEach(conn => {
@@ -3095,10 +3126,12 @@ async function showNodeDetail(nodeId) {
   } catch (error) {
     const card = document.createElement('div');
     card.className = 'detail-card';
-    card.appendChild(createDetailRow('Error', error.message));
+    card.appendChild(detailRow('Error', error.message));
     panel.replaceChildren(card);
   }
 }
+
+window.showNodeDetail = showNodeDetail;
 
 function clearNodeDetail() {
   document.getElementById('node-detail').innerHTML = `
@@ -3107,6 +3140,8 @@ function clearNodeDetail() {
     </div>
   `;
 }
+
+window.clearNodeDetail = clearNodeDetail;
 
 async function highlightNode(nodeId) {
   const node = window._nodesMap ? window._nodesMap[nodeId] : null;

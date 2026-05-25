@@ -15,6 +15,7 @@
 
 pub mod cobalt_strike;
 pub mod havoc;
+pub mod profiles;
 pub mod sliver;
 
 use crate::error::{OverthroneError, Result};

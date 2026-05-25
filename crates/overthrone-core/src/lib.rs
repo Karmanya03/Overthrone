@@ -1,18 +1,19 @@
 #![doc = "Core types, protocols, and utilities for Overthrone AD assessment framework."]
 pub mod adcs;
-pub mod c2; // ← Export C2 module
+pub mod azure_ad;
+pub mod c2;
 pub mod config;
 pub mod cred_store;
 pub mod crypto;
 pub mod error;
-pub mod exec; // ← This now points to exec/mod.rs (which has all types)
+pub mod exec;
 pub mod graph;
 pub mod mssql;
 pub mod output;
-pub mod plugin; // ← NEW: wire in the plugin module
-pub mod postex; // ← Post-exploitation modules (skeleton key, etc.)
+pub mod plugin;
+pub mod postex;
 pub mod proto;
-pub mod proxy; // ← NEW: SOCKS5 proxy & port forwarding
+pub mod proxy;
 pub mod scan;
 pub mod sccm;
 pub mod types;

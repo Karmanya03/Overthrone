@@ -995,6 +995,116 @@ pub async fn read_remote_registry_value(
     Ok(value)
 }
 
+/// Helper macro to close all opened handles on error paths.
+macro_rules! close_all_handles {
+    ($reg:expr, $opened:expr, $smb:expr, $pipe:expr, $call_id:expr) => {
+        for h in $opened.iter().rev() {
+            let close_req = $reg.build_close_key_request(h, $call_id);
+            $call_id += 1;
+            let _ = $smb.pipe_transact($pipe, &close_req).await;
+        }
+    };
+}
+
+/// Write a remote registry value via WINREG DCE/RPC over SMB named pipe.
+///
+/// Orchestrates the full WINREG RPC conversation:
+/// Bind → OpenHive → OpenKey (for each path segment) → SetValue → CloseKey (all handles).
+///
+/// # Arguments
+/// * `smb_session` - Active SMB session with IPC$ access
+/// * `hive` - Predefined hive (HKLM, HKCU, etc.)
+/// * `path` - Registry path (e.g., "SYSTEM\\CurrentControlSet\\Services\\DnsCache\\Performance")
+/// * `value_name` - Value to write
+/// * `value_type` - Registry value type (REG_SZ, REG_DWORD, etc.)
+/// * `data` - Raw value data (UTF-16LE for REG_SZ, little-endian u32 for REG_DWORD, etc.)
+pub async fn write_remote_registry_value(
+    smb_session: &mut crate::proto::smb::SmbSession,
+    hive: PredefinedHive,
+    path: &str,
+    value_name: &str,
+    value_type: u32,
+    data: &[u8],
+) -> Result<()> {
+    let mut reg = RemoteRegistry::new();
+    let pipe = "winreg";
+    let mut call_id = 1u32;
+
+    // 1. DCE/RPC Bind to WINREG interface
+    let bind_req = reg.build_bind_request(call_id);
+    call_id += 1;
+    let bind_resp = smb_session
+        .pipe_transact(pipe, &bind_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("WINREG bind transport failed: {e}")))?;
+    if bind_resp.len() < 4 || bind_resp[2] != 12 {
+        return Err(OverthroneError::custom(
+            "WINREG RPC bind rejected by server",
+        ));
+    }
+    info!("RemoteRegistry: RPC bind to WINREG accepted");
+
+    // 2. Open the predefined hive (with KEY_READ | KEY_WRITE access)
+    let open_hive_req = reg.build_open_hive_ex_request(hive, call_id, 0x00020019);
+    call_id += 1;
+    let open_hive_resp = smb_session
+        .pipe_transact(pipe, &open_hive_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("OpenHive failed: {e}")))?;
+    let hive_handle = reg.parse_open_hive_response(&open_hive_resp)?;
+
+    // Track all opened handles for cleanup
+    let mut opened_handles: Vec<[u8; 20]> = vec![hive_handle];
+    let mut current_handle = hive_handle;
+
+    // 3. Walk the registry path, opening each subkey
+    let parts: Vec<&str> = path.split('\\').filter(|s| !s.is_empty()).collect();
+    for part in &parts {
+        let open_key_req = reg.build_open_key_request(&current_handle, part, call_id);
+        call_id += 1;
+        let open_key_resp = match smb_session.pipe_transact(pipe, &open_key_req).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                close_all_handles!(reg, opened_handles, smb_session, pipe, call_id);
+                return Err(OverthroneError::custom(format!(
+                    "Failed to open registry key '{}': {}",
+                    part, e
+                )));
+            }
+        };
+
+        if open_key_resp.len() < 48 {
+            close_all_handles!(reg, opened_handles, smb_session, pipe, call_id);
+            return Err(OverthroneError::custom(format!(
+                "OpenKey response too short for '{}'",
+                part
+            )));
+        }
+
+        let mut key_handle = [0u8; 20];
+        key_handle.copy_from_slice(&open_key_resp[24..44]);
+        opened_handles.push(key_handle);
+        current_handle = key_handle;
+    }
+
+    // 4. Write the value
+    let set_req = reg.build_set_value_request(&current_handle, value_name, value_type, data, call_id);
+    call_id += 1;
+    if let Err(e) = smb_session.pipe_transact(pipe, &set_req).await {
+        close_all_handles!(reg, opened_handles, smb_session, pipe, call_id);
+        return Err(OverthroneError::custom(format!("SetValue failed: {e}")));
+    }
+
+    // 5. Close all handles in reverse order
+    close_all_handles!(reg, opened_handles, smb_session, pipe, call_id);
+
+    info!(
+        "RemoteRegistry: Wrote value '{}' (type={}, {} bytes) to {}",
+        value_name, value_type, data.len(), path
+    );
+    Ok(())
+}
+
 /// Common remote registry paths for security assessments
 pub mod registry_paths {
     /// Windows Defender exclusion paths

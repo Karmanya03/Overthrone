@@ -4,6 +4,7 @@
 //! for credential capture and relay to other services.
 
 pub mod adcs_relay;
+pub mod exchange;
 pub mod mitm6;
 pub mod poisoner;
 pub mod relay;
@@ -39,6 +40,8 @@ pub enum Protocol {
     Webdav,
     /// `Msmq` variant (Microsoft Message Queuing, port 1801)
     Msmq,
+    /// `Exchange` variant (MAPI-over-HTTP / EWS, CVE-2024-21410)
+    Exchange,
 }
 
 impl std::fmt::Display for Protocol {
@@ -52,6 +55,7 @@ impl std::fmt::Display for Protocol {
             Self::Mssql => write!(f, "MSSQL"),
             Self::Webdav => write!(f, "WebDAV"),
             Self::Msmq => write!(f, "MSMQ"),
+            Self::Exchange => write!(f, "Exchange"),
         }
     }
 }

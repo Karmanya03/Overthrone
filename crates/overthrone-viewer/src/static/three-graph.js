@@ -45,7 +45,7 @@
   // Visual config
   const NODE_SEGMENTS  = 36;
   const ARROW_SIZE     = 22;
-  const NODE_BASE_RADIUS = 38;
+  const NODE_BASE_RADIUS = 46;
   const GRAPH_X_SPREAD  = 3.5;
 
   // Color tokens
@@ -1806,12 +1806,23 @@
       on('json-upload', 'change', async event => {
         const file = event.target.files[0];
         if (!file) return;
-        if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
-          alert('Only JSON files are allowed'); return;
+        const lowerName = file.name.toLowerCase();
+        const isJson = file.type === 'application/json' || lowerName.endsWith('.json');
+        const isZip = file.type === 'application/zip' || file.type === 'application/x-zip-compressed' || lowerName.endsWith('.zip');
+        if (!isJson && !isZip) {
+          alert('Only JSON or ZIP files are allowed'); return;
         }
         $('graph-badge') && ($('graph-badge').textContent = 'Uploading…');
         try {
-          const resp = await fetch('/api/upload', { method: 'POST', body: file });
+          const resp = await fetch('/api/upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': isZip ? 'application/zip' : 'application/json',
+              'X-Overthrone-Filename': encodeURIComponent(file.name),
+              'X-Overthrone-Upload-Type': isZip ? 'zip' : 'json',
+            },
+            body: file
+          });
           if (!resp.ok) throw new Error(await resp.text());
           const g = await resp.json();
           if (typeof loadGraphList === 'function') await loadGraphList();
@@ -1972,7 +1983,7 @@
     if (!graphData || !node) return;
     selectedNode = node;
     graphRenderer.selectNode(node);
-    if (typeof showNodeDetail === 'function') showNodeDetail(node.id);
+    if (typeof window.showNodeDetail === 'function') window.showNodeDetail(node.id);
   }
 
   function selectNodes(nodes, mode = 'replace') {
@@ -1981,7 +1992,7 @@
     if (!picked.length) return;
     graphRenderer.selectNodes(picked, mode);
     selectedNode = picked[picked.length - 1];
-    if (typeof showNodeDetail === 'function') showNodeDetail(selectedNode.id);
+    if (typeof window.showNodeDetail === 'function') window.showNodeDetail(selectedNode.id);
     const count = graphRenderer.selectedNodeIds?.size ?? picked.length;
     if (count > 1) {
       const rb = document.getElementById('render-badge');

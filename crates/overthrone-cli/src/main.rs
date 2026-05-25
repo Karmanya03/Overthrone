@@ -14,12 +14,12 @@ mod tui;
 use std::process::ExitCode;
 
 use auth::{AuthMethod, Credentials};
-use autopwn::{AdaptiveModeArg, AutoPwnArgs, ExecMethod, MaxStageArg, PlaybookArg};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell as ClapShell, generate as clap_generate};
 use colored::Colorize;
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
+use autopwn::ExecMethod;
 
 use futures::StreamExt;
 use overthrone_core::c2::C2Manager;
@@ -288,106 +288,7 @@ enum Commands {
         concurrency: usize,
     },
 
-    /// Autonomous attack chain — full killchain from enum to DA
-    #[command(name = "auto-pwn", alias = "auto", alias = "autopwn")]
-    AutoPwn {
-        /// Goal: "Domain Admins", "ntds", "recon", hostname, or user
-        #[arg(short, long, default_value = "Domain Admins")]
-        target: String,
-        /// Preferred remote execution method
-        #[arg(short, long, value_enum, default_value = "auto")]
-        method: ExecMethod,
-        /// Stealth mode — low-noise actions, extra jitter
-        #[arg(long, default_value = "false")]
-        stealth: bool,
-        /// Dry run — plan and display, no execution
-        #[arg(long, default_value = "false")]
-        dry_run: bool,
-        /// Maximum stage to reach (enumerate, attack, escalate, lateral, loot, cleanup)
-        #[arg(long, value_enum, default_value = "loot")]
-        max_stage: MaxStageArg,
-        /// Adaptive engine mode: heuristic, qlearning, or hybrid (default)
-        #[arg(long, value_enum, default_value = "hybrid")]
-        adaptive: AdaptiveModeArg,
-        /// Path to persist Q-table across engagements
-        #[arg(long, default_value = "q_table.json")]
-        q_table: String,
-        /// Jitter between steps (milliseconds)
-        #[arg(long, default_value = "1000")]
-        jitter_ms: u64,
-        /// Use LDAPS (port 636)
-        #[arg(long)]
-        ldaps: bool,
-        /// Per-step timeout (seconds)
-        #[arg(long, default_value = "30")]
-        timeout: u64,
-        /// Run a named playbook instead of goal-driven planning
-        #[arg(long, value_enum)]
-        playbook: Option<PlaybookArg>,
-        /// TOML config file to load targets/credentials/options from
-        #[arg(short = 'C', long, value_name = "FILE")]
-        config: Option<String>,
-        /// Resume a previously saved session file
-        #[arg(long, value_name = "SESSION_FILE")]
-        resume: Option<String>,
-    },
-
-    /// Autonomous attack chain starting from no credentials (pre-auth enum + loot bootstrap)
-    #[command(
-        name = "auto-pwn-preauth",
-        alias = "autopwn-preauth",
-        alias = "auto-preauth"
-    )]
-    AutoPwnPreauth {
-        /// Goal: "Domain Admins", "ntds", "recon", hostname, or user
-        #[arg(short, long, default_value = "Domain Admins")]
-        target: String,
-        /// Preferred remote execution method
-        #[arg(short, long, value_enum, default_value = "auto")]
-        method: ExecMethod,
-        /// Stealth mode — low-noise actions, extra jitter
-        #[arg(long, default_value = "false")]
-        stealth: bool,
-        /// Dry run — plan and display, no execution
-        #[arg(long, default_value = "false")]
-        dry_run: bool,
-        /// Maximum stage to reach (enumerate, attack, escalate, lateral, loot, cleanup)
-        #[arg(long, value_enum, default_value = "loot")]
-        max_stage: MaxStageArg,
-        /// Adaptive engine mode: heuristic, qlearning, or hybrid (default)
-        #[arg(long, value_enum, default_value = "hybrid")]
-        adaptive: AdaptiveModeArg,
-        /// Path to persist Q-table across engagements
-        #[arg(long, default_value = "q_table.json")]
-        q_table: String,
-        /// Jitter between steps (milliseconds)
-        #[arg(long, default_value = "1000")]
-        jitter_ms: u64,
-        /// Use LDAPS (port 636)
-        #[arg(long)]
-        ldaps: bool,
-        /// Per-step timeout (seconds)
-        #[arg(long, default_value = "30")]
-        timeout: u64,
-        /// Run a named playbook instead of goal-driven planning
-        #[arg(long, value_enum)]
-        playbook: Option<PlaybookArg>,
-        /// TOML config file to load targets/credentials/options from
-        #[arg(short = 'C', long, value_name = "FILE")]
-        config: Option<String>,
-        /// Resume a previously saved session file
-        #[arg(long, value_name = "SESSION_FILE")]
-        resume: Option<String>,
-        /// Optional path to username wordlist (one per line) for preauth bootstrap
-        #[arg(short = 'U', long)]
-        userlist: Option<String>,
-        /// When set, attempt LDAP-based username enumeration for bootstrap
-        #[arg(long)]
-        use_ldap: bool,
-        /// Number of concurrent probes during preauth enumeration
-        #[arg(long, default_value = "10")]
-        concurrency: usize,
-    },
+    
 
     /// Credential dumping (SAM, LSA, NTDS, DCC2)
     Dump {
@@ -1848,87 +1749,7 @@ async fn async_main() -> i32 {
             )
             .await
         }
-        Commands::AutoPwn {
-            ref target,
-            ref method,
-            stealth,
-            dry_run,
-            max_stage,
-            adaptive,
-            ref q_table,
-            jitter_ms,
-            ldaps,
-            timeout,
-            playbook,
-            ref config,
-            ref resume,
-        } => {
-            cmd_autopwn(
-                &cli,
-                AutoPwnArgs {
-                    target: target.clone(),
-                    method: method.clone(),
-                    stealth,
-                    dry_run,
-                    max_stage,
-                    adaptive,
-                    q_table: q_table.clone(),
-                    jitter_ms,
-                    ldaps,
-                    timeout,
-                    playbook,
-                    config: config.clone(),
-                    resume: resume.clone(),
-                    bootstrap_no_creds: false,
-                    userlist: cli.user_list.clone(),
-                    use_ldap: false,
-                    concurrency: 10,
-                },
-            )
-            .await
-        }
-        Commands::AutoPwnPreauth {
-            ref target,
-            ref method,
-            stealth,
-            dry_run,
-            max_stage,
-            adaptive,
-            ref q_table,
-            jitter_ms,
-            ldaps,
-            timeout,
-            playbook,
-            ref config,
-            ref resume,
-            ref userlist,
-            use_ldap,
-            concurrency,
-        } => {
-            cmd_autopwn(
-                &cli,
-                AutoPwnArgs {
-                    target: target.clone(),
-                    method: method.clone(),
-                    stealth,
-                    dry_run,
-                    max_stage,
-                    adaptive,
-                    q_table: q_table.clone(),
-                    jitter_ms,
-                    ldaps,
-                    timeout,
-                    playbook,
-                    config: config.clone(),
-                    resume: resume.clone(),
-                    bootstrap_no_creds: true,
-                    userlist: userlist.clone().or_else(|| cli.user_list.clone()),
-                    use_ldap,
-                    concurrency,
-                },
-            )
-            .await
-        }
+        
         Commands::Dump {
             ref target,
             ref source,
@@ -3115,6 +2936,18 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
                         ));
                     }
 
+                    if let Some(domain) = discover_domain_from_rootdse(&dc).await {
+                        banner::print_info(&format!(
+                            "Discovered domain context from RootDSE: {}",
+                            domain
+                        ));
+                        run_preauth_snaffler(&dc, &domain).await;
+                    } else {
+                        banner::print_warn(
+                            "RootDSE did not expose a domain context; skipping pre-auth loot pass.",
+                        );
+                    }
+
                     banner::print_success(&format!(
                         "Pre-auth discovery completed in {}ms (risk score: {}/10)",
                         result.duration_ms, result.summary.risk_score
@@ -3128,7 +2961,16 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
             }
         }
         EnumTarget::Anonymous => match anonymous_ldap_probe(&dc).await {
-            Ok(_) => 0,
+            Ok(_) => {
+                if let Some(domain) = discover_domain_from_rootdse(&dc).await {
+                    banner::print_info(&format!(
+                        "Discovered domain context from RootDSE: {}",
+                        domain
+                    ));
+                    run_preauth_snaffler(&dc, &domain).await;
+                }
+                0
+            }
             Err(e) => {
                 banner::print_fail(&format!("Anonymous LDAP probe failed: {e}"));
                 1
@@ -5013,101 +4855,8 @@ async fn cmd_spray(
     0
 }
 
-async fn cmd_autopwn(cli: &Cli, args: AutoPwnArgs) -> i32 {
-    banner::print_module_banner("AUTONOMOUS ATTACK");
-
-    let _ovt_cfg = match crate::ovt_config::OverthroneConfig::load(args.config.as_deref()) {
-        Ok(c) => c,
-        Err(e) => {
-            banner::print_warn(&format!("Config file warning: {}", e));
-            crate::ovt_config::OverthroneConfig::default()
-        }
-    };
-
-    let dc = match require_dc(cli) {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
-
-    let discovered_domain = if args.bootstrap_no_creds {
-        if let Some(domain) = cli.domain.clone() {
-            Some(domain)
-        } else {
-            discover_domain_from_rootdse(&dc).await
-        }
-    } else {
-        None
-    };
-
-    let creds = if args.bootstrap_no_creds {
-        if let Some(domain) = discovered_domain.as_deref() {
-            banner::print_info(&format!(
-                "No-credential bootstrap mode enabled (domain: {})",
-                domain
-            ));
-        } else {
-            banner::print_warn(
-                "No-credential bootstrap mode enabled, but domain could not be auto-discovered. Continuing with pre-auth-only methods.",
-            );
-        }
-        None
-    } else {
-        Some(match require_creds(cli) {
-            Ok(c) => c,
-            Err(e) => return e,
-        })
-    };
-
-    if args.bootstrap_no_creds {
-        let _ = cmd_pre_enum(cli, EnumTarget::Pre).await;
-        let _ = cmd_pre_enum(cli, EnumTarget::Anonymous).await;
-        let _ = commands_impl::cmd_rid(cli, 500, 2000, true).await;
-        let preauth_domain = discovered_domain.clone().unwrap_or_default();
-        run_preauth_snaffler(&dc, &preauth_domain).await;
-
-        let ue_cfg = overthrone_hunter::UserEnumConfig {
-            userlist: args
-                .userlist
-                .as_deref()
-                .or(cli.user_list.as_deref())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_default(),
-            output_file: None,
-            save_asrep_hashes: true,
-            concurrency: args.concurrency,
-            use_ldap: args.use_ldap,
-        };
-        banner::print_info("Running preauth username enumeration (bootstrap)");
-        if let Ok(res) =
-            overthrone_hunter::userenum::run(&dc, &preauth_domain, &ue_cfg, args.jitter_ms).await
-        {
-            banner::print_info(&format!(
-                "Preauth enumeration discovered {} valid users ({} no-preauth)",
-                res.valid_users.len() + res.no_preauth_users.len(),
-                res.no_preauth_users.len()
-            ));
-        } else {
-            banner::print_warn("Preauth userenum failed");
-        }
-    }
-
-    let initial_state = if let Some(session_path) = args.resume.as_deref() {
-        match crate::session_store::load_session(std::path::Path::new(session_path)) {
-            Ok(s) => {
-                banner::print_info(&format!("Loaded session from {}", session_path));
-                Some(s)
-            }
-            Err(e) => {
-                banner::print_fail(&format!("Failed to load session: {}", e));
-                return 1;
-            }
-        }
-    } else {
-        None
-    };
-
-    autopwn::run(dc, creds, discovered_domain, &args, initial_state).await
-}
+// `autopwn` command removed; `autopwn.rs` remains as reference but autopwn execution
+// is intentionally disabled. Wizard remains the interactive/autonomous interface.
 
 // cmd_mssql
 async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {

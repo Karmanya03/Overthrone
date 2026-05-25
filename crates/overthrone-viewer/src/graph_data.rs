@@ -7,8 +7,10 @@ use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use zip::ZipArchive;
 
 const EDGE_KEYS: &[&str] = &[
     "MemberOf",
@@ -1150,6 +1152,12 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
                 .collect::<Vec<_>>();
             entries.sort();
             paths.extend(entries);
+        } else if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+        {
+            paths.extend(expand_zip_source(&path)?);
         } else if !path.exists() {
             return Err(format!("source file does not exist: {}", path.display()));
         } else {
@@ -1157,6 +1165,86 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(paths)
+}
+
+fn expand_zip_source(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let bytes =
+        fs::read(path).map_err(|e| format!("failed to read ZIP source {}: {e}", path.display()))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| format!("failed to open ZIP source {}: {e}", path.display()))?;
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("graph");
+    let out_dir = std::env::temp_dir().join(format!(
+        "overthrone_zip_source_{}_{}",
+        sanitize_path_stem(stem),
+        uuid::Uuid::new_v4()
+    ));
+    fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("failed to create ZIP extraction directory: {e}"))?;
+
+    let mut paths = Vec::new();
+    for idx in 0..archive.len() {
+        let mut entry = archive
+            .by_index(idx)
+            .map_err(|e| format!("failed to read ZIP entry {idx}: {e}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let Some(enclosed) = entry.enclosed_name() else {
+            continue;
+        };
+        if !enclosed
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        let mut body = Vec::new();
+        entry
+            .read_to_end(&mut body)
+            .map_err(|e| format!("failed to extract {}: {e}", enclosed.display()))?;
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .map_err(|e| format!("ZIP entry {} is not valid JSON: {e}", enclosed.display()))?;
+
+        let out_path = out_dir.join(enclosed);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+        }
+        fs::write(&out_path, body)
+            .map_err(|e| format!("failed to write extracted {}: {e}", out_path.display()))?;
+        paths.push(out_path);
+    }
+    paths.sort();
+    if paths.is_empty() {
+        return Err(format!(
+            "ZIP source {} did not contain any JSON graph files",
+            path.display()
+        ));
+    }
+    Ok(paths)
+}
+
+fn sanitize_path_stem(stem: &str) -> String {
+    let safe = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let safe = safe.trim_matches('-');
+    if safe.is_empty() {
+        "graph".to_string()
+    } else {
+        safe.to_string()
+    }
 }
 
 fn object_id(value: &Value) -> Option<String> {

@@ -43,6 +43,7 @@ pub mod esc6;
 pub mod esc7;
 pub mod esc8;
 pub mod esc9;
+pub mod esc_strong_mapping;
 pub mod ldap_enumeration;
 pub mod pfx;
 pub mod web_enrollment;
@@ -79,6 +80,11 @@ pub use esc14::{
 };
 pub use esc15::{Esc15Config, Esc15Exploiter, Esc15Result, Esc15VulnerableTemplate};
 pub use esc16::{Esc16Config, Esc16Exploiter, Esc16Result, Esc16VulnerableTemplate};
+pub use esc_strong_mapping::{
+    StrongBindingState, StrongMappingAssessment, assess_strong_mapping,
+    cert_mapping_methods_command, infer_binding_state_from_build, is_ws2025_build,
+    reg_query_command, winrm_check_command,
+};
 pub use ldap_enumeration::{
     CaConfiguration, CaVulnerabilityInfo, EnrollmentService, LdapAdcsEnumerator,
     LdapCertificateTemplate, LdapCertificationAuthority,

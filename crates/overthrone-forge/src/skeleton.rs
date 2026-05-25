@@ -377,6 +377,7 @@ mod tests {
             lsa_protection_enabled: false,
             lsa_cfg_flags: None,
             run_as_ppl: None,
+            isolated_credentials_root_secret: false,
             warnings: vec!["remote registry unavailable".into()],
             evidence: vec!["WINREG bind failed".into()],
         };

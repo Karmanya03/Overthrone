@@ -2092,6 +2092,80 @@ impl LdapSession {
         Ok(computer_dn)
     }
 
+    /// Add a generic LDAP entry with the given attributes.
+    ///
+    /// Each attribute value is a byte slice. The `attrs` slice contains
+    /// `(attr_name, [values])` tuples following ldap3's `add` signature.
+    pub async fn add_entry(
+        &mut self,
+        dn: &str,
+        attrs: &[(&str, &[&[u8]])],
+    ) -> Result<()> {
+        use std::collections::HashSet;
+
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: dn.to_string(),
+            reason: "Add-entry requires password auth".to_string(),
+        })?;
+
+        let mut ldap_attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = Vec::new();
+        for (attr_name, values) in attrs {
+            let mut set = HashSet::new();
+            for val in *values {
+                set.insert(val.to_vec());
+            }
+            ldap_attrs.push((attr_name.as_bytes().to_vec(), set));
+        }
+
+        let result = ldap.add(dn, ldap_attrs).await.map_err(|e| {
+            OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!("Add-entry failed: {e}"),
+            }
+        })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!(
+                    "Add-entry rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP add-entry successful: {dn}");
+        Ok(())
+    }
+
+    /// Delete an LDAP entry by DN.
+    pub async fn delete_entry(&mut self, dn: &str) -> Result<()> {
+        let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+            target: dn.to_string(),
+            reason: "Delete-entry requires password auth".to_string(),
+        })?;
+
+        let result = ldap.delete(dn).await.map_err(|e| OverthroneError::Ldap {
+            target: dn.to_string(),
+            reason: format!("Delete-entry failed: {e}"),
+        })?;
+
+        if result.rc != 0 {
+            return Err(OverthroneError::Ldap {
+                target: dn.to_string(),
+                reason: format!(
+                    "Delete-entry rejected (rc={}): {}",
+                    result.rc,
+                    ldap_rc_to_string(result.rc)
+                ),
+            });
+        }
+
+        debug!("LDAP delete-entry successful: {dn}");
+        Ok(())
+    }
+
     /// Read a specific attribute from a DN
     pub async fn read_attribute(&mut self, dn: &str, attr: &str) -> Result<Vec<String>> {
         let entries = self.search_entries(dn, "(objectClass=*)", &[attr]).await?;

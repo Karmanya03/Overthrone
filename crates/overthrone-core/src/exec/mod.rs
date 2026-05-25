@@ -13,6 +13,7 @@
 //! All methods are cross-platform (Linux/macOS/Windows).
 
 pub mod atexec;
+pub mod lolbin;
 pub mod modules;
 pub mod psexec;
 pub mod shell; // ← Export shell module
@@ -199,6 +200,15 @@ impl RemoteExecutor for C2Executor {
         self.session_hostname.eq_ignore_ascii_case(target)
     }
 }
+
+// Re-export LOLBin types for convenience
+pub use lolbin::{
+    LolConfig, LolMethod, LolPayload, all_download_cradles, bitsadmin_download,
+    certutil_decode_exec, certutil_url_download, cscript_exec, execute_lolbin,
+    mshta_inline_js, mshta_remote_hta, msiexec_remote_msi, powershell_amsi_bypass,
+    powershell_download_cradle, regsvr32_sct, rundll32_js_exec, rundll32_sct,
+    wmic_xsl_exec,
+};
 
 /// Base64-encode a PowerShell script for -EncodedCommand
 fn base64_encode_ps(script: &str) -> String {

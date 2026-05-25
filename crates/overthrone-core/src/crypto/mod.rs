@@ -3,10 +3,12 @@
 pub mod aes_cts;
 pub mod cracker;
 pub mod dpapi;
+pub mod hashcat_gpu;
 pub mod gpp;
 pub mod hmac_util;
 pub mod md4;
 pub mod rc4_util;
+pub mod smart_wordlist;
 pub mod ticket;
 
 // Re-export key types for convenience
@@ -14,6 +16,7 @@ pub use cracker::{
     CrackResult, CrackerConfig, HashCracker, HashType, MaskPattern, Rule, expand_wordlist,
     get_embedded_wordlist, is_hashcat_available, password_to_nt_hash,
 };
+pub use smart_wordlist::SmartWordlist;
 
 pub use dpapi::{DpapiBackupKey, LapsCredentials, LapsDecryptor, LapsEncryptedBlob};
 

@@ -326,3 +326,10 @@ impl From<RelayError> for OverthroneError {
         OverthroneError::Relay(err.to_string())
     }
 }
+
+#[cfg(target_os = "windows")]
+impl From<windows::core::Error> for OverthroneError {
+    fn from(err: windows::core::Error) -> Self {
+        OverthroneError::PostExploitation(format!("Windows API error: {err}"))
+    }
+}

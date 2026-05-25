@@ -691,6 +691,10 @@ pub struct CrackerConfig {
     pub masks: Vec<String>,
     /// Enable hybrid mode (wordlist + mask suffix)
     pub hybrid_masks: Vec<String>,
+    /// Smart wordlist from AD enumeration (supersedes embedded/custom)
+    pub smart_wordlist: Vec<String>,
+    /// Enable LDAP-derived smart wordlist generation
+    pub use_smart_wordlist: bool,
 }
 
 impl Default for CrackerConfig {
@@ -711,6 +715,8 @@ impl Default for CrackerConfig {
             threads: 0,
             masks: Vec::new(),
             hybrid_masks: Vec::new(),
+            smart_wordlist: Vec::new(),
+            use_smart_wordlist: false,
         }
     }
 }
@@ -727,6 +733,8 @@ impl CrackerConfig {
             threads: 0,
             masks: Vec::new(),
             hybrid_masks: Vec::new(),
+            smart_wordlist: Vec::new(),
+            use_smart_wordlist: false,
         }
     }
 
@@ -764,6 +772,37 @@ impl CrackerConfig {
                 "?d?d?d?d?s".into(), // word + 4 digits + symbol
                 "?s?d?d".into(),     // word + symbol + 2 digits
             ],
+            smart_wordlist: Vec::new(),
+            use_smart_wordlist: false,
+        }
+    }
+
+    /// Smart wordlist mode — uses LDAP-derived patterns, aggressive rules.
+    /// Caller must populate `smart_wordlist` before passing to `HashCracker::new()`.
+    pub fn smart() -> Self {
+        Self {
+            use_embedded: true,
+            custom_wordlist: None,
+            rules: vec![
+                Rule::None,
+                Rule::Capitalize,
+                Rule::CapitalizeDigit,
+                Rule::CapitalizeYear,
+                Rule::AppendYear,
+                Rule::AppendSpecial,
+                Rule::FullVariation,
+            ],
+            max_candidates: 0,
+            prefer_hashcat: false,
+            threads: 0,
+            masks: vec![
+                "?u?l?l?l?l?l?d?d".into(),
+                "?u?l?l?l?l?l?l?d?d".into(),
+                "?u?l?l?l?l?l?l?l?d?d".into(),
+            ],
+            hybrid_masks: vec!["?d?d?d?d".into(), "?s?d?d".into()],
+            smart_wordlist: Vec::new(),
+            use_smart_wordlist: true,
         }
     }
 }
@@ -785,8 +824,14 @@ impl HashCracker {
                 .ok(); // Ignore error if already built
         }
 
-        // Load wordlist
-        let wordlist = if let Some(ref path) = config.custom_wordlist {
+        // Load wordlist — smart wordlist takes priority if configured
+        let wordlist = if config.use_smart_wordlist && !config.smart_wordlist.is_empty() {
+            info!(
+                "Using smart wordlist with {} AD-derived candidates",
+                config.smart_wordlist.len()
+            );
+            config.smart_wordlist.clone()
+        } else if let Some(ref path) = config.custom_wordlist {
             load_wordlist_from_file(path)?
         } else if config.use_embedded {
             get_embedded_wordlist()
@@ -1230,6 +1275,17 @@ impl HashType {
     }
 }
 
+/// Create a `CrackerConfig` pre-populated with SmartWordlist candidates.
+///
+/// This is the primary integration point between LDAP enumeration and
+/// password cracking. Call this after enumerating users via `LdapSession`,
+/// and pass the result to `HashCracker::new()`.
+pub fn config_from_smart_wordlist(smart: &mut crate::crypto::smart_wordlist::SmartWordlist) -> CrackerConfig {
+    let mut config = CrackerConfig::smart();
+    config.smart_wordlist = smart.generate();
+    config
+}
+
 // ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════
@@ -1429,5 +1485,15 @@ mod tests {
     fn test_aes_salt_generation() {
         let salt = kerberos_aes_salt("corp.local", "jdoe");
         assert_eq!(salt, "CORP.LOCALjdoe");
+    }
+
+    #[test]
+    fn test_smart_wordlist_config_integration() {
+        let mut smart = crate::crypto::smart_wordlist::SmartWordlist::new("corp.local");
+        smart.add_static_keywords(&["Contoso", "ITDepartment", "SQLServer"]);
+        let config = config_from_smart_wordlist(&mut smart);
+        assert!(config.use_smart_wordlist);
+        assert!(!config.smart_wordlist.is_empty());
+        assert!(config.smart_wordlist.iter().any(|w| w.contains("Contoso")));
     }
 }
