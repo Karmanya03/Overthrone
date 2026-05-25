@@ -909,7 +909,6 @@ pub async fn request_tgt_opsec(
         match AsRep::parse(&response_bytes) {
             Ok((_, as_rep)) => {
                 let mut decrypted: Option<Vec<u8>> = None;
-                let mut used_etype = primary_etype;
 
                 for &try_etype in decryption_etypes {
                     let try_key = if try_etype == ETYPE_RC4_HMAC {
@@ -929,7 +928,6 @@ pub async fn request_tgt_opsec(
                             match cipher.decrypt(&try_key, 3, &as_rep.enc_part.cipher) {
                                 Ok(d) => {
                                     decrypted = Some(d);
-                                    used_etype = try_etype;
                                     break;
                                 }
                                 Err(_) => continue,
@@ -1400,7 +1398,6 @@ pub async fn s4u2self_with_checksum_bypass(
 
     let mut current_dc = dc_ip.to_string();
     let mut current_realm = realm.clone();
-    let mut bypass_succeeded = false;
 
     for hop in 0..=2 {
         let req_body = build_tgs_req_body(
@@ -1442,7 +1439,7 @@ pub async fn s4u2self_with_checksum_bypass(
                     .map_err(|e| OverthroneError::Kerberos(format!("Parse EncTgsRepPart: {e}")))?;
 
                 // If we provided custom checksum and got a ticket back, bypass succeeded
-                bypass_succeeded = had_custom_checksum || pac_flags.is_some();
+                let bypass_succeeded = had_custom_checksum || pac_flags.is_some();
 
                 info!("S4U2Self-bypass ticket for {impersonate_user} obtained (bypass={bypass_succeeded})");
                 return Ok((

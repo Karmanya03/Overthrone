@@ -248,13 +248,13 @@ pub async fn run_hashcat_gpu(
         let elapsed = started.elapsed();
 
         // Check stop flag
-        if let Some(ref flag) = stop_flag {
-            if !flag.load(Ordering::SeqCst) {
-                log.push("Stop flag received — killing hashcat".to_string());
-                let _ = child.kill();
-                let _ = child.wait();
-                break;
-            }
+        if let Some(ref flag) = stop_flag
+            && !flag.load(Ordering::SeqCst)
+        {
+            log.push("Stop flag received — killing hashcat".to_string());
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
         }
 
         // Check timeout
