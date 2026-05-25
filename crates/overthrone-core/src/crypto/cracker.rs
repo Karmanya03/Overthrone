@@ -1280,7 +1280,9 @@ impl HashType {
 /// This is the primary integration point between LDAP enumeration and
 /// password cracking. Call this after enumerating users via `LdapSession`,
 /// and pass the result to `HashCracker::new()`.
-pub fn config_from_smart_wordlist(smart: &mut crate::crypto::smart_wordlist::SmartWordlist) -> CrackerConfig {
+pub fn config_from_smart_wordlist(
+    smart: &mut crate::crypto::smart_wordlist::SmartWordlist,
+) -> CrackerConfig {
     let mut config = CrackerConfig::smart();
     config.smart_wordlist = smart.generate();
     config

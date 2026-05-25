@@ -20,9 +20,8 @@ pub use cg_check::{
 pub use opsec::{
     AmsiBypassResult, EtwSuppressResult, HONEYPOT_ATTRS, OpsecConfig, OpsecPatchReport,
     SyscallResult, apply_opsec, check_credential_guard, contains_honeypot_attrs,
-    early_bird_apc_injection, module_stomping_injection, patch_amsi,
-    prefer_kerberos_etype, process_hollowing_injection, resolve_syscall_numbers,
-    strip_honeypot_attrs, suppress_etw,
+    early_bird_apc_injection, module_stomping_injection, patch_amsi, prefer_kerberos_etype,
+    process_hollowing_injection, resolve_syscall_numbers, strip_honeypot_attrs, suppress_etw,
 };
 pub use skeleton_key::{
     DEFAULT_SKELETON_KEY, DeploymentMethod, SkeletonKeyConfig, SkeletonKeyExploiter,

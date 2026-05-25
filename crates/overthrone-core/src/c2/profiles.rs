@@ -88,7 +88,11 @@ impl C2Profile {
     /// High OPSEC — blends with AWS edge traffic.
     pub fn mimic_aws_cloudfront() -> Self {
         let mut headers = HashMap::new();
-        headers.insert("Accept".into(), "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8".into());
+        headers.insert(
+            "Accept".into(),
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                .into(),
+        );
         headers.insert("Accept-Language".into(), "en-US,en;q=0.9".into());
         headers.insert("Accept-Encoding".into(), "gzip, deflate, br".into());
         headers.insert("Cache-Control".into(), "no-cache".into());
@@ -229,27 +233,21 @@ impl C2Profile {
 
         Self {
             name: "Azure Blob".into(),
-            description: "Mimics Azure Blob Storage API traffic — common in enterprise cloud environments".into(),
+            description:
+                "Mimics Azure Blob Storage API traffic — common in enterprise cloud environments"
+                    .into(),
             sleep_range: (Duration::from_secs(60), Duration::from_secs(360)),
             jitter_percent: 50,
             user_agent: "Azure-Storage/2.0".into(),
             headers,
-            get_uris: vec![
-                "/container/blob.txt".into(),
-                "/container/metadata".into(),
-            ],
-            post_uris: vec![
-                "/container/block".into(),
-                "/container/commit".into(),
-            ],
+            get_uris: vec!["/container/blob.txt".into(), "/container/metadata".into()],
+            post_uris: vec!["/container/block".into(), "/container/commit".into()],
             staging_uri: Some("/container/stage".into()),
             dns_sleep: None,
             dns_hostname_pattern: Some("*.blob.core.windows.net".to_string()),
             tls_config: Some(TlsConfig {
                 tls_version: "TLSv1.2".into(),
-                cipher_suites: vec![
-                    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384".into(),
-                ],
+                cipher_suites: vec!["TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384".into()],
                 sni: Some("storageaccount.blob.core.windows.net".into()),
                 session_tickets: false,
             }),
@@ -265,7 +263,8 @@ impl C2Profile {
     pub fn mimic_dns_tunnel() -> Self {
         Self {
             name: "DNS Tunnel".into(),
-            description: "DNS-based C2 with TXT query callbacks — bypasses HTTP/HTTPS egress filters".into(),
+            description:
+                "DNS-based C2 with TXT query callbacks — bypasses HTTP/HTTPS egress filters".into(),
             sleep_range: (Duration::from_secs(10), Duration::from_secs(60)),
             jitter_percent: 25,
             user_agent: String::new(),
@@ -293,7 +292,9 @@ impl C2Profile {
             description: "Minimal HTTP profile — fast, low overhead, low OPSEC".into(),
             sleep_range: (Duration::from_secs(5), Duration::from_secs(30)),
             jitter_percent: 10,
-            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0".into(),
+            user_agent:
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
+                    .into(),
             headers,
             get_uris: vec!["/".into(), "/ping".into()],
             post_uris: vec!["/submit".into(), "/data".into()],
@@ -382,7 +383,11 @@ mod tests {
     #[test]
     fn test_google_api_profile() {
         let profile = C2Profile::mimic_google_api();
-        assert!(profile.get_uris.contains(&"/gmail/v1/users/me/profile".into()));
+        assert!(
+            profile
+                .get_uris
+                .contains(&"/gmail/v1/users/me/profile".into())
+        );
     }
 
     #[test]

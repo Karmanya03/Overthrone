@@ -57,6 +57,11 @@ pub use csr::{
     CertificateSigningRequest, CsrSubject, ExtendedKeyUsage, RsaKeyPair, SanEntry, SubjectAltName,
     create_client_auth_csr, create_esc1_csr,
 };
+pub use esc_strong_mapping::{
+    StrongBindingState, StrongMappingAssessment, assess_strong_mapping,
+    cert_mapping_methods_command, infer_binding_state_from_build, is_ws2025_build,
+    reg_query_command, winrm_check_command,
+};
 pub use esc1::Esc1Exploiter;
 pub use esc2::Esc2Exploiter;
 pub use esc3::Esc3Exploiter;
@@ -80,11 +85,6 @@ pub use esc14::{
 };
 pub use esc15::{Esc15Config, Esc15Exploiter, Esc15Result, Esc15VulnerableTemplate};
 pub use esc16::{Esc16Config, Esc16Exploiter, Esc16Result, Esc16VulnerableTemplate};
-pub use esc_strong_mapping::{
-    StrongBindingState, StrongMappingAssessment, assess_strong_mapping,
-    cert_mapping_methods_command, infer_binding_state_from_build, is_ws2025_build,
-    reg_query_command, winrm_check_command,
-};
 pub use ldap_enumeration::{
     CaConfiguration, CaVulnerabilityInfo, EnrollmentService, LdapAdcsEnumerator,
     LdapCertificateTemplate, LdapCertificationAuthority,

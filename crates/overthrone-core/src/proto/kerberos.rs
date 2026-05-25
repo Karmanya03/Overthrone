@@ -6,12 +6,12 @@
 use crate::error::{OverthroneError, Result};
 use crate::proto::ntlm;
 use chrono::Utc;
+pub use kerberos_asn1::Checksum;
 use kerberos_asn1::{
     ApReq, AsRep, AsReq, Asn1Object, Authenticator as KrbAuthenticator, EncAsRepPart,
     EncTgsRepPart, EncryptedData, KdcReqBody, KerbPaPacRequest, KerberosFlags, KerberosTime,
     KrbError, PaData, PaEncTsEnc, PaForUser, PaPacOptions, PrincipalName, TgsRep, TgsReq, Ticket,
 };
-pub use kerberos_asn1::Checksum;
 use kerberos_crypto::new_kerberos_cipher;
 use md5::Md5;
 use std::net::SocketAddr;
@@ -445,7 +445,8 @@ pub fn build_encrypted_authenticator_with_authdata(
     let ctag5 = asn1_context_tag(5, &asn1_generalized_time(&format_kerberos_time(&now)));
     let ctag7 = asn1_context_tag(7, &asn1_integer(rand::random::<u32>() as i64));
     let ctag10 = asn1_context_tag(10, auth_data_raw);
-    let authenticator_raw = asn1_sequence_raw(&[&ctag0, &ctag1, &ctag2, &ctag4, &ctag5, &ctag7, &ctag10]);
+    let authenticator_raw =
+        asn1_sequence_raw(&[&ctag0, &ctag1, &ctag2, &ctag4, &ctag5, &ctag7, &ctag10]);
 
     let cipher = new_kerberos_cipher(etype)
         .map_err(|e| OverthroneError::Kerberos(format!("Cipher error: {e}")))?;
@@ -924,15 +925,13 @@ pub async fn request_tgt_opsec(
                     };
 
                     match new_kerberos_cipher(try_etype) {
-                        Ok(cipher) => {
-                            match cipher.decrypt(&try_key, 3, &as_rep.enc_part.cipher) {
-                                Ok(d) => {
-                                    decrypted = Some(d);
-                                    break;
-                                }
-                                Err(_) => continue,
+                        Ok(cipher) => match cipher.decrypt(&try_key, 3, &as_rep.enc_part.cipher) {
+                            Ok(d) => {
+                                decrypted = Some(d);
+                                break;
                             }
-                        }
+                            Err(_) => continue,
+                        },
                         Err(_) => continue,
                     }
                 }
@@ -1441,7 +1440,9 @@ pub async fn s4u2self_with_checksum_bypass(
                 // If we provided custom checksum and got a ticket back, bypass succeeded
                 let bypass_succeeded = had_custom_checksum || pac_flags.is_some();
 
-                info!("S4U2Self-bypass ticket for {impersonate_user} obtained (bypass={bypass_succeeded})");
+                info!(
+                    "S4U2Self-bypass ticket for {impersonate_user} obtained (bypass={bypass_succeeded})"
+                );
                 return Ok((
                     TicketGrantingData {
                         ticket: tgs_rep.ticket,
@@ -1604,7 +1605,11 @@ pub async fn s4u2proxy(
 // ═══════════════════════════════════════════════════════════
 
 /// Build HMAC-MD5 checksum for S4U2Self PA-FOR-USER
-pub fn build_s4u2self_checksum(username: &str, realm: &str, session_key: &[u8]) -> Result<Checksum> {
+pub fn build_s4u2self_checksum(
+    username: &str,
+    realm: &str,
+    session_key: &[u8],
+) -> Result<Checksum> {
     use hmac::{Hmac, Mac};
 
     let mut data: Vec<u8> = Vec::new();

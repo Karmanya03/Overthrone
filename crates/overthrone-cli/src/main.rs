@@ -14,12 +14,12 @@ mod tui;
 use std::process::ExitCode;
 
 use auth::{AuthMethod, Credentials};
+use autopwn::ExecMethod;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell as ClapShell, generate as clap_generate};
 use colored::Colorize;
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
-use autopwn::ExecMethod;
 
 use futures::StreamExt;
 use overthrone_core::c2::C2Manager;
@@ -287,8 +287,6 @@ enum Commands {
         #[arg(long, default_value = "10")]
         concurrency: usize,
     },
-
-    
 
     /// Credential dumping (SAM, LSA, NTDS, DCC2)
     Dump {
@@ -1749,7 +1747,7 @@ async fn async_main() -> i32 {
             )
             .await
         }
-        
+
         Commands::Dump {
             ref target,
             ref source,

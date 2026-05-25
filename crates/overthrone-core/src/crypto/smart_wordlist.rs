@@ -51,11 +51,7 @@ pub struct SmartWordlist {
 impl SmartWordlist {
     /// Create a new wordlist generator for the given domain.
     pub fn new(domain: &str) -> Self {
-        let company = domain
-            .split('.')
-            .next()
-            .unwrap_or(domain)
-            .to_lowercase();
+        let company = domain.split('.').next().unwrap_or(domain).to_lowercase();
 
         Self {
             company,
@@ -197,17 +193,26 @@ impl SmartWordlist {
 
         // Company name variations
         for year in 2019..=2026 {
-            let s = format!("{company}{year}"); self.insert(&s);
-            let s = format!("{company}@{year}"); self.insert(&s);
-            let s = format!("{capitalized}{year}"); self.insert(&s);
-            let s = format!("{capitalized}@{year}"); self.insert(&s);
-            let s = format!("{capitalized}@{year}!"); self.insert(&s);
+            let s = format!("{company}{year}");
+            self.insert(&s);
+            let s = format!("{company}@{year}");
+            self.insert(&s);
+            let s = format!("{capitalized}{year}");
+            self.insert(&s);
+            let s = format!("{capitalized}@{year}");
+            self.insert(&s);
+            let s = format!("{capitalized}@{year}!");
+            self.insert(&s);
         }
 
         // Company + common words
-        for suffix in &["123", "123!", "1234", "2024!", "2025!", "admin", "it", "corp"] {
-            let s = format!("{company}{suffix}"); self.insert(&s);
-            let s = format!("{capitalized}{suffix}"); self.insert(&s);
+        for suffix in &[
+            "123", "123!", "1234", "2024!", "2025!", "admin", "it", "corp",
+        ] {
+            let s = format!("{company}{suffix}");
+            self.insert(&s);
+            let s = format!("{capitalized}{suffix}");
+            self.insert(&s);
         }
     }
 
@@ -236,7 +241,9 @@ impl SmartWordlist {
             // Year alone
             self.insert(&format!("{year}"));
             // Year with common prefixes
-            for prefix in &["Welcome", "ChangeMe", "changeme", "Password", "password", "P@ssw0rd"] {
+            for prefix in &[
+                "Welcome", "ChangeMe", "changeme", "Password", "password", "P@ssw0rd",
+            ] {
                 self.insert(&format!("{prefix}{year}"));
                 self.insert(&format!("{prefix}{year}!"));
             }
@@ -288,43 +295,90 @@ const COMMON_YEARS: &[u32] = &[2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
 
 /// Common password suffixes in enterprise environments.
 const COMMON_SUFFIXES: &[&str] = &[
-    "1", "12", "123", "1234", "12345", "123!", "123!", "!", "@", "#",
-    "1!", "12!", "123!", "2024", "2025", "2026",
+    "1", "12", "123", "1234", "12345", "123!", "123!", "!", "@", "#", "1!", "12!", "123!", "2024",
+    "2025", "2026",
 ];
 
 /// Common enterprise passwords that appear in breached corp environments.
 const COMMON_ENTERPRISE_PASSWORDS: &[&str] = &[
-    "Password1", "Password123", "Password123!", "Password1234",
-    "Password2024!", "Password2025!",
-    "P@ssw0rd", "P@ssw0rd1", "P@ssw0rd123",
-    "Welcome1", "Welcome123", "Welcome2024!", "Welcome2025!",
-    "ChangeMe1", "ChangeMe123", "ChangeMe2024!",
-    "changeme", "changeme123",
-    "Summer2024!", "Summer2025!",
-    "Winter2024!", "Winter2025!",
-    "Spring2024!", "Spring2025!",
-    "Fall2024!", "Fall2025!",
-    "letmein", "letmein123",
-    "qwerty1", "qwerty123", "Qwerty123",
-    "admin123", "Admin123", "Administrator1",
-    "Passw0rd!", "Passw0rd123",
-    "Season2024!", "Season2025!",
-    "Company2024!", "Company2025!",
-    "DefaultPassword", "defaultpassword",
-    "TempPassword1", "temppassword",
-    "Initial1", "init123",
-    "P@ss1234", "Pass@1234",
-    "ITAdmin1", "svcadmin1",
-    "Backup2024!", "BackupAdmin1",
+    "Password1",
+    "Password123",
+    "Password123!",
+    "Password1234",
+    "Password2024!",
+    "Password2025!",
+    "P@ssw0rd",
+    "P@ssw0rd1",
+    "P@ssw0rd123",
+    "Welcome1",
+    "Welcome123",
+    "Welcome2024!",
+    "Welcome2025!",
+    "ChangeMe1",
+    "ChangeMe123",
+    "ChangeMe2024!",
+    "changeme",
+    "changeme123",
+    "Summer2024!",
+    "Summer2025!",
+    "Winter2024!",
+    "Winter2025!",
+    "Spring2024!",
+    "Spring2025!",
+    "Fall2024!",
+    "Fall2025!",
+    "letmein",
+    "letmein123",
+    "qwerty1",
+    "qwerty123",
+    "Qwerty123",
+    "admin123",
+    "Admin123",
+    "Administrator1",
+    "Passw0rd!",
+    "Passw0rd123",
+    "Season2024!",
+    "Season2025!",
+    "Company2024!",
+    "Company2025!",
+    "DefaultPassword",
+    "defaultpassword",
+    "TempPassword1",
+    "temppassword",
+    "Initial1",
+    "init123",
+    "P@ss1234",
+    "Pass@1234",
+    "ITAdmin1",
+    "svcadmin1",
+    "Backup2024!",
+    "BackupAdmin1",
 ];
 
 /// Common words in AD descriptions that are NOT password hints.
 const COMMON_DESC_WORDS: &[&str] = &[
-    "user", "account", "service", "admin", "administrator", "manager",
-    "employee", "staff", "temporary", "contract", "vendor", "consultant",
-    "disabled", "enabled", "active", "inactive",
-    "domain", "group", "mailbox", "shared",
-    "description", "purpose",
+    "user",
+    "account",
+    "service",
+    "admin",
+    "administrator",
+    "manager",
+    "employee",
+    "staff",
+    "temporary",
+    "contract",
+    "vendor",
+    "consultant",
+    "disabled",
+    "enabled",
+    "active",
+    "inactive",
+    "domain",
+    "group",
+    "mailbox",
+    "shared",
+    "description",
+    "purpose",
 ];
 
 #[cfg(test)]

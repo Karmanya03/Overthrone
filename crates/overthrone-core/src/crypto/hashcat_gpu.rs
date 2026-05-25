@@ -15,8 +15,8 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
@@ -286,10 +286,7 @@ pub async fn run_hashcat_gpu(
 
     // Read output file
     let cracked_passwords = read_cracked_file(&config.output_file);
-    log.push(format!(
-        "Cracked {} passwords",
-        cracked_passwords.len()
-    ));
+    log.push(format!("Cracked {} passwords", cracked_passwords.len()));
 
     // Count total hashes from input
     let total_hashes = count_hash_lines(&config.hash_file);
@@ -321,7 +318,10 @@ pub async fn run_hashcat_gpu(
 }
 
 /// Build the hashcat command from config.
-fn build_hashcat_command(config: &HashcatGpuConfig, _log: &[String]) -> Result<std::process::Command> {
+fn build_hashcat_command(
+    config: &HashcatGpuConfig,
+    _log: &[String],
+) -> Result<std::process::Command> {
     let mut cmd = Command::new(&config.hashcat_path);
 
     // Mode
@@ -349,7 +349,8 @@ fn build_hashcat_command(config: &HashcatGpuConfig, _log: &[String]) -> Result<s
     }
 
     // Platform
-    cmd.arg("--opencl-platforms").arg(config.platform_id.to_string());
+    cmd.arg("--opencl-platforms")
+        .arg(config.platform_id.to_string());
 
     // Performance
     cmd.arg("--optimized-kernel-enable");
@@ -480,13 +481,20 @@ mod tests {
     #[test]
     fn test_mode_descriptions() {
         assert_eq!(GpuHashMode::Ntlm.description(), "NTLM (1000)");
-        assert!(GpuHashMode::KerberoastAes256.description().contains("19700"));
+        assert!(
+            GpuHashMode::KerberoastAes256
+                .description()
+                .contains("19700")
+        );
     }
 
     #[test]
     fn test_rule_set_filenames() {
         assert_eq!(GpuRuleSet::Best64.filename(), "best64.rule");
-        assert_eq!(GpuRuleSet::OneRuleToRuleThemAll.filename(), "OneRuleToRuleThemAll.rule");
+        assert_eq!(
+            GpuRuleSet::OneRuleToRuleThemAll.filename(),
+            "OneRuleToRuleThemAll.rule"
+        );
         assert_eq!(GpuRuleSet::None.filename(), "");
     }
 

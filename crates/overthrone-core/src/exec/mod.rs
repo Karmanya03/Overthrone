@@ -204,10 +204,9 @@ impl RemoteExecutor for C2Executor {
 // Re-export LOLBin types for convenience
 pub use lolbin::{
     LolConfig, LolMethod, LolPayload, all_download_cradles, bitsadmin_download,
-    certutil_decode_exec, certutil_url_download, cscript_exec, execute_lolbin,
-    mshta_inline_js, mshta_remote_hta, msiexec_remote_msi, powershell_amsi_bypass,
-    powershell_download_cradle, regsvr32_sct, rundll32_js_exec, rundll32_sct,
-    wmic_xsl_exec,
+    certutil_decode_exec, certutil_url_download, cscript_exec, execute_lolbin, mshta_inline_js,
+    mshta_remote_hta, msiexec_remote_msi, powershell_amsi_bypass, powershell_download_cradle,
+    regsvr32_sct, rundll32_js_exec, rundll32_sct, wmic_xsl_exec,
 };
 
 /// Base64-encode a PowerShell script for -EncodedCommand

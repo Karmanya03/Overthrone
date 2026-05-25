@@ -2096,11 +2096,7 @@ impl LdapSession {
     ///
     /// Each attribute value is a byte slice. The `attrs` slice contains
     /// `(attr_name, [values])` tuples following ldap3's `add` signature.
-    pub async fn add_entry(
-        &mut self,
-        dn: &str,
-        attrs: &[(&str, &[&[u8]])],
-    ) -> Result<()> {
+    pub async fn add_entry(&mut self, dn: &str, attrs: &[(&str, &[&[u8]])]) -> Result<()> {
         use std::collections::HashSet;
 
         let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
@@ -2117,12 +2113,13 @@ impl LdapSession {
             ldap_attrs.push((attr_name.as_bytes().to_vec(), set));
         }
 
-        let result = ldap.add(dn, ldap_attrs).await.map_err(|e| {
-            OverthroneError::Ldap {
+        let result = ldap
+            .add(dn, ldap_attrs)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
                 target: dn.to_string(),
                 reason: format!("Add-entry failed: {e}"),
-            }
-        })?;
+            })?;
 
         if result.rc != 0 {
             return Err(OverthroneError::Ldap {

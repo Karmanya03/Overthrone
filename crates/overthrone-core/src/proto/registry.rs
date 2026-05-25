@@ -1088,7 +1088,8 @@ pub async fn write_remote_registry_value(
     }
 
     // 4. Write the value
-    let set_req = reg.build_set_value_request(&current_handle, value_name, value_type, data, call_id);
+    let set_req =
+        reg.build_set_value_request(&current_handle, value_name, value_type, data, call_id);
     call_id += 1;
     if let Err(e) = smb_session.pipe_transact(pipe, &set_req).await {
         close_all_handles!(reg, opened_handles, smb_session, pipe, call_id);
@@ -1100,7 +1101,10 @@ pub async fn write_remote_registry_value(
 
     info!(
         "RemoteRegistry: Wrote value '{}' (type={}, {} bytes) to {}",
-        value_name, value_type, data.len(), path
+        value_name,
+        value_type,
+        data.len(),
+        path
     );
     Ok(())
 }

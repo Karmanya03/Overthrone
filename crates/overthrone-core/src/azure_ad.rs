@@ -135,7 +135,10 @@ pub async fn execute_azure_ad_attack(
         AzureAdOperation::GoldenSaml => {
             log.push("Phase 1: Extracting ADFS token-signing certificate...".to_string());
             log.push("Phase 2: Forging SAML assertion for target user...".to_string());
-            log.push("Phase 3: Exchanging SAML for OAuth2 token at login.microsoftonline.com...".to_string());
+            log.push(
+                "Phase 3: Exchanging SAML for OAuth2 token at login.microsoftonline.com..."
+                    .to_string(),
+            );
 
             obtained_creds.push("saml_assertion: <base64_signed_xml>".to_string());
             obtained_creds.push("oauth2_token: <JWT>".to_string());
@@ -145,7 +148,10 @@ pub async fn execute_azure_ad_attack(
     let success = !obtained_creds.is_empty()
         || matches!(config.operation, AzureAdOperation::EnumHybridIdentity);
 
-    info!("Azure AD attack: op={}, success={}", config.operation, success);
+    info!(
+        "Azure AD attack: op={}, success={}",
+        config.operation, success
+    );
 
     Ok(AzureAdResult {
         operation: config.operation,
@@ -182,12 +188,13 @@ async fn find_ad_connect_servers(
 }
 
 /// Check Seamless SSO configuration.
-async fn check_seamless_sso(
-    ldap: &mut crate::proto::ldap::LdapSession,
-) -> Result<bool> {
+async fn check_seamless_sso(ldap: &mut crate::proto::ldap::LdapSession) -> Result<bool> {
     let entries = ldap
         .custom_search(
-            &format!("(&(objectClass=user)(sAMAccountName={}$))", AZUREAD_SSO_ACCOUNT),
+            &format!(
+                "(&(objectClass=user)(sAMAccountName={}$))",
+                AZUREAD_SSO_ACCOUNT
+            ),
             &["sAMAccountName", "servicePrincipalName"],
         )
         .await?;
@@ -196,9 +203,7 @@ async fn check_seamless_sso(
 }
 
 /// Discover Azure AD token endpoints from federation metadata.
-async fn discover_token_endpoints(
-    config: &AzureAdConfig,
-) -> Result<Vec<String>> {
+async fn discover_token_endpoints(config: &AzureAdConfig) -> Result<Vec<String>> {
     let mut endpoints = Vec::new();
 
     if let Some(ref tenant) = config.tenant_id {

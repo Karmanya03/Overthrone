@@ -39,7 +39,10 @@
 //! - **Variant B** (`CertificateMappingMethods & 0x4`): WS2025 does NOT change this
 //!   default, so Variant B remains viable.
 
-use crate::adcs::esc_strong_mapping::{cert_mapping_methods_command, collect_dc_builds, is_ws2025_build, reg_query_command, StrongBindingState};
+use crate::adcs::esc_strong_mapping::{
+    StrongBindingState, cert_mapping_methods_command, collect_dc_builds, is_ws2025_build,
+    reg_query_command,
+};
 use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_esc1_csr};
@@ -288,7 +291,9 @@ impl Esc10Exploiter {
     ///
     /// Returns a summary including the inferred state from build versions,
     /// whether WS2025 DCs are present, and registry commands for confirmation.
-    pub async fn detect_enforcement_state(ldap: &mut LdapSession) -> crate::adcs::esc_strong_mapping::StrongMappingAssessment {
+    pub async fn detect_enforcement_state(
+        ldap: &mut LdapSession,
+    ) -> crate::adcs::esc_strong_mapping::StrongMappingAssessment {
         let dc_builds = collect_dc_builds(ldap).await;
         let ws2025_dc_present = dc_builds.iter().any(|os| is_ws2025_build(Some(os), None));
 
@@ -298,11 +303,17 @@ impl Esc10Exploiter {
             info!(
                 "ESC10: WS2025 DC detected — StrongCertificateBindingEnforcement check required.\n\
                  Run on any domain-joined machine:\n  {}",
-                dc_builds.first().map(|d| reg_query_command(d)).unwrap_or_default()
+                dc_builds
+                    .first()
+                    .map(|d| reg_query_command(d))
+                    .unwrap_or_default()
             );
             info!(
                 "ESC10B: CertificateMappingMethods check:\n  {}",
-                dc_builds.first().map(|d| cert_mapping_methods_command(d)).unwrap_or_default()
+                dc_builds
+                    .first()
+                    .map(|d| cert_mapping_methods_command(d))
+                    .unwrap_or_default()
             );
         }
 

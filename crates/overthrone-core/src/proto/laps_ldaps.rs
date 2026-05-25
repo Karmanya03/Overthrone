@@ -13,7 +13,7 @@
 //!    allows the confidential attribute to be decrypted by the DC.
 
 use crate::error::Result;
-use crate::proto::ldap::{LdapSession, LapsResult, LDAPS_PORT};
+use crate::proto::ldap::{LDAPS_PORT, LapsResult, LdapSession};
 use tracing::info;
 
 /// WS2025 build prefix for detection.
@@ -50,9 +50,13 @@ pub async fn read_laps_passwords_ws2025(
     }
 
     // Phase 4: Retry over LDAPS (TLS port 636)
-    info!("LAPS: WS2025 DC detected — retrying over LDAPS on {dc_host}:{}", LDAPS_PORT);
+    info!(
+        "LAPS: WS2025 DC detected — retrying over LDAPS on {dc_host}:{}",
+        LDAPS_PORT
+    );
 
-    let domain = session.base_dn
+    let domain = session
+        .base_dn
         .split(',')
         .filter_map(|part| part.strip_prefix("DC="))
         .collect::<Vec<_>>()
@@ -77,10 +81,7 @@ pub async fn read_laps_passwords_ws2025(
 /// Detect if the target DC is running Windows Server 2025+.
 async fn is_ws2025_dc(session: &mut LdapSession) -> bool {
     let entries = session
-        .custom_search(
-            "(objectClass=computer)",
-            &["operatingSystem"],
-        )
+        .custom_search("(objectClass=computer)", &["operatingSystem"])
         .await
         .ok();
 
@@ -89,9 +90,7 @@ async fn is_ws2025_dc(session: &mut LdapSession) -> bool {
             for entry in &entries {
                 if let Some(os_list) = entry.attrs.get("operatingSystem") {
                     for os in os_list {
-                        if os.contains(WS2025_BUILD_PREFIX)
-                            || os.contains("Windows Server 2025")
-                        {
+                        if os.contains(WS2025_BUILD_PREFIX) || os.contains("Windows Server 2025") {
                             return true;
                         }
                     }
@@ -125,14 +124,8 @@ pub async fn read_laps_with_fallback_info(
     password: &str,
 ) -> Result<LapsLdapsResult> {
     let is_ws2025 = is_ws2025_dc(session).await;
-    let passwords = read_laps_passwords_ws2025(
-        session,
-        computer_filter,
-        dc_host,
-        username,
-        password,
-    )
-    .await?;
+    let passwords =
+        read_laps_passwords_ws2025(session, computer_filter, dc_host, username, password).await?;
 
     let ldaps_fallback_attempted = is_ws2025;
     let ldaps_fallback_succeeded = ldaps_fallback_attempted && !passwords.is_empty();

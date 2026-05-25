@@ -3,8 +3,8 @@
 pub mod aes_cts;
 pub mod cracker;
 pub mod dpapi;
-pub mod hashcat_gpu;
 pub mod gpp;
+pub mod hashcat_gpu;
 pub mod hmac_util;
 pub mod md4;
 pub mod rc4_util;

