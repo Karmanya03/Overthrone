@@ -35,6 +35,7 @@ fn dirs_home() -> PathBuf {
 
 /// Serialize and save `EngagementState` to `path`.
 /// Creates parent directories if needed.
+#[allow(dead_code)]
 pub fn save_session(path: &Path, state: &EngagementState) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -55,6 +56,7 @@ pub fn save_session(path: &Path, state: &EngagementState) -> std::io::Result<()>
 }
 
 /// Load and deserialize an `EngagementState` from `path`.
+#[allow(dead_code)]
 pub fn load_session(path: &Path) -> Result<EngagementState, String> {
     let data = std::fs::read_to_string(path)
         .map_err(|e| format!("Cannot read session file {}: {}", path.display(), e))?;
@@ -87,6 +89,7 @@ pub fn session_path(name: &str) -> PathBuf {
 }
 
 /// Auto-save path derived from DC host + domain.
+#[allow(dead_code)]
 pub fn auto_session_path(dc_host: &str, domain: &str) -> PathBuf {
     let name = format!("{}-{}", domain, dc_host)
         .chars()
@@ -103,6 +106,7 @@ pub fn auto_session_path(dc_host: &str, domain: &str) -> PathBuf {
 
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SessionEnvelope {
     version: u32,

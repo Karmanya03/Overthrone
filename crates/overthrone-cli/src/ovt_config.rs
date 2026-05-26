@@ -128,6 +128,7 @@ fn default_timeout() -> u64 {
 
 impl OverthroneConfig {
     /// Load config from the given path or auto-discover.
+    #[allow(dead_code)]
     pub fn load(path: Option<&str>) -> Result<Self, String> {
         let config_path = match path {
             Some(p) => PathBuf::from(p),
@@ -155,6 +156,7 @@ impl OverthroneConfig {
     }
 
     /// Parse a TOML config file.
+    #[allow(dead_code)]
     pub fn from_file(path: &Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Cannot read config {}: {}", path.display(), e))?;
@@ -193,6 +195,7 @@ impl OverthroneConfig {
     }
 }
 
+#[allow(dead_code)]
 fn dirs_home() -> PathBuf {
     #[cfg(windows)]
     {

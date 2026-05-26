@@ -307,7 +307,7 @@ pub async fn inject_aaaa_record(
 /// Remove a DNS record from AD-Integrated DNS.
 pub async fn remove_record(ldap: &mut LdapSession, record_dn: &str) -> Result<()> {
     info!("  {} Removing DNS record: {record_dn}", "→".cyan());
-    ldap.delete_entry(&record_dn).await?;
+    ldap.delete_entry(record_dn).await?;
     info!("  {} DNS record removed", "✓".green());
     Ok(())
 }

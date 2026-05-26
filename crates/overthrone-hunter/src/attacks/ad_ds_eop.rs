@@ -50,8 +50,10 @@ pub struct AdDsEopResult {
 }
 
 /// Build number threshold for patched DCs (March 2026 CU).
-const WS2025_PATCHED_BUILD: u32 = 26100_3476;
-const WS2022_PATCHED_BUILD: u32 = 20348_3207;
+#[allow(dead_code)]
+const WS2025_PATCHED_BUILD: u32 = 261_003_476;
+#[allow(dead_code)]
+const WS2022_PATCHED_BUILD: u32 = 203_483_207;
 
 /// Assess and exploit CVE-2026-25177 if possible.
 pub async fn exploit_ad_ds_eop(
@@ -199,10 +201,10 @@ async fn read_dsheuristics(ldap: &mut LdapSession, ds_service_dn: &str) -> Resul
         .custom_search_with_base(ds_service_dn, "(objectClass=*)", &["dSHeuristics"])
         .await?;
     for entry in &entries {
-        if let Some(vals) = entry.attrs.get("dSHeuristics") {
-            if let Some(val) = vals.first() {
-                return Ok(Some(val.clone()));
-            }
+        if let Some(vals) = entry.attrs.get("dSHeuristics")
+            && let Some(val) = vals.first()
+        {
+            return Ok(Some(val.clone()));
         }
     }
     Ok(None)
@@ -300,10 +302,10 @@ async fn get_dc_build_number(ldap: &mut LdapSession) -> Option<String> {
         .await
         .ok()?;
     for entry in &entries {
-        if let Some(os) = entry.attrs.get("operatingSystem") {
-            if let Some(version_str) = os.first() {
-                return Some(version_str.clone());
-            }
+        if let Some(os) = entry.attrs.get("operatingSystem")
+            && let Some(version_str) = os.first()
+        {
+            return Some(version_str.clone());
         }
     }
     None
@@ -312,15 +314,10 @@ async fn get_dc_build_number(ldap: &mut LdapSession) -> Option<String> {
 fn is_vulnerable_build(version: &Option<String>) -> bool {
     match version {
         Some(v) => {
-            if v.contains("10.0")
+            v.contains("10.0")
                 || v.contains("Windows Server 2025")
                 || v.contains("Windows Server 2022")
                 || v.contains("20348")
-            {
-                true
-            } else {
-                false
-            }
         }
         None => true,
     }
@@ -332,8 +329,8 @@ mod tests {
 
     #[test]
     fn test_build_constants() {
-        assert!(WS2025_PATCHED_BUILD > 26100_0000);
-        assert!(WS2022_PATCHED_BUILD > 20348_0000);
+        const _: () = assert!(WS2025_PATCHED_BUILD > 261_000_000);
+        const _: () = assert!(WS2022_PATCHED_BUILD > 203_480_000);
     }
 
     #[test]

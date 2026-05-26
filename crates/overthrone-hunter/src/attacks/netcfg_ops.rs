@@ -245,10 +245,10 @@ async fn check_current_user_in_group(ldap: &mut LdapSession, group_sid: &str) ->
         .unwrap_or_default();
 
     for entry in &entries {
-        if let Some(member_list) = entry.attrs.get("member") {
-            if member_list.iter().any(|m| m.contains(&current_user_dn)) {
-                return Ok(true);
-            }
+        if let Some(member_list) = entry.attrs.get("member")
+            && member_list.iter().any(|m| m.contains(&current_user_dn))
+        {
+            return Ok(true);
         }
     }
 

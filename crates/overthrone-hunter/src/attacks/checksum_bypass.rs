@@ -190,7 +190,7 @@ pub async fn exploit_checksum_bypass(
         ChecksumTechnique::MismatchedBody => {
             // Compute checksum for a different user/realm
             let wrong = build_s4u2self_checksum("WrongUser", "WRONG.REALM", &tgt.session_key)?;
-            log.push(format!("  Mismatched checksum: for WrongUser@WRONG.REALM"));
+            log.push("  Mismatched checksum: for WrongUser@WRONG.REALM".to_string());
             (Some(wrong), None)
         }
         ChecksumTechnique::SkipValidation => {

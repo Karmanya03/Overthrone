@@ -31,6 +31,7 @@ impl std::fmt::Display for ExecMethod {
 
 /// CLI-argument shim that feeds into the pilot runner.
 /// Constructed by `cmd_autopwn` in main.rs from parsed subcommand fields.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AutoPwnArgs {
     pub target: String,
@@ -90,6 +91,7 @@ pub enum PlaybookArg {
 
 /// Build the [`overthrone_pilot::runner::AutoPwnConfig`] from CLI arguments
 /// and credentials, then run the pilot.
+#[allow(dead_code)]
 pub async fn run(
     dc: String,
     creds: Option<crate::auth::Credentials>,

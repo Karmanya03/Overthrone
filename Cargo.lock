@@ -4212,6 +4212,7 @@ dependencies = [
  "kerberos_crypto",
  "ldap3",
  "overthrone-core",
+ "overthrone-relay",
  "pretty_assertions",
  "rand 0.10.1",
  "reqwest 0.13.2",

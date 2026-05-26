@@ -8,6 +8,7 @@ description = "Kerberos attack toolkit — AS-REP roasting, Kerberoasting, deleg
 
 [dependencies]
 overthrone-core = { version = "0.2.1-beta", path = "../overthrone-core" }
+overthrone-relay = { version = "0.2.1-beta", path = "../overthrone-relay" }
 ldap3.workspace = true
 tokio.workspace = true
 serde.workspace = true

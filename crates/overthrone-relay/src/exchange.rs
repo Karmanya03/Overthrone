@@ -259,19 +259,18 @@ fn build_exchange_http_request(path: &str, ntlm_blob: &[u8]) -> Vec<u8> {
 
 fn extract_ntlm_from_http(body: &str) -> Option<Vec<u8>> {
     for line in body.lines() {
-        if line.to_uppercase().contains("WWW-AUTHENTICATE: NTLM ")
-            || line.to_uppercase().contains("AUTHORIZATION: NTLM ")
+        if (line.to_uppercase().contains("WWW-AUTHENTICATE: NTLM ")
+            || line.to_uppercase().contains("AUTHORIZATION: NTLM "))
+            && let Some(b64_part) = line.split("NTLM ").nth(1)
         {
-            if let Some(b64_part) = line.split("NTLM ").nth(1) {
-                return base64::engine::general_purpose::STANDARD
-                    .decode(b64_part.trim())
-                    .ok();
-            }
+            return base64::engine::general_purpose::STANDARD
+                .decode(b64_part.trim())
+                .ok();
         }
     }
     if let Some(b64_start) = body.find("NTLM ") {
         let after = &body[b64_start + 5..];
-        if let Some(end) = after.find(|c: char| c == '\r' || c == '\n') {
+        if let Some(end) = after.find(['\r', '\n']) {
             return base64::engine::general_purpose::STANDARD
                 .decode(after[..end].trim())
                 .ok();

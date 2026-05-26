@@ -5,21 +5,19 @@
 //! If CG is active, LSASS-derived secrets are isolated and classic attacks fail.
 //!
 //! # Detection Methods
-//! 1. **Remote WMI/Registry**: Query `HKLM\SYSTEM\CurrentControlSet\Control\Lsa`
+//! 1. **Remote Registry via SMB**: Query `HKLM\SYSTEM\CurrentControlSet\Control\Lsa`
 //!    `LsaCfgFlags` (0=disabled, 1=enabled with UEFI lock, 2=enabled without lock)
-//! 2. **Remote WMI/Registry**: Query
+//! 2. **Remote Registry via SMB**: Query
 //!    `HKLM\SYSTEM\CurrentControlSet\Control\Lsa\CredentialGuard`
 //!    `IsolatedCredentialsRootSecret` (presence indicates CG active)
-//! 3. **Remote WMI/WinRM**: Check `Win32_DeviceGuard` `SecurityServicesRunning`
-//!    for bit 0 (Hypervisor-protected Code Integrity) and bit 1 (Credential Guard)
-//! 4. **LDAP**: Read `msDS-IsRods` and `msDS-IsRecycleBin` signals that hint at
-//!    WS2025 presence (not definitive by itself)
+//! 3. **Name/OS heuristic**: Fallback when SMB remote registry is unavailable
 //!
 //! # Routing
 //! - If CG enabled → route to ADCS Shadow Credentials / RBCD instead
 //! - If CG disabled → proceed with LSASS techniques
 //! - If unknown → assume CG disabled (legacy compat)
 
+use crate::proto::registry::{PredefinedHive, REG_DWORD, read_remote_registry_value};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -55,46 +53,140 @@ pub struct CgPreflightResult {
     pub findings: Vec<String>,
 }
 
-/// Pre-flight CG check on a remote system via exposed port-based access.
+/// Pre-flight CG check on a remote system using SMB remote registry.
 ///
-/// Uses available remote access methods (WMI, WinRM, SMB, LDAP) in order
-/// of preference to determine CG status without dropping a binary.
+/// Connects via SMB named pipe `\PIPE\winreg` and queries:
+/// - `HKLM\SYSTEM\CurrentControlSet\Control\Lsa\LsaCfgFlags`
+/// - `HKLM\SYSTEM\CurrentControlSet\Control\Lsa\CredentialGuard\IsolatedCredentialsRootSecret`
 ///
-/// When no remote access is available, returns `Unknown`.
+/// This provides definitive detection without requiring code execution on the target.
+pub async fn check_credential_guard_remote(
+    smb_session: &mut crate::proto::smb::SmbSession,
+) -> CgPreflightResult {
+    let mut findings = Vec::new();
+    let mut lsa_cfg_flags: Option<u32> = None;
+    let mut flags_readable = false;
+
+    findings.push(format!("SMB Remote Registry CG check on {}", smb_session.target));
+
+    // Method 1: Query LsaCfgFlags
+    match read_remote_registry_value(
+        smb_session,
+        PredefinedHive::LocalMachine,
+        "SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        "LsaCfgFlags",
+    )
+    .await
+    {
+        Ok(value) if value.data_type == REG_DWORD && value.data.len() >= 4 => {
+            let flags = u32::from_le_bytes([
+                value.data[0],
+                value.data[1],
+                value.data[2],
+                value.data[3],
+            ]);
+            lsa_cfg_flags = Some(flags);
+            flags_readable = true;
+            findings.push(format!("LsaCfgFlags = {flags}"));
+        }
+        Ok(value) => {
+            findings.push(format!(
+                "LsaCfgFlags returned unexpected type={}/len={}",
+                value.data_type,
+                value.data.len()
+            ));
+        }
+        Err(e) => {
+            findings.push(format!("LsaCfgFlags not readable: {e}"));
+        }
+    }
+
+    // Method 2: Query IsolatedCredentialsRootSecret presence
+    let secret_found = match read_remote_registry_value(
+        smb_session,
+        PredefinedHive::LocalMachine,
+        "SYSTEM\\CurrentControlSet\\Control\\Lsa\\CredentialGuard",
+        "IsolatedCredentialsRootSecret",
+    )
+    .await
+    {
+        Ok(value) => {
+            let found = !value.data.is_empty();
+            findings.push(format!("IsolatedCredentialsRootSecret present: {found}"));
+            Some(found)
+        }
+        Err(e) => {
+            findings.push(format!("IsolatedCredentialsRootSecret not found: {e}"));
+            Some(false)
+        }
+    };
+    let secret_present = secret_found;
+
+    let (status, recommendation) = match lsa_cfg_flags {
+        Some(1) | Some(2) => (
+            CredentialGuardStatus::Enabled,
+            "CG confirmed via LsaCfgFlags — route to ADCS Shadow Credentials, RBCD, or dMSA"
+                .to_string(),
+        ),
+        Some(0) => (
+            CredentialGuardStatus::Disabled,
+            "CG disabled (LsaCfgFlags=0) — LSASS techniques are viable".to_string(),
+        ),
+        Some(flag) => (
+            CredentialGuardStatus::Unknown,
+            format!("CG unreadable (unknown LsaCfgFlags={flag}) — assuming disabled for legacy compat"),
+        ),
+        None => {
+            (
+                CredentialGuardStatus::Unknown,
+                "CG status unknown — assuming disabled for legacy compat".to_string(),
+            )
+        }
+    };
+
+    info!(
+        "CG Remote Preflight: status={:?}, LsaCfgFlags={:?}, findings={}",
+        status,
+        lsa_cfg_flags,
+        findings.len()
+    );
+
+    CgPreflightResult {
+        status,
+        lsa_cfg_flags_readable: flags_readable,
+        lsa_cfg_flags,
+        isolated_credential_secret_present: secret_present,
+        device_guard_queried: false,
+        security_services_running: None,
+        recommendation,
+        findings,
+    }
+}
+
+/// Pre-flight CG check using heuristic/name-based detection.
+///
+/// Fallback when SMB remote registry is unavailable:
+/// - If the OS version suggests WS2025, flag as likely CG-enabled
+/// - Otherwise, return Unknown
 pub fn check_credential_guard_preflight(
     target: &str,
     _dc_ip: &str,
     _domain: &str,
 ) -> CgPreflightResult {
-    // On non-Windows / without direct WMI access, use heuristics:
-    // 1. If the OS version suggests WS2025, flag as likely CG-enabled
-    // 2. Otherwise, assume disabled (legacy compat)
-    //
-    // Real implementation requires DCOM / WMI / WinRM remote access which
-    // is platform-dependent. This is a best-effort heuristic fallback.
-
     let mut findings = Vec::new();
-    let mut flags_present = false;
     let mut cg_flags: Option<u32> = None;
-    let mut secret_present: Option<bool> = None;
-    let dg_queried = false;
 
-    findings.push(format!("Target: {}", target));
+    findings.push(format!("Target: {target} (heuristic only)"));
 
-    // ── WMI check via remote registry (requires admin on target) ──
-    // In production, this would use DCOM/WMI. For now, use heuristics:
-    // If target name hints at WS2025 or Server Core, flag as potential CG.
     if target.contains("2025") || target.contains("WS2025") || target.contains("win2025") {
         findings.push("OS hint suggests Windows Server 2025 — CG likely enabled".to_string());
         cg_flags = Some(2);
-        flags_present = true;
-        secret_present = Some(true);
     }
 
     let (status, recommendation) = match cg_flags {
         Some(2) | Some(1) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed — route to ADCS Shadow Credentials, RBCD, or dMSA attack instead of LSASS"
+            "CG likely enabled (WS2025 heuristic) — route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
         _ => (
@@ -103,16 +195,14 @@ pub fn check_credential_guard_preflight(
         ),
     };
 
-    if let Some(ref rec) = findings.last() {
-        info!("CG Preflight: {}", rec);
-    }
+    info!("CG Heuristic Preflight: target={target}, status={status:?}");
 
     CgPreflightResult {
         status,
-        lsa_cfg_flags_readable: flags_present,
+        lsa_cfg_flags_readable: false,
         lsa_cfg_flags: cg_flags,
-        isolated_credential_secret_present: secret_present,
-        device_guard_queried: dg_queried,
+        isolated_credential_secret_present: None,
+        device_guard_queried: false,
         security_services_running: None,
         recommendation,
         findings,
@@ -123,12 +213,9 @@ pub fn check_credential_guard_preflight(
 pub fn choose_cred_extraction(cg: &CgPreflightResult) -> &'static str {
     match cg.status {
         CredentialGuardStatus::Enabled => {
-            // CG isolates LSASS — classic dump fails.
-            // Use Shadow Credentials, RBCD, or dMSA instead.
             "shadow_credentials"
         }
         CredentialGuardStatus::Disabled | CredentialGuardStatus::Unknown => {
-            // CG not present — use LSASS dump (kiwi, procdump, etc.)
             "lsass_dump"
         }
     }
@@ -176,6 +263,21 @@ mod tests {
             device_guard_queried: true,
             security_services_running: Some(0),
             recommendation: "Use LSASS".to_string(),
+            findings: vec![],
+        };
+        assert_eq!(choose_cred_extraction(&cg), "lsass_dump");
+    }
+
+    #[test]
+    fn test_choose_extraction_cg_unknown() {
+        let cg = CgPreflightResult {
+            status: CredentialGuardStatus::Unknown,
+            lsa_cfg_flags_readable: false,
+            lsa_cfg_flags: None,
+            isolated_credential_secret_present: None,
+            device_guard_queried: false,
+            security_services_running: None,
+            recommendation: "Unknown — using legacy".to_string(),
             findings: vec![],
         };
         assert_eq!(choose_cred_extraction(&cg), "lsass_dump");

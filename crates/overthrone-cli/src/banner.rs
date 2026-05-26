@@ -119,6 +119,7 @@ pub fn _print_hash_capture(hash_type: &str, username: &str, hash_preview: &str) 
 }
 
 /// Print DA achieved banner
+#[allow(dead_code)]
 pub fn print_da_achieved(username: &str, host: &str) {
     println!();
     println!(

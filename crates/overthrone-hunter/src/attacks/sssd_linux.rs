@@ -207,10 +207,7 @@ async fn try_ssh(config: &SssdLinuxConfig) -> bool {
     cmd.arg(format!("{user}@{}", config.target_host));
     cmd.arg("whoami");
 
-    match cmd.output().await {
-        Ok(out) if out.status.success() => true,
-        _ => false,
-    }
+    matches!(cmd.output().await, Ok(out) if out.status.success())
 }
 
 async fn check_sudo(config: &SssdLinuxConfig) -> bool {
@@ -225,10 +222,7 @@ async fn check_sudo(config: &SssdLinuxConfig) -> bool {
     cmd.arg(format!("{user}@{}", config.target_host));
     cmd.arg("sudo -n true 2>&1");
 
-    match cmd.output().await {
-        Ok(out) if out.status.success() => true,
-        _ => false,
-    }
+    matches!(cmd.output().await, Ok(out) if out.status.success())
 }
 
 #[cfg(test)]

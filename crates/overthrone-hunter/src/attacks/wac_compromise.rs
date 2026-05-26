@@ -231,12 +231,12 @@ async fn probe_wac_auth(client: &reqwest::Client, base: &str) -> Result<Vec<WacA
         _ => {
             // If endpoint doesn't exist, try the identity root
             let root_url = format!("{base}/api/identities");
-            if let Ok(resp) = client.get(&root_url).timeout(HTTP_TIMEOUT).send().await {
-                if resp.status().is_success() {
-                    let body = resp.text().await.unwrap_or_default();
-                    if body.contains("windows") || body.contains("negotiate") {
-                        methods.push(WacAuthMethod::NtlmRelay);
-                    }
+            if let Ok(resp) = client.get(&root_url).timeout(HTTP_TIMEOUT).send().await
+                && resp.status().is_success()
+            {
+                let body = resp.text().await.unwrap_or_default();
+                if body.contains("windows") || body.contains("negotiate") {
+                    methods.push(WacAuthMethod::NtlmRelay);
                 }
             }
         }

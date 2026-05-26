@@ -169,6 +169,7 @@ async fn modify_and_resign(
     })
 }
 
+#[allow(clippy::ptr_arg)]
 async fn direct_forge(config: &KrbBypassConfig, log: &mut Vec<String>) -> Result<KrbBypassResult> {
     let key = match &config.service_key_hex {
         Some(k) if !k.is_empty() => hex::decode(k).unwrap_or_else(|_| k.as_bytes().to_vec()),
@@ -429,7 +430,7 @@ fn build_pac(domain_sid: &str, username: &str, user_rid: u32, realm: &str) -> Ve
     let logon = build_logon_info(domain_sid, username, user_rid, realm);
     let header_sz = 8 + 16;
     let mut padded = logon;
-    while padded.len() % 8 != 0 {
+    while !padded.len().is_multiple_of(8) {
         padded.push(0);
     }
     let mut pac = Vec::new();

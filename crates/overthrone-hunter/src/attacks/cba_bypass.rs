@@ -180,10 +180,11 @@ async fn find_exploitable_ca(
             )
             .await?;
         for entry in &entries {
-            if let Some(ekus) = entry.attrs.get("pKIExtendedKeyUsage") {
-                if ekus.iter().any(|e| {
+            if let Some(ekus) = entry.attrs.get("pKIExtendedKeyUsage")
+                && ekus.iter().any(|e| {
                     e.contains("1.3.6.1.5.5.7.3.2") || e.contains("1.3.6.1.4.1.311.20.2.2")
-                }) {
+                })
+            {
                     let tname = entry
                         .attrs
                         .get("name")
@@ -192,7 +193,6 @@ async fn find_exploitable_ca(
                         .unwrap_or_default();
                     return Ok((Some(format!("{ca_name}/{tname}")), true));
                 }
-            }
         }
     }
     Ok((None, false))
