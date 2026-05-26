@@ -512,6 +512,14 @@ enum Commands {
         action: GpoAction,
     },
 
+    // ─── NEW: Azure AD / Entra ID Attacks ────────────────────
+    /// Azure AD / Entra ID hybrid identity attacks: SeamlessSSO, Golden SAML, PRT theft
+    #[command(alias = "entra", alias = "aad")]
+    Azure {
+        #[command(subcommand)]
+        action: AzureAction,
+    },
+
     // ─── Shell completion generation ────────────────────────
     /// Generate shell tab-completion scripts
     #[command(name = "completions", alias = "completion", hide = true)]
@@ -559,6 +567,26 @@ enum CompletionShell {
     PowerShell,
     /// Elvish shell
     Elvish,
+}
+
+// ──────────────────────────────────────────────────────────
+// Azure AD sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum AzureAction {
+    /// Enumerate hybrid identity configuration (Azure AD Connect, SeamlessSSO, ADFS)
+    Enum,
+    /// Seamless SSO — Kerberos ticket → Azure AD token via AZUREADSSOACC$
+    SeamlessSso,
+    /// Golden SAML — forge SAML assertion with extracted ADFS cert
+    GoldenSaml {
+        /// Target UPN (user@domain) to impersonate
+        #[arg(long, default_value = "admin@corp.local")]
+        upn: String,
+    },
+    /// PRT theft — extract Primary Refresh Tokens from Windows TokenBroker cache
+    PrtTheft,
 }
 
 // ──────────────────────────────────────────────────────────
@@ -1890,6 +1918,11 @@ async fn async_main() -> i32 {
 
         // ─── GPO abuse handler ───────────────────────────────
         Commands::Gpo { ref action } => cmd_gpo(&cli, action.clone()).await,
+
+        // ─── Azure AD attack handler ─────────────────────────
+        Commands::Azure { ref action } => {
+            commands_impl::cmd_azure(&cli, action).await
+        }
 
         // ─── Shell completion generation ─────────────────────
         Commands::Completions {

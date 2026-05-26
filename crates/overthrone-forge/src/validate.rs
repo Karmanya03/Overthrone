@@ -363,6 +363,34 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
                 ));
             }
         }
+        crate::runner::ForgeAction::EnhancedDiamond
+        | crate::runner::ForgeAction::SapphireTicket => {
+            if config.krbtgt_hash.is_none() && config.krbtgt_aes256.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "krbtgt hash or AES256 key required for this action".into(),
+                ));
+            }
+            if config.domain_sid.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "Domain SID required for this action".into(),
+                ));
+            }
+            if config.password.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "Password required for this action (to request TGT)".into(),
+                ));
+            }
+        }
+        crate::runner::ForgeAction::BronzeBit { .. } => {
+            if config.password.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "Password required for Bronze Bit".into(),
+                ));
+            }
+        }
+        crate::runner::ForgeAction::ConvertTicket { .. } => {
+            // No validation needed — offline operation
+        }
     }
 
     debug!("ForgeConfig validation passed");

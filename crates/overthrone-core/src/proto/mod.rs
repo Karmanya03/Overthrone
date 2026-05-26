@@ -22,7 +22,7 @@ pub use epm::rpc_null_session_enumeration;
 pub use kerberos::{
     Checksum, FastArmorParams, RequestTgtOptions, build_encrypted_authenticator_with_authdata,
     build_fast_armor, build_pac_authdata_raw, build_s4u2self_checksum, forge_service_ticket,
-    forge_tgt, request_tgt_opsec,
+    forge_tgt, request_tgt_opsec, s4u2proxy_bronzebit, s4u2self, s4u2proxy, request_tgt,
 };
 pub use netbios::{NbnsNodeStatus, SmbNegotiateResult, netbios_discovery, smb_negotiate};
 pub use pkinit::{CertificateGenerator, PkinitAuthenticator, PkinitConfig, PkinitResult};

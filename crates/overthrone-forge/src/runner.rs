@@ -2,10 +2,13 @@
 //! Takes a ForgeConfig and dispatches to the appropriate forging module.
 
 use colored::Colorize;
-use overthrone_core::error::Result;
+use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{acl_backdoor, dcsync_user, diamond, dsrm, golden, nopac, silver, skeleton};
+use crate::{
+    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, sapphire,
+    silver, skeleton,
+};
 
 /// What kind of ticket/persistence to forge
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,18 +20,31 @@ pub enum ForgeAction {
     SilverTicket { target_spn: String },
     /// `DiamondTicket` variant
     DiamondTicket,
+    /// Enhanced Diamond — preserves original KDC checksum from legitimate TGT
+    EnhancedDiamond,
+    /// Sapphire Ticket — KDC-issued PAC via S4U2Self for KrbtgtFullPacSignature bypass
+    SapphireTicket,
+    /// Bronze Bit (CVE-2020-17049) — S4U2Proxy forwardable flag bypass
+    BronzeBit { target_spn: String },
     /// `` variant
     InterRealmTgt { target_domain: String },
-    /// `SkeletonKey` variant
+    /// Skeleton Key
     SkeletonKey,
-    /// `DsrmBackdoor` variant
+    /// DSRM Backdoor
     DsrmBackdoor,
-    /// `` variant
+    /// DCSync specific user
     DcSyncUser { target_user: String },
-    /// `` variant
+    /// ACL Backdoor
     AclBackdoor { target_dn: String, trustee: String },
-    /// `` variant
+    /// noPac (CVE-2021-42278 / CVE-2021-42287)
     NoPac { target_dc: String },
+    /// Format conversion between ticket formats
+    ConvertTicket {
+        /// Input file path
+        input_path: String,
+        /// Output format: kirbi, ccache, base64
+        output_format: String,
+    },
 }
 
 impl std::fmt::Display for ForgeAction {
@@ -37,6 +53,9 @@ impl std::fmt::Display for ForgeAction {
             Self::GoldenTicket => write!(f, "Golden Ticket"),
             Self::SilverTicket { target_spn } => write!(f, "Silver Ticket ({})", target_spn),
             Self::DiamondTicket => write!(f, "Diamond Ticket"),
+            Self::EnhancedDiamond => write!(f, "Enhanced Diamond Ticket"),
+            Self::SapphireTicket => write!(f, "Sapphire Ticket"),
+            Self::BronzeBit { target_spn } => write!(f, "Bronze Bit → {}", target_spn),
             Self::InterRealmTgt { target_domain } => {
                 write!(f, "Inter-Realm TGT → {}", target_domain)
             }
@@ -47,6 +66,9 @@ impl std::fmt::Display for ForgeAction {
                 write!(f, "ACL Backdoor ({} → {})", trustee, target_dn)
             }
             Self::NoPac { target_dc } => write!(f, "noPac (target DC: {target_dc})"),
+            Self::ConvertTicket { input_path, output_format } => {
+                write!(f, "Convert Ticket ({} → {})", input_path, output_format)
+            }
         }
     }
 }
@@ -198,6 +220,11 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
             silver::forge_silver_ticket(config, target_spn).await?
         }
         ForgeAction::DiamondTicket => diamond::forge_diamond_ticket(config).await?,
+        ForgeAction::EnhancedDiamond => diamond::forge_diamond_ticket(config).await?,
+        ForgeAction::SapphireTicket => sapphire::forge_sapphire_ticket(config).await?,
+        ForgeAction::BronzeBit { target_spn } => {
+            bronze_bit::run_bronze_bit(config, target_spn).await?
+        }
         ForgeAction::InterRealmTgt { target_domain } => {
             golden::forge_interrealm_tgt(config, target_domain).await?
         }
@@ -239,6 +266,28 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                 } else {
                     format!("noPac attack failed: {}", result.error.unwrap_or_default())
                 },
+            }
+        }
+        ForgeAction::ConvertTicket { input_path, output_format } => {
+            let input_bytes = tokio::fs::read(input_path).await.map_err(|e| {
+                OverthroneError::TicketForge(format!("Cannot read input file {input_path}: {e}"))
+            })?;
+            let from_fmt = convert::detect_format(&input_bytes)?;
+            let to_fmt = convert::parse_format(output_format)?;
+            let output_bytes = convert::convert_format(&input_bytes, from_fmt, to_fmt)?;
+            let output_path = input_path.replace(".kirbi", &format!(".{}", output_format))
+                .replace(".ccache", &format!(".{}", output_format))
+                .replace(".b64", &format!(".{}", output_format));
+            tokio::fs::write(&output_path, &output_bytes).await.map_err(|e| {
+                OverthroneError::TicketForge(format!("Cannot write {output_path}: {e}"))
+            })?;
+            ForgeResult {
+                action: format!("Converted {} → {}", input_path, output_path),
+                domain: String::new(),
+                success: true,
+                ticket_data: None,
+                persistence_result: None,
+                message: format!("Ticket converted: {} → {} ({} bytes)", input_path, output_path, output_bytes.len()),
             }
         }
     };

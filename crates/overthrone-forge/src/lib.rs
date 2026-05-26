@@ -23,7 +23,9 @@
 //! - **Validate** (`validate`): Verify ticket validity
 
 pub mod acl_backdoor;
+pub mod bronze_bit;
 pub mod cleanup;
+pub mod convert;
 pub mod dcsync_user;
 pub mod diamond;
 pub mod dsrm;
@@ -31,9 +33,11 @@ pub mod exec_util;
 pub mod golden;
 pub mod nopac;
 pub mod runner;
+pub mod sapphire;
 pub mod shadow_credentials;
 pub mod silver;
 pub mod skeleton;
+pub mod stealth;
 pub mod validate;
 
 pub use runner::{ForgeConfig, ForgeResult, run_forge};

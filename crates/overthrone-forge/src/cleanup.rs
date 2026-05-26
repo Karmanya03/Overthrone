@@ -469,6 +469,57 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
                 "Patch DCs against CVE-2021-42287 and CVE-2021-42278".into(),
             ],
         },
+
+        ForgeAction::EnhancedDiamond => DetectionAssessment {
+            overall_risk: RiskLevel::VeryLow,
+            description: "Enhanced Diamond preserves original KDC checksum — maximum stealth".into(),
+            indicators: vec![DetectionIndicator {
+                source: "PAC deep inspection".into(),
+                detail: "If KDC_ISSUED flag is verified against PAC checksum".into(),
+                severity: RiskLevel::Low,
+            }],
+            mitigations: vec![
+                "Already the most stealthy elevated TGT technique".into(),
+            ],
+        },
+        ForgeAction::SapphireTicket => DetectionAssessment {
+            overall_risk: RiskLevel::VeryLow,
+            description: "Sapphire uses KDC-issued PAC via S4U2Self — defeats KrbtgtFullPacSignature".into(),
+            indicators: vec![DetectionIndicator {
+                source: "AS-REQ + TGS correlation".into(),
+                detail: "TGT cname may not match original TGT user".into(),
+                severity: RiskLevel::Low,
+            }],
+            mitigations: vec![
+                "Use a user who is already a DA for maximum stealth".into(),
+            ],
+        },
+        ForgeAction::BronzeBit { .. } => DetectionAssessment {
+            overall_risk: RiskLevel::Medium,
+            description: "Bronze Bit exploits CVE-2020-17049 — non-forwardable ticket delegation".into(),
+            indicators: vec![
+                DetectionIndicator {
+                    source: "Event ID 4769".into(),
+                    detail: "TGS-REQ with S4U2Proxy for sensitive user (S-1-5-21-...-498)".into(),
+                    severity: RiskLevel::Medium,
+                },
+                DetectionIndicator {
+                    source: "Event ID 512".into(),
+                    detail: "Delegation from a user who is 'sensitive and cannot be delegated'".into(),
+                    severity: RiskLevel::High,
+                },
+            ],
+            mitigations: vec![
+                "Apply Microsoft patch for CVE-2020-17049".into(),
+                "Monitor for unusual delegation patterns".into(),
+            ],
+        },
+        ForgeAction::ConvertTicket { .. } => DetectionAssessment {
+            overall_risk: RiskLevel::VeryLow,
+            description: "Format conversion is offline, no network traffic generated".into(),
+            indicators: vec![],
+            mitigations: vec![],
+        },
     }
 }
 
