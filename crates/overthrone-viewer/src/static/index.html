@@ -457,9 +457,22 @@ input:disabled {
 }
 
 .query-float.collapsed {
+  width: 46px !important;
+  min-width: 46px;
   min-height: 0;
   height: auto !important;
   resize: none;
+}
+
+.query-float.collapsed .query-float-header {
+  justify-content: center;
+  padding: 8px;
+  border-bottom: 0;
+  cursor: default;
+}
+
+.query-float.collapsed .query-float-title {
+  display: none;
 }
 
 .query-float-header {
@@ -1507,10 +1520,14 @@ input:disabled {
               <button class="secondary-button" id="refresh-list-btn" style="padding:10px;flex-shrink:0" title="Refresh graph list">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
               </button>
-              <input type="file" id="json-upload" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" style="display:none">
-              <label for="json-upload" class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON or ZIP">
+              <input type="file" id="json-upload" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" multiple style="display:none">
+              <input type="file" id="folder-upload" accept=".json,application/json" multiple webkitdirectory directory style="display:none">
+              <button type="button" class="secondary-button" id="upload-btn" style="padding:10px;flex-shrink:0" title="Upload JSON, ZIP, or multiple files">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-              </label>
+              </button>
+              <button type="button" class="secondary-button" id="folder-upload-btn" style="padding:10px;flex-shrink:0" title="Upload folder">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.17a2 2 0 0 1-1.42-.59L9.59 3.59A2 2 0 0 0 8.17 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path></svg>
+              </button>
         </div>
       </div>
 
@@ -1827,6 +1844,9 @@ async function init() {
   document.getElementById('upload-btn').addEventListener('click', () => {
     document.getElementById('json-upload').click();
   });
+  document.getElementById('folder-upload-btn').addEventListener('click', () => {
+    document.getElementById('folder-upload').click();
+  });
   document.getElementById('refresh-list-btn').addEventListener('click', async () => {
     const btn = document.getElementById('refresh-list-btn');
     btn.disabled = true;
@@ -1836,45 +1856,53 @@ async function init() {
     btn.style.opacity = '1';
   });
   document.getElementById('json-upload').addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    const lowerName = file.name.toLowerCase();
-    const isJson = file.type === "application/json" || lowerName.endsWith(".json");
-    const isZip = file.type === "application/zip" || file.type === "application/x-zip-compressed" || lowerName.endsWith(".zip");
-    if (!isJson && !isZip) {
-        alert("Only JSON or ZIP files are allowed");
+    await uploadSelectedFiles(event.target.files, { source: 'files' });
+    event.target.value = '';
+  });
+  document.getElementById('folder-upload').addEventListener('change', async (event) => {
+    await uploadSelectedFiles(event.target.files, { source: 'folder' });
+    event.target.value = '';
+  });
+  async function uploadSelectedFiles(fileList, { source }) {
+    const files = Array.from(fileList || []).filter(file => file && !file.name.startsWith('.'));
+    if (!files.length) return;
+    const jsonFiles = files.filter(file => file.name.toLowerCase().endsWith('.json') || file.type === 'application/json');
+    const zipFiles = files.filter(file => file.name.toLowerCase().endsWith('.zip') || file.type === "application/zip" || file.type === "application/x-zip-compressed");
+    const unsupported = files.filter(file => !jsonFiles.includes(file) && !zipFiles.includes(file));
+    if (unsupported.length) {
+        alert(`Only JSON or ZIP files are allowed. Unsupported: ${unsupported.slice(0, 3).map(file => file.name).join(', ')}`);
         return;
     }
-    if (file.size > 200 * 1024 * 1024) {
-        alert("File too large (max 200 MB). Consider using the --input flag with the CLI.");
+    if (files.some(file => file.size > 200 * 1024 * 1024)) {
+        alert("File too large (max 200 MB per file). Consider using the --input flag with the CLI.");
         return;
     }
-    document.getElementById('graph-badge').textContent = 'Uploading...';
+    if (source === 'folder' && !jsonFiles.length) {
+        alert("Selected folder did not contain JSON files.");
+        return;
+    }
+    document.getElementById('graph-badge').textContent = files.length > 1 ? `Uploading ${files.length} files...` : 'Uploading...';
     try {
-      const resp = await fetch('/api/upload', {
-        method: 'POST',
-        headers: {
-          'Content-Type': isZip ? 'application/zip' : 'application/json',
-          'X-Overthrone-Filename': encodeURIComponent(file.name),
-          'X-Overthrone-Upload-Type': isZip ? 'zip' : 'json',
-        },
-        body: file
-      });
-      if (!resp.ok) {
-        throw new Error(await readApiError(resp));
+      const uploaded = [];
+      if (source === 'folder') {
+        for (const jsonFile of jsonFiles) {
+          uploaded.push(await uploadSingleGraphFile(jsonFile));
+        }
+      } else if (jsonFiles.length > 1) {
+        uploaded.push(await uploadJsonCollection(jsonFiles, source));
+      } else if (jsonFiles.length === 1) {
+        uploaded.push(await uploadSingleGraphFile(jsonFiles[0]));
       }
-      const text = await resp.text();
-      let newGraph;
-      try {
-        newGraph = JSON.parse(text);
-      } catch(e) {
-        throw new Error("Server returned invalid JSON: " + e.message);
+      for (const zip of zipFiles) {
+        uploaded.push(await uploadSingleGraphFile(zip));
       }
-      if (!newGraph.id) throw new Error("Upload succeeded but no graph ID returned");
-      if (typeof ensureGraphOption === 'function') {
-        ensureGraphOption(newGraph);
+      const successfulUploads = uploaded.filter(Boolean);
+      const newGraph = successfulUploads[successfulUploads.length - 1];
+      if (!newGraph || !newGraph.id) throw new Error("Upload succeeded but no graph ID returned");
+      for (const graph of uploaded) {
+        if (typeof ensureGraphOption === 'function') ensureGraphOption(graph);
+        graphList = [graph, ...graphList.filter(existing => existing.id !== graph.id)];
       }
-      graphList = [newGraph, ...graphList.filter(graph => graph.id !== newGraph.id)];
       await loadGraphList({ preserve: newGraph.id });
       document.getElementById('graph-select').value = newGraph.id;
       await loadGraph(newGraph.id);
@@ -1884,8 +1912,60 @@ async function init() {
       document.getElementById('graph-badge').textContent = 'Upload failed';
       setEmptyMessage('Upload failed', msg.length > 200 ? msg.slice(0, 200) + '...' : msg);
     }
-    event.target.value = '';
-  });
+  }
+
+  async function uploadSingleGraphFile(file) {
+    const lowerName = file.name.toLowerCase();
+    const isJson = file.type === "application/json" || lowerName.endsWith(".json");
+    const isZip = file.type === "application/zip" || file.type === "application/x-zip-compressed" || lowerName.endsWith(".zip");
+    if (!isJson && !isZip) {
+        throw new Error(`Only JSON or ZIP files are allowed: ${file.name}`);
+    }
+    return uploadGraphBody(file, file.name, isZip ? 'zip' : 'json', isZip ? 'application/zip' : 'application/json');
+  }
+
+  async function uploadJsonCollection(files, source) {
+    const values = [];
+    for (const file of files) {
+      try {
+        values.push(JSON.parse(await file.text()));
+      } catch (error) {
+        const name = file.webkitRelativePath || file.name;
+        throw new Error(`${name} is not valid JSON: ${error.message}`);
+      }
+    }
+    const folderName = source === 'folder'
+      ? ((files[0].webkitRelativePath || '').split('/')[0] || 'folder')
+      : 'multi-file';
+    const filename = `${folderName}-collection.json`;
+    return uploadGraphBody(
+      new Blob([JSON.stringify(values)], { type: 'application/json' }),
+      filename,
+      'json',
+      'application/json'
+    );
+  }
+
+  async function uploadGraphBody(body, filename, uploadType, contentType) {
+    const resp = await fetch('/api/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': contentType,
+        'X-Overthrone-Filename': encodeURIComponent(filename),
+        'X-Overthrone-Upload-Type': uploadType,
+      },
+      body
+    });
+    if (!resp.ok) {
+      throw new Error(await readApiError(resp));
+    }
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch(e) {
+      throw new Error("Server returned invalid JSON: " + e.message);
+    }
+  }
   document.getElementById('path-from').addEventListener('keydown', submitPathOnEnter);
   document.getElementById('path-to').addEventListener('keydown', submitPathOnEnter);
   bindSuggest('search-input', 'search-results', item => {
@@ -2524,12 +2604,19 @@ function installQueryPanelControls() {
 
   if (collapse) {
     collapse.addEventListener('click', () => {
-      panel.classList.toggle('collapsed');
-      collapse.textContent = panel.classList.contains('collapsed') ? '+' : '-';
-      collapse.title = panel.classList.contains('collapsed')
-        ? 'Expand custom query'
-        : 'Collapse custom query';
+      setQueryPanelCollapsed(!panel.classList.contains('collapsed'));
     });
+  }
+}
+
+function setQueryPanelCollapsed(collapsed) {
+  const panel = document.getElementById('query-panel');
+  const collapse = document.getElementById('query-collapse');
+  if (!panel) return;
+  panel.classList.toggle('collapsed', collapsed);
+  if (collapse) {
+    collapse.textContent = collapsed ? '+' : '-';
+    collapse.title = collapsed ? 'Expand custom query' : 'Collapse custom query';
   }
 }
 
@@ -2654,6 +2741,7 @@ async function renderSelectedChunk({ focus = null, relationship = null, warnAll 
     updateRenderBadge(graphData);
     updateChunkControls(graphData);
     renderGraph(graphData);
+    setQueryPanelCollapsed(true);
   } catch (error) {
     setEmptyMessage('Render failed', error.message);
     document.getElementById('render-badge').textContent = 'Error';

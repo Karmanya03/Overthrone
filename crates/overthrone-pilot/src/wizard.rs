@@ -560,7 +560,7 @@ impl WizardSession {
             }
         }
 
-        let mut final_summary = format!(
+        let base_summary = format!(
             "Wizard completed. Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds.",
             steps_executed,
             steps_succeeded,
@@ -568,9 +568,13 @@ impl WizardSession {
             wall_start.elapsed().as_secs()
         );
         #[cfg(feature = "qlearn")]
-        if let Some(ref ql) = qlearner {
-            final_summary.push_str(&format!(" Q-learner: {}", ql.session_summary()));
-        }
+        let final_summary = if let Some(ref ql) = qlearner {
+            format!("{base_summary} Q-learner: {}", ql.session_summary())
+        } else {
+            base_summary
+        };
+        #[cfg(not(feature = "qlearn"))]
+        let final_summary = base_summary;
         if let Some(writer) = &trail {
             writer.append_final(&self.state, final_summary);
         }

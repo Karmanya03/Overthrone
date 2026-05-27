@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use axum::extract::{ConnectInfo, Path as AxumPath, Query, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, Request, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header;
@@ -41,6 +41,8 @@ use crate::graph_data::{
 const INDEX_HTML: &str = include_str!("static/index.html");
 /// Embedded Three.js renderer (built from static/three-graph.js)
 const THREE_GRAPH_JS: &str = include_str!("static/three-graph.js");
+/// Maximum upload body size accepted by the API (250 MB).
+const MAX_UPLOAD_BODY_BYTES: usize = 250 * 1024 * 1024;
 
 /// Loaded graph bundle
 #[derive(Clone)]
@@ -3283,6 +3285,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         .route("/api/path", post(find_path))
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,

@@ -960,14 +960,18 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let da_achieved = final_status.is_success()
         || state.has_domain_admin
         || matches!(final_status, GoalStatus::Achieved);
-    let mut final_summary = format!(
+    let base_summary = format!(
         "Steps executed: `{}`. Succeeded: `{}`. Failed: `{}`. Duration: `{}` seconds. Final status: `{:?}`.",
         steps_executed, steps_succeeded, steps_failed, duration_secs, final_status
     );
     #[cfg(feature = "qlearn")]
-    if let Some(ref ql) = qlearner {
-        final_summary.push_str(&format!(" Q-learner: {}", ql.session_summary()));
-    }
+    let final_summary = if let Some(ref ql) = qlearner {
+        format!("{base_summary} Q-learner: {}", ql.session_summary())
+    } else {
+        base_summary
+    };
+    #[cfg(not(feature = "qlearn"))]
+    let final_summary = base_summary;
     if let Some(writer) = &trail {
         writer.append_final(&state, final_summary);
     }

@@ -535,7 +535,7 @@ pub fn prefer_kerberos_etype(preferred_etype: i32) -> i32 {
     match preferred_etype {
         18 => 18, // AES256-CTS-HMAC-SHA1-96
         17 => 17, // AES128-CTS-HMAC-SHA1-96
-        23 => 23, // RC4-HMAC (legacy, detectable)
+        23 => 18, // RC4-HMAC is legacy and commonly alerted; prefer AES256
         _ => 18,  // Default to AES256 for OPSEC
     }
 }
@@ -557,6 +557,9 @@ pub fn check_credential_guard() -> Result<bool> {
 /// Honeypot LDAP attributes that trigger MDI alerts when queried in bulk.
 pub const HONEYPOT_ATTRS: &[&str] = &[
     "ms-Mcs-AdmPwd",
+    "msLAPS-Password",
+    "msLAPS-EncryptedPassword",
+    "msLAPS-EncryptedPasswordHistory",
     "msDS-ManagedPassword",
     "unixUserPassword",
     "msDS-KeyCredentialLink",
@@ -566,7 +569,11 @@ pub const HONEYPOT_ATTRS: &[&str] = &[
 pub fn contains_honeypot_attrs<'a>(attrs: &[&'a str]) -> Vec<&'a str> {
     attrs
         .iter()
-        .filter(|a| HONEYPOT_ATTRS.contains(a))
+        .filter(|attr| {
+            HONEYPOT_ATTRS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(attr))
+        })
         .copied()
         .collect()
 }
@@ -575,7 +582,11 @@ pub fn contains_honeypot_attrs<'a>(attrs: &[&'a str]) -> Vec<&'a str> {
 pub fn strip_honeypot_attrs<'a>(attrs: &[&'a str]) -> Vec<&'a str> {
     attrs
         .iter()
-        .filter(|a| !HONEYPOT_ATTRS.contains(a))
+        .filter(|attr| {
+            !HONEYPOT_ATTRS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(attr))
+        })
         .copied()
         .collect()
 }
@@ -893,7 +904,7 @@ mod tests {
     fn test_prefer_kerberos_etype() {
         assert_eq!(prefer_kerberos_etype(18), 18);
         assert_eq!(prefer_kerberos_etype(17), 17);
-        assert_eq!(prefer_kerberos_etype(23), 23);
+        assert_eq!(prefer_kerberos_etype(23), 18);
         assert_eq!(prefer_kerberos_etype(0), 18); // default to AES
     }
 
@@ -901,22 +912,25 @@ mod tests {
     fn test_honeypot_attrs_detection() {
         let attrs = &[
             "sAMAccountName",
-            "ms-Mcs-AdmPwd",
+            "ms-mcs-admpwd",
             "cn",
+            "msLAPS-EncryptedPassword",
             "msDS-ManagedPassword",
         ];
         let detected = contains_honeypot_attrs(attrs);
-        assert_eq!(detected.len(), 2);
-        assert!(detected.contains(&"ms-Mcs-AdmPwd"));
+        assert_eq!(detected.len(), 3);
+        assert!(detected.contains(&"ms-mcs-admpwd"));
+        assert!(detected.contains(&"msLAPS-EncryptedPassword"));
         assert!(detected.contains(&"msDS-ManagedPassword"));
     }
 
     #[test]
     fn test_strip_honeypot_attrs() {
-        let attrs = &["sAMAccountName", "ms-Mcs-AdmPwd", "cn"];
+        let attrs = &["sAMAccountName", "ms-Mcs-AdmPwd", "mslaps-password", "cn"];
         let stripped = strip_honeypot_attrs(attrs);
         assert_eq!(stripped.len(), 2);
         assert!(!stripped.contains(&"ms-Mcs-AdmPwd"));
+        assert!(!stripped.contains(&"mslaps-password"));
     }
 
     #[test]

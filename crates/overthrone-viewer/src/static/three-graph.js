@@ -1802,7 +1802,8 @@
     on('path-button',   'click', () => typeof findAttackPath     === 'function' && findAttackPath());
 
     if ($('upload-btn')) {
-      on('upload-btn', 'click', () => $('json-upload').click());
+      on('upload-btn', 'click', () => $('json-upload') && $('json-upload').click());
+      on('folder-upload-btn', 'click', () => $('folder-upload') && $('folder-upload').click());
       on('json-upload', 'change', async event => {
         const file = event.target.files[0];
         if (!file) return;
