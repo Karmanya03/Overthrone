@@ -107,7 +107,10 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
 
     let new_pac = if let Some(ref kdc_checksum) = original_kdc_checksum {
         // Enhanced Diamond: build new PAC with elevated privs, inject original KDC checksum
-        info!("[diamond] Enhanced mode: preserving original KDC checksum ({} bytes)", kdc_checksum.len());
+        info!(
+            "[diamond] Enhanced mode: preserving original KDC checksum ({} bytes)",
+            kdc_checksum.len()
+        );
         golden::build_pac_with_kdc_checksum(
             impersonate,
             &realm,
@@ -208,7 +211,9 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         message: format!(
             "{} Diamond Ticket forged: {} as {} ({})",
             if enhanced { "Enhanced" } else { "Standard" },
-            realm, impersonate, etype_str
+            realm,
+            impersonate,
+            etype_str
         ),
     })
 }

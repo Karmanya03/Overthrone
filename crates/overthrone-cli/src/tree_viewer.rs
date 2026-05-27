@@ -849,6 +849,12 @@ impl TreeApp {
             ]),
             Line::from(format!("Impact: {}", relationship_hint(&edge.relationship))),
             Line::from(format!(
+                "ACE context: {}",
+                ace_context_note(&edge.relationship).unwrap_or(
+                    "this row may be ACE-backed; verify the original DACL before changing it"
+                )
+            )),
+            Line::from(format!(
                 "Traversable in path search: {}",
                 VisualGraph::edge_traversable(edge)
             )),
@@ -1124,6 +1130,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from("Structure"),
         Line::from("  Domain -> object type -> object -> outbound/inbound relationships"),
+        Line::from("  ACE/DACL-backed edges surface in the details pane with rollback hints."),
         Line::from("  Names stay in tree/details panes so the graph canvas stays clean."),
         Line::from(""),
         Line::from("Press ? to close this help."),
@@ -1191,6 +1198,41 @@ fn tree_row_line(row: &TreeRow, app: &TreeApp) -> Line<'static> {
             Style::default().fg(Color::DarkGray),
         ),
     ])
+}
+
+fn ace_context_note(relationship: &str) -> Option<&'static str> {
+    let normalized = relationship
+        .trim()
+        .replace([' ', '-', '_'], "")
+        .to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "genericall" | "genericwrite" => {
+            Some("this is an ACE-backed permission edge; preserve the original ACL before changes")
+        }
+        "writedacl" | "writeowner" | "owns" => {
+            Some("this is a DACL/ACE mutation path; capture and restore the original ACL after use")
+        }
+        "writeproperty" | "writeself" | "addmembers" | "addself" => Some(
+            "this is an attribute or group ACE; verify the exact right before modifying the object",
+        ),
+        "allowedtoact" | "allowedtodelegate" => Some(
+            "this is a delegation ACE; keep the original entry and remove any test ACE when finished",
+        ),
+        "readlapspassword" | "readgmsapassword" => Some(
+            "this is an ACL-backed read primitive; treat the retrieved value as credential material",
+        ),
+        "writekeycredentiallink" | "writemsdskeycredentiallink" | "addkeycredentiallink" => {
+            Some("this is a shadow-credentials ACE path; keep the temporary value tightly scoped")
+        }
+        "writealtsecurityidentities" => Some(
+            "this is a certificate-mapping ACE path; restore the original mapping after validation",
+        ),
+        "writegplink" => Some(
+            "this is a GPO link ACE; verify scope, inheritance, and rollback before any change",
+        ),
+        _ => None,
+    }
 }
 
 fn default_expanded_keys(graph: &VisualGraph, selected_node: Option<usize>) -> BTreeSet<TreeKey> {

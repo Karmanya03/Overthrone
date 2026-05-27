@@ -6,8 +6,8 @@ use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, sapphire,
-    silver, skeleton,
+    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, sapphire, silver,
+    skeleton,
 };
 
 /// What kind of ticket/persistence to forge
@@ -66,7 +66,10 @@ impl std::fmt::Display for ForgeAction {
                 write!(f, "ACL Backdoor ({} → {})", trustee, target_dn)
             }
             Self::NoPac { target_dc } => write!(f, "noPac (target DC: {target_dc})"),
-            Self::ConvertTicket { input_path, output_format } => {
+            Self::ConvertTicket {
+                input_path,
+                output_format,
+            } => {
                 write!(f, "Convert Ticket ({} → {})", input_path, output_format)
             }
         }
@@ -268,26 +271,37 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                 },
             }
         }
-        ForgeAction::ConvertTicket { input_path, output_format } => {
+        ForgeAction::ConvertTicket {
+            input_path,
+            output_format,
+        } => {
             let input_bytes = tokio::fs::read(input_path).await.map_err(|e| {
                 OverthroneError::TicketForge(format!("Cannot read input file {input_path}: {e}"))
             })?;
             let from_fmt = convert::detect_format(&input_bytes)?;
             let to_fmt = convert::parse_format(output_format)?;
             let output_bytes = convert::convert_format(&input_bytes, from_fmt, to_fmt)?;
-            let output_path = input_path.replace(".kirbi", &format!(".{}", output_format))
+            let output_path = input_path
+                .replace(".kirbi", &format!(".{}", output_format))
                 .replace(".ccache", &format!(".{}", output_format))
                 .replace(".b64", &format!(".{}", output_format));
-            tokio::fs::write(&output_path, &output_bytes).await.map_err(|e| {
-                OverthroneError::TicketForge(format!("Cannot write {output_path}: {e}"))
-            })?;
+            tokio::fs::write(&output_path, &output_bytes)
+                .await
+                .map_err(|e| {
+                    OverthroneError::TicketForge(format!("Cannot write {output_path}: {e}"))
+                })?;
             ForgeResult {
                 action: format!("Converted {} → {}", input_path, output_path),
                 domain: String::new(),
                 success: true,
                 ticket_data: None,
                 persistence_result: None,
-                message: format!("Ticket converted: {} → {} ({} bytes)", input_path, output_path, output_bytes.len()),
+                message: format!(
+                    "Ticket converted: {} → {} ({} bytes)",
+                    input_path,
+                    output_path,
+                    output_bytes.len()
+                ),
             }
         }
     };

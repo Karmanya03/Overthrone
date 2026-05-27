@@ -185,14 +185,14 @@ async fn find_exploitable_ca(
                     e.contains("1.3.6.1.5.5.7.3.2") || e.contains("1.3.6.1.4.1.311.20.2.2")
                 })
             {
-                    let tname = entry
-                        .attrs
-                        .get("name")
-                        .and_then(|v| v.first())
-                        .cloned()
-                        .unwrap_or_default();
-                    return Ok((Some(format!("{ca_name}/{tname}")), true));
-                }
+                let tname = entry
+                    .attrs
+                    .get("name")
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .unwrap_or_default();
+                return Ok((Some(format!("{ca_name}/{tname}")), true));
+            }
         }
     }
     Ok((None, false))

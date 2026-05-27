@@ -194,8 +194,8 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::GenericWrite => {
             Some("Write non-protected attributes â€” SPN, KeyCredentialLink, etc.")
         }
-        EdgeType::WriteDacl => Some("Modify DACL â†’ grant yourself GenericAll"),
-        EdgeType::WriteOwner => Some("Take ownership â†’ modify DACL â†’ GenericAll"),
+        EdgeType::WriteDacl => Some("Modify DACL / ACEs -> grant yourself GenericAll"),
+        EdgeType::WriteOwner => Some("Take ownership -> modify DACL / ACEs -> GenericAll"),
         EdgeType::Owns => Some("Already owner â€” modify DACL to gain GenericAll"),
         EdgeType::ForceChangePassword => {
             Some("net rpc password / Set-ADAccountPassword (no current pw needed)")
@@ -208,7 +208,7 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
             Some("S4U2Self + S4U2Proxy â†’ impersonate any user to target service")
         }
         EdgeType::AllowedToAct => {
-            Some("RBCD â†’ getST.py to impersonate Domain Admin to target computer")
+            Some("RBCD ACE -> getST.py to impersonate Domain Admin to target computer")
         }
         EdgeType::DcSync => Some("secretsdump.py -just-dc â†’ dump NTDS + all NTLM hashes"),
         EdgeType::GetChanges | EdgeType::GetChangesAll => {
@@ -914,7 +914,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
     if let Some(ref acls) = app.acl_findings {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            " ACL Findings Summary",
+            " ACL / ACE Findings Summary",
             Style::default()
                 .fg(Color::LightRed)
                 .add_modifier(Modifier::BOLD)
@@ -1312,7 +1312,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
     // â”€â”€ Abuse summary for unique outbound edge types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Edge Abuse Summary",
+        "  Edge / ACE Abuse Summary",
         Style::default()
             .fg(Color::LightRed)
             .add_modifier(Modifier::UNDERLINED),
@@ -1385,7 +1385,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let total = app.acl_findings.as_ref().map(|v| v.len()).unwrap_or(0);
-    let title = format!(" ACL Findings ({} total) [â†‘/â†“ scroll] ", total);
+    let title = format!(" ACL / ACE Findings ({} total) [â†‘/â†“ scroll] ", total);
 
     let widget = List::new(items)
         .block(
@@ -1535,13 +1535,13 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
     let entries: &[(&str, Color, &str)] = &[
         ("AdminTo", Color::Red, "Local admin access"),
         (
-            "AllowedToAct (RBCD)",
+            "AllowedToAct (RBCD ACE)",
             Color::Red,
             "Resource-based constrained delegation",
         ),
         ("GenericAll", Color::LightRed, "Full control over object"),
         (
-            "WriteDacl",
+            "WriteDacl / ACE",
             Color::LightRed,
             "Modify DACL â†’ grant GenericAll",
         ),

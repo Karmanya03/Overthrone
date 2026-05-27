@@ -826,7 +826,7 @@ enum SmbAction {
 #[derive(Subcommand, Clone)]
 enum GraphAction {
     Build,
-    /// Launch the local Rust BloodHound-style graph visualizer.
+    /// Launch the local Rust BloodHound-style graph visualizer with ACE-aware detail panes.
     #[command(alias = "visual", alias = "ui", alias = "viz")]
     View {
         /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
@@ -843,7 +843,7 @@ enum GraphAction {
         #[arg(long = "port", default_value = "0")]
         port: u16,
     },
-    /// Launch the local Rust BloodHound-style interactive tree explorer.
+    /// Launch the local Rust BloodHound-style interactive tree explorer with ACE/DACL context.
     #[command(alias = "hierarchy", alias = "explore")]
     Tree {
         /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
@@ -1920,9 +1920,7 @@ async fn async_main() -> i32 {
         Commands::Gpo { ref action } => cmd_gpo(&cli, action.clone()).await,
 
         // ─── Azure AD attack handler ─────────────────────────
-        Commands::Azure { ref action } => {
-            commands_impl::cmd_azure(&cli, action).await
-        }
+        Commands::Azure { ref action } => commands_impl::cmd_azure(&cli, action).await,
 
         // ─── Shell completion generation ─────────────────────
         Commands::Completions {

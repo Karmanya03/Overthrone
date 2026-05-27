@@ -67,7 +67,10 @@ pub async fn check_credential_guard_remote(
     let mut lsa_cfg_flags: Option<u32> = None;
     let mut flags_readable = false;
 
-    findings.push(format!("SMB Remote Registry CG check on {}", smb_session.target));
+    findings.push(format!(
+        "SMB Remote Registry CG check on {}",
+        smb_session.target
+    ));
 
     // Method 1: Query LsaCfgFlags
     match read_remote_registry_value(
@@ -79,12 +82,8 @@ pub async fn check_credential_guard_remote(
     .await
     {
         Ok(value) if value.data_type == REG_DWORD && value.data.len() >= 4 => {
-            let flags = u32::from_le_bytes([
-                value.data[0],
-                value.data[1],
-                value.data[2],
-                value.data[3],
-            ]);
+            let flags =
+                u32::from_le_bytes([value.data[0], value.data[1], value.data[2], value.data[3]]);
             lsa_cfg_flags = Some(flags);
             flags_readable = true;
             findings.push(format!("LsaCfgFlags = {flags}"));
@@ -134,14 +133,14 @@ pub async fn check_credential_guard_remote(
         ),
         Some(flag) => (
             CredentialGuardStatus::Unknown,
-            format!("CG unreadable (unknown LsaCfgFlags={flag}) — assuming disabled for legacy compat"),
+            format!(
+                "CG unreadable (unknown LsaCfgFlags={flag}) — assuming disabled for legacy compat"
+            ),
         ),
-        None => {
-            (
-                CredentialGuardStatus::Unknown,
-                "CG status unknown — assuming disabled for legacy compat".to_string(),
-            )
-        }
+        None => (
+            CredentialGuardStatus::Unknown,
+            "CG status unknown — assuming disabled for legacy compat".to_string(),
+        ),
     };
 
     info!(
@@ -212,12 +211,8 @@ pub fn check_credential_guard_preflight(
 /// Decide which credential extraction technique to use based on CG status.
 pub fn choose_cred_extraction(cg: &CgPreflightResult) -> &'static str {
     match cg.status {
-        CredentialGuardStatus::Enabled => {
-            "shadow_credentials"
-        }
-        CredentialGuardStatus::Disabled | CredentialGuardStatus::Unknown => {
-            "lsass_dump"
-        }
+        CredentialGuardStatus::Enabled => "shadow_credentials",
+        CredentialGuardStatus::Disabled | CredentialGuardStatus::Unknown => "lsass_dump",
     }
 }
 

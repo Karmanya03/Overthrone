@@ -593,12 +593,10 @@ async fn dispatch_cve_attack(config: &HuntConfig, attack: &CveAttackType) -> Cve
                 cve_id: cve_id.to_string(),
                 name: name.to_string(),
                 success: true,
-                summary: format!(
-                    "Exchange relay completed against {target_exchange}:{relay_port}"
-                ),
-                log: vec![log(
-                    format!("Exchange relay to {target_exchange}:{relay_port} completed")
-                )],
+                summary: format!("Exchange relay completed against {target_exchange}:{relay_port}"),
+                log: vec![log(format!(
+                    "Exchange relay to {target_exchange}:{relay_port} completed"
+                ))],
             },
             Err(e) => CveAttackResult {
                 cve_id: cve_id.to_string(),

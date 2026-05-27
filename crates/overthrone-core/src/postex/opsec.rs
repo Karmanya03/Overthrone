@@ -303,9 +303,7 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
 
         let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
             .ok()
-            .ok_or_else(|| {
-                OverthroneError::PostExploitation("ntdll.dll not loaded".into())
-            })?;
+            .ok_or_else(|| OverthroneError::PostExploitation("ntdll.dll not loaded".into()))?;
 
         let ntdll_base = ntdll.0 as usize;
 
@@ -317,16 +315,16 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
             ));
         }
 
-        let nt_headers = &*((ntdll_base + dos_header.e_lfanew as usize)
-            as *const image::IMAGE_NT_HEADERS64);
+        let nt_headers =
+            &*((ntdll_base + dos_header.e_lfanew as usize) as *const image::IMAGE_NT_HEADERS64);
         if nt_headers.Signature != 0x0000_4550 {
             return Err(OverthroneError::PostExploitation(
                 "Invalid NT header signature in ntdll.dll".into(),
             ));
         }
 
-        let export_dir = nt_headers.OptionalHeader.DataDirectory
-            [image::IMAGE_DIRECTORY_ENTRY_EXPORT];
+        let export_dir =
+            nt_headers.OptionalHeader.DataDirectory[image::IMAGE_DIRECTORY_ENTRY_EXPORT];
         if export_dir.Size == 0 {
             return Err(OverthroneError::PostExploitation(
                 "No export directory in ntdll.dll".into(),
@@ -390,7 +388,9 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
 
             // Pattern 2: `mov r10, rcx; mov eax, SSN` at offset 3
             if code.len() >= 8
-                && code[0] == 0x4C && code[1] == 0x8B && code[2] == 0xD1
+                && code[0] == 0x4C
+                && code[1] == 0x8B
+                && code[2] == 0xD1
                 && code[3] == 0xB8
             {
                 let ssn = u32::from_le_bytes([code[4], code[5], code[6], code[7]]);

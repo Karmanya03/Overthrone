@@ -4415,7 +4415,11 @@ pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
     };
 
     let has_hash = cli.nt_hash.is_some();
-    let ldap_pass = cli.nt_hash.as_deref().or(cli.password.as_deref()).unwrap_or("");
+    let ldap_pass = cli
+        .nt_hash
+        .as_deref()
+        .or(cli.password.as_deref())
+        .unwrap_or("");
 
     println!("  {} Domain: {}", "\u{2591}".bright_black(), domain.cyan());
     println!("  {} DC:     {}", "\u{2591}".bright_black(), dc_ip.cyan());
@@ -4433,8 +4437,10 @@ pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
         } else {
             username.clone()
         };
-        overthrone_core::proto::ldap::LdapSession::connect(&dc_ip, &domain, &ldap_user, ldap_pass, has_hash)
-            .await
+        overthrone_core::proto::ldap::LdapSession::connect(
+            &dc_ip, &domain, &ldap_user, ldap_pass, has_hash,
+        )
+        .await
     };
 
     let config = overthrone_core::azure_ad::AzureAdConfig {

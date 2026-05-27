@@ -37,10 +37,24 @@ pub fn detect_format(data: &[u8]) -> Result<TicketFormat> {
         let text = std::str::from_utf8(data).unwrap_or("");
         if !text.is_empty()
             && text.trim().len() > 20
-            && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' || b == b'\n' || b == b'{' || b == b'}' || b == b' ' || b == b'\r')
+            && text.bytes().all(|b| {
+                b.is_ascii_alphanumeric()
+                    || b == b'+'
+                    || b == b'/'
+                    || b == b'='
+                    || b == b'\n'
+                    || b == b'{'
+                    || b == b'}'
+                    || b == b' '
+                    || b == b'\r'
+            })
         {
             // Try to decode as base64 — if it yields valid ASN.1, it's base64
-            let clean = text.trim().trim_start_matches('{').trim_end_matches('}').trim();
+            let clean = text
+                .trim()
+                .trim_start_matches('{')
+                .trim_end_matches('}')
+                .trim();
             if base64::Engine::decode(&base64::engine::general_purpose::STANDARD, clean).is_ok() {
                 return Ok(TicketFormat::Base64);
             }
@@ -114,21 +128,16 @@ pub fn base64_to_kirbi(input: &[u8]) -> Result<Vec<u8>> {
         .collect::<Vec<_>>()
         .join("");
 
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        clean.as_bytes(),
-    )
-    .map_err(|e| OverthroneError::TicketForge(format!("Base64 decode failed: {e}")))?;
+    let decoded =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, clean.as_bytes())
+            .map_err(|e| OverthroneError::TicketForge(format!("Base64 decode failed: {e}")))?;
 
     Ok(decoded)
 }
 
 /// Encode a KRB-CRED to Rubeus-compatible base64.
 pub fn kirbi_to_base64(kirbi: &[u8]) -> Result<String> {
-    let encoded = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        kirbi,
-    );
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, kirbi);
     Ok(encoded)
 }
 
@@ -167,9 +176,10 @@ pub fn kirbi_to_ccache(kirbi: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| OverthroneError::TicketForge(format!("Parse KRB-CRED: {e}")))?
         .1;
 
-    let ticket = kerb_cred.tickets.first().ok_or_else(|| {
-        OverthroneError::TicketForge("KRB-CRED has no tickets".into())
-    })?;
+    let ticket = kerb_cred
+        .tickets
+        .first()
+        .ok_or_else(|| OverthroneError::TicketForge("KRB-CRED has no tickets".into()))?;
 
     let mut cred_info = None;
     // The enc_part of a .kirbi is unencrypted (etype=0) and contains EncKrbCredPart
@@ -288,7 +298,9 @@ pub fn ccache_to_kirbi(ccache: &[u8]) -> Result<Vec<u8>> {
     ]) as usize;
 
     if ticket_start + ticket_len > ccache.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: ticket data truncated".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: ticket data truncated".into(),
+        ));
     }
 
     let ticket_bytes = &ccache[ticket_start..ticket_start + ticket_len];
@@ -344,32 +356,47 @@ fn find_ticket_in_ccache(ccache: &[u8], start: usize) -> Result<usize> {
 
     // Skip keyblock: keytype(u16) + keylen(u16) + keydata(keylen)
     if pos + 4 > ccache.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated at keyblock".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated at keyblock".into(),
+        ));
     }
     let key_len = u16::from_le_bytes([ccache[pos + 2], ccache[pos + 3]]) as usize;
     pos += 4 + key_len;
 
     // Skip times: authtime(i32) + starttime(i32) + endtime(i32) + renew_till(i32)
     if pos + 16 > ccache.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated at times".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated at times".into(),
+        ));
     }
     pos += 16;
 
     // Skip is_skey(u8) + ticket_flags(u32)
     if pos + 5 > ccache.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated at flags".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated at flags".into(),
+        ));
     }
     pos += 1 + 4;
 
     // Now at ticket data length field — return the position of the data
     if pos + 4 > ccache.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated at ticket len".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated at ticket len".into(),
+        ));
     }
-    let ticket_len = u32::from_le_bytes([ccache[pos], ccache[pos + 1], ccache[pos + 2], ccache[pos + 3]]) as usize;
+    let ticket_len = u32::from_le_bytes([
+        ccache[pos],
+        ccache[pos + 1],
+        ccache[pos + 2],
+        ccache[pos + 3],
+    ]) as usize;
     pos += 4;
 
     if pos + ticket_len > ccache.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: ticket data truncated".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: ticket data truncated".into(),
+        ));
     }
 
     Ok(pos)
@@ -378,26 +405,34 @@ fn find_ticket_in_ccache(ccache: &[u8], start: usize) -> Result<usize> {
 /// Skip past a CCACHE-encoded principal, returning the next position.
 fn skip_ccache_principal(data: &[u8], pos: usize) -> Result<usize> {
     if pos + 2 > data.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated principal realm length".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated principal realm length".into(),
+        ));
     }
     let realm_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
     let mut p = pos + 2 + realm_len;
 
     if p + 2 > data.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated principal num components".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated principal num components".into(),
+        ));
     }
     let num_comps = u16::from_le_bytes([data[p], data[p + 1]]) as usize;
     p += 2;
 
     // Skip name_type (u32)
     if p + 4 > data.len() {
-        return Err(OverthroneError::TicketForge("CCACHE: truncated principal name type".into()));
+        return Err(OverthroneError::TicketForge(
+            "CCACHE: truncated principal name type".into(),
+        ));
     }
     p += 4;
 
     for _ in 0..num_comps {
         if p + 2 > data.len() {
-            return Err(OverthroneError::TicketForge("CCACHE: truncated principal component".into()));
+            return Err(OverthroneError::TicketForge(
+                "CCACHE: truncated principal component".into(),
+            ));
         }
         let comp_len = u16::from_le_bytes([data[p], data[p + 1]]) as usize;
         p += 2 + comp_len;
