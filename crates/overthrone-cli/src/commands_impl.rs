@@ -4429,6 +4429,18 @@ pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
         AzureAction::SeamlessSso => overthrone_core::azure_ad::AzureAdOperation::SeamlessSsoAbuse,
         AzureAction::GoldenSaml { .. } => overthrone_core::azure_ad::AzureAdOperation::GoldenSaml,
         AzureAction::PrtTheft => overthrone_core::azure_ad::AzureAdOperation::PrtTheft,
+        AzureAction::ManagedIdentityToken => {
+            overthrone_core::azure_ad::AzureAdOperation::ManagedIdentityToken
+        }
+        AzureAction::EntraConnectExtract => {
+            overthrone_core::azure_ad::AzureAdOperation::EntraConnectExtract
+        }
+        AzureAction::AppRegistrationAbuse => {
+            overthrone_core::azure_ad::AzureAdOperation::AppRegistrationAbuse
+        }
+        AzureAction::DeviceCodePhish => {
+            overthrone_core::azure_ad::AzureAdOperation::DeviceCodePhish
+        }
     };
 
     let ldap_result = {

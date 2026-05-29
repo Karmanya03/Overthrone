@@ -4117,6 +4117,7 @@ dependencies = [
  "prost",
  "quick-xml",
  "rand 0.10.1",
+ "rand_core 0.6.4",
  "rasn",
  "rayon",
  "rc4",
@@ -4276,6 +4277,7 @@ dependencies = [
 name = "overthrone-relay"
 version = "0.2.1-beta"
 dependencies = [
+ "aes 0.8.4",
  "anyhow",
  "async-trait",
  "base64",
@@ -4283,6 +4285,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "cmac 0.7.2",
  "colored",
  "digest 0.10.7",
  "futures",
@@ -4296,11 +4299,13 @@ dependencies = [
  "pnet_packet",
  "pnet_transport",
  "rand 0.10.1",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "uuid",
 ]

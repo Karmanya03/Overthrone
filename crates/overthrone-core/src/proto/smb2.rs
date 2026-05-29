@@ -1638,7 +1638,7 @@ fn filetime_now() -> [u8; 8] {
 // ═══════════════════════════════════════════════════════════
 
 /// Wrap an NTLMSSP token in a SPNEGO NegTokenInit.
-fn wrap_spnego_init(ntlmssp: &[u8]) -> Vec<u8> {
+pub fn wrap_spnego_init(ntlmssp: &[u8]) -> Vec<u8> {
     // Build inner mechTypes sequence [NTLMSSP OID]
     let mech_types = asn1_sequence(NTLMSSP_OID);
     // mechToken [2] OCTET STRING
@@ -1654,7 +1654,7 @@ fn wrap_spnego_init(ntlmssp: &[u8]) -> Vec<u8> {
 }
 
 /// Wrap an NTLMSSP token in a SPNEGO NegTokenResp (responseToken).
-fn wrap_spnego_response(ntlmssp: &[u8]) -> Vec<u8> {
+pub fn wrap_spnego_response(ntlmssp: &[u8]) -> Vec<u8> {
     // NegTokenResp: responseToken [2] OCTET STRING
     let resp_token = asn1_context_tag(2, &asn1_octet_string(ntlmssp));
     let neg_token_resp = asn1_sequence(&resp_token);
@@ -1673,7 +1673,7 @@ fn wrap_spnego_kerberos(ap_req: &[u8]) -> Vec<u8> {
 }
 
 /// Extract the NTLMSSP token from a SPNEGO response.
-fn extract_ntlmssp_from_spnego(data: &[u8]) -> Result<Vec<u8>> {
+pub fn extract_ntlmssp_from_spnego(data: &[u8]) -> Result<Vec<u8>> {
     // Walk the ASN.1 looking for the NTLMSSP signature
     if let Some(pos) = find_subsequence(data, NTLMSSP_SIGNATURE) {
         // Find the end of this NTLMSSP message

@@ -9,8 +9,9 @@
 //! - Registry query commands for manual verification
 //! - Programmatic enforcement state assessment
 
+use crate::proto::registry::{PredefinedHive, REG_DWORD, read_remote_registry_value};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 /// The three states of `StrongCertificateBindingEnforcement`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +149,101 @@ pub async fn collect_dc_builds(ldap: &mut crate::proto::ldap::LdapSession) -> Ve
         Err(e) => {
             info!("collect_dc_builds: LDAP search failed: {e}");
             Vec::new()
+        }
+    }
+}
+
+/// Read `StrongCertificateBindingEnforcement` from a remote DC via SMB `\\pipe\winreg`.
+///
+/// Requires an authenticated SMB session to the DC with `SYSTEM\CurrentControlSet\Services\Kdc`
+/// read access. Returns `None` if the value is not set (defaults to 0/pre-WS2025) or on error.
+pub async fn read_strong_mapping_via_smb(
+    smb: &mut crate::proto::smb::SmbSession,
+) -> Option<StrongBindingState> {
+    const KDC_REG_PATH: &str = r"SYSTEM\CurrentControlSet\Services\Kdc";
+    const VALUE_NAME: &str = "StrongCertificateBindingEnforcement";
+
+    match read_remote_registry_value(smb, PredefinedHive::LocalMachine, KDC_REG_PATH, VALUE_NAME)
+        .await
+    {
+        Ok(val) if val.data_type == REG_DWORD => {
+            if val.data.len() >= 4 {
+                let dw = u32::from_le_bytes(val.data[..4].try_into().unwrap_or([0; 4]));
+                match dw {
+                    0 => {
+                        info!("SMB registry: StrongCertificateBindingEnforcement=0 (Disabled)");
+                        Some(StrongBindingState::Disabled)
+                    }
+                    1 => {
+                        info!(
+                            "SMB registry: StrongCertificateBindingEnforcement=1 (Compatibility)"
+                        );
+                        Some(StrongBindingState::Compatibility)
+                    }
+                    2 => {
+                        info!("SMB registry: StrongCertificateBindingEnforcement=2 (Enforced)");
+                        Some(StrongBindingState::Enforced)
+                    }
+                    other => {
+                        warn!(
+                            "SMB registry: StrongCertificateBindingEnforcement={other} (unknown)"
+                        );
+                        Some(StrongBindingState::Unknown)
+                    }
+                }
+            } else {
+                warn!(
+                    "SMB registry: StrongCertificateBindingEnforcement value too short ({})",
+                    val.data.len()
+                );
+                None
+            }
+        }
+        Ok(_) => {
+            info!("SMB registry: StrongCertificateBindingEnforcement returned non-DWORD type");
+            None
+        }
+        Err(e) => {
+            warn!("SMB registry read failed (falling back to build inference): {e}");
+            None
+        }
+    }
+}
+
+/// Read `CertificateMappingMethods` from a remote DC via SMB `\\pipe\winreg`.
+/// Bit 0x4 (UPN match) enables ESC10 Variant B.
+pub async fn read_cert_mapping_methods_via_smb(
+    smb: &mut crate::proto::smb::SmbSession,
+) -> Option<u32> {
+    const KDC_REG_PATH: &str = r"SYSTEM\CurrentControlSet\Services\Kdc";
+    const VALUE_NAME: &str = "CertificateMappingMethods";
+
+    match read_remote_registry_value(smb, PredefinedHive::LocalMachine, KDC_REG_PATH, VALUE_NAME)
+        .await
+    {
+        Ok(val) if val.data_type == REG_DWORD => {
+            if val.data.len() >= 4 {
+                let dw = u32::from_le_bytes(val.data[..4].try_into().unwrap_or([0; 4]));
+                info!("SMB registry: CertificateMappingMethods=0x{dw:08x}");
+                Some(dw)
+            } else {
+                warn!("SMB registry: CertificateMappingMethods value too short");
+                None
+            }
+        }
+        Ok(_) => {
+            warn!("SMB registry: CertificateMappingMethods returned non-DWORD type");
+            None
+        }
+        Err(e) if e.to_string().contains("not found") || e.to_string().contains("Value '") => {
+            info!(
+                "SMB registry: CertificateMappingMethods not set (defaults to 7 = SID+UPN+Issuer)"
+            );
+            Some(7)
+        }
+        Err(e) => {
+            warn!("SMB registry read for CertificateMappingMethods failed: {e}");
+            None
         }
     }
 }

@@ -195,27 +195,35 @@ impl RawLdapConn {
         nt_hash: &[u8],
     ) -> crate::error::Result<()> {
         use crate::proto::ntlm;
+        use crate::proto::smb2;
 
-        // ── Step 1: Send NTLMSSP NEGOTIATE ──
+        // ── Step 1: Send SPNEGO NegTokenInit wrapping NTLMSSP NEGOTIATE ──
         let negotiate = ntlm::build_negotiate_message(domain);
+        let spnego_init = smb2::wrap_spnego_init(&negotiate);
         let id1 = self.next_msg_id();
-        let req1 = build_bind_sasl(&mut [], id1, "NTLM", &negotiate);
+        let req1 = build_bind_sasl(&mut [], id1, "GSS-SPNEGO", &spnego_init);
         raw_ldap_send(&mut self.stream, &req1).await?;
 
-        // ── Step 2: Receive NTLMSSP CHALLENGE ──
+        // ── Step 2: Receive SPNEGO NegTokenResp wrapping NTLMSSP CHALLENGE ──
         let resp1 = raw_ldap_recv(&mut self.stream).await?;
         let sasl_creds = parse_bind_response_sasl(&resp1).map_err(|e| OverthroneError::Ldap {
             target: "raw".to_string(),
             reason: format!("NTLM SASL step 1 failed: {e}"),
         })?;
 
+        let ntlm_challenge =
+            smb2::extract_ntlmssp_from_spnego(&sasl_creds).map_err(|e| OverthroneError::Ldap {
+                target: "raw".to_string(),
+                reason: format!("SPNEGO NTLM challenge extraction failed: {e}"),
+            })?;
+
         let challenge_msg =
-            ntlm::parse_challenge_message(&sasl_creds).map_err(|e| OverthroneError::Ldap {
+            ntlm::parse_challenge_message(&ntlm_challenge).map_err(|e| OverthroneError::Ldap {
                 target: "raw".to_string(),
                 reason: format!("NTLM challenge parse failed: {e}"),
             })?;
 
-        // ── Step 3: Send NTLMSSP AUTHENTICATE ──
+        // ── Step 3: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE ──
         let authenticate = ntlm::build_authenticate_message(
             domain,
             username,
@@ -224,8 +232,9 @@ impl RawLdapConn {
             challenge_msg.target_info.as_deref(),
             None,
         );
+        let spnego_resp = smb2::wrap_spnego_response(&authenticate);
         let id2 = self.next_msg_id();
-        let req2 = build_bind_sasl(&mut [], id2, "NTLM", &authenticate);
+        let req2 = build_bind_sasl(&mut [], id2, "GSS-SPNEGO", &spnego_resp);
         raw_ldap_send(&mut self.stream, &req2).await?;
 
         // ── Step 4: Receive final BindResponse ──
@@ -238,7 +247,7 @@ impl RawLdapConn {
             });
         }
 
-        debug!("RawLDAP: NTLM SASL bind succeeded");
+        debug!("RawLDAP: GSS-SPNEGO bind succeeded");
         Ok(())
     }
 

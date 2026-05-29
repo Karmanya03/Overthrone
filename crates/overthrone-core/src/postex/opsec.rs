@@ -425,7 +425,7 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
 /// Field names follow Windows SDK naming conventions.
 #[cfg(target_os = "windows")]
 #[allow(non_camel_case_types, non_snake_case, dead_code)]
-mod image {
+pub mod image {
     #[repr(C)]
     pub struct IMAGE_DOS_HEADER {
         pub e_magic: u16,
@@ -523,6 +523,20 @@ mod image {
         pub AddressOfFunctions: u32,
         pub AddressOfNames: u32,
         pub AddressOfNameOrdinals: u32,
+    }
+
+    #[repr(C)]
+    pub struct IMAGE_SECTION_HEADER {
+        pub Name: [u8; 8],
+        pub VirtualSize: u32,
+        pub VirtualAddress: u32,
+        pub SizeOfRawData: u32,
+        pub PointerToRawData: u32,
+        pub PointerToRelocations: u32,
+        pub PointerToLinenumbers: u32,
+        pub NumberOfRelocations: u16,
+        pub NumberOfLinenumbers: u16,
+        pub Characteristics: u32,
     }
 }
 

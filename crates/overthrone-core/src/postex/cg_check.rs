@@ -17,12 +17,14 @@
 //! - If CG disabled → proceed with LSASS techniques
 //! - If unknown → assume CG disabled (legacy compat)
 
+use crate::error::{OverthroneError, Result};
+use crate::proto::ldap::LdapSession;
 use crate::proto::registry::{PredefinedHive, REG_DWORD, read_remote_registry_value};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 /// Credential Guard status for a target system.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CredentialGuardStatus {
     /// CG is confirmed enabled — LSASS techniques will fail.
     Enabled,
@@ -100,46 +102,33 @@ pub async fn check_credential_guard_remote(
         }
     }
 
-    // Method 2: Query IsolatedCredentialsRootSecret presence
-    let secret_found = match read_remote_registry_value(
-        smb_session,
-        PredefinedHive::LocalMachine,
-        "SYSTEM\\CurrentControlSet\\Control\\Lsa\\CredentialGuard",
-        "IsolatedCredentialsRootSecret",
-    )
-    .await
-    {
-        Ok(value) => {
-            let found = !value.data.is_empty();
-            findings.push(format!("IsolatedCredentialsRootSecret present: {found}"));
-            Some(found)
-        }
-        Err(e) => {
-            findings.push(format!("IsolatedCredentialsRootSecret not found: {e}"));
-            Some(false)
-        }
-    };
+    // Method 2: Query IsolatedCredentialsRootSecret presence. Windows builds
+    // have exposed this indicator under both paths in the wild.
+    let secret_found = query_isolated_credentials_secret(smb_session, &mut findings).await;
     let secret_present = secret_found;
 
-    let (status, recommendation) = match lsa_cfg_flags {
-        Some(1) | Some(2) => (
+    let (status, recommendation) = match (lsa_cfg_flags, secret_present) {
+        (_, Some(true)) => (
+            CredentialGuardStatus::Enabled,
+            "CG confirmed via IsolatedCredentialsRootSecret; route to ADCS Shadow Credentials, RBCD, or dMSA"
+                .to_string(),
+        ),
+        (Some(1) | Some(2), _) => (
             CredentialGuardStatus::Enabled,
             "CG confirmed via LsaCfgFlags — route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
-        Some(0) => (
+        (Some(0), _) => (
             CredentialGuardStatus::Disabled,
-            "CG disabled (LsaCfgFlags=0) — LSASS techniques are viable".to_string(),
+            "CG disabled (LsaCfgFlags=0) and no isolated-secret indicator was found".to_string(),
         ),
-        Some(flag) => (
+        (Some(flag), _) => (
             CredentialGuardStatus::Unknown,
-            format!(
-                "CG unreadable (unknown LsaCfgFlags={flag}) — assuming disabled for legacy compat"
-            ),
+            format!("CG inconclusive (unknown LsaCfgFlags={flag}); avoid LSASS techniques"),
         ),
-        None => (
+        (None, _) => (
             CredentialGuardStatus::Unknown,
-            "CG status unknown — assuming disabled for legacy compat".to_string(),
+            "CG status unknown; avoid LSASS techniques".to_string(),
         ),
     };
 
@@ -160,6 +149,43 @@ pub async fn check_credential_guard_remote(
         recommendation,
         findings,
     }
+}
+
+async fn query_isolated_credentials_secret(
+    smb_session: &mut crate::proto::smb::SmbSession,
+    findings: &mut Vec<String>,
+) -> Option<bool> {
+    const VALUE_NAME: &str = "IsolatedCredentialsRootSecret";
+    const PATHS: &[&str] = &[
+        "SYSTEM\\CurrentControlSet\\Control\\Lsa\\MSV1_0",
+        "SYSTEM\\CurrentControlSet\\Control\\Lsa\\CredentialGuard",
+    ];
+
+    let mut checked_any = false;
+    for path in PATHS {
+        match read_remote_registry_value(
+            smb_session,
+            PredefinedHive::LocalMachine,
+            path,
+            VALUE_NAME,
+        )
+        .await
+        {
+            Ok(value) => {
+                checked_any = true;
+                let found = !value.data.is_empty();
+                findings.push(format!("HKLM\\{path}\\{VALUE_NAME} present: {found}"));
+                if found {
+                    return Some(true);
+                }
+            }
+            Err(e) => {
+                findings.push(format!("HKLM\\{path}\\{VALUE_NAME} not readable: {e}"));
+            }
+        }
+    }
+
+    if checked_any { Some(false) } else { None }
 }
 
 /// Pre-flight CG check using heuristic/name-based detection.
@@ -190,7 +216,7 @@ pub fn check_credential_guard_preflight(
         ),
         _ => (
             CredentialGuardStatus::Unknown,
-            "CG not confirmed — attempt LSASS technique with opsec pre-checks".to_string(),
+            "CG not confirmed; avoid LSASS-touching techniques until remote registry or WMI evidence is available".to_string(),
         ),
     };
 
@@ -211,9 +237,484 @@ pub fn check_credential_guard_preflight(
 /// Decide which credential extraction technique to use based on CG status.
 pub fn choose_cred_extraction(cg: &CgPreflightResult) -> &'static str {
     match cg.status {
-        CredentialGuardStatus::Enabled => "shadow_credentials",
-        CredentialGuardStatus::Disabled | CredentialGuardStatus::Unknown => "lsass_dump",
+        CredentialGuardStatus::Enabled | CredentialGuardStatus::Unknown => "shadow_credentials",
+        CredentialGuardStatus::Disabled => "lsass_dump",
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  WMI-based Credential Guard Detection
+// ──────────────────────────────────────────────────────────────────────
+
+/// Check Credential Guard / VBS status via WMI on a remote machine.
+///
+/// Uses the `Win32_DeviceGuard` WMI class to query:
+/// - `DeviceGuardEnabled` — whether VBS is enabled
+/// - `SecurityServicesRunning` — which CG services are running
+/// - `DeviceGuardLocalSystemAuthorityCredentialGuard` — CG-specific
+/// - `VirtualizationBasedSecurityStatus` — VBS status
+///
+/// Requires admin credentials and WMI access to the target.
+#[cfg(target_os = "windows")]
+pub fn check_credential_guard_via_wmi(
+    target: &str,
+    _username: &str,
+    _password: &str,
+) -> Result<CgPreflightResult> {
+    use std::collections::HashMap;
+    use wmi::COMLibrary;
+    use wmi::WMIConnection;
+
+    let mut findings = Vec::new();
+    findings.push(format!("WMI CG check on {target}"));
+
+    let com = COMLibrary::new()
+        .map_err(|e| OverthroneError::PostExploitation(format!("WMI COM init failed: {e}")))?;
+
+    let wmi_conn = WMIConnection::new(com)
+        .map_err(|e| OverthroneError::PostExploitation(format!("WMI connection failed: {e}")))?;
+
+    let results: Vec<HashMap<String, wmi::Variant>> = wmi_conn.query().map_err(|e| {
+        OverthroneError::PostExploitation(format!("WMI query Win32_DeviceGuard failed: {e}"))
+    })?;
+
+    let mut device_guard_queried = false;
+    let mut lsa_cfg_flags: Option<u32> = None;
+    let mut security_services_running: Option<u32> = None;
+    let mut isolated_secret_present: Option<bool> = None;
+
+    for result in results {
+        device_guard_queried = true;
+
+        // Check VirtualizationBasedSecurityStatus: 0 = Disabled, 1 = Running, 2 = Stopped
+        if let Some(wmi::Variant::UI4(val)) = result.get("VirtualizationBasedSecurityStatus") {
+            findings.push(format!("VirtualizationBasedSecurityStatus = {val}"));
+            if *val == 1 {
+                lsa_cfg_flags = Some(2);
+            }
+        }
+
+        // Check SecurityServicesRunning: bitmask of running services
+        // 1 = SecureBoot, 2 = DMA, 4 = HypervisorEnforcedCodeIntegrity, 8 = CredentialGuard
+        if let Some(wmi::Variant::UI4(val)) = result.get("SecurityServicesRunning") {
+            security_services_running = Some(*val);
+            findings.push(format!("SecurityServicesRunning = {val} (bitmask)"));
+            if *val & 0x08 != 0 {
+                findings.push("Credential Guard service is running".to_string());
+            }
+        }
+
+        // Check DeviceGuardLocalSystemAuthorityCredentialGuard (actually just CredentialGuard)
+        if let Some(wmi::Variant::Bool(val)) =
+            result.get("DeviceGuardLocalSystemAuthorityCredentialGuard")
+        {
+            findings.push(format!("CredentialGuard field = {val}"));
+            if *val {
+                isolated_secret_present = Some(true);
+            }
+        }
+    }
+
+    if !device_guard_queried {
+        findings.push("Win32_DeviceGuard query returned no results".to_string());
+    }
+
+    let (status, recommendation) = match (lsa_cfg_flags, isolated_secret_present) {
+        (Some(1) | Some(2), _) => (
+            CredentialGuardStatus::Enabled,
+            "CG confirmed via WMI (VBS running) — route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
+        ),
+        (_, Some(true)) => (
+            CredentialGuardStatus::Enabled,
+            "CG confirmed via WMI (CredentialGuard field) — route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
+        ),
+        (Some(0), _) => (
+            CredentialGuardStatus::Disabled,
+            "CG disabled via WMI (VBS not running)".to_string(),
+        ),
+        _ => (
+            CredentialGuardStatus::Unknown,
+            "CG status via WMI inconclusive — further investigation needed".to_string(),
+        ),
+    };
+
+    Ok(CgPreflightResult {
+        status,
+        lsa_cfg_flags_readable: lsa_cfg_flags.is_some(),
+        lsa_cfg_flags,
+        isolated_credential_secret_present: isolated_secret_present,
+        device_guard_queried,
+        security_services_running,
+        recommendation,
+        findings,
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn check_credential_guard_via_wmi(
+    _target: &str,
+    _username: &str,
+    _password: &str,
+) -> Result<CgPreflightResult> {
+    Err(OverthroneError::PostExploitation(
+        "WMI CG check requires Windows platform".into(),
+    ))
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  Domain-level CG Assessment via LDAP
+// ──────────────────────────────────────────────────────────────────────
+
+/// Assess Credential Guard deployment across the domain via LDAP.
+///
+/// Queries domain controllers for:
+/// 1. OS version / build number (WS2025 defaults to CG enabled)
+/// 2. GPO links that deploy CG
+/// 3. Active Directory offering for VBS/CG
+///
+/// Returns a domain-wide CG posture assessment.
+pub async fn assess_domain_credential_guard(
+    ldap: &mut LdapSession,
+    domain: &str,
+) -> Result<DomainCgAssessment> {
+    let mut findings = Vec::new();
+    let mut dc_builds: Vec<(String, String)> = Vec::new();
+    let mut gpo_cg_policies: Vec<String> = Vec::new();
+    let mut ws2025_dcs = 0;
+    let mut total_dcs = 0;
+
+    // Phase 1: Enumerate DCs and check build versions
+    let dcs = ldap
+        .custom_search(
+            "(&(objectClass=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))",
+            &[
+                "cn",
+                "operatingSystem",
+                "operatingSystemVersion",
+                "dNSHostName",
+            ],
+        )
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: domain.into(),
+            reason: e.to_string(),
+        })?;
+
+    for dc in &dcs {
+        total_dcs += 1;
+        let dc_name = dc
+            .attrs
+            .get("cn")
+            .and_then(|v| v.first())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        let os_ver = dc
+            .attrs
+            .get("operatingSystemVersion")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+        let os_name = dc
+            .attrs
+            .get("operatingSystem")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+
+        dc_builds.push((dc_name.clone(), os_ver.clone()));
+
+        // WS2025 has build 10.0.26xxx
+        if os_ver.starts_with("10.0.26") {
+            ws2025_dcs += 1;
+            findings.push(format!(
+                "{dc_name}: WS2025 (build {os_ver}) — CG likely enabled by default"
+            ));
+        } else if os_ver.starts_with("10.0.2") {
+            let build_num: u32 = os_ver
+                .split('.')
+                .nth(2)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if build_num >= 20348 {
+                findings.push(format!(
+                    "{dc_name}: WS2022+ (build {os_ver}) — CG may be deployed via GPO"
+                ));
+            }
+        } else {
+            let has_dc_name = if !dc_name.is_empty() {
+                dc_name
+            } else {
+                "Unknown DC".into()
+            };
+            findings.push(format!("{has_dc_name}: OS = {os_name} (build {os_ver})"));
+        }
+    }
+
+    // Phase 2: GPO-based CG detection
+    let gpo_search = ldap
+        .custom_search(
+            "(&(objectClass=groupPolicyContainer)(displayName=*CredentialGuard*))",
+            &["cn", "displayName", "gPCFileSysPath"],
+        )
+        .await;
+
+    if let Ok(gpos) = gpo_search {
+        for gpo in &gpos {
+            if let Some(names) = gpo.attrs.get("displayName") {
+                for name in names {
+                    gpo_cg_policies.push(name.clone());
+                    findings.push(format!(
+                        "GPO found: {name} — likely deploys CredentialGuard"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Phase 3: Determine overall domain posture
+    let cg_likely_enabled = ws2025_dcs > 0 || !gpo_cg_policies.is_empty();
+    let percentage = if total_dcs > 0 {
+        (ws2025_dcs as f64 / total_dcs as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let posture = if cg_likely_enabled {
+        DomainCgPosture::LikelyEnabled
+    } else if total_dcs == 0 {
+        DomainCgPosture::InsufficientData
+    } else if percentage > 50.0 {
+        DomainCgPosture::LikelyEnabled
+    } else {
+        DomainCgPosture::LikelyDisabled
+    };
+
+    Ok(DomainCgAssessment {
+        total_dcs,
+        ws2025_dcs,
+        dc_builds,
+        gpo_cg_policies,
+        ws2025_percentage: percentage,
+        posture,
+        findings,
+    })
+}
+
+/// Domain-level CG posture.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum DomainCgPosture {
+    /// All evidence suggests CG is deployed
+    LikelyEnabled,
+    /// Most evidence suggests CG is not deployed
+    LikelyDisabled,
+    /// Not enough data
+    InsufficientData,
+}
+
+impl std::fmt::Display for DomainCgPosture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LikelyEnabled => write!(f, "Likely Enabled"),
+            Self::LikelyDisabled => write!(f, "Likely Disabled"),
+            Self::InsufficientData => write!(f, "Insufficient Data"),
+        }
+    }
+}
+
+/// Domain-level Credential Guard assessment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainCgAssessment {
+    /// Total domain controllers found
+    pub total_dcs: usize,
+    /// Number of WS2025 DCs detected
+    pub ws2025_dcs: usize,
+    /// DC build version details
+    pub dc_builds: Vec<(String, String)>,
+    /// GPOs related to Credential Guard
+    pub gpo_cg_policies: Vec<String>,
+    /// Percentage of WS2025 DCs
+    pub ws2025_percentage: f64,
+    /// Overall assessment
+    pub posture: DomainCgPosture,
+    /// Bulleted findings
+    pub findings: Vec<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  Multi-signal CG Check (combined remote + WMI + domain + heuristic)
+// ──────────────────────────────────────────────────────────────────────
+
+/// Multi-signal Credential Guard check combining all available methods.
+///
+/// Collects evidence from:
+/// 1. Remote registry (SMB) — if session provided
+/// 2. WMI — if credentials provided
+/// 3. LDAP domain assessment — if session provided
+/// 4. Name/OS heuristic — always available
+///
+/// Returns a consolidated result with confidence scoring.
+pub async fn comprehensive_cg_check(
+    target: &str,
+    domain: &str,
+    smb_session: Option<&mut crate::proto::smb::SmbSession>,
+    ldap_session: Option<&mut LdapSession>,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<ComprehensiveCgResult> {
+    let mut signals: Vec<CgSignal> = Vec::new();
+    let mut findings: Vec<String> = Vec::new();
+    let mut domain_assessment: Option<DomainCgAssessment> = None;
+
+    // Signal 1: Remote registry via SMB
+    if let Some(smb) = smb_session {
+        let reg_result = check_credential_guard_remote(smb).await;
+        let reg_status = reg_result.status;
+        findings.push(format!(
+            "SMB Remote Registry: {:?} (LsaCfgFlags={:?})",
+            reg_status, reg_result.lsa_cfg_flags
+        ));
+        signals.push(CgSignal {
+            method: "SMB Remote Registry".into(),
+            status: reg_status,
+            confidence: 0.9,
+        });
+    }
+
+    // Signal 2: Domain-level via LDAP
+    if let Some(ldap) = ldap_session {
+        match assess_domain_credential_guard(ldap, domain).await {
+            Ok(domain_cg) => {
+                let domain_status = match domain_cg.posture {
+                    DomainCgPosture::LikelyEnabled => CredentialGuardStatus::Enabled,
+                    DomainCgPosture::LikelyDisabled => CredentialGuardStatus::Disabled,
+                    DomainCgPosture::InsufficientData => CredentialGuardStatus::Unknown,
+                };
+                findings.push(format!(
+                    "Domain Assessment: {:?} ({} WS2025 DCs out of {}, {} policies found)",
+                    domain_status,
+                    domain_cg.ws2025_dcs,
+                    domain_cg.total_dcs,
+                    domain_cg.gpo_cg_policies.len()
+                ));
+                signals.push(CgSignal {
+                    method: "Domain Assessment".into(),
+                    status: domain_status,
+                    confidence: 0.7,
+                });
+                domain_assessment = Some(domain_cg);
+            }
+            Err(e) => {
+                findings.push(format!("Domain assessment failed: {e}"));
+            }
+        }
+    }
+
+    // Signal 3: WMI (if credentials provided)
+    let wmi_result = if let (Some(user), Some(pass)) = (username, password) {
+        match check_credential_guard_via_wmi(target, user, pass) {
+            Ok(wmi) => {
+                let wmi_status = wmi.status;
+                findings.push(format!("WMI: {:?}", wmi_status));
+                signals.push(CgSignal {
+                    method: "WMI".into(),
+                    status: wmi_status,
+                    confidence: 0.85,
+                });
+                Some(wmi)
+            }
+            Err(e) => {
+                findings.push(format!("WMI query failed: {e}"));
+                None
+            }
+        }
+    } else {
+        findings.push("WMI: skipped (no credentials)".to_string());
+        None
+    };
+
+    // Signal 4: Heuristic fallback
+    let heuristic = check_credential_guard_preflight(target, "", domain);
+    let heuristic_status = heuristic.status;
+    findings.push(format!("Heuristic: {:?}", heuristic_status));
+    signals.push(CgSignal {
+        method: "Heuristic".into(),
+        status: heuristic_status,
+        confidence: 0.3,
+    });
+
+    // Consolidate: weighted voting
+    let mut enable_weight: f64 = 0.0;
+    let mut disable_weight: f64 = 0.0;
+    let mut unknown_weight: f64 = 0.0;
+
+    for signal in &signals {
+        match signal.status {
+            CredentialGuardStatus::Enabled => enable_weight += signal.confidence,
+            CredentialGuardStatus::Disabled => disable_weight += signal.confidence,
+            CredentialGuardStatus::Unknown => unknown_weight += signal.confidence * 0.5,
+        }
+    }
+
+    let total_weight = enable_weight + disable_weight + unknown_weight;
+    let (final_status, confidence) = if total_weight == 0.0 {
+        (CredentialGuardStatus::Unknown, 0.0)
+    } else {
+        let enable_pct = enable_weight / total_weight;
+        let disable_pct = disable_weight / total_weight;
+        if enable_pct > 0.5 {
+            (CredentialGuardStatus::Enabled, enable_pct)
+        } else if disable_pct > 0.5 {
+            (CredentialGuardStatus::Disabled, disable_pct)
+        } else {
+            (CredentialGuardStatus::Unknown, total_weight.max(0.3))
+        }
+    };
+
+    let recommendation = match final_status {
+        CredentialGuardStatus::Enabled => {
+            "CG confirmed — route to ADCS Shadow Credentials, RBCD, or dMSA".to_string()
+        }
+        CredentialGuardStatus::Disabled => {
+            "CG not detected — proceed with LSASS techniques".to_string()
+        }
+        CredentialGuardStatus::Unknown => {
+            "CG status unclear — prefer non-LSASS techniques as precaution".to_string()
+        }
+    };
+
+    Ok(ComprehensiveCgResult {
+        status: final_status,
+        confidence,
+        signals: signals.len(),
+        enable_weight: format!("{:.2}", enable_weight),
+        disable_weight: format!("{:.2}", disable_weight),
+        domain_assessment,
+        wmi_result,
+        recommendation,
+        findings,
+    })
+}
+
+/// A single Credential Guard detection signal with confidence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CgSignal {
+    pub method: String,
+    pub status: CredentialGuardStatus,
+    pub confidence: f64,
+}
+
+/// Comprehensive Credential Guard assessment result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComprehensiveCgResult {
+    pub status: CredentialGuardStatus,
+    pub confidence: f64,
+    pub signals: usize,
+    pub enable_weight: String,
+    pub disable_weight: String,
+    pub domain_assessment: Option<DomainCgAssessment>,
+    pub wmi_result: Option<CgPreflightResult>,
+    pub recommendation: String,
+    pub findings: Vec<String>,
 }
 
 #[cfg(test)]
@@ -275,6 +776,6 @@ mod tests {
             recommendation: "Unknown — using legacy".to_string(),
             findings: vec![],
         };
-        assert_eq!(choose_cred_extraction(&cg), "lsass_dump");
+        assert_eq!(choose_cred_extraction(&cg), "shadow_credentials");
     }
 }

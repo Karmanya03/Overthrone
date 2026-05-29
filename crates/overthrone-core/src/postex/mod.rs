@@ -7,15 +7,32 @@
 //! - `skeleton_key`: LSASS authentication bypass via msv1_0.dll patching
 //! - `skeleton_key_dll`: Embedded native DLL bytes for reflective injection
 //! - `opsec`: AMSI bypass, ETW patching, direct syscall infrastructure
+//! - `edr_bypass`: Next-gen EDR detection, ntdll unhooking, ETW abolition, sleep masking
+//! - `cves`: CVE exploit modules (sAMAccountName spoofing, Shadow Credentials, RBCD)
 
 pub mod cg_check;
+pub mod cves;
+pub mod edr_bypass;
 pub mod opsec;
 pub mod skeleton_key;
 pub mod skeleton_key_dll;
 
 pub use cg_check::{
-    CgPreflightResult, CredentialGuardStatus, check_credential_guard_preflight,
-    choose_cred_extraction,
+    CgPreflightResult, CgSignal, ComprehensiveCgResult, CredentialGuardStatus, DomainCgAssessment,
+    DomainCgPosture, assess_domain_credential_guard, check_credential_guard_preflight,
+    check_credential_guard_remote, check_credential_guard_via_wmi, choose_cred_extraction,
+    comprehensive_cg_check,
+};
+pub use cves::{
+    RbcdResult, SamAccountNameSpoofResult, ShadowCredentialsResult, cleanup_rbcd,
+    cleanup_samname_spoof, cleanup_shadow_credentials, exploit_rbcd, exploit_samname_spoof,
+    exploit_shadow_credentials,
+};
+pub use edr_bypass::{
+    EdrAssessment, EdrProduct, EtwAbolitionResult, EvasionStrategy, HookDetection, SleepMaskConfig,
+    StealthResult, UnhookResult, abolish_etw_providers, apply_stealth_profile,
+    assess_edr_landscape, deobfuscate_memory, detect_edr_drivers, detect_edr_processes,
+    obfuscate_memory, resolve_clean_syscall_numbers, scan_ntdll_hooks, unhook_ntdll,
 };
 pub use opsec::{
     AmsiBypassResult, EtwSuppressResult, HONEYPOT_ATTRS, OpsecConfig, OpsecPatchReport,

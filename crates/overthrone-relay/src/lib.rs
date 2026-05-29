@@ -9,12 +9,14 @@ pub mod mitm6;
 pub mod poisoner;
 pub mod relay;
 pub mod responder;
+pub mod smb_daemon;
 pub mod utils;
 
 // Re-export types from submodules
 pub use adcs_relay::{AdcsRelay, AdcsRelayConfig};
 pub use relay::RelayStats;
 pub use responder::CapturedCredential;
+pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 // Re-export RelayError from overthrone_core
 pub use overthrone_core::error::RelayError;
 use overthrone_core::error::Result;
@@ -156,6 +158,10 @@ pub struct RelayControllerConfig {
     /// If `true`, skip all poisoning/responder components.
     /// Useful when pre-captured hashes are fed externally — relay only mode.
     pub no_poison: bool,
+    /// Enable LDAP signing bypass (CVE-2019-1040).
+    /// Strips SIGN/SEAL/ALWAYS_SIGN flags and channel bindings from
+    /// NTLM challenge/authenticate during LDAP/LDAPS relay.
+    pub ldap_signing_bypass: bool,
 }
 
 impl Default for RelayControllerConfig {
@@ -172,6 +178,7 @@ impl Default for RelayControllerConfig {
             wpad_script: None,
             downgrade_auth: false,
             no_poison: false,
+            ldap_signing_bypass: true,
         }
     }
 }
@@ -245,7 +252,7 @@ impl RelayController {
                 round_robin: true,
                 remove_on_success: true,
                 timeout_secs: 30,
-                ldap_signing_bypass: true,
+                ldap_signing_bypass: self.config.ldap_signing_bypass,
                 max_retries: 3,
                 max_connections: 64,
             };
@@ -344,6 +351,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         wpad_script: None,
         downgrade_auth: false,
         no_poison: false,
+        ldap_signing_bypass: true,
     };
 
     let mut controller = RelayController::new(config);
@@ -371,6 +379,7 @@ pub async fn run_relay_attack(
         wpad_script: None,
         downgrade_auth: false,
         no_poison: false,
+        ldap_signing_bypass: true,
     };
 
     let mut controller = RelayController::new(config);

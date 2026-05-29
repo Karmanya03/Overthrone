@@ -44,9 +44,13 @@ md4.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 md-5.workspace = true
+aes.workspace = true
+cmac.workspace = true
 
 # Random number generation — must match workspace
 rand.workspace = true
 
 # Base64 encoding
 base64.workspace = true
+rustls-native-certs = "0.8.3"
+tokio-rustls = "0.26.4"

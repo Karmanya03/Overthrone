@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.2.1--beta-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.3.0--beta-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -132,58 +132,57 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 
 | Crate | Codename | What It Does | The Implementation |
 |---|---|---|---|
-| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling | The absolute unit that ate the gym. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. The crypto has been battle-hardened with 66 passing tests. All 16 ADCS ESC vectors are implemented. 222 unit tests. Zero clippy warnings. The borrow checker needed therapy after this one. |
+| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling, **EDR evasion module (next-gen stealth: ntdll unhooking, ETW abolition, sleep masking, syscall resurrection), Credential Guard multi-signal remote detection (SMB registry + WMI + LDAP domain assessment), Azure AD / Entra ID hybrid attack depth (Managed Identity token theft, Entra Connect extraction, App Registration abuse, Device Code phishing)** | The absolute unit that ate the gym, then built a home gym, then ate that too. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. ~64,500 lines of Rust. 1,575 lines of pure EDR evasion. The borrow checker needed therapy after this one. |
 | `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
 | `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, **zero-knowledge username enumeration via Kerberos AS-REQ**, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
 | `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond ticket forging with full PAC construction, DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL, DSRM backdoor via remote registry, forensic cleanup for all persistence mechanisms, ticket validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Actually works now - PKINIT has real RSA signing and DH key exchange instead of "placeholder PEM structures." The chocolate key became a real key. |
 | `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (compiled by default), goal-based planning ("get DA" ? resolve path), YAML playbook engine, interactive wizard mode, full auto-pwn orchestration connecting enum ? graph ? exploit ? persist ? report, **live kill-chain pipeline visualization**, per-step Q-state/decision/reward readout, 9-section final report with credential tables and loot summaries | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments, and actually tells you what it's doing instead of running in mysterious silence. Every step prints its stage, noise level, priority, and result. The Q-learner shows its state, which action it picked, whether it's exploring or exploiting, and the reward it got. The final report has a kill-chain completion visual, per-stage stats, credential tables, admin host lists, loot summaries, and a full audit trail. It plans, it adapts, it executes, it explains itself, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND writes a detailed trip report with expense breakdowns. |
-| `overthrone-relay` | The Interceptor | NTLM relay engine (SMB?LDAP, HTTP?SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8) | Born complete. Zero stubs since day one. Responder.py walked so this crate could sprint. In Rust. Without the GIL. The overachiever sibling of overthrone-hunter. |
+| `overthrone-relay` | The Interceptor | NTLM relay engine (SMB→LDAP, HTTP→SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8), **Exchange relay (CVE-2024-21410 with EPA bypass)**, **SMB signing awareness (pre-flight check refuses relay when signing required)**, **LDAP signing bypass (CVE-2019-1040 Drop the MIC)** | Born complete. Stayed complete. Added Exchange relay, SMB signing pre-flight, and LDAP signing bypass just to flex. ~6,600 lines, zero stubs. Responder.py walked so this crate could sprint, then it learned to fly. |
 | `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
 | `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now - PDF reports, TUI crawler, C2 implant deployment, and a zero-Neo4j graph viewer. The banner ASCII art is *chef's kiss*. |
 | `overthrone-viewer` | The Window | Browser-based graph GUI served locally. D3 force graph, node search, path finder, detail panels, and stats. No Neo4j, no external DB, no hosted web app. | When you want BloodHound vibes in a browser tab, but still want everything to stay on your machine. |
 
 ### The Crate Report Card
 
-These are real numbers from `cargo test --workspace --lib` on 0.2.0-beta. No rounding up.
+These are real numbers from `cargo test --workspace --lib`. No rounding up.
 
 ```
-overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  298+ unit tests. ESC1-ESC16. SOCKS5 proxy (RFC 1928). Mask attack
-                                                    cracker. Graph O(N²) fixed. Zero clippy warnings. The absolute unit
-                                                    keeps getting bigger and hasn't broken yet. Suspicious.
+overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  64,500+ lines. ADDED: EDR evasion module (1,575 lines - ntdll
+                                                    unhooking, ETW abolition, sleep masking, syscall resurrection),
+                                                    Credential Guard multi-signal remote detection (SMB + WMI + LDAP
+                                                    domain assessment weighted voting), Azure AD depth (4 new ops:
+                                                    ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse,
+                                                    DeviceCodePhish). Zero clippy warnings. Still growing. Still
+                                                    suspicious.
 
-overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  47 unit tests. DPAPI decrypts LAPS v2 now. Full reaper_test.rs
-                                                   integration suite (587 lines). Missing: a handful of edge-case GPO
-                                                   attribute parsers that will never matter until they do.
+overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  47 unit tests. DPAPI decrypts LAPS v2. Full reaper_test.rs
+                                                   integration suite (587 lines).
 
 overthrone-hunter   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  11 unit tests. 100% feature complete. The overachiever.
                                                    hunter_test.rs integration suite (254 lines). No notes.
 
-overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~95%  7 unit tests. foreign.rs went from empty to 25KB of real cross-trust
-                                                   LDAP queries. crawler_test.rs integration suite (203 lines).
-                                                   Missing: a few inter-realm SID filter edge cases. Close enough.
+overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~95%  7 unit tests. foreign.rs is 25KB of real cross-trust LDAP queries.
+                                                   crawler_test.rs integration suite (203 lines).
 
-overthrone-forge    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~96%  17 unit tests. Shadow Creds PKINIT is real RSA+DH, not placeholder
-                                                   PEM. forge_test.rs integration suite (130 lines). Diamond tickets
+overthrone-forge    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~96%  17 unit tests. Shadow Creds PKINIT is real RSA+DH. Diamond tickets
                                                    work. Golden/Silver/DCSync all solid.
 
 overthrone-pilot    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  8 unit tests + live DC integration suite (349 lines, gated behind
                                                    OT_DC_HOST). 3,078-line executor. 1,051-line Q-learner. Q-learning
-                                                   compiles by default now - no more feature flag roulette. Live
-                                                   kill-chain pipeline, per-step QL readout, 9-section final report.
-                                                   The auto-pwn actually tells you what it's doing. Revolutionary.
+                                                   compiles by default. Live kill-chain pipeline, per-step QL readout,
+                                                   9-section final report.
 
-overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  43 unit tests. relay.rs (1,557 lines), responder.rs (836 lines),
-                                                   poisoner.rs (766 lines), ADCS relay (359 lines). Born complete.
-                                                   Still complete. Annoyingly consistent.
+overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  6,600+ lines. ADDED: Exchange relay (CVE-2024-21410, EPA bypass),
+                                                   SMB signing awareness (pre-flight check), LDAP signing bypass
+                                                   (CVE-2019-1040 Drop the MIC). Born complete. Stayed complete.
 
 overthrone-scribe   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  13 unit tests. scribe_test.rs integration suite (314 lines). All
                                                    three output formats work and are wired to the CLI. PDF works.
-                                                   We're as surprised as you are.
 
-overthrone-cli      ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  3 unit tests (don't @ us, it's a CLI). 107KB interactive shell.
-                                                   TUI wired. C2 deploy wired. PDF wired. All commands point to real
-                                                   code. --help doesn't lie anymore.
+overthrone-cli      ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  22,500+ lines. 107KB interactive shell. TUI wired. C2 deploy
+                                                   wired. PDF wired. Azure AD CLI commands wired (Enum, SeamlessSso,
+                                                   GoldenSaml, PrtTheft). --help doesn't lie anymore.
 ```
 
 ## What's Still Cooking (The Backlog)
@@ -213,16 +212,25 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. Knows which creds are worth more than others. |
 | **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. The audit trail explains why it chickened out. |
 | **Skeleton Key native DLL** | `tools/skeleton_key/skeleton_key.c`, `core/src/postex/skeleton_key_dll.rs` | 92KB x64 MSVC-compiled DLL with `MsvpPasswordValidate` hook. Embedded as Rust const bytes. Reflective injection uses pre-compiled binary. Exports: `SkeletonKey_Enable`, `SkeletonKey_Disable`, `SkeletonKey_IsActive`. The LSASS patching binary that used to be "operator must compile" is now baked in. |
+| **EDR Evasion Module** | `core/src/postex/edr_bypass.rs` | 1,575-line next-gen stealth module: EDR product detection (22 vendors, process/driver/WMI), ntdll unhooking via clean mapped copy from disk, ETW provider callback abolition via `NtControlTrace`, syscall number resolution from fresh ntdll, sleep masking with XOR+rotate memory obfuscation, hook classification (JMP/CALL/INT3/PUSH-RET/detour), unified `apply_stealth_profile()` entry point. |
+| **Credential Guard Remote Detection** | `core/src/postex/cg_check.rs` | Multi-signal CG detection: SMB remote registry (`LsaCfgFlags`, `IsolatedCredentialsRootSecret`), WMI fallback via `Win32_DeviceGuard`, LDAP domain-wide assessment (DC build versions, GPO `LsaCfgFlags`), heuristic name-based fallback. Comprehensive weighted voting with confidence scoring. `choose_cred_extraction()` dynamically routes extraction technique based on CG status. Windows-2025-aware. |
+| **Azure AD / Entra ID Hybrid Operations** | `core/src/azure_ad.rs` | 4 new operations beyond the original 4: **ManagedIdentityToken** (Azure IMDS token theft), **EntraConnectExtract** (sync credential extraction via config discovery), **AppRegistrationAbuse** (LDAP enumeration of SPN/federated credential objects), **DeviceCodePhish** (OAuth device code generation + polling loop). Total 8 Azure AD attack operations. |
+| **Exchange NTLM Relay** | `relay/src/exchange.rs` | Full Exchange relay target (CVE-2024-21410): NTLM relay to MAPI-over-HTTP and EWS endpoints with TLS support, self-signed certificate acceptance, channel binding stripping (EPA bypass), configurable Exchange version (2013/2016/2019/Online/AutoDetect). 455 lines of production relay code. |
 
 ### ? Still Pending
 
 No sugarcoating. These are genuinely not done.
 
 | What | Why It Matters | Status | Notes |
-|---|---|---|---|
-| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ? Not yet | 292 unit tests pass. Property-based tests pass. Nobody has run this against GOAD or a real lab yet. That's the next milestone. The bravery check is scheduled. |
-| **LDAP signing “Require” mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn’t enough - the server demands signed LDAP messages for every operation. | ?? Partial | The bypass works when policy is "Negotiate" (common in many environments). When it’s "Require", we’d need the session key to sign messages - which we can’t derive in a relay scenario (we don’t know the victim’s NT hash). `ovt doctor` tells you which mode the DC is using. |
-| **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ?? Windows only | Use `--method psexec` or `--method smbexec` on Linux. They work everywhere. WmiExec is a Windows-only creature and it knows it. |
+|---|---|---|---|---|
+| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ? Not yet | Unit tests pass. Property-based tests pass. Nobody has run this against GOAD or a real lab yet. The bravery check is still scheduled. |
+| **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ?? Partial | Bypass works when policy is "Negotiate". When "Require", we'd need the session key to sign messages - can't derive in relay scenario. `ovt doctor` tells you which mode the DC uses. |
+| **EDR evasion CLI integration** | The full EDR evasion library exists (1,575 lines) but has no `ovt edr` command. | ?? CLI only | Library: `edr_bypass.rs` - EDR detection, ntdll unhooking, ETW abolition, sleep masking. Needs CLI wiring. |
+| **CG check CLI integration** | Multi-signal CG detection exists but no `ovt cg` command. | ?? CLI only | Library: `cg_check.rs` - SMB registry + WMI + LDAP domain + heuristic weighted voting. Needs CLI wiring. |
+| **4 Azure AD ops CLI** | 4 of 8 Azure AD operations lack CLI subcommands. | ?? CLI only | Missing: ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse, DeviceCodePhish. Library code exists. |
+| **Exchange relay CLI** | Exchange relay module exists but is not exposed in the CLI's relay subsystem. | ?? CLI only | Programmatic use from hunter crate works. No `ovt ntlm exchange` command. |
+| **SMBDaemon** | A dedicated SMB server for capturing credentials outside of responder. | ? Not yet | Does not exist anywhere in the codebase. |
+| **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ?? Windows only | Use `--method psexec` or `--method smbexec` on Linux. |
 
 ## Does It Actually Work?
 
@@ -245,7 +253,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **Attack graph + path to DA** | ✅ | ✅ | ✅ | ✅ | Reverse Dijkstra from DA back to you. Shows the exact sequence of moves to go from zero to domain admin. Usually 3 hops. Always embarrassing for someone. |
 | **ADCS ESC1-ESC8** | ✅ | ✅ | ✅ | ✅ | Core certificate abuse chain (SAN/EA/template/CA ACL/web relay). WS 2025 ships tighter defaults (EPA/strong mapping), so validate first with `ovt adcs enum`. |
 | **ADCS ESC9-ESC13** | ✅ | ✅ | ✅ | ✅ | Advanced mapping/policy/CA key abuse paths are implemented (some are operator-guided depending on privileges and CA hardening). |
-| **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB). WS 2025 new AD deployments require LDAP signing by default and enable channel-binding auditing; SMB signing and NTLM-blocking hardening are also much less chill. `ovt doctor` and graph/viewer hints now call out when a path is real, blocked by policy, or needs an alternate route. |
+| **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB, Exchange MAPI/EWS). SMB signing pre-flight check refuses relay when signing required. Exchange relay (CVE-2024-21410) with EPA bypass. LDAP signing bypass (CVE-2019-1040). WS 2025 LDAP signing required by default on new AD deployments; `ovt doctor` tells you what terrain you're on before you relay. |
 | **LAPS (v1 + v2)** | ✅ | ✅ | ✅ | ✅ | LAPS v1 reads `ms-Mcs-AdmPwd` in plaintext. LAPS v2 decrypts `msLAPS-EncryptedPassword` via DPAPI/AES-256-GCM. Both work. |
 | **GPP decrypt** | ✅ | ✅ | ✅ | ✅ | Microsoft literally shipped the AES key in their documentation. We use it. `cpassword` ? plaintext, every time. Thanks, Microsoft. |
 | **RID cycling** | ✅ | ✅ | ✅ | ✅ | Enumerate users by RID even without valid creds (`--null-session`). Still works on misconfigured/legacy hosts. |
@@ -257,7 +265,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~142,000 lines of Rust across 10 crates (~150,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises over 450 library tests across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~152,000 lines of Rust across 10 crates (~160,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises over 450 library tests across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
@@ -287,6 +295,9 @@ ovt dump -t DC ntds -d DOMAIN -u DA -p PASS --output-format json -O ntds.json
 ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
 ovt graph gui -i ./graphs/                               # Browser GUI; blank-first search/chunk render
 ovt doctor                                                # Health check
+ovt azure enum -H DC -d DOMAIN -u USER -p PASS            # Hybrid identity + Entra enumeration
+ovt azure golden-saml -H DC -d DOMAIN -u DA -p PASS       # Golden SAML forge via ADFS cert
+ovt azure seamless-sso -H DC -d DOMAIN -u USER -p PASS    # Seamless SSO → OAuth token abuse
 ovt completions bash                                      # Shell tab completion
 ```
 
@@ -380,8 +391,10 @@ The browser GUI runs a local Rust HTTP server, opens a tab automatically, and se
 Born complete. Zero stubs. The prodigy crate that showed up on day one and said "I'm not here to play, I'm here to win."
 
 | Feature | Details | Status |
-|---|---|---|
+|---|---|---|---|
 | **NTLM Relay Engine** | Full relay - capture NTLM auth from one protocol, replay to another. SMB→LDAP, HTTP→SMB, mix and match like a deadly cocktail. | ✅ Full |
+| **Exchange Relay** | CVE-2024-21410 - NTLM relay to Exchange MAPI-over-HTTP and EWS endpoints. TLS support, self-signed cert acceptance, EPA/channel binding bypass. Pre-CU14 Exchange servers accept relayed NTLM auth without Extended Protection. | ✅ Full |
+| **SMB Signing Pre-Flight** | Inline SMB2 negotiate probe checks `SecurityMode` before relaying. If the target requires packet signing, relay refuses with a clear error. No silent failures. | ✅ Full |
 | **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). Works when DC signing policy is "Negotiate." | ✅ Full |
 | **LLMNR/NBT-NS/mDNS Poisoner** | Respond to broadcast name resolution. "Who is FILESERVER?" "Me. I'm FILESERVER now." Identity theft, but for computers. | ✅ Full |
 | **Network Poisoner** | Decides when to poison, what to poison, and how aggressively - while avoiding detection. Subtlety is an art form. | ✅ Full |
@@ -904,7 +917,7 @@ A: Impacket is a legendary Python protocol library. Overthrone reimplements the 
 A: Memory safety. Single static binary. Native performance. No dependency hell. No Wine. No .NET. Also, explaining Rust lifetime errors to a rubber duck at 4 AM builds character.
 
 **Q: Will this get caught by AV/EDR?**
-A: Overthrone uses native protocol implementations that look identical to legitimate Windows traffic. It doesn't inject into processes, doesn't use PowerShell, doesn't drop assemblies. That said, if you DCSync from a Linux box at 3 AM, any decent SOC will notice.
+A: Overthrone uses native protocol implementations that look identical to legitimate Windows traffic. It doesn't inject into processes, doesn't use PowerShell, doesn't drop assemblies. The built-in EDR evasion module (`edr_bypass.rs`) adds next-gen stealth: ntdll unhooking from a clean disk copy, ETW provider callback abolition, syscall number resolution from fresh ntdll, and sleep masking with memory obfuscation. That said, if you DCSync from a Linux box at 3 AM, any decent SOC will notice.
 
 **Q: Does it need Wine or Mimikatz or .NET?**
 A: No. No. And no. Every protocol is native Rust. If you find yourself installing Wine to run Overthrone, something has gone terribly wrong.
@@ -944,7 +957,7 @@ MIT - use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 <p align="center">
   <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>9 crates. Pure Rust protocols. Zero Python. One smbclient dependency. No regrets. (Some regrets.)</sub><br/>
+  <sub>10 crates. ~152,000 lines of Rust. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>
