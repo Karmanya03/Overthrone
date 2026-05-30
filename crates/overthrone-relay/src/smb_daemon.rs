@@ -52,6 +52,7 @@ const SMB2_DIALECT_302: u16 = 0x0302;
 const SMB2_DIALECT_311: u16 = 0x0311;
 
 const SMB2_FLAGS_SERVER_TO_REDIR: u32 = 0x0001;
+#[expect(dead_code)]
 const SMB2_FLAGS_SIGNED: u32 = 0x0008;
 
 const STATUS_SUCCESS: u32 = 0x0000_0000;
@@ -557,7 +558,7 @@ impl SmbDaemon {
 
                 let mut final_hasher = Sha512::new();
                 final_hasher.update(&client_salt);
-                final_hasher.update(&hash1);
+                final_hasher.update(hash1);
                 let final_hash = final_hasher.finalize();
                 resp[salt_field_pos..salt_field_pos + 32].copy_from_slice(&final_hash[..32]);
                 debug!("SMB 3.1.1 pre-auth integrity hash computed");
@@ -616,7 +617,7 @@ impl SmbDaemon {
                             resp.extend_from_slice(&9u16.to_le_bytes());
                             resp.push(0x00);
                             resp.push(0x00);
-                            let sec_off = (64 + resp.len() as u16 + 4) as u16;
+                            let sec_off = 64 + resp.len() as u16 + 4;
                             resp.extend_from_slice(&sec_off.to_le_bytes());
                             resp.extend_from_slice(&(spnego.len() as u16).to_le_bytes());
                             while resp.len() < sec_off as usize - 64 {
@@ -641,7 +642,7 @@ impl SmbDaemon {
                 resp.extend_from_slice(&9u16.to_le_bytes());
                 resp.push(0x00);
                 resp.push(0x00);
-                let sec_off = (64 + resp.len() as u16 + 4) as u16;
+                let sec_off = 64 + resp.len() as u16 + 4;
                 resp.extend_from_slice(&sec_off.to_le_bytes());
                 resp.extend_from_slice(&(spnego.len() as u16).to_le_bytes());
                 while resp.len() < sec_off as usize - 64 {
@@ -964,7 +965,7 @@ impl SmbDaemon {
         resp.extend_from_slice(file_id);
         resp.extend_from_slice(&0u32.to_le_bytes());
         resp.extend_from_slice(&0u32.to_le_bytes());
-        let out_off = (64 + resp.len() as u32 + 12) as u32;
+        let out_off = 64 + resp.len() as u32 + 12;
         resp.extend_from_slice(&out_off.to_le_bytes());
         resp.extend_from_slice(&(dce_request.len() as u32).to_le_bytes());
         resp.extend_from_slice(&0u32.to_le_bytes());
@@ -991,7 +992,7 @@ impl SmbDaemon {
     async fn relay_negotiate_and_type1(
         target_host: &str,
         target_port: u16,
-        session: &SmbClientSession,
+        _session: &SmbClientSession,
         victim_negotiate: &[u8],
     ) -> Result<(Vec<u8>, SmbRelaySession)> {
         let addr = format!("{}:{}", target_host, target_port);
@@ -1374,7 +1375,7 @@ impl SmbDaemon {
         body.push(0x00); // SecurityMode
         body.extend_from_slice(&0u16.to_le_bytes()); // Capabilities
         body.extend_from_slice(&0u64.to_le_bytes()); // Channel/Reserved
-        let sec_off = (64 + body.len() as u16 + 4) as u16;
+        let sec_off = 64 + body.len() as u16 + 4;
         body.extend_from_slice(&sec_off.to_le_bytes());
         body.extend_from_slice(&(sec_blob.len() as u16).to_le_bytes());
         body.extend_from_slice(&0u32.to_le_bytes()); // PreviousSessionId
@@ -1716,7 +1717,7 @@ impl SmbDaemon {
     }
 
     /// Extract session key from an NTLM Type 2 challenge's KeyExchange field
-    fn extract_session_key_from_challenge(challenge: &[u8]) -> Vec<u8> {
+    fn extract_session_key_from_challenge(_challenge: &[u8]) -> Vec<u8> {
         // In a relay response, the session key is sometimes embedded in the KeyList or
         // returned as part of the SMB2 session setup response.
         // This is a best-effort extract; the actual key comes from the target's
@@ -1884,7 +1885,7 @@ impl SmbDaemon {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let intervals = now.as_secs() * 10_000_000 + now.subsec_nanos() as u64 / 100;
-        intervals + 11644473600_000_0000
+        intervals + 116_444_736_000_000_000
     }
 
     fn build_smb1_negotiate_response(challenge: [u8; 8], _target_name: &str) -> Vec<u8> {
