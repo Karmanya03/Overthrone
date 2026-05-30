@@ -1,0 +1,128 @@
+﻿cargo : crates\overthrone-core\src\azure_ad.rs:249:38: warning: useless use of `format!`: help: consider using 
+`.to_string()`: `"    ΓÜá Has federated credentials ΓÇö vulnerable to token theft".to_string()`
+At line:1 char:50
++ ... Overthrone; cargo clippy -p overthrone --message-format=short 2>&1 |  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (crates\overthro...t".to_string()`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+crates\overthrone-core\src\azure_ad.rs:252:38: warning: useless use of `format!`: help: consider using `.to_string()`: 
+`"    ΓÜá Has password credentials".to_string()`
+crates\overthrone-core\src\azure_ad.rs:871:28: warning: useless use of `format!`: help: consider using `.to_string()`: 
+`"mi_token_arm: <REDACTED>".to_string()`
+crates\overthrone-core\src\azure_ad.rs:873:17: warning: this `if` statement can be collapsed
+crates\overthrone-core\src\azure_ad.rs:893:5: warning: this `if` statement can be collapsed
+crates\overthrone-core\src\azure_ad.rs:895:13: warning: this `if` statement can be collapsed
+crates\overthrone-core\src\azure_ad.rs:896:17: warning: this `if` statement can be collapsed
+crates\overthrone-core\src\azure_ad.rs:942:13: warning: this `if` statement can be collapsed
+crates\overthrone-core\src\postex\cg_check.rs:526:26: warning: using `clone` on type `CredentialGuardStatus` which 
+implements the `Copy` trait: help: try removing the `clone` call: `reg_result.status`
+crates\overthrone-core\src\postex\cg_check.rs:571:34: warning: using `clone` on type `CredentialGuardStatus` which 
+implements the `Copy` trait: help: try removing the `clone` call: `wmi.status`
+crates\overthrone-core\src\postex\cg_check.rs:592:28: warning: using `clone` on type `CredentialGuardStatus` which 
+implements the `Copy` trait: help: try removing the `clone` call: `heuristic.status`
+crates\overthrone-core\src\postex\cves.rs:43:66: warning: this expression creates a reference which is immediately 
+dereferenced by the compiler: help: change this to: `spoofed_name`
+crates\overthrone-core\src\postex\edr_bypass.rs:468:5: warning: there is no need to manually implement bit rotation: 
+help: this expression can be rewritten as: `val.rotate_left(n)`
+crates\overthrone-core\src\postex\edr_bypass.rs:473:5: warning: there is no need to manually implement bit rotation: 
+help: this expression can be rewritten as: `val.rotate_right(n)`
+crates\overthrone-core\src\postex\edr_bypass.rs:839:33: warning: this expression creates a reference which is 
+immediately dereferenced by the compiler: help: change this to: `std::slice::from_raw_parts(addr as *const u8, 8)`
+crates\overthrone-core\src\postex\edr_bypass.rs:1022:40: warning: useless use of `format!`: help: consider using 
+`.to_string()`: `"VirtualProtect on .text failed".to_string()`
+crates\overthrone-core\src\postex\edr_bypass.rs:1201:46: warning: casting to the same type is unnecessary (`usize` -> 
+`usize`): help: try: `disable_etw_trace_sessions()`
+crates\overthrone-core\src\postex\edr_bypass.rs:1316:34: warning: transmute used without annotations: help: consider 
+adding missing annotations: `transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(u32, *mut 
+std::ffi::c_void, u32, *mut u32) -> i32>`
+crates\overthrone-core\src\postex\edr_bypass.rs:1351:34: warning: transmute used without annotations: help: consider 
+adding missing annotations: `transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(u32, *mut 
+u16, *mut u8, u32) -> i32>`
+warning: `overthrone-core` (lib) generated 19 warnings (run `cargo clippy --fix --lib -p overthrone-core` to apply 17 
+suggestions)
+crates\overthrone-relay\src\smb_daemon.rs:1429:21: warning: digits grouped inconsistently by underscores: help: 
+consider: `116_444_736_000_000_000`
+crates\overthrone-relay\src\smb_daemon.rs:1216:48: warning: unused variable: `session`: help: if this is intentional, 
+prefix it with an underscore: `_session`
+crates\overthrone-relay\src\smb_daemon.rs:1303:43: warning: unused variable: `challenge`: help: if this is 
+intentional, prefix it with an underscore: `_challenge`
+crates\overthrone-relay\src\smb_daemon.rs:55:7: warning: constant `SMB2_FLAGS_SIGNED` is never used
+crates\overthrone-relay\src\smb_daemon.rs:469:37: warning: the borrowed expression implements the required traits: 
+help: change this to: `hash1`
+crates\overthrone-relay\src\smb_daemon.rs:514:43: warning: casting to the same type is unnecessary (`u16` -> `u16`): 
+help: try: `(64 + resp.len() as u16 + 4)`
+crates\overthrone-relay\src\smb_daemon.rs:535:31: warning: casting to the same type is unnecessary (`u16` -> `u16`): 
+help: try: `(64 + resp.len() as u16 + 4)`
+crates\overthrone-relay\src\smb_daemon.rs:749:23: warning: casting to the same type is unnecessary (`u32` -> `u32`): 
+help: try: `(64 + resp.len() as u32 + 12)`
+crates\overthrone-relay\src\smb_daemon.rs:1011:23: warning: casting to the same type is unnecessary (`u16` -> `u16`): 
+help: try: `(64 + body.len() as u16 + 4)`
+warning: `overthrone-relay` (lib) generated 9 warnings (run `cargo clippy --fix --lib -p overthrone-relay` to apply 7 
+suggestions)
+warning: unused variable: `cli`
+    --> crates\overthrone-cli\src\main.rs:2606:18
+     |
+2606 | async fn cmd_edr(cli: &Cli, action: EdrAction) -> i32 {
+     |                  ^^^ help: if this is intentional, prefix it with an underscore: `_cli`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: using `clone` on type `EnumTarget` which implements the `Copy` trait
+    --> crates\overthrone-cli\src\main.rs:1924:29
+     |
+1924 |         } => cmd_enum(&cli, target.clone(), filter.clone(), include_disabled).await,
+     |                             ^^^^^^^^^^^^^^ help: try dereferencing it: `*target`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#clone_on_copy
+     = note: `#[warn(clippy::clone_on_copy)]` on by default
+
+warning: using `clone` on type `DumpSource` which implements the `Copy` trait
+    --> crates\overthrone-cli\src\main.rs:1961:52
+     |
+1961 |         } => commands_impl::cmd_dump(&cli, target, source.clone()).await,
+     |                                                    ^^^^^^^^^^^^^^ help: try dereferencing it: `*source`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#clone_on_copy
+
+warning: using `clone` on type `EdrAction` which implements the `Copy` trait
+    --> crates\overthrone-cli\src\main.rs:2108:55
+     |
+2108 |         Commands::Edr { ref action } => cmd_edr(&cli, action.clone()).await,
+     |                                                       ^^^^^^^^^^^^^^ help: try dereferencing it: `*action`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#clone_on_copy
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates\overthrone-cli\src\main.rs:2509:76
+     |
+2509 |             match overthrone_core::proto::smb::SmbSession::connect(target, &domain, user, pass).await
+     |                                                                            ^^^^^^^ help: change this to: 
+`domain`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+     = note: `#[warn(clippy::needless_borrow)]` on by default
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates\overthrone-cli\src\main.rs:2521:25
+     |
+2521 |                 target, &domain, user, hash,
+     |                         ^^^^^^^ help: change this to: `domain`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates\overthrone-cli\src\main.rs:2555:21
+     |
+2555 |             target, &domain, &ldap_user, ldap_pass, has_hash,
+     |                     ^^^^^^^ help: change this to: `domain`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+
+warning: `overthrone` (bin "ovt") generated 7 warnings (run `cargo clippy --fix --bin "ovt" -p overthrone` to apply 7 
+suggestions)
+warning: `overthrone` (bin "overthrone") generated 7 warnings (7 duplicates)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.54s

@@ -815,7 +815,6 @@ fn detect_edr_drivers_impl() -> Vec<String> {
     found
 }
 
-#[cfg(target_os = "windows")]
 fn classify_edr_process(name: &str) -> EdrProduct {
     let n = name.to_lowercase();
     if n.contains("crowdstrike") || n.contains("csagent") || n.contains("csfalcon") {

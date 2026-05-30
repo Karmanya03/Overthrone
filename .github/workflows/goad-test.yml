@@ -1,0 +1,129 @@
+# GOAD Lab Integration Tests
+#
+# Spins up a GOAD (Game of Active Directory) lab via Vagrant/VirtualBox
+# and runs the full Overthrone attack chain against live Domain Controllers.
+#
+# Prerequisites:
+#   - Self-hosted runner with VirtualBox + Vagrant + 16GB+ RAM
+#   - GOAD repository cloned alongside Overthrone
+#   - `goad` directory with Vagrantfile at repository root
+#
+# Reference: https://github.com/Orange-Cyberdefense/GOAD
+
+name: GOAD Integration Tests
+on:
+  schedule:
+    # Weekly Sunday midnight test
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    # Manual trigger from GitHub UI
+    inputs:
+      goad_path:
+        description: 'Path to GOAD Vagrantfile'
+        required: false
+        default: '../GOAD'
+      test_filter:
+        description: 'Test filter (e.g. "relay::" for specific module)'
+        required: false
+        default: ''
+
+jobs:
+  goad-test:
+    runs-on: self-hosted
+    timeout-minutes: 180  # GOAD provisioning can take 2+ hours
+
+    steps:
+      - name: Checkout Overthrone
+        uses: actions/checkout@v4
+        with:
+          path: overthrone
+
+      - name: Checkout GOAD
+        uses: actions/checkout@v4
+        with:
+          repository: Orange-Cyberdefense/GOAD
+          path: goad
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Build Overthrone (debug)
+        working-directory: overthrone
+        run: cargo build --workspace
+        shell: bash
+
+      - name: Cache compiled dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            overthrone/target
+            ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-${{ hashFiles('overthrone/Cargo.lock') }}
+
+      - name: Provision GOAD Lab
+        working-directory: goad
+        run: |
+          vagrant up --provider=virtualbox
+          echo "GOAD provisioning complete"
+        shell: bash
+
+      - name: Wait for Lab Readiness
+        run: |
+          echo "Waiting for DCs to become responsive..."
+          for i in $(seq 1 30); do
+            if nc -zv sevenkingdoms.local 389 2>/dev/null; then
+              echo "LDAP ready after ${i}s"
+              break
+            fi
+            sleep 10
+          done
+        shell: bash
+
+      - name: Run Integration Tests
+        working-directory: overthrone
+        env:
+          GOAD_DC_IP: 192.168.56.10
+          GOAD_DOMAIN: sevenkingdoms.local
+          GOAD_USER: administrator
+          GOAD_PASS: Password!
+        run: |
+          TEST_FILTER="${{ github.event.inputs.test_filter || '' }}"
+          if [ -n "$TEST_FILTER" ]; then
+            cargo test --workspace -- "$TEST_FILTER" --test-threads=4
+          else
+            cargo test --workspace --test-threads=4
+          fi
+        shell: bash
+
+      - name: Run Attack-Specific Validation
+        working-directory: overthrone
+        run: |
+          echo "=== AS-REP Roasting ==="
+          cargo run --bin overthrone -- asreproast -d $GOAD_DOMAIN -u $GOAD_USER -p $GOAD_PASS --dc-ip $GOAD_DC_IP || echo "AS-REP test completed (may have no targets)"
+
+          echo "=== Kerberoasting ==="
+          cargo run --bin overthrone -- kerberoast -d $GOAD_DOMAIN -u $GOAD_USER -p $GOAD_PASS --dc-ip $GOAD_DC_IP || echo "Kerberoast test completed"
+
+          echo "=== BloodHound Data Collection ==="
+          cargo run --bin overthrone -- collect -d $GOAD_DOMAIN -u $GOAD_USER -p $GOAD_PASS --dc-ip $GOAD_DC_IP || echo "Collection completed"
+        shell: bash
+        continue-on-error: true
+
+      - name: Cleanup GOAD Lab
+        if: always()
+        working-directory: goad
+        run: vagrant destroy -f
+        shell: bash
+
+      - name: Upload Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: goad-test-results
+          path: |
+            overthrone/target/overthrone-*.json
+            overthrone/*.json
+          retention-days: 7

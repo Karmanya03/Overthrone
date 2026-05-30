@@ -1,0 +1,340 @@
+﻿cargo :     Checking overthrone-core v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-core)
+At line:1 char:50
++ ... Documents\VSCFiles1\Overthrone; cargo clippy --workspace 2>&1 | Out-F ...
++                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking ov...verthrone-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Checking overthrone-viewer v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-viewer)
+warning: useless use of `format!`
+   --> crates\overthrone-core\src\azure_ad.rs:249:38
+    |
+249 | ...                   log.push(format!("    ΓÜá Has federated credentials ΓÇö vulnerable to token theft"));
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: 
+consider using `.to_string()`: `"    ΓÜá Has federated credentials ΓÇö vulnerable to token theft".to_string()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#useless_format
+    = note: `#[warn(clippy::useless_format)]` on by default
+
+warning: useless use of `format!`
+   --> crates\overthrone-core\src\azure_ad.rs:252:38
+    |
+252 | ...                   log.push(format!("    ΓÜá Has password credentials"));
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `.to_string()`: `" 
+   ΓÜá Has password credentials".to_string()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#useless_format
+
+warning: useless use of `format!`
+   --> crates\overthrone-core\src\azure_ad.rs:871:28
+    |
+871 |                 creds.push(format!("mi_token_arm: <REDACTED>"));
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `.to_string()`: 
+`"mi_token_arm: <REDACTED>".to_string()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#useless_format
+
+warning: this `if` statement can be collapsed
+   --> crates\overthrone-core\src\azure_ad.rs:873:17
+    |
+873 | /                 if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body) {
+874 | |                     if let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+875 | |                         creds.push(format!("mi_token_arm: {:.100}...", token));
+876 | |                     }
+877 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+873 ~                 if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body)
+874 ~                     && let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+875 |                         creds.push(format!("mi_token_arm: {:.100}...", token));
+876 ~                     }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\overthrone-core\src\azure_ad.rs:893:5
+    |
+893 | /     if let Ok(r) = client.get(&graph_url).header("Metadata", "true").send().await {
+894 | |         if r.status().is_success() {
+895 | |             if let Ok(body) = r.text().await {
+896 | |                 if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body) {
+...   |
+904 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+893 ~     if let Ok(r) = client.get(&graph_url).header("Metadata", "true").send().await
+894 ~         && r.status().is_success() {
+895 |             if let Ok(body) = r.text().await {
+...
+902 |             creds.push("mi_token_graph: <present>".to_string());
+903 ~         }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\overthrone-core\src\azure_ad.rs:895:13
+    |
+895 | /             if let Ok(body) = r.text().await {
+896 | |                 if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body) {
+897 | |                     if let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+898 | |                         creds.push(format!("mi_token_graph: {:.100}...", token));
+...   |
+901 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+895 ~             if let Ok(body) = r.text().await
+896 ~                 && let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body) {
+897 |                     if let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+898 |                         creds.push(format!("mi_token_graph: {:.100}...", token));
+899 |                     }
+900 ~                 }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\overthrone-core\src\azure_ad.rs:896:17
+    |
+896 | /                 if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body) {
+897 | |                     if let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+898 | |                         creds.push(format!("mi_token_graph: {:.100}...", token));
+899 | |                     }
+900 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+896 ~                 if let Ok(json) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&body)
+897 ~                     && let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+898 |                         creds.push(format!("mi_token_graph: {:.100}...", token));
+899 ~                     }
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates\overthrone-core\src\azure_ad.rs:942:13
+    |
+942 | /             if let Ok(r) = client.get(&url).send().await {
+943 | |                 if r.status().is_success() {
+944 | |                     let text = r.text().await.unwrap_or_default();
+945 | |                     if text.contains("microsoft") || text.contains("azure") || text.contains("username") {
+...   |
+956 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+942 ~             if let Ok(r) = client.get(&url).send().await
+943 ~                 && r.status().is_success() {
+944 |                     let text = r.text().await.unwrap_or_default();
+...
+954 |                     }
+955 ~                 }
+    |
+
+warning: using `clone` on type `CredentialGuardStatus` which implements the `Copy` trait
+   --> crates\overthrone-core\src\postex\cg_check.rs:526:26
+    |
+526 |         let reg_status = reg_result.status.clone();
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `reg_result.status`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#clone_on_copy
+    = note: `#[warn(clippy::clone_on_copy)]` on by default
+
+warning: using `clone` on type `CredentialGuardStatus` which implements the `Copy` trait
+   --> crates\overthrone-core\src\postex\cg_check.rs:571:34
+    |
+571 |                 let wmi_status = wmi.status.clone();
+    |                                  ^^^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `wmi.status`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#clone_on_copy
+
+warning: using `clone` on type `CredentialGuardStatus` which implements the `Copy` trait
+   --> crates\overthrone-core\src\postex\cg_check.rs:592:28
+    |
+592 |     let heuristic_status = heuristic.status.clone();
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `heuristic.status`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#clone_on_copy
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+  --> crates\overthrone-core\src\postex\cves.rs:43:66
+   |
+43 |     let tgt = crate::proto::kerberos::request_tgt(dc_ip, domain, &spoofed_name, password, false)
+   |                                                                  ^^^^^^^^^^^^^ help: change this to: 
+`spoofed_name`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+   = note: `#[warn(clippy::needless_borrow)]` on by default
+
+warning: there is no need to manually implement bit rotation
+   --> crates\overthrone-core\src\postex\edr_bypass.rs:468:5
+    |
+468 |     (val << n) | (val >> (8 - n))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: this expression can be rewritten as: `val.rotate_left(n)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_rotate
+    = note: `#[warn(clippy::manual_rotate)]` on by default
+
+warning: there is no need to manually implement bit rotation
+   --> crates\overthrone-core\src\postex\edr_bypass.rs:473:5
+    |
+473 |     (val >> n) | (val << (8 - n))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: this expression can be rewritten as: `val.rotate_right(n)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_rotate
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates\overthrone-core\src\postex\edr_bypass.rs:839:33
+    |
+839 | ...                   &std::slice::from_raw_parts(addr as *const u8, 8)
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: 
+`std::slice::from_raw_parts(addr as *const u8, 8)`
+    |
+    = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+
+warning: useless use of `format!`
+    --> crates\overthrone-core\src\postex\edr_bypass.rs:1022:40
+     |
+1022 |                     result.errors.push(format!("VirtualProtect on .text failed"));
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using 
+`.to_string()`: `"VirtualProtect on .text failed".to_string()`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#useless_format
+
+warning: casting to the same type is unnecessary (`usize` -> `usize`)
+    --> crates\overthrone-core\src\postex\edr_bypass.rs:1201:46
+     |
+1201 |             result.trace_sessions_disabled = disable_etw_trace_sessions() as usize;
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: 
+`disable_etw_trace_sessions()`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+     = note: `#[warn(clippy::unnecessary_cast)]` on by default
+
+warning: transmute used without annotations
+    --> crates\overthrone-core\src\postex\edr_bypass.rs:1316:34
+     |
+1316 |             Some(p) => std::mem::transmute::<_, NtQuerySystemInformation>(p),
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider adding missing 
+annotations: `transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(u32, *mut std::ffi::c_void, 
+u32, *mut u32) -> i32>`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_transmute_annotations
+     = note: `#[warn(clippy::missing_transmute_annotations)]` on by default
+
+warning: transmute used without annotations
+    --> crates\overthrone-core\src\postex\edr_bypass.rs:1351:34
+     |
+1351 |             Some(p) => std::mem::transmute::<_, NtControlTrace>(p),
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider adding missing annotations: 
+`transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(u32, *mut u16, *mut u8, u32) -> i32>`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_transmute_annotations
+
+warning: `overthrone-core` (lib) generated 19 warnings (run `cargo clippy --fix --lib -p overthrone-core` to apply 17 
+suggestions)
+    Checking overthrone-relay v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-relay)
+    Checking overthrone-reaper v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-reaper)
+    Checking overthrone-forge v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-forge)
+warning: digits grouped inconsistently by underscores
+    --> crates\overthrone-relay\src\smb_daemon.rs:1429:21
+     |
+1429 |         intervals + 11644473600_000_0000
+     |                     ^^^^^^^^^^^^^^^^^^^^ help: consider: `116_444_736_000_000_000`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#inconsistent_digit_grouping
+     = note: `#[warn(clippy::inconsistent_digit_grouping)]` on by default
+
+warning: unused variable: `session`
+    --> crates\overthrone-relay\src\smb_daemon.rs:1216:48
+     |
+1216 |     fn extract_ntlmssp_from_smb2_session_setup(session: &SmbClientSession) -> Vec<u8> {
+     |                                                ^^^^^^^ help: if this is intentional, prefix it with an 
+underscore: `_session`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `challenge`
+    --> crates\overthrone-relay\src\smb_daemon.rs:1303:43
+     |
+1303 |     fn extract_session_key_from_challenge(challenge: &[u8]) -> Vec<u8> {
+     |                                           ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: 
+`_challenge`
+
+warning: constant `SMB2_FLAGS_SIGNED` is never used
+  --> crates\overthrone-relay\src\smb_daemon.rs:55:7
+   |
+55 | const SMB2_FLAGS_SIGNED: u32 = 0x0008;
+   |       ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: the borrowed expression implements the required traits
+   --> crates\overthrone-relay\src\smb_daemon.rs:469:37
+    |
+469 |                 final_hasher.update(&hash1);
+    |                                     ^^^^^^ help: change this to: `hash1`
+    |
+    = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+    = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+
+warning: casting to the same type is unnecessary (`u16` -> `u16`)
+   --> crates\overthrone-relay\src\smb_daemon.rs:514:43
+    |
+514 | ...                   let sec_off = (64 + resp.len() as u16 + 4) as u16;
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `(64 + resp.len() as u16 + 4)`
+    |
+    = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+    = note: `#[warn(clippy::unnecessary_cast)]` on by default
+
+warning: casting to the same type is unnecessary (`u16` -> `u16`)
+   --> crates\overthrone-relay\src\smb_daemon.rs:535:31
+    |
+535 |                 let sec_off = (64 + resp.len() as u16 + 4) as u16;
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `(64 + resp.len() as u16 + 4)`
+    |
+    = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+
+warning: casting to the same type is unnecessary (`u32` -> `u32`)
+   --> crates\overthrone-relay\src\smb_daemon.rs:749:23
+    |
+749 |         let out_off = (64 + resp.len() as u32 + 12) as u32;
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `(64 + resp.len() as u32 + 12)`
+    |
+    = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+
+warning: casting to the same type is unnecessary (`u16` -> `u16`)
+    --> crates\overthrone-relay\src\smb_daemon.rs:1011:23
+     |
+1011 |         let sec_off = (64 + body.len() as u16 + 4) as u16;
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `(64 + body.len() as u16 + 4)`
+     |
+     = help: for further information visit 
+https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+
+warning: `overthrone-relay` (lib) generated 9 warnings (run `cargo clippy --fix --lib -p overthrone-relay` to apply 7 
+suggestions)
+    Checking overthrone-hunter v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-hunter)
+    Checking overthrone-crawler v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-crawler)
+    Checking overthrone-pilot v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-pilot)
+    Checking overthrone-scribe v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-scribe)
+    Checking overthrone v0.2.1-beta (C:\Users\ACER\Documents\VSCFiles1\Overthrone\crates\overthrone-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 46s

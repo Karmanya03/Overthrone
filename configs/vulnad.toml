@@ -1,0 +1,28 @@
+# VulnAD Engagement Config
+# Target: VulnAD lab (WS2025 DC + Member Server)
+# Kali: 192.168.6.20
+# WS2025 DC: 192.168.6.10
+# WS2025 Member: 192.168.5.145
+
+[general]
+domain = "vulnad.local"
+dc_host = "192.168.6.10"
+targets = ["192.168.6.10", "192.168.5.145"]
+timeout_secs = 60
+
+[auth]
+# Replace with your VulnAD creds
+username = ""
+password = ""
+# Or use NT hash
+# nt_hash = ""
+
+[stealth]
+jitter_ms = 1000
+randomize_order = true
+avoid_honeypots = true
+
+[pilot]
+adaptive = "hybrid"
+max_stage = "loot"
+# q_table = "./vulnad_brain.json"  # Persistent Q-learning brain
