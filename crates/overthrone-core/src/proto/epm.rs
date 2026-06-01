@@ -11,6 +11,8 @@
 use crate::error::{OverthroneError, Result};
 use crate::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tracing::{debug, info};
 
 // ═══════════════════════════════════════════════════════════
@@ -91,7 +93,11 @@ pub struct EpEndpoint {
 // ═══════════════════════════════════════════════════════════
 
 /// Build DCE/RPC bind request for a given interface UUID.
-fn build_rpc_bind(interface_uuid: &[u8; 16], version_major: u16, version_minor: u16) -> Vec<u8> {
+pub fn build_rpc_bind(
+    interface_uuid: &[u8; 16],
+    version_major: u16,
+    version_minor: u16,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     // RPC header
     buf.extend_from_slice(&[5, 0]); // version 5.0
@@ -123,7 +129,7 @@ fn build_rpc_bind(interface_uuid: &[u8; 16], version_major: u16, version_minor: 
 }
 
 /// Build DCE/RPC request PDU with opnum and stub data.
-fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
+pub fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
     let mut pdu = vec![5, 0, 0, 0x03]; // version 5.0, type=Request, flags=first+last
     pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR data representation
     let frag_len = (24 + stub_data.len()) as u16;
@@ -138,7 +144,7 @@ fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 }
 
 /// Check if RPC bind was accepted.
-fn is_bind_accepted(resp: &[u8]) -> bool {
+pub fn is_bind_accepted(resp: &[u8]) -> bool {
     resp.len() > 30 && resp[28] == 0 && resp[29] == 0
 }
 
@@ -164,7 +170,7 @@ fn build_close_handle(handle: &[u8]) -> Vec<u8> {
 //  NDR Encoding Helpers
 // ═══════════════════════════════════════════════════════════
 
-fn ndr_conformant_string(s: &str) -> Vec<u8> {
+pub fn ndr_conformant_string(s: &str) -> Vec<u8> {
     let utf16: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
     let bytes: Vec<u8> = utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
     let count = utf16.len() as u32;
@@ -734,6 +740,181 @@ async fn enumerate_epmapper(smb: &SmbSession) -> Result<Vec<EpEndpoint>> {
     let endpoints = parse_epm_endpoints(&map_resp);
 
     Ok(endpoints)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  TCP-based EPM resolution
+// ═══════════════════════════════════════════════════════════
+
+/// Write a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
+async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
+    let len = (pdu.len() as u32).to_le_bytes();
+    stream.write_all(&len).await.map_err(|e| {
+        OverthroneError::custom(format!("BTF write failed: {e}"))
+    })?;
+    stream.write_all(pdu).await.map_err(|e| {
+        OverthroneError::custom(format!("BTF write PDU failed: {e}"))
+    })?;
+    Ok(())
+}
+
+/// Read a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
+async fn btf_read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await.map_err(|e| {
+        OverthroneError::custom(format!("BTF read length failed: {e}"))
+    })?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > 1_048_576 {
+        return Err(OverthroneError::custom(format!(
+            "BTF frame too large: {len} bytes"
+        )));
+    }
+    let mut buf = vec![0u8; len];
+    stream.read_exact(&mut buf).await.map_err(|e| {
+        OverthroneError::custom(format!("BTF read data failed: {e}"))
+    })?;
+    Ok(buf)
+}
+
+/// Build an ept_map (opnum 3) request for a specific interface UUID.
+/// Queries the endpoint mapper for TCP binding information.
+fn build_ept_map_request_uuid(interface_uuid: &[u8; 16]) -> Vec<u8> {
+    let mut pkt = Vec::with_capacity(128);
+
+    // DCE/RPC header (request)
+    pkt.push(5);
+    pkt.push(0);
+    pkt.push(0);
+    pkt.push(0x03);
+    pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
+    pkt.extend_from_slice(&[0x00, 0x00]);
+    pkt.extend_from_slice(&[0x00, 0x00]);
+    pkt.extend_from_slice(&1u32.to_le_bytes());
+
+    // Request body
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    pkt.extend_from_slice(&[0x00, 0x00]);
+    pkt.extend_from_slice(&[0x03, 0x00]);
+
+    // ept_map inputs
+    pkt.extend_from_slice(&[0u8; 16]);
+    let tower_len: u32 = 75;
+    pkt.extend_from_slice(&tower_len.to_le_bytes());
+    pkt.extend_from_slice(&tower_len.to_le_bytes());
+
+    // Floor 1: Interface UUID
+    pkt.extend_from_slice(&[0x05, 0x00]);
+    pkt.push(0x0D);
+    pkt.extend_from_slice(interface_uuid);
+    pkt.extend_from_slice(&[0x00, 0x00]);
+
+    // Floor 2: NDR transfer syntax
+    pkt.push(0x0D);
+    pkt.extend_from_slice(&[
+        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
+        0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+    ]);
+    pkt.extend_from_slice(&[0x02, 0x00]);
+
+    // Floor 3: NCACN
+    pkt.push(0x09);
+    pkt.extend_from_slice(&[0x00, 0x00]);
+
+    // Floor 4: TCP
+    pkt.push(0x07);
+    pkt.extend_from_slice(&[0x00, 0x00]);
+
+    // Floor 5: IP
+    pkt.push(0x09);
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    pkt.extend_from_slice(&4u32.to_le_bytes());
+
+    // Fix frag length
+    let len = pkt.len() as u16;
+    pkt[8] = (len & 0xFF) as u8;
+    pkt[9] = (len >> 8) as u8;
+
+    pkt
+}
+
+/// Parse ept_map response to extract the TCP port from tower data.
+/// Returns the port number, or 0 if not found.
+fn parse_ept_map_tcp_port(response: &[u8]) -> u16 {
+    if response.len() < 40 {
+        return 0;
+    }
+    for i in 24..response.len().saturating_sub(3) {
+        if response[i] == 0x07 && response[i + 1] != 0 && response[i + 2] != 0 {
+            let port = u16::from_be_bytes([response[i + 1], response[i + 2]]);
+            if (1024..=65535).contains(&port) {
+                debug!("EPM TCP: Resolved dynamic port {port}");
+                return port;
+            }
+        }
+    }
+    0
+}
+
+/// Parse ept_map response to extract the IPv4 address from tower data.
+/// Returns the address as a string, or None if not found.
+fn parse_ept_map_addr(response: &[u8]) -> Option<String> {
+    for i in 24..response.len().saturating_sub(7) {
+        if response[i] == 0x09 && response[i + 1] == 0x00 {
+            let a = response[i + 2];
+            let b = response[i + 3];
+            let c = response[i + 4];
+            let d = response[i + 5];
+            if a != 0 || b != 0 || c != 0 || d != 0 {
+                return Some(format!("{a}.{b}.{c}.{d}"));
+            }
+        }
+    }
+    None
+}
+
+/// Resolve an RPC interface UUID to a TCP endpoint by querying the
+/// Endpoint Mapper over TCP (port 135).
+///
+/// Returns `(host, port)` on success.
+pub async fn resolve_uuid_via_epm_tcp(
+    target: &str,
+    interface_uuid: &[u8; 16],
+) -> Result<(String, u16)> {
+    let addr = format!("{target}:135");
+    debug!("EPM TCP: Connecting to {addr}");
+
+    let mut stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("EPM TCP connect to {addr} failed: {e}")))?;
+
+    // Bind to EPM v3.0
+    let bind_req = build_rpc_bind(&EPMAPPER_UUID, 3, 0);
+    btf_write_frame(&mut stream, &bind_req).await?;
+
+    let bind_resp = btf_read_frame(&mut stream).await?;
+    if !is_bind_accepted(&bind_resp) {
+        return Err(OverthroneError::custom("EPM TCP bind rejected"));
+    }
+
+    // ept_map (opnum 3) for the target interface
+    let map_req = build_ept_map_request_uuid(interface_uuid);
+    btf_write_frame(&mut stream, &map_req).await?;
+
+    let map_resp = btf_read_frame(&mut stream).await?;
+    let port = parse_ept_map_tcp_port(&map_resp);
+
+    if port == 0 {
+        return Err(OverthroneError::custom(
+            "EPM TCP: no TCP endpoint found for interface".to_string(),
+        ));
+    }
+
+    let host = parse_ept_map_addr(&map_resp).unwrap_or_else(|| target.to_string());
+
+    debug!("EPM TCP: {target} interface resolved to {host}:{port}");
+    Ok((host, port))
 }
 
 // ═══════════════════════════════════════════════════════════

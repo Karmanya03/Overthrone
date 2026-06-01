@@ -24,6 +24,7 @@
 
 pub mod acl_backdoor;
 pub mod bronze_bit;
+pub mod cert_store;
 pub mod cleanup;
 pub mod convert;
 pub mod dcsync_user;
@@ -40,6 +41,7 @@ pub mod skeleton;
 pub mod stealth;
 pub mod validate;
 
+pub use cert_store::{request_cert_via_rpc, request_cert_via_rpc_with_creds};
 pub use runner::{ForgeConfig, ForgeResult, run_forge};
 pub use shadow_credentials::{
     ShadowCredentialsConfig, ShadowCredentialsResult, execute as shadow_credentials_attack,

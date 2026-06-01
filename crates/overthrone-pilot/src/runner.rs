@@ -1530,3 +1530,268 @@ pub async fn run_playbook(playbook_id: PlaybookId, config: &AutoPwnConfig) -> Au
         steps_failed,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Credentials ──
+
+    #[test]
+    fn credentials_password_constructor() {
+        let cred = Credentials::password("test.local", "admin", "Passw0rd!");
+        assert_eq!(cred.domain, "test.local");
+        assert_eq!(cred.username, "admin");
+        assert_eq!(cred.secret(), "Passw0rd!");
+        assert!(!cred.is_hash());
+    }
+
+    #[test]
+    fn credentials_ntlm_hash_constructor() {
+        let cred = Credentials::ntlm_hash("dom", "user", "aad3b435b51404eeaad3b435b51404ee");
+        assert_eq!(cred.secret(), "aad3b435b51404eeaad3b435b51404ee");
+        assert!(cred.is_hash());
+    }
+
+    #[test]
+    fn credentials_to_snapshot_round_trip() {
+        let cred = Credentials::password("domain.test", "sa", "secret123");
+        let snap = cred.to_snapshot();
+        assert_eq!(snap.domain, "domain.test");
+        assert!(!snap.is_hash);
+
+        let restored = Credentials::from_snapshot(snap);
+        assert_eq!(restored.secret(), "secret123");
+    }
+
+    // ── Stage ordering ──
+
+    #[test]
+    fn stage_order_is_correct() {
+        assert!(Stage::Enumerate < Stage::Attack);
+        assert!(Stage::Attack < Stage::Escalate);
+        assert!(Stage::Escalate < Stage::Lateral);
+        assert!(Stage::Lateral < Stage::Loot);
+        assert!(Stage::Loot < Stage::Cleanup);
+    }
+
+    #[test]
+    fn stage_display_returns_short_label() {
+        assert_eq!(Stage::Enumerate.to_string(), "ENUM");
+        assert_eq!(Stage::Attack.to_string(), "ATTACK");
+        assert_eq!(Stage::Escalate.to_string(), "ESCALATE");
+        assert_eq!(Stage::Lateral.to_string(), "LATERAL");
+        assert_eq!(Stage::Loot.to_string(), "LOOT");
+        assert_eq!(Stage::Cleanup.to_string(), "CLEANUP");
+    }
+
+    #[test]
+    fn stage_is_cleanup_when_ord_5() {
+        assert_eq!(Stage::Cleanup as isize, 5);
+    }
+
+    #[test]
+    fn stage_discriminants_are_sequential() {
+        assert_eq!(Stage::Enumerate as isize + 1, Stage::Attack as isize);
+        assert_eq!(Stage::Attack as isize + 1, Stage::Escalate as isize);
+        assert_eq!(Stage::Escalate as isize + 1, Stage::Lateral as isize);
+        assert_eq!(Stage::Lateral as isize + 1, Stage::Loot as isize);
+        assert_eq!(Stage::Loot as isize + 1, Stage::Cleanup as isize);
+    }
+
+    // ── ExecMethod display ──
+
+    #[test]
+    fn exec_method_display() {
+        assert_eq!(ExecMethod::Auto.to_string(), "auto");
+        assert_eq!(ExecMethod::PsExec.to_string(), "psexec");
+        assert_eq!(ExecMethod::SmbExec.to_string(), "smbexec");
+        assert_eq!(ExecMethod::WmiExec.to_string(), "wmiexec");
+        assert_eq!(ExecMethod::WinRm.to_string(), "winrm");
+    }
+
+    // ── AutoPwnConfig::goal() ──
+
+    fn sample_config(target: &str) -> AutoPwnConfig {
+        AutoPwnConfig {
+            dc_host: "10.0.0.1".into(),
+            creds: Credentials::password("test.local", "user", "pass"),
+            target: target.into(),
+            max_stage: Stage::Loot,
+            stealth: false,
+            dry_run: true,
+            exec_method: ExecMethod::Auto,
+            jitter_ms: 500,
+            use_ldaps: false,
+            timeout: 30,
+            userlist: None,
+            #[cfg(feature = "qlearn")]
+            adaptive_mode: AdaptiveMode::Heuristic,
+            #[cfg(feature = "qlearn")]
+            q_table_path: std::path::PathBuf::from("test.json"),
+            initial_state: None,
+        }
+    }
+
+    #[test]
+    fn goal_domain_admins() {
+        let config = sample_config("Domain Admins");
+        assert!(matches!(config.goal(), AttackGoal::DomainAdmin { .. }));
+    }
+
+    #[test]
+    fn goal_da_abbreviation() {
+        let config = sample_config("da");
+        assert!(matches!(config.goal(), AttackGoal::DomainAdmin { .. }));
+    }
+
+    #[test]
+    fn goal_ntds() {
+        let config = sample_config("ntds");
+        assert!(matches!(config.goal(), AttackGoal::DumpNtds { .. }));
+    }
+
+    #[test]
+    fn goal_recon() {
+        let config = sample_config("recon");
+        assert!(matches!(config.goal(), AttackGoal::ReconOnly));
+    }
+
+    #[test]
+    fn goal_enum() {
+        let config = sample_config("enum");
+        assert!(matches!(config.goal(), AttackGoal::ReconOnly));
+    }
+
+    #[test]
+    fn goal_host_target() {
+        let config = sample_config("DC01.test.local");
+        assert!(matches!(config.goal(), AttackGoal::CompromiseHost { .. }));
+    }
+
+    #[test]
+    fn goal_user_target() {
+        let config = sample_config("DOMAIN\\jsmith");
+        assert!(matches!(config.goal(), AttackGoal::CompromiseUser { .. }));
+    }
+
+    #[test]
+    fn goal_user_target_upn_contains_dot_falls_to_host() {
+        // `jsmith@test.local` contains '.' so it matches host branch first
+        let config = sample_config("jsmith@test.local");
+        assert!(matches!(config.goal(), AttackGoal::CompromiseHost { .. }));
+    }
+
+    #[test]
+    fn goal_unknown_falls_back_to_domain_admin() {
+        let config = sample_config("some random text");
+        assert!(matches!(config.goal(), AttackGoal::DomainAdmin { .. }));
+    }
+
+    // ── AutoPwnConfig::exec_context() ──
+
+    #[test]
+    fn exec_context_uses_password_when_not_hash() {
+        let config = sample_config("recon");
+        let ctx = config.exec_context();
+        assert_eq!(ctx.dc_ip, "10.0.0.1");
+        assert_eq!(ctx.domain, "test.local");
+        assert_eq!(ctx.username, "user");
+        assert_eq!(ctx.secret, "pass");
+        assert!(!ctx.use_hash);
+    }
+
+    #[test]
+    fn exec_context_increases_jitter_in_stealth_mode() {
+        let mut config = sample_config("recon");
+        config.stealth = true;
+        config.jitter_ms = 100;
+        let ctx = config.exec_context();
+        assert!(ctx.jitter_ms >= 2000);
+    }
+
+    #[test]
+    fn exec_context_normal_jitter_when_not_stealth() {
+        let config = sample_config("recon");
+        let ctx = config.exec_context();
+        assert_eq!(ctx.jitter_ms, 500);
+    }
+
+    #[test]
+    fn exec_context_dry_run_preserved() {
+        let config = sample_config("recon");
+        let ctx = config.exec_context();
+        assert!(ctx.dry_run);
+    }
+
+    #[test]
+    fn exec_context_ldaps_preserved() {
+        let mut config = sample_config("recon");
+        config.use_ldaps = true;
+        let ctx = config.exec_context();
+        assert!(ctx.use_ldaps);
+    }
+
+    // ── AutoPwnConfig snapshot round-trip ──
+
+    #[test]
+    fn config_snapshot_round_trip() {
+        let config = sample_config("Domain Admins");
+        let snap = config.to_snapshot();
+        assert_eq!(snap.dc_host, "10.0.0.1");
+        assert_eq!(snap.target, "Domain Admins");
+        assert!(!snap.stealth);
+        assert!(snap.dry_run);
+
+        let restored = AutoPwnConfig::from_snapshot(snap);
+        assert_eq!(restored.dc_host, "10.0.0.1");
+        assert_eq!(restored.target, "Domain Admins");
+        assert!(!restored.stealth);
+        assert!(restored.dry_run);
+        assert_eq!(restored.jitter_ms, 500);
+        assert_eq!(restored.timeout, 30);
+    }
+
+    #[test]
+    fn config_snapshot_stealth_preserved() {
+        let mut config = sample_config("recon");
+        config.stealth = true;
+        let snap = config.to_snapshot();
+        assert!(snap.stealth);
+
+        let restored = AutoPwnConfig::from_snapshot(snap);
+        assert!(restored.stealth);
+    }
+
+    // ── truncate_output ──
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate_output("hello", 100), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_cut() {
+        let long = "a".repeat(200);
+        let result = truncate_output(&long, 50);
+        // 49 ASCII chars + 3-byte '…' = 52 bytes
+        assert_eq!(result.len(), 52, "Expected 49 chars + 3-byte ellipsis");
+        assert!(result.ends_with('…'));
+        // Character count should be exactly 50
+        assert_eq!(result.chars().count(), 50);
+    }
+
+    #[test]
+    fn truncate_removes_newlines() {
+        let s = "line1\nline2\rline3";
+        let result = truncate_output(s, 200);
+        assert!(!result.contains('\n'));
+        assert!(!result.contains('\r'));
+    }
+
+    #[test]
+    fn truncate_exact_length_no_ellipsis() {
+        let s = "hello world";
+        assert_eq!(truncate_output(s, 11), "hello world");
+    }
+}

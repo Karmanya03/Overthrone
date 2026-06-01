@@ -238,3 +238,129 @@ fn join_limited<'a>(items: impl Iterator<Item = &'a str>, limit: usize) -> Strin
         values.join(", ")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── sanitize_name ──
+
+    #[test]
+    fn sanitize_name_keeps_alphanumeric() {
+        assert_eq!(sanitize_name("test.local"), "test_local");
+    }
+
+    #[test]
+    fn sanitize_name_lowercases() {
+        assert_eq!(sanitize_name("TEST.DOMAIN"), "test_domain");
+    }
+
+    #[test]
+    fn sanitize_name_replaces_special_chars() {
+        assert_eq!(sanitize_name("dc-01.test_local"), "dc_01_test_local");
+    }
+
+    #[test]
+    fn sanitize_name_empty_falls_back() {
+        assert_eq!(sanitize_name("!@#$"), "unknown");
+    }
+
+    #[test]
+    fn sanitize_name_keeps_dots_and_dashes() {
+        assert_eq!(sanitize_name("dc01.ad.test"), "dc01_ad_test");
+    }
+
+    // ── sanitize_inline ──
+
+    #[test]
+    fn sanitize_inline_removes_newlines() {
+        assert_eq!(sanitize_inline("hello\nworld"), "hello world");
+    }
+
+    #[test]
+    fn sanitize_inline_removes_carriage_returns() {
+        assert_eq!(sanitize_inline("line1\rline2"), "line1 line2");
+    }
+
+    #[test]
+    fn sanitize_inline_unchanged_when_clean() {
+        assert_eq!(sanitize_inline("hello world"), "hello world");
+    }
+
+    #[test]
+    fn sanitize_inline_handles_empty() {
+        assert_eq!(sanitize_inline(""), "");
+    }
+
+    // ── join_limited ──
+
+    #[test]
+    fn join_limited_empty() {
+        assert_eq!(join_limited(std::iter::empty(), 5), "none");
+    }
+
+    #[test]
+    fn join_limited_under_limit() {
+        let items = ["a", "b", "c"];
+        assert_eq!(join_limited(items.iter().copied(), 5), "a, b, c");
+    }
+
+    #[test]
+    fn join_limited_at_limit() {
+        let items = ["a", "b", "c"];
+        assert_eq!(join_limited(items.iter().copied(), 3), "a, b, c");
+    }
+
+    #[test]
+    fn join_limited_over_limit() {
+        let items = ["a", "b", "c", "d", "e"];
+        assert_eq!(
+            join_limited(items.iter().copied(), 3),
+            "a, b, c, +2 more"
+        );
+    }
+
+    #[test]
+    fn join_limited_single_item() {
+        assert_eq!(join_limited(std::iter::once("only"), 5), "only");
+    }
+
+    // ── next_path logic ──
+
+    #[test]
+    fn next_path_uses_correct_prefix() {
+        let dir = std::env::temp_dir().join("overthrone_trail_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = next_path(&dir, "test.local", "10.0.0.1");
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("overthrone_test_local_10_0_0_1"));
+        assert!(name.ends_with(".md"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── state_snapshot formatting ──
+
+    #[test]
+    fn state_snapshot_empty_state() {
+        let state = EngagementState::new();
+        let snap = state_snapshot(&state);
+        assert!(snap.contains("users `0`"), "snap should mention users: {snap}");
+        assert!(snap.contains("computers `0`"), "snap should mention computers: {snap}");
+        assert!(snap.contains("Domain admin: `false`"), "snap should say Domain admin: false: {snap}");
+        assert!(snap.contains("kerberoastable [none]"), "snap should mention kerberoastable: {snap}");
+        assert!(snap.contains("asrep [none]"), "snap should mention asrep: {snap}");
+        assert!(snap.contains("admin hosts [none]"), "snap should mention admin hosts: {snap}");
+    }
+
+    #[test]
+    fn state_snapshot_with_data() {
+        let mut state = EngagementState::new();
+        state.kerberoastable.push("svc_1".into());
+        state.has_domain_admin = true;
+        state.da_user = Some("admin".into());
+        let snap = state_snapshot(&state);
+        assert!(snap.contains("kerberoastable `1`"), "snap should show kerberoastable count: {snap}");
+        assert!(snap.contains("Domain admin: `true`"), "snap should say Domain admin: true: {snap}");
+        assert!(snap.contains("via `admin`"), "snap should mention da user: {snap}");
+    }
+}

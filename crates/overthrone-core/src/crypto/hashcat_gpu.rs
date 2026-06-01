@@ -10,6 +10,15 @@
 //! 3. Select wordlist (rockyou, embedded, custom)
 //! 4. Select rules (OneRuleToRuleThemAll, best64, etc.)
 //! 5. Start the crack and monitor progress via the result channel
+//!
+//! ## OPSEC Warning
+//! Spawning `hashcat.exe` as a subprocess generates highly visible
+//! Process Creation events (Event ID 4688) and exposes cracking
+//! parameters on the command line. For production engagements:
+//! - Build with `--no-default-features --features opsec` to use the
+//!   safe inline CPU cracker instead of subprocess spawning.
+//! - Or use `crate::crypto::cracker` directly for inline cracking
+//!   with zero process creation telemetry.
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
@@ -19,6 +28,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
+
+#[cfg(feature = "opsec")]
+use tracing::warn;
 
 /// Minimum timeout for hashcat runs (24 hours default).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(86400);
@@ -166,43 +178,48 @@ pub struct HashcatGpuResult {
 /// Run hashcat as a GPU-accelerated subprocess.
 pub async fn run_hashcat_gpu(
     config: &HashcatGpuConfig,
-    stop_flag: Option<Arc<AtomicBool>>,
+    #[cfg(not(feature = "opsec"))] stop_flag: Option<Arc<AtomicBool>>,
 ) -> HashcatGpuResult {
-    let mut log = Vec::new();
-    let started = Instant::now();
-
-    log.push(format!(
-        "Hashcat GPU: mode={}, wordlist={:?}, rules={}",
-        config.mode.description(),
-        config.wordlist_path,
-        config.rules.filename()
-    ));
-
-    // Check hashcat availability
-    let available = which_hashcat(&config.hashcat_path);
-    log.push(format!("Hashcat available: {available}"));
-
-    if !available {
-        return HashcatGpuResult {
+    // In opsec mode, refuse to spawn subprocess
+    #[cfg(feature = "opsec")]
+    {
+        warn!(
+            "OpSec mode: hashcat subprocess spawning disabled. Use crate::crypto::cracker for inline cracking."
+        );
+        HashcatGpuResult {
             hashcat_available: false,
             completed: false,
             cracked_count: 0,
             total_hashes: 0,
             speed_hs: 0,
-            runtime_secs: started.elapsed().as_secs(),
+            runtime_secs: 0,
             output_file: config.output_file.clone(),
             cracked_passwords: vec![],
-            log,
-        };
+            log: vec!["OpSec mode: subprocess spawning disabled".to_string()],
+        }
     }
 
-    // Build hashcat command
-    let mut cmd = match build_hashcat_command(config, &log) {
-        Ok(c) => c,
-        Err(e) => {
-            log.push(format!("Failed to build command: {e}"));
+    #[cfg(not(feature = "opsec"))]
+    let mut log = Vec::new();
+    #[cfg(not(feature = "opsec"))]
+    let started = Instant::now();
+
+    #[cfg(not(feature = "opsec"))]
+    {
+        log.push(format!(
+            "Hashcat GPU: mode={}, wordlist={:?}, rules={}",
+            config.mode.description(),
+            config.wordlist_path,
+            config.rules.filename()
+        ));
+
+        // Check hashcat availability
+        let available = which_hashcat(&config.hashcat_path);
+        log.push(format!("Hashcat available: {available}"));
+
+        if !available {
             return HashcatGpuResult {
-                hashcat_available: true,
+                hashcat_available: false,
                 completed: false,
                 cracked_count: 0,
                 total_hashes: 0,
@@ -213,107 +230,126 @@ pub async fn run_hashcat_gpu(
                 log,
             };
         }
-    };
 
-    log.push(format!("Command: {:?}", cmd));
-
-    // Spawn hashcat
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            log.push(format!("Failed to spawn hashcat: {e}"));
-            return HashcatGpuResult {
-                hashcat_available: true,
-                completed: false,
-                cracked_count: 0,
-                total_hashes: 0,
-                speed_hs: 0,
-                runtime_secs: started.elapsed().as_secs(),
-                output_file: config.output_file.clone(),
-                cracked_passwords: vec![],
-                log,
-            };
-        }
-    };
-
-    log.push("Hashcat subprocess started".to_string());
-
-    // Monitor with timeout + stop flag
-    let timeout = config.timeout;
-    let poll = POLL_INTERVAL;
-
-    loop {
-        tokio::time::sleep(poll).await;
-
-        let elapsed = started.elapsed();
-
-        // Check stop flag
-        if let Some(ref flag) = stop_flag
-            && !flag.load(Ordering::SeqCst)
-        {
-            log.push("Stop flag received — killing hashcat".to_string());
-            let _ = child.kill();
-            let _ = child.wait();
-            break;
-        }
-
-        // Check timeout
-        if elapsed > timeout {
-            log.push(format!("Timeout reached ({timeout:?}) — killing hashcat"));
-            let _ = child.kill();
-            let _ = child.wait();
-            break;
-        }
-
-        // Check if process exited
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                log.push(format!("Hashcat exited with status: {status}"));
-                break;
-            }
-            Ok(None) => {
-                // Still running
-                debug!("Hashcat running for {elapsed:?}");
-            }
+        // Build hashcat command
+        let mut cmd = match build_hashcat_command(config, &log) {
+            Ok(c) => c,
             Err(e) => {
-                log.push(format!("Error checking hashcat status: {e}"));
+                log.push(format!("Failed to build command: {e}"));
+                return HashcatGpuResult {
+                    hashcat_available: true,
+                    completed: false,
+                    cracked_count: 0,
+                    total_hashes: 0,
+                    speed_hs: 0,
+                    runtime_secs: started.elapsed().as_secs(),
+                    output_file: config.output_file.clone(),
+                    cracked_passwords: vec![],
+                    log,
+                };
+            }
+        };
+
+        log.push(format!("Command: {:?}", cmd));
+
+        // Spawn hashcat
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                log.push(format!("Failed to spawn hashcat: {e}"));
+                return HashcatGpuResult {
+                    hashcat_available: true,
+                    completed: false,
+                    cracked_count: 0,
+                    total_hashes: 0,
+                    speed_hs: 0,
+                    runtime_secs: started.elapsed().as_secs(),
+                    output_file: config.output_file.clone(),
+                    cracked_passwords: vec![],
+                    log,
+                };
+            }
+        };
+
+        log.push("Hashcat subprocess started".to_string());
+
+        // Monitor with timeout + stop flag
+        let timeout = config.timeout;
+        let poll = POLL_INTERVAL;
+
+        loop {
+            tokio::time::sleep(poll).await;
+
+            let elapsed = started.elapsed();
+
+            // Check stop flag
+            if let Some(ref flag) = stop_flag
+                && !flag.load(Ordering::SeqCst)
+            {
+                log.push("Stop flag received — killing hashcat".to_string());
+                let _ = child.kill();
+                let _ = child.wait();
                 break;
             }
+
+            // Check timeout
+            if elapsed > timeout {
+                log.push(format!("Timeout reached ({timeout:?}) — killing hashcat"));
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+
+            // Check if process exited
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    log.push(format!("Hashcat exited with status: {status}"));
+                    break;
+                }
+                Ok(None) => {
+                    // Still running
+                    debug!("Hashcat running for {elapsed:?}");
+                }
+                Err(e) => {
+                    log.push(format!("Error checking hashcat status: {e}"));
+                    break;
+                }
+            }
         }
-    }
 
-    let runtime = started.elapsed();
+        let runtime = started.elapsed();
 
-    // Read output file
-    let cracked_passwords = read_cracked_file(&config.output_file);
-    log.push(format!("Cracked {} passwords", cracked_passwords.len()));
+        // Read output file
+        let cracked_passwords = read_cracked_file(&config.output_file);
+        log.push(format!("Cracked {} passwords", cracked_passwords.len()));
 
-    // Count total hashes from input
-    let total_hashes = count_hash_lines(&config.hash_file);
+        // Count total hashes from input
+        let total_hashes = count_hash_lines(&config.hash_file);
 
-    let speed_hs = if runtime.as_secs() > 0 {
-        (cracked_passwords.len() as u64) / runtime.as_secs()
-    } else {
-        0
-    };
+        let speed_hs = if runtime.as_secs() > 0 {
+            (cracked_passwords.len() as u64) / runtime.as_secs()
+        } else {
+            0
+        };
 
-    info!(
-        "Hashcat GPU: cracked={}/{} hashes in {:?}",
-        cracked_passwords.len(),
-        total_hashes,
-        runtime
-    );
+        info!(
+            "Hashcat GPU: cracked={}/{} hashes in {:?}",
+            cracked_passwords.len(),
+            total_hashes,
+            runtime
+        );
 
-    HashcatGpuResult {
-        hashcat_available: true,
-        completed: true,
-        cracked_count: cracked_passwords.len() as u32,
-        total_hashes,
-        speed_hs,
-        runtime_secs: runtime.as_secs(),
-        output_file: config.output_file.clone(),
-        cracked_passwords,
-        log,
+        HashcatGpuResult {
+            hashcat_available: true,
+            completed: true,
+            cracked_count: cracked_passwords.len() as u32,
+            total_hashes,
+            speed_hs,
+            runtime_secs: runtime.as_secs(),
+            output_file: config.output_file.clone(),
+            cracked_passwords,
+            log,
+        }
     }
 }
 
@@ -446,6 +482,19 @@ pub fn default_rockyou_path() -> PathBuf {
     }
 
     PathBuf::from("/usr/share/wordlists/rockyou.txt")
+}
+
+/// OpSec-safe mode gate.
+///
+/// When built with `cfg(feature = "opsec")`, this module still compiles but
+/// `run_hashcat_gpu()` will log a warning and return early without spawning
+/// a subprocess. The caller should fall back to `crate::crypto::cracker`
+/// for zero-telemetry inline cracking.
+///
+/// For production engagements requiring GPU acceleration without process
+/// creation events, implement an FFI-based OpenCL loader (see design doc).
+pub fn is_opsec_mode() -> bool {
+    cfg!(feature = "opsec")
 }
 
 /// Default OneRuleToRuleThemAll path detection.

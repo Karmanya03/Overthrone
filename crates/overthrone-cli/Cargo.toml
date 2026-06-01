@@ -19,19 +19,19 @@ path = "src/ovt_main.rs"
 
 [dependencies]
 overthrone-core = { version = "0.2.1-beta", path = "../overthrone-core" }
-overthrone-reaper = { version = "0.2.1-beta", path = "../overthrone-reaper" }
-overthrone-hunter = { version = "0.2.1-beta", path = "../overthrone-hunter" }
-overthrone-pilot = { version = "0.2.1-beta", path = "../overthrone-pilot" }
-overthrone-crawler = { version = "0.2.1-beta", path = "../overthrone-crawler" }
-overthrone-forge = { version = "0.2.1-beta", path = "../overthrone-forge" }
-overthrone-scribe = { version = "0.2.1-beta", path = "../overthrone-scribe" }
-overthrone-relay = { version = "0.2.1-beta", path = "../overthrone-relay" }
-overthrone-viewer = { version = "0.2.1-beta", path = "../overthrone-viewer" }
+overthrone-reaper = { version = "0.2.1-beta", path = "../overthrone-reaper", optional = true }
+overthrone-hunter = { version = "0.2.1-beta", path = "../overthrone-hunter", optional = true }
+overthrone-pilot = { version = "0.2.1-beta", path = "../overthrone-pilot", optional = true }
+overthrone-crawler = { version = "0.2.1-beta", path = "../overthrone-crawler", optional = true }
+overthrone-forge = { version = "0.2.1-beta", path = "../overthrone-forge", optional = true }
+overthrone-scribe = { version = "0.2.1-beta", path = "../overthrone-scribe", optional = true }
+overthrone-relay = { version = "0.2.1-beta", path = "../overthrone-relay", optional = true }
+overthrone-viewer = { version = "0.2.1-beta", path = "../overthrone-viewer", optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 ratatui = "0.29"
 crossterm = "0.28"
-tui-widget-list = "0.13"
+
 async-trait = "0.1"
 
 tokio.workspace = true
@@ -64,7 +64,16 @@ tokio-test.workspace = true
 pretty_assertions.workspace = true
 
 [features]
-default = []
+default = ["full"]
+full = ["reaper", "hunter", "forge", "relay", "pilot", "crawler", "viewer", "scribe"]
+hunter = ["dep:overthrone-hunter"]
+forge = ["dep:overthrone-forge"]
+relay = ["dep:overthrone-relay"]
+pilot = ["dep:overthrone-pilot"]
+reaper = ["dep:overthrone-reaper"]
+crawler = ["dep:overthrone-crawler"]
+viewer = ["dep:overthrone-viewer"]
+scribe = ["dep:overthrone-scribe"]
 qlearn = []
 vendored-openssl = ["openssl/vendored"]
 

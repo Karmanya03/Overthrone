@@ -37,6 +37,67 @@ use crate::graph_data::{
     ViewerStats,
 };
 
+/// Strip ANSI escape sequences from a string to prevent terminal injection attacks.
+/// Blue/Defender teams can poison AD attributes with raw ANSI escape sequences
+/// (e.g., CSI, OSC, DCS) that, when rendered to a terminal, could execute
+/// arbitrary commands or exfiltrate data from the operator's terminal.
+fn sanitize_ad_string(input: &str) -> String {
+    // Strip ANSI escape sequences: ESC (0x1B) followed by [
+    // Handles CSI sequences (ESC[...), OSC sequences (ESC]), DCS (ESCP),
+    // and standalone ESC characters
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // ANSI escape — consume until we hit a letter terminator
+            // CSI: ESC[ ... letter
+            // OSC: ESC] ... ST (ESC\) or BEL
+            // Other: ESC ... letter
+            match chars.next() {
+                Some('[') => {
+                    // CSI sequence: consume params + intermediate + final byte
+                    for ec in chars.by_ref() {
+                        match ec {
+                            'a'..='z' | 'A'..='Z' | '~' | '@' => break,
+                            _ => continue,
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC sequence: consume until ST (ESC \) or BEL (0x07)
+                    for ec in chars.by_ref() {
+                        if ec == '\x1b' {
+                            let _ = chars.next(); // consume '\'
+                            break;
+                        }
+                        if ec == '\x07' {
+                            break;
+                        }
+                    }
+                }
+                Some('P' | 'D' | '_' | '^') => {
+                    // DCS, DLE, APC, SOS: consume until ST (ESC\)
+                    for ec in chars.by_ref() {
+                        if ec == '\x1b' {
+                            let _ = chars.next();
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    // Single-char escape or unrecognized — discard
+                }
+                None => break,
+            }
+        } else if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
+            // Strip other control characters (except newline, carriage return, tab)
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Embedded HTML content (built from static/index.html)
 const INDEX_HTML: &str = include_str!("static/index.html");
 /// Embedded Three.js renderer (built from static/three-graph.js)
@@ -2144,6 +2205,12 @@ fn graph_edges(
     edges
 }
 
+fn sanitize_btreemap(map: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    map.iter()
+        .map(|(k, v)| (k.clone(), sanitize_ad_string(v)))
+        .collect()
+}
+
 fn build_connection(
     graph: &ViewerGraph,
     edge: &ViewerEdge,
@@ -2155,17 +2222,17 @@ fn build_connection(
     let actual_target = graph.get_node(edge.target)?;
 
     Some(Connection {
-        target_id: target.id.clone(),
-        target_label: target.label.clone(),
+        target_id: sanitize_ad_string(&target.id),
+        target_label: sanitize_ad_string(&target.label),
         target_display: node_display_name(target),
         target_type: node_type_str(target),
         target_domain: node_domain(target),
-        relationship: edge.relationship.clone(),
+        relationship: sanitize_ad_string(&edge.relationship),
         direction: direction.to_string(),
         cost: edge.cost,
         severity: annotation.severity,
         guidance: annotation.guidance,
-        properties: edge.properties.clone(),
+        properties: sanitize_btreemap(&edge.properties),
         ovt_command: annotation.ovt_command,
         ovt_command_desc: annotation.ovt_command_desc,
         ace_details: annotation
@@ -2489,17 +2556,26 @@ async fn node_detail_response(
     metrics.phase("connections", connections_started.elapsed().as_millis());
     metrics.finish();
 
+    let sanitized_properties: BTreeMap<String, String> = node
+        .properties
+        .iter()
+        .map(|(k, v)| (k.clone(), sanitize_ad_string(v)))
+        .collect();
+
     let detail = NodeDetail {
         id: node.id.clone(),
-        label: node.label.clone(),
+        label: sanitize_ad_string(&node.label),
         display_name: node_display_name(node),
         node_type: node_type_str(node),
         domain: node_domain(node),
-        distinguished_name: node.distinguished_name.clone(),
+        distinguished_name: node
+            .distinguished_name
+            .as_ref()
+            .map(|d| sanitize_ad_string(d)),
         enabled: node.enabled,
         high_value: node.high_value,
         owned: node.owned,
-        properties: node.properties.clone(),
+        properties: sanitized_properties,
         security_notes: node_security_notes(&graph, node_idx),
         connections,
         out_degree,

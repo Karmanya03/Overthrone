@@ -70,8 +70,7 @@ reqwest = { workspace = true, features = ["blocking"] }
 
 async-trait = "0.1"
 rcgen = "0.14.7"
-p12 = "0.6.3"
-foreign-types = "0.5.0"
+
 pfx = "0.4.1"
 p12-keystore = "0.2.1"
 
@@ -128,6 +127,7 @@ uuid = { workspace = true }
 default = []
 sliver-grpc = ["tonic", "prost"]      # Enable Sliver gRPC (requires protobuf compiler)
 full-c2 = ["sliver-grpc"]             # All C2 integrations
+opsec = []                             # OPSEC-safe mode — disables subprocess spawning
 
 [dev-dependencies]
 tokio-test.workspace = true

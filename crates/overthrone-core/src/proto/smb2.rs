@@ -133,6 +133,17 @@ const STATUS_SUCCESS: u32 = 0x0000_0000;
 const STATUS_MORE_PROCESSING_REQUIRED: u32 = 0xC000_0016;
 const STATUS_NO_MORE_FILES: u32 = 0x8000_0006;
 
+// SMB3 Transform_Header (MS-SMB2 §2.2.41)
+const SMB3_TRANSFORM_MAGIC: &[u8; 4] = b"\xfdSMB";
+const SMB3_TRANSFORM_HEADER_SIZE: usize = 52;
+const SMB3_ENCRYPTION_AES128_GCM: u16 = 0x0001;
+#[allow(dead_code)]
+const SMB3_ENCRYPTION_AES256_GCM: u16 = 0x0002;
+// KDF labels for SMB 3.x encryption key derivation
+const SMB3_ENCRYPTION_KEY_LABEL_C2S: &[u8] = b"SMBC2SCipherKey\x00";
+const SMB3_ENCRYPTION_KEY_LABEL_S2C: &[u8] = b"SMBS2CCipherKey\x00";
+const SMB3_ENCRYPTION_KEY_CONTEXT: &[u8] = b"SmbCipher\x00";
+
 // ═══════════════════════════════════════════════════════════
 //  SMB2 Connection — TCP Transport
 // ═══════════════════════════════════════════════════════════
@@ -147,6 +158,12 @@ pub struct Smb2Connection {
     session_key: Mutex<Option<Vec<u8>>>,
     /// Whether the server requires packet signing
     sign_required: std::sync::atomic::AtomicBool,
+    /// Whether the server requires SMB3 encryption
+    encryption_required: std::sync::atomic::AtomicBool,
+    /// Derived SMB3 encryption key (server→client direction)
+    decryption_key: Mutex<Option<Vec<u8>>>,
+    /// Derived SMB3 encryption key (client→server direction)
+    encryption_key: Mutex<Option<Vec<u8>>>,
     /// Negotiated SMB dialect (e.g. 0x0210 = SMB 2.1, 0x0300 = SMB 3.0, 0x0302 = SMB 3.0.2)
     dialect: AtomicU16,
     /// Negotiated max transaction size (from server NEGOTIATE response)
@@ -182,6 +199,9 @@ impl Smb2Connection {
             tree_id: Mutex::new(0),
             session_key: Mutex::new(None),
             sign_required: std::sync::atomic::AtomicBool::new(false),
+            encryption_required: std::sync::atomic::AtomicBool::new(false),
+            decryption_key: Mutex::new(None),
+            encryption_key: Mutex::new(None),
             dialect: AtomicU16::new(0),
             max_transact_size: AtomicU32::new(65536),
             max_read_size: 65536,
@@ -192,17 +212,31 @@ impl Smb2Connection {
     // ───────────────── Transport ─────────────────
 
     /// Send an SMB2 message (prepends NetBIOS session header).
+    /// Automatically wraps with SMB3 Transform_Header if encryption is enabled.
     async fn send(&self, data: &[u8]) -> Result<()> {
+        let payload = if self
+            .encryption_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let session_id = *self.session_id.lock().await;
+            let enc_key =
+                self.encryption_key.lock().await.clone().ok_or_else(|| {
+                    OverthroneError::Smb("SMB3 encryption key not set".to_string())
+                })?;
+            smb3_encrypt_aes128_gcm(data, &enc_key, session_id)?
+        } else {
+            data.to_vec()
+        };
+
         let mut stream = self.stream.lock().await;
-        let len = data.len() as u32;
-        // NetBIOS session service header: 4 bytes big-endian length
+        let len = payload.len() as u32;
         let header = len.to_be_bytes();
         stream
             .write_all(&header)
             .await
             .map_err(|e| OverthroneError::Smb(format!("SMB2 send header: {e}")))?;
         stream
-            .write_all(data)
+            .write_all(&payload)
             .await
             .map_err(|e| OverthroneError::Smb(format!("SMB2 send data: {e}")))?;
         stream
@@ -213,6 +247,7 @@ impl Smb2Connection {
     }
 
     /// Receive an SMB2 response (reads NetBIOS header, then payload).
+    /// Automatically unwraps SMB3 Transform_Header if encryption is enabled.
     async fn recv(&self) -> Result<Vec<u8>> {
         let mut stream = self.stream.lock().await;
         let mut len_buf = [0u8; 4];
@@ -240,13 +275,30 @@ impl Smb2Connection {
         .map_err(|_| OverthroneError::Timeout(30))?
         .map_err(|e| OverthroneError::Smb(format!("SMB2 recv body: {e}")))?;
 
+        // Decrypt if this is an SMB3 encrypted packet
+        if self
+            .encryption_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && is_smb3_encrypted(&buf)
+        {
+            let dec_key =
+                self.decryption_key.lock().await.clone().ok_or_else(|| {
+                    OverthroneError::Smb("SMB3 decryption key not set".to_string())
+                })?;
+            let plaintext = smb3_decrypt_aes128_gcm(&buf, &dec_key)?;
+            return Ok(plaintext);
+        }
+
         Ok(buf)
     }
 
     /// Receive a response and verify its SMB2 signature (if signing is required).
+    /// If SMB3 encryption is active, the signature is verified on the decrypted payload.
     async fn recv_verified(&self) -> Result<Vec<u8>> {
         let buf = self.recv().await?;
 
+        // If encryption is active, the received buffer is already decrypted by recv()
+        // and the signature is embedded in the SMB2 header of the decrypted payload.
         if self
             .sign_required
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -386,6 +438,7 @@ impl Smb2Connection {
     }
 
     /// Send a packet, signing it first if signing is required and a session key is available.
+    /// When SMB3 encryption is active, signing occurs on the plaintext before encryption wrapping.
     async fn send_signed(&self, pkt: &mut [u8]) -> Result<()> {
         if self
             .sign_required
@@ -1347,6 +1400,45 @@ impl Smb2Connection {
         self.session_key.lock().await.clone()
     }
 
+    /// Enable SMB3 encryption (AES-128-GCM) for subsequent messages.
+    ///
+    /// Must be called after successful session setup. Derives encryption keys
+    /// from the session key using SP800-108 KDF and enables Transform_Header
+    /// wrapping on all subsequent sends and unwrapping on receives.
+    ///
+    /// This is needed when the server advertises SMB3_ENCRYPTION_CAPABLE
+    /// in the Negotiate response and the client chooses to enable encryption
+    /// (e.g., by sending a SMB2 Session Setup with encryption preference).
+    pub async fn enable_encryption(&self) -> Result<()> {
+        let session_key = self.session_key.lock().await.clone().ok_or_else(|| {
+            OverthroneError::Smb("Cannot enable encryption without session key".to_string())
+        })?;
+
+        if self.dialect.load(Ordering::Relaxed) < SMB2_DIALECT_300 {
+            return Err(OverthroneError::Smb(
+                "SMB3 encryption requires dialect 3.x+".to_string(),
+            ));
+        }
+
+        // Derive C2S (encryption) and S2C (decryption) keys
+        let enc_key = derive_smb3_encryption_key(&session_key, false);
+        let dec_key = derive_smb3_encryption_key(&session_key, true);
+
+        *self.encryption_key.lock().await = Some(enc_key);
+        *self.decryption_key.lock().await = Some(dec_key);
+        self.encryption_required
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        debug!("SMB3 encryption enabled (AES-128-GCM)");
+        Ok(())
+    }
+
+    /// Check whether SMB3 encryption is currently active.
+    pub fn is_encryption_enabled(&self) -> bool {
+        self.encryption_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Logoff and cleanly close the session.
     pub async fn logoff(&self) -> Result<()> {
         let hdr = self.build_header(SMB2_LOGOFF, 0).await;
@@ -1750,6 +1842,106 @@ fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8>
     let mut mac = HmacSha256::new_from_slice(key_in).expect("HMAC-SHA256 accepts any key size");
     mac.update(&input);
     mac.finalize().into_bytes()[..16].to_vec()
+}
+
+/// Derive SMB 3.x encryption key for the given direction.
+/// Uses SP800-108 KDF with direction-specific labels.
+fn derive_smb3_encryption_key(session_key: &[u8], is_server_to_client: bool) -> Vec<u8> {
+    let label = if is_server_to_client {
+        SMB3_ENCRYPTION_KEY_LABEL_S2C
+    } else {
+        SMB3_ENCRYPTION_KEY_LABEL_C2S
+    };
+    sp800_108_counter_kdf(session_key, label, SMB3_ENCRYPTION_KEY_CONTEXT)
+}
+
+/// Encrypt an SMB3 payload using AES-128-GCM and build a Transform_Header.
+///
+/// Returns the complete Transform_Header + encrypted payload (with 16-byte GCM tag appended).
+/// The nonce is randomly generated and embedded in the header.
+fn smb3_encrypt_aes128_gcm(
+    plaintext: &[u8],
+    encryption_key: &[u8],
+    session_id: u64,
+) -> Result<Vec<u8>> {
+    use aes_gcm::{
+        Aes128Gcm, Nonce,
+        aead::{Aead, KeyInit},
+    };
+
+    let key = Aes128Gcm::new_from_slice(encryption_key)
+        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM key init: {e}")))?;
+
+    // Generate random 12-byte nonce
+    let mut nonce_bytes = [0u8; 12];
+    rand::rng().fill(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    // Encrypt with GCM — tag is appended to ciphertext
+    let ciphertext = key
+        .encrypt(nonce, plaintext)
+        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM encrypt failed: {e}")))?;
+
+    // Build Transform_Header (52 bytes) + encrypted data
+    let mut result = Vec::with_capacity(SMB3_TRANSFORM_HEADER_SIZE + ciphertext.len());
+    result.extend_from_slice(SMB3_TRANSFORM_MAGIC); // 0..4: ProtocolId
+    result.extend_from_slice(&(plaintext.len() as u32).to_le_bytes()); // 4..8: OriginalMessageSize
+    result.extend_from_slice(&0u16.to_le_bytes()); // 8..10: Reserved
+    result.extend_from_slice(&SMB3_ENCRYPTION_AES128_GCM.to_le_bytes()); // 10..12: Algorithm
+    result.extend_from_slice(&session_id.to_le_bytes()); // 12..20: SessionId
+    result.extend_from_slice(&nonce_bytes); // 20..32: Nonce (12 bytes)
+    result.extend_from_slice(&[0u8; 4]); // 32..36: Reserved
+    result.extend_from_slice(&[0u8; 16]); // 36..52: RemainingSessionKey (zeroed)
+    result.extend_from_slice(&ciphertext); // 52..: EncryptedData + GCM tag
+
+    Ok(result)
+}
+
+/// Decrypt an SMB3 Transform_Header-wrapped payload using AES-128-GCM.
+///
+/// Expects `data` to start with a 52-byte Transform_Header followed by
+/// encrypted payload + 16-byte GCM authentication tag.
+/// Returns the decrypted plaintext on success.
+fn smb3_decrypt_aes128_gcm(data: &[u8], encryption_key: &[u8]) -> Result<Vec<u8>> {
+    use aes_gcm::{
+        Aes128Gcm, Nonce,
+        aead::{Aead, KeyInit},
+    };
+
+    if data.len() < SMB3_TRANSFORM_HEADER_SIZE + 16 {
+        return Err(OverthroneError::Smb(format!(
+            "SMB3 encrypted packet too short: {} bytes (need at least {})",
+            data.len(),
+            SMB3_TRANSFORM_HEADER_SIZE + 16
+        )));
+    }
+
+    // Validate Transform_Header magic
+    if &data[0..4] != SMB3_TRANSFORM_MAGIC {
+        return Err(OverthroneError::Smb(
+            "SMB3 Transform_Header magic mismatch".to_string(),
+        ));
+    }
+
+    // Extract nonce (bytes 20..32)
+    let nonce = Nonce::from_slice(&data[20..32]);
+
+    // Extract encrypted payload (bytes 52..)
+    let encrypted = &data[SMB3_TRANSFORM_HEADER_SIZE..];
+
+    let key = Aes128Gcm::new_from_slice(encryption_key)
+        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM key init: {e}")))?;
+
+    let plaintext = key
+        .decrypt(nonce, encrypted)
+        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM decrypt failed: {e}")))?;
+
+    Ok(plaintext)
+}
+
+/// Check whether a received packet is wrapped in an SMB3 Transform_Header.
+fn is_smb3_encrypted(data: &[u8]) -> bool {
+    data.len() >= 4 && &data[0..4] == SMB3_TRANSFORM_MAGIC
 }
 
 /// AES-128-CMAC over `data` using `key` (should be 16 bytes).  Returns 16-byte tag.

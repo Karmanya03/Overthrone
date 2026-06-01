@@ -45,6 +45,8 @@ fn to_core_shell_type(shell_type: &CliShellType) -> ShellType {
         CliShellType::Winrm => ShellType::Winrm,
         CliShellType::Smb => ShellType::Smb,
         CliShellType::Wmi => ShellType::Wmi,
+        CliShellType::Null => ShellType::Smb,
+        CliShellType::Guest => ShellType::Smb,
     }
 }
 

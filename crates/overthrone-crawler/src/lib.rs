@@ -8,6 +8,8 @@ pub mod cross_forest;
 pub mod escalation;
 pub mod foreign;
 pub mod mssql_links;
+/// OpSec pacing, rate limiting, and jitter for network operations.
+pub mod pacing;
 pub mod pam;
 pub mod pivot;
 pub mod runner;

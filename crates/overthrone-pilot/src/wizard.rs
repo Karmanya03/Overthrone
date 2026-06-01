@@ -71,6 +71,67 @@ mod wizard_stage_tests {
         ];
         assert_eq!(stages.pop(), Some(Stage::Cleanup));
     }
+
+    #[test]
+    fn wizard_stage_count_is_six() {
+        let stages = vec![
+            Stage::Enumerate,
+            Stage::Attack,
+            Stage::Escalate,
+            Stage::Lateral,
+            Stage::Loot,
+            Stage::Cleanup,
+        ];
+        assert_eq!(stages.len(), 6);
+    }
+
+    #[test]
+    fn wizard_stages_in_correct_order() {
+        let stages = vec![
+            Stage::Enumerate,
+            Stage::Attack,
+            Stage::Escalate,
+            Stage::Lateral,
+            Stage::Loot,
+            Stage::Cleanup,
+        ];
+        for window in stages.windows(2) {
+            assert!(window[0] < window[1],
+                "Stage {:?} should come before {:?}", window[0], window[1]);
+        }
+    }
+
+    #[test]
+    fn wizard_stages_are_distinct() {
+        let stages = vec![
+            Stage::Enumerate,
+            Stage::Attack,
+            Stage::Escalate,
+            Stage::Lateral,
+            Stage::Loot,
+            Stage::Cleanup,
+        ];
+        let mut unique = stages.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), stages.len(), "Stages should be unique");
+    }
+
+    #[test]
+    fn wizard_session_id_is_non_empty() {
+        // Can't create a full WizardSession without config, but we can verify
+        // UUID generation works by testing the session_id pattern.
+        let id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(id.len(), 36);
+        assert_eq!(id.chars().filter(|&c| c == '-').count(), 4);
+    }
+
+    #[test]
+    fn wizard_stage_display_format() {
+        let stage = Stage::Enumerate;
+        let display = format!("{stage}");
+        assert!(['E', 'N', 'U', 'M'].iter().any(|c| display.contains(*c)));
+    }
 }
 
 // ═══════════════════════════════════════════════════════════

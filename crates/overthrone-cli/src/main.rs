@@ -18,6 +18,7 @@ use autopwn::ExecMethod;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell as ClapShell, generate as clap_generate};
 use colored::Colorize;
+#[cfg(feature = "reaper")]
 use overthrone_reaper::runner::ReaperConfig;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -98,7 +99,6 @@ struct Cli {
 
     // Credential list/file options
     #[arg(
-        short = 'U',
         long,
         global = true,
         value_name = "FILE",
@@ -134,8 +134,18 @@ struct Cli {
     )]
     stdout_format: OutputFormat,
 
+    /// Enable structured JSON logging to stdout.
+    /// Every critical event (cracked hash, found SPN, etc.) is emitted
+    /// as a typed JSON blob suitable for `jq` or pipeline ingestion.
+    #[arg(long = "json-log", global = true)]
+    json_log: bool,
+
     #[arg(short = 'O', long, global = true)]
     outfile: Option<String>,
+
+    /// List compiled-in feature modules and exit
+    #[arg(long, global = true)]
+    modules: bool,
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -201,6 +211,7 @@ enum Commands {
     },
 
     /// Full AD enumeration via reaper modules
+    #[cfg(feature = "reaper")]
     Reaper {
         #[arg(long, short, value_delimiter = ',')]
         modules: Vec<String>,
@@ -209,12 +220,14 @@ enum Commands {
     },
 
     /// Snaffler-style sensitive file discovery across readable SMB shares
+    #[cfg(feature = "reaper")]
     Snaffler {
         #[arg(long, default_value = "500")]
         page_size: u32,
     },
 
     /// Enumerate specific AD object types
+    #[cfg(feature = "reaper")]
     Enum {
         #[arg(value_enum)]
         target: EnumTarget,
@@ -225,6 +238,7 @@ enum Commands {
     },
 
     /// PowerView-style LDAP enumeration aliases backed by Overthrone modules
+    #[cfg(feature = "reaper")]
     #[command(alias = "pv", alias = "power-view")]
     Powerview {
         #[command(subcommand)]
@@ -238,6 +252,7 @@ enum Commands {
     },
 
     /// Kerberos operations
+    #[cfg(feature = "hunter")]
     #[command(alias = "krb", alias = "roast")]
     Kerberos {
         #[command(subcommand)]
@@ -270,6 +285,7 @@ enum Commands {
     },
 
     /// Password spraying
+    #[cfg(feature = "hunter")]
     Spray {
         #[arg(short, long)]
         password: String,
@@ -308,6 +324,7 @@ enum Commands {
     },
 
     /// Generate engagement report (Markdown, PDF, JSON)
+    #[cfg(feature = "scribe")]
     Report {
         /// Input engagement state file
         #[arg(long, default_value = "engagement.json")]
@@ -327,12 +344,14 @@ enum Commands {
     },
 
     /// Ticket forging operations (golden, silver tickets)
+    #[cfg(feature = "forge")]
     Forge {
         #[command(subcommand)]
         action: ForgeAction,
     },
 
     /// Crack captured hashes (AS-REP, Kerberoast, NTLM)
+    #[cfg(feature = "reaper")]
     Crack {
         /// Hash string to crack (auto-detects type)
         #[arg(short = 's', long)]
@@ -349,6 +368,9 @@ enum Commands {
         /// Maximum candidates to try (0 = unlimited)
         #[arg(long, default_value = "0")]
         max_candidates: usize,
+        /// Use hashcat GPU subprocess (requires hashcat on PATH)
+        #[arg(long)]
+        hashcat: bool,
     },
 
     /// RID cycling — enumerate users/groups via MS-SAMR (works unauthenticated)
@@ -366,6 +388,7 @@ enum Commands {
     },
 
     /// Lateral movement — trust mapping, escalation paths, MSSQL chains
+    #[cfg(feature = "reaper")]
     #[command(alias = "lateral")]
     Move {
         #[command(subcommand)]
@@ -383,6 +406,7 @@ enum Commands {
     },
 
     /// LAPS password reading — read local admin passwords from AD
+    #[cfg(feature = "reaper")]
     Laps {
         /// Only query a specific computer name
         #[arg(long)]
@@ -396,6 +420,7 @@ enum Commands {
     },
 
     /// NTLM relay and responder — LLMNR/NBT-NS poisoning and credential relay
+    #[cfg(feature = "relay")]
     #[command(alias = "relay")]
     Ntlm {
         #[command(subcommand)]
@@ -403,6 +428,7 @@ enum Commands {
     },
 
     /// ADCS certificate abuse — ESC1-ESC13 attacks
+    #[cfg(feature = "forge")]
     #[command(alias = "certify")]
     Adcs {
         #[command(subcommand)]
@@ -463,6 +489,7 @@ enum Commands {
     },
 
     /// Launch interactive TUI with live attack graph
+    #[cfg(feature = "viewer")]
     #[clap(alias = "ui")]
     Tui {
         /// Domain to crawl
@@ -1032,6 +1059,10 @@ enum ShellType {
     Smb,
     /// WMI-based shell
     Wmi,
+    /// Null session shell (no credentials, falls back to SMB)
+    Null,
+    /// Guest session shell (falls back to SMB)
+    Guest,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -1428,6 +1459,9 @@ enum KerberosAction {
         /// Target SPN (roast all if omitted)
         #[arg(long)]
         spn: Option<String>,
+        /// OPSEC mode: request AES-only tickets (no RC4 etype 23)
+        #[arg(long)]
+        opsec: bool,
     },
     /// AS-REP roast — request AS-REP for users without pre-authentication
     AsrepRoast {
@@ -1893,15 +1927,31 @@ async fn async_main() -> i32 {
         _ => "trace",
     };
 
-    fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
-        )
-        .with_target(false)
-        .compact()
-        .init();
+    if cli.json_log {
+        fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
+            )
+            .with_target(false)
+            .json()
+            .init();
+    } else {
+        fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
+            )
+            .with_target(false)
+            .compact()
+            .init();
+    }
 
     banner::print_banner();
+
+    if cli.modules {
+        let modules = compiled_modules();
+        println!("Compiled features: {}", modules.join(", "));
+        return 0;
+    }
 
     // Register all built-in modules (core + extended CME-style)
     // This ensures `ovt module list` returns available modules.
@@ -1916,18 +1966,23 @@ async fn async_main() -> i32 {
                 1
             }
         },
+        #[cfg(feature = "reaper")]
         Commands::Reaper {
             ref modules,
             page_size,
         } => cmd_reaper(&cli, modules.clone(), page_size).await,
+        #[cfg(feature = "reaper")]
         Commands::Snaffler { page_size } => cmd_snaffler(&cli, page_size).await,
+        #[cfg(feature = "reaper")]
         Commands::Enum {
             ref target,
             ref filter,
             include_disabled,
         } => cmd_enum(&cli, *target, filter.clone(), include_disabled).await,
+        #[cfg(feature = "reaper")]
         Commands::Powerview { ref action } => cmd_powerview(&cli, action.clone()).await,
         Commands::Guid { ref action } => cmd_guid(action.clone()),
+        #[cfg(feature = "hunter")]
         Commands::Kerberos { ref action } => cmd_kerberos(&cli, action.clone()).await,
         Commands::Smb { ref action } => cmd_smb(&cli, action.clone()).await,
         Commands::Exec {
@@ -1939,6 +1994,7 @@ async fn async_main() -> i32 {
             ref file,
             ref action,
         } => cmd_graph(&cli, file.as_deref(), action.clone()).await,
+        #[cfg(feature = "hunter")]
         Commands::Spray {
             ref password,
             ref userlist,
@@ -1982,18 +2038,22 @@ async fn async_main() -> i32 {
             }
             exit
         }
+        #[cfg(feature = "scribe")]
         Commands::Report {
             ref input,
             ref output,
             ref format,
         } => commands_impl::cmd_report(&cli, input, output, format.clone()).await,
+        #[cfg(feature = "forge")]
         Commands::Forge { ref action } => commands_impl::cmd_forge(&cli, action).await,
+        #[cfg(feature = "reaper")]
         Commands::Crack {
             ref hash,
             ref file,
             ref mode,
             ref wordlist,
             max_candidates,
+            hashcat,
         } => {
             commands_impl::cmd_crack(
                 &cli,
@@ -2002,6 +2062,7 @@ async fn async_main() -> i32 {
                 mode.clone(),
                 wordlist.as_deref(),
                 max_candidates,
+                hashcat,
             )
             .await
         }
@@ -2010,14 +2071,18 @@ async fn async_main() -> i32 {
             end_rid,
             null_session,
         } => commands_impl::cmd_rid(&cli, start_rid, end_rid, null_session).await,
+        #[cfg(feature = "reaper")]
         Commands::Move { ref action } => commands_impl::cmd_move(&cli, action).await,
         Commands::Gpp {
             ref file,
             ref cpassword,
         } => commands_impl::cmd_gpp(&cli, file.as_deref(), cpassword.as_deref()).await,
+        #[cfg(feature = "reaper")]
         Commands::Laps { ref computer } => commands_impl::cmd_laps(&cli, computer.as_deref()).await,
         Commands::Secrets { ref action } => commands_impl::cmd_secrets(action).await,
+        #[cfg(feature = "relay")]
         Commands::Ntlm { ref action } => cmd_ntlm(action.clone()).await,
+        #[cfg(feature = "forge")]
         Commands::Adcs { ref action } => commands_impl::cmd_adcs(&cli, action).await,
         Commands::Shell {
             ref target,
@@ -2046,6 +2111,7 @@ async fn async_main() -> i32 {
             .await
         }
         Commands::Mssql { ref action } => cmd_mssql(&cli, action.clone()).await,
+        #[cfg(feature = "viewer")]
         Commands::Tui {
             ref domain,
             crawl,
@@ -2229,6 +2295,7 @@ fn require_dc(cli: &Cli) -> std::result::Result<String, i32> {
     })
 }
 
+#[cfg(feature = "reaper")]
 fn make_reaper_config(
     cli: &Cli,
     creds: Credentials,
@@ -2263,6 +2330,7 @@ fn make_reaper_config(
 // ──────────────────────────────────────────────────────────
 
 // cmd_reaper
+#[cfg(feature = "reaper")]
 async fn cmd_reaper(cli: &Cli, modules: Vec<String>, page_size: u32) -> i32 {
     let creds = match require_creds(cli) {
         Ok(c) => c,
@@ -2291,6 +2359,7 @@ async fn cmd_reaper(cli: &Cli, modules: Vec<String>, page_size: u32) -> i32 {
     }
 }
 
+#[cfg(feature = "reaper")]
 async fn cmd_snaffler(cli: &Cli, page_size: u32) -> i32 {
     banner::print_module_banner("SNAFFLER");
 
@@ -2352,6 +2421,7 @@ async fn cmd_snaffler(cli: &Cli, page_size: u32) -> i32 {
     }
 }
 
+#[cfg(feature = "reaper")]
 async fn cmd_powerview(cli: &Cli, action: PowerViewAction) -> i32 {
     match action {
         PowerViewAction::Users {
@@ -2923,6 +2993,7 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
 }
 
 // cmd_ntlm
+#[cfg(feature = "relay")]
 async fn cmd_ntlm(action: NtlmAction) -> i32 {
     use overthrone_relay::{Protocol, RelayController, RelayControllerConfig, RelayTarget};
     use std::net::SocketAddr;
@@ -3746,6 +3817,7 @@ fn print_powerview_summary(result: &overthrone_reaper::runner::ReaperResult) {
     }
 }
 
+#[cfg(feature = "reaper")]
 async fn cmd_enum(
     cli: &Cli,
     target: EnumTarget,
@@ -4422,6 +4494,7 @@ fn enum_target_modules(target: &EnumTarget) -> Vec<String> {
 }
 
 // cmd_kerberos
+#[cfg(feature = "hunter")]
 async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     banner::print_module_banner("KERBEROS");
 
@@ -4485,7 +4558,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     };
 
     match action {
-        KerberosAction::Roast { spn } => {
+        KerberosAction::Roast { spn, opsec } => {
             use overthrone_core::proto::kerberos;
             let creds = match require_creds(cli) {
                 Ok(c) => c,
@@ -4535,12 +4608,11 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     jitter_ms: 0,
                     tgt: None,
                 };
-                match overthrone_hunter::kerberoast::run(
-                    &hunt_config,
-                    &overthrone_hunter::kerberoast::KerberoastConfig::default(),
-                )
-                .await
-                {
+                let kc = overthrone_hunter::kerberoast::KerberoastConfig {
+                    downgrade_to_rc4: !opsec,
+                    ..Default::default()
+                };
+                match overthrone_hunter::kerberoast::run(&hunt_config, &kc).await {
                     Ok(result) => {
                         println!(
                             "{} Kerberoast complete: {} hashes captured",
@@ -5349,6 +5421,7 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
             }
         }
 
+        #[cfg(feature = "viewer")]
         GraphAction::Gui { input, port } => {
             // Build sources: prefer explicit input; otherwise prefer graph_file, then docs demo JSON, then fallback
             let sources = if input.is_empty() {
@@ -5613,6 +5686,7 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 }
 
 // cmd_spray
+#[cfg(feature = "hunter")]
 async fn cmd_spray(
     cli: &Cli,
     password: &str,
@@ -5990,6 +6064,29 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
         }
     }
     0
+}
+
+/// Returns a list of compiled-in feature modules.
+#[allow(clippy::vec_init_then_push)]
+pub fn compiled_modules() -> Vec<&'static str> {
+    let mut modules = Vec::new();
+    #[cfg(feature = "hunter")]
+    modules.push("hunter");
+    #[cfg(feature = "forge")]
+    modules.push("forge");
+    #[cfg(feature = "relay")]
+    modules.push("relay");
+    #[cfg(feature = "pilot")]
+    modules.push("pilot");
+    #[cfg(feature = "reaper")]
+    modules.push("reaper");
+    #[cfg(feature = "crawler")]
+    modules.push("crawler");
+    #[cfg(feature = "viewer")]
+    modules.push("viewer");
+    #[cfg(feature = "scribe")]
+    modules.push("scribe");
+    modules
 }
 
 #[cfg(test)]

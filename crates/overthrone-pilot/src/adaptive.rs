@@ -190,7 +190,6 @@ pub enum StepModification {
 /// The adaptive engine evaluates outcomes and adjusts the plan
 pub struct AdaptiveEngine {
     /// Maximum retries per step before giving up
-    #[allow(dead_code)] // Configuration field used in future retry logic
     max_retries: u32,
     /// Maximum total re-plans before aborting
     max_replans: u32,
@@ -232,6 +231,15 @@ impl AdaptiveEngine {
     /// Reset consecutive failure counter (called on success)
     pub fn reset_failure_streak(&mut self) {
         self.consecutive_failures = 0;
+    }
+
+    /// Get effective max retries for a step (step-specific value, or engine default if 0)
+    pub fn effective_max_retries(&self, step: &PlanStep) -> u32 {
+        if step.max_retries > 0 {
+            step.max_retries
+        } else {
+            self.max_retries
+        }
     }
 
     /// Get the current consecutive failure count (used by Q-learner).
@@ -298,7 +306,7 @@ impl AdaptiveEngine {
             failure.label().red(),
             step.description,
             step.retries + 1,
-            step.max_retries,
+            self.effective_max_retries(step),
             repeat_count,
         );
 
@@ -356,7 +364,7 @@ impl AdaptiveEngine {
         // Extract target from step action
         let target = self.extract_target(&step.action);
 
-        if step.retries < step.max_retries {
+        if step.retries < self.effective_max_retries(step) {
             info!(
                 "  {} Network error — retrying in 5s (transient)",
                 "🔄".cyan()
@@ -453,7 +461,7 @@ impl AdaptiveEngine {
     }
 
     fn handle_timeout(&mut self, step: &PlanStep) -> AdaptiveDecision {
-        if step.retries < step.max_retries {
+        if step.retries < self.effective_max_retries(step) {
             AdaptiveDecision::Retry {
                 delay_secs: 3,
                 modify: Some(StepModification::ExtendTimeout),
@@ -466,7 +474,7 @@ impl AdaptiveEngine {
     }
 
     fn handle_unknown(&mut self, step: &PlanStep) -> AdaptiveDecision {
-        if step.retries < step.max_retries {
+        if step.retries < self.effective_max_retries(step) {
             AdaptiveDecision::Retry {
                 delay_secs: 2,
                 modify: None,
@@ -553,7 +561,7 @@ impl AdaptiveEngine {
         let action_id = self.action_identifier(&step.action);
 
         if matches!(failure, FailureClass::NetworkError | FailureClass::Timeout)
-            && step.retries < step.max_retries
+            && step.retries < self.effective_max_retries(step)
         {
             return None;
         }
@@ -945,14 +953,287 @@ pub fn rotate_credential(
 
 #[cfg(test)]
 mod tests {
-    use super::FailureClass;
+    use super::*;
+    use crate::goals::{AttackGoal, EngagementState};
+    use crate::planner::{NoiseLevel, PlannedAction};
+    use crate::runner::Stage;
+
+    fn default_engine() -> AdaptiveEngine {
+        AdaptiveEngine::new(false)
+    }
+
+    fn sample_step() -> PlanStep {
+        PlanStep {
+            id: "test-001".into(),
+            description: "Kerberoast test account".into(),
+            stage: Stage::Attack,
+            action: PlannedAction::Kerberoast { spns: vec!["svc_1/http.test.local".into()] },
+            priority: 50,
+            noise: NoiseLevel::Low,
+            depends_on: vec![],
+            executed: false,
+            result: None,
+            retries: 0,
+            max_retries: 0,
+            reversible: false,
+            compensation: None,
+        }
+    }
+
+    fn sample_state() -> EngagementState {
+        EngagementState::new()
+    }
+
+    fn ok_result(new_creds: usize, new_admin: usize) -> StepResult {
+        StepResult { success: true, output: "OK".into(), new_credentials: new_creds, new_admin_hosts: new_admin }
+    }
+
+    fn fail_result(output: &str) -> StepResult {
+        StepResult { success: false, output: output.into(), new_credentials: 0, new_admin_hosts: 0 }
+    }
+
+    // ── FailureClass classification ──
 
     #[test]
     fn smb2_negotiate_too_short_is_classified_as_network_error() {
         let output = "SMB2 Negotiate response too short: 72 bytes";
-        assert!(matches!(
-            FailureClass::classify(output),
-            FailureClass::NetworkError
-        ));
+        assert!(matches!(FailureClass::classify(output), FailureClass::NetworkError));
+    }
+
+    #[test]
+    fn auth_failure_classified_correctly() {
+        assert!(matches!(FailureClass::classify("logon failure: unknown user"), FailureClass::AuthFailure));
+        assert!(matches!(FailureClass::classify("KDC_ERR_PREAUTH_FAILED"), FailureClass::AuthFailure));
+        assert!(matches!(FailureClass::classify("account locked out"), FailureClass::AuthFailure));
+        assert!(matches!(FailureClass::classify("STATUS_ACCOUNT_LOCKED_OUT"), FailureClass::AuthFailure));
+    }
+
+    #[test]
+    fn network_error_classified_correctly() {
+        assert!(matches!(FailureClass::classify("connection refused: 10.0.0.1:445"), FailureClass::NetworkError));
+        assert!(matches!(FailureClass::classify("no route to host"), FailureClass::NetworkError));
+        assert!(matches!(FailureClass::classify("connection reset by peer"), FailureClass::NetworkError));
+    }
+
+    #[test]
+    fn access_denied_classified_correctly() {
+        assert!(matches!(FailureClass::classify("STATUS_ACCESS_DENIED"), FailureClass::AccessDenied));
+        assert!(matches!(FailureClass::classify("insufficient privileges"), FailureClass::AccessDenied));
+        assert!(matches!(FailureClass::classify("not allowed"), FailureClass::AccessDenied));
+    }
+
+    #[test]
+    fn not_found_classified_correctly() {
+        assert!(matches!(FailureClass::classify("not found: CN=DoesNotExist,DC=test,DC=local"), FailureClass::NotFound));
+        assert!(matches!(FailureClass::classify("no such object"), FailureClass::NotFound));
+        assert!(matches!(FailureClass::classify("KDC_ERR_S_PRINCIPAL_UNKNOWN"), FailureClass::NotFound));
+    }
+
+    #[test]
+    fn detected_classified_correctly() {
+        assert!(matches!(FailureClass::classify("blocked by Windows Defender"), FailureClass::Detected));
+        assert!(matches!(FailureClass::classify("quarantined"), FailureClass::Detected));
+        assert!(matches!(FailureClass::classify("antivirus alert triggered"), FailureClass::Detected));
+    }
+
+    #[test]
+    fn unknown_failure_for_gibberish() {
+        assert!(matches!(FailureClass::classify("something completely unexpected happened"), FailureClass::Unknown));
+        assert!(matches!(FailureClass::classify(""), FailureClass::Unknown));
+    }
+
+    // ── evaluate() decisions ──
+
+    #[test]
+    fn evaluate_success_returns_continue() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = ok_result(0, 0);
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        assert_eq!(decision, AdaptiveDecision::Continue);
+    }
+
+    #[test]
+    fn evaluate_new_creds_returns_continue() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = ok_result(3, 0);
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        assert_eq!(decision, AdaptiveDecision::Continue);
+    }
+
+    #[test]
+    fn evaluate_goal_achieved_on_domain_admin() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = ok_result(0, 0);
+        let goal = AttackGoal::DomainAdmin { target_group: "Domain Admins".into() };
+        let mut state = sample_state();
+        state.has_domain_admin = true;
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        assert_eq!(decision, AdaptiveDecision::Continue);
+    }
+
+    #[test]
+    fn evaluate_auth_failure_causes_skip_or_retry() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = fail_result("STATUS_LOGON_FAILURE: wrong password");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        // Auth failure should not be Continue — either Retry, Skip, or Replan
+        assert_ne!(decision, AdaptiveDecision::Continue);
+    }
+
+    #[test]
+    fn evaluate_network_error_first_attempt_is_retry() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = fail_result("connection refused: target:445");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        // First network error should be a Retry
+        assert!(matches!(decision, AdaptiveDecision::Retry { .. }));
+    }
+
+    #[test]
+    fn evaluate_detected_triggers_replan_or_skip() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = fail_result("blocked by security controls");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        // Detection should cause Skip or Replan (not Continue, not Retry)
+        assert_ne!(decision, AdaptiveDecision::Continue);
+        assert!(!matches!(decision, AdaptiveDecision::Retry { .. }));
+    }
+
+    // ── maximum retries ──
+
+    #[test]
+    fn retries_exhausted_after_max_retries_network_errors() {
+        let mut engine = default_engine();
+        let mut step = sample_step();
+        step.retries = 3;
+        step.max_retries = 3;
+        step.executed = true;
+        let result = fail_result("connection refused");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        let decision = engine.evaluate(&step, &result, &state, &goal);
+        // After exhausting retries, should not be Retry
+        assert!(!matches!(decision, AdaptiveDecision::Retry { .. }));
+    }
+
+    // ── effective_max_retries ──
+
+    #[test]
+    fn effective_max_retries_uses_step_value_when_nonzero() {
+        let engine = default_engine();
+        let mut step = sample_step();
+        step.max_retries = 5;
+        assert_eq!(engine.effective_max_retries(&step), 5);
+    }
+
+    #[test]
+    fn effective_max_retries_falls_back_to_engine_default() {
+        let engine = default_engine();
+        let step = sample_step();
+        assert_eq!(engine.effective_max_retries(&step), 3);
+    }
+
+    #[test]
+    fn effective_max_retries_engine_overrides_zero_step_value() {
+        let engine = AdaptiveEngine { max_retries: 7, ..AdaptiveEngine::new(false) };
+        let step = sample_step();
+        assert_eq!(engine.effective_max_retries(&step), 7);
+    }
+
+    // ── consecutive_failures tracking ──
+
+    #[test]
+    fn consecutive_failures_increments_on_failure() {
+        let mut engine = default_engine();
+        assert_eq!(engine.consecutive_failures(), 0);
+
+        let step = sample_step();
+        let result = fail_result("auth failure");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        engine.evaluate(&step, &result, &state, &goal);
+        assert_eq!(engine.consecutive_failures(), 1);
+    }
+
+    #[test]
+    fn consecutive_failures_resets_on_success() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result_ok = ok_result(0, 0);
+        let result_fail = fail_result("auth failure");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        // Start at 0
+        assert_eq!(engine.consecutive_failures(), 0);
+
+        // One failure increments to 1
+        engine.evaluate(&step, &result_fail, &state, &goal);
+        assert_eq!(engine.consecutive_failures(), 1);
+
+        // Success resets to 0
+        engine.evaluate(&step, &result_ok, &state, &goal);
+        assert_eq!(engine.consecutive_failures(), 0);
+    }
+
+    // ── failure signature tracking (avoid over-counting same failure) ──
+
+    #[test]
+    fn same_failure_blacklisted_once() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = fail_result("STATUS_ACCESS_DENIED on target DC");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        // Same failure twice should not double-add the action to the blacklist
+        engine.evaluate(&step, &result, &state, &goal);
+        engine.evaluate(&step, &result, &state, &goal);
+        // The blacklist should have at most 1 entry for this action
+        let blacklisted = engine.failed_actions().len();
+        assert!(blacklisted <= 1,
+            "Same action should not be blacklisted more than once, got {blacklisted}");
+    }
+
+    // ── reset_failure_streak ──
+
+    #[test]
+    fn reset_failure_streak_zeroes_counter() {
+        let mut engine = default_engine();
+        let step = sample_step();
+        let result = fail_result("timeout");
+        let goal = AttackGoal::ReconOnly;
+        let state = sample_state();
+
+        engine.evaluate(&step, &result, &state, &goal);
+        engine.evaluate(&step, &result, &state, &goal);
+        assert_eq!(engine.consecutive_failures(), 2);
+
+        engine.reset_failure_streak();
+        assert_eq!(engine.consecutive_failures(), 0);
     }
 }

@@ -4,6 +4,7 @@ pub mod aes_cts;
 pub mod cracker;
 pub mod dpapi;
 pub mod gpp;
+#[cfg(not(feature = "opsec"))]
 pub mod hashcat_gpu;
 pub mod hmac_util;
 pub mod md4;

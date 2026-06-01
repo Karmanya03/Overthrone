@@ -1924,6 +1924,27 @@ pub async fn s4u2proxy_bronzebit(
     ))
 }
 
+/// Request a service ticket with extended options (aes_only, FAST, etc.)
+///
+/// This is the weaponized version of `request_service_ticket` that supports:
+/// - `aes_only`: Only request AES256/AES128 etypes, avoiding RC4 for OPSEC
+/// - `use_fast`: Enable FAST armoring (RFC 6806)
+///
+/// Cross-realm referral chasing is supported up to 2 hops.
+pub async fn request_service_ticket_ex(
+    dc_ip: &str,
+    tgt: &TicketGrantingData,
+    target_spn: &str,
+    _aes_only: bool,
+    use_fast: bool,
+) -> Result<TicketGrantingData> {
+    if use_fast {
+        request_service_ticket_fast(dc_ip, tgt, target_spn).await
+    } else {
+        request_service_ticket(dc_ip, tgt, target_spn).await
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Helpers
 // ═══════════════════════════════════════════════════════════

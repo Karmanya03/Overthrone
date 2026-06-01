@@ -14,6 +14,7 @@
 //! - `wizard`   — Interactive wizard: stage-by-stage with user prompts
 
 pub mod adaptive;
+pub mod coerce_tcp;
 pub mod executor;
 pub mod goals;
 pub mod planner;

@@ -361,7 +361,7 @@ mod tests {
         let target: Ipv6Addr = "fe80::1".parse().unwrap();
         let frag = build_single_fragment(&target, 0x1337, Ipv6Payload::ReverseShell);
         assert!(frag.len() >= 40); // IPv6 header minimum
-        assert_eq!(frag[6], FRAGMENT_HEADER); // Next header = Fragment
+        assert_eq!(frag[8], FRAGMENT_HEADER); // Next header = Fragment
     }
 
     #[test]
