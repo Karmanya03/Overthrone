@@ -389,7 +389,7 @@ impl EngagementSession {
     }
 
     /// Auto-generate findings from engagement state
-    fn auto_generate_findings(&mut self) {
+    pub fn auto_generate_findings(&mut self) {
         let state = match &self.engagement_state {
             Some(s) => s.clone(),
             None => return,

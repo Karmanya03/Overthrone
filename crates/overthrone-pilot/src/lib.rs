@@ -15,6 +15,7 @@
 
 pub mod adaptive;
 pub mod coerce_tcp;
+pub mod dc_verify;
 pub mod executor;
 pub mod goals;
 pub mod planner;
@@ -22,10 +23,12 @@ pub mod playbook;
 #[cfg(feature = "qlearn")]
 pub mod qlearner;
 pub mod runner;
+pub mod session;
 pub(crate) mod trail;
 pub mod wizard;
 
 // Re-exports for CLI integration
+pub use dc_verify::{DcCheckKind, DcCheckResult, DcVerificationSummary, DcVerifyConfig, verify_dc};
 pub use goals::{AttackGoal, GoalStatus};
 pub use planner::{AttackPlan, PlanStep};
 pub use playbook::{Playbook, PlaybookId};

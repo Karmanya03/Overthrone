@@ -16,7 +16,7 @@ use chrono::{Duration, Utc};
 use kerberos_asn1::{Asn1Object, EncTicketPart, EncryptedData, Ticket};
 use kerberos_crypto::new_kerberos_cipher;
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::kerberos::{self, ETYPE_AES256_CTS, ETYPE_RC4_HMAC};
+use overthrone_core::proto::kerberos::{ETYPE_AES256_CTS, ETYPE_RC4_HMAC};
 use tracing::info;
 
 use crate::golden;
@@ -42,25 +42,12 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
 
     validate::validate_sid_format(domain_sid)?;
 
-    let password = config.password.as_deref().ok_or_else(|| {
-        OverthroneError::TicketForge(
-            "Password is required for Diamond Ticket (to request legitimate TGT)".into(),
-        )
-    })?;
-
     // Step 1: Request a legitimate TGT from the KDC
     info!(
-        "[diamond] Step 1: Requesting legitimate TGT as {}",
+        "[diamond] Step 1: Requesting TGT as {}",
         config.username
     );
-    let legit_tgt = kerberos::request_tgt(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        password,
-        false,
-    )
-    .await?;
+    let legit_tgt = config.request_user_tgt().await?;
 
     info!(
         "[diamond] Legitimate TGT obtained (etype: {})",

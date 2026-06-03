@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use overthrone_pilot::goals::EngagementState;
+use crate::goals::EngagementState;
 
 /// Default session directory: ~/.overthrone/sessions/
 pub fn default_session_dir() -> PathBuf {
@@ -35,7 +35,6 @@ fn dirs_home() -> PathBuf {
 
 /// Serialize and save `EngagementState` to `path`.
 /// Creates parent directories if needed.
-#[allow(dead_code)]
 pub fn save_session(path: &Path, state: &EngagementState) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -56,7 +55,6 @@ pub fn save_session(path: &Path, state: &EngagementState) -> std::io::Result<()>
 }
 
 /// Load and deserialize an `EngagementState` from `path`.
-#[allow(dead_code)]
 pub fn load_session(path: &Path) -> Result<EngagementState, String> {
     let data = std::fs::read_to_string(path)
         .map_err(|e| format!("Cannot read session file {}: {}", path.display(), e))?;
@@ -72,7 +70,6 @@ pub fn load_session(path: &Path) -> Result<EngagementState, String> {
 
 /// Build a session file path for a given engagement name.
 /// E.g. `session_path("corp.local")` → `~/.overthrone/sessions/corp.local.json`
-#[allow(dead_code)]
 pub fn session_path(name: &str) -> PathBuf {
     // Sanitize name to avoid path traversal
     let safe_name: String = name
@@ -89,7 +86,6 @@ pub fn session_path(name: &str) -> PathBuf {
 }
 
 /// Auto-save path derived from DC host + domain.
-#[allow(dead_code)]
 pub fn auto_session_path(dc_host: &str, domain: &str) -> PathBuf {
     let name = format!("{}-{}", domain, dc_host)
         .chars()
@@ -104,13 +100,104 @@ pub fn auto_session_path(dc_host: &str, domain: &str) -> PathBuf {
     default_session_dir().join(format!("{}.json", name))
 }
 
-// ─── Internal ─────────────────────────────────────────────────────────────────
-
-#[allow(dead_code)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SessionEnvelope {
     version: u32,
     overthrone_version: String,
     saved_at: String,
     state: EngagementState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn dummy_state() -> EngagementState {
+        EngagementState {
+            domain: Some("test.local".into()),
+            dc_ip: Some("192.168.1.1".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_default_session_dir_created() {
+        let dir = default_session_dir();
+        let components: Vec<_> = dir.components().collect();
+        assert!(components
+            .iter()
+            .any(|c| c.as_os_str() == ".overthrone"));
+        assert!(components
+            .iter()
+            .any(|c| c.as_os_str() == "sessions"));
+    }
+
+    #[test]
+    fn test_save_and_load_session() {
+        let dir = std::env::temp_dir().join("ovt_session_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("test_session.json");
+        let state = dummy_state();
+
+        save_session(&path, &state).unwrap();
+        assert!(path.exists());
+
+        let loaded = load_session(&path).unwrap();
+        assert_eq!(loaded.domain, Some("test.local".into()));
+        assert_eq!(loaded.dc_ip, Some("192.168.1.1".into()));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_bare_state_fallback() {
+        let dir = std::env::temp_dir().join("ovt_session_bare_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("bare_state.json");
+        let state = dummy_state();
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        fs::write(&path, &json).unwrap();
+
+        let loaded = load_session(&path).unwrap();
+        assert_eq!(loaded.domain, Some("test.local".into()));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_session_path_sanitizes_name() {
+        let path = session_path("corp.local");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert!(filename.contains("corp.local"));
+        assert!(filename.ends_with(".json"));
+
+        // Path traversal attempt: / replaced with _
+        let path = session_path("../evil");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        // Slash replaced with underscore — no new path components introduced
+        assert_eq!(filename, ".._evil.json");
+        // The joined path should not go up directories
+        let parent = path.parent().unwrap();
+        let expected_parent = default_session_dir();
+        assert_eq!(parent, expected_parent);
+    }
+
+    #[test]
+    fn test_auto_session_path() {
+        let path = auto_session_path("dc01.corp.local", "corp.local");
+        let name = path.file_stem().unwrap().to_string_lossy();
+        assert!(name.contains("corp.local"));
+        assert!(name.contains("dc01.corp.local"));
+    }
+
+    #[test]
+    fn test_load_nonexistent_session() {
+        let result = load_session(Path::new("/nonexistent/path.json"));
+        assert!(result.is_err());
+    }
 }

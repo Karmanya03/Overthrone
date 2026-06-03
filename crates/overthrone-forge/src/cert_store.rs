@@ -195,14 +195,11 @@ fn parse_icertrequest_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8>> {
 
     // Check HRESULT — S_OK (0) means success
     // Common ADCS HRESULTs: CRYPT_E_REVOKED (0x80092010), CERTSRV_E_BAD_REQUESTSUBJECT (0x80094001)
-    if hresult != 0 && hresult != 1 {
-        // Some implementations return 1 for pending
-        if hresult & 0x80000000 != 0 {
-            return Err(OverthroneError::CertificateRequest(format!(
-                "ICertRequestD returned HRESULT 0x{:08X}",
-                hresult
-            )));
-        }
+    if hresult != 0 && hresult != 1 && hresult & 0x80000000 != 0 {
+        return Err(OverthroneError::CertificateRequest(format!(
+            "ICertRequestD returned HRESULT 0x{:08X}",
+            hresult
+        )));
     }
 
     // 2. pdwRequestId (DWORD at stub_start + 4)

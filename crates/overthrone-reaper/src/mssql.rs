@@ -73,71 +73,6 @@ impl MssqlInstance {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_mssql_filter() {
-        let f = mssql_filter();
-        assert!(f.contains("servicePrincipalName=MSSQLSvc/*"));
-        assert!(f.contains("objectCategory=person"));
-        assert!(f.contains("objectCategory=computer"));
-        assert!(f.contains("msDS-GroupManagedServiceAccount"));
-    }
-
-    #[test]
-    fn test_from_spn_host_port() {
-        let inst = MssqlInstance::from_spn(
-            "MSSQLSvc/sql01.contoso.com:1433",
-            "svc_sql",
-            "CN=SQL,DC=c",
-            true,
-        );
-        assert_eq!(inst.hostname.as_deref(), Some("sql01.contoso.com"));
-        assert_eq!(inst.port, Some(1433));
-        assert!(inst.instance_name.is_none());
-        assert_eq!(inst.service_account, "svc_sql");
-        assert!(inst.enabled);
-    }
-
-    #[test]
-    fn test_from_spn_host_instance() {
-        let inst = MssqlInstance::from_spn(
-            "MSSQLSvc/sql02.contoso.com:NAMEDINST",
-            "svc_sql2",
-            "CN=SQL2,DC=c",
-            false,
-        );
-        assert_eq!(inst.hostname.as_deref(), Some("sql02.contoso.com"));
-        assert!(inst.port.is_none());
-        assert_eq!(inst.instance_name.as_deref(), Some("NAMEDINST"));
-        assert!(!inst.enabled);
-    }
-
-    #[test]
-    fn test_from_spn_host_only() {
-        let inst = MssqlInstance::from_spn(
-            "MSSQLSvc/sql03.contoso.com",
-            "svc_sql3",
-            "CN=SQL3,DC=c",
-            true,
-        );
-        assert_eq!(inst.hostname.as_deref(), Some("sql03.contoso.com"));
-        assert!(inst.port.is_none());
-        assert!(inst.instance_name.is_none());
-    }
-
-    #[test]
-    fn test_from_spn_malformed() {
-        let inst = MssqlInstance::from_spn("not-a-valid-spn", "svc", "CN=Bad,DC=c", true);
-        assert!(inst.hostname.is_none());
-        assert!(inst.port.is_none());
-        assert!(inst.instance_name.is_none());
-        assert_eq!(inst.spn, "not-a-valid-spn");
-    }
-}
-
 pub fn mssql_filter() -> String {
     // Include user accounts, computer accounts, and MSA/gMSA accounts that may
     // run MSSQL services. Limiting to objectCategory=person misses computer-hosted
@@ -275,4 +210,69 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
         entries.len()
     );
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mssql_filter() {
+        let f = mssql_filter();
+        assert!(f.contains("servicePrincipalName=MSSQLSvc/*"));
+        assert!(f.contains("objectCategory=person"));
+        assert!(f.contains("objectCategory=computer"));
+        assert!(f.contains("msDS-GroupManagedServiceAccount"));
+    }
+
+    #[test]
+    fn test_from_spn_host_port() {
+        let inst = MssqlInstance::from_spn(
+            "MSSQLSvc/sql01.contoso.com:1433",
+            "svc_sql",
+            "CN=SQL,DC=c",
+            true,
+        );
+        assert_eq!(inst.hostname.as_deref(), Some("sql01.contoso.com"));
+        assert_eq!(inst.port, Some(1433));
+        assert!(inst.instance_name.is_none());
+        assert_eq!(inst.service_account, "svc_sql");
+        assert!(inst.enabled);
+    }
+
+    #[test]
+    fn test_from_spn_host_instance() {
+        let inst = MssqlInstance::from_spn(
+            "MSSQLSvc/sql02.contoso.com:NAMEDINST",
+            "svc_sql2",
+            "CN=SQL2,DC=c",
+            false,
+        );
+        assert_eq!(inst.hostname.as_deref(), Some("sql02.contoso.com"));
+        assert!(inst.port.is_none());
+        assert_eq!(inst.instance_name.as_deref(), Some("NAMEDINST"));
+        assert!(!inst.enabled);
+    }
+
+    #[test]
+    fn test_from_spn_host_only() {
+        let inst = MssqlInstance::from_spn(
+            "MSSQLSvc/sql03.contoso.com",
+            "svc_sql3",
+            "CN=SQL3,DC=c",
+            true,
+        );
+        assert_eq!(inst.hostname.as_deref(), Some("sql03.contoso.com"));
+        assert!(inst.port.is_none());
+        assert!(inst.instance_name.is_none());
+    }
+
+    #[test]
+    fn test_from_spn_malformed() {
+        let inst = MssqlInstance::from_spn("not-a-valid-spn", "svc", "CN=Bad,DC=c", true);
+        assert!(inst.hostname.is_none());
+        assert!(inst.port.is_none());
+        assert!(inst.instance_name.is_none());
+        assert_eq!(inst.spn, "not-a-valid-spn");
+    }
 }

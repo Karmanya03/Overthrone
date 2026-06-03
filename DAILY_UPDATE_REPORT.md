@@ -82,3 +82,49 @@ Short version: the tool is strong, the domain is still the problem.
   - **wizard** (6 tests): Stage ordering, count, distinctness, display format, session UUID validity, cleanup postcondition.
   
   Zero clippy warnings at default lint level across the entire crate. The test suite runs in under a second.
+
+  ## 02-06-2026
+
+- **LDAPS relay goes live**: `build_relay_tls_config()` builds a rustls `ClientConfig` with `AcceptAllVerifier` (ntlmrelayx trust model). `wrap_tls()` does the actual TLS wrap on a TCP stream. `--ldaps` flag on `LdapRelay` subcommand now does something.
+
+- **ICertPassage RPC client** (forge): `RequestClient` + `RemoteCertService` over `\PIPE\cert` via UUID `91ae6020-9e3c-11cf-8d7c-00aa00c091be`. Foundation for ESC11 instead of just printing `ntlmrelayx.py`.
+
+- **CES enrollment client for WS2025** (forge): `EnrolmentWebServiceClient` hits `ADPolicyProvider/CES` SOAP endpoint. `CertAutoEnroll` orchestrates CES + RPC paths for ESC9/10.
+
+- **Forge subcommands go full roster**: CLI `forge` now handles Diamond, Sapphire, Bronze Bit, Inter-Realm TGT, Skeleton Key, DSRM, DCSync User, ACL Backdoor, noPac, Convert Ticket. All route through `run_forge()` via `build_runner_action()` bridge.
+
+- **Viewer TLS + security stack** (Phase 3): Custom `TlsListener` implementing `axum::serve::Listener` — per-connection `TlsAcceptor::accept` via rustls 0.23 (ring crypto). Auth middleware always-on, returns `INTERNAL_SERVER_ERROR` if no creds configured. CSRF middleware requires `X-CSRF-Token` header on POST/PUT/DELETE. CORS restricted to `localhost`/`127.0.0.1`/`[::1]` (GET + POST only, no wildcard). `ViewerConfig::default()` generates random 12-char user / 24-char pass / 32-char CSRF token (printed to stdout at launch) — no more accidental open-by-default server.
+
+- **rand 0.10 API migration**: Switched from `gen_range`/`distributions::Alphanumeric` to `RngExt::random_range` + `ThreadRng::default` + manual charset for the new credential generator.
+
+- **40 new tests** (1155 → 1195): 11 viewer (TlsConfig construction, random_string length/charset/uniqueness, basic_auth empty-user + colon-in-pass, default random creds differ across calls), 11 relay (RelayStream newtype traits + Debug + Send + Unpin + `wrap_tls` rejects empty hostname, `requires_tls` per protocol), 18 forge (ForgeAction Display for all 11 variants, serde round-trip, `effective_impersonate`/`effective_groups`/`effective_lifetime` defaults + custom overrides).
+
+- **Pre-existing test bugs fixed**: `reaper/export.rs` had `""servicePrincipalName""` (double-quoted in source) — fixed to `"servicePrincipalName"`. `forge/icert_passage.rs` `test_parse_response_pending` used 28-byte stub but parser reads from offset 24 — fixed to match.
+
+- **Clippy fixes**: `forge/cert_auto_enroll.rs` `vec_init_then_push` (collapsed `Vec::new()` + 4 pushes into `vec![..]`). Workspace still clean at `-D warnings` across all 9 crates.
+
+## 03-06-2026
+
+- **Relay IPv6 transport**: `format_addr()` in `utils.rs` brackets IPv6 addresses and leaves IPv4/hostnames plain. Applied to all 6 `TcpListener::bind` and 3 `TcpStream::connect` calls across the relay crate. 5 tests.
+
+- **Relay SOCKS5 proxy output**: `RelayConfig.socks5_proxy: Option<SocketAddr>` with `connect_to_target()` helper using `tokio_socks::Socks5Stream`. All 6 `TcpStream::connect` calls in `relay.rs` proxy-aware. Fully backward-compatible (default `None`).
+
+- **Relay HTTP->SMB asymmetric relay**: `RelayBridge` (Arc<TokioMutex<NtlmRelay>> + Handle) with `PendingRelays` map for client-IP->challenge tracking. `handle_http_client()` bridges HTTP auth to SMB relay via `block_on` fallback. 4 tests.
+
+- **Relay DCE/RPC signing bypass**: SIGN/SEAL/CBT stripping gated by existing `ldap_signing_bypass` config flag, applied in MSMQ dispatch. Reuses same NTLM-level transforms as LDAP path.
+
+- **Relay mTLS client certificate**: `TlsIdentity` struct (cert_pem/key_pem) with `build_relay_tls_config(Option<&TlsIdentity>)` calling `with_client_auth_cert()` using `rustls::pki_types::PemObject`. CLi `--auto-coerce-targets` and `--auto-coerce-listener` flags on 4 relay subcommands.
+
+- **Relay auto-trigger coercion**: `RelayControllerConfig.auto_coerce_targets` + `auto_coerce_listener`. `auto_coerce()` method runs all 3 techniques (printer-bug, petitpotam, dfs-coerce) per target after listeners are up. Failures logged as warnings, never abort relay.
+
+- **Hunter Kerberoast pre-auth skip**: `KerberoastConfig.skip_asrep_roastable: bool` (default true) skips `dont_req_preauth` accounts in `enumerate_spn_accounts()`. 6 tests.
+
+- **session_store moved to pilot**: `crates/overthrone-pilot/src/session.rs` with `save_session`, `load_session`, `SessionEnvelope`, `default_session_dir`. Unlinked from CLI `main.rs`. 7 tests carried over.
+
+- **Pilot hostile-DC detection**: New `dc_verify.rs` module with 5 checks (LDAP rootDSE probe, domain name match, DNS SRV consistency, hostname resolution, Kerberos port 88). `DcVerifyConfig` with enabled/skip_dns/strict modes. `DcVerificationSummary` stored in `EngagementState.dc_verification`. CLI `--no-dc-verify` / `--no-dc-verify-dns` on wizard subcommand. 5 tests.
+
+- **Forge PKINIT-keyed ticket input**: `pkinit_auth.rs` with `pkinit_authenticate()` loading PEM cert+key from disk. `ForgeConfig.pkinit_cert_path` + `pkinit_key_path` fields. `request_user_tgt()` helper selects PKINIT first, falls back to password/hash. `diamond.rs`, `sapphire.rs`, `bronze_bit.rs` all use `request_user_tgt()`. CLi `--pkinit-cert` / `--pkinit-key` global flags. `PkinitResult.session_key_etype` added in core.
+
+- **Sapphire AES key derivation**: `derive_user_key()` in `sapphire.rs` now supports AES128/256 via `kerberos_crypto::generate_key_from_string()` (full PBKDF2 + DK("kerberos") per RFC 3962), not just RC4. PKINIT+S4U2Self chain is fully functional end-to-end.
+
+- **Tests**: 1212 total (was 1195 prior session), all 9 crates green. Clippy `-D warnings` clean across workspace.

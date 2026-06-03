@@ -4135,6 +4135,7 @@ dependencies = [
  "pretty_assertions",
  "rand 0.10.1",
  "rcgen",
+ "reqwest 0.13.2",
  "rsa 0.9.10",
  "serde",
  "serde_json",
@@ -4234,10 +4235,12 @@ dependencies = [
  "hmac 0.12.1",
  "overthrone-core",
  "rand 0.10.1",
+ "rustls",
  "rustls-native-certs",
  "sha2 0.10.9",
  "tokio",
  "tokio-rustls",
+ "tokio-socks",
  "tracing",
 ]
 
@@ -4270,10 +4273,15 @@ dependencies = [
  "base64",
  "chrono",
  "open",
+ "rand 0.10.1",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "uuid",
@@ -5839,6 +5847,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7024,6 +7041,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-socks"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7e2948f60dbe26b35f2c7fb74ac2854c1fddded0fe9d7548fcc674a246f7615"
+dependencies = [
+ "either",
+ "futures-util",
+ "thiserror 1.0.69",
  "tokio",
 ]
 

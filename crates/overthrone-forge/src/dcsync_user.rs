@@ -190,7 +190,7 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
     info!("[dcsync] DRSGetNCChanges returned {} bytes", gnc_resp.len());
 
     // ── 6. Parse the replication response ──
-    let secrets = parse_dcsync_response(&gnc_resp, &drs_session_key, &realm);
+    let secrets = parse_dcsync_response(&gnc_resp, &drs_session_key, &realm)?;
 
     let extracted_count = secrets.len();
     let success = extracted_count > 0;
@@ -653,7 +653,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
             .map_err(|e| OverthroneError::custom(format!("DRSGetNCChanges failed: {e}")))?;
 
         let page_secrets =
-            parse_dcsync_response_with_cursor(&gnc_resp, &drs_session_key, &realm, &mut cursor);
+            parse_dcsync_response_with_cursor(&gnc_resp, &drs_session_key, &realm, &mut cursor)?;
         let page_count = page_secrets.len();
         all_secrets.extend(page_secrets);
 
@@ -796,27 +796,23 @@ fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) ->
 // Response Parsing
 // ═══════════════════════════════════════════════════════════
 
-/// Parse DCSync response using the DRSR parser in overthrone-core
-fn parse_dcsync_response(resp: &[u8], session_key: &[u8], domain: &str) -> Vec<DcSyncSecrets> {
-    match drsr::parse_get_nc_changes_reply(resp, session_key) {
-        Ok(result) => {
-            info!(
-                "[dcsync] Parser returned {} objects, more_data={}",
-                result.objects.len(),
-                result.more_data
-            );
+/// Parse DCSync response using the DRSR parser in overthrone-core.
+/// Returns an error on parse failure instead of silently returning an empty Vec.
+fn parse_dcsync_response(resp: &[u8], session_key: &[u8], domain: &str) -> Result<Vec<DcSyncSecrets>> {
+    let result = drsr::parse_get_nc_changes_reply(resp, session_key)
+        .map_err(|e| OverthroneError::custom(format!("[dcsync] Failed to parse DRSGetNCChanges reply: {e}")))?;
 
-            result
-                .objects
-                .iter()
-                .map(|obj| dcsync_obj_to_secrets(obj, domain))
-                .collect()
-        }
-        Err(e) => {
-            warn!("[dcsync] Failed to parse DRSGetNCChanges reply: {}", e);
-            Vec::new()
-        }
-    }
+    info!(
+        "[dcsync] Parser returned {} objects, more_data={}",
+        result.objects.len(),
+        result.more_data
+    );
+
+    Ok(result
+        .objects
+        .iter()
+        .map(|obj| dcsync_obj_to_secrets(obj, domain))
+        .collect())
 }
 
 /// Parse DCSync response and extract pagination cursor for multi-page replication.
@@ -825,32 +821,26 @@ fn parse_dcsync_response_with_cursor(
     session_key: &[u8],
     domain: &str,
     cursor: &mut Option<DcSyncCursor>,
-) -> Vec<DcSyncSecrets> {
-    match drsr::parse_get_nc_changes_reply(resp, session_key) {
-        Ok(result) => {
-            info!(
-                "[dcsync] Parser returned {} objects, more_data={}",
-                result.objects.len(),
-                result.more_data
-            );
+) -> Result<Vec<DcSyncSecrets>> {
+    let result = drsr::parse_get_nc_changes_reply(resp, session_key)
+        .map_err(|e| OverthroneError::custom(format!("[dcsync] Failed to parse DRSGetNCChanges reply: {e}")))?;
 
-            *cursor = Some(DcSyncCursor {
-                uuid_invoc_id_src: result.uuid_invoc_id_src,
-                usnvec_to: result.usnvec_to,
-            });
+    info!(
+        "[dcsync] Parser returned {} objects, more_data={}",
+        result.objects.len(),
+        result.more_data
+    );
 
-            result
-                .objects
-                .iter()
-                .map(|obj| dcsync_obj_to_secrets(obj, domain))
-                .collect()
-        }
-        Err(e) => {
-            warn!("[dcsync] Failed to parse DRSGetNCChanges reply: {}", e);
-            *cursor = None;
-            Vec::new()
-        }
-    }
+    *cursor = Some(DcSyncCursor {
+        uuid_invoc_id_src: result.uuid_invoc_id_src,
+        usnvec_to: result.usnvec_to,
+    });
+
+    Ok(result
+        .objects
+        .iter()
+        .map(|obj| dcsync_obj_to_secrets(obj, domain))
+        .collect())
 }
 
 fn dcsync_obj_to_secrets(obj: &drsr::ReplicatedObject, domain: &str) -> DcSyncSecrets {

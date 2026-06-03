@@ -51,6 +51,8 @@ pub struct AutoPwnArgs {
     pub userlist: Option<String>,
     pub use_ldap: bool,
     pub concurrency: usize,
+    pub no_dc_verify: bool,
+    pub no_dc_verify_dns: bool,
 }
 
 /// Maximum stage the autonomous pipeline should attempt to reach.
@@ -152,6 +154,10 @@ pub async fn run(
         #[cfg(feature = "qlearn")]
         q_table_path: std::path::PathBuf::from(&args.q_table),
         initial_state,
+        dc_verify: overthrone_pilot::dc_verify::DcVerifyConfig {
+            skip_dns: args.no_dc_verify_dns,
+            ..Default::default()
+        },
     };
 
     let pilot_domain_display = match creds {
@@ -221,11 +227,11 @@ pub async fn run(
 
     // Auto-save session state
     {
-        let save_path = crate::session_store::auto_session_path(
+        let save_path = overthrone_pilot::session::auto_session_path(
             &dc,
             result.state.domain.as_deref().unwrap_or("unknown"),
         );
-        match crate::session_store::save_session(&save_path, &result.state) {
+        match overthrone_pilot::session::save_session(&save_path, &result.state) {
             Ok(_) => banner::print_info(&format!("Session saved → {}", save_path.display())),
             Err(e) => banner::print_warn(&format!("Could not save session: {}", e)),
         }

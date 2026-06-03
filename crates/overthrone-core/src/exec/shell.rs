@@ -259,7 +259,7 @@ impl InteractiveShell {
     async fn execute_winrm(&self, command: &str) -> Result<String> {
         let creds = match &self.backend {
             Some(ShellBackend::Winrm { creds }) => creds.clone(),
-            _ => unreachable!(),
+            _ => return Err(OverthroneError::Shell("execute_winrm called without WinRM backend".to_string())),
         };
 
         debug!("Executing via WinRM: {}", command);
@@ -317,7 +317,7 @@ impl InteractiveShell {
     async fn execute_smb(&self, command: &str) -> Result<String> {
         let session = match &self.backend {
             Some(ShellBackend::Smb { session }) => session,
-            _ => unreachable!(),
+            _ => return Err(OverthroneError::Shell("execute_smb called without SMB backend".to_string())),
         };
 
         debug!("Executing via SMB: {}", command);
@@ -361,7 +361,7 @@ impl InteractiveShell {
     async fn execute_wmi(&self, command: &str) -> Result<String> {
         let session = match &self.backend {
             Some(ShellBackend::Wmi { session }) => session,
-            _ => unreachable!(),
+            _ => return Err(OverthroneError::Shell("execute_wmi called without WMI backend".to_string())),
         };
 
         debug!("Executing via WMI: {}", command);

@@ -785,9 +785,17 @@ impl AdcsClient {
     }
 }
 
+impl AdcsClient {
+    /// Try to create a default client, returning an error instead of panicking.
+    pub fn try_default() -> Result<Self> {
+        Self::new("localhost").map_err(|e| OverthroneError::Adcs(format!("Failed to create default ADCS client: {e}")))
+    }
+}
+
 impl Default for AdcsClient {
     fn default() -> Self {
-        Self::new("localhost").expect("Failed to create default ADCS client")
+        // LEGACY: panics on failure — prefer AdcsClient::try_default()
+        Self::new("localhost").expect("Failed to create default ADCS client (use try_default() for fallible path)")
     }
 }
 

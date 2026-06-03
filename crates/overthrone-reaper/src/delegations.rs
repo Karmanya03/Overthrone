@@ -31,19 +31,6 @@ pub struct DelegationEntry {
     pub enabled: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_delegation_filter() {
-        let f = delegation_filter();
-        assert!(f.contains("userAccountControl:1.2.840.113556.1.4.803:=524288"));
-        assert!(f.contains("msDS-AllowedToDelegateTo=*"));
-        assert!(f.contains("msDS-AllowedToActOnBehalfOfOtherIdentity=*"));
-    }
-}
-
 pub fn delegation_filter() -> String {
     "(|(userAccountControl:1.2.840.113556.1.4.803:=524288)(userAccountControl:1.2.840.113556.1.4.803:=16777216)(msDS-AllowedToDelegateTo=*)(msDS-AllowedToActOnBehalfOfOtherIdentity=*))".to_string()
 }
@@ -155,4 +142,17 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
 
     info!("[delegations] Found {} delegation entries", results.len());
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_delegation_filter() {
+        let f = delegation_filter();
+        assert!(f.contains("userAccountControl:1.2.840.113556.1.4.803:=524288"));
+        assert!(f.contains("msDS-AllowedToDelegateTo=*"));
+        assert!(f.contains("msDS-AllowedToActOnBehalfOfOtherIdentity=*"));
+    }
 }

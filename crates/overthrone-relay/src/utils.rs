@@ -1,11 +1,25 @@
-//! Utility functions for NTLM relay and responder
+﻿//! Utility functions for NTLM relay and responder
 //!
 //! Provides helper functions for NTLM calculations,
 //! challenge generation, and response validation using
 //! the full NTLMv2 implementation from overthrone-core.
 
+use std::net::IpAddr;
+
 use crate::{NtlmChallenge, NtlmResponse, Result};
 use overthrone_core::proto::ntlm;
+
+/// Format an IP address and port into a `host:port` string
+/// suitable for `TcpStream::connect` or `TcpListener::bind`.
+///
+/// Correctly brackets IPv6 addresses (`[::1]:445`) while
+/// leaving IPv4 and hostnames plain (`192.168.1.1:445`).
+pub fn format_addr(ip: &str, port: u16) -> String {
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => format!("[{ip}]:{port}"),
+        _ => format!("{ip}:{port}"),
+    }
+}
 
 /// Calculate NTLMv2 response for a given challenge.
 /// This is used for offline cracking validation — NOT for relay
@@ -130,6 +144,36 @@ pub fn extract_domain_from_target_info(target_info: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_addr_ipv4() {
+        assert_eq!(format_addr("192.168.1.1", 445), "192.168.1.1:445");
+    }
+
+    #[test]
+    fn test_format_addr_ipv6() {
+        assert_eq!(format_addr("::1", 389), "[::1]:389");
+        assert_eq!(format_addr("fe80::1", 80), "[fe80::1]:80");
+    }
+
+    #[test]
+    fn test_format_addr_unspecified() {
+        assert_eq!(format_addr("0.0.0.0", 445), "0.0.0.0:445");
+        assert_eq!(format_addr("::", 80), "[::]:80");
+    }
+
+    #[test]
+    fn test_format_addr_hostname() {
+        // Hostnames are passed through as-is
+        let result = format_addr("dc01.corp.local", 445);
+        assert_eq!(result, "dc01.corp.local:445");
+    }
+
+    #[test]
+    fn test_format_addr_loopback() {
+        assert_eq!(format_addr("127.0.0.1", 8080), "127.0.0.1:8080");
+        assert_eq!(format_addr("::1", 443), "[::1]:443");
+    }
 
     const TEST_USER: &str = "testuser";
     const TEST_DOMAIN: &str = "TEST";

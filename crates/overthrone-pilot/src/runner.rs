@@ -239,9 +239,38 @@ pub struct AutoPwnConfig {
     pub q_table_path: std::path::PathBuf,
     /// Pre-loaded engagement state (for session resume)
     pub initial_state: Option<crate::goals::EngagementState>,
+    /// Hostile DC verification configuration
+    pub dc_verify: crate::dc_verify::DcVerifyConfig,
 }
 
 impl AutoPwnConfig {
+    /// Validate configuration at build time.
+    /// Returns `Ok(())` if all fields are semantically valid, or an error message.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.dc_host.is_empty() {
+            return Err("dc_host must not be empty".into());
+        }
+        if self.target.is_empty() {
+            return Err("target must not be empty".into());
+        }
+        if self.creds.domain.is_empty() {
+            return Err("creds.domain must not be empty".into());
+        }
+        if !self.creds.domain.contains('.') {
+            return Err(format!(
+                "creds.domain '{}' does not look like an FQDN (expected a dot)",
+                self.creds.domain
+            ));
+        }
+        if self.creds.username.is_empty() {
+            return Err("creds.username must not be empty".into());
+        }
+        if self.creds.secret().is_empty() {
+            return Err("credentials secret (password or hash) must not be empty".into());
+        }
+        Ok(())
+    }
+
     /// Derive the attack goal from the target string
     pub fn goal(&self) -> AttackGoal {
         let lower = self.target.to_lowercase();
@@ -327,6 +356,7 @@ impl AutoPwnConfig {
             #[cfg(feature = "qlearn")]
             q_table_path: std::path::PathBuf::from("q_table.json"),
             initial_state: None,
+            dc_verify: crate::dc_verify::DcVerifyConfig::default(),
         }
     }
 }
@@ -535,6 +565,50 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     ctx.ldap_available = false;
                 }
             }
+        }
+    }
+
+    // ── Hostile DC Detection ──
+    if config.dc_verify.enabled && !config.dry_run {
+        println!(
+            "  {} Hostile DC detection check...",
+            "DC".bold().cyan()
+        );
+        let dc_result = crate::dc_verify::verify_dc(
+            &config.dc_host,
+            &config.creds.domain,
+            &config.dc_verify,
+        )
+        .await;
+        dc_result.print_summary();
+        state.dc_verification = Some(dc_result.clone());
+
+        if dc_result.is_hostile() && config.dc_verify.strict {
+            let reason = format!(
+                "Hostile DC detected: {}",
+                dc_result.summary
+            );
+            println!(
+                "  {} Hostile DC detected and strict mode enabled — aborting",
+                "ABORT".red().bold()
+            );
+            return AutoPwnResult {
+                domain_admin_achieved: false,
+                goal_status: GoalStatus::Blocked { reason },
+                state,
+                adaptive_summary: AdaptiveSummary {
+                    total_replans: 0,
+                    dead_hosts: Vec::new(),
+                    blocked_methods: Vec::new(),
+                    blacklisted_actions: Vec::new(),
+                },
+                duration_secs: wall_start.elapsed().as_secs(),
+                started_at,
+                finished_at: Utc::now(),
+                steps_executed: 0,
+                steps_succeeded: 0,
+                steps_failed: 0,
+            };
         }
     }
 
@@ -1630,6 +1704,7 @@ mod tests {
             #[cfg(feature = "qlearn")]
             q_table_path: std::path::PathBuf::from("test.json"),
             initial_state: None,
+            dc_verify: crate::dc_verify::DcVerifyConfig::default(),
         }
     }
 

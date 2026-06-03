@@ -793,9 +793,17 @@ impl RemoteRegistry {
         // Parse the response structure
         // [RPC header][type:u32][len:u32][data...]
         let offset = 24; // Skip RPC header
-        let data_type = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
-        let data_len =
-            u32::from_le_bytes(response[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        if response.len() < offset + 8 {
+            return Err(OverthroneError::custom("QueryValue response too short for header"));
+        }
+        let type_bytes = response[offset..offset + 4]
+            .try_into()
+            .map_err(|_| OverthroneError::custom("QueryValue type bytes read failed"))?;
+        let data_type = u32::from_le_bytes(type_bytes);
+        let len_bytes = response[offset + 4..offset + 8]
+            .try_into()
+            .map_err(|_| OverthroneError::custom("QueryValue len bytes read failed"))?;
+        let data_len = u32::from_le_bytes(len_bytes) as usize;
 
         if offset + 8 + data_len > response.len() {
             return Err(OverthroneError::custom("QueryValue data truncated"));

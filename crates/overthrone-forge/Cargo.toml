@@ -26,6 +26,7 @@ sha2.workspace = true
 rsa = "0.9"
 rcgen = "0.14"
 base64.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true

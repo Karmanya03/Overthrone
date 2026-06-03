@@ -306,6 +306,9 @@ impl OvtModule for NtdsDumpModule {
             output_path: None,
             payload_path: None,
             skeleton_master_password: None,
+            pkinit_cert_path: None,
+            pkinit_key_path: None,
+            dry_run: false,
         };
 
         let mut output = String::new();
@@ -505,6 +508,7 @@ impl OvtModule for KerberoastModule {
             admin_only: false,
             downgrade_to_rc4: true,
             spn_filter: None,
+            skip_asrep_roastable: true,
         };
 
         let actions = vec![overthrone_hunter::runner::HuntAction::Kerberoast(kc)];

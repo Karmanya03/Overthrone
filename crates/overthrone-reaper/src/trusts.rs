@@ -84,64 +84,6 @@ const TRUST_ATTR_CROSS_ORG: u32 = 0x00000010;
 const TRUST_ATTR_WITHIN_FOREST: u32 = 0x00000020;
 const TRUST_ATTR_TGT_DELEGATION: u32 = 0x00000200;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_trust_filter() {
-        assert_eq!(trust_filter(), "(objectClass=trustedDomain)");
-    }
-
-    #[test]
-    fn test_trust_direction_display_inbound() {
-        assert_eq!(format!("{}", TrustDirection::Inbound), "Inbound");
-    }
-
-    #[test]
-    fn test_trust_direction_display_outbound() {
-        assert_eq!(format!("{}", TrustDirection::Outbound), "Outbound");
-    }
-
-    #[test]
-    fn test_trust_direction_display_bidirectional() {
-        assert_eq!(
-            format!("{}", TrustDirection::Bidirectional),
-            "Bidirectional"
-        );
-    }
-
-    #[test]
-    fn test_trust_direction_display_unknown() {
-        assert_eq!(format!("{}", TrustDirection::Unknown(99)), "Unknown(99)");
-    }
-
-    #[test]
-    fn test_trust_type_display_parent_child() {
-        assert_eq!(format!("{}", TrustType::ParentChild), "ParentChild");
-    }
-
-    #[test]
-    fn test_trust_type_display_external() {
-        assert_eq!(format!("{}", TrustType::External), "External");
-    }
-
-    #[test]
-    fn test_trust_type_display_forest() {
-        assert_eq!(format!("{}", TrustType::Forest), "Forest");
-    }
-
-    #[test]
-    fn test_trust_type_display_cross_link() {
-        assert_eq!(format!("{}", TrustType::CrossLink), "CrossLink");
-    }
-
-    #[test]
-    fn test_trust_type_display_unknown() {
-        assert_eq!(format!("{}", TrustType::Unknown(42)), "Unknown(42)");
-    }
-}
-
 pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> {
     info!("[trusts] Querying {} for domain trusts", config.dc_ip);
 
@@ -249,4 +191,62 @@ pub async fn enumerate_trusts(config: &ReaperConfig) -> Result<Vec<TrustEntry>> 
 
     info!("[trusts] Found {} domain trusts", results.len());
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trust_filter() {
+        assert_eq!(trust_filter(), "(objectClass=trustedDomain)");
+    }
+
+    #[test]
+    fn test_trust_direction_display_inbound() {
+        assert_eq!(format!("{}", TrustDirection::Inbound), "Inbound");
+    }
+
+    #[test]
+    fn test_trust_direction_display_outbound() {
+        assert_eq!(format!("{}", TrustDirection::Outbound), "Outbound");
+    }
+
+    #[test]
+    fn test_trust_direction_display_bidirectional() {
+        assert_eq!(
+            format!("{}", TrustDirection::Bidirectional),
+            "Bidirectional"
+        );
+    }
+
+    #[test]
+    fn test_trust_direction_display_unknown() {
+        assert_eq!(format!("{}", TrustDirection::Unknown(99)), "Unknown(99)");
+    }
+
+    #[test]
+    fn test_trust_type_display_parent_child() {
+        assert_eq!(format!("{}", TrustType::ParentChild), "ParentChild");
+    }
+
+    #[test]
+    fn test_trust_type_display_external() {
+        assert_eq!(format!("{}", TrustType::External), "External");
+    }
+
+    #[test]
+    fn test_trust_type_display_forest() {
+        assert_eq!(format!("{}", TrustType::Forest), "Forest");
+    }
+
+    #[test]
+    fn test_trust_type_display_cross_link() {
+        assert_eq!(format!("{}", TrustType::CrossLink), "CrossLink");
+    }
+
+    #[test]
+    fn test_trust_type_display_unknown() {
+        assert_eq!(format!("{}", TrustType::Unknown(42)), "Unknown(42)");
+    }
 }

@@ -25,6 +25,7 @@
 pub mod acl_backdoor;
 pub mod bronze_bit;
 pub mod cert_store;
+pub mod cert_auto_enroll;
 pub mod cleanup;
 pub mod convert;
 pub mod dcsync_user;
@@ -32,7 +33,9 @@ pub mod diamond;
 pub mod dsrm;
 pub mod exec_util;
 pub mod golden;
+pub mod icert_passage;
 pub mod nopac;
+pub mod pkinit_auth;
 pub mod runner;
 pub mod sapphire;
 pub mod shadow_credentials;

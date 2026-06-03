@@ -163,7 +163,9 @@ pub struct WizardSession {
 
 impl WizardSession {
     /// Runs this module operation.
-    pub fn new(config: AutoPwnConfig, checkpoint_dir: Option<PathBuf>) -> Self {
+    pub fn new(config: AutoPwnConfig, checkpoint_dir: Option<PathBuf>) -> std::result::Result<Self, String> {
+        config.validate()?;
+
         let session_id = format!("wiz_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
         let checkpoint_path = checkpoint_dir
             .unwrap_or_else(|| PathBuf::from("./checkpoints"))
@@ -173,7 +175,7 @@ impl WizardSession {
         state.domain = Some(config.creds.domain.clone());
         state.dc_ip = Some(config.dc_host.clone());
 
-        Self {
+        Ok(Self {
             session_id,
             config,
             state,
@@ -184,7 +186,7 @@ impl WizardSession {
             pause_after_stage: true,
             auto_crack: true,
             max_pause_secs: Some(300),
-        }
+        })
     }
 
     /// Load a WizardSession from a checkpoint file.

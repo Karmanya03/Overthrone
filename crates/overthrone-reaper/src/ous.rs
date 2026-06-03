@@ -21,16 +21,6 @@ pub fn ou_filter() -> String {
     "(objectCategory=organizationalUnit)".to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ou_filter() {
-        assert_eq!(ou_filter(), "(objectCategory=organizationalUnit)");
-    }
-}
-
 pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {
     info!("[ous] Querying {} for organizational units", config.dc_ip);
 
@@ -106,4 +96,14 @@ pub async fn enumerate_ous(config: &ReaperConfig) -> Result<Vec<OuEntry>> {
 
     info!("[ous] Found {} organizational units", results.len());
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ou_filter() {
+        assert_eq!(ou_filter(), "(objectCategory=organizationalUnit)");
+    }
 }

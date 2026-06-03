@@ -4,6 +4,7 @@
 //! "dump NTDS.dit". Each goal has success criteria that can be
 //! evaluated against the current engagement state.
 
+use crate::dc_verify::DcVerificationSummary;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -225,6 +226,9 @@ pub struct EngagementState {
     pub loot: Vec<LootItem>,
     /// All actions taken (for audit trail)
     pub action_log: Vec<ActionLogEntry>,
+    /// DC verification results (hostile DC detection)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_verification: Option<DcVerificationSummary>,
 }
 /// Structure
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

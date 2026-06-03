@@ -791,4 +791,342 @@ mod tests {
         assert!(is_empty_lm_hash(&empty));
         assert!(!is_empty_lm_hash(&[0u8; 16]));
     }
+
+    // ── strip_mic_from_type3 ──────────────────────────
+
+    // Constants for NTLM signing flags (duplicated here for test scope)
+    const TEST_NEG_SIGN: u32 = 0x0000_0010;
+    const TEST_NEG_SEAL: u32 = 0x0000_0020;
+    const TEST_NEG_ALWAYS_SIGN: u32 = 0x0000_8000;
+
+    /// Build a minimal NTLM Type 3 message with NTLMv2 response containing AV_PAIRs and a MIC.
+    fn build_type3_with_mic() -> Vec<u8> {
+        let nt_proof = [0xAA; 16];
+        let client_challenge = [0xBB; 8];
+        let timestamp: u64 = 0x01D7_1B02_4C00_0000;
+
+        let mut av_pairs = Vec::new();
+        // MsvAvNbDomainName: AvId=1, AvLen=10, Data="CORP\0" (UTF-16LE)
+        av_pairs.extend_from_slice(&[0x01, 0x00, 0x0A, 0x00]);
+        av_pairs.extend_from_slice(b"C\x00O\x00R\x00P\x00\x00\x00");
+        // MsvAvFlags: AvId=6, AvLen=4, Data=0x00000001 (MIC present)
+        av_pairs.extend_from_slice(&[0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00]);
+        av_pairs.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // EOL
+        let mic = [0xCC; 16];
+
+        let mut client_blob = Vec::with_capacity(28 + av_pairs.len() + 16);
+        client_blob.push(0x01);
+        client_blob.push(0x01);
+        client_blob.extend_from_slice(&[0u8; 2]);
+        client_blob.extend_from_slice(&[0u8; 4]);
+        client_blob.extend_from_slice(&timestamp.to_le_bytes());
+        client_blob.extend_from_slice(&client_challenge);
+        client_blob.extend_from_slice(&[0u8; 4]);
+        client_blob.extend_from_slice(&av_pairs);
+        client_blob.extend_from_slice(&mic);
+
+        let nt_resp: Vec<u8> = [&nt_proof[..], &client_blob].concat();
+
+        let nt_resp_offset: u32 = 64;
+        let nt_resp_len = nt_resp.len() as u16;
+
+        let mut msg = Vec::with_capacity(64 + nt_resp.len());
+        msg.extend_from_slice(b"NTLMSSP\x00");
+        msg.extend_from_slice(&3u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_len.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_len.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_offset.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        let flags = TEST_NEG_SIGN | TEST_NEG_SEAL | TEST_NEG_ALWAYS_SIGN;
+        msg.extend_from_slice(&flags.to_le_bytes());
+        msg.extend_from_slice(&nt_resp);
+        msg
+    }
+
+    fn build_type3_without_mic() -> Vec<u8> {
+        let nt_proof = [0xAA; 16];
+        let client_challenge = [0xBB; 8];
+        let timestamp: u64 = 0x01D7_1B02_4C00_0000;
+
+        let mut av_pairs = Vec::new();
+        // MsvAvNbDomainName: AvId=1, AvLen=10, Data="CORP\0"
+        av_pairs.extend_from_slice(&[0x01, 0x00, 0x0A, 0x00]);
+        av_pairs.extend_from_slice(b"C\x00O\x00R\x00P\x00\x00\x00");
+        av_pairs.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // EOL
+
+        let mut client_blob = Vec::with_capacity(28 + av_pairs.len());
+        client_blob.push(0x01);
+        client_blob.push(0x01);
+        client_blob.extend_from_slice(&[0u8; 2]);
+        client_blob.extend_from_slice(&[0u8; 4]);
+        client_blob.extend_from_slice(&timestamp.to_le_bytes());
+        client_blob.extend_from_slice(&client_challenge);
+        client_blob.extend_from_slice(&[0u8; 4]);
+        client_blob.extend_from_slice(&av_pairs);
+
+        let nt_resp: Vec<u8> = [&nt_proof[..], &client_blob].concat();
+        let nt_resp_offset: u32 = 64;
+        let nt_resp_len = nt_resp.len() as u16;
+
+        let mut msg = Vec::with_capacity(64 + nt_resp.len());
+        msg.extend_from_slice(b"NTLMSSP\x00");
+        msg.extend_from_slice(&3u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_len.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_len.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_offset.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        let flags = TEST_NEG_SIGN | TEST_NEG_SEAL;
+        msg.extend_from_slice(&flags.to_le_bytes());
+        msg.extend_from_slice(&nt_resp);
+        msg
+    }
+
+    #[test]
+    fn test_strip_mic_clears_flags() {
+        let msg = build_type3_with_mic();
+        let result = strip_mic_from_type3(&msg);
+
+        let flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
+        assert_eq!(flags & TEST_NEG_SIGN, 0, "SIGN flag should be cleared");
+        assert_eq!(flags & TEST_NEG_SEAL, 0, "SEAL flag should be cleared");
+        assert_eq!(flags & TEST_NEG_ALWAYS_SIGN, 0, "ALWAYS_SIGN flag should be cleared");
+    }
+
+    #[test]
+    fn test_strip_mic_clears_mic_present_bit() {
+        let msg = build_type3_with_mic();
+        let result = strip_mic_from_type3(&msg);
+
+        let nt_resp_off = u32::from_le_bytes([msg[24], msg[25], msg[26], msg[27]]) as usize;
+        let nt_resp_len = u16::from_le_bytes([msg[20], msg[21]]) as usize;
+        let av_pairs_start = 16 + 28;
+        let av_pairs = &result[nt_resp_off + av_pairs_start..nt_resp_off + nt_resp_len];
+        let mut i = 0;
+        while i + 4 <= av_pairs.len() {
+            let av_id = u16::from_le_bytes([av_pairs[i], av_pairs[i + 1]]);
+            let av_len = u16::from_le_bytes([av_pairs[i + 2], av_pairs[i + 3]]) as usize;
+            if av_id == 6 && av_len >= 4 {
+                assert_eq!(av_pairs[i + 4] & 0x01, 0, "MIC-present bit should be cleared");
+                return;
+            }
+            if av_id == 0 {
+                break;
+            }
+            i += 4 + av_len;
+        }
+        panic!("MsvAvFlags AV_PAIR not found in result");
+    }
+
+    #[test]
+    fn test_strip_mic_zeroes_mic_bytes() {
+        let msg = build_type3_with_mic();
+        let result = strip_mic_from_type3(&msg);
+
+        let nt_resp_off = u32::from_le_bytes([msg[24], msg[25], msg[26], msg[27]]) as usize;
+        let nt_resp_len = u16::from_le_bytes([msg[20], msg[21]]) as usize;
+        let av_pairs_start = 16 + 28;
+        let av_pairs = &result[nt_resp_off + av_pairs_start..nt_resp_off + nt_resp_len];
+        let mut i = 0;
+        while i + 4 <= av_pairs.len() {
+            let av_id = u16::from_le_bytes([av_pairs[i], av_pairs[i + 1]]);
+            let av_len = u16::from_le_bytes([av_pairs[i + 2], av_pairs[i + 3]]) as usize;
+            if av_id == 0 {
+                break;
+            }
+            i += 4 + av_len;
+        }
+        let eol_end = av_pairs_start + i + 4;
+        let mic_start = nt_resp_off + eol_end;
+
+        for j in 0..16 {
+            assert_eq!(result[mic_start + j], 0, "MIC byte {j} should be zeroed");
+        }
+    }
+
+    #[test]
+    fn test_strip_mic_preserves_other_av_pairs() {
+        let msg = build_type3_with_mic();
+        let result = strip_mic_from_type3(&msg);
+
+        let nt_resp_off = u32::from_le_bytes([msg[24], msg[25], msg[26], msg[27]]) as usize;
+        let av_pairs_start = 16 + 28;
+        let av_pairs = &result[nt_resp_off + av_pairs_start..];
+
+        let av_id = u16::from_le_bytes([av_pairs[0], av_pairs[1]]);
+        assert_eq!(av_id, 1, "First AV_PAIR should be preserved");
+        assert_eq!(&av_pairs[4..8], b"C\x00O\x00", "AV_PAIR value should be preserved");
+    }
+
+    #[test]
+    fn test_strip_mic_no_mic_present() {
+        let msg = build_type3_without_mic();
+        let result = strip_mic_from_type3(&msg);
+
+        let flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
+        assert_eq!(flags & TEST_NEG_SIGN, 0);
+        assert_eq!(flags & TEST_NEG_SEAL, 0);
+
+        assert!(result.len() >= 64 + 16 + 28);
+        assert_eq!(&result[0..8], b"NTLMSSP\x00");
+    }
+
+    #[test]
+    fn test_strip_mic_short_message_returns_original() {
+        let data = [0u8; 30];
+        let result = strip_mic_from_type3(&data);
+        assert_eq!(result, data.to_vec());
+    }
+
+    #[test]
+    fn test_strip_mic_wrong_signature_returns_original() {
+        let mut data = vec![0u8; 64];
+        data[0..8].copy_from_slice(b"NOTNTLM\x00");
+        data[8..12].copy_from_slice(&3u32.to_le_bytes());
+        let result = strip_mic_from_type3(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_mic_wrong_type_returns_original() {
+        let mut data = vec![0u8; 64];
+        data[0..8].copy_from_slice(b"NTLMSSP\x00");
+        data[8..12].copy_from_slice(&2u32.to_le_bytes());
+        let result = strip_mic_from_type3(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_mic_preserves_non_sign_flags() {
+        let mut msg = build_type3_with_mic();
+        let extra_flags = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+        let orig = u32::from_le_bytes([msg[60], msg[61], msg[62], msg[63]]);
+        msg[60..64].copy_from_slice(&(orig | extra_flags).to_le_bytes());
+
+        let result = strip_mic_from_type3(&msg);
+
+        let flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
+        assert_eq!(flags & extra_flags, extra_flags, "Non-sign flags should be preserved");
+        assert_eq!(flags & (TEST_NEG_SIGN | TEST_NEG_SEAL | TEST_NEG_ALWAYS_SIGN), 0);
+    }
+
+    #[test]
+    fn test_strip_mic_bad_nt_resp_offset_does_not_panic() {
+        let mut msg = build_type3_with_mic();
+        msg[24..28].copy_from_slice(&9999u32.to_le_bytes());
+        let result = strip_mic_from_type3(&msg);
+
+        let flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
+        assert_eq!(flags & TEST_NEG_SIGN, 0);
+    }
+
+    #[test]
+    fn test_strip_mic_multiple_av_pairs_with_mic_last() {
+        let nt_proof = [0xAA; 16];
+        let client_challenge = [0xBB; 8];
+        let timestamp: u64 = 0x01D7_1B02_4C00_0000;
+
+        let mut av_pairs = Vec::new();
+        // MsvAvNbDomainName: AvId=1, AvLen=10, Data="CORP\0"
+        av_pairs.extend_from_slice(&[0x01, 0x00, 0x0A, 0x00]);
+        av_pairs.extend_from_slice(b"C\x00O\x00R\x00P\x00\x00\x00");
+        // MsvAvNbTreeName: AvId=3, AvLen=10, Data="CORP\0"
+        av_pairs.extend_from_slice(&[0x03, 0x00, 0x0A, 0x00]);
+        av_pairs.extend_from_slice(b"C\x00O\x00R\x00P\x00\x00\x00");
+        // MsvAvNbComputerName: AvId=5, AvLen=14, Data="WS2025\0"
+        av_pairs.extend_from_slice(&[0x05, 0x00, 0x0E, 0x00]);
+        av_pairs.extend_from_slice(b"W\x00S\x002\x000\x002\x005\x00\x00\x00");
+        // MsvAvFlags: AvId=6, AvLen=4, Data=MIC_PRESENT=1
+        av_pairs.extend_from_slice(&[0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00]);
+        // MsvAvTimestamp: AvId=7, AvLen=8, Data=0 (8 bytes of zeros)
+        av_pairs.extend_from_slice(&[0x07, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        av_pairs.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // EOL
+
+        let mic = [0xDD; 16];
+
+        let mut client_blob = Vec::with_capacity(28 + av_pairs.len() + 16);
+        client_blob.push(0x01);
+        client_blob.push(0x01);
+        client_blob.extend_from_slice(&[0u8; 2]);
+        client_blob.extend_from_slice(&[0u8; 4]);
+        client_blob.extend_from_slice(&timestamp.to_le_bytes());
+        client_blob.extend_from_slice(&client_challenge);
+        client_blob.extend_from_slice(&[0u8; 4]);
+        client_blob.extend_from_slice(&av_pairs);
+        client_blob.extend_from_slice(&mic);
+
+        let nt_resp: Vec<u8> = [&nt_proof[..], &client_blob].concat();
+        let nt_resp_offset: u32 = 64;
+        let nt_resp_len = nt_resp.len() as u16;
+
+        let mut msg = Vec::with_capacity(64 + nt_resp.len());
+        msg.extend_from_slice(b"NTLMSSP\x00");
+        msg.extend_from_slice(&3u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_len.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_len.to_le_bytes());
+        msg.extend_from_slice(&nt_resp_offset.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u16.to_le_bytes());
+        msg.extend_from_slice(&0u32.to_le_bytes());
+        let flags = TEST_NEG_SIGN | TEST_NEG_SEAL | TEST_NEG_ALWAYS_SIGN;
+        msg.extend_from_slice(&flags.to_le_bytes());
+        msg.extend_from_slice(&nt_resp);
+
+        let result = strip_mic_from_type3(&msg);
+
+        let nt_off = u32::from_le_bytes([msg[24], msg[25], msg[26], msg[27]]) as usize;
+        let av_sizes = vec![
+            4 + 10, // NbDomain: header(4)+data(10)
+            4 + 10, // NbTree: header(4)+data(10)
+            4 + 14, // NbComputer: header(4)+data(14)
+            4 + 4,  // MsvAvFlags: header(4)+data(4)
+            4 + 8,  // Timestamp: header(4)+data(8)
+        ];
+        let av_total: usize = av_sizes.iter().sum();
+        let expected_mic_start = nt_off + 16 + 28 + av_total + 4; // +4 for EOL
+        for j in 0..16 {
+            assert_eq!(result[expected_mic_start + j], 0, "MIC byte {j} should be zeroed");
+        }
+
+        assert_eq!(&result[nt_off + 16 + 28 + 4..nt_off + 16 + 28 + 8], b"C\x00O\x00");
+    }
 }

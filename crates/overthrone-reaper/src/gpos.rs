@@ -29,16 +29,6 @@ pub fn gpo_filter() -> String {
     "(objectCategory=groupPolicyContainer)".to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gpo_filter() {
-        assert_eq!(gpo_filter(), "(objectCategory=groupPolicyContainer)");
-    }
-}
-
 pub async fn enumerate_gpos(config: &ReaperConfig) -> Result<Vec<GpoEntry>> {
     info!("[gpos] Querying {} for GPOs", config.dc_ip);
 
@@ -122,4 +112,14 @@ pub async fn enumerate_gpos(config: &ReaperConfig) -> Result<Vec<GpoEntry>> {
 
     info!("[gpos] Found {} GPOs", results.len());
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gpo_filter() {
+        assert_eq!(gpo_filter(), "(objectCategory=groupPolicyContainer)");
+    }
 }

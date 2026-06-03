@@ -1,4 +1,4 @@
-//! Full SMB2 protocol server daemon.
+﻿//! Full SMB2 protocol server daemon.
 //!
 //! Listens on port 445 and handles the full SMB2 protocol:
 //! - Negotiate (SMB 2.0.2 through 3.1.1) with pre-auth integrity
@@ -23,9 +23,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const SMB2_PROTOCOL: &[u8; 4] = b"\xfeSMB";
 const SMB2_HEADER_SIZE: usize = 64;
@@ -69,9 +69,9 @@ const SHARE_TYPE_PIPE: u8 = 0x02;
 const OPLOCK_LEVEL_NONE: u8 = 0x00;
 const FILE_OPEN: u32 = 0x0001;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[derive(Debug, Clone)]
 pub enum SmbDaemonMode {
@@ -103,9 +103,9 @@ impl Default for SmbDaemonConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Session state per client
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 struct SmbFile {
     persistent_id: u64,
@@ -163,9 +163,9 @@ impl SmbClientSession {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // SMBDaemon
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub struct SmbDaemon {
     config: SmbDaemonConfig,
@@ -186,7 +186,7 @@ impl SmbDaemon {
         if self.running.load(Ordering::SeqCst) {
             return Err(RelayError::Config("SMBDaemon already running".into()).into());
         }
-        let addr = format!("{}:{}", self.config.listen_ip, self.config.listen_port);
+        let addr = crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
         let listener = TcpListener::bind(&addr)
             .await
             .map_err(|e| RelayError::Socket(format!("Failed to bind SMB port {}: {}", addr, e)))?;
@@ -222,9 +222,9 @@ impl SmbDaemon {
         self.running.load(Ordering::SeqCst)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Internal: Connection handling
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     async fn accept_loop(
         listener: TcpListener,
@@ -374,9 +374,9 @@ impl SmbDaemon {
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Internal: Command handlers
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn handle_negotiate(
         data: &[u8],
@@ -983,9 +983,9 @@ impl SmbDaemon {
         (STATUS_SUCCESS, vec![0x04, 0x00])
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // Relay: SMB2 client to target
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     /// Connect to the target, negotiate, and send NTLM Type 1.
     /// Returns (raw NTLM Type2 challenge blob, relay session).
@@ -995,7 +995,7 @@ impl SmbDaemon {
         _session: &SmbClientSession,
         victim_negotiate: &[u8],
     ) -> Result<(Vec<u8>, SmbRelaySession)> {
-        let addr = format!("{}:{}", target_host, target_port);
+        let addr = crate::utils::format_addr(target_host, target_port);
         let mut stream = TcpStream::connect(&addr)
             .await
             .map_err(|e| RelayError::Socket(format!("relay connect to {}: {}", addr, e)))?;
@@ -1316,9 +1316,9 @@ impl SmbDaemon {
         (status, resp_body)
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // Relay: SMB2 request builders for target
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     fn build_relay_request(
         msg_id: u64,
@@ -1462,9 +1462,9 @@ impl SmbDaemon {
         body
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // SMB2 Signing
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     /// Derive the SMB signing key from the NTLM session key
     /// For SMB 2.xx: signing_key = session_key (used directly with HMAC-SHA256)
@@ -1538,9 +1538,9 @@ impl SmbDaemon {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // NTLM / SPNEGO helpers
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     fn build_ntlm_challenge(challenge: [u8; 8], target_name: &str) -> Vec<u8> {
         let mut msg = Vec::new();
@@ -1726,9 +1726,9 @@ impl SmbDaemon {
         Vec::new()
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // Session key derivation
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     /// Attempt to derive the session key from an NTLM Type 3 message.
     /// Without the NT hash this is impossible — returns None in capture mode.
@@ -1741,9 +1741,9 @@ impl SmbDaemon {
         None
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // Credential capture
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     fn capture_ntlm_credentials(
         ntlmssp: &[u8],
@@ -1827,9 +1827,9 @@ impl SmbDaemon {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // Protocol helpers
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     fn build_full_message_for_hash(body: &[u8]) -> Vec<u8> {
         let mut msg = Vec::with_capacity(SMB2_HEADER_SIZE + body.len());

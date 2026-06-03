@@ -1,4 +1,4 @@
-//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
+﻿//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
 
 use crate::acls::DangerousRight;
 use crate::runner::ReaperResult;
@@ -44,7 +44,7 @@ pub async fn export_results(
         }
     }
 
-    info!("[export] Done → {}", path.display());
+    info!("[export] Done â†’ {}", path.display());
     Ok(())
 }
 
@@ -77,7 +77,7 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
             ));
         }
         tokio::fs::write(&path, lines.join("\n")).await?;
-        info!("[export] → {}", path.display());
+        info!("[export] â†’ {}", path.display());
     }
 
     if !result.computers.is_empty() {
@@ -96,15 +96,15 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
             ));
         }
         tokio::fs::write(&path, lines.join("\n")).await?;
-        info!("[export] → {}", path.display());
+        info!("[export] â†’ {}", path.display());
     }
 
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  BloodHound v4 Export
-// ═══════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 fn right_to_bloodhound_name(right: &DangerousRight) -> String {
     match right {
@@ -153,70 +153,6 @@ fn right_to_bloodhound_name(right: &DangerousRight) -> String {
         DangerousRight::EnrollCertificate => "EnrollCertificate".to_string(),
         DangerousRight::WriteProperty { attribute, guid: _ } => attribute.clone(),
         DangerousRight::Custom(s) => s.clone(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_right_to_bloodhound_name_generic_all() {
-        assert_eq!(
-            right_to_bloodhound_name(&DangerousRight::GenericAll),
-            "GenericAll"
-        );
-    }
-
-    #[test]
-    fn test_right_to_bloodhound_name_dcsync() {
-        assert_eq!(right_to_bloodhound_name(&DangerousRight::DcSync), "DcSync");
-    }
-
-    #[test]
-    fn test_right_to_bloodhound_name_write_property() {
-        assert_eq!(
-            right_to_bloodhound_name(&DangerousRight::WriteProperty {
-                attribute: "servicePrincipalName".into(),
-                guid: String::new(),
-            }),
-            "servicePrincipalName"
-        );
-    }
-
-    #[test]
-    fn test_right_to_bloodhound_name_custom() {
-        assert_eq!(
-            right_to_bloodhound_name(&DangerousRight::Custom("CustomRight".into())),
-            "CustomRight"
-        );
-    }
-
-    #[test]
-    fn test_right_to_bloodhound_name_roundtrip() {
-        let cases = [
-            (DangerousRight::GenericAll, "GenericAll"),
-            (DangerousRight::GenericWrite, "GenericWrite"),
-            (DangerousRight::WriteDacl, "WriteDacl"),
-            (DangerousRight::WriteOwner, "WriteOwner"),
-            (DangerousRight::Owns, "Owns"),
-            (DangerousRight::AllExtendedRights, "AllExtendedRights"),
-            (DangerousRight::CreateChild, "CreateChild"),
-            (DangerousRight::WriteSelf, "WriteSelf"),
-            (DangerousRight::ForceChangePassword, "ForceChangePassword"),
-            (DangerousRight::DcSync, "DcSync"),
-            (DangerousRight::ReadLapsPassword, "ReadLapsPassword"),
-            (DangerousRight::ReadGmsaPassword, "ReadGmsaPassword"),
-            (DangerousRight::AddMembers, "AddMembers"),
-            (DangerousRight::AddSelf, "AddSelf"),
-            (DangerousRight::WriteSPN, "WriteSPN"),
-            (DangerousRight::AddAllowedToAct, "AddAllowedToAct"),
-            (DangerousRight::EnrollCertificate, "EnrollCertificate"),
-            (DangerousRight::WriteGPLink, "WriteGPLink"),
-        ];
-        for (right, expected) in &cases {
-            assert_eq!(right_to_bloodhound_name(right), *expected);
-        }
     }
 }
 
@@ -273,7 +209,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         }
     }
 
-    // ── Users ──
+    // â”€â”€ Users â”€â”€
     if !result.users.is_empty() {
         let users_json: Vec<Value> = result
             .users
@@ -341,10 +277,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_users.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound users → {}", path.display());
+        info!("[export] BloodHound users â†’ {}", path.display());
     }
 
-    // ── Computers ──
+    // â”€â”€ Computers â”€â”€
     if !result.computers.is_empty() {
         let computers_json: Vec<Value> = result
             .computers
@@ -402,10 +338,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_computers.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound computers → {}", path.display());
+        info!("[export] BloodHound computers â†’ {}", path.display());
     }
 
-    // ── Groups ──
+    // â”€â”€ Groups â”€â”€
     if !result.groups.is_empty() {
         let groups_json: Vec<Value> = result.groups.iter().map(|g| {
             let domain_upper = result.domain.to_uppercase();
@@ -444,10 +380,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_groups.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound groups → {}", path.display());
+        info!("[export] BloodHound groups â†’ {}", path.display());
     }
 
-    // ── OUs ──
+    // â”€â”€ OUs â”€â”€
     if !result.ous.is_empty() {
         let ous_json: Vec<Value> = result
             .ous
@@ -488,10 +424,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_ous.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound OUs → {}", path.display());
+        info!("[export] BloodHound OUs â†’ {}", path.display());
     }
 
-    // ── GPOs ──
+    // â”€â”€ GPOs â”€â”€
     if !result.gpos.is_empty() {
         let gpos_json: Vec<Value> = result.gpos.iter().map(|g| {
             let gpo_aces_for_this: Vec<Value> = gpo_aces
@@ -527,10 +463,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_gpos.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound GPOs → {}", path.display());
+        info!("[export] BloodHound GPOs â†’ {}", path.display());
     }
 
-    // ── Domains ──
+    // â”€â”€ Domains â”€â”€
     let domain_upper = result.domain.to_uppercase();
 
     // Derive domain SID from an enumerated object's SID (strip the last RID component).
@@ -602,7 +538,71 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
     let path = dir.join(format!("{}_domains.json", timestamp));
     tokio::fs::write(&path, serde_json::to_string_pretty(&domain_json)?).await?;
-    info!("[export] BloodHound domains → {}", path.display());
+    info!("[export] BloodHound domains â†’ {}", path.display());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_right_to_bloodhound_name_generic_all() {
+        assert_eq!(
+            right_to_bloodhound_name(&DangerousRight::GenericAll),
+            "GenericAll"
+        );
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_dcsync() {
+        assert_eq!(right_to_bloodhound_name(&DangerousRight::DcSync), "DcSync");
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_write_property() {
+        assert_eq!(
+            right_to_bloodhound_name(&DangerousRight::WriteProperty {
+                attribute: "servicePrincipalName".into(),
+                guid: String::new(),
+            }),
+            "servicePrincipalName"
+        );
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_custom() {
+        assert_eq!(
+            right_to_bloodhound_name(&DangerousRight::Custom("CustomRight".into())),
+            "CustomRight"
+        );
+    }
+
+    #[test]
+    fn test_right_to_bloodhound_name_roundtrip() {
+        let cases = [
+            (DangerousRight::GenericAll, "GenericAll"),
+            (DangerousRight::GenericWrite, "GenericWrite"),
+            (DangerousRight::WriteDacl, "WriteDacl"),
+            (DangerousRight::WriteOwner, "WriteOwner"),
+            (DangerousRight::Owns, "Owns"),
+            (DangerousRight::AllExtendedRights, "AllExtendedRights"),
+            (DangerousRight::CreateChild, "CreateChild"),
+            (DangerousRight::WriteSelf, "WriteSelf"),
+            (DangerousRight::ForceChangePassword, "ForceChangePassword"),
+            (DangerousRight::DcSync, "DcSync"),
+            (DangerousRight::ReadLapsPassword, "ReadLapsPassword"),
+            (DangerousRight::ReadGmsaPassword, "ReadGmsaPassword"),
+            (DangerousRight::AddMembers, "AddMembers"),
+            (DangerousRight::AddSelf, "AddSelf"),
+            (DangerousRight::WriteSPN, "WriteSPN"),
+            (DangerousRight::AddAllowedToAct, "AddAllowedToAct"),
+            (DangerousRight::EnrollCertificate, "EnrollCertificate"),
+            (DangerousRight::WriteGPLink, "WriteGPLink"),
+        ];
+        for (right, expected) in &cases {
+            assert_eq!(right_to_bloodhound_name(right), *expected);
+        }
+    }
 }

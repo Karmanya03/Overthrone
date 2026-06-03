@@ -2985,7 +2985,11 @@ impl LdapSession {
 
         // Locate the DACL in the security descriptor.
         // SECURITY_DESCRIPTOR layout (absolute, offset 4 = Control, offset 16 = DaclOffset)
-        let dacl_offset = u32::from_le_bytes(ntsd[16..20].try_into().unwrap()) as usize;
+        let dacl_offset_bytes: [u8; 4] = ntsd[16..20].try_into().map_err(|_| OverthroneError::Ldap {
+            target: target_dn.to_string(),
+            reason: "DACL offset bytes malformed in security descriptor".to_string(),
+        })?;
+        let dacl_offset = u32::from_le_bytes(dacl_offset_bytes) as usize;
         if dacl_offset == 0 || dacl_offset + 8 > ntsd.len() {
             return Err(OverthroneError::Ldap {
                 target: target_dn.to_string(),

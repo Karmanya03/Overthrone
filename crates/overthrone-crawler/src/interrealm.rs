@@ -297,6 +297,9 @@ pub async fn forge_inter_realm_tgt(config: &InterRealmForgeConfig) -> Result<For
         output_path: None,
         payload_path: None,
         skeleton_master_password: None,
+        pkinit_cert_path: None,
+        pkinit_key_path: None,
+        dry_run: false,
     };
 
     let result =

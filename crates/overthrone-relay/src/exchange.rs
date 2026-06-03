@@ -1,4 +1,4 @@
-//! Exchange Relay Target (CVE-2024-21410) — NTLM relay to Microsoft Exchange.
+﻿//! Exchange Relay Target (CVE-2024-21410) — NTLM relay to Microsoft Exchange.
 //!
 //! Relays captured NTLM authentication to Exchange MAPI-over-HTTP or EWS endpoints.
 //! Pre-CU14 Exchange servers (and many unpatched post-CU14 servers) accept NTLM
@@ -101,12 +101,12 @@ impl ExchangeRelay {
         }
         self.running.store(true, Ordering::SeqCst);
 
-        let listen_addr = format!("{}:80", self.config.listen_ip);
+        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, 80);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Network(format!("Bind failed: {e}")))?;
         info!(
-            "Exchange relay listening on {listen_addr} → {}:{} (CVE-2024-21410)",
+            "Exchange relay listening on {listen_addr} -> {}:{} (CVE-2024-21410)",
             self.config.target_host, self.config.target_port
         );
 
@@ -279,7 +279,7 @@ async fn handle_exchange_relay(
 async fn connect_exchange_stream(
     config: &ExchangeRelayConfig,
 ) -> Result<Box<dyn ExchangeIo + Send>> {
-    let exchange_addr = format!("{}:{}", config.target_host, config.target_port);
+    let exchange_addr = crate::utils::format_addr(&config.target_host, config.target_port);
     let tcp = TcpStream::connect(&exchange_addr)
         .await
         .map_err(|e| RelayError::Network(format!("Exchange connect failed: {e}")))?;

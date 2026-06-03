@@ -41,6 +41,8 @@ pub struct PkinitResult {
     pub tgt: Vec<u8>,
     /// Session key
     pub session_key: Vec<u8>,
+    /// Session key encryption type (e.g. 23 for RC4, 18 for AES256)
+    pub session_key_etype: i32,
     /// Ticket valid until (Unix timestamp)
     pub valid_until: u64,
 }
@@ -639,13 +641,15 @@ impl PkinitAuthenticator {
         let (_, enc_as_rep_part) = EncAsRepPart::parse(&decrypted)
             .map_err(|_| OverthroneError::Kerberos("Failed to parse EncAsRepPart".to_string()))?;
 
-        // Extract session key and validity
+        // Extract session key, etype, and validity
         let session_key = enc_as_rep_part.key.keyvalue.clone();
+        let session_key_etype = enc_as_rep_part.key.keytype;
         let valid_until = enc_as_rep_part.endtime.timestamp() as u64;
 
         Ok(PkinitResult {
             tgt,
             session_key,
+            session_key_etype,
             valid_until,
         })
     }

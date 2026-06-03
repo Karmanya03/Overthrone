@@ -27,59 +27,6 @@ impl SpnAccount {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_spn_filter() {
-        assert_eq!(
-            spn_filter(),
-            "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
-        );
-    }
-
-    #[test]
-    fn test_is_high_value_target_enabled_admin() {
-        let s = SpnAccount {
-            enabled: true,
-            admin_count: true,
-            ..Default::default()
-        };
-        assert!(s.is_high_value_target());
-    }
-
-    #[test]
-    fn test_is_high_value_target_disabled_admin() {
-        let s = SpnAccount {
-            enabled: false,
-            admin_count: true,
-            ..Default::default()
-        };
-        assert!(!s.is_high_value_target());
-    }
-
-    #[test]
-    fn test_is_high_value_target_enabled_not_admin() {
-        let s = SpnAccount {
-            enabled: true,
-            admin_count: false,
-            ..Default::default()
-        };
-        assert!(!s.is_high_value_target());
-    }
-
-    #[test]
-    fn test_is_high_value_target_disabled_not_admin() {
-        let s = SpnAccount {
-            enabled: false,
-            admin_count: false,
-            ..Default::default()
-        };
-        assert!(!s.is_high_value_target());
-    }
-}
-
 pub fn spn_filter() -> String {
     "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))".to_string()
 }
@@ -174,4 +121,57 @@ pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAcco
 
     info!("[spns] Found {} Kerberoastable accounts", results.len());
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spn_filter() {
+        assert_eq!(
+            spn_filter(),
+            "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        );
+    }
+
+    #[test]
+    fn test_is_high_value_target_enabled_admin() {
+        let s = SpnAccount {
+            enabled: true,
+            admin_count: true,
+            ..Default::default()
+        };
+        assert!(s.is_high_value_target());
+    }
+
+    #[test]
+    fn test_is_high_value_target_disabled_admin() {
+        let s = SpnAccount {
+            enabled: false,
+            admin_count: true,
+            ..Default::default()
+        };
+        assert!(!s.is_high_value_target());
+    }
+
+    #[test]
+    fn test_is_high_value_target_enabled_not_admin() {
+        let s = SpnAccount {
+            enabled: true,
+            admin_count: false,
+            ..Default::default()
+        };
+        assert!(!s.is_high_value_target());
+    }
+
+    #[test]
+    fn test_is_high_value_target_disabled_not_admin() {
+        let s = SpnAccount {
+            enabled: false,
+            admin_count: false,
+            ..Default::default()
+        };
+        assert!(!s.is_high_value_target());
+    }
 }

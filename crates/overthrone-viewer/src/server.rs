@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, Request, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
@@ -24,11 +24,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use chrono::Utc;
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use zip::ZipArchive;
 
@@ -114,17 +115,32 @@ struct GraphBundle {
     file_bytes: u64,
 }
 
+/// TLS configuration for the viewer web server.
+#[derive(Clone, Debug)]
+pub struct TlsConfig {
+    /// Path to the TLS certificate PEM file
+    pub cert_pem: PathBuf,
+    /// Path to the TLS private key PEM file
+    pub key_pem: PathBuf,
+}
+
 /// Configuration for the viewer web server.
 #[derive(Clone, Debug)]
 pub struct ViewerConfig {
-    /// Optional basic auth username
+    /// Basic auth username (auto-generated if None)
     pub username: Option<String>,
-    /// Optional basic auth password
+    /// Basic auth password (auto-generated if None)
     pub password: Option<String>,
+    /// Optional TLS configuration (REQUIRED for non-loopback bindings)
+    pub tls: Option<TlsConfig>,
+    /// CSRF token for state-changing endpoints (auto-generated if None)
+    pub csrf_token: Option<String>,
     /// Rate limit window in seconds
     pub rate_limit_window_secs: u64,
     /// Maximum requests per IP within the window
     pub rate_limit_max_requests: u32,
+    /// Bind address (defaults to 127.0.0.1). Non-loopback addresses REQUIRE TLS.
+    pub bind_address: Option<std::net::IpAddr>,
 }
 
 impl ViewerConfig {
@@ -138,13 +154,26 @@ impl ViewerConfig {
     }
 }
 
+fn random_string(rng: &mut impl Rng, len: usize) -> String {
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let n = CHARSET.len();
+    (0..len).map(|_| CHARSET[rng.random_range(0..n)] as char).collect()
+}
+
 impl Default for ViewerConfig {
     fn default() -> Self {
+        let mut rng = rand::rngs::ThreadRng::default();
+        let auth_user = random_string(&mut rng, 12);
+        let auth_pass = random_string(&mut rng, 24);
+        let csrf = random_string(&mut rng, 32);
         Self {
-            username: None,
-            password: None,
+            username: Some(auth_user),
+            password: Some(auth_pass),
+            tls: None,
+            csrf_token: Some(csrf),
             rate_limit_window_secs: 60,
             rate_limit_max_requests: 100,
+            bind_address: None,
         }
     }
 }
@@ -3253,34 +3282,32 @@ fn json_load_error(status: StatusCode) -> (StatusCode, Json<ApiError>) {
 // ============================================================
 
 /// Basic auth middleware — checks the `Authorization: Basic` header against
-/// the configured credentials in `AppState`. If no credentials are configured,
-/// all requests pass through.
+/// the configured credentials in `AppState`.
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<impl IntoResponse, StatusCode> {
     let config = &state.config;
-    match (&config.username, &config.password) {
-        (Some(expected_user), Some(expected_pass)) => {
-            let auth_header = req
-                .headers()
-                .get(header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if let Some(creds) = auth_header.strip_prefix("Basic ")
-                && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(creds)
-                && let Ok(creds_str) = String::from_utf8(decoded)
-            {
-                let parts: Vec<&str> = creds_str.splitn(2, ':').collect();
-                if parts.len() == 2 && parts[0] == expected_user && parts[1] == expected_pass {
-                    return Ok(next.run(req).await);
-                }
-            }
-            Err(StatusCode::UNAUTHORIZED)
+    let (expected_user, expected_pass) = match (&config.username, &config.password) {
+        (Some(u), Some(p)) => (u, p),
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let auth_header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if let Some(creds) = auth_header.strip_prefix("Basic ")
+        && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(creds)
+        && let Ok(creds_str) = String::from_utf8(decoded)
+    {
+        let parts: Vec<&str> = creds_str.splitn(2, ':').collect();
+        if parts.len() == 2 && parts[0] == expected_user && parts[1] == expected_pass {
+            return Ok(next.run(req).await);
         }
-        _ => Ok(next.run(req).await),
     }
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 /// Rate limiting middleware — checks per-IP request counts against the
@@ -3298,13 +3325,98 @@ async fn rate_limit_middleware(
     }
 }
 
+/// CSRF middleware — requires `X-CSRF-Token` header on POST/PUT/DELETE.
+async fn csrf_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Result<impl IntoResponse, StatusCode> {
+    if req.method() == axum::http::Method::GET || req.method() == axum::http::Method::HEAD {
+        return Ok(next.run(req).await);
+    }
+    let expected = match &state.config.csrf_token {
+        Some(t) => t.clone(),
+        None => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let provided = req
+        .headers()
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if provided == expected {
+        Ok(next.run(req).await)
+    } else {
+        Err(StatusCode::UNPROCESSABLE_ENTITY)
+    }
+}
+
+/// Build a `CorsLayer` that only allows loopback origins.
+fn loopback_cors() -> CorsLayer {
+    let origins = [
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://[::1]",
+    ];
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(
+            origins.iter().map(|s| s.parse().unwrap()),
+        ))
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-csrf-token"),
+        ])
+}
+
+/// A [`tokio::net::TcpListener`] wrapper that performs a TLS handshake
+/// before yielding each accepted connection. Implements [`axum::serve::Listener`]
+/// so it can be passed to `axum::serve` directly.
+struct TlsListener {
+    inner: TcpListener,
+    acceptor: Arc<tokio_rustls::TlsAcceptor>,
+}
+
+impl TlsListener {
+    fn new(inner: TcpListener, acceptor: Arc<tokio_rustls::TlsAcceptor>) -> Self {
+        Self { inner, acceptor }
+    }
+}
+
+impl axum::serve::Listener for TlsListener {
+    type Io = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (tcp, addr) = match self.inner.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    warn!("Accept error: {e}");
+                    continue;
+                }
+            };
+            match self.acceptor.accept(tcp).await {
+                Ok(tls) => return (tls, addr),
+                Err(e) => {
+                    warn!("TLS handshake failed from {}: {e}", addr);
+                    continue;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.inner.local_addr()
+    }
+}
+
 // ============================================================
 //  Public API
 // ============================================================
 
-/// Launch the viewer web server with default configuration (no auth, default
-/// rate limiting).
-/// Loads the graph from the given sources, starts an Axum HTTP server on the
+/// Launch the viewer web server with default configuration.
+/// Loads the graph from the given sources, starts an Axum HTTP/HTTPS server on the
 /// specified port (or a free port if 0), and opens the browser.
 pub async fn launch(sources: &[String], port: u16) -> Result<()> {
     launch_with_config(sources, port, ViewerConfig::default()).await
@@ -3312,6 +3424,11 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
 
 /// Launch the viewer web server with the given configuration.
 pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerConfig) -> Result<()> {
+    let has_auth = config.username.is_some() && config.password.is_some();
+    if !has_auth {
+        bail!("Viewer requires authentication credentials in config");
+    }
+
     let graphs = build_graph_bundles(sources)?;
 
     for graph in &graphs {
@@ -3337,14 +3454,9 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         graphs: RwLock::new(graphs),
         default_graph,
         cache: RwLock::new(HashMap::new()),
-        config,
+        config: config.clone(),
         rate_limiter,
     });
-
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
 
     let app = Router::new()
         .route("/", get(index))
@@ -3368,30 +3480,88 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            csrf_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             auth_middleware,
         ))
-        .layer(cors)
+        .layer(loopback_cors())
         .with_state(state);
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let bind_ip = config.bind_address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let addr = SocketAddr::new(bind_ip, port);
+
+    if !bind_ip.is_loopback() && config.tls.is_none() {
+        bail!(
+            "Refusing to bind non-loopback address {} without TLS. \
+             Configure TLS via TlsConfig to serve over the network.",
+            bind_ip
+        );
+    }
+
     let listener = TcpListener::bind(addr).await?;
     let actual_addr = listener.local_addr()?;
-    let url = format!("http://{}", actual_addr);
+
+    let tls_config_data = match config.tls {
+        Some(ref tls) => {
+            let tls_certs = rustls_pemfile::certs(&mut std::io::BufReader::new(
+                fs::File::open(&tls.cert_pem)?,
+            ))
+            .collect::<Result<Vec<_>, _>>()?;
+            let tls_key = rustls_pemfile::private_key(&mut std::io::BufReader::new(
+                fs::File::open(&tls.key_pem)?,
+            ))?
+            .ok_or_else(|| anyhow!("No private key found in {}", tls.key_pem.display()))?;
+
+            let server_config = rustls::ServerConfig::builder_with_provider(
+                Arc::new(rustls::crypto::ring::default_provider()),
+            )
+            .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?
+            .with_no_client_auth()
+            .with_single_cert(tls_certs, tls_key)?;
+
+            Some(Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(server_config))))
+        }
+        None => None,
+    };
+
+    let url = if tls_config_data.is_some() {
+        format!("https://{}", actual_addr)
+    } else {
+        format!("http://{}", actual_addr)
+    };
+
+    let serve_fut = async move {
+        if let Some(ref tls_acceptor) = tls_config_data {
+            let listener = TlsListener::new(listener, tls_acceptor.clone());
+            axum::serve(listener, app.into_make_service())
+                .await
+                .map_err(|e| anyhow!("Server error: {e}"))
+        } else {
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .map_err(|e| anyhow!("Server error: {e}"))
+        }
+    };
+
+    let auth_user = config.username.as_deref().unwrap_or("unknown");
+    let auth_pass = config.password.as_deref().unwrap_or("unknown");
 
     info!("Graph viewer running at {}", url);
     println!("\n  Overthrone Graph Viewer");
     println!("  ------------------------");
-    println!("  {}", url);
+    println!("  URL:    {}", url);
+    println!("  User:   {}", auth_user);
+    println!("  Pass:   {}", auth_pass);
+    if let Some(ref csrf) = config.csrf_token {
+        println!("  CSRF:   {}", csrf);
+    }
     println!("  Press Ctrl+C to stop.\n");
 
-    // Open browser (non-blocking, ignore errors)
     let _ = open::that(&url);
 
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
+    serve_fut.await?;
     Ok(())
 }
 
@@ -3426,10 +3596,18 @@ mod tests {
     const TEST_VIEWER_PASS: &str = "secret";
 
     #[test]
-    fn test_viewer_config_default_no_auth() {
+    fn test_viewer_config_default_generates_random_auth() {
         let config = ViewerConfig::default();
-        assert!(config.username.is_none());
-        assert!(config.password.is_none());
+        // Default now generates random credentials + CSRF token so the
+        // server is never accidentally exposed without auth.
+        assert!(config.username.is_some());
+        assert!(config.password.is_some());
+        let user = config.username.as_deref().unwrap();
+        let pass = config.password.as_deref().unwrap();
+        assert_eq!(user.len(), 12);
+        assert_eq!(pass.len(), 24);
+        assert!(config.csrf_token.is_some());
+        assert_eq!(config.csrf_token.as_deref().unwrap().len(), 32);
         assert_eq!(config.rate_limit_window_secs, 60);
         assert_eq!(config.rate_limit_max_requests, 100);
     }
@@ -3501,8 +3679,13 @@ mod tests {
 
     #[test]
     fn test_basic_auth_no_credentials_when_expected() {
-        // When no credentials configured, any request should pass
-        // (This is handled by the middleware logic directly returning Ok)
+        // Default ViewerConfig now auto-generates credentials, so the
+        // server always requires auth. Verify the random credentials
+        // differ from the test constants (so test credentials don't pass
+        // by accident).
+        let config = ViewerConfig::default();
+        assert_ne!(config.username.as_deref(), Some(TEST_VIEWER_USER));
+        assert_ne!(config.password.as_deref(), Some(TEST_VIEWER_PASS));
     }
 
     fn test_state() -> Arc<AppState> {
@@ -3624,5 +3807,125 @@ mod tests {
         assert!(info.label.contains("1 JSON files"));
         assert_eq!(info.stats.as_ref().unwrap().total_nodes, 2);
         assert_eq!(info.stats.as_ref().unwrap().total_edges, 1);
+    }
+
+    // ── Phase 3 security primitive tests ────────────────────────
+
+    fn basic_auth_value(value: &str) -> String {
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(value)
+        )
+    }
+
+    // ── TlsConfig tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_tls_config_construction() {
+        let cfg = TlsConfig {
+            cert_pem: PathBuf::from("/tmp/cert.pem"),
+            key_pem: PathBuf::from("/tmp/key.pem"),
+        };
+        assert_eq!(cfg.cert_pem, PathBuf::from("/tmp/cert.pem"));
+        assert_eq!(cfg.key_pem, PathBuf::from("/tmp/key.pem"));
+    }
+
+    #[test]
+    fn test_tls_config_default_is_none() {
+        let cfg = ViewerConfig::default();
+        assert!(cfg.tls.is_none());
+    }
+
+    #[test]
+    fn test_viewer_config_with_auth_preserves_defaults() {
+        let cfg = ViewerConfig::with_auth("u", "p");
+        assert!(cfg.tls.is_none());
+        assert_eq!(cfg.username.as_deref(), Some("u"));
+        assert_eq!(cfg.password.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn test_viewer_config_with_auth_inherits_random_csrf_from_default() {
+        // The default impl is invoked, so csrf_token should still be Some
+        let cfg = ViewerConfig::with_auth("u", "p");
+        assert!(cfg.csrf_token.is_some());
+    }
+
+    // ── random_string tests ─────────────────────────────────────
+
+    #[test]
+    fn test_random_string_length() {
+        let mut rng = rand::rngs::ThreadRng::default();
+        for n in [1usize, 8, 16, 32, 64, 128] {
+            let s = random_string(&mut rng, n);
+            assert_eq!(s.len(), n, "length should match");
+        }
+    }
+
+    #[test]
+    fn test_random_string_charset() {
+        let mut rng = rand::rngs::ThreadRng::default();
+        let s = random_string(&mut rng, 256);
+        for c in s.chars() {
+            assert!(
+                c.is_ascii_alphanumeric(),
+                "char {c:?} should be alphanumeric"
+            );
+        }
+    }
+
+    #[test]
+    fn test_random_string_is_random() {
+        let mut rng = rand::rngs::ThreadRng::default();
+        let mut seen = HashSet::new();
+        for _ in 0..100 {
+            let s = random_string(&mut rng, 32);
+            assert!(seen.insert(s.clone()), "duplicate: {s}");
+        }
+    }
+
+    // ── CorsLayer restriction tests ─────────────────────────────
+
+    #[test]
+    fn test_loopback_cors_returns_layer() {
+        // The function should compile and return a CorsLayer
+        let _layer: CorsLayer = loopback_cors();
+    }
+
+    // ── Auth parsing coverage tests ─────────────────────────────
+
+    #[test]
+    fn test_basic_auth_with_empty_user_and_pass() {
+        // Edge case: empty credentials
+        assert!(!check_basic_auth(
+            Some(&basic_auth_value(":")),
+            TEST_VIEWER_USER,
+            TEST_VIEWER_PASS
+        ));
+    }
+
+    #[test]
+    fn test_basic_auth_with_colon_in_password() {
+        // Passwords may contain colons; check that we use splitn(2, ':')
+        let pw = "secret:with:colons";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", pw));
+        // We can't use check_basic_auth directly because it hardcodes
+        // TEST_VIEWER_PASS. So just verify the encoding round-trips.
+        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        let s = String::from_utf8(decoded).unwrap();
+        let parts: Vec<&str> = s.splitn(2, ':').collect();
+        assert_eq!(parts[0], "admin");
+        assert_eq!(parts[1], pw);
+    }
+
+    // ── Config default behavior tests ───────────────────────────
+
+    #[test]
+    fn test_viewer_config_default_random_credentials_differ_between_calls() {
+        let a = ViewerConfig::default();
+        let b = ViewerConfig::default();
+        assert_ne!(a.username, b.username);
+        assert_ne!(a.password, b.password);
+        assert_ne!(a.csrf_token, b.csrf_token);
     }
 }

