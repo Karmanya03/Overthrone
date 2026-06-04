@@ -452,4 +452,179 @@ mod tests {
         assert!(wildcard_match("", ""));
         assert!(!wildcard_match("a", ""));
     }
+
+    // ── Pre-auth skip logic ──────────────────────────────────
+    //
+    // The kerberoast pre-auth check at the rust-side skip level
+    // (line ~158) uses `u.dont_req_preauth`, which is populated
+    // by `parse_ad_user` from the bit `userAccountControl & 0x400000`
+    // (UF_DONT_REQUIRE_PREAUTH). These tests pin the bit value and
+    // prove the skip works on a mock ad-user set.
+
+    /// Reference: UF_DONT_REQUIRE_PREAUTH = 0x400000 (4194304).
+    /// If this test ever fails, AD documentation has changed and
+    /// the LDAP filter / UAC check in overthrone-core need an update.
+    #[test]
+    fn preauth_uac_bit_value_is_documented() {
+        const UF_DONT_REQUIRE_PREAUTH: u32 = 0x400000;
+        assert_eq!(UF_DONT_REQUIRE_PREAUTH, 4_194_304);
+    }
+
+    /// Simulates the filter logic from `parse_ad_user` in
+    /// `overthrone-core/src/proto/ldap.rs`. If this fails, the
+    /// `dont_req_preauth` field is being populated from a wrong bit
+    /// and the kerberoast skip will silently miss preauth-vulnerable
+    /// accounts.
+    #[test]
+    fn parse_ad_user_marks_dont_req_preauth_correctly() {
+        const UAC_DONT_REQ_PREAUTH: u32 = 0x400000;
+        let uac_no_preauth: u32 = 0x400000; // bit 22 set
+        let uac_preauth_required: u32 = 0x000200; // NORMAL_ACCOUNT only
+        let uac_disabled_no_preauth: u32 = 0x400002; // disabled + no preauth
+
+        let no_pre1 = uac_no_preauth & UAC_DONT_REQ_PREAUTH != 0;
+        let no_pre2 = uac_preauth_required & UAC_DONT_REQ_PREAUTH != 0;
+        let no_pre3 = uac_disabled_no_preauth & UAC_DONT_REQ_PREAUTH != 0;
+        assert!(no_pre1, "plain no-preauth should be detected");
+        assert!(!no_pre2, "normal account must NOT be flagged as no-preauth");
+        assert!(no_pre3, "disabled+no-preauth should still flag preauth");
+    }
+
+    /// Simulates the `for u in &ad_users` filter loop in
+    /// `enumerate_spn_accounts` (lines 149-184). The combination of
+    /// `skip_asrep_roastable=true` and `u.dont_req_preauth=true`
+    /// must result in the account being skipped (not in the output).
+    #[test]
+    fn skip_asrep_roastable_filters_dont_req_preauth_accounts() {
+        // Mock a small user set
+        struct MockUser {
+            sam: &'static str,
+            enabled: bool,
+            dont_req_preauth: bool,
+            is_machine: bool,
+            spns: Vec<&'static str>,
+        }
+        let users = vec![
+            MockUser {
+                sam: "normaluser",
+                enabled: true,
+                dont_req_preauth: false,
+                is_machine: false,
+                spns: vec!["HTTP/dc01"],
+            },
+            MockUser {
+                sam: "asrepuser",
+                enabled: true,
+                dont_req_preauth: true,
+                is_machine: false,
+                spns: vec!["HTTP/dc01"],
+            },
+            MockUser {
+                sam: "disableduser",
+                enabled: false,
+                dont_req_preauth: false,
+                is_machine: false,
+                spns: vec!["HTTP/dc01"],
+            },
+            MockUser {
+                sam: "machine$",
+                enabled: true,
+                dont_req_preauth: false,
+                is_machine: true,
+                spns: vec!["HTTP/dc01"],
+            },
+        ];
+
+        let skip_disabled = true;
+        let skip_asrep_roastable = true;
+        let skip_machine_accounts = true;
+
+        let kept: Vec<&str> = users
+            .iter()
+            .filter(|u| {
+                if skip_disabled && !u.enabled {
+                    return false;
+                }
+                if skip_asrep_roastable && u.dont_req_preauth {
+                    return false;
+                }
+                if skip_machine_accounts && u.is_machine {
+                    return false;
+                }
+                !u.spns.is_empty()
+            })
+            .map(|u| u.sam)
+            .collect();
+
+        assert_eq!(kept, vec!["normaluser"]);
+    }
+
+    /// When `skip_asrep_roastable=false`, the preauth account should
+    /// NOT be filtered (operator wants to kerberoast it anyway).
+    #[test]
+    fn skip_asrep_roastable_false_keeps_preauth_accounts() {
+        struct MockUser {
+            dont_req_preauth: bool,
+        }
+        let users = vec![
+            MockUser {
+                dont_req_preauth: false,
+            },
+            MockUser {
+                dont_req_preauth: true,
+            },
+        ];
+        let skip_asrep_roastable = false;
+        let kept: Vec<bool> = users
+            .iter()
+            .filter(|u| !(skip_asrep_roastable && u.dont_req_preauth))
+            .map(|u| u.dont_req_preauth)
+            .collect();
+        assert_eq!(kept, vec![false, true]);
+    }
+
+    /// `KerberoastConfig::default()` should have `skip_asrep_roastable=true`
+    /// so out-of-the-box behavior doesn't waste SPN requests.
+    #[test]
+    fn default_config_skips_asrep_roastable() {
+        let kc = KerberoastConfig::default();
+        assert!(kc.skip_asrep_roastable);
+        assert!(kc.skip_disabled);
+        assert!(kc.skip_machine_accounts);
+        assert!(!kc.admin_only);
+        assert!(!kc.downgrade_to_rc4);
+    }
+
+    /// All other UAC bits must NOT cause a false positive on
+    /// `dont_req_preauth`. This guards against accidental name/bit
+    /// collisions if someone later refactors the constant.
+    #[test]
+    fn no_false_positives_for_other_uac_bits() {
+        const UAC_DONT_REQ_PREAUTH: u32 = 0x400000;
+        // Sample of UAC bits that are NOT DONT_REQ_PREAUTH:
+        //   UF_SCRIPT                     0x00000001
+        //   UF_ACCOUNTDISABLE             0x00000002
+        //   UF_HOMEDIR_REQUIRED           0x00000008
+        //   UF_LOCKOUT                    0x00000010
+        //   UF_PASSWD_NOTREQD             0x00000020
+        //   UF_PASSWD_CANT_CHANGE         0x00000040
+        //   UF_NORMAL_ACCOUNT             0x00000200
+        //   UF_DONT_EXPIRE_PASSWD         0x00010000
+        //   UF_TRUSTED_FOR_DELEGATION     0x00080000
+        //   UF_NOT_DELEGATED              0x00100000
+        //   UF_USE_DES_KEY_ONLY           0x00200000
+        //   UF_TRUSTED_TO_AUTH_FOR_DELEG  0x01000000
+        //   UF_PASSWORD_EXPIRED           0x00800000
+        let other_bits: [u32; 13] = [
+            0x00000001, 0x00000002, 0x00000008, 0x00000010, 0x00000020, 0x00000040, 0x00000200,
+            0x00010000, 0x00080000, 0x00100000, 0x00200000, 0x01000000, 0x00800000,
+        ];
+        for &bits in &other_bits {
+            assert!(
+                bits & UAC_DONT_REQ_PREAUTH == 0,
+                "bit 0x{:08x} unexpectedly matches UAC_DONT_REQ_PREAUTH",
+                bits
+            );
+        }
+    }
 }

@@ -9,6 +9,7 @@ pub mod adcs;
 pub mod computers;
 pub mod delegations;
 pub mod export;
+pub mod gmsa;
 pub mod gpos;
 pub mod gpp_fetch;
 pub mod groups;

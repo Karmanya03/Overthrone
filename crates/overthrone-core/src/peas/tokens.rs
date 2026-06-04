@@ -48,22 +48,24 @@ pub async fn enumerate() -> PeasResult {
                     if parts.len() >= 2 {
                         let priv_name = parts[0].trim();
                         let enabled = parts.get(1).unwrap_or(&"").trim();
-                        if !priv_name.is_empty() && enabled.eq_ignore_ascii_case("Enabled")
-                            && let Some(severity) = is_dangerous_privilege(priv_name) {
-                                dangerous_found.push(priv_name.to_string());
-                                let mut priv_data = HashMap::new();
-                                priv_data.insert("privilege".into(), priv_name.to_string());
-                                priv_data.insert("state".into(), "Enabled".into());
-                                findings.push(PeasFinding {
-                                    name: format!("Dangerous Privilege: {}", priv_name),
-                                    description: format!(
-                                        "{} is ENABLED - privilege escalation risk",
-                                        priv_name
-                                    ),
-                                    severity,
-                                    data: priv_data,
-                                });
-                            }
+                        if !priv_name.is_empty()
+                            && enabled.eq_ignore_ascii_case("Enabled")
+                            && let Some(severity) = is_dangerous_privilege(priv_name)
+                        {
+                            dangerous_found.push(priv_name.to_string());
+                            let mut priv_data = HashMap::new();
+                            priv_data.insert("privilege".into(), priv_name.to_string());
+                            priv_data.insert("state".into(), "Enabled".into());
+                            findings.push(PeasFinding {
+                                name: format!("Dangerous Privilege: {}", priv_name),
+                                description: format!(
+                                    "{} is ENABLED - privilege escalation risk",
+                                    priv_name
+                                ),
+                                severity,
+                                data: priv_data,
+                            });
+                        }
                     }
                 }
 

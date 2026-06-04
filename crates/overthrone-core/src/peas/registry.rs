@@ -47,7 +47,11 @@ pub async fn enumerate() -> PeasResult {
                     name: "AlwaysInstallElevated (UAC Policy)".into(),
                     description: format!(
                         "AlwaysInstallElevated is {}",
-                        if always_install { "ENABLED (vulnerable)" } else { "disabled" }
+                        if always_install {
+                            "ENABLED (vulnerable)"
+                        } else {
+                            "disabled"
+                        }
                     ),
                     severity: if always_install {
                         PeasSeverity::High
@@ -101,7 +105,11 @@ pub async fn enumerate() -> PeasResult {
         // HKCU AutoRun
         match run_reg_query(&[r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"]) {
             Ok(output) => {
-                let entries: Vec<String> = output.lines().filter(|l| l.contains("REG_")).map(String::from).collect();
+                let entries: Vec<String> = output
+                    .lines()
+                    .filter(|l| l.contains("REG_"))
+                    .map(String::from)
+                    .collect();
                 let entry_count = entries.len();
                 let mut data = HashMap::new();
                 data.insert("entry_count".into(), entry_count.to_string());
@@ -128,7 +136,11 @@ pub async fn enumerate() -> PeasResult {
         // HKLM AutoRun
         match run_reg_query(&[r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"]) {
             Ok(output) => {
-                let entries: Vec<String> = output.lines().filter(|l| l.contains("REG_")).map(String::from).collect();
+                let entries: Vec<String> = output
+                    .lines()
+                    .filter(|l| l.contains("REG_"))
+                    .map(String::from)
+                    .collect();
                 let entry_count = entries.len();
                 let mut data = HashMap::new();
                 data.insert("entry_count".into(), entry_count.to_string());
@@ -165,9 +177,17 @@ pub async fn enumerate() -> PeasResult {
                     name: "WDigest Credential Caching".into(),
                     description: format!(
                         "WDigest UseLogonCredential is {}",
-                        if wdigest { "ENABLED (cleartext cached)" } else { "not set / disabled" }
+                        if wdigest {
+                            "ENABLED (cleartext cached)"
+                        } else {
+                            "not set / disabled"
+                        }
                     ),
-                    severity: if wdigest { PeasSeverity::High } else { PeasSeverity::Info },
+                    severity: if wdigest {
+                        PeasSeverity::High
+                    } else {
+                        PeasSeverity::Info
+                    },
                     data,
                 });
             }

@@ -138,17 +138,29 @@ impl ForgeConfig {
 
         if let (Some(cert), Some(key)) = (&self.pkinit_cert_path, &self.pkinit_key_path) {
             crate::pkinit_auth::pkinit_authenticate(
-                &self.dc_ip, &self.domain, &self.username, cert, key,
+                &self.dc_ip,
+                &self.domain,
+                &self.username,
+                cert,
+                key,
             )
             .await
         } else {
-            let secret = self.password.as_deref().or(self.nt_hash.as_deref()).ok_or_else(|| {
-                OverthroneError::TicketForge(
-                    "Password, NTLM hash, or PKINIT certificate required to acquire TGT".into(),
-                )
-            })?;
+            let secret = self
+                .password
+                .as_deref()
+                .or(self.nt_hash.as_deref())
+                .ok_or_else(|| {
+                    OverthroneError::TicketForge(
+                        "Password, NTLM hash, or PKINIT certificate required to acquire TGT".into(),
+                    )
+                })?;
             kerberos::request_tgt(
-                &self.dc_ip, &self.domain, &self.username, secret, self.nt_hash.is_some(),
+                &self.dc_ip,
+                &self.domain,
+                &self.username,
+                secret,
+                self.nt_hash.is_some(),
             )
             .await
         }
@@ -384,7 +396,12 @@ mod tests {
 
     #[test]
     fn test_forge_action_display_silver_ticket() {
-        let s = format!("{}", ForgeAction::SilverTicket { target_spn: "cifs/dc".to_string() });
+        let s = format!(
+            "{}",
+            ForgeAction::SilverTicket {
+                target_spn: "cifs/dc".to_string()
+            }
+        );
         assert!(s.contains("Silver"));
     }
 
@@ -402,7 +419,12 @@ mod tests {
 
     #[test]
     fn test_forge_action_display_bronze_bit() {
-        let s = format!("{}", ForgeAction::BronzeBit { target_spn: "cifs/dc".to_string() });
+        let s = format!(
+            "{}",
+            ForgeAction::BronzeBit {
+                target_spn: "cifs/dc".to_string()
+            }
+        );
         assert!(s.contains("Bronze"));
     }
 
@@ -420,7 +442,12 @@ mod tests {
 
     #[test]
     fn test_forge_action_display_dcsync_user() {
-        let s = format!("{}", ForgeAction::DcSyncUser { target_user: "admin".to_string() });
+        let s = format!(
+            "{}",
+            ForgeAction::DcSyncUser {
+                target_user: "admin".to_string()
+            }
+        );
         assert!(s.contains("DCSync"));
     }
 
@@ -438,7 +465,12 @@ mod tests {
 
     #[test]
     fn test_forge_action_display_nopac() {
-        let s = format!("{}", ForgeAction::NoPac { target_dc: "DC01".to_string() });
+        let s = format!(
+            "{}",
+            ForgeAction::NoPac {
+                target_dc: "DC01".to_string()
+            }
+        );
         assert!(s.contains("noPac"));
     }
 
@@ -456,7 +488,9 @@ mod tests {
 
     #[test]
     fn test_forge_action_serialization() {
-        let action = ForgeAction::SilverTicket { target_spn: "cifs/dc".to_string() };
+        let action = ForgeAction::SilverTicket {
+            target_spn: "cifs/dc".to_string(),
+        };
         let json = serde_json::to_string(&action).unwrap();
         let parsed: ForgeAction = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -486,7 +520,10 @@ mod tests {
         let groups = config.effective_groups();
         assert!(!groups.is_empty());
         assert!(groups.contains(&512), "should include Domain Admins (512)");
-        assert!(groups.contains(&519), "should include Enterprise Admins (519)");
+        assert!(
+            groups.contains(&519),
+            "should include Enterprise Admins (519)"
+        );
     }
 
     #[test]

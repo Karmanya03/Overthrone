@@ -1,4 +1,4 @@
-﻿//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
+//! Export reaper results to JSON, CSV, or BloodHound-compatible formats.
 
 use crate::acls::DangerousRight;
 use crate::runner::ReaperResult;

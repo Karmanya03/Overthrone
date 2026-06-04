@@ -96,8 +96,12 @@ mod wizard_stage_tests {
             Stage::Cleanup,
         ];
         for window in stages.windows(2) {
-            assert!(window[0] < window[1],
-                "Stage {:?} should come before {:?}", window[0], window[1]);
+            assert!(
+                window[0] < window[1],
+                "Stage {:?} should come before {:?}",
+                window[0],
+                window[1]
+            );
         }
     }
 
@@ -163,7 +167,10 @@ pub struct WizardSession {
 
 impl WizardSession {
     /// Runs this module operation.
-    pub fn new(config: AutoPwnConfig, checkpoint_dir: Option<PathBuf>) -> std::result::Result<Self, String> {
+    pub fn new(
+        config: AutoPwnConfig,
+        checkpoint_dir: Option<PathBuf>,
+    ) -> std::result::Result<Self, String> {
         config.validate()?;
 
         let session_id = format!("wiz_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
@@ -181,6 +188,54 @@ impl WizardSession {
             state,
             current_stage: Stage::Enumerate,
             completed_stages: Vec::new(),
+            checkpoint_path,
+            started_at: Utc::now(),
+            pause_after_stage: true,
+            auto_crack: true,
+            max_pause_secs: Some(300),
+        })
+    }
+
+    /// Construct a new wizard session pre-populated with an existing
+    /// `EngagementState` (e.g. loaded from a saved session file).
+    /// Domain and DC IP from `config` override the values in the state.
+    /// Stage is set to `Attack` because the Enumerate stage is presumed
+    /// to be done (or at least partially) in the loaded state.
+    pub fn new_with_state(
+        config: AutoPwnConfig,
+        checkpoint_dir: Option<PathBuf>,
+        mut state: EngagementState,
+    ) -> std::result::Result<Self, String> {
+        config.validate()?;
+
+        if state.domain.as_deref().map(str::is_empty).unwrap_or(true) {
+            state.domain = Some(config.creds.domain.clone());
+        }
+        if state.dc_ip.as_deref().map(str::is_empty).unwrap_or(true) {
+            state.dc_ip = Some(config.dc_host.clone());
+        }
+
+        let session_id = format!("wiz_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_resumed"));
+        let checkpoint_path = checkpoint_dir
+            .unwrap_or_else(|| PathBuf::from("./checkpoints"))
+            .join(format!("{}.json", session_id));
+
+        let mut completed = Vec::new();
+        // Mark Enumerate as completed since we have a pre-existing state
+        if !state.users.is_empty() || !state.computers.is_empty() || !state.groups.is_empty() {
+            completed.push(Stage::Enumerate);
+        }
+
+        Ok(Self {
+            session_id,
+            config,
+            state,
+            current_stage: if completed.is_empty() {
+                Stage::Enumerate
+            } else {
+                Stage::Attack
+            },
+            completed_stages: completed,
             checkpoint_path,
             started_at: Utc::now(),
             pause_after_stage: true,

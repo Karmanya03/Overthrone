@@ -110,7 +110,7 @@ pub enum EdgeType {
     /// `SQLAdmin` variant
     SQLAdmin,
 
-    // -- ACL-Based --
+    // -- ACL-Based (broad) --
     /// `GenericAll` variant
     GenericAll,
     /// `GenericWrite` variant
@@ -119,16 +119,42 @@ pub enum EdgeType {
     WriteOwner,
     /// `WriteDacl` variant
     WriteDacl,
+    /// `Owns` variant
+    Owns,
+    /// `AllExtendedRights` variant
+    AllExtendedRights,
     /// `ForceChangePassword` variant
     ForceChangePassword,
     /// `AddMembers` variant
     AddMembers,
     /// `AddSelf` variant
     AddSelf,
+    /// `CreateChild` variant
+    CreateChild,
+    /// `WriteSelf` variant
+    WriteSelf,
+
+    // -- ACL-Based (password / secrets) --
     /// `ReadLapsPassword` variant
     ReadLapsPassword,
+    /// `ReadLapsPasswordExpiry` variant
+    ReadLapsPasswordExpiry,
     /// `ReadGmsaPassword` variant
     ReadGmsaPassword,
+
+    // -- ACL-Based (attribute-level write) --
+    /// `WriteSPN` variant
+    WriteSPN,
+    /// `WriteKeyCredentialLink` variant
+    WriteKeyCredentialLink,
+    /// `AddKeyCredentialLink` variant
+    AddKeyCredentialLink,
+    /// `WriteAllowedToDelegateTo` variant
+    WriteAllowedToDelegateTo,
+    /// `AddAllowedToAct` variant
+    AddAllowedToAct,
+    /// `WriteAccountRestrictions` variant
+    WriteAccountRestrictions,
 
     // -- Kerberos Delegation --
     /// `AllowedToDelegate` variant
@@ -162,7 +188,19 @@ pub enum EdgeType {
     /// `Contains` variant
     Contains,
 
-    // -- ADCS --
+    // -- ADCS management --
+    /// `Enroll` variant
+    Enroll,
+    /// `EnrollOnBehalfOf` variant
+    EnrollOnBehalfOf,
+    /// `ManageCA` variant
+    ManageCA,
+    /// `ManageCertificates` variant
+    ManageCertificates,
+    /// `ManageCertTemplate` variant
+    ManageCertTemplate,
+
+    // -- ADCS ESC --
     /// `AdcsEsc1` variant
     AdcsEsc1,
     /// `AdcsEsc2` variant
@@ -197,8 +235,6 @@ pub enum EdgeType {
     AdcsEsc16,
 
     // -- Generic --
-    /// `Owns` variant
-    Owns,
     /// `Custom` variant
     Custom(String),
 }
@@ -236,16 +272,26 @@ impl EdgeType {
             Self::WriteOwner => 1,
             Self::AllowedToDelegate => 1,
             Self::AllowedToAct => 1,
+            Self::AllExtendedRights => 1,
+            Self::WriteKeyCredentialLink => 1,
+            Self::AddKeyCredentialLink => 1,
+            Self::WriteAllowedToDelegateTo => 1,
+            Self::AddAllowedToAct => 1,
 
             // Moderate effort
             Self::HasSession => 2,
             Self::GenericWrite => 2,
             Self::AddMembers => 2,
             Self::AddSelf => 2,
+            Self::CreateChild => 2,
+            Self::WriteSelf => 2,
             Self::ReadLapsPassword => 2,
+            Self::ReadLapsPasswordExpiry => 2,
             Self::ReadGmsaPassword => 2,
             Self::GetChanges => 2,
             Self::GetChangesAll => 2,
+            Self::WriteSPN => 2,
+            Self::WriteAccountRestrictions => 2,
 
             // Requires additional steps
             Self::CanRDP => 3,
@@ -253,6 +299,13 @@ impl EdgeType {
             Self::ExecuteDCOM => 3,
             Self::SQLAdmin => 3,
             Self::GpoLink => 3,
+            Self::Enroll => 3,
+            Self::ManageCertTemplate => 3,
+            Self::ManageCA => 3,
+            Self::ManageCertificates => 3,
+
+            // Certificate-based delegation
+            Self::EnrollOnBehalfOf => 3,
 
             // Offline cracking required
             Self::HasSpn => 5,
@@ -1834,11 +1887,24 @@ fn parse_edge_type(raw: &str) -> EdgeType {
         "genericwrite" => EdgeType::GenericWrite,
         "writeowner" => EdgeType::WriteOwner,
         "writedacl" => EdgeType::WriteDacl,
+        "owns" => EdgeType::Owns,
+        "allextendedrights" => EdgeType::AllExtendedRights,
         "forcechangepassword" => EdgeType::ForceChangePassword,
         "addmembers" => EdgeType::AddMembers,
+        "addmember" => EdgeType::AddMembers,
         "addself" => EdgeType::AddSelf,
+        "createchild" => EdgeType::CreateChild,
+        "writeself" => EdgeType::WriteSelf,
         "readlapspassword" => EdgeType::ReadLapsPassword,
+        "readlapspasswordexpiry" => EdgeType::ReadLapsPasswordExpiry,
         "readgmsapassword" => EdgeType::ReadGmsaPassword,
+        "writeserviceprincipalname" => EdgeType::WriteSPN,
+        "writespn" => EdgeType::WriteSPN,
+        "writekeycredentiallink" => EdgeType::WriteKeyCredentialLink,
+        "addkeycredentiallink" => EdgeType::AddKeyCredentialLink,
+        "writeallowedtodelegateto" => EdgeType::WriteAllowedToDelegateTo,
+        "addallowedtoact" => EdgeType::AddAllowedToAct,
+        "writeaccountrestrictions" => EdgeType::WriteAccountRestrictions,
         "allowedtodelegate" => EdgeType::AllowedToDelegate,
         "allowedtoact" => EdgeType::AllowedToAct,
         "hassidhistory" => EdgeType::HasSidHistory,
@@ -1850,7 +1916,11 @@ fn parse_edge_type(raw: &str) -> EdgeType {
         "dontreqpreauth" => EdgeType::DontReqPreauth,
         "gpolink" => EdgeType::GpoLink,
         "contains" => EdgeType::Contains,
-        "owns" => EdgeType::Owns,
+        "enroll" => EdgeType::Enroll,
+        "enrollonbehalfof" => EdgeType::EnrollOnBehalfOf,
+        "manageca" => EdgeType::ManageCA,
+        "managecertificates" => EdgeType::ManageCertificates,
+        "managecerttemplate" => EdgeType::ManageCertTemplate,
         "adcsesc1" => EdgeType::AdcsEsc1,
         "adcsesc2" => EdgeType::AdcsEsc2,
         "adcsesc3" => EdgeType::AdcsEsc3,

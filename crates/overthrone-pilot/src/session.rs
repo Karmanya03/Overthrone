@@ -125,12 +125,8 @@ mod tests {
     fn test_default_session_dir_created() {
         let dir = default_session_dir();
         let components: Vec<_> = dir.components().collect();
-        assert!(components
-            .iter()
-            .any(|c| c.as_os_str() == ".overthrone"));
-        assert!(components
-            .iter()
-            .any(|c| c.as_os_str() == "sessions"));
+        assert!(components.iter().any(|c| c.as_os_str() == ".overthrone"));
+        assert!(components.iter().any(|c| c.as_os_str() == "sessions"));
     }
 
     #[test]

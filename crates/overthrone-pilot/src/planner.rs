@@ -79,10 +79,14 @@ mod tests {
         let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], true);
 
         let actions: Vec<&PlannedAction> = plan.steps.iter().map(|s| &s.action).collect();
-        assert!(actions.contains(&&PlannedAction::StealthLdapProbe),
-            "Stealth plan should include StealthLdapProbe when LDAP is available");
-        assert!(actions.contains(&&PlannedAction::StealthDelegationProbe),
-            "Stealth plan should include StealthDelegationProbe when LDAP is available");
+        assert!(
+            actions.contains(&&PlannedAction::StealthLdapProbe),
+            "Stealth plan should include StealthLdapProbe when LDAP is available"
+        );
+        assert!(
+            actions.contains(&&PlannedAction::StealthDelegationProbe),
+            "Stealth plan should include StealthDelegationProbe when LDAP is available"
+        );
     }
 
     #[test]
@@ -92,8 +96,13 @@ mod tests {
         let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
 
         // Without LDAP, first step should be UserEnum, not stealth probes
-        assert!(!plan.steps.iter().any(|s| matches!(s.action, PlannedAction::StealthLdapProbe)),
-            "Without LDAP, stealth probes should not be in plan");
+        assert!(
+            !plan
+                .steps
+                .iter()
+                .any(|s| matches!(s.action, PlannedAction::StealthLdapProbe)),
+            "Without LDAP, stealth probes should not be in plan"
+        );
     }
 
     #[test]
@@ -101,13 +110,18 @@ mod tests {
         let planner = empty_planner();
         let state = empty_state();
         let plan = planner.plan(
-            &AttackGoal::ReconOnly, &state,
-            &["user_enum".to_string()], false,
+            &AttackGoal::ReconOnly,
+            &state,
+            &["user_enum".to_string()],
+            false,
         );
 
         // UserEnum should not appear in the plan
         assert!(
-            !plan.steps.iter().any(|s| matches!(s.action, PlannedAction::UserEnum { .. })),
+            !plan
+                .steps
+                .iter()
+                .any(|s| matches!(s.action, PlannedAction::UserEnum { .. })),
             "Plan should exclude failed actions"
         );
     }
@@ -119,15 +133,20 @@ mod tests {
 
         let recon_plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
         let da_plan = planner.plan(
-            &AttackGoal::DomainAdmin { target_group: "Domain Admins".into() },
-            &state, &[], false,
+            &AttackGoal::DomainAdmin {
+                target_group: "Domain Admins".into(),
+            },
+            &state,
+            &[],
+            false,
         );
 
         // DA plan should have more steps (it includes exploitation, not just recon)
         assert!(
             da_plan.steps.len() >= recon_plan.steps.len(),
             "DA plan ({} steps) should have >= Recon plan ({} steps)",
-            da_plan.steps.len(), recon_plan.steps.len()
+            da_plan.steps.len(),
+            recon_plan.steps.len()
         );
     }
 
@@ -150,7 +169,12 @@ mod tests {
         let plan = planner.plan(&AttackGoal::ReconOnly, &state, &[], false);
 
         for step in &plan.steps {
-            assert!(step.priority >= 0, "Step {} has negative priority {}", step.id, step.priority);
+            assert!(
+                step.priority >= 0,
+                "Step {} has negative priority {}",
+                step.id,
+                step.priority
+            );
         }
     }
 
@@ -164,7 +188,10 @@ mod tests {
             assert!(
                 window[0].priority >= window[1].priority,
                 "Steps not sorted by priority: {} (prio={}) > {} (prio={})",
-                window[0].id, window[0].priority, window[1].id, window[1].priority
+                window[0].id,
+                window[0].priority,
+                window[1].id,
+                window[1].priority
             );
         }
     }
@@ -173,7 +200,9 @@ mod tests {
 
     #[test]
     fn goal_describe_returns_readable_string() {
-        let g = AttackGoal::DomainAdmin { target_group: "Domain Admins".into() };
+        let g = AttackGoal::DomainAdmin {
+            target_group: "Domain Admins".into(),
+        };
         assert!(g.describe().contains("Domain Admins"));
 
         let g = AttackGoal::ReconOnly;
@@ -182,16 +211,29 @@ mod tests {
         let g = AttackGoal::DumpNtds { target_dc: None };
         assert!(g.describe().contains("NTDS"));
 
-        let g = AttackGoal::Custom { description: "test goal".into(), success_check: "".into() };
+        let g = AttackGoal::Custom {
+            description: "test goal".into(),
+            success_check: "".into(),
+        };
         assert_eq!(g.describe(), "test goal");
     }
 
     #[test]
     fn goal_requires_da_is_correct() {
-        assert!(AttackGoal::DomainAdmin { target_group: "DA".into() }.requires_da());
+        assert!(
+            AttackGoal::DomainAdmin {
+                target_group: "DA".into()
+            }
+            .requires_da()
+        );
         assert!(AttackGoal::DumpNtds { target_dc: None }.requires_da());
         assert!(!AttackGoal::ReconOnly.requires_da());
-        assert!(!AttackGoal::CompromiseUser { target_user: "u".into() }.requires_da());
+        assert!(
+            !AttackGoal::CompromiseUser {
+                target_user: "u".into()
+            }
+            .requires_da()
+        );
     }
 }
 

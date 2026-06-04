@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::{
-    acls, adcs, computers, delegations, gpos, groups, laps, mssql, ous, policy, powerview,
+    acls, adcs, computers, delegations, gmsa, gpos, groups, laps, mssql, ous, policy, powerview,
     snaffler, spns, trusts, users,
 };
 /// Structure
@@ -113,6 +113,8 @@ pub struct ReaperResult {
     pub acl_findings: Vec<acls::AclFinding>,
     /// laps entries field
     pub laps_entries: Vec<laps::LapsEntry>,
+    /// gMSA accounts field
+    pub gmsa_entries: Vec<gmsa::GmsaEntry>,
     /// mssql instances field
     pub mssql_instances: Vec<mssql::MssqlInstance>,
     /// snaffle findings field
@@ -135,6 +137,7 @@ const MODULES: &[&str] = &[
     "delegations",
     "acls",
     "laps",
+    "gmsa",
     "mssql",
     "snaffler",
     "powerview",
@@ -179,6 +182,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
         delegations: Vec::new(),
         acl_findings: Vec::new(),
         laps_entries: Vec::new(),
+        gmsa_entries: Vec::new(),
         mssql_instances: Vec::new(),
         snaffle_findings: Vec::new(),
         powerview_results: None,
@@ -301,6 +305,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     );
     run_module!("acls", acls::enumerate_dangerous_acls, acl_findings);
     run_module!("laps", laps::enumerate_laps, laps_entries);
+    run_module!("gmsa", gmsa::enumerate_gmsa, gmsa_entries);
     run_module!("mssql", mssql::enumerate_mssql, mssql_instances);
     run_module!("snaffler", snaffler::run_snaffler, snaffle_findings);
     if config.should_run("powerview") {

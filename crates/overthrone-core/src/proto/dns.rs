@@ -1,7 +1,8 @@
 //! DNS operations for AD reconnaissance: SRV lookups, reverse DNS, DC discovery.
 //!
 //! Provides a [`DnsResolver`] struct that caches the underlying resolver instance
-//! and supports using a custom nameserver (useful for targeting internal AD DNS).
+//! and supports custom nameservers with optional round-robin rotation
+//! (useful for evading DNS-level monitoring or balancing across internal AD DNS).
 //! Free functions are provided as thin wrappers for backward compatibility.
 
 use crate::error::{OverthroneError, Result};
@@ -48,10 +49,14 @@ pub struct SrvRecord {
 // ═══════════════════════════════════════════════════════════
 
 /// DNS resolver that caches the underlying hickory-resolver instance and
-/// optionally targets a custom nameserver (e.g. the domain's internal DNS).
+/// optionally targets one or more custom nameservers with rotation support.
+///
+/// When multiple nameservers are configured, call [`rotate`](Self::rotate)
+/// between queries to round-robin through them.
 pub struct DnsResolver {
     resolver: TokioResolver,
-    server: Option<String>,
+    nameservers: Vec<String>,
+    current_index: usize,
 }
 
 impl DnsResolver {
@@ -68,12 +73,12 @@ impl DnsResolver {
         })?;
         Ok(Self {
             resolver,
-            server: None,
+            nameservers: Vec::new(),
+            current_index: 0,
         })
     }
 
-    /// Build a resolver that targets a specific nameserver IP (port 53 UDP+TCP).
-    pub fn with_nameserver(server_ip: &str) -> Result<Self> {
+    fn build_with_server(server_ip: &str) -> Result<TokioResolver> {
         let ip: IpAddr = server_ip.parse().map_err(|_| OverthroneError::Dns {
             target: server_ip.to_string(),
             reason: "Invalid nameserver IP address".to_string(),
@@ -82,22 +87,74 @@ impl DnsResolver {
         config.add_name_server(NameServerConfig::udp(ip));
         config.add_name_server(NameServerConfig::tcp(ip));
 
-        let resolver: TokioResolver =
-            Resolver::builder_with_config(config, TokioRuntimeProvider::default())
-                .build()
-                .map_err(|e| OverthroneError::Dns {
-                    target: server_ip.to_string(),
-                    reason: e.to_string(),
-                })?;
+        Resolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .build()
+            .map_err(|e| OverthroneError::Dns {
+                target: server_ip.to_string(),
+                reason: e.to_string(),
+            })
+    }
+
+    /// Build a resolver that targets a specific nameserver IP (port 53 UDP+TCP).
+    pub fn with_nameserver(server_ip: &str) -> Result<Self> {
+        let resolver = Self::build_with_server(server_ip)?;
         Ok(Self {
             resolver,
-            server: Some(server_ip.to_string()),
+            nameservers: vec![server_ip.to_string()],
+            current_index: 0,
         })
     }
 
-    /// The nameserver in use, or `None` for system default.
+    /// Build a resolver that round-robins across the given nameserver IPs.
+    /// Starts with the first server.
+    pub fn with_nameservers(server_ips: &[&str]) -> Result<Self> {
+        let first = server_ips.first().copied().unwrap_or("8.8.8.8");
+        let resolver = Self::build_with_server(first)?;
+        Ok(Self {
+            resolver,
+            nameservers: server_ips.iter().map(|s| s.to_string()).collect(),
+            current_index: 0,
+        })
+    }
+
+    /// Return the current nameserver IP, or `None` if using the system resolver.
     pub fn nameserver(&self) -> Option<&str> {
-        self.server.as_deref()
+        self.nameservers.get(self.current_index).map(|s| s.as_str())
+    }
+
+    /// Return all configured nameservers (empty = system default).
+    pub fn nameservers(&self) -> &[String] {
+        &self.nameservers
+    }
+
+    /// How many nameservers are configured (0 = system default).
+    pub fn num_nameservers(&self) -> usize {
+        self.nameservers.len()
+    }
+
+    /// Rotate to the next nameserver in the list (wraps around).
+    /// No-op if using the system resolver (no custom servers).
+    pub fn rotate(&mut self) -> Result<()> {
+        if self.nameservers.is_empty() {
+            return Ok(());
+        }
+        self.current_index = (self.current_index + 1) % self.nameservers.len();
+        let ip = &self.nameservers[self.current_index];
+        self.resolver = Self::build_with_server(ip)?;
+        Ok(())
+    }
+
+    /// Rotate to a specific nameserver index.
+    /// Panics if `idx >= nameservers.len()`.
+    pub fn rotate_to(&mut self, idx: usize) -> Result<()> {
+        assert!(
+            idx < self.nameservers.len(),
+            "rotate_to index out of bounds"
+        );
+        self.current_index = idx;
+        let ip = &self.nameservers[self.current_index];
+        self.resolver = Self::build_with_server(ip)?;
+        Ok(())
     }
 
     // ─────────────────────────────────────────────────────────

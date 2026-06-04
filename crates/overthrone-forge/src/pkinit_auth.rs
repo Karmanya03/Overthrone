@@ -33,20 +33,16 @@ fn pem_to_der(pem_data: &str) -> Result<Vec<u8>> {
         }
         if in_body {
             let line = line.trim();
-            let decoded = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                line,
-            )
-            .map_err(|e| {
-                OverthroneError::TicketForge(format!("PEM base64 decode error: {e}"))
-            })?;
+            let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, line)
+                .map_err(|e| {
+                    OverthroneError::TicketForge(format!("PEM base64 decode error: {e}"))
+                })?;
             der.extend_from_slice(&decoded);
         }
     }
     if der.is_empty() {
         return Err(OverthroneError::TicketForge(
-            "Empty or invalid PEM data — expected BEGIN/END markers with base64 content"
-                .into(),
+            "Empty or invalid PEM data — expected BEGIN/END markers with base64 content".into(),
         ));
     }
     Ok(der)
@@ -114,9 +110,8 @@ pub async fn pkinit_authenticate(
     );
 
     // Parse the raw ticket bytes back into a Ticket struct
-    let (_, ticket) = kerberos_asn1::Ticket::parse(&result.tgt).map_err(|e| {
-        OverthroneError::TicketForge(format!("Failed to parse PKINIT TGT: {e}"))
-    })?;
+    let (_, ticket) = kerberos_asn1::Ticket::parse(&result.tgt)
+        .map_err(|e| OverthroneError::TicketForge(format!("Failed to parse PKINIT TGT: {e}")))?;
 
     Ok(TicketGrantingData {
         ticket,
@@ -125,8 +120,7 @@ pub async fn pkinit_authenticate(
         client_principal: username.to_string(),
         client_realm: realm,
         end_time: {
-            let dt =
-                DateTime::from_timestamp(result.valid_until as i64, 0).unwrap_or_default();
+            let dt = DateTime::from_timestamp(result.valid_until as i64, 0).unwrap_or_default();
             Some(kerberos_asn1::KerberosTime::from(dt))
         },
     })

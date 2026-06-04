@@ -82,13 +82,10 @@ impl EnrolmentWebServiceClient {
             })?;
 
         let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| OverthroneError::Connection {
-                target: self.ca_server.clone(),
-                reason: format!("CES get_policy read body failed: {e}"),
-            })?;
+        let body = resp.text().await.map_err(|e| OverthroneError::Connection {
+            target: self.ca_server.clone(),
+            reason: format!("CES get_policy read body failed: {e}"),
+        })?;
 
         if !status.is_success() {
             return Err(OverthroneError::Connection {
@@ -136,10 +133,7 @@ impl EnrolmentWebServiceClient {
 
         // Parse the SOAP response to extract the issued certificate (PKCS#7 DER blob)
         let cert_der = extract_ces_certificate(&body)?;
-        info!(
-            "[CES] Certificate obtained ({} bytes)",
-            cert_der.len()
-        );
+        info!("[CES] Certificate obtained ({} bytes)", cert_der.len());
         Ok(cert_der)
     }
 }
@@ -292,17 +286,14 @@ impl CertAutoEnroll {
                     "[CertAutoEnroll] CES enrollment: CA={}, template={}",
                     self.ca_server, _template
                 );
-                let client =
-                    EnrolmentWebServiceClient::new(&self.ca_server)?;
+                let client = EnrolmentWebServiceClient::new(&self.ca_server)?;
                 client.submit_request(_csr_der, _template).await
             }
-            EnrollmentPath::Rpc => {
-                Err(OverthroneError::Adcs(
-                    "RPC-based auto-enrollment requires an authenticated SMB session; \
+            EnrollmentPath::Rpc => Err(OverthroneError::Adcs(
+                "RPC-based auto-enrollment requires an authenticated SMB session; \
                      use RemoteCertService directly"
-                        .to_string(),
-                ))
-            }
+                    .to_string(),
+            )),
         }
     }
 }

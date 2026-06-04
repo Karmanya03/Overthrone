@@ -43,9 +43,17 @@ pub async fn enumerate() -> PeasResult {
                     name: "Current User Details".into(),
                     description: format!(
                         "Current user token: {}",
-                        if is_admin { "Administrator" } else { "Standard User" }
+                        if is_admin {
+                            "Administrator"
+                        } else {
+                            "Standard User"
+                        }
                     ),
-                    severity: if is_admin { PeasSeverity::High } else { PeasSeverity::Info },
+                    severity: if is_admin {
+                        PeasSeverity::High
+                    } else {
+                        PeasSeverity::Info
+                    },
                     data,
                 });
             }
@@ -80,7 +88,11 @@ pub async fn enumerate() -> PeasResult {
                 findings.push(PeasFinding {
                     name: "Local Administrators".into(),
                     description: format!("Found {} local administrator(s)", count),
-                    severity: if count > 0 { PeasSeverity::Medium } else { PeasSeverity::Info },
+                    severity: if count > 0 {
+                        PeasSeverity::Medium
+                    } else {
+                        PeasSeverity::Info
+                    },
                     data,
                 });
             }

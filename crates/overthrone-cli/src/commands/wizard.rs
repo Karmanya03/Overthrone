@@ -43,6 +43,10 @@ pub struct WizardArgs {
     #[arg(long, value_name = "FILE")]
     pub resume: Option<PathBuf>,
 
+    /// Resume from a saved engagement session (e.g. from `ovt session list`)
+    #[arg(long, value_name = "NAME", conflicts_with = "resume")]
+    pub from_session: Option<String>,
+
     /// Checkpoint directory (default: ./checkpoints)
     #[arg(long, default_value = "./checkpoints")]
     pub checkpoint_dir: PathBuf,
@@ -182,6 +186,11 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // ── Resume from saved engagement session ──
+    if let Some(ref session_name) = args.from_session {
+        return resume_from_saved_session(&args, session_name).await;
+    }
+
     // ── New session — validate required args ──
     let target = args
         .target
@@ -279,5 +288,158 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
             checkpoint_path.display()
         );
         Err(anyhow::anyhow!("Wizard goal not achieved"))
+    }
+}
+
+/// Resume the wizard from a saved engagement session file
+/// (e.g. `ovt session list` output, persisted by auto-pwn/wizard runs).
+///
+/// Loads the `EngagementState` from `~/.overthrone/sessions/<name>.json`,
+/// constructs a new wizard with the state pre-populated, and runs the
+/// Attack-through-Cleanup stages. Enumerate is skipped if the loaded
+/// state contains any users/computers/groups.
+async fn resume_from_saved_session(args: &WizardArgs, session_name: &str) -> anyhow::Result<()> {
+    use overthrone_pilot::session::session_path;
+
+    // ── Validate required args (the loaded state may not have creds) ──
+    let dc_host = args
+        .dc_host
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--dc-host / OT_DC_HOST required"))?;
+    let domain = args
+        .domain
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--domain / OT_DOMAIN required"))?;
+    let username = args
+        .username
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--username / OT_USERNAME required"))?;
+
+    let creds = if let Some(hash) = args.nt_hash.clone() {
+        info!("Using NTLM hash authentication");
+        Credentials::ntlm_hash(&domain, &username, &hash)
+    } else {
+        let password = args
+            .password
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("--password or --nt-hash required"))?;
+        Credentials::password(&domain, &username, &password)
+    };
+
+    // ── Load saved state ──
+    let path = session_path(session_name);
+    if !path.exists() {
+        anyhow::bail!(
+            "Session file does not exist: {} (use `ovt session list` to see available sessions)",
+            path.display()
+        );
+    }
+    info!("Loading saved session from {}", path.display());
+    let state = overthrone_pilot::session::load_session(&path)
+        .map_err(|e| anyhow::anyhow!("Failed to load session file: {}", e))?;
+
+    let user_count = state.users.len();
+    let computer_count = state.computers.len();
+    let cred_count = state.credentials.len();
+    info!(
+        "Loaded session: domain={:?} dc={:?} users={} computers={} creds={} da={}",
+        state.domain, state.dc_ip, user_count, computer_count, cred_count, state.has_domain_admin
+    );
+
+    let pilot_stage = match args.max_stage {
+        StageArg::Enumerate => Stage::Enumerate,
+        StageArg::Attack => Stage::Attack,
+        StageArg::Escalate => Stage::Escalate,
+        StageArg::Lateral => Stage::Lateral,
+        StageArg::Loot => Stage::Loot,
+        StageArg::Cleanup => Stage::Cleanup,
+    };
+
+    let config = AutoPwnConfig {
+        dc_host,
+        creds,
+        target: state
+            .da_user
+            .clone()
+            .unwrap_or_else(|| "Domain Admins".to_string()),
+        max_stage: pilot_stage,
+        stealth: args.stealth,
+        dry_run: args.dry_run,
+        exec_method: args.exec_method.into(),
+        jitter_ms: args.jitter_ms,
+        use_ldaps: args.ldaps,
+        timeout: args.timeout,
+        userlist: None,
+        #[cfg(feature = "qlearn")]
+        adaptive_mode: overthrone_pilot::qlearner::AdaptiveMode::Heuristic,
+        #[cfg(feature = "qlearn")]
+        q_table_path: std::path::PathBuf::from(""),
+        initial_state: Some(state.clone()),
+        dc_verify: overthrone_pilot::dc_verify::DcVerifyConfig {
+            skip_dns: args.no_dc_verify_dns,
+            ..Default::default()
+        },
+    };
+
+    let mut session =
+        WizardSession::new_with_state(config, Some(args.checkpoint_dir.clone()), state)
+            .map_err(|e| anyhow::anyhow!("Failed to construct wizard: {}", e))?;
+    session.pause_after_stage = !args.no_pause;
+    session.auto_crack = !args.no_auto_crack;
+    session.max_pause_secs = if args.pause_timeout == 0 {
+        None
+    } else {
+        Some(args.pause_timeout)
+    };
+
+    let checkpoint_path = session.checkpoint_path.clone();
+    let result = session
+        .run()
+        .await
+        .map_err(|e| anyhow::anyhow!("Wizard execution failed: {}", e))?;
+
+    if result.domain_admin_achieved {
+        println!("\n{}", "SUCCESS: Domain Admin achieved!".green().bold());
+        Ok(())
+    } else {
+        println!("\n{}", "Wizard completed (goal not achieved)".yellow());
+        println!(
+            "  Resume with: ovt wizard --resume {}",
+            checkpoint_path.display()
+        );
+        Err(anyhow::anyhow!("Wizard goal not achieved"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_arg_conversion_covers_all_variants() {
+        // Compile-time exhaustiveness check
+        for arg in [
+            StageArg::Enumerate,
+            StageArg::Attack,
+            StageArg::Escalate,
+            StageArg::Lateral,
+            StageArg::Loot,
+            StageArg::Cleanup,
+        ] {
+            let _: Stage = arg.into();
+        }
+    }
+
+    #[test]
+    fn exec_method_arg_conversion_covers_all_variants() {
+        for arg in [
+            ExecMethodArg::Auto,
+            ExecMethodArg::Psexec,
+            ExecMethodArg::Smbexec,
+            ExecMethodArg::Wmiexec,
+            ExecMethodArg::Winrm,
+        ] {
+            let _: ExecMethod = arg.into();
+        }
     }
 }

@@ -314,10 +314,7 @@ mod tests {
     #[test]
     fn join_limited_over_limit() {
         let items = ["a", "b", "c", "d", "e"];
-        assert_eq!(
-            join_limited(items.iter().copied(), 3),
-            "a, b, c, +2 more"
-        );
+        assert_eq!(join_limited(items.iter().copied(), 3), "a, b, c, +2 more");
     }
 
     #[test]
@@ -344,12 +341,30 @@ mod tests {
     fn state_snapshot_empty_state() {
         let state = EngagementState::new();
         let snap = state_snapshot(&state);
-        assert!(snap.contains("users `0`"), "snap should mention users: {snap}");
-        assert!(snap.contains("computers `0`"), "snap should mention computers: {snap}");
-        assert!(snap.contains("Domain admin: `false`"), "snap should say Domain admin: false: {snap}");
-        assert!(snap.contains("kerberoastable [none]"), "snap should mention kerberoastable: {snap}");
-        assert!(snap.contains("asrep [none]"), "snap should mention asrep: {snap}");
-        assert!(snap.contains("admin hosts [none]"), "snap should mention admin hosts: {snap}");
+        assert!(
+            snap.contains("users `0`"),
+            "snap should mention users: {snap}"
+        );
+        assert!(
+            snap.contains("computers `0`"),
+            "snap should mention computers: {snap}"
+        );
+        assert!(
+            snap.contains("Domain admin: `false`"),
+            "snap should say Domain admin: false: {snap}"
+        );
+        assert!(
+            snap.contains("kerberoastable [none]"),
+            "snap should mention kerberoastable: {snap}"
+        );
+        assert!(
+            snap.contains("asrep [none]"),
+            "snap should mention asrep: {snap}"
+        );
+        assert!(
+            snap.contains("admin hosts [none]"),
+            "snap should mention admin hosts: {snap}"
+        );
     }
 
     #[test]
@@ -359,8 +374,17 @@ mod tests {
         state.has_domain_admin = true;
         state.da_user = Some("admin".into());
         let snap = state_snapshot(&state);
-        assert!(snap.contains("kerberoastable `1`"), "snap should show kerberoastable count: {snap}");
-        assert!(snap.contains("Domain admin: `true`"), "snap should say Domain admin: true: {snap}");
-        assert!(snap.contains("via `admin`"), "snap should mention da user: {snap}");
+        assert!(
+            snap.contains("kerberoastable `1`"),
+            "snap should show kerberoastable count: {snap}"
+        );
+        assert!(
+            snap.contains("Domain admin: `true`"),
+            "snap should say Domain admin: true: {snap}"
+        );
+        assert!(
+            snap.contains("via `admin`"),
+            "snap should mention da user: {snap}"
+        );
     }
 }

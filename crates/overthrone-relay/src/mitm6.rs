@@ -1,4 +1,4 @@
-﻿//! mitm6 — DHCPv6 DNS Poisoning + WPAD Injection + DNS Spoofing
+//! mitm6 — DHCPv6 DNS Poisoning + WPAD Injection + DNS Spoofing
 //!
 //! Implements full IPv6 attack chain:
 //! 1. **DHCPv6 spoofing**: Replies to DHCPv6 Solicit/Request with attacker's
@@ -254,7 +254,8 @@ impl Mitm6 {
     /// Start the WPAD HTTP server component.
     /// Serves malicious proxy configuration to route victim traffic.
     async fn start_wpad_server(&self) -> Result<tokio::task::JoinHandle<()>, RelayError> {
-        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, self.config.wpad_http_port);
+        let listen_addr =
+            crate::utils::format_addr(&self.config.listen_ip, self.config.wpad_http_port);
         let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
             RelayError::Socket(format!(
                 "Cannot bind WPAD HTTP port {}: {e}",

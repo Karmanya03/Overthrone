@@ -570,24 +570,15 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
     // ── Hostile DC Detection ──
     if config.dc_verify.enabled && !config.dry_run {
-        println!(
-            "  {} Hostile DC detection check...",
-            "DC".bold().cyan()
-        );
-        let dc_result = crate::dc_verify::verify_dc(
-            &config.dc_host,
-            &config.creds.domain,
-            &config.dc_verify,
-        )
-        .await;
+        println!("  {} Hostile DC detection check...", "DC".bold().cyan());
+        let dc_result =
+            crate::dc_verify::verify_dc(&config.dc_host, &config.creds.domain, &config.dc_verify)
+                .await;
         dc_result.print_summary();
         state.dc_verification = Some(dc_result.clone());
 
         if dc_result.is_hostile() && config.dc_verify.strict {
-            let reason = format!(
-                "Hostile DC detected: {}",
-                dc_result.summary
-            );
+            let reason = format!("Hostile DC detected: {}", dc_result.summary);
             println!(
                 "  {} Hostile DC detected and strict mode enabled — aborting",
                 "ABORT".red().bold()

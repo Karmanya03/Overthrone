@@ -798,9 +798,16 @@ fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) ->
 
 /// Parse DCSync response using the DRSR parser in overthrone-core.
 /// Returns an error on parse failure instead of silently returning an empty Vec.
-fn parse_dcsync_response(resp: &[u8], session_key: &[u8], domain: &str) -> Result<Vec<DcSyncSecrets>> {
-    let result = drsr::parse_get_nc_changes_reply(resp, session_key)
-        .map_err(|e| OverthroneError::custom(format!("[dcsync] Failed to parse DRSGetNCChanges reply: {e}")))?;
+fn parse_dcsync_response(
+    resp: &[u8],
+    session_key: &[u8],
+    domain: &str,
+) -> Result<Vec<DcSyncSecrets>> {
+    let result = drsr::parse_get_nc_changes_reply(resp, session_key).map_err(|e| {
+        OverthroneError::custom(format!(
+            "[dcsync] Failed to parse DRSGetNCChanges reply: {e}"
+        ))
+    })?;
 
     info!(
         "[dcsync] Parser returned {} objects, more_data={}",
@@ -822,8 +829,11 @@ fn parse_dcsync_response_with_cursor(
     domain: &str,
     cursor: &mut Option<DcSyncCursor>,
 ) -> Result<Vec<DcSyncSecrets>> {
-    let result = drsr::parse_get_nc_changes_reply(resp, session_key)
-        .map_err(|e| OverthroneError::custom(format!("[dcsync] Failed to parse DRSGetNCChanges reply: {e}")))?;
+    let result = drsr::parse_get_nc_changes_reply(resp, session_key).map_err(|e| {
+        OverthroneError::custom(format!(
+            "[dcsync] Failed to parse DRSGetNCChanges reply: {e}"
+        ))
+    })?;
 
     info!(
         "[dcsync] Parser returned {} objects, more_data={}",

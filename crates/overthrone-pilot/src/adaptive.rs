@@ -967,7 +967,9 @@ mod tests {
             id: "test-001".into(),
             description: "Kerberoast test account".into(),
             stage: Stage::Attack,
-            action: PlannedAction::Kerberoast { spns: vec!["svc_1/http.test.local".into()] },
+            action: PlannedAction::Kerberoast {
+                spns: vec!["svc_1/http.test.local".into()],
+            },
             priority: 50,
             noise: NoiseLevel::Low,
             depends_on: vec![],
@@ -985,11 +987,21 @@ mod tests {
     }
 
     fn ok_result(new_creds: usize, new_admin: usize) -> StepResult {
-        StepResult { success: true, output: "OK".into(), new_credentials: new_creds, new_admin_hosts: new_admin }
+        StepResult {
+            success: true,
+            output: "OK".into(),
+            new_credentials: new_creds,
+            new_admin_hosts: new_admin,
+        }
     }
 
     fn fail_result(output: &str) -> StepResult {
-        StepResult { success: false, output: output.into(), new_credentials: 0, new_admin_hosts: 0 }
+        StepResult {
+            success: false,
+            output: output.into(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        }
     }
 
     // ── FailureClass classification ──
@@ -997,48 +1009,102 @@ mod tests {
     #[test]
     fn smb2_negotiate_too_short_is_classified_as_network_error() {
         let output = "SMB2 Negotiate response too short: 72 bytes";
-        assert!(matches!(FailureClass::classify(output), FailureClass::NetworkError));
+        assert!(matches!(
+            FailureClass::classify(output),
+            FailureClass::NetworkError
+        ));
     }
 
     #[test]
     fn auth_failure_classified_correctly() {
-        assert!(matches!(FailureClass::classify("logon failure: unknown user"), FailureClass::AuthFailure));
-        assert!(matches!(FailureClass::classify("KDC_ERR_PREAUTH_FAILED"), FailureClass::AuthFailure));
-        assert!(matches!(FailureClass::classify("account locked out"), FailureClass::AuthFailure));
-        assert!(matches!(FailureClass::classify("STATUS_ACCOUNT_LOCKED_OUT"), FailureClass::AuthFailure));
+        assert!(matches!(
+            FailureClass::classify("logon failure: unknown user"),
+            FailureClass::AuthFailure
+        ));
+        assert!(matches!(
+            FailureClass::classify("KDC_ERR_PREAUTH_FAILED"),
+            FailureClass::AuthFailure
+        ));
+        assert!(matches!(
+            FailureClass::classify("account locked out"),
+            FailureClass::AuthFailure
+        ));
+        assert!(matches!(
+            FailureClass::classify("STATUS_ACCOUNT_LOCKED_OUT"),
+            FailureClass::AuthFailure
+        ));
     }
 
     #[test]
     fn network_error_classified_correctly() {
-        assert!(matches!(FailureClass::classify("connection refused: 10.0.0.1:445"), FailureClass::NetworkError));
-        assert!(matches!(FailureClass::classify("no route to host"), FailureClass::NetworkError));
-        assert!(matches!(FailureClass::classify("connection reset by peer"), FailureClass::NetworkError));
+        assert!(matches!(
+            FailureClass::classify("connection refused: 10.0.0.1:445"),
+            FailureClass::NetworkError
+        ));
+        assert!(matches!(
+            FailureClass::classify("no route to host"),
+            FailureClass::NetworkError
+        ));
+        assert!(matches!(
+            FailureClass::classify("connection reset by peer"),
+            FailureClass::NetworkError
+        ));
     }
 
     #[test]
     fn access_denied_classified_correctly() {
-        assert!(matches!(FailureClass::classify("STATUS_ACCESS_DENIED"), FailureClass::AccessDenied));
-        assert!(matches!(FailureClass::classify("insufficient privileges"), FailureClass::AccessDenied));
-        assert!(matches!(FailureClass::classify("not allowed"), FailureClass::AccessDenied));
+        assert!(matches!(
+            FailureClass::classify("STATUS_ACCESS_DENIED"),
+            FailureClass::AccessDenied
+        ));
+        assert!(matches!(
+            FailureClass::classify("insufficient privileges"),
+            FailureClass::AccessDenied
+        ));
+        assert!(matches!(
+            FailureClass::classify("not allowed"),
+            FailureClass::AccessDenied
+        ));
     }
 
     #[test]
     fn not_found_classified_correctly() {
-        assert!(matches!(FailureClass::classify("not found: CN=DoesNotExist,DC=test,DC=local"), FailureClass::NotFound));
-        assert!(matches!(FailureClass::classify("no such object"), FailureClass::NotFound));
-        assert!(matches!(FailureClass::classify("KDC_ERR_S_PRINCIPAL_UNKNOWN"), FailureClass::NotFound));
+        assert!(matches!(
+            FailureClass::classify("not found: CN=DoesNotExist,DC=test,DC=local"),
+            FailureClass::NotFound
+        ));
+        assert!(matches!(
+            FailureClass::classify("no such object"),
+            FailureClass::NotFound
+        ));
+        assert!(matches!(
+            FailureClass::classify("KDC_ERR_S_PRINCIPAL_UNKNOWN"),
+            FailureClass::NotFound
+        ));
     }
 
     #[test]
     fn detected_classified_correctly() {
-        assert!(matches!(FailureClass::classify("blocked by Windows Defender"), FailureClass::Detected));
-        assert!(matches!(FailureClass::classify("quarantined"), FailureClass::Detected));
-        assert!(matches!(FailureClass::classify("antivirus alert triggered"), FailureClass::Detected));
+        assert!(matches!(
+            FailureClass::classify("blocked by Windows Defender"),
+            FailureClass::Detected
+        ));
+        assert!(matches!(
+            FailureClass::classify("quarantined"),
+            FailureClass::Detected
+        ));
+        assert!(matches!(
+            FailureClass::classify("antivirus alert triggered"),
+            FailureClass::Detected
+        ));
     }
 
     #[test]
     fn unknown_failure_for_gibberish() {
-        assert!(matches!(FailureClass::classify("something completely unexpected happened"), FailureClass::Unknown));
+        assert!(matches!(
+            FailureClass::classify("something completely unexpected happened"),
+            FailureClass::Unknown
+        ));
         assert!(matches!(FailureClass::classify(""), FailureClass::Unknown));
     }
 
@@ -1073,7 +1139,9 @@ mod tests {
         let mut engine = default_engine();
         let step = sample_step();
         let result = ok_result(0, 0);
-        let goal = AttackGoal::DomainAdmin { target_group: "Domain Admins".into() };
+        let goal = AttackGoal::DomainAdmin {
+            target_group: "Domain Admins".into(),
+        };
         let mut state = sample_state();
         state.has_domain_admin = true;
 
@@ -1158,7 +1226,10 @@ mod tests {
 
     #[test]
     fn effective_max_retries_engine_overrides_zero_step_value() {
-        let engine = AdaptiveEngine { max_retries: 7, ..AdaptiveEngine::new(false) };
+        let engine = AdaptiveEngine {
+            max_retries: 7,
+            ..AdaptiveEngine::new(false)
+        };
         let step = sample_step();
         assert_eq!(engine.effective_max_retries(&step), 7);
     }
@@ -1215,8 +1286,10 @@ mod tests {
         engine.evaluate(&step, &result, &state, &goal);
         // The blacklist should have at most 1 entry for this action
         let blacklisted = engine.failed_actions().len();
-        assert!(blacklisted <= 1,
-            "Same action should not be blacklisted more than once, got {blacklisted}");
+        assert!(
+            blacklisted <= 1,
+            "Same action should not be blacklisted more than once, got {blacklisted}"
+        );
     }
 
     // ── reset_failure_streak ──

@@ -104,7 +104,11 @@ pub async fn enumerate() -> PeasResult {
                 findings.push(PeasFinding {
                     name: "UAC Status".into(),
                     description: format!("UAC is {}", if enabled { "enabled" } else { "disabled" }),
-                    severity: if enabled { PeasSeverity::Info } else { PeasSeverity::Medium },
+                    severity: if enabled {
+                        PeasSeverity::Info
+                    } else {
+                        PeasSeverity::Medium
+                    },
                     data,
                 });
             }
@@ -130,7 +134,11 @@ pub async fn enumerate() -> PeasResult {
                     name: "Domain Join Status".into(),
                     description: format!(
                         "Machine is {} a domain",
-                        if is_domain_joined { "part of" } else { "NOT part of" }
+                        if is_domain_joined {
+                            "part of"
+                        } else {
+                            "NOT part of"
+                        }
                     ),
                     severity: PeasSeverity::Info,
                     data,

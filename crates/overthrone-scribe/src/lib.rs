@@ -15,10 +15,10 @@
 
 pub mod mapper;
 pub mod markdown;
-pub mod pipeline;
 pub mod mitigations;
 pub mod narrative;
 pub mod pdf;
+pub mod pipeline;
 pub mod runner;
 pub mod session;
 

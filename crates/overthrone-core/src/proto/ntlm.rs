@@ -917,7 +917,11 @@ mod tests {
         let flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
         assert_eq!(flags & TEST_NEG_SIGN, 0, "SIGN flag should be cleared");
         assert_eq!(flags & TEST_NEG_SEAL, 0, "SEAL flag should be cleared");
-        assert_eq!(flags & TEST_NEG_ALWAYS_SIGN, 0, "ALWAYS_SIGN flag should be cleared");
+        assert_eq!(
+            flags & TEST_NEG_ALWAYS_SIGN,
+            0,
+            "ALWAYS_SIGN flag should be cleared"
+        );
     }
 
     #[test]
@@ -934,7 +938,11 @@ mod tests {
             let av_id = u16::from_le_bytes([av_pairs[i], av_pairs[i + 1]]);
             let av_len = u16::from_le_bytes([av_pairs[i + 2], av_pairs[i + 3]]) as usize;
             if av_id == 6 && av_len >= 4 {
-                assert_eq!(av_pairs[i + 4] & 0x01, 0, "MIC-present bit should be cleared");
+                assert_eq!(
+                    av_pairs[i + 4] & 0x01,
+                    0,
+                    "MIC-present bit should be cleared"
+                );
                 return;
             }
             if av_id == 0 {
@@ -982,7 +990,11 @@ mod tests {
 
         let av_id = u16::from_le_bytes([av_pairs[0], av_pairs[1]]);
         assert_eq!(av_id, 1, "First AV_PAIR should be preserved");
-        assert_eq!(&av_pairs[4..8], b"C\x00O\x00", "AV_PAIR value should be preserved");
+        assert_eq!(
+            &av_pairs[4..8],
+            b"C\x00O\x00",
+            "AV_PAIR value should be preserved"
+        );
     }
 
     #[test]
@@ -1033,8 +1045,15 @@ mod tests {
         let result = strip_mic_from_type3(&msg);
 
         let flags = u32::from_le_bytes([result[60], result[61], result[62], result[63]]);
-        assert_eq!(flags & extra_flags, extra_flags, "Non-sign flags should be preserved");
-        assert_eq!(flags & (TEST_NEG_SIGN | TEST_NEG_SEAL | TEST_NEG_ALWAYS_SIGN), 0);
+        assert_eq!(
+            flags & extra_flags,
+            extra_flags,
+            "Non-sign flags should be preserved"
+        );
+        assert_eq!(
+            flags & (TEST_NEG_SIGN | TEST_NEG_SEAL | TEST_NEG_ALWAYS_SIGN),
+            0
+        );
     }
 
     #[test]
@@ -1066,7 +1085,9 @@ mod tests {
         // MsvAvFlags: AvId=6, AvLen=4, Data=MIC_PRESENT=1
         av_pairs.extend_from_slice(&[0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00]);
         // MsvAvTimestamp: AvId=7, AvLen=8, Data=0 (8 bytes of zeros)
-        av_pairs.extend_from_slice(&[0x07, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        av_pairs.extend_from_slice(&[
+            0x07, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
         av_pairs.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // EOL
 
         let mic = [0xDD; 16];
@@ -1124,9 +1145,16 @@ mod tests {
         let av_total: usize = av_sizes.iter().sum();
         let expected_mic_start = nt_off + 16 + 28 + av_total + 4; // +4 for EOL
         for j in 0..16 {
-            assert_eq!(result[expected_mic_start + j], 0, "MIC byte {j} should be zeroed");
+            assert_eq!(
+                result[expected_mic_start + j],
+                0,
+                "MIC byte {j} should be zeroed"
+            );
         }
 
-        assert_eq!(&result[nt_off + 16 + 28 + 4..nt_off + 16 + 28 + 8], b"C\x00O\x00");
+        assert_eq!(
+            &result[nt_off + 16 + 28 + 4..nt_off + 16 + 28 + 8],
+            b"C\x00O\x00"
+        );
     }
 }

@@ -1372,17 +1372,31 @@ mod tests {
         let mut learner = AdaptiveQLearner::new(false, path.clone());
 
         let state = EngagementStateKey {
-            cred_bucket: 0, has_domain_admin: false, has_any_admin: false,
-            admin_hosts_bucket: 0, kerberoastable_bucket: 0, asrep_bucket: 0,
-            users_bucket: 1, policy_bucket: 0, lockout_risk_bucket: 0,
-            laps_bucket: 0, delegation_bucket: 0, gpo_bucket: 0,
-            consec_failures: 0, current_stage: 0, current_action: 0,
-            stealth: false, last_failure: 6,
+            cred_bucket: 0,
+            has_domain_admin: false,
+            has_any_admin: false,
+            admin_hosts_bucket: 0,
+            kerberoastable_bucket: 0,
+            asrep_bucket: 0,
+            users_bucket: 1,
+            policy_bucket: 0,
+            lockout_risk_bucket: 0,
+            laps_bucket: 0,
+            delegation_bucket: 0,
+            gpo_bucket: 0,
+            consec_failures: 0,
+            current_stage: 0,
+            current_action: 0,
+            stealth: false,
+            last_failure: 6,
         };
         let next_state = state.clone();
 
         // Before training, all Q-values are 0
-        assert_eq!(learner.q_value(&state, &AdaptiveAction::RetrySwapCreds), 0.0);
+        assert_eq!(
+            learner.q_value(&state, &AdaptiveAction::RetrySwapCreds),
+            0.0
+        );
         assert_eq!(learner.q_value(&state, &AdaptiveAction::Skip), 0.0);
 
         // Train: RetrySwapCreds consistently leads to success (reward = 10.0)
@@ -1392,12 +1406,17 @@ mod tests {
 
         // After training, RetrySwapCreds should have a positive Q-value
         let q_retry = learner.q_value(&state, &AdaptiveAction::RetrySwapCreds);
-        assert!(q_retry > 0.0, "Expected positive Q-value after repeated success, got {q_retry}");
+        assert!(
+            q_retry > 0.0,
+            "Expected positive Q-value after repeated success, got {q_retry}"
+        );
 
         // RetrySwapCreds should have a higher Q-value than Skip (which was never updated)
         let q_skip = learner.q_value(&state, &AdaptiveAction::Skip);
-        assert!(q_retry > q_skip,
-            "Expected RetrySwapCreds ({q_retry}) > Skip ({q_skip}) after positive training");
+        assert!(
+            q_retry > q_skip,
+            "Expected RetrySwapCreds ({q_retry}) > Skip ({q_skip}) after positive training"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1411,26 +1430,42 @@ mod tests {
         let mut learner = AdaptiveQLearner::new(false, path.clone());
 
         let state = EngagementStateKey {
-            cred_bucket: 0, has_domain_admin: false, has_any_admin: false,
-            admin_hosts_bucket: 0, kerberoastable_bucket: 0, asrep_bucket: 0,
-            users_bucket: 1, policy_bucket: 0, lockout_risk_bucket: 0,
-            laps_bucket: 0, delegation_bucket: 0, gpo_bucket: 0,
-            consec_failures: 0, current_stage: 0, current_action: 0,
-            stealth: false, last_failure: 6,
+            cred_bucket: 0,
+            has_domain_admin: false,
+            has_any_admin: false,
+            admin_hosts_bucket: 0,
+            kerberoastable_bucket: 0,
+            asrep_bucket: 0,
+            users_bucket: 1,
+            policy_bucket: 0,
+            lockout_risk_bucket: 0,
+            laps_bucket: 0,
+            delegation_bucket: 0,
+            gpo_bucket: 0,
+            consec_failures: 0,
+            current_stage: 0,
+            current_action: 0,
+            stealth: false,
+            last_failure: 6,
         };
         let next_state = state.clone();
 
         // Record a negative outcome for Abort
         learner.record_outcome(&state, &AdaptiveAction::Abort, -20.0, &next_state);
         let q_abort = learner.q_value(&state, &AdaptiveAction::Abort);
-        assert!(q_abort < 0.0, "Expected negative Q-value after penalty, got {q_abort}");
+        assert!(
+            q_abort < 0.0,
+            "Expected negative Q-value after penalty, got {q_abort}"
+        );
 
         // Positive action should be preferred over Abort
         learner.record_outcome(&state, &AdaptiveAction::RetrySwapCreds, 10.0, &next_state);
         let q_retry = learner.q_value(&state, &AdaptiveAction::RetrySwapCreds);
         let q_abort = learner.q_value(&state, &AdaptiveAction::Abort);
-        assert!(q_retry > q_abort,
-            "Expected RetrySwapCreds ({q_retry}) > Abort ({q_abort}) after positive + negative training");
+        assert!(
+            q_retry > q_abort,
+            "Expected RetrySwapCreds ({q_retry}) > Abort ({q_abort}) after positive + negative training"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1450,10 +1485,14 @@ mod tests {
         }
 
         let final_epsilon = learner.epsilon();
-        assert!(final_epsilon < initial_epsilon,
-            "Epsilon should decay from {initial_epsilon} to below, got {final_epsilon}");
-        assert!(final_epsilon >= 0.05,
-            "Epsilon should not go below minimum 0.05, got {final_epsilon}");
+        assert!(
+            final_epsilon < initial_epsilon,
+            "Epsilon should decay from {initial_epsilon} to below, got {final_epsilon}"
+        );
+        assert!(
+            final_epsilon >= 0.05,
+            "Epsilon should not go below minimum 0.05, got {final_epsilon}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1466,11 +1505,17 @@ mod tests {
         let result = dummy_result_success();
         let mut state = dummy_state();
         state.has_domain_admin = true;
-        state.credentials.insert("admin".into(), crate::goals::CompromisedCred {
-            username: "admin".into(), secret: "hash".into(),
-            secret_type: crate::goals::SecretType::NtHash,
-            source: "TEST".into(), is_admin: true, admin_on: vec![],
-        });
+        state.credentials.insert(
+            "admin".into(),
+            crate::goals::CompromisedCred {
+                username: "admin".into(),
+                secret: "hash".into(),
+                secret_type: crate::goals::SecretType::NtHash,
+                source: "TEST".into(),
+                is_admin: true,
+                admin_on: vec![],
+            },
+        );
 
         let key = EngagementStateKey::encode(&state, &step, &result, false, 3);
         assert!(key.has_domain_admin);
@@ -1484,11 +1529,17 @@ mod tests {
         let result = dummy_result_success();
         let mut state = dummy_state();
         for i in 0..10 {
-            state.credentials.insert(format!("user{i}"), crate::goals::CompromisedCred {
-                username: format!("user{i}"), secret: "x".into(),
-                secret_type: crate::goals::SecretType::Password,
-                source: "T".into(), is_admin: false, admin_on: vec![],
-            });
+            state.credentials.insert(
+                format!("user{i}"),
+                crate::goals::CompromisedCred {
+                    username: format!("user{i}"),
+                    secret: "x".into(),
+                    secret_type: crate::goals::SecretType::Password,
+                    source: "T".into(),
+                    is_admin: false,
+                    admin_on: vec![],
+                },
+            );
         }
         let key = EngagementStateKey::encode(&state, &step, &result, false, 5);
         assert_eq!(key.cred_bucket, 3);

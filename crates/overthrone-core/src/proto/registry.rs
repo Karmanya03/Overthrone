@@ -794,7 +794,9 @@ impl RemoteRegistry {
         // [RPC header][type:u32][len:u32][data...]
         let offset = 24; // Skip RPC header
         if response.len() < offset + 8 {
-            return Err(OverthroneError::custom("QueryValue response too short for header"));
+            return Err(OverthroneError::custom(
+                "QueryValue response too short for header",
+            ));
         }
         let type_bytes = response[offset..offset + 4]
             .try_into()

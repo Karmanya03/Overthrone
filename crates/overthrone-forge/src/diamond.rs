@@ -43,10 +43,7 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     validate::validate_sid_format(domain_sid)?;
 
     // Step 1: Request a legitimate TGT from the KDC
-    info!(
-        "[diamond] Step 1: Requesting TGT as {}",
-        config.username
-    );
+    info!("[diamond] Step 1: Requesting TGT as {}", config.username);
     let legit_tgt = config.request_user_tgt().await?;
 
     info!(

@@ -28,6 +28,7 @@ impl WebEnrollmentClient {
         let http_client = Client::builder()
             .danger_accept_invalid_certs(true) // Often needed for internal CAs
             .timeout(Duration::from_secs(60))
+            .user_agent(crate::http::UserAgentPool::random())
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .map_err(|e| OverthroneError::Connection {
@@ -47,6 +48,7 @@ impl WebEnrollmentClient {
         let http_client = Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_secs(timeout_secs))
+            .user_agent(crate::http::UserAgentPool::random())
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .map_err(|e| OverthroneError::Connection {

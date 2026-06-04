@@ -73,6 +73,21 @@ pub fn edge_color(edge_type: &EdgeType, highlighted: bool) -> Color {
         EdgeType::WriteOwner => Color::LightRed,
         EdgeType::Owns => Color::LightRed,
 
+        EdgeType::AllExtendedRights => Color::LightRed,
+        EdgeType::WriteSPN => Color::Magenta,
+        EdgeType::WriteKeyCredentialLink => Color::LightRed,
+        EdgeType::AddKeyCredentialLink => Color::LightRed,
+        EdgeType::WriteAllowedToDelegateTo => Color::Magenta,
+        EdgeType::AddAllowedToAct => Color::Red,
+        EdgeType::WriteAccountRestrictions => Color::Magenta,
+        EdgeType::CreateChild => Color::DarkGray,
+        EdgeType::WriteSelf => Color::Yellow,
+        EdgeType::ReadLapsPasswordExpiry => Color::Magenta,
+        EdgeType::Enroll => Color::Green,
+        EdgeType::EnrollOnBehalfOf => Color::LightRed,
+        EdgeType::ManageCA => Color::Green,
+        EdgeType::ManageCertificates => Color::Green,
+        EdgeType::ManageCertTemplate => Color::Green,
         EdgeType::ForceChangePassword => Color::Magenta,
         EdgeType::ReadLapsPassword => Color::Magenta,
         EdgeType::ReadGmsaPassword => Color::Magenta,
@@ -197,12 +212,43 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::WriteDacl => Some("Modify DACL / ACEs -> grant yourself GenericAll"),
         EdgeType::WriteOwner => Some("Take ownership -> modify DACL / ACEs -> GenericAll"),
         EdgeType::Owns => Some("Already owner â€” modify DACL to gain GenericAll"),
+        EdgeType::AllExtendedRights => Some("Covers all extended rights â€” check individual RSOP"),
         EdgeType::ForceChangePassword => {
             Some("net rpc password / Set-ADAccountPassword (no current pw needed)")
         }
         EdgeType::AddMembers => Some("Add yourself / controlled account to the group"),
         EdgeType::AddSelf => {
             Some("Self-write validated right â€” add your own account to the group")
+        }
+        EdgeType::CreateChild => Some("CreateChild â€” create new AD objects in the container"),
+        EdgeType::WriteSelf => Some("WriteSelf â€” modify attributes on self/group membership"),
+        EdgeType::ReadLapsPasswordExpiry => Some("Read LAPS expiry metadata"),
+        EdgeType::WriteSPN => Some("Write SPN -> targeted Kerberoast after ticket collection"),
+        EdgeType::WriteKeyCredentialLink => {
+            Some("Shadow Credentials -> authenticate as target via PKINIT")
+        }
+        EdgeType::AddKeyCredentialLink => {
+            Some("Shadow Credentials (self) -> authenticate as target via PKINIT")
+        }
+        EdgeType::WriteAllowedToDelegateTo => {
+            Some("Write msDS-AllowedToDelegateTo for constrained delegation")
+        }
+        EdgeType::AddAllowedToAct => {
+            Some("Write RBCD ACE -> impersonate Domain Admin to target computer")
+        }
+        EdgeType::WriteAccountRestrictions => {
+            Some("Write account restriction attributes -> delegation/policy abuse")
+        }
+        EdgeType::Enroll => Some("Certificate enrollment -> request certificate from template"),
+        EdgeType::EnrollOnBehalfOf => {
+            Some("Enrollment agent -> request certs on behalf of other principals")
+        }
+        EdgeType::ManageCA => Some("Manage CA -> modify CA settings, revocation, permissions"),
+        EdgeType::ManageCertificates => {
+            Some("Manage Certificates -> approve/reject pending requests")
+        }
+        EdgeType::ManageCertTemplate => {
+            Some("Manage Certificate Template -> modify EKU/issuance settings")
         }
         EdgeType::AllowedToDelegate => {
             Some("S4U2Self + S4U2Proxy â†’ impersonate any user to target service")
@@ -342,6 +388,26 @@ fn edge_ovt_command(edge_type: &EdgeType) -> Option<&'static str> {
         }
         EdgeType::AddMembers => Some("ovt acl add-member --group <GROUP> --member <ACCOUNT>"),
         EdgeType::AddSelf => Some("ovt acl add-self --group <GROUP>"),
+        EdgeType::AllExtendedRights => Some("ovt powerview acls --sid <SID>"),
+        EdgeType::CreateChild => Some("ovt acls writedacl --target <TARGET>"),
+        EdgeType::WriteSelf => Some("ovt powerview acls --sid <SID>"),
+        EdgeType::ReadLapsPasswordExpiry => {
+            Some("ovt laps read --computer <COMPUTER> --target-dc <DC>")
+        }
+        EdgeType::WriteSPN => Some("ovt acl write-spn --target <TARGET> --spn <SPN>"),
+        EdgeType::WriteKeyCredentialLink | EdgeType::AddKeyCredentialLink => {
+            Some("ovt acl shadow-creds --target <TARGET> --cert <CERT_FILE>")
+        }
+        EdgeType::WriteAllowedToDelegateTo => Some("ovt acls writedacl --target <TARGET>"),
+        EdgeType::AddAllowedToAct => Some("ovt acls add-allowed-to-act --target <TARGET>"),
+        EdgeType::WriteAccountRestrictions => Some("ovt powerview acls --sid <SID>"),
+        EdgeType::Enroll => Some("ovt adcs enroll --template <TEMPLATE> --target <TARGET>"),
+        EdgeType::EnrollOnBehalfOf => {
+            Some("ovt adcs enroll --template <TEMPLATE> --target <TARGET> --agent")
+        }
+        EdgeType::ManageCA => Some("ovt adcs manage-ca --ca <CA>"),
+        EdgeType::ManageCertificates => Some("ovt adcs manage-certificates --ca <CA>"),
+        EdgeType::ManageCertTemplate => Some("ovt adcs template --template <TEMPLATE> --inspect"),
         EdgeType::AllowedToDelegate => Some("ovt powerview delegations --target <TARGET>"),
         EdgeType::AllowedToAct => Some("ovt acls add-allowed-to-act --target <TARGET>"),
         EdgeType::DcSync | EdgeType::GetChanges | EdgeType::GetChangesAll => {
@@ -421,12 +487,18 @@ fn edge_severity(edge_type: &EdgeType) -> u8 {
         | EdgeType::WriteDacl
         | EdgeType::WriteOwner
         | EdgeType::Owns
+        | EdgeType::AllExtendedRights
         | EdgeType::DcSync
-        | EdgeType::AllowedToAct => 1,
+        | EdgeType::AllowedToAct
+        | EdgeType::WriteKeyCredentialLink
+        | EdgeType::AddKeyCredentialLink => 1,
         EdgeType::GenericWrite
         | EdgeType::ForceChangePassword
         | EdgeType::AddMembers
         | EdgeType::AddSelf
+        | EdgeType::WriteSPN
+        | EdgeType::WriteAllowedToDelegateTo
+        | EdgeType::AddAllowedToAct
         | EdgeType::ReadLapsPassword
         | EdgeType::ReadGmsaPassword
         | EdgeType::AllowedToDelegate
@@ -434,13 +506,22 @@ fn edge_severity(edge_type: &EdgeType) -> u8 {
         | EdgeType::GpoLink
         | EdgeType::TrustedBy
         | EdgeType::GetChanges
-        | EdgeType::GetChangesAll => 2,
+        | EdgeType::GetChangesAll
+        | EdgeType::EnrollOnBehalfOf
+        | EdgeType::ManageCertTemplate => 2,
         EdgeType::AdminTo
         | EdgeType::CanRDP
         | EdgeType::CanPSRemote
         | EdgeType::ExecuteDCOM
         | EdgeType::HasSession
-        | EdgeType::HasSidHistory => 3,
+        | EdgeType::HasSidHistory
+        | EdgeType::CreateChild
+        | EdgeType::WriteSelf
+        | EdgeType::ReadLapsPasswordExpiry
+        | EdgeType::WriteAccountRestrictions
+        | EdgeType::Enroll
+        | EdgeType::ManageCA
+        | EdgeType::ManageCertificates => 3,
         EdgeType::HasSpn | EdgeType::DontReqPreauth => 4,
         EdgeType::AdcsEsc1
         | EdgeType::AdcsEsc2
@@ -560,6 +641,48 @@ fn edge_operator_note(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::DontReqPreauth => {
             Some("Operator note: AS-REP roast marker; collect once and continue offline.")
         }
+        EdgeType::AllExtendedRights => Some(
+            "Operator note: resolve target class first; this can mean password reset, enrollment control, or replication impact.",
+        ),
+        EdgeType::CreateChild => Some(
+            "Operator note: container-level control; evaluate machine account creation, service class, or group creation.",
+        ),
+        EdgeType::WriteSelf => Some(
+            "Operator note: validated self-write; confirm exact writeable attributes before exploitation.",
+        ),
+        EdgeType::ReadLapsPasswordExpiry => Some(
+            "Operator note: LAPS expiry metadata; combine with LAPS decryption if encrypted passwords are accessible.",
+        ),
+        EdgeType::WriteSPN => Some(
+            "Operator note: SPN write for targeted Kerberoast; set a temporary SPN and restore after ticket collection.",
+        ),
+        EdgeType::WriteKeyCredentialLink | EdgeType::AddKeyCredentialLink => Some(
+            "Operator note: shadow credentials path; add KeyCredentialLink, authenticate via PKINIT, and remove after use.",
+        ),
+        EdgeType::WriteAllowedToDelegateTo => Some(
+            "Operator note: constrained delegation; record original msDS-AllowedToDelegateTo and restore after S4U validation.",
+        ),
+        EdgeType::AddAllowedToAct => Some(
+            "Operator note: RBCD path; use a controlled machine account and request only the needed service ticket.",
+        ),
+        EdgeType::WriteAccountRestrictions => Some(
+            "Operator note: account restriction attributes may affect delegation and authentication; document original values.",
+        ),
+        EdgeType::Enroll => Some(
+            "Operator note: certificate enrollment; review template EKUs, subject supply, approval flags, and security filtering.",
+        ),
+        EdgeType::EnrollOnBehalfOf => Some(
+            "Operator note: enrollment agent path; validate agent restriction and template approval requirements before requesting.",
+        ),
+        EdgeType::ManageCA => Some(
+            "Operator note: CA management; CA modifications affect all issued certificates — prefer read-only audit.",
+        ),
+        EdgeType::ManageCertificates => Some(
+            "Operator note: certificate approval; approve/reject pending requests or manage revocation at the CA console.",
+        ),
+        EdgeType::ManageCertTemplate => Some(
+            "Operator note: template management; template ACL or EKU changes can enable ESC1-style abuse.",
+        ),
         EdgeType::GpoLink => Some(
             "Operator note: review linked OU scope, security filtering, and rollback before GPO edits.",
         ),

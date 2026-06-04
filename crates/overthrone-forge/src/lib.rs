@@ -24,8 +24,8 @@
 
 pub mod acl_backdoor;
 pub mod bronze_bit;
-pub mod cert_store;
 pub mod cert_auto_enroll;
+pub mod cert_store;
 pub mod cleanup;
 pub mod convert;
 pub mod dcsync_user;

@@ -157,7 +157,9 @@ impl ViewerConfig {
 fn random_string(rng: &mut impl Rng, len: usize) -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let n = CHARSET.len();
-    (0..len).map(|_| CHARSET[rng.random_range(0..n)] as char).collect()
+    (0..len)
+        .map(|_| CHARSET[rng.random_range(0..n)] as char)
+        .collect()
 }
 
 impl Default for ViewerConfig {
@@ -199,7 +201,6 @@ impl RateLimiter {
         let mut buckets = self.buckets.lock().await;
         let now = Instant::now();
         let entry = buckets.entry(ip).or_insert((now, 0));
-        // Reset if window has expired
         if now.duration_since(entry.0) > self.window {
             *entry = (now, 1);
             return true;
@@ -212,6 +213,105 @@ impl RateLimiter {
     }
 }
 
+/// Per-user rate limiter keyed by (username, IpAddr).
+/// Allows the same user from different IPs, or different users from the same IP,
+/// to have independent rate limit counters.
+#[allow(dead_code)]
+struct UserRateLimiter {
+    window: Duration,
+    max_requests: u32,
+    buckets: Mutex<HashMap<(String, IpAddr), (Instant, u32)>>,
+}
+
+#[allow(dead_code)]
+impl UserRateLimiter {
+    fn new(window_secs: u64, max_requests: u32) -> Self {
+        Self {
+            window: Duration::from_secs(window_secs),
+            max_requests,
+            buckets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn check(&self, username: &str, ip: IpAddr) -> bool {
+        let mut buckets = self.buckets.lock().await;
+        let now = Instant::now();
+        let key = (username.to_string(), ip);
+        let entry = buckets.entry(key).or_insert((now, 0));
+        if now.duration_since(entry.0) > self.window {
+            *entry = (now, 1);
+            return true;
+        }
+        if entry.1 >= self.max_requests {
+            return false;
+        }
+        entry.1 += 1;
+        true
+    }
+}
+
+/// A user session with bearer-token auth.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct SessionInfo {
+    token: String,
+    username: String,
+    created_at: Instant,
+}
+
+/// Session store that auto-cleans expired tokens on access.
+#[allow(dead_code)]
+struct SessionStore {
+    sessions: Mutex<HashMap<String, SessionInfo>>,
+    session_ttl: Duration,
+}
+
+#[allow(dead_code)]
+impl SessionStore {
+    fn new(ttl_secs: u64) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            session_ttl: Duration::from_secs(ttl_secs),
+        }
+    }
+
+    /// Create a new session for the given username and return a bearer token.
+    async fn create_session(&self, username: &str) -> String {
+        use rand::RngExt;
+        let mut rng = rand::rngs::ThreadRng::default();
+        let token: String = (0..48)
+            .map(|_| {
+                const CHARS: &[u8] =
+                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                CHARS[rng.random_range(0..CHARS.len())] as char
+            })
+            .collect();
+
+        let mut sessions = self.sessions.lock().await;
+        // Clean expired sessions on write
+        let now = Instant::now();
+        sessions.retain(|_, s| now.duration_since(s.created_at) < self.session_ttl);
+        sessions.insert(
+            token.clone(),
+            SessionInfo {
+                token: token.clone(),
+                username: username.to_string(),
+                created_at: now,
+            },
+        );
+        token
+    }
+
+    /// Validate a bearer token and return the username if valid.
+    async fn validate_token(&self, token: &str) -> Option<String> {
+        let mut sessions = self.sessions.lock().await;
+        let now = Instant::now();
+        // Clean expired
+        sessions.retain(|_, s| now.duration_since(s.created_at) < self.session_ttl);
+        sessions.get(token).map(|s| s.username.clone())
+    }
+}
+
 /// Shared application state
 struct AppState {
     graphs: RwLock<Vec<GraphBundle>>,
@@ -219,6 +319,10 @@ struct AppState {
     cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
     config: ViewerConfig,
     rate_limiter: RateLimiter,
+    #[allow(dead_code)]
+    user_rate_limiter: UserRateLimiter,
+    #[allow(dead_code)]
+    sessions: SessionStore,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -3298,6 +3402,16 @@ async fn auth_middleware(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+
+    // Check Bearer token (session-based auth)
+    if let Some(token) = auth_header.strip_prefix("Bearer ") {
+        if state.sessions.validate_token(token).await.is_some() {
+            return Ok(next.run(req).await);
+        }
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // Fall back to Basic auth (legacy / backward compat)
     if let Some(creds) = auth_header.strip_prefix("Basic ")
         && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(creds)
         && let Ok(creds_str) = String::from_utf8(decoded)
@@ -3352,11 +3466,7 @@ async fn csrf_middleware(
 
 /// Build a `CorsLayer` that only allows loopback origins.
 fn loopback_cors() -> CorsLayer {
-    let origins = [
-        "http://localhost",
-        "http://127.0.0.1",
-        "http://[::1]",
-    ];
+    let origins = ["http://localhost", "http://127.0.0.1", "http://[::1]"];
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(
             origins.iter().map(|s| s.parse().unwrap()),
@@ -3450,15 +3560,26 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         config.rate_limit_max_requests,
     );
 
+    let user_rate_limiter = UserRateLimiter::new(
+        config.rate_limit_window_secs,
+        config.rate_limit_max_requests,
+    );
+
+    // Sessions expire after 8 hours of inactivity
+    let sessions = SessionStore::new(8 * 3600);
+
     let state = Arc::new(AppState {
         graphs: RwLock::new(graphs),
         default_graph,
         cache: RwLock::new(HashMap::new()),
         config: config.clone(),
         rate_limiter,
+        user_rate_limiter,
+        sessions,
     });
 
     let app = Router::new()
+        // All routes (auth handled by auth_middleware; login via Basic auth or Bearer token)
         .route("/", get(index))
         .route("/three-graph.js", get(three_graph_js))
         .route("/api/graphs", get(list_graphs))
@@ -3473,23 +3594,27 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         .route("/api/path", post(find_path))
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES))
-        .layer(middleware::from_fn_with_state(
+        // auth middleware only wraps routes above (everything except /api/login)
+        .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            rate_limit_middleware,
+            auth_middleware,
         ))
+        // Global middleware layers wrap everything, outermost last
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             csrf_middleware,
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
-            auth_middleware,
+            rate_limit_middleware,
         ))
         .layer(loopback_cors())
         .with_state(state);
 
-    let bind_ip = config.bind_address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let bind_ip = config
+        .bind_address
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
     let addr = SocketAddr::new(bind_ip, port);
 
     if !bind_ip.is_loopback() && config.tls.is_none() {
@@ -3505,23 +3630,24 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
 
     let tls_config_data = match config.tls {
         Some(ref tls) => {
-            let tls_certs = rustls_pemfile::certs(&mut std::io::BufReader::new(
-                fs::File::open(&tls.cert_pem)?,
-            ))
-            .collect::<Result<Vec<_>, _>>()?;
+            let tls_certs =
+                rustls_pemfile::certs(&mut std::io::BufReader::new(fs::File::open(&tls.cert_pem)?))
+                    .collect::<Result<Vec<_>, _>>()?;
             let tls_key = rustls_pemfile::private_key(&mut std::io::BufReader::new(
                 fs::File::open(&tls.key_pem)?,
             ))?
             .ok_or_else(|| anyhow!("No private key found in {}", tls.key_pem.display()))?;
 
-            let server_config = rustls::ServerConfig::builder_with_provider(
-                Arc::new(rustls::crypto::ring::default_provider()),
-            )
+            let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
             .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?
             .with_no_client_auth()
             .with_single_cert(tls_certs, tls_key)?;
 
-            Some(Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(server_config))))
+            Some(Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(
+                server_config,
+            ))))
         }
         None => None,
     };
@@ -3539,9 +3665,12 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
                 .await
                 .map_err(|e| anyhow!("Server error: {e}"))
         } else {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-                .await
-                .map_err(|e| anyhow!("Server error: {e}"))
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .map_err(|e| anyhow!("Server error: {e}"))
         }
     };
 
@@ -3695,6 +3824,8 @@ mod tests {
             cache: RwLock::new(HashMap::new()),
             config: ViewerConfig::default(),
             rate_limiter: RateLimiter::new(60, 100),
+            user_rate_limiter: UserRateLimiter::new(60, 100),
+            sessions: SessionStore::new(3600),
         })
     }
 
@@ -3911,7 +4042,9 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", pw));
         // We can't use check_basic_auth directly because it hardcodes
         // TEST_VIEWER_PASS. So just verify the encoding round-trips.
-        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
         let s = String::from_utf8(decoded).unwrap();
         let parts: Vec<&str> = s.splitn(2, ':').collect();
         assert_eq!(parts[0], "admin");

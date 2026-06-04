@@ -749,21 +749,24 @@ async fn enumerate_epmapper(smb: &SmbSession) -> Result<Vec<EpEndpoint>> {
 /// Write a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
 async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
     let len = (pdu.len() as u32).to_le_bytes();
-    stream.write_all(&len).await.map_err(|e| {
-        OverthroneError::custom(format!("BTF write failed: {e}"))
-    })?;
-    stream.write_all(pdu).await.map_err(|e| {
-        OverthroneError::custom(format!("BTF write PDU failed: {e}"))
-    })?;
+    stream
+        .write_all(&len)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("BTF write failed: {e}")))?;
+    stream
+        .write_all(pdu)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("BTF write PDU failed: {e}")))?;
     Ok(())
 }
 
 /// Read a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
 async fn btf_read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await.map_err(|e| {
-        OverthroneError::custom(format!("BTF read length failed: {e}"))
-    })?;
+    stream
+        .read_exact(&mut len_buf)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("BTF read length failed: {e}")))?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > 1_048_576 {
         return Err(OverthroneError::custom(format!(
@@ -771,9 +774,10 @@ async fn btf_read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
         )));
     }
     let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf).await.map_err(|e| {
-        OverthroneError::custom(format!("BTF read data failed: {e}"))
-    })?;
+    stream
+        .read_exact(&mut buf)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("BTF read data failed: {e}")))?;
     Ok(buf)
 }
 
@@ -812,8 +816,8 @@ fn build_ept_map_request_uuid(interface_uuid: &[u8; 16]) -> Vec<u8> {
     // Floor 2: NDR transfer syntax
     pkt.push(0x0D);
     pkt.extend_from_slice(&[
-        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
-        0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11, 0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48,
+        0x60,
     ]);
     pkt.extend_from_slice(&[0x02, 0x00]);
 

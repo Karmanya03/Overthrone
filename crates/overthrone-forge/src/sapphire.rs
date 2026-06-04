@@ -61,7 +61,8 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
     let nt_hash = config.nt_hash.as_deref();
     if password.is_none() && nt_hash.is_none() {
         return Err(OverthroneError::TicketForge(
-            "Password or NTLM hash is required for Sapphire Ticket (to decrypt S4U2Self ticket)".into(),
+            "Password or NTLM hash is required for Sapphire Ticket (to decrypt S4U2Self ticket)"
+                .into(),
         ));
     }
 

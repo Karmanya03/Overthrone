@@ -2,12 +2,11 @@ mod auth;
 mod autopwn;
 mod banner;
 mod bloodhound_viewer;
+mod cli_config;
 mod commands;
 mod commands_impl;
 mod interactive_shell;
 mod modules_ext;
-// NOTE: ovt_config.rs removed — dead 270-line TOML config system with 0 callers.
-// Use clap args + env vars for all configuration.
 mod tree_viewer;
 mod tui;
 
@@ -134,7 +133,11 @@ struct Cli {
     )]
     stdout_format: OutputFormat,
 
-    #[arg(long, global = true, help = "Dry run — validate and show what would be done without executing")]
+    #[arg(
+        long,
+        global = true,
+        help = "Dry run — validate and show what would be done without executing"
+    )]
     dry_run: bool,
 
     /// Enable structured JSON logging to stdout.
@@ -154,16 +157,41 @@ struct Cli {
     #[arg(long, global = true)]
     pkinit_key: Option<String>,
 
+    /// Path to TOML config file. Default: search XDG config dirs + CWD.
+    #[arg(long, global = true, env = "OT_CONFIG")]
+    config: Option<String>,
+
+    /// Named config profile (loaded from `<config_dir>/profiles/<NAME>.toml`).
+    /// Profile values override the main config but are overridden by CLI flags.
+    /// Also reads from OT_PROFILE env var when this flag is unset.
+    #[arg(long, global = true, env = "OT_PROFILE")]
+    profile: Option<String>,
+
     /// List compiled-in feature modules and exit
     #[arg(long, global = true)]
     modules: bool,
 }
 
-#[derive(Clone, clap::ValueEnum)]
+#[derive(Clone, PartialEq, clap::ValueEnum)]
 enum OutputFormat {
     Text,
     Json,
     Csv,
+}
+
+impl std::str::FromStr for OutputFormat {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "text" => Ok(Self::Text),
+            "json" => Ok(Self::Json),
+            "csv" => Ok(Self::Csv),
+            _ => Err(format!(
+                "unknown output format: '{}' (expected text|json|csv)",
+                s
+            )),
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────
@@ -219,6 +247,20 @@ enum Commands {
     Wizard {
         #[command(flatten)]
         args: commands::wizard::WizardArgs,
+    },
+
+    /// Saved engagement session management (list/show/delete/clean/stats)
+    #[command(alias = "sessions")]
+    Session {
+        #[command(subcommand)]
+        action: commands::session::SessionAction,
+    },
+
+    /// Persistent TOML config management (init/show/path/set/unset/edit/save)
+    #[command(alias = "cfg")]
+    Config {
+        #[command(subcommand)]
+        action: commands::config::ConfigAction,
     },
 
     /// Full AD enumeration via reaper modules
@@ -1012,6 +1054,21 @@ enum AdcsAction {
             default_value = "cert.pfx"
         )]
         output: String,
+    },
+    /// Auto-scan and optionally exploit — enumerate all ESCs, find viable targets, auto-exploit
+    Auto {
+        /// CA server hostname (optional — auto-discovered from LDAP)
+        #[arg(short, long)]
+        ca: Option<String>,
+        /// Target template filter (optional — scan specific template)
+        #[arg(short, long)]
+        template: Option<String>,
+        /// Target user UPN for auto-exploit
+        #[arg(short = 'U', long)]
+        target_user: Option<String>,
+        /// Automatically exploit the most severe finding
+        #[arg(long)]
+        exploit: bool,
     },
 }
 
@@ -1965,7 +2022,7 @@ enum GraphAction {
         #[arg(short, long, required = true)]
         input: Vec<String>,
         /// Web server port
-        #[arg(short, long, default_value = "8080")]
+        #[arg(long, default_value = "8080")]
         port: u16,
     },
     /// Display tree view of the attack graph
@@ -2058,7 +2115,45 @@ async fn async_main() -> i32 {
         return 1;
     }
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    // Load TOML config and merge into Cli.
+    //
+    // Precedence (highest to lowest):
+    //   1. CLI flag / clap `env` binding (already merged into `cli` by `Cli::parse()`)
+    //   2. Active profile (`<config_dir>/profiles/<NAME>.toml`, if --profile or OT_PROFILE is set)
+    //   3. Main config.toml (loaded from --config path, OT_CONFIG, or XDG search)
+    //   4. Built-in default (encoded as the `None` variants of each field)
+    //
+    // We load both the main config and the active profile; the profile is
+    // applied on top of the main config so any fields the profile sets
+    // override the main config. CLI flags still win over both.
+    let main_config = cli_config::load_config(cli.config.as_deref()).ok();
+    let active_profile = cli
+        .profile
+        .clone()
+        .or_else(|| cli_config::active_profile().ok().flatten());
+    let profile_config = match active_profile.as_deref() {
+        Some(name) => match cli_config::load_profile(name) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                tracing::warn!("Failed to load profile '{}': {}", name, e);
+                None
+            }
+        },
+        None => None,
+    };
+
+    if let Some(profile) = profile_config {
+        tracing::info!(
+            "Loaded profile '{}' (overrides main config for unset fields)",
+            active_profile.as_deref().unwrap_or("")
+        );
+        apply_config_layer(&mut cli, &profile, "profile");
+    }
+    if let Some(config) = main_config {
+        apply_config_layer(&mut cli, &config, "config");
+    }
 
     let filter = match cli.verbose {
         0 => "warn",
@@ -2106,6 +2201,28 @@ async fn async_main() -> i32 {
                 1
             }
         },
+        Commands::Session { ref action } => {
+            match commands::session::run(commands::session::SessionArgs {
+                action: action.clone(),
+            }) {
+                Ok(_) => 0,
+                Err(e) => {
+                    banner::print_fail(&format!("Session error: {}", e));
+                    1
+                }
+            }
+        }
+        Commands::Config { ref action } => {
+            match commands::config::run(commands::config::ConfigArgs {
+                action: action.clone(),
+            }) {
+                Ok(_) => 0,
+                Err(e) => {
+                    banner::print_fail(&format!("Config error: {}", e));
+                    1
+                }
+            }
+        }
         #[cfg(feature = "reaper")]
         Commands::Reaper {
             ref modules,
@@ -2355,6 +2472,93 @@ async fn async_main() -> i32 {
 // ──────────────────────────────────────────────────────────
 // NEW: Plugin Context Helper
 // ──────────────────────────────────────────────────────────
+
+/// Merge one layer of config (either the active profile or the main
+/// `config.toml`) into the `Cli` struct. Only fields the user did not
+/// set via CLI flag or clap `env` binding are touched. Strings are
+/// guarded by `is_none()`; numeric/bool fields are guarded by their
+/// "default" sentinel (verbose == 0, dry_run/json_log == false,
+/// stdout_format == Text, auth_method == Password).
+///
+/// `layer_label` is just used for tracing when we warn about an
+/// invalid enum value.
+fn apply_config_layer(cli: &mut Cli, config: &cli_config::CliConfig, layer_label: &str) {
+    if cli.dc_host.is_none() {
+        cli.dc_host = config.dc_host.clone();
+    }
+    if cli.domain.is_none() {
+        cli.domain = config.domain.clone();
+    }
+    if cli.username.is_none() {
+        cli.username = config.username.clone();
+    }
+    if cli.password.is_none() {
+        cli.password = config.password.clone();
+    }
+    if cli.nt_hash.is_none() {
+        cli.nt_hash = config.nt_hash.clone();
+    }
+    if cli.ticket.is_none() {
+        cli.ticket = config.ticket.clone();
+    }
+    if cli.pkinit_cert.is_none() {
+        cli.pkinit_cert = config.pkinit_cert.clone();
+    }
+    if cli.pkinit_key.is_none() {
+        cli.pkinit_key = config.pkinit_key.clone();
+    }
+    if cli.outfile.is_none() {
+        cli.outfile = config.outfile.clone();
+    }
+    if cli.user_list.is_none() {
+        cli.user_list = config.user_list.clone();
+    }
+    if cli.pass_list.is_none() {
+        cli.pass_list = config.pass_list.clone();
+    }
+    if cli.user_pass_list.is_none() {
+        cli.user_pass_list = config.user_pass_list.clone();
+    }
+    if cli.verbose == 0
+        && let Some(v) = config.verbose
+    {
+        cli.verbose = v;
+    }
+    if !cli.dry_run
+        && let Some(v) = config.dry_run
+    {
+        cli.dry_run = v;
+    }
+    if !cli.json_log
+        && let Some(v) = config.json_log
+    {
+        cli.json_log = v;
+    }
+    if cli.stdout_format == OutputFormat::Text
+        && let Some(ref fmt) = config.stdout_format
+    {
+        match fmt.parse::<OutputFormat>() {
+            Ok(parsed) => cli.stdout_format = parsed,
+            Err(_) => tracing::warn!(
+                "Ignoring invalid stdout_format '{}' from {} (expected: text|json|csv)",
+                fmt,
+                layer_label
+            ),
+        }
+    }
+    if cli.auth_method == AuthMethod::Password
+        && let Some(ref m) = config.auth_method
+    {
+        match m.parse::<AuthMethod>() {
+            Ok(parsed) => cli.auth_method = parsed,
+            Err(_) => tracing::warn!(
+                "Ignoring invalid auth_method '{}' from {} (expected: password|hash|ticket)",
+                m,
+                layer_label
+            ),
+        }
+    }
+}
 
 fn make_plugin_context(cli: &Cli) -> PluginContext {
     let domain = cli.domain.clone().unwrap_or_else(|| "local".to_string());
@@ -4011,7 +4215,9 @@ async fn cmd_enum(
 
     match target {
         EnumTarget::Pre | EnumTarget::Anonymous | EnumTarget::NullSession => {
-            eprintln!("[!] Internal error: EnumTarget::Pre/Anonymous/NullSession should have been handled before enum dispatch");
+            eprintln!(
+                "[!] Internal error: EnumTarget::Pre/Anonymous/NullSession should have been handled before enum dispatch"
+            );
             return 1;
         }
         EnumTarget::Users => println!("{}", "Enumerating users...".bright_black()),
@@ -5071,7 +5277,9 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         }
         KerberosAction::UserEnum { .. } => {
             // Handled above before credential check (zero-knowledge, no creds needed)
-            eprintln!("[!] Internal error: KerberosAction::UserEnum should have been handled before credential check");
+            eprintln!(
+                "[!] Internal error: KerberosAction::UserEnum should have been handled before credential check"
+            );
             return 1;
         }
     }
@@ -6357,6 +6565,7 @@ mod cli_parse_tests {
             delegations: Vec::new(),
             acl_findings: Vec::new(),
             laps_entries: Vec::new(),
+            gmsa_entries: Vec::new(),
             mssql_instances: Vec::new(),
             snaffle_findings: Vec::new(),
             powerview_results: Some(overthrone_reaper::powerview::PowerViewResult {

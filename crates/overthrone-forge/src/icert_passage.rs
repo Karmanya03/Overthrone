@@ -12,7 +12,9 @@
 //! - ICertPassage UUID: 91ae6020-9e3c-11cf-8d7c-00aa00c091be
 
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::epm::{build_rpc_bind, build_rpc_request, is_bind_accepted, ndr_conformant_string};
+use overthrone_core::proto::epm::{
+    build_rpc_bind, build_rpc_request, is_bind_accepted, ndr_conformant_string,
+};
 use overthrone_core::proto::smb::SmbSession;
 use tracing::{debug, info};
 
@@ -264,7 +266,10 @@ fn extract_cert_blob(resp: &[u8], search_start: usize) -> Option<Vec<u8>> {
             let data_start = i + 12;
             if data_start + actual as usize <= resp.len() && resp[data_start] == 0x30 {
                 let cert = resp[data_start..data_start + actual as usize].to_vec();
-                info!("[ICertPassage] Certificate via blob scan ({} bytes)", cert.len());
+                info!(
+                    "[ICertPassage] Certificate via blob scan ({} bytes)",
+                    cert.len()
+                );
                 return Some(cert);
             }
         }
@@ -320,7 +325,10 @@ impl<'a> RemoteCertService<'a> {
 
         match resp.cert_der {
             Some(cert) => {
-                info!("[RemoteCertService] Certificate obtained ({} bytes)", cert.len());
+                info!(
+                    "[RemoteCertService] Certificate obtained ({} bytes)",
+                    cert.len()
+                );
                 Ok(cert)
             }
             None => Err(OverthroneError::CertificateRequest(format!(

@@ -117,7 +117,12 @@ pub async fn verify_dc(
 
     // ── Check 1: LDAP rootDSE probe ──
     info!("DC verification: checking rootDSE on {dc_host}");
-    match tokio::time::timeout(timeout_dur, overthrone_core::proto::ldap::probe_rootdse_raw(dc_host, false)).await {
+    match tokio::time::timeout(
+        timeout_dur,
+        overthrone_core::proto::ldap::probe_rootdse_raw(dc_host, false),
+    )
+    .await
+    {
         Ok(Ok(rootdse)) => {
             checks.push(DcCheckResult {
                 kind: DcCheckKind::LdapRootDse,
@@ -216,7 +221,10 @@ pub async fn verify_dc(
             hostile_suspicion = true;
         }
         Err(_) => {
-            let msg = format!("LDAP rootDSE probe timed out after {}s", config.check_timeout_secs);
+            let msg = format!(
+                "LDAP rootDSE probe timed out after {}s",
+                config.check_timeout_secs
+            );
             warn!("{}", msg);
             checks.push(DcCheckResult {
                 kind: DcCheckKind::LdapRootDse,
@@ -232,7 +240,12 @@ pub async fn verify_dc(
         info!("DC verification: checking DNS SRV records for {domain}");
         match DnsResolver::system() {
             Ok(resolver) => {
-                match tokio::time::timeout(timeout_dur, resolver.discover_domain_controllers(domain)).await {
+                match tokio::time::timeout(
+                    timeout_dur,
+                    resolver.discover_domain_controllers(domain),
+                )
+                .await
+                {
                     Ok(Ok(dcs)) => {
                         dns_domain_controllers = dcs.clone();
                         let dc_host_lower = dc_host.to_lowercase();
@@ -251,7 +264,10 @@ pub async fn verify_dc(
                                 ),
                             });
                         } else {
-                            let known: Vec<String> = dcs.iter().map(|(h, _): &(String, Vec<String>)| h.clone()).collect();
+                            let known: Vec<String> = dcs
+                                .iter()
+                                .map(|(h, _): &(String, Vec<String>)| h.clone())
+                                .collect();
                             let msg = format!(
                                 "DC '{}' NOT found in DNS SRV records for {domain}. Known DCs: {known:?}",
                                 dc_host,
@@ -275,7 +291,10 @@ pub async fn verify_dc(
                         checks.push(DcCheckResult {
                             kind: DcCheckKind::DnsSrvConsistency,
                             severity: CheckSeverity::Warning,
-                            message: format!("DNS SRV lookup timed out after {}s", config.check_timeout_secs),
+                            message: format!(
+                                "DNS SRV lookup timed out after {}s",
+                                config.check_timeout_secs
+                            ),
                         });
                     }
                 }
@@ -298,7 +317,12 @@ pub async fn verify_dc(
 
     // ── Check 5: Kerberos port check ──
     info!("DC verification: checking Kerberos port 88 on {dc_host}");
-    match tokio::time::timeout(timeout_dur, tokio::net::TcpStream::connect(format!("{dc_host}:88"))).await {
+    match tokio::time::timeout(
+        timeout_dur,
+        tokio::net::TcpStream::connect(format!("{dc_host}:88")),
+    )
+    .await
+    {
         Ok(Ok(_)) => {
             checks.push(DcCheckResult {
                 kind: DcCheckKind::KerberosPort,
@@ -317,7 +341,10 @@ pub async fn verify_dc(
             hostile_suspicion = true;
         }
         Err(_) => {
-            let msg = format!("Kerberos port 88 timed out after {}s", config.check_timeout_secs);
+            let msg = format!(
+                "Kerberos port 88 timed out after {}s",
+                config.check_timeout_secs
+            );
             warn!("{}", msg);
             checks.push(DcCheckResult {
                 kind: DcCheckKind::KerberosPort,
@@ -329,8 +356,14 @@ pub async fn verify_dc(
     }
 
     // ── Compile summary ──
-    let failed_count = checks.iter().filter(|c| matches!(c.severity, CheckSeverity::Fail)).count();
-    let warn_count = checks.iter().filter(|c| matches!(c.severity, CheckSeverity::Warning)).count();
+    let failed_count = checks
+        .iter()
+        .filter(|c| matches!(c.severity, CheckSeverity::Fail))
+        .count();
+    let warn_count = checks
+        .iter()
+        .filter(|c| matches!(c.severity, CheckSeverity::Warning))
+        .count();
     let total = checks.len();
 
     let summary = if hostile_suspicion {
@@ -380,7 +413,9 @@ impl DcVerificationSummary {
             println!(
                 "  {} {}",
                 "!!!".red().bold(),
-                "HOSTILE DC DETECTED — proceed with extreme caution".red().bold()
+                "HOSTILE DC DETECTED — proceed with extreme caution"
+                    .red()
+                    .bold()
             );
         }
         println!("  {}\n", "═══".bold().cyan());
@@ -405,7 +440,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_hostile(), "unreachable DC should be flagged as hostile");
+        assert!(
+            result.is_hostile(),
+            "unreachable DC should be flagged as hostile"
+        );
         assert!(!result.checks.is_empty(), "should have at least one check");
 
         let rootdse_failed = result.checks.iter().any(|c| {
@@ -414,8 +452,14 @@ mod tests {
         let kerb_failed = result.checks.iter().any(|c| {
             c.kind == DcCheckKind::KerberosPort && matches!(c.severity, CheckSeverity::Fail)
         });
-        assert!(rootdse_failed, "rootDSE check should fail for unreachable host");
-        assert!(kerb_failed, "Kerberos check should fail for unreachable host");
+        assert!(
+            rootdse_failed,
+            "rootDSE check should fail for unreachable host"
+        );
+        assert!(
+            kerb_failed,
+            "Kerberos check should fail for unreachable host"
+        );
     }
 
     #[tokio::test]
@@ -432,7 +476,10 @@ mod tests {
         )
         .await;
 
-        let dns_check = result.checks.iter().find(|c| c.kind == DcCheckKind::DnsSrvConsistency);
+        let dns_check = result
+            .checks
+            .iter()
+            .find(|c| c.kind == DcCheckKind::DnsSrvConsistency);
         assert!(dns_check.is_some(), "DNS check should be present");
         assert!(
             matches!(dns_check.unwrap().severity, CheckSeverity::Pass),

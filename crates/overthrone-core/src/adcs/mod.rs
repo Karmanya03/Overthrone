@@ -26,6 +26,7 @@
 //! - ESC14: Certificate mapping / altSecurityIdentities guidance trail
 //! - ESC15: Schema V1 template with enrollee-supplied subject (CVE-2024-49019)
 //! - ESC16: CA security extension disabled (szOID_NTDS_CA_SECURITY_EXT removed)
+pub mod auto_exploit;
 pub mod csr;
 pub mod esc1;
 pub mod esc10;
@@ -53,6 +54,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 // Re-export key types
+pub use auto_exploit::{AdcsAutoConfig, AdcsAutoScanner, AdcsScanReport};
 pub use csr::{
     CertificateSigningRequest, CsrSubject, ExtendedKeyUsage, RsaKeyPair, SanEntry, SubjectAltName,
     create_client_auth_csr, create_esc1_csr,
@@ -788,14 +790,17 @@ impl AdcsClient {
 impl AdcsClient {
     /// Try to create a default client, returning an error instead of panicking.
     pub fn try_default() -> Result<Self> {
-        Self::new("localhost").map_err(|e| OverthroneError::Adcs(format!("Failed to create default ADCS client: {e}")))
+        Self::new("localhost").map_err(|e| {
+            OverthroneError::Adcs(format!("Failed to create default ADCS client: {e}"))
+        })
     }
 }
 
 impl Default for AdcsClient {
     fn default() -> Self {
         // LEGACY: panics on failure — prefer AdcsClient::try_default()
-        Self::new("localhost").expect("Failed to create default ADCS client (use try_default() for fallible path)")
+        Self::new("localhost")
+            .expect("Failed to create default ADCS client (use try_default() for fallible path)")
     }
 }
 

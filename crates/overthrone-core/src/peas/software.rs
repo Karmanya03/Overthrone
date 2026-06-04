@@ -24,7 +24,10 @@ pub async fn enumerate() -> PeasResult {
             "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Select-Object DisplayName,DisplayVersion,Publisher,InstallDate | Where-Object { $_.DisplayName } | Format-List",
         ) {
             Ok(output) => {
-                let count = output.lines().filter(|l| l.contains("DisplayName :")).count();
+                let count = output
+                    .lines()
+                    .filter(|l| l.contains("DisplayName :"))
+                    .count();
                 let mut data = HashMap::new();
                 data.insert("installed_count".into(), count.to_string());
                 data.insert("details".into(), output);
@@ -50,36 +53,42 @@ pub async fn enumerate() -> PeasResult {
         // 64-bit software from HKLM (WOW6432Node)
         if let Ok(output) = run_powershell(
             "Get-ItemProperty HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue | Select-Object DisplayName,DisplayVersion,Publisher,InstallDate | Where-Object { $_.DisplayName } | Format-List",
-        )
-            && !output.is_empty() {
-                let count = output.lines().filter(|l| l.contains("DisplayName :")).count();
-                let mut data = HashMap::new();
-                data.insert("installed_count".into(), count.to_string());
-                data.insert("details".into(), output);
-                findings.push(PeasFinding {
-                    name: "Installed Software (WOW6432Node)".into(),
-                    description: format!("Found {} 32-bit application(s)", count),
-                    severity: PeasSeverity::Info,
-                    data,
-                });
-            }
+        ) && !output.is_empty()
+        {
+            let count = output
+                .lines()
+                .filter(|l| l.contains("DisplayName :"))
+                .count();
+            let mut data = HashMap::new();
+            data.insert("installed_count".into(), count.to_string());
+            data.insert("details".into(), output);
+            findings.push(PeasFinding {
+                name: "Installed Software (WOW6432Node)".into(),
+                description: format!("Found {} 32-bit application(s)", count),
+                severity: PeasSeverity::Info,
+                data,
+            });
+        }
 
         // HKCU installed software
         if let Ok(output) = run_powershell(
             "Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue | Select-Object DisplayName,DisplayVersion,Publisher,InstallDate | Where-Object { $_.DisplayName } | Format-List",
-        )
-            && !output.is_empty() {
-                let count = output.lines().filter(|l| l.contains("DisplayName :")).count();
-                let mut data = HashMap::new();
-                data.insert("installed_count".into(), count.to_string());
-                data.insert("details".into(), output);
-                findings.push(PeasFinding {
-                    name: "Installed Software (HKCU)".into(),
-                    description: format!("Found {} user-installed application(s)", count),
-                    severity: PeasSeverity::Info,
-                    data,
-                });
-            }
+        ) && !output.is_empty()
+        {
+            let count = output
+                .lines()
+                .filter(|l| l.contains("DisplayName :"))
+                .count();
+            let mut data = HashMap::new();
+            data.insert("installed_count".into(), count.to_string());
+            data.insert("details".into(), output);
+            findings.push(PeasFinding {
+                name: "Installed Software (HKCU)".into(),
+                description: format!("Found {} user-installed application(s)", count),
+                severity: PeasSeverity::Info,
+                data,
+            });
+        }
 
         // Antivirus / Security product detection
         match run_powershell(
@@ -96,7 +105,10 @@ pub async fn enumerate() -> PeasResult {
                         data,
                     });
                 } else {
-                    let count = output.lines().filter(|l| l.contains("DisplayName :")).count();
+                    let count = output
+                        .lines()
+                        .filter(|l| l.contains("DisplayName :"))
+                        .count();
                     let mut data = HashMap::new();
                     data.insert("av_count".into(), count.to_string());
                     data.insert("details".into(), output);
@@ -113,7 +125,8 @@ pub async fn enumerate() -> PeasResult {
                 data.insert("error".into(), e);
                 findings.push(PeasFinding {
                     name: "Antivirus Products".into(),
-                    description: "Failed to detect AV products (SecurityCenter2 may not exist)".into(),
+                    description: "Failed to detect AV products (SecurityCenter2 may not exist)"
+                        .into(),
                     severity: PeasSeverity::Info,
                     data,
                 });

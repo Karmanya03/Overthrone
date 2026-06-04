@@ -34,9 +34,7 @@ pub async fn enumerate() -> PeasResult {
 
     if cfg!(target_os = "windows") {
         // AutoLogon credentials
-        match run_reg_query(
-            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-        ) {
+        match run_reg_query(r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon") {
             Ok(output) => {
                 let has_user = output.contains("DefaultUserName");
                 let has_pass = output.contains("DefaultPassword");
@@ -114,7 +112,8 @@ pub async fn enumerate() -> PeasResult {
                     data.insert("details".into(), output);
                     findings.push(PeasFinding {
                         name: "GPP Passwords".into(),
-                        description: "Group Policy History files found (may contain cpassword)".into(),
+                        description: "Group Policy History files found (may contain cpassword)"
+                            .into(),
                         severity: PeasSeverity::High,
                         data,
                     });
@@ -139,7 +138,10 @@ pub async fn enumerate() -> PeasResult {
                 let mut data = HashMap::new();
                 data.insert("sam_backup_exists".into(), exists.to_string());
 
-                let sam_paths = ["C:\\Windows\\repair\\SAM", "C:\\Windows\\System32\\config\\SAM"];
+                let sam_paths = [
+                    "C:\\Windows\\repair\\SAM",
+                    "C:\\Windows\\System32\\config\\SAM",
+                ];
                 for path in &sam_paths {
                     if let Ok(p) = run_powershell(&format!("Test-Path '{}'", path)) {
                         data.insert(format!("exists:{}", path), p.trim().to_string());
@@ -153,7 +155,11 @@ pub async fn enumerate() -> PeasResult {
                     } else {
                         "No SAM backup found at C:\\Windows\\repair\\SAM".into()
                     },
-                    severity: if exists { PeasSeverity::High } else { PeasSeverity::Info },
+                    severity: if exists {
+                        PeasSeverity::High
+                    } else {
+                        PeasSeverity::Info
+                    },
                     data,
                 });
             }
@@ -188,7 +194,8 @@ pub async fn enumerate() -> PeasResult {
                     data.insert("details".into(), output);
                     findings.push(PeasFinding {
                         name: "Unattended Install Files".into(),
-                        description: "Unattended install files found (may contain credentials)".into(),
+                        description: "Unattended install files found (may contain credentials)"
+                            .into(),
                         severity: PeasSeverity::High,
                         data,
                     });

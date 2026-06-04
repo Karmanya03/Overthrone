@@ -31,8 +31,14 @@ pub async fn enumerate() -> PeasResult {
             "Get-CimInstance Win32_Service | Select-Object Name,DisplayName,State,StartName,PathName | Format-List",
         ) {
             Ok(output) => {
-                let running_count = output.lines().filter(|l| l.contains("State : Running")).count();
-                let system_count = output.lines().filter(|l| l.contains("StartName : LocalSystem")).count();
+                let running_count = output
+                    .lines()
+                    .filter(|l| l.contains("State : Running"))
+                    .count();
+                let system_count = output
+                    .lines()
+                    .filter(|l| l.contains("StartName : LocalSystem"))
+                    .count();
                 let mut data = HashMap::new();
                 data.insert("running_count".into(), running_count.to_string());
                 data.insert("system_count".into(), system_count.to_string());

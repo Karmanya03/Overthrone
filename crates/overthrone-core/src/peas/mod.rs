@@ -1,13 +1,13 @@
-pub mod system;
-pub mod users;
-pub mod services;
-pub mod tasks;
-pub mod registry;
 pub mod credentials;
-pub mod network;
-pub mod tokens;
-pub mod software;
 pub mod env;
+pub mod network;
+pub mod registry;
+pub mod services;
+pub mod software;
+pub mod system;
+pub mod tasks;
+pub mod tokens;
+pub mod users;
 
 use std::collections::HashMap;
 

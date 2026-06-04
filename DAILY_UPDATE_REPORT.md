@@ -128,3 +128,17 @@ Short version: the tool is strong, the domain is still the problem.
 - **Sapphire AES key derivation**: `derive_user_key()` in `sapphire.rs` now supports AES128/256 via `kerberos_crypto::generate_key_from_string()` (full PBKDF2 + DK("kerberos") per RFC 3962), not just RC4. PKINIT+S4U2Self chain is fully functional end-to-end.
 
 - **Tests**: 1212 total (was 1195 prior session), all 9 crates green. Clippy `-D warnings` clean across workspace.
+
+## 04-06-2026
+
+- **Config file loading** (cli): `CliConfig` struct (17 fields, Serialize/Deserialize) with `save_config()`, `set_value()`, `unset_value()`, secret masking, and XDG-aware `default_config_path()`. New `ovt config` subcommand with 7 actions (init, show, path, set, unset, edit, save). Aliased as `ovt cfg`. 25 unit tests. `FromStr` for `AuthMethod` added to unblock the merge.
+
+- **Profile system** (cli): Named profiles stored at `<config_dir>/profiles/<NAME>.toml`, honoring `OT_CONFIG` and `OT_PROFILE` env vars. `--profile <NAME>` global flag. Config precedence: CLI flag > env > active profile > main config > default. `ovt config profile` subcommand with 9 actions (list, show, create, set, unset, delete, use, clone, path). 45 unit tests. 17-field round-trip with validation for auth_method/bool/u8/string/stdout_format.
+
+- **Session management CLI** (pilot): `ovt session` subcommand (list, show, info, delete, clean, path, stats). `--from-session <name>` wired into wizard — loads saved `EngagementState`, skips Enumerate when state already has data. 12 tests. New `WizardSession::new_with_state()` constructor for pre-populated state.
+
+- **Reaper BH edge-type coverage**: 19 new `EdgeType` variants (AllExtendedRights, WriteSelf, WriteSPN, WriteKeyCredentialLink, AddKeyCredentialLink, Enroll, ManageCA, ManageCertificates, ManageCertTemplate, etc.) with `default_cost()`, `from_str_name()` mapping, and TUI `edge_color()`/`edge_severity()`/`edge_ovt_command()`/`edge_operator_note()` implementations.
+
+- **Hunter Kerberoast pre-auth test coverage**: 6 tests pinning UAC bit 0x400000, proving `parse_ad_user` logic, verifying skip logic, confirming no false positives on adjacent UAC bits. Hunter tests: 60 → 66.
+
+- **Tests**: 1474 total across 9 crates, all green. Clippy `-D warnings` clean.

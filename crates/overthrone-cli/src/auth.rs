@@ -1,8 +1,9 @@
 //! Credential management and authentication helpers for the CLI.
 use clap::ValueEnum;
 use std::io::{self, Write};
+use std::str::FromStr;
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum AuthMethod {
     Password,
     Hash,
@@ -15,6 +16,22 @@ impl std::fmt::Display for AuthMethod {
             Self::Password => write!(f, "password"),
             Self::Hash => write!(f, "hash"),
             Self::Ticket => write!(f, "ticket"),
+        }
+    }
+}
+
+impl FromStr for AuthMethod {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "password" => Ok(Self::Password),
+            "hash" | "ntlm" | "ntlmhash" => Ok(Self::Hash),
+            "ticket" | "kerberos" | "ccache" => Ok(Self::Ticket),
+            _ => Err(format!(
+                "Unknown auth method '{}' (expected: password|hash|ticket)",
+                s
+            )),
         }
     }
 }

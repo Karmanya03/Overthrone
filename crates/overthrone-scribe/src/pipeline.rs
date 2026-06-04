@@ -59,10 +59,7 @@ pub fn findings_to_events(
 }
 
 /// Emit all findings as JSON Lines to stdout.
-pub fn emit_findings_json_lines(
-    domain: Option<String>,
-    findings: &[crate::session::Finding],
-) {
+pub fn emit_findings_json_lines(domain: Option<String>, findings: &[crate::session::Finding]) {
     for event in findings_to_events(domain.clone(), findings) {
         emit_pipeline_event(&event);
     }
@@ -87,9 +84,7 @@ impl Default for PipelineConfig {
 }
 
 /// Emit a session summary event for pipeline consumers.
-pub fn emit_session_summary(
-    session: &crate::session::EngagementSession,
-) {
+pub fn emit_session_summary(session: &crate::session::EngagementSession) {
     let event = PipelineEvent {
         event_type: "session_summary".to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
@@ -153,12 +148,8 @@ mod tests {
 
     #[test]
     fn test_emit_session_summary_serializable() {
-        let _session = crate::session::EngagementSession::new(
-            "Test",
-            "Client",
-            "Assessor",
-            "Company",
-        );
+        let _session =
+            crate::session::EngagementSession::new("Test", "Client", "Assessor", "Company");
         // Should not panic
         let _event = {
             // capture the emitted event logic

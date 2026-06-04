@@ -67,10 +67,8 @@ pub async fn enumerate() -> PeasResult {
         // Listening ports via netstat
         match run_cmd(&["netstat", "-ano"]) {
             Ok(output) => {
-                let listening: Vec<&str> = output
-                    .lines()
-                    .filter(|l| l.contains("LISTENING"))
-                    .collect();
+                let listening: Vec<&str> =
+                    output.lines().filter(|l| l.contains("LISTENING")).collect();
                 let count = listening.len();
                 let mut data = HashMap::new();
                 data.insert("listening_count".into(), count.to_string());
