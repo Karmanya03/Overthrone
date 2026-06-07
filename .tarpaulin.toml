@@ -1,0 +1,8 @@
+[tarpaulin]
+workspace = true
+exclude = ["overthrone-cli"]
+out = ["Html", "Lcov"]
+output-dir = "coverage/"
+timeout = "300s"
+skip-clean = true
+exclude-files = ["*/proto/pkinit.rs"]
