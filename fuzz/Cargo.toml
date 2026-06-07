@@ -1,0 +1,31 @@
+[package]
+name = "overthrone-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+overthrone-core = { path = "../crates/overthrone-core" }
+kerberos_asn1 = "0.5"
+
+# Prevent this crate from interfering with normal workspace builds
+[workspace]
+
+[[bin]]
+name = "fuzz_ntlm_parser"
+path = "fuzz_targets/ntlm_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_kerberos_parser"
+path = "fuzz_targets/kerberos_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_smb2_parser"
+path = "fuzz_targets/smb2_parser.rs"
+doc = false

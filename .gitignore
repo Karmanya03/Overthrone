@@ -29,7 +29,6 @@ technical_debt_and_flaws.md
 DAILY_UPDATE_REPORT.md
 PLAN.md
 ROADMAP.md
-COMMAND-LIST.md
 
 # Docs folder (internal docs, not for public repo)
 docs/
@@ -46,25 +45,17 @@ __pycache__/
 # Test fixtures and integration tests (local testing only)
 tests/
 
-# Tools (local dev utilities)
-tools/
+# Dev utility tools (not skeleton_key which is part of the project)
+tools/add_docs.ps1
+tools/add_docs.py
+tools/docfix/
+tools/docgen/
 
-# Assets (large binary files, wordlists)
-assets/
+# Cargo audit config
+.cargo/
 
-# Config files (local deployment configs)
-configs/
-
-# Install scripts
-install.ps1
-install.sh
+# Fuzz testing (local only)
 
 # Package locks (auto-generated)
 package-lock.json
 bun.lock
-
-# Fuzz testing (local only)
-fuzz/
-
-# Tarpaulin config (local test coverage)
-.tarpaulin.toml
