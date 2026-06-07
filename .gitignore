@@ -5,8 +5,7 @@ target/
 *.exe
 
 # IDE
-.vscode/settings.json
-.vscode/overthrone_auditV2.md
+.vscode/
 .idea/
 *.swp
 *.swo
@@ -38,5 +37,34 @@ docs/
 # Reports
 reports/
 
-# Cargo lock (optional - uncomment if you want to ignore)
-# Cargo.lock
+# Python files and cache
+*.py
+__pycache__/
+*.pyc
+*.pyo
+
+# Test fixtures and integration tests (local testing only)
+tests/
+
+# Tools (local dev utilities)
+tools/
+
+# Assets (large binary files, wordlists)
+assets/
+
+# Config files (local deployment configs)
+configs/
+
+# Install scripts
+install.ps1
+install.sh
+
+# Package locks (auto-generated)
+package-lock.json
+bun.lock
+
+# Fuzz testing (local only)
+fuzz/
+
+# Tarpaulin config (local test coverage)
+.tarpaulin.toml
