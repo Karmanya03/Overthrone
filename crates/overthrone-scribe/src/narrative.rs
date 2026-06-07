@@ -258,6 +258,7 @@ mod tests {
             total_computers_enumerated: 50,
             total_credentials_compromised: 5,
             total_admin_hosts: 1,
+            operator: None,
         }
     }
 

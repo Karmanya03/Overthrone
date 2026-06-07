@@ -979,6 +979,7 @@ mod tests {
             max_retries: 0,
             reversible: false,
             compensation: None,
+            parallel_safe: false,
         }
     }
 

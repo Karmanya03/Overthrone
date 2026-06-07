@@ -22,6 +22,9 @@ pub mod interrealm;
 
 pub use runner::{CrawlerConfig, CrawlerResult, run_crawler};
 
+// Re-export OPSEC pacing and rotation types
+pub use pacing::{DnsRotator, OpsecPacer, PacingConfig, UserAgentPool};
+
 // Re-export cross-forest analysis types
 pub use cross_forest::{
     CrossForestAssessment, CrossForestOpportunity, CrossForestTechnique, Severity,

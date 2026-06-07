@@ -165,6 +165,7 @@ impl Playbook {
             max_retries: 2,
             reversible: false,
             compensation: None,
+            parallel_safe: false,
         }
     }
 

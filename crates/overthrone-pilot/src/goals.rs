@@ -755,8 +755,34 @@ impl EngagementState {
                     GoalStatus::InProgress
                 }
             }
-            AttackGoal::Persistence { .. } => GoalStatus::InProgress,
-            AttackGoal::Custom { .. } => GoalStatus::InProgress,
+            AttackGoal::Persistence { method } => {
+                let target_loot = match method {
+                    PersistenceMethod::GoldenTicket => "GoldenTicket",
+                    PersistenceMethod::SilverTicket => "SilverTicket",
+                    PersistenceMethod::Skeleton => "Skeleton",
+                    PersistenceMethod::DCShadow => "DCShadow",
+                    PersistenceMethod::AdminSDHolder => "AdminSDHolder",
+                };
+                if self.loot.iter().any(|l| l.loot_type == target_loot) {
+                    GoalStatus::Achieved
+                } else if self.has_domain_admin
+                    || !self.credentials.is_empty()
+                {
+                    GoalStatus::InProgress
+                } else {
+                    GoalStatus::Pending
+                }
+            }
+            AttackGoal::Custom { .. } => {
+                // Custom goals: achieved if we have any credentials and admin hosts
+                if !self.credentials.is_empty() && !self.admin_hosts.is_empty() {
+                    GoalStatus::Achieved
+                } else if !self.credentials.is_empty() || !self.users.is_empty() {
+                    GoalStatus::InProgress
+                } else {
+                    GoalStatus::Pending
+                }
+            }
         }
     }
 

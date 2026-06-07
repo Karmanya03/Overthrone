@@ -4,10 +4,11 @@
 
 use crate::mapper::MitreMapping;
 use crate::mitigations::Mitigation;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use overthrone_pilot::goals::EngagementState;
 use overthrone_pilot::runner::AutoPwnResult;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -167,6 +168,43 @@ pub struct EvidenceItem {
     pub content: String,
     /// Classification for this object.
     pub content_type: EvidenceType,
+    /// SHA-256 hash of the content for chain-of-custody verification
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256_hash: Option<String>,
+}
+
+impl EvidenceItem {
+    /// Create a new evidence item and compute its SHA-256 hash
+    pub fn new(label: impl Into<String>, content: impl Into<String>, content_type: EvidenceType) -> Self {
+        let content = content.into();
+        let sha256_hash = Self::compute_hash_for(&content);
+        Self {
+            label: label.into(),
+            content,
+            content_type,
+            sha256_hash: Some(sha256_hash),
+        }
+    }
+
+    /// Compute SHA-256 hash of content
+    pub fn compute_hash_for(content: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Recompute and update the hash for this evidence item
+    pub fn recompute_hash(&mut self) {
+        self.sha256_hash = Some(Self::compute_hash_for(&self.content));
+    }
+
+    /// Verify that the stored hash matches the current content
+    pub fn verify_integrity(&self) -> bool {
+        match &self.sha256_hash {
+            Some(stored) => *stored == Self::compute_hash_for(&self.content),
+            None => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +223,61 @@ pub enum EvidenceType {
     Configuration,
     /// `NetworkCapture` variant
     NetworkCapture,
+}
+
+// ═══════════════════════════════════════════════════════════
+// Operator Attribution
+// ═══════════════════════════════════════════════════════════
+
+/// Operator attribution metadata — who ran what, when, from where
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperatorMetadata {
+    /// Operator's name or handle
+    pub operator_name: String,
+    /// Operator's team or group
+    pub team: Option<String>,
+    /// Source IP address the operator worked from
+    pub source_ip: Option<String>,
+    /// Operator's role in the engagement
+    pub role: Option<String>,
+    /// Contact email for the operator
+    pub contact_email: Option<String>,
+    /// Certifications held (e.g., OSCP, CRTP)
+    pub certifications: Vec<String>,
+}
+
+impl Default for OperatorMetadata {
+    fn default() -> Self {
+        Self {
+            operator_name: "Operator".to_string(),
+            team: None,
+            source_ip: None,
+            role: None,
+            contact_email: None,
+            certifications: vec![],
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Timeline Entry
+// ═══════════════════════════════════════════════════════════
+
+/// A single timeline entry grouping findings by date
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineDay {
+    /// The date (YYYY-MM-DD)
+    pub date: String,
+    /// Year
+    pub year: i32,
+    /// Month
+    pub month: u32,
+    /// Day
+    pub day: u32,
+    /// Findings discovered on this day
+    pub findings: Vec<String>,
+    /// Number of findings
+    pub count: usize,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -243,6 +336,11 @@ pub struct EngagementSession {
     pub total_credentials_compromised: usize,
     /// Total count
     pub total_admin_hosts: usize,
+
+    // ── Operator Attribution ──
+    /// Operator metadata for attribution (who/when/from-where)
+    #[serde(default)]
+    pub operator: Option<OperatorMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,6 +439,8 @@ impl EngagementSession {
             total_computers_enumerated: state.computers.len(),
             total_credentials_compromised: state.credentials.len(),
             total_admin_hosts: state.admin_hosts.len(),
+
+            operator: None,
         };
 
         // Auto-generate findings from state
@@ -385,7 +485,53 @@ impl EngagementSession {
             total_computers_enumerated: 0,
             total_credentials_compromised: 0,
             total_admin_hosts: 0,
+
+            operator: None,
         }
+    }
+
+    /// Set operator attribution metadata
+    pub fn with_operator(mut self, operator: OperatorMetadata) -> Self {
+        self.operator = Some(operator);
+        self
+    }
+
+    /// Group findings by day for timeline view.
+    /// Returns a sorted list of days with findings discovered on each day.
+    pub fn timeline_by_day(&self) -> Vec<TimelineDay> {
+        let mut day_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut day_parts: HashMap<String, (i32, u32, u32)> = HashMap::new();
+
+        for finding in &self.findings {
+            let dt = &finding.discovered_at;
+            let date_key = format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day());
+            day_map
+                .entry(date_key.clone())
+                .or_default()
+                .push(finding.title.clone());
+            day_parts
+                .entry(date_key)
+                .or_insert((dt.year(), dt.month(), dt.day()));
+        }
+
+        let mut timeline: Vec<TimelineDay> = day_map
+            .into_iter()
+            .map(|(date, findings)| {
+                let (year, month, day) = day_parts.get(&date).copied().unwrap_or((0, 0, 0));
+                let count = findings.len();
+                TimelineDay {
+                    date,
+                    year,
+                    month,
+                    day,
+                    findings,
+                    count,
+                }
+            })
+            .collect();
+
+        timeline.sort_by(|a, b| a.date.cmp(&b.date));
+        timeline
     }
 
     /// Auto-generate findings from engagement state
@@ -419,11 +565,11 @@ impl EngagementSession {
                     "Extracted encrypted ticket data in hashcat-compatible format".to_string(),
                     "Cracked service account passwords offline using hashcat".to_string(),
                 ],
-                evidence: vec![EvidenceItem {
-                    label: "Kerberoastable accounts".to_string(),
-                    content: state.kerberoastable.join("\n"),
-                    content_type: EvidenceType::CommandOutput,
-                }],
+                evidence: vec![EvidenceItem::new(
+                    "Kerberoastable accounts",
+                    state.kerberoastable.join("\n"),
+                    EvidenceType::CommandOutput,
+                )],
                 mitre: crate::mapper::map_technique("kerberoast"),
                 mitigations: crate::mitigations::get_mitigations("kerberoast"),
                 business_impact: "Compromised service accounts often have elevated privileges \
@@ -460,11 +606,11 @@ impl EngagementSession {
                     "Sent AS-REQ without pre-authentication data".to_string(),
                     "Captured AS-REP with encrypted timestamp (hashcat mode 18200)".to_string(),
                 ],
-                evidence: vec![EvidenceItem {
-                    label: "AS-REP roastable accounts".to_string(),
-                    content: state.asrep_roastable.join("\n"),
-                    content_type: EvidenceType::CommandOutput,
-                }],
+                evidence: vec![EvidenceItem::new(
+                    "AS-REP roastable accounts",
+                    state.asrep_roastable.join("\n"),
+                    EvidenceType::CommandOutput,
+                )],
                 mitre: crate::mapper::map_technique("asrep_roast"),
                 mitigations: crate::mitigations::get_mitigations("asrep_roast"),
                 business_impact: "These accounts can be attacked without any authentication, \
@@ -520,14 +666,14 @@ impl EngagementSession {
                 evidence: state
                     .credentials
                     .values()
-                    .map(|c| EvidenceItem {
-                        label: format!("{} ({})", c.username, c.source),
-                        content: format!(
+                    .map(|c| EvidenceItem::new(
+                        format!("{} ({})", c.username, c.source),
+                        format!(
                             "User: {}\\{}, Type: {:?}, Admin: {}",
                             domain, c.username, c.secret_type, c.is_admin
                         ),
-                        content_type: EvidenceType::Credential,
-                    })
+                        EvidenceType::Credential,
+                    ))
                     .collect(),
                 mitre: crate::mapper::map_technique("credential_access"),
                 mitigations: crate::mitigations::get_mitigations("credential_exposure"),
@@ -562,11 +708,11 @@ impl EngagementSession {
                     "Captured DC machine account TGT".to_string(),
                     "Used captured TGT for DCSync replication".to_string(),
                 ],
-                evidence: vec![EvidenceItem {
-                    label: "Unconstrained delegation hosts".to_string(),
-                    content: state.unconstrained_delegation.join("\n"),
-                    content_type: EvidenceType::CommandOutput,
-                }],
+                evidence: vec![EvidenceItem::new(
+                    "Unconstrained delegation hosts",
+                    state.unconstrained_delegation.join("\n"),
+                    EvidenceType::CommandOutput,
+                )],
                 mitre: crate::mapper::map_technique("unconstrained_delegation"),
                 mitigations: crate::mitigations::get_mitigations("unconstrained_delegation"),
                 business_impact: "Complete domain compromise possible through TGT capture \
@@ -758,6 +904,7 @@ mod tests {
             total_computers_enumerated: 0,
             total_credentials_compromised: 0,
             total_admin_hosts: 0,
+            operator: None,
         };
         let counts = session.severity_counts();
         assert_eq!(counts.get(&Severity::Informational).unwrap_or(&0), &0);
@@ -791,6 +938,7 @@ mod tests {
             total_computers_enumerated: 0,
             total_credentials_compromised: 0,
             total_admin_hosts: 0,
+            operator: None,
         };
         assert_eq!(session.overall_risk(), Severity::Informational);
         session.findings.push(Finding {

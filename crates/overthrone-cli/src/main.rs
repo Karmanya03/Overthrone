@@ -1915,6 +1915,24 @@ enum ForgeAction {
         #[arg(short, long, required = true)]
         format: String,
     },
+    /// Interactive forge REPL - persistent ticket forging session
+    Shell {
+        /// Domain SID
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// krbtgt hash (RC4 or AES256)
+        #[arg(long, required = true)]
+        krbtgt_hash: String,
+        /// krbtgt AES256 key (optional, for Diamond tickets)
+        #[arg(long)]
+        krbtgt_aes256: Option<String>,
+        /// Default username to impersonate
+        #[arg(short, long, default_value = "Administrator")]
+        user: String,
+        /// Default RID to use
+        #[arg(long, default_value = "500")]
+        rid: u32,
+    },
 }
 
 // ──────────────────────────────────────────────────────────
@@ -3377,6 +3395,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_client_identity: None,
                 auto_coerce_targets: Vec::new(),
                 auto_coerce_listener: None,
+                socks5_proxy: None,
+                http_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3451,6 +3471,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_client_identity: None,
                 auto_coerce_targets,
                 auto_coerce_listener,
+                socks5_proxy: None,
+                http_relay_config: None,
             };
 
             let mut controller = RelayController::new(config);
@@ -3518,6 +3540,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_client_identity: None,
                 auto_coerce_targets,
                 auto_coerce_listener,
+                socks5_proxy: None,
+                http_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3588,6 +3612,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_client_identity: None,
                 auto_coerce_targets,
                 auto_coerce_listener,
+                socks5_proxy: None,
+                http_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3663,6 +3689,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_client_identity: None,
                 auto_coerce_targets,
                 auto_coerce_listener,
+                socks5_proxy: None,
+                http_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3699,6 +3727,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 challenge: None,
                 mode: SmbDaemonMode::Capture,
                 domain_name: "LAN".to_string(),
+                socks5_proxy: None,
             };
             let mut daemon = SmbDaemon::new(config);
             match daemon.start().await {
@@ -3771,6 +3800,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     }
                     _ => overthrone_relay::exchange::ExchangeVersion::AutoDetect,
                 },
+                socks5_proxy: None,
             };
             let mut relay = ExchangeRelay::new(config);
             match relay.start().await {

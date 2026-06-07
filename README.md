@@ -67,63 +67,104 @@ This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is no
 
 ### The Kill Chain
 
-```
-  YOU                        OVERTHRONE                        DOMAIN CONTROLLER
-   |                              |                                    |
-    |   ovt auto-pwn                |                                    |
-   |----------------------------->|                                    |
-   |                              |                                    |
-   |   Phase 1: RECON             |                                    |
-   |   +- LDAP enumeration ------>|------ Who are you people? -------->|
-   |   +- Users, groups, GPOs     |<----- Here's literally everything -|
-   |   +- Kerberoastable SPNs     |       (AD has no chill)            |
-   |   +- AS-REP roastable accts  |                                    |
-   |   +- Domain trusts           |                                    |
-   |                              |                                    |
-   |   Phase 2: GRAPH             |                                    |
-   |   +- Build attack graph      |                                    |
-   |   +- Find shortest path      |                                    |
-   |   ¦   to Domain Admin        |                                    |
-   |   +- "Oh look, 3 hops.      |                                    |
-   |       That's... concerning." |                                    |
-   |                              |                                    |
-   |   Phase 3: EXPLOIT           |                                    |
-   |   +- Kerberoast that SPN --->|------ TGS-REQ for MSSQLSvc ------>|
-   |   +- Crack offline           |<----- Here's a ticket, help urself |
-   |   +- Pass-the-Hash --------->|------ SMB auth with NT hash ------>|
-   |   +- Lateral move            |       (the hash IS the password)   |
-   |                              |                                    |
-   |   Phase 4: PERSIST           |                                    |
-   |   +- DCSync ---------------->|------ Replicate me everything ---->|
-   |   +- Golden Ticket           |<----- krbtgt hash, as requested ---|
-   |   +- You own the forest.     |       (hope you enjoyed your reign)|
-   |       The forest doesn't     |                                    |
-   |       know yet.              |                                    |
-   |                              |                                    |
-   |   Phase 5: REPORT            |                                    |
-   |   +- PDF that makes the      |                                    |
-   |      blue team question      |                                    |
-   |      their career choices    |                                    |
-   V                              V                                    V
+```mermaid
+sequenceDiagram
+    participant Op as Operator (ovt)
+    participant OV as Overthrone
+    participant DC as Domain Controller
+
+    Op->>OV: ovt auto-pwn -d BANK -u j.smith -p 'P@ssw0rd!'
+
+    Note over OV,DC: Phase 1: Reconnaissance
+    OV->>DC: LDAP enum (users, groups, SPNs, trusts, ACLs, GPOs, LAPS, ADCS)
+    DC-->>OV: Complete AD data dump (AD has no chill)
+
+    Note over OV: Phase 2: Attack Graph
+    OV->>OV: Build graph (petgraph + Dijkstra)
+    Note right of OV: Find shortest path to Domain Admin<br/>(usually 3-5 hops, always concerning)
+
+    Note over OV,DC: Phase 3: Exploitation
+    OV->>DC: Kerberoast MSSQLSvc/db.bank.anz
+    DC-->>OV: TGS ticket (encrypted with svc_sql hash)
+    OV->>OV: Crack offline (rayon + embedded wordlist)
+    OV->>DC: Pass-the-Hash → SMB auth (the hash IS the password)
+    DC-->>OV: Lateral movement granted
+    OV->>DC: Coerce auth → NTLM relay → LDAP group add
+    DC-->>OV: Target added to Domain Admins (oops)
+
+    Note over OV,DC: Phase 4: Persistence
+    OV->>DC: DCSync (MS-DRSR → krbtgt hash)
+    DC-->>OV: krbtgt AES256 + NTLM (as requested)
+    OV->>OV: Forge Golden Ticket + Diamond Ticket
+
+    Note over OV: Phase 5: Reporting
+    OV->>OV: Generate PDF + JSON with MITRE ATT&CK mapping<br/>Credential tables · Loot summary · Remediation guide
+
+    OV-->>Op: Domain owned. The forest hasn't noticed yet.
 ```
 
 ## Architecture
 
 Overthrone is a Rust workspace with 10 crates, because monoliths are for cathedrals, not offensive tooling. Each crate handles one phase of making sysadmins regret their GPO configurations:
 
-```
-overthrone/
-+-- crates/
-¦   +-- overthrone-core       # The brain - LDAP, Kerberos, SMB, NTLM, DRSR, MSSQL, ADCS, graph engine, crypto, C2, plugins, exec
-¦   +-- overthrone-reaper     # Enumeration - finds everything AD will confess (users, groups, ACLs, LAPS, GPP, ADCS)
-¦   +-- overthrone-hunter     # Exploitation - Kerberoast, ASREPRoast, coercion, delegation abuse, ticket manipulation
-¦   +-- overthrone-crawler    # Cross-domain - trust mapping, inter-realm tickets, SID filtering, foreign LDAP, MSSQL links
-¦   +-- overthrone-forge      # Persistence - Golden/Silver/Diamond tickets, DCSync, Shadow Creds, ACL backdoors, cleanup
-¦   +-- overthrone-pilot      # The autopilot - autonomous "hold my beer" mode with adaptive planning and wizard
-¦   +-- overthrone-relay      # NTLM relay - poisoning, responder, ADCS relay. The man-in-the-middle crate.
-¦   +-- overthrone-scribe     # Reporting - turns carnage into compliance documents (Markdown, PDF, JSON)
-¦   +-- overthrone-cli        # The CLI + TUI + interactive REPL shell - where you type things and thrones fall
-¦   +-- overthrone-viewer     # Browser-based graph GUI - local web server + D3 viewer, no Neo4j required
+```mermaid
+flowchart TB
+    subgraph L1["User Interface"]
+        CLI["overthrone-cli<br/>CLI · TUI · REPL"]
+    end
+
+    subgraph L2["Orchestrator"]
+        PILOT["overthrone-pilot<br/>Auto-Pwn · Wizard · Q-Learning"]
+    end
+
+    subgraph L3["Reconnaissance"]
+        REAPER["overthrone-reaper<br/>LDAP enum · LAPS · GPP · ADCS"]
+        CRAWLER["overthrone-crawler<br/>Cross-domain · Foreign LDAP · Trusts"]
+    end
+
+    subgraph L4["Core Engine"]
+        CORE["overthrone-core<br/>LDAP · Kerberos · SMB · NTLM · DRSR · MSSQL · ADCS<br/>Attack Graph · EDR Evasion · Azure AD / Entra"]
+    end
+
+    subgraph L5["Attack"]
+        HUNTER["overthrone-hunter<br/>Kerberoast · Coercion · RBCD"]
+        RELAY["overthrone-relay<br/>NTLM relay · Poison · ESC8"]
+    end
+
+    subgraph L6["Persistence"]
+        FORGE["overthrone-forge<br/>Tickets · DCSync · Shadow Creds"]
+    end
+
+    subgraph L7["Output"]
+        SCRIBE["overthrone-scribe<br/>Markdown · PDF · JSON"]
+        VIEWER["overthrone-viewer<br/>Web GUI · D3 · Three.js"]
+    end
+
+    CLI --> PILOT
+    CLI --> REAPER
+    CLI --> CRAWLER
+    CLI --> HUNTER
+    CLI --> RELAY
+    CLI --> FORGE
+    CLI --> CORE
+    CLI --> SCRIBE
+    CLI --> VIEWER
+
+    PILOT --> REAPER
+    PILOT --> CRAWLER
+    PILOT --> HUNTER
+    PILOT --> RELAY
+    PILOT --> FORGE
+    PILOT --> SCRIBE
+
+    REAPER --> CORE
+    CRAWLER --> CORE
+    HUNTER --> CORE
+    RELAY --> CORE
+    FORGE --> CORE
+    CORE --> SCRIBE
+    CORE --> VIEWER
+    CORE --> PILOT
 ```
 
 ## The Crate Breakdown

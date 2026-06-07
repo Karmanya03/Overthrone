@@ -241,6 +241,12 @@ pub struct AutoPwnConfig {
     pub initial_state: Option<crate::goals::EngagementState>,
     /// Hostile DC verification configuration
     pub dc_verify: crate::dc_verify::DcVerifyConfig,
+    /// Enable concurrent execution of parallel-safe steps
+    pub enable_concurrent: bool,
+    /// OPSEC cost/benefit profile for noise-aware escalation
+    pub opsec_profile: crate::planner::OpsecProfile,
+    /// Multi-DC targeting configuration
+    pub multi_dc: crate::planner::MultiDcConfig,
 }
 
 impl AutoPwnConfig {
@@ -283,6 +289,19 @@ impl AutoPwnConfig {
             AttackGoal::DumpNtds { target_dc: None }
         } else if lower == "recon" || lower == "enum" || lower == "enumerate" {
             AttackGoal::ReconOnly
+        } else if lower == "persistence" || lower == "golden" || lower == "golden ticket" {
+            AttackGoal::Persistence {
+                method: crate::goals::PersistenceMethod::GoldenTicket,
+            }
+        } else if lower == "silver" || lower == "silver ticket" {
+            AttackGoal::Persistence {
+                method: crate::goals::PersistenceMethod::SilverTicket,
+            }
+        } else if lower.starts_with("custom:") {
+            AttackGoal::Custom {
+                description: self.target.clone(),
+                success_check: "credentials+admin_hosts".to_string(),
+            }
         } else if lower.contains('.') || lower.contains('$') {
             AttackGoal::CompromiseHost {
                 target_host: self.target.clone(),
@@ -357,6 +376,9 @@ impl AutoPwnConfig {
             q_table_path: std::path::PathBuf::from("q_table.json"),
             initial_state: None,
             dc_verify: crate::dc_verify::DcVerifyConfig::default(),
+            enable_concurrent: false,
+            opsec_profile: crate::planner::OpsecProfile::default(),
+            multi_dc: crate::planner::MultiDcConfig::default(),
         }
     }
 }
@@ -478,6 +500,27 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let planner = Planner::new(config.stealth, config.userlist.clone());
     let mut adaptive = AdaptiveEngine::new(config.stealth);
     let mut ctx = config.exec_context();
+
+    // ── OPSEC profile override for stealth mode ──
+    // When stealth is enabled, use the strict stealth profile regardless of
+    // what was configured. This ensures the noise budget is always tight.
+    let effective_opsec = if config.stealth {
+        crate::planner::OpsecProfile::stealth()
+    } else {
+        config.opsec_profile.clone()
+    };
+    if config.stealth {
+        println!(
+            "  {} OPSEC stealth mode: max_noise={}, value_overrides={}",
+            "\u{1f507}".dimmed(),
+            effective_opsec.max_noise,
+            if effective_opsec.allow_value_overrides {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+    }
 
     // ── Q-Learning Engine (optional) ──
     #[cfg(feature = "qlearn")]
@@ -621,6 +664,86 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     'main: loop {
         adaptive.adjust_plan(&mut plan, &state);
 
+        // ── Concurrent execution: collect parallel-safe steps in the same stage ──
+        if config.enable_concurrent {
+            let parallel_indices: Vec<usize> = {
+                let first_unexecuted = plan.steps.iter().position(|s| !s.executed);
+                match first_unexecuted {
+                    Some(first_idx) => {
+                        let first_stage = plan.steps[first_idx].stage;
+                        plan.steps
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| {
+                                !s.executed
+                                    && s.stage == first_stage
+                                    && s.parallel_safe
+                                    && s.depends_on.is_empty()
+                            })
+                            .map(|(i, _)| i)
+                            .collect()
+                    }
+                    None => vec![],
+                }
+            };
+
+            if parallel_indices.len() >= 2 {
+                println!(
+                    "\n  {} Executing {} parallel-safe steps concurrently",
+                    "\u{26a1}".yellow().bold(),
+                    parallel_indices.len()
+                );
+                let mut handles = Vec::new();
+                for &idx in &parallel_indices {
+                    let step_clone = plan.steps[idx].clone();
+                    let ctx_clone = ctx.clone();
+                    let state_snapshot = state.clone();
+                    handles.push(tokio::spawn(async move {
+                        let result =
+                            executor::execute_step(&step_clone, &ctx_clone, &mut state_snapshot.clone())
+                                .await;
+                        (idx, result)
+                    }));
+                }
+
+                for handle in handles {
+                    match handle.await {
+                        Ok((idx, result)) => {
+                            plan.steps[idx].executed = true;
+                            plan.steps[idx].result = Some(result.clone());
+                            steps_executed += 1;
+                            if result.success {
+                                steps_succeeded += 1;
+                                let step_stage = plan.steps[idx].stage;
+                                stage_stats.entry(step_stage).or_insert((0, 0)).0 += 1;
+                                successful_steps.push(plan.steps[idx].clone());
+                                println!(
+                                    "  {} [parallel] {} {}",
+                                    "\u{251c}\u{2500}".dimmed(),
+                                    "\u{2713}".green().bold(),
+                                    plan.steps[idx].description.green()
+                                );
+                            } else {
+                                steps_failed += 1;
+                                let step_stage = plan.steps[idx].stage;
+                                stage_stats.entry(step_stage).or_insert((0, 0)).1 += 1;
+                                println!(
+                                    "  {} [parallel] {} {}",
+                                    "\u{251c}\u{2500}".dimmed(),
+                                    "\u{2717}".red().bold(),
+                                    plan.steps[idx].description.red()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Parallel step task failed: {}", e);
+                        }
+                    }
+                }
+                continue 'main;
+            }
+        }
+
         let step_idx = match plan.steps.iter().position(|s| !s.executed) {
             Some(idx) => idx,
             None => {
@@ -640,34 +763,42 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             break 'main;
         }
 
-        // ── OPSEC gate: skip steps that exceed the noise budget ──
+        // ── OPSEC gate: cost/benefit analysis using OpsecProfile ──
         {
-            let max_allowed = if config.stealth {
-                crate::planner::NoiseLevel::Medium
-            } else {
-                crate::planner::NoiseLevel::Critical
-            };
-            let (step_noise, step_desc) = {
+            let (step_noise, step_priority, step_desc) = {
                 let s = &plan.steps[step_idx];
-                (s.noise, s.description.clone())
+                (s.noise, s.priority, s.description.clone())
             };
-            if step_noise > max_allowed {
-                warn!(
-                    "  OPSEC: skipping '{}' (noise={} > max={})",
-                    step_desc, step_noise, max_allowed
-                );
-                plan.steps[step_idx].executed = true;
-                plan.steps[step_idx].result = Some(crate::planner::StepResult {
-                    success: false,
-                    output: format!(
-                        "Skipped: noise level {} exceeds OPSEC budget ({})",
-                        step_noise, max_allowed
-                    ),
-                    new_credentials: 0,
-                    new_admin_hosts: 0,
-                });
-                steps_failed += 1;
-                continue 'main;
+            let has_creds = !state.credentials.is_empty();
+            let decision = effective_opsec.should_execute(
+                step_noise,
+                step_priority,
+                has_creds,
+            );
+            match &decision {
+                crate::planner::OpsecDecision::Allow { reason } => {
+                    tracing::debug!("OPSEC: allowing '{}' — {}", step_desc, reason);
+                }
+                crate::planner::OpsecDecision::AllowOverride { reason } => {
+                    println!(
+                        "  {} OPSEC override: '{}' — {}",
+                        "\u{26a0}".yellow().bold(),
+                        step_desc,
+                        reason
+                    );
+                }
+                crate::planner::OpsecDecision::Deny { reason } => {
+                    warn!("  OPSEC: skipping '{}' — {}", step_desc, reason);
+                    plan.steps[step_idx].executed = true;
+                    plan.steps[step_idx].result = Some(crate::planner::StepResult {
+                        success: false,
+                        output: format!("Skipped by OPSEC: {}", reason),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    });
+                    steps_failed += 1;
+                    continue 'main;
+                }
             }
         }
 
@@ -955,6 +1086,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     max_retries: plan.steps[step_idx].max_retries,
                     reversible: false,
                     compensation: None,
+                    parallel_safe: false,
                 };
                 plan.steps.insert(step_idx + 1, new_step);
             }
@@ -1696,6 +1828,9 @@ mod tests {
             q_table_path: std::path::PathBuf::from("test.json"),
             initial_state: None,
             dc_verify: crate::dc_verify::DcVerifyConfig::default(),
+            enable_concurrent: false,
+            opsec_profile: crate::planner::OpsecProfile::default(),
+            multi_dc: crate::planner::MultiDcConfig::default(),
         }
     }
 
@@ -1859,5 +1994,113 @@ mod tests {
     fn truncate_exact_length_no_ellipsis() {
         let s = "hello world";
         assert_eq!(truncate_output(s, 11), "hello world");
+    }
+
+    // ── Planner ↔ Runner Integration ──
+
+    #[test]
+    fn planner_generates_da_plan_with_parallel_safe_steps() {
+        let planner = crate::planner::Planner::new(false, None);
+        let state = crate::goals::EngagementState::new();
+        let goal = crate::goals::AttackGoal::DomainAdmin {
+            target_group: "Domain Admins".into(),
+        };
+        let plan = planner.plan(&goal, &state, &[], true);
+        let parallel_count = plan.steps.iter().filter(|s| s.parallel_safe).count();
+        assert!(
+            parallel_count >= 5,
+            "DA plan should have >= 5 parallel-safe recon steps, got {}",
+            parallel_count
+        );
+        for step in &plan.steps {
+            if step.parallel_safe {
+                assert_eq!(
+                    step.stage,
+                    Stage::Enumerate,
+                    "Parallel-safe step '{}' should be in Enumerate stage",
+                    step.description
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opsec_profile_blocks_noisy_steps_in_stealth() {
+        let profile = crate::planner::OpsecProfile::stealth();
+        let d = profile.should_execute(crate::planner::NoiseLevel::Silent, 100, true);
+        assert!(d.is_allowed());
+        let d = profile.should_execute(crate::planner::NoiseLevel::High, 50, true);
+        assert!(!d.is_allowed());
+        let d = profile.should_execute(crate::planner::NoiseLevel::Critical, 50, true);
+        assert!(!d.is_allowed());
+    }
+
+    #[test]
+    fn opsec_profile_allows_override_for_high_value() {
+        let profile = crate::planner::OpsecProfile {
+            max_noise: crate::planner::NoiseLevel::Medium,
+            allow_value_overrides: true,
+            value_override_threshold: 90,
+            ..Default::default()
+        };
+        // Critical noise (95 priority, no creds) -> still Critical > Medium -> override
+        let d = profile.should_execute(crate::planner::NoiseLevel::Critical, 95, false);
+        assert!(d.is_allowed());
+        assert!(matches!(d, crate::planner::OpsecDecision::AllowOverride { .. }));
+        // Critical noise with low priority -> denied
+        let d = profile.should_execute(crate::planner::NoiseLevel::Critical, 50, false);
+        assert!(!d.is_allowed());
+    }
+
+    #[test]
+    fn opsec_profile_authenticated_bonus_reduces_noise() {
+        let profile = crate::planner::OpsecProfile {
+            max_noise: crate::planner::NoiseLevel::Medium,
+            allow_value_overrides: false,
+            ..Default::default()
+        };
+        let d = profile.should_execute(crate::planner::NoiseLevel::High, 50, false);
+        assert!(!d.is_allowed());
+        let d = profile.should_execute(crate::planner::NoiseLevel::High, 50, true);
+        assert!(d.is_allowed());
+    }
+
+    #[test]
+    fn multi_dc_config_round_robin() {
+        let mut m = crate::planner::MultiDcConfig::new(vec![
+            "10.0.0.1".into(), "10.0.0.2".into(), "10.0.0.3".into(),
+        ]);
+        assert!(m.enabled);
+        assert_eq!(m.len(), 3);
+        assert_eq!(m.active_host(), Some("10.0.0.1"));
+        assert_eq!(m.next_host(), Some("10.0.0.2"));
+        assert_eq!(m.next_host(), Some("10.0.0.3"));
+        assert_eq!(m.next_host(), Some("10.0.0.1"));
+    }
+
+    #[test]
+    fn multi_dc_failover() {
+        let mut m = crate::planner::MultiDcConfig::new(vec![
+            "10.0.0.1".into(), "10.0.0.2".into(),
+        ]);
+        assert_eq!(m.active_host(), Some("10.0.0.1"));
+        assert_eq!(m.failover(), Some("10.0.0.2"));
+        assert_eq!(m.active_host(), Some("10.0.0.2"));
+    }
+
+    #[test]
+    fn planner_da_goal_includes_all_recon_stages() {
+        let planner = crate::planner::Planner::new(false, None);
+        let state = crate::goals::EngagementState::new();
+        let goal = crate::goals::AttackGoal::DomainAdmin {
+            target_group: "Domain Admins".into(),
+        };
+        let plan = planner.plan(&goal, &state, &[], true);
+        let keys: Vec<&str> = plan.steps.iter().map(|s| s.action.key()).collect();
+        assert!(keys.contains(&"enumerate_users"));
+        assert!(keys.contains(&"enumerate_computers"));
+        assert!(keys.contains(&"enumerate_groups"));
+        assert!(keys.contains(&"enumerate_trusts"));
+        assert!(keys.contains(&"enumerate_password_policy"));
     }
 }

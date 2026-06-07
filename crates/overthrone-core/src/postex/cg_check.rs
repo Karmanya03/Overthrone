@@ -235,9 +235,16 @@ pub fn check_credential_guard_preflight(
 }
 
 /// Decide which credential extraction technique to use based on CG status.
+/// Choose credential extraction strategy based on Credential Guard status.
+///
+/// Returns the recommended strategy name:
+/// - `"lsaiso_bypass"` — CG is enabled, try ALPC-based extraction from LSAISO
+/// - `"shadow_credentials"` — CG unknown, fall back to ADCS shadow credentials
+/// - `"lsass_dump"` — CG disabled, direct LSASS memory dumping
 pub fn choose_cred_extraction(cg: &CgPreflightResult) -> &'static str {
     match cg.status {
-        CredentialGuardStatus::Enabled | CredentialGuardStatus::Unknown => "shadow_credentials",
+        CredentialGuardStatus::Enabled => "lsaiso_bypass",
+        CredentialGuardStatus::Unknown => "shadow_credentials",
         CredentialGuardStatus::Disabled => "lsass_dump",
     }
 }
@@ -746,7 +753,7 @@ mod tests {
             recommendation: "Use ADCS".to_string(),
             findings: vec![],
         };
-        assert_eq!(choose_cred_extraction(&cg), "shadow_credentials");
+        assert_eq!(choose_cred_extraction(&cg), "lsaiso_bypass");
     }
 
     #[test]

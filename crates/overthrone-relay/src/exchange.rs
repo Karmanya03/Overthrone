@@ -41,6 +41,8 @@ pub struct ExchangeRelayConfig {
     pub mapi_path: String,
     pub prefer_mapi: bool,
     pub exchange_version: ExchangeVersion,
+    /// Optional SOCKS5 proxy for outbound connections (format: `host:port`).
+    pub socks5_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +69,7 @@ impl std::fmt::Display for ExchangeVersion {
 impl Default for ExchangeRelayConfig {
     fn default() -> Self {
         Self {
-            listen_ip: "0.0.0.0".into(),
+            listen_ip: "::".into(),
             target_host: "exchange.corp.local".into(),
             target_port: 443,
             use_tls: true,
@@ -76,6 +78,7 @@ impl Default for ExchangeRelayConfig {
             mapi_path: "/mapi/".into(),
             prefer_mapi: true,
             exchange_version: ExchangeVersion::AutoDetect,
+            socks5_proxy: None,
         }
     }
 }
@@ -279,8 +282,13 @@ async fn handle_exchange_relay(
 async fn connect_exchange_stream(
     config: &ExchangeRelayConfig,
 ) -> Result<Box<dyn ExchangeIo + Send>> {
-    let exchange_addr = crate::utils::format_addr(&config.target_host, config.target_port);
-    let tcp = TcpStream::connect(&exchange_addr)
+    let target: std::net::SocketAddr = format!(
+        "{}:{}",
+        config.target_host, config.target_port
+    )
+    .parse()
+    .map_err(|e| RelayError::Config(format!("Invalid Exchange target address: {e}")))?;
+    let tcp = crate::utils::socks5_connect(target, IO_TIMEOUT, config.socks5_proxy.as_deref())
         .await
         .map_err(|e| RelayError::Network(format!("Exchange connect failed: {e}")))?;
 

@@ -266,6 +266,10 @@ pub struct PlanStep {
     pub reversible: bool,
     /// Optional compensation action to undo this step
     pub compensation: Option<CompensationAction>,
+    /// Whether this step can run concurrently with other parallel-safe steps
+    /// in the same stage (no shared state or side effects).
+    #[serde(default)]
+    pub parallel_safe: bool,
 }
 
 /// Describes how to undo/reverse a completed step.
@@ -944,6 +948,41 @@ impl PlanStep {
     pub fn action_key(&self) -> &'static str {
         self.action.key()
     }
+
+    /// Create a new plan step with sensible defaults.
+    /// `parallel_safe` defaults to `false`; set it explicitly for read-only recon steps.
+    pub fn new(
+        id: String,
+        description: String,
+        stage: Stage,
+        action: PlannedAction,
+        priority: i32,
+        noise: NoiseLevel,
+        max_retries: u32,
+    ) -> Self {
+        Self {
+            id,
+            description,
+            stage,
+            action,
+            priority,
+            noise,
+            depends_on: vec![],
+            executed: false,
+            result: None,
+            retries: 0,
+            max_retries,
+            reversible: false,
+            compensation: None,
+            parallel_safe: false,
+        }
+    }
+
+    /// Mark this step as safe for concurrent execution.
+    pub fn with_parallel_safe(mut self) -> Self {
+        self.parallel_safe = true;
+        self
+    }
 }
 
 /// Result of executing a step
@@ -983,6 +1022,217 @@ impl std::fmt::Display for NoiseLevel {
             Self::High => write!(f, "{}", "HIGH".red()),
             Self::Critical => write!(f, "{}", "CRITICAL".red().bold()),
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// OPSEC-Aware Cost/Benefit Profile
+// ═══════════════════════════════════════════════════════════
+
+/// OPSEC profile for cost/benefit analysis of noisy operations.
+/// Determines whether a noisy step is worth the risk based on
+/// the current engagement context and potential reward.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpsecProfile {
+    /// Maximum noise level allowed (budget)
+    pub max_noise: NoiseLevel,
+    /// Whether to allow "worth it" overrides (high-value steps can exceed budget)
+    pub allow_value_overrides: bool,
+    /// Noise multiplier for password spraying / mass operations
+    pub spray_penalty: f64,
+    /// Noise reduction for steps that use credentials (less suspicious)
+    pub authenticated_bonus: f64,
+    /// Value threshold: steps with priority >= this can override noise budget
+    pub value_override_threshold: i32,
+}
+
+impl Default for OpsecProfile {
+    fn default() -> Self {
+        Self {
+            max_noise: NoiseLevel::Medium,
+            allow_value_overrides: true,
+            spray_penalty: 2.0,
+            authenticated_bonus: 1.0,
+            value_override_threshold: 90,
+        }
+    }
+}
+
+impl OpsecProfile {
+    /// Create a stealth profile (low noise, no overrides).
+    pub fn stealth() -> Self {
+        Self {
+            max_noise: NoiseLevel::Low,
+            allow_value_overrides: false,
+            spray_penalty: 3.0,
+            authenticated_bonus: 1.5,
+            value_override_threshold: 100,
+        }
+    }
+
+    /// Create an aggressive profile (high noise OK, value overrides enabled).
+    pub fn aggressive() -> Self {
+        Self {
+            max_noise: NoiseLevel::Critical,
+            allow_value_overrides: true,
+            spray_penalty: 0.5,
+            authenticated_bonus: 0.5,
+            value_override_threshold: 50,
+        }
+    }
+
+    /// Evaluate whether a step should be executed based on cost/benefit.
+    /// Returns `true` if the step should proceed, `false` if it should be skipped.
+    pub fn should_execute(
+        &self,
+        step_noise: NoiseLevel,
+        step_priority: i32,
+        has_credentials: bool,
+    ) -> OpsecDecision {
+        let effective_noise = if has_credentials {
+            // Authenticated operations are less suspicious
+            self.reduce_noise(step_noise)
+        } else {
+            step_noise
+        };
+
+        if effective_noise <= self.max_noise {
+            return OpsecDecision::Allow {
+                reason: format!(
+                    "noise {} within budget {}",
+                    effective_noise, self.max_noise
+                ),
+            };
+        }
+
+        // Check if high-value override applies
+        if self.allow_value_overrides && step_priority >= self.value_override_threshold {
+            return OpsecDecision::AllowOverride {
+                reason: format!(
+                    "noise {} exceeds budget {} but priority {} >= threshold {}",
+                    effective_noise, self.max_noise, step_priority, self.value_override_threshold
+                ),
+            };
+        }
+
+        OpsecDecision::Deny {
+            reason: format!(
+                "noise {} exceeds budget {} (priority {} < threshold {})",
+                effective_noise, self.max_noise, step_priority, self.value_override_threshold
+            ),
+        }
+    }
+
+    /// Reduce noise level by one step (for authenticated operations).
+    fn reduce_noise(&self, noise: NoiseLevel) -> NoiseLevel {
+        match noise {
+            NoiseLevel::Critical => NoiseLevel::High,
+            NoiseLevel::High => NoiseLevel::Medium,
+            NoiseLevel::Medium => NoiseLevel::Low,
+            NoiseLevel::Low => NoiseLevel::Silent,
+            NoiseLevel::Silent => NoiseLevel::Silent,
+        }
+    }
+}
+
+/// Result of an OPSEC cost/benefit evaluation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OpsecDecision {
+    /// Step is within noise budget
+    Allow { reason: String },
+    /// Step exceeds budget but high-value override applies
+    AllowOverride { reason: String },
+    /// Step exceeds budget and no override
+    Deny { reason: String },
+}
+
+impl OpsecDecision {
+    /// Whether the step should be executed
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allow { .. } | Self::AllowOverride { .. })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-DC Targeting
+// ═══════════════════════════════════════════════════════════
+
+/// Configuration for targeting multiple domain controllers.
+/// Allows the planner to distribute operations across DCs
+/// for resilience and load distribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiDcConfig {
+    /// Whether multi-DC targeting is enabled
+    pub enabled: bool,
+    /// List of DC IPs to target (in priority order)
+    pub dc_hosts: Vec<String>,
+    /// Current active DC index (for round-robin or failover)
+    pub active_index: usize,
+    /// Whether to failover to next DC on connection failure
+    pub auto_failover: bool,
+    /// Whether to distribute different operations across DCs
+    pub distribute_operations: bool,
+}
+
+impl Default for MultiDcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dc_hosts: vec![],
+            active_index: 0,
+            auto_failover: true,
+            distribute_operations: false,
+        }
+    }
+}
+
+impl MultiDcConfig {
+    /// Create a multi-DC config from a list of DC IPs.
+    pub fn new(dc_hosts: Vec<String>) -> Self {
+        Self {
+            enabled: dc_hosts.len() > 1,
+            dc_hosts,
+            active_index: 0,
+            auto_failover: true,
+            distribute_operations: false,
+        }
+    }
+
+    /// Get the current active DC host.
+    pub fn active_host(&self) -> Option<&str> {
+        self.dc_hosts.get(self.active_index).map(|s| s.as_str())
+    }
+
+    /// Get the next DC host for round-robin distribution.
+    pub fn next_host(&mut self) -> Option<&str> {
+        if self.dc_hosts.is_empty() {
+            return None;
+        }
+        self.active_index = (self.active_index + 1) % self.dc_hosts.len();
+        self.dc_hosts.get(self.active_index).map(|s| s.as_str())
+    }
+
+    /// Failover to the next DC (called on connection failure).
+    pub fn failover(&mut self) -> Option<&str> {
+        if self.dc_hosts.len() <= 1 {
+            return None;
+        }
+        self.active_index = (self.active_index + 1) % self.dc_hosts.len();
+        warn!(
+            "Multi-DC failover to {}",
+            self.dc_hosts[self.active_index]
+        );
+        self.dc_hosts.get(self.active_index).map(|s| s.as_str())
+    }
+
+    /// Number of configured DC hosts.
+    pub fn len(&self) -> usize {
+        self.dc_hosts.len()
+    }
+
+    /// Whether no DC hosts are configured.
+    pub fn is_empty(&self) -> bool {
+        self.dc_hosts.is_empty()
     }
 }
 
@@ -1060,6 +1310,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                    parallel_safe: true,
                 });
             }
             if !failed("stealth_delegation_probe") {
@@ -1079,6 +1330,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                    parallel_safe: true,
                 });
             }
         }
@@ -1103,6 +1355,7 @@ impl Planner {
                         max_retries: 2,
                         reversible: false,
                         compensation: None,
+                        parallel_safe: true,
                     });
                 }
             } else {
@@ -1124,6 +1377,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
+                                            parallel_safe: false,
                     });
                 }
 
@@ -1146,6 +1400,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
+                                            parallel_safe: false,
                     });
                 }
             }
@@ -1166,6 +1421,7 @@ impl Planner {
                 max_retries: 2,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1184,6 +1440,7 @@ impl Planner {
                 max_retries: 2,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1206,6 +1463,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1224,6 +1482,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1242,6 +1501,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1260,6 +1520,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1278,6 +1539,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                parallel_safe: true,
             });
         }
 
@@ -1301,6 +1563,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
         }
 
@@ -1335,6 +1598,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
         }
 
@@ -1360,6 +1624,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
         }
 
@@ -1383,6 +1648,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
         }
 
@@ -1421,6 +1687,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
         }
@@ -1446,6 +1713,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
 
             // ESC1 — enrollee supplies SAN (most common ADCS vuln)
@@ -1469,6 +1737,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
 
@@ -1491,6 +1760,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
 
@@ -1516,6 +1786,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
 
@@ -1674,6 +1945,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
         }
@@ -1710,6 +1982,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
         }
@@ -1734,6 +2007,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
         }
@@ -1760,6 +2034,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
         }
@@ -1792,6 +2067,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
+                                            parallel_safe: false,
                     });
                 }
             }
@@ -1824,6 +2100,7 @@ impl Planner {
                         max_retries: 2,
                         reversible: false,
                         compensation: None,
+                                            parallel_safe: false,
                     });
                 }
             }
@@ -1850,6 +2127,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
+                                            parallel_safe: false,
                     });
                 }
                 if !failed_actions.contains(&format!("dump_sam_{}", host)) {
@@ -1869,6 +2147,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
+                                            parallel_safe: false,
                     });
                 }
             }
@@ -1902,6 +2181,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
+                                        parallel_safe: false,
                 });
             }
         }
@@ -1933,6 +2213,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
         }
 
@@ -1964,6 +2245,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
+                                    parallel_safe: false,
             });
         }
 

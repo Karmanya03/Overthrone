@@ -14,7 +14,7 @@
 
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 /// OPSEC configuration profile
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -554,13 +554,53 @@ pub fn prefer_kerberos_etype(preferred_etype: i32) -> i32 {
     }
 }
 
-/// Check if Credential Guard / VBS is enabled on a remote target.
-/// Returns `true` if VBS is likely enabled (skeleton key will fail).
+/// Check if Credential Guard / VBS is enabled on the local machine.
+/// Returns `true` if CG is likely enabled (skeleton key will fail).
+///
+/// Uses two methods:
+/// 1. Reads `HKLM\SYSTEM\CurrentControlSet\Control\Lsa\LsaCfgFlags` via reg.exe
+/// 2. Probes `\LsaIsoEndpoint` ALPC port as fallback
 #[cfg(target_os = "windows")]
 pub fn check_credential_guard() -> Result<bool> {
-    Err(OverthroneError::NotImplemented {
-        module: "check_credential_guard_local".to_string(),
-    })
+    use std::process::Command;
+
+    let lsa_cfg_flags = (|| -> Option<u32> {
+        let output = Command::new("reg")
+            .args([
+                "query",
+                r"HKLM\SYSTEM\CurrentControlSet\Control\Lsa",
+                "/v",
+                "LsaCfgFlags",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.contains("LsaCfgFlags")
+                && let Some(hex_str) = line.split_whitespace().last()
+            {
+                let hex_val = hex_str
+                    .strip_prefix("0x")
+                    .or_else(|| hex_str.strip_prefix("0X"))
+                    .unwrap_or(hex_str);
+                return u32::from_str_radix(hex_val, 16).ok();
+            }
+        }
+        None
+    })();
+
+    match lsa_cfg_flags {
+        Some(0) => Ok(false),
+        Some(1) | Some(2) => Ok(true),
+        _ => {
+            warn!("LsaCfgFlags unreadable or unexpected ({:?}), probing LSAISO", lsa_cfg_flags);
+            Ok(crate::postex::lsaiso::is_lsaiso_available())
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]

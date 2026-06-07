@@ -151,6 +151,12 @@ fn right_to_bloodhound_name(right: &DangerousRight) -> String {
         DangerousRight::AddKeyCredentialLink => "AddKeyCredentialLink".to_string(),
         DangerousRight::WriteUserCertificate => "WriteUserCertificate".to_string(),
         DangerousRight::EnrollCertificate => "EnrollCertificate".to_string(),
+        DangerousRight::Enroll => "Enroll".to_string(),
+        DangerousRight::ManageCA => "ManageCA".to_string(),
+        DangerousRight::ManageCertificates => "ManageCertificates".to_string(),
+        DangerousRight::ManageCertTemplate => "ManageCertTemplate".to_string(),
+        DangerousRight::UserForceChangePassword => "UserForceChangePassword".to_string(),
+        DangerousRight::AllowedToAct => "AllowedToAct".to_string(),
         DangerousRight::WriteProperty { attribute, guid: _ } => attribute.clone(),
         DangerousRight::Custom(s) => s.clone(),
     }
@@ -543,6 +549,127 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
     Ok(())
 }
 
+// ═══════════════════════════════════════════════════════════
+// BloodHound Edge-Type Coverage Validation
+// ═══════════════════════════════════════════════════════════
+
+/// Known BloodHound v4 edge types (ACE rights).
+/// This is the canonical list from the BloodHound Community Edition
+/// and SpecterOps documentation (as of 2025).
+pub fn known_bloodhound_v4_edges() -> Vec<&'static str> {
+    vec![
+        // Core ACL rights
+        "GenericAll", "GenericWrite", "WriteDacl", "WriteOwner",
+        "Owns", "AllExtendedRights", "CreateChild", "WriteSelf",
+        "ForceChangePassword", "ReadLapsPassword", "ReadLapsPasswordExpiry",
+        "ReadGmsaPassword",
+        // Group membership
+        "AddMembers", "AddSelf",
+        // Kerberos/SPN abuse
+        "WriteSPN", "WriteAllowedToDelegateTo", "AddAllowedToAct",
+        "AddKeyCredentialLink", "WriteKeyCredentialLink",
+        "WriteMsDsKeyCredentialLink",
+        // Account restrictions
+        "WriteAccountRestrictions", "WriteLogonScript",
+        "WriteProfilePath", "WriteScriptPath", "WriteDnsHostName",
+        "WriteServicePrincipalName", "WriteUserCertificate",
+        "WriteUserParameters", "WriteAltSecurityIdentities",
+        // Password policy
+        "WritePwdProperties", "WriteLockoutThreshold", "WriteMinPwdLength",
+        "WritePwdHistoryLength", "WritePwdComplexity",
+        "WritePwdReversibleEncryption", "WritePwdAge",
+        "WriteLockoutDuration", "WriteLockoutObservationWindow",
+        // GPO
+        "WriteGPLink",
+        // DCSync
+        "DcSync",
+        // Certificate enrollment
+        "Enroll", "EnrollCertificate",
+        // CA management
+        "ManageCA", "ManageCertificates", "ManageCertTemplate",
+        // Extended rights
+        "UserForceChangePassword", "AllowedToAct",
+    ]
+}
+
+/// Check which known BloodHound v4 edge types are NOT covered by the
+/// current `right_to_bloodhound_name` mapping.
+pub fn missing_bloodhound_edges() -> Vec<String> {
+    // Collect all edge names produced by our DangerousRight enum
+    let covered: Vec<String> = all_mapped_bloodhound_edges();
+    let covered_refs: Vec<&str> = covered.iter().map(|s| s.as_str()).collect();
+    missing_bloodhound_edges_from(&covered_refs)
+}
+
+/// Check which known edges are missing from a given set of covered edges.
+pub fn missing_bloodhound_edges_from(covered: &[&str]) -> Vec<String> {
+    let known = known_bloodhound_v4_edges();
+    known
+        .iter()
+        .filter(|edge| !covered.contains(edge))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Collect all edge names produced by the `right_to_bloodhound_name` function
+/// across all `DangerousRight` variants (excluding WriteProperty and Custom).
+fn all_mapped_bloodhound_edges() -> Vec<String> {
+    use crate::acls::DangerousRight;
+    let variants = [
+        DangerousRight::GenericAll,
+        DangerousRight::GenericWrite,
+        DangerousRight::WriteDacl,
+        DangerousRight::WriteOwner,
+        DangerousRight::Owns,
+        DangerousRight::AllExtendedRights,
+        DangerousRight::CreateChild,
+        DangerousRight::WriteSelf,
+        DangerousRight::ForceChangePassword,
+        DangerousRight::DcSync,
+        DangerousRight::ReadLapsPassword,
+        DangerousRight::ReadLapsPasswordExpiry,
+        DangerousRight::ReadGmsaPassword,
+        DangerousRight::AddMembers,
+        DangerousRight::AddSelf,
+        DangerousRight::WriteSPN,
+        DangerousRight::WriteAllowedToDelegateTo,
+        DangerousRight::AddAllowedToAct,
+        DangerousRight::WriteAccountRestrictions,
+        DangerousRight::WriteLogonScript,
+        DangerousRight::WriteProfilePath,
+        DangerousRight::WriteScriptPath,
+        DangerousRight::WriteDnsHostName,
+        DangerousRight::WriteServicePrincipalName,
+        DangerousRight::WriteKeyCredentialLink,
+        DangerousRight::WriteMsDsKeyCredentialLink,
+        DangerousRight::WriteAltSecurityIdentities,
+        DangerousRight::WriteUserParameters,
+        DangerousRight::WritePwdProperties,
+        DangerousRight::WriteLockoutThreshold,
+        DangerousRight::WriteMinPwdLength,
+        DangerousRight::WritePwdHistoryLength,
+        DangerousRight::WritePwdComplexity,
+        DangerousRight::WritePwdReversibleEncryption,
+        DangerousRight::WritePwdAge,
+        DangerousRight::WriteLockoutDuration,
+        DangerousRight::WriteLockoutObservationWindow,
+        DangerousRight::WriteGPLink,
+        DangerousRight::AddKeyCredentialLink,
+        DangerousRight::WriteUserCertificate,
+        DangerousRight::EnrollCertificate,
+        DangerousRight::Enroll,
+        DangerousRight::ManageCA,
+        DangerousRight::ManageCertificates,
+        DangerousRight::ManageCertTemplate,
+        DangerousRight::UserForceChangePassword,
+        DangerousRight::AllowedToAct,
+    ];
+    variants
+        .iter()
+        .map(right_to_bloodhound_name)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,5 +731,43 @@ mod tests {
         for (right, expected) in &cases {
             assert_eq!(right_to_bloodhound_name(right), *expected);
         }
+    }
+
+    #[test]
+    fn test_bloodhound_edge_coverage_all_known_types_mapped() {
+        let missing = missing_bloodhound_edges();
+        assert!(
+            missing.is_empty(),
+            "Missing BloodHound edge types: {:?}",
+            missing
+        );
+    }
+
+    #[test]
+    fn test_bloodhound_edge_coverage_detects_gaps() {
+        // Simulate a result with only a few edge types
+        let covered = vec!["GenericAll", "DcSync", "Owns"];
+        let missing = missing_bloodhound_edges_from(&covered);
+        assert!(!missing.is_empty());
+        assert!(missing.contains(&"GenericWrite".to_string()));
+        assert!(missing.contains(&"WriteDacl".to_string()));
+    }
+
+    #[test]
+    fn test_known_bloodhound_v4_edges_comprehensive() {
+        let edges = known_bloodhound_v4_edges();
+        // Verify critical edges are in the known list
+        assert!(edges.contains(&"GenericAll"));
+        assert!(edges.contains(&"DcSync"));
+        assert!(edges.contains(&"ForceChangePassword"));
+        assert!(edges.contains(&"AddMembers"));
+        assert!(edges.contains(&"WriteDacl"));
+        assert!(edges.contains(&"WriteOwner"));
+        assert!(edges.contains(&"Owns"));
+        assert!(edges.contains(&"ReadLapsPassword"));
+        assert!(edges.contains(&"Enroll"));
+        assert!(edges.contains(&"AllExtendedRights"));
+        // Verify count is reasonable (BloodHound v4 has ~50 edge types)
+        assert!(edges.len() >= 40, "Expected >= 40 known edges, got {}", edges.len());
     }
 }

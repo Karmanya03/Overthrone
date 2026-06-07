@@ -85,27 +85,41 @@ pub fn decrypt_gpp_password(cpassword: &str) -> Result<String> {
 
 /// Parse a GPP XML file and extract all credentials with their
 /// decrypted passwords.
+///
+/// Supports all known GPP XML attribute patterns for usernames:
+/// - `userName` (Groups.xml, ScheduledTasks.xml, Drives.xml)
+/// - `runAs` (Services.xml)
+/// - `accountName` (DataSources.xml, Printers.xml)
+/// - `sUserName` (Shortcuts.xml)
+/// - `userContext` (Registry.xml, NetworkOptions.xml)
+/// - `name` (fallback for ScheduledTasks.xml task-level elements)
+///
+/// Also handles base64-encoded password blobs in `cpassword` and
+/// `password` attributes (some GPP variants store raw base64).
 pub fn parse_gpp_xml(xml_content: &str, source_file: &str) -> Vec<GppCredential> {
     let mut creds = Vec::new();
 
-    // Simple XML parsing — look for cpassword and userName attributes
-    // GPP XML uses attributes like: userName="..." cpassword="..." changed="..."
-    // We parse this without a full XML parser for minimal dependencies
     for line in xml_content.lines() {
         let line = line.trim();
-        if !line.contains("cpassword=") {
-            continue;
-        }
 
-        let username = extract_xml_attr(line, "userName")
-            .or_else(|| extract_xml_attr(line, "runAs"))
-            .or_else(|| extract_xml_attr(line, "accountName"))
-            .unwrap_or_default();
+        // Check for cpassword attribute (standard GPP)
+        let cpassword = extract_xml_attr(line, "cpassword")
+            .or_else(|| extract_xml_attr(line, "password"));
 
-        let cpassword = match extract_xml_attr(line, "cpassword") {
+        let cpassword = match cpassword {
             Some(cp) if !cp.is_empty() => cp,
             _ => continue,
         };
+
+        // Try all known username attribute names across GPP XML variants
+        let username = extract_xml_attr(line, "userName")
+            .or_else(|| extract_xml_attr(line, "runAs"))
+            .or_else(|| extract_xml_attr(line, "accountName"))
+            .or_else(|| extract_xml_attr(line, "sUserName"))
+            .or_else(|| extract_xml_attr(line, "userContext"))
+            .or_else(|| extract_xml_attr(line, "targetName"))
+            .or_else(|| extract_xml_attr(line, "name"))
+            .unwrap_or_default();
 
         let changed = extract_xml_attr(line, "changed").unwrap_or_default();
 
@@ -193,5 +207,90 @@ mod tests {
         // Empty cpassword should produce no results
         let creds = parse_gpp_xml(xml, "Groups.xml");
         assert!(creds.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gpp_services_xml_runas() {
+        // Services.xml uses `runAs` attribute instead of `userName`
+        let xml = r#"<NTService clsid="{2CFB484A-4E96-4b5d-A0B6-093D2F91E6AE}">
+  <Properties name="wuauserv" runAs="svc_account" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-06-15 10:00:00" />
+</NTService>"#;
+        let creds = parse_gpp_xml(xml, "Services.xml");
+        // Should find the credential via runAs attribute
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].username, "svc_account");
+        assert_eq!(creds[0].source_file, "Services.xml");
+    }
+
+    #[test]
+    fn test_parse_gpp_datasources_xml_accountname() {
+        // DataSources.xml uses `accountName` attribute
+        let xml = r#"<DataSource clsid="{some-guid}">
+  <Properties dsn="SQL" accountName="db_admin" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-01-01" />
+</DataSource>"#;
+        let creds = parse_gpp_xml(xml, "DataSources.xml");
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].username, "db_admin");
+    }
+
+    #[test]
+    fn test_parse_gpp_shortcuts_xml_susername() {
+        // Shortcuts.xml uses `sUserName` attribute
+        let xml = r#"<Shortcut clsid="{some-guid}">
+  <Properties sUserName="shortcut_user" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-03-15" />
+</Shortcut>"#;
+        let creds = parse_gpp_xml(xml, "Shortcuts.xml");
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].username, "shortcut_user");
+    }
+
+    #[test]
+    fn test_parse_gpp_registry_xml_usercontext() {
+        // Registry.xml uses `userContext` attribute
+        let xml = r#"<Registry clsid="{some-guid}">
+  <Properties userContext="reg_user" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-05-20" />
+</Registry>"#;
+        let creds = parse_gpp_xml(xml, "Registry.xml");
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].username, "reg_user");
+    }
+
+    #[test]
+    fn test_parse_gpp_password_attribute_fallback() {
+        // Some GPP variants use `password` instead of `cpassword`
+        let xml = r#"<Properties userName="fallback_user" password="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-07-01" />"#;
+        let creds = parse_gpp_xml(xml, "Unknown.xml");
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].username, "fallback_user");
+    }
+
+    #[test]
+    fn test_parse_gpp_xml_multiple_credentials() {
+        let xml = r#"<?xml version="1.0"?>
+<Groups>
+  <User name="Admin1">
+    <Properties userName="admin1" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-01-01" />
+  </User>
+  <User name="Admin2">
+    <Properties userName="admin2" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-02-01" />
+  </User>
+  <User name="Empty">
+    <Properties userName="empty" cpassword="" changed="2023-03-01" />
+  </User>
+</Groups>"#;
+        let creds = parse_gpp_xml(xml, "Groups.xml");
+        // Should find 2 credentials (empty cpassword skipped)
+        assert_eq!(creds.len(), 2);
+        assert_eq!(creds[0].username, "admin1");
+        assert_eq!(creds[1].username, "admin2");
+    }
+
+    #[test]
+    fn test_parse_gpp_name_fallback() {
+        // When no specific username attr exists, falls back to `name`
+        let xml = r#"<Task name="scheduled_admin" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw" changed="2023-08-01" />"#;
+        let creds = parse_gpp_xml(xml, "ScheduledTasks.xml");
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].username, "scheduled_admin");
     }
 }

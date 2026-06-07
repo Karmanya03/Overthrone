@@ -276,7 +276,7 @@ pub struct ResponderConfig {
 impl Default for ResponderConfig {
     fn default() -> Self {
         Self {
-            listen_ip: "0.0.0.0".to_string(),
+            listen_ip: "::".to_string(),
             challenge: Some("1122334455667788".to_string()),
             http: true,
             smb: true,
@@ -1664,7 +1664,7 @@ mod tests {
     #[test]
     fn test_responder_config_default() {
         let config = ResponderConfig::default();
-        assert_eq!(config.listen_ip, "0.0.0.0");
+        assert_eq!(config.listen_ip, "::");
         assert!(config.http);
         assert!(config.smb);
         assert_eq!(config.challenge, Some("1122334455667788".to_string()));

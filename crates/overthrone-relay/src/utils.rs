@@ -4,10 +4,13 @@
 //! challenge generation, and response validation using
 //! the full NTLMv2 implementation from overthrone-core.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
-use crate::{NtlmChallenge, NtlmResponse, Result};
+use crate::{NtlmChallenge, NtlmResponse, RelayError, Result};
 use overthrone_core::proto::ntlm;
+use tokio::net::TcpStream;
+use tokio_socks::tcp::socks5::Socks5Stream;
 
 /// Format an IP address and port into a `host:port` string
 /// suitable for `TcpStream::connect` or `TcpListener::bind`.
@@ -18,6 +21,51 @@ pub fn format_addr(ip: &str, port: u16) -> String {
     match ip.parse::<IpAddr>() {
         Ok(IpAddr::V6(_)) => format!("[{ip}]:{port}"),
         _ => format!("{ip}:{port}"),
+    }
+}
+
+/// Connect to a target address, optionally via SOCKS5 proxy.
+/// When `socks5` is `Some`, routes through the SOCKS5 proxy at `host:port`.
+/// Otherwise connects directly via TCP.
+pub async fn socks5_connect(
+    target: SocketAddr,
+    timeout: Duration,
+    socks5: Option<&str>,
+) -> std::result::Result<TcpStream, RelayError> {
+    match socks5 {
+        Some(proxy) => {
+            let proxy_addr: SocketAddr = proxy.parse().map_err(|e| {
+                RelayError::Config(format!("Invalid SOCKS5 proxy '{}': {}", proxy, e))
+            })?;
+            let socks5_stream = tokio::time::timeout(
+                timeout,
+                Socks5Stream::connect(proxy_addr, target),
+            )
+            .await
+            .map_err(|_| {
+                RelayError::Connection(format!(
+                    "Timeout connecting to {} via SOCKS5 proxy {}",
+                    target, proxy
+                ))
+            })?
+            .map_err(|e| {
+                RelayError::Connection(format!(
+                    "SOCKS5 connect to {} via {}: {}",
+                    target, proxy, e
+                ))
+            })?;
+            Ok(socks5_stream.into_inner())
+        }
+        None => {
+            tokio::time::timeout(timeout, TcpStream::connect(target))
+                .await
+                .map_err(|_| {
+                    RelayError::Connection(format!("Timeout connecting to {}", target))
+                })?
+                .map_err(|e| {
+                    RelayError::Connection(format!("Connect to {}: {}", target, e))
+                })
+        }
     }
 }
 

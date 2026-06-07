@@ -10,9 +10,11 @@
 //! - `mitigations` — Remediation recommendations per finding type
 //! - `narrative`    — Human-readable narrative generation for findings
 //! - `markdown`    — Markdown report renderer
+//! - `html`        — HTML report renderer (standalone, embedded CSS)
 //! - `pdf`         — PDF report renderer (via printpdf)
 //! - `runner`      — Top-level report generation orchestrator
 
+pub mod html;
 pub mod mapper;
 pub mod markdown;
 pub mod mitigations;
@@ -27,7 +29,7 @@ pub use runner::{
     ReportConfig, ReportFormat, ReportOutput, generate_from_file, generate_from_session,
     generate_report, load_session, merge_sessions, save_session,
 };
-pub use session::{EngagementSession, Finding, Severity};
+pub use session::{EngagementSession, EvidenceItem, Finding, OperatorMetadata, Severity, TimelineDay};
 
 #[cfg(test)]
 mod tests {

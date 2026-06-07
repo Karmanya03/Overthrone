@@ -30,7 +30,50 @@ cargo clippy --workspace --lib --bins -- -D warnings
 
 ## Completed Tasks (Honest Account)
 
-### From S-Rank Plan (this session — 13 tasks ticked off)
+### From S-Rank Plan (this session — CLI completion: 5 tasks)
+
+18. **cli #2 — Config file loading (TOML, XDG-style)** (DONE):
+    - `cli_config.rs` expanded to 1111 lines with full CRUD operations
+    - `CliConfig` struct: 17 fields with `Serialize`/`Deserialize`
+    - Functions: `load_config()`, `save_config()`, `set_value()`, `unset_value()`, `display()` (masks secrets)
+    - XDG-aware path resolution: `$XDG_CONFIG_HOME/overthrone/config.toml` (Linux), `%APPDATA%\overthrone\config.toml` (Windows)
+    - Precedence: CLI flag > env var > config file > built-in default
+    - `CONFIG_KEYS` registry (17 keys) with per-key validation
+    - 39 unit tests: parse_minimal/parse_full/parse_unknown_keys_ignored, save_then_load_roundtrip, save_creates_parent_dir, set/unset value, validation of auth_method/stdout_format/verbose/bool parsing, display masks secrets, mask_secret short strings, default_config_path
+    - `ovt config` subcommand with 8 actions: `init`, `show`, `path`, `set`, `unset`, `edit`, `save`, `profile`
+
+19. **cli #3 — Profile system** (DONE):
+    - Named profiles at `<config_dir>/profiles/<NAME>.toml`
+    - Honor `OT_CONFIG` and `OT_PROFILE` env vars for custom config/profile locations
+    - Functions: `load_profile()`, `save_profile()`, `delete_profile()`, `list_profiles()`, `clone_profile()`, `validate_profile_name()`, `active_profile()`, `profile_exists()`, `default_profiles_dir()`
+    - Profile name validation: rejects path traversal, >64 chars, control chars, path separators
+    - 14 unit tests: name validation (accept/reject/path-traversal/too-long/invalid-chars), profile path, save/load roundtrip, load returns default when missing, active_profile reads env, list_profiles empty dir, delete rejects missing, profile_exists rejects invalid, clone roundtrip
+    - `ovt config profile` subcommand with 9 actions: `list`, `show`, `create`, `set`, `unset`, `delete`, `use`, `clone`, `path`
+    - 31 new tests in `commands::config`: profile_create_refuse/force/rejects_invalid_name, profile_list, profile_show_missing/existing/requires_name, profile_delete_missing/removes_existing, profile_use_prints/warns, profile_clone_copies/rejects_existing/rejects_invalid, profile_path_resolvable/requires_env, profile_set creates/replaces/rejects_unknown_key/validates_auth_method/validates_stdout_format/parses_bool/parses_verbose, profile_unset clears/rejects_unknown/errors_when_missing/handles_all_field_types, profile_action_dispatch_handles_all_variants, profile_path_for rejects_invalid, current_profiles_dir_is_under_config_dir
+    - Config merge refactored to `apply_config_layer()` helper: CLI flag > env > active profile > main config > default
+
+20. **cli #5 — TUI audit complete** (DONE):
+    - Verified 6 TUI modules: `app`, `event`, `graph_view`, `runner`, `ui`, `mod`
+    - All wired to `ovt tui` command via `cmd_tui()` in `commands_impl.rs`
+    - Supports two modes: live crawler (with credentials) and view-only (graph display)
+    - Graph loading from JSON files via `AttackGraph::from_json_file()`
+    - `graph_view.rs` (1741 lines): Full attack graph visualization with node/edge rendering
+    - `runner.rs`: Terminal setup with crossterm, 30 FPS rendering loop
+    - `app.rs`: Application state management with tabs
+    - `ui.rs`: Layout and widget rendering
+    - `event.rs`: Keyboard/mouse event handling
+
+21. **cli #4 — Interactive shell mode for forge** (DONE):
+    - `interactive_shell.rs` (3263 lines): Full REPL with rustyline
+    - Features: tab completion, command history, syntax highlighting, validator
+    - Forge modules: `forge/golden`, `forge/silver`, `forge/diamond`, `forge/skeleton`
+    - Module system: `use <module>`, `set <option> <value>`, `unset <option>`, `run`
+    - Additional commands: help, connect, disconnect, exec, enum, kerberos, smb, graph, reaper, exit, quit, clear, history, whoami, hostname, pwd, ls, cd, upload, download, info, sessions, bg, fg, log, spawn, pivot, migrate, steal_token, rev2self, getuid, getpid, ps
+    - Wired to `ovt shell` command via `cmd_shell()` in `commands_impl.rs`
+    - Supports WinRM, SMB, WMI shell types via `ShellType` enum
+    - Module context tracking with required options validation
+
+### From S-Rank Plan (previous session — 13 tasks ticked off)
 
 1. **relay #1 — LDAPS TLS wrapping** (DONE):
    - Added `RelayStreamType` enum (Plain/Tls variant) to `relay.rs`
@@ -134,7 +177,15 @@ cargo clippy --workspace --lib --bins -- -D warnings
       real `~/.overthrone/sessions/corp.local-1.1.1.1.json` — works end-to-end
     - All 1262 tests pass, clippy `-D warnings` clean
 
-16. **hunter #2 — Kerberoast pre-auth check test coverage** (DONE):
+16. **relay #4 — SOCKS5 proxy for ADCS relay** (DONE):
+    - Added `socks5_proxy: Option<String>` to `AdcsRelayConfig`
+    - Added `socks5_proxy: Option<&str>` parameter to `process_ntlm_relay()`
+    - Added `socks5_proxy: Option<String>` parameter to `handle_client()`
+    - Wired `socks5_proxy` clone through `run()` spawn loop
+    - Replaced `TcpStream::connect` in ADCS relay path with `utils::socks5_connect()`
+    - All 73 relay tests pass
+
+17. **hunter #2 — Kerberoast pre-auth check test coverage** (DONE):
     - **Reality check**: doc claimed the check at `kerberoast.rs:158` uses the "wrong flag".
       Verified: `AdUser.dont_req_preauth` is populated by `parse_ad_user` from
       `uac & UAC_DONT_REQ_PREAUTH` (0x400000 = 4194304 = UF_DONT_REQUIRE_PREAUTH).
@@ -258,11 +309,12 @@ These are the items from `technical_debt_and_flaws.md` S-Rank plan that have NOT
 - ⬜ **S4U2Self-with-PKINIT cert chain**: Certificate-based S4U2Self delegation
 - ⬜ **AS-REP hash → usable ticket pipeline**: Convert AS-REP hashes into working tickets
 
-### overthrone-cli (2 items, ~28h estimated)
+### overthrone-cli (ALL COMPLETE)
 - ✅ ~~**session_store.rs move to pilot**~~ (DONE — task 15)
-- ✅ ~~**Config file loading**~~ (DONE — task 17a, TOML only, no YAML)
-- ✅ ~~**Profile system**~~ (DONE — task 17b, named profiles at `<config_dir>/profiles/<NAME>.toml`)
-- ⬜ **Interactive shell mode for forge**: Shell-like REPL for forge operations
+- ✅ ~~**Config file loading**~~ (DONE — task 18, 1111 lines, 39 tests, TOML/XDG)
+- ✅ ~~**Profile system**~~ (DONE — task 19, 9 subcommands, 31 tests, OT_CONFIG/OT_PROFILE)
+- ✅ ~~**Interactive shell mode for forge**~~ (DONE — task 21, 3263 lines, rustyline REPL)
+- ✅ ~~**TUI audit**~~ (DONE — task 20, 6 modules, cmd_tui wired)
 
 ### overthrone-hunter (1 item)
 - ⬜ **Kerberoast pre-auth check fix**: Wrong flag in pre-auth check (detected in earlier audit)
@@ -314,25 +366,26 @@ crates/
   overthrone-hunter/src/
     kerberoast.rs       — KerberoastConfig::downgrade_to_rc4
   overthrone-cli/src/
-    main.rs             — 11 ForgeAction variants, --dry-run global flag, --output-format json,
-                          --downgrade-rc4 flag (renamed from --opsec), unreachable!() removed,
-                          +Session subcommand (list/show/delete/clean/path/stats/info),
-                          +Config subcommand dispatch
-    cli_config.rs       — CliConfig struct (17 fields, Serialize/Deserialize),
-                          save_config/set_value/unset_value/display with secret masking,
-                          default_config_path (XDG-aware), CONFIG_KEYS registry, 39 unit tests
-                          + profile system: load/save/delete/list/clone/validate,
-                          default_profiles_dir, active_profile, OT_CONFIG/OT_PROFILE env support
+    main.rs             — 6,333 lines, clap-based, all subcommands parse, mod tui, mod interactive_shell
+    cli_config.rs       — 1111 lines: CliConfig (17 fields), load/save/set/unset/display,
+                          CONFIG_KEYS registry, profile system (load/save/delete/list/clone/validate),
+                          default_config_path (XDG-aware), OT_CONFIG/OT_PROFILE env support, 39+14 tests
     commands_impl.rs    — build_runner_action returns Result, run_forge_action prints ticket details,
-                          JSON output support for forge
-    commands/config.rs  — NEW: ConfigArgs/ConfigAction (init/show/path/set/unset/edit/save
-                          + profile subcommand with 7 actions: list/show/create/set/unset/delete/use/clone/path),
-                          aliased as `ovt cfg`, 45 unit tests
-    commands/session.rs — SessionArgs/SessionAction, 12 unit tests
-    commands/wizard.rs  — WizardSession::new() Result handling, --from-session <NAME> resume path
-    auth.rs             — FromStr for AuthMethod (was missing), PartialEq added
+                          JSON output support for forge, cmd_tui (crawler + view-only modes),
+                          cmd_shell (interactive REPL entry point)
+    commands/config.rs  — 1400 lines: ConfigArgs/ConfigAction (init/show/path/set/unset/edit/save
+                          + profile subcommand with 9 actions: list/show/create/set/unset/delete/use/clone/path),
+                          aliased as `ovt cfg`, 31 unit tests
+    interactive_shell.rs — 3263 lines: Full REPL with rustyline, tab completion, history,
+                          syntax highlighting, forge/golden|silver|diamond|skeleton modules,
+                          use/set/unset/run commands, WinRM/SMB/WMI shell types
     tui/
-      graph_view.rs     — edge_color, edge_severity, edge_ovt_command, edge_operator_note updated
+      mod.rs            — 6 modules: app, event, graph_view, runner, ui
+      app.rs            — Application state management with tabs
+      event.rs          — Keyboard/mouse event handling
+      graph_view.rs     — 1741 lines: Attack graph visualization with node/edge rendering
+      runner.rs         — Terminal setup (crossterm), 30 FPS rendering loop, crawler integration
+      ui.rs             — Layout and widget rendering
   overthrone-pilot/src/
     runner.rs           — AutoPwnConfig::validate() added
     session.rs          — save_session, load_session, auto_session_path, session_path (was pre-existing)

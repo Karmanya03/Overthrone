@@ -158,6 +158,9 @@ pub async fn run(
             skip_dns: args.no_dc_verify_dns,
             ..Default::default()
         },
+        enable_concurrent: false,
+        opsec_profile: overthrone_pilot::planner::OpsecProfile::default(),
+        multi_dc: overthrone_pilot::planner::MultiDcConfig::default(),
     };
 
     let pilot_domain_display = match creds {

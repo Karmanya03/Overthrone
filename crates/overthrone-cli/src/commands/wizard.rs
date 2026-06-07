@@ -237,6 +237,9 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
             skip_dns: args.no_dc_verify_dns,
             ..Default::default()
         },
+        enable_concurrent: false,
+        opsec_profile: overthrone_pilot::planner::OpsecProfile::default(),
+        multi_dc: overthrone_pilot::planner::MultiDcConfig::default(),
     };
 
     let mut session = WizardSession::new(config, Some(args.checkpoint_dir))
@@ -379,6 +382,9 @@ async fn resume_from_saved_session(args: &WizardArgs, session_name: &str) -> any
             skip_dns: args.no_dc_verify_dns,
             ..Default::default()
         },
+        enable_concurrent: false,
+        opsec_profile: overthrone_pilot::planner::OpsecProfile::default(),
+        multi_dc: overthrone_pilot::planner::MultiDcConfig::default(),
     };
 
     let mut session =

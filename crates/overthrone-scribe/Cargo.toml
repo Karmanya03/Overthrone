@@ -22,6 +22,9 @@ base64.workspace = true
 # PDF generation
 printpdf = "0.9.1"
 
+# Evidence hashing
+sha2.workspace = true
+
 [dev-dependencies]
 tokio-test.workspace = true
 pretty_assertions.workspace = true

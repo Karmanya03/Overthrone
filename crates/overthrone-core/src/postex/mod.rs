@@ -13,6 +13,7 @@
 pub mod cg_check;
 pub mod cves;
 pub mod edr_bypass;
+pub mod lsaiso;
 pub mod opsec;
 pub mod skeleton_key;
 pub mod skeleton_key_dll;
@@ -39,6 +40,10 @@ pub use opsec::{
     SyscallResult, apply_opsec, check_credential_guard, contains_honeypot_attrs,
     early_bird_apc_injection, module_stomping_injection, patch_amsi, prefer_kerberos_etype,
     process_hollowing_injection, resolve_syscall_numbers, strip_honeypot_attrs, suppress_etw,
+};
+pub use lsaiso::{
+    LsaIsoCredType, LsaIsoCredential, LsaIsoExtractionResult, LsaIsoExtractionStats,
+    LsaIsoOpCode, extract_credentials_via_lsaiso, is_lsaiso_available,
 };
 pub use skeleton_key::{
     DEFAULT_SKELETON_KEY, DeploymentMethod, SkeletonKeyConfig, SkeletonKeyExploiter,

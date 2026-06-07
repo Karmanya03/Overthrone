@@ -1,6 +1,7 @@
 //! Report runner — Top-level orchestrator that drives report generation.
 //! Takes an engagement session and produces output in the requested format.
 
+use crate::html;
 use crate::markdown;
 use crate::pdf;
 use crate::session::EngagementSession;
@@ -24,6 +25,8 @@ pub enum ReportFormat {
     Pdf,
     /// `Json` variant
     Json,
+    /// `Html` variant
+    Html,
     /// `All` variant
     All,
 }
@@ -34,6 +37,7 @@ impl std::fmt::Display for ReportFormat {
             Self::Markdown => write!(f, "Markdown"),
             Self::Pdf => write!(f, "PDF"),
             Self::Json => write!(f, "JSON"),
+            Self::Html => write!(f, "HTML"),
             Self::All => write!(f, "All Formats"),
         }
     }
@@ -238,10 +242,15 @@ pub async fn generate_from_session(
             let path = generate_json(session, config).await?;
             output.files.push(path);
         }
+        ReportFormat::Html => {
+            let path = generate_html(session, config).await?;
+            output.files.push(path);
+        }
         ReportFormat::All => {
             output.files.push(generate_markdown(session, config).await?);
             output.files.push(generate_pdf(session, config).await?);
             output.files.push(generate_json(session, config).await?);
+            output.files.push(generate_html(session, config).await?);
         }
     }
 
@@ -341,6 +350,25 @@ async fn generate_json(
         "✓".green(),
         path.display(),
         json_session.len() as f64 / 1024.0
+    );
+    Ok(path)
+}
+
+async fn generate_html(
+    session: &EngagementSession,
+    config: &ReportConfig,
+) -> anyhow::Result<PathBuf> {
+    let content = html::render(session);
+    let path = config
+        .output_dir
+        .join(format!("{}.html", config.filename_base));
+
+    tokio::fs::write(&path, &content).await?;
+    info!(
+        "  {} HTML: {} ({:.1} KB)",
+        "✓".green(),
+        path.display(),
+        content.len() as f64 / 1024.0
     );
     Ok(path)
 }

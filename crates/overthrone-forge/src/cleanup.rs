@@ -520,6 +520,20 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
             indicators: vec![],
             mitigations: vec![],
         },
+        ForgeAction::AsRepToTgt { .. } => DetectionAssessment {
+            overall_risk: RiskLevel::Low,
+            description: "AS-REP to TGT request is a normal AS-REQ, low detection risk".into(),
+            indicators: vec![
+                DetectionIndicator {
+                    source: "Event ID 4768".into(),
+                    detail: "Normal AS-REQ with valid credentials — indistinguishable from legitimate auth".into(),
+                    severity: RiskLevel::VeryLow,
+                },
+            ],
+            mitigations: vec![
+                "Request TGT during business hours to blend with normal traffic".into(),
+            ],
+        },
     }
 }
 

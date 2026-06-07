@@ -391,6 +391,18 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
         crate::runner::ForgeAction::ConvertTicket { .. } => {
             // No validation needed — offline operation
         }
+        crate::runner::ForgeAction::AsRepToTgt { cracked_password } => {
+            if cracked_password.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "Cracked AS-REP password must not be empty".into(),
+                ));
+            }
+            if config.username.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "Username required for AS-REP to TGT conversion".into(),
+                ));
+            }
+        }
     }
 
     debug!("ForgeConfig validation passed");

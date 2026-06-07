@@ -216,14 +216,12 @@ impl RateLimiter {
 /// Per-user rate limiter keyed by (username, IpAddr).
 /// Allows the same user from different IPs, or different users from the same IP,
 /// to have independent rate limit counters.
-#[allow(dead_code)]
 struct UserRateLimiter {
     window: Duration,
     max_requests: u32,
     buckets: Mutex<HashMap<(String, IpAddr), (Instant, u32)>>,
 }
 
-#[allow(dead_code)]
 impl UserRateLimiter {
     fn new(window_secs: u64, max_requests: u32) -> Self {
         Self {
@@ -251,22 +249,20 @@ impl UserRateLimiter {
 }
 
 /// A user session with bearer-token auth.
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct SessionInfo {
+    #[allow(dead_code)]
     token: String,
     username: String,
     created_at: Instant,
 }
 
 /// Session store that auto-cleans expired tokens on access.
-#[allow(dead_code)]
 struct SessionStore {
     sessions: Mutex<HashMap<String, SessionInfo>>,
     session_ttl: Duration,
 }
 
-#[allow(dead_code)]
 impl SessionStore {
     fn new(ttl_secs: u64) -> Self {
         Self {
@@ -276,6 +272,7 @@ impl SessionStore {
     }
 
     /// Create a new session for the given username and return a bearer token.
+    #[allow(dead_code)]
     async fn create_session(&self, username: &str) -> String {
         use rand::RngExt;
         let mut rng = rand::rngs::ThreadRng::default();
@@ -319,9 +316,7 @@ struct AppState {
     cache: RwLock<HashMap<String, Arc<ViewerGraph>>>,
     config: ViewerConfig,
     rate_limiter: RateLimiter,
-    #[allow(dead_code)]
     user_rate_limiter: UserRateLimiter,
-    #[allow(dead_code)]
     sessions: SessionStore,
 }
 
@@ -3424,19 +3419,31 @@ async fn auth_middleware(
     Err(StatusCode::UNAUTHORIZED)
 }
 
+
 /// Rate limiting middleware — checks per-IP request counts against the
-/// configured window and maximum.
+/// configured window and maximum. Also applies per-user rate limits when
+/// a bearer token is present.
 async fn rate_limit_middleware(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
     next: Next,
 ) -> Result<impl IntoResponse, StatusCode> {
-    if state.rate_limiter.check(addr.ip()).await {
-        Ok(next.run(req).await)
-    } else {
-        Err(StatusCode::TOO_MANY_REQUESTS)
+    // Per-IP rate limit (always applied)
+    if !state.rate_limiter.check(addr.ip()).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
     }
+
+    // Per-user rate limit (when session token is present)
+    if let Some(auth_header) = req.headers().get("authorization").and_then(|v| v.to_str().ok())
+        && let Some(token) = auth_header.strip_prefix("Bearer ")
+        && let Some(username) = state.sessions.validate_token(token).await
+        && !state.user_rate_limiter.check(&username, addr.ip()).await
+    {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    Ok(next.run(req).await)
 }
 
 /// CSRF middleware — requires `X-CSRF-Token` header on POST/PUT/DELETE.

