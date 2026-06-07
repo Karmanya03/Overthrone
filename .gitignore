@@ -1,173 +1,42 @@
-# ═══════════════════════════════════════════════════════════
-# Rust / Cargo
-# ═══════════════════════════════════════════════════════════
-/target/
-**/*.rs.bk
-# NOTE: Cargo.lock is NOT ignored — it must be committed for
-# binary crates to ensure reproducible builds across CI/CD.
-
-# ═══════════════════════════════════════════════════════════
-# Build Artifacts
-# ═══════════════════════════════════════════════════════════
+﻿# Build artifacts
+target/
 *.pdb
-*.exe
 *.dll
-*.dylib
-*.so
-*.d
-*.o
-*.obj
-*.lib
-*.rlib
+*.exe
 
-# ═══════════════════════════════════════════════════════════
-# IDE / Editor
-# ═══════════════════════════════════════════════════════════
+# IDE
 .vscode/settings.json
-.vscode/launch.json
-.vscode/*.code-workspace
+.vscode/overthrone_auditV2.md
 .idea/
 *.swp
 *.swo
-*~
-.agent/
-.agents/
 
-# ═══════════════════════════════════════════════════════════
-# OS Generated
-# ═══════════════════════════════════════════════════════════
+# OS
 .DS_Store
 Thumbs.db
-Desktop.ini
-ehthumbs.db
 
-# ═══════════════════════════════════════════════════════════
-# Environment / Secrets
-# ═══════════════════════════════════════════════════════════
-.env
-.env.*
-*.key
-*.pem
-*.pfx
-*.crt
-*.p12
-
-# ═══════════════════════════════════════════════════════════
-# Overthrone — Output & Loot
-# ═══════════════════════════════════════════════════════════
-/output/
-/loot/
-/reports/
-/sessions/
-*.pdf
-*.html.report
-*.json.report
-
-# ═══════════════════════════════════════════════════════════
-# Overthrone — Runtime / Engagement State Files
-# ═══════════════════════════════════════════════════════════
+# Personal/Planning files (not for GitHub)
+.opencode/
+plans/
+*=
 q_table.json
-engagement.json
+clippy*.txt
+hex_dump.txt
 
-# ═══════════════════════════════════════════════════════════
-# Overthrone — Credential & Dump Files
-# ═══════════════════════════════════════════════════════════
-*.ntds
-*.dit
-*.sam
-*.system
-*.security
-*.dmp
-*hashdump*
-*.kirbi
-*.ccache
-cracked_credentials.txt
-*cracked*.txt
+# Personal MD files
+INTERVIEW_PREP_ANZ.md
+comprehensive_audit_report.md
+technical_debt_and_flaws.md
+DAILY_UPDATE_REPORT.md
+PLAN.md
+ROADMAP.md
+COMMAND-LIST.md
 
-# ═══════════════════════════════════════════════════════════
-# Overthrone — Payloads & Staging
-# ═══════════════════════════════════════════════════════════
-/payloads/
-/staging/
-*.bin
-*.shellcode
+# Docs folder (internal docs, not for public repo)
+docs/
 
-# ═══════════════════════════════════════════════════════════
-# Logs & Debug
-# ═══════════════════════════════════════════════════════════
-*.log
-*.trace
-/logs/
-check.json
-check.txt
-check_errors.txt
-err.json
-err.log
-err2.txt
-error.log
-errors.txt
+# Reports
+reports/
 
-# ═══════════════════════════════════════════════════════════
-# Test Lab / Vagrant / Docker
-# ═══════════════════════════════════════════════════════════
-.vagrant/
-docker-compose.override.yml
-*.vmdk
-*.ova
-*.ovf
-# CodeBuddy
-.codebuddy/*
-!.codebuddy/skills/
-!.codebuddy/rules/
-!.codebuddy/prompts/
-!.codebuddy/config.json
-
-# Agent config directories
-.agent/
-.agents/
-
-# ═══════════════════════════════════════════════════════════
-# Kiro IDE / Spec Files (Local Development)
-# ═══════════════════════════════════════════════════════════
-.kiro/
-
-# ═══════════════════════════════════════════════════════════
-# Temporary Build Check Files
-# ═══════════════════════════════════════════════════════════
-cargo_check_output.txt
-cargo_cli_check.txt
-cargo_errors.txt
-check_*.txt
-build_errors*.txt
-clippy_output.txt
-*_output.txt
-**/output.txt
-warnings*.txt
-
-# ═══════════════════════════════════════════════════════════
-# Stale / Duplicate Directories
-# ═══════════════════════════════════════════════════════════
-# Root-level overthrone-cli/ is a stale duplicate — the real
-# CLI crate lives at crates/overthrone-cli/
-/overthrone-cli/
-
-# ═══════════════════════════════════════════════════════════
-# Internal Planning Docs (not shipped)
-# ═══════════════════════════════════════════════════════════
-implementation_plan.md
-IMPLEMENTATION_STATUS.md
-TODO.md
-PLAN-*.md
-Overthrone Deep Implementation Plan.md
-docs/PLAN-*.md
-
-# ═══════════════════════════════════════════════════════════
-# Dev-only / Scaffolding Scripts & Test Binaries
-# ═══════════════════════════════════════════════════════════
-setup.ps1
-crates/overthrone-core/src/bin/test_pfx.rs
-
-# ═══════════════════════════════════════════════════════════
-# Redundant Assets (only .zst compressed version is used)
-# ═══════════════════════════════════════════════════════════
-assets/wordlist_top10k.txt
+# Cargo lock (optional - uncomment if you want to ignore)
+# Cargo.lock
