@@ -109,62 +109,113 @@ Overthrone is a Rust workspace with 10 crates, because monoliths are for cathedr
 
 ```mermaid
 flowchart TB
-    subgraph L1["User Interface"]
-        CLI["overthrone-cli<br/>CLI · TUI · REPL"]
+    %% Modern styling with gradients and shadows
+    classDef userInterface fill:#6366f1,color:#fff,stroke:#4f46e5,stroke-width:2px,rx:8px,ry:8px
+    classDef orchestrator fill:#8b5cf6,color:#fff,stroke:#7c3aed,stroke-width:2px,rx:8px,ry:8px
+    classDef recon fill:#06b6d4,color:#fff,stroke:#0891b2,stroke-width:2px,rx:8px,ry:8px
+    classDef core fill:#ef4444,color:#fff,stroke:#dc2626,stroke-width:3px,rx:10px,ry:10px
+    classDef attack fill:#f59e0b,color:#000,stroke:#d97706,stroke-width:2px,rx:8px,ry:8px
+    classDef persistence fill:#10b981,color:#fff,stroke:#059669,stroke-width:2px,rx:8px,ry:8px
+    classDef output fill:#ec4899,color:#fff,stroke:#db2777,stroke-width:2px,rx:8px,ry:8px
+    classDef external fill:#64748b,color:#fff,stroke:#475569,stroke-width:2px,stroke-dasharray: 5 5,rx:8px,ry:8px
+
+    subgraph UI["🎯 User Interface Layer"]
+        direction TB
+        CLI["⚡ overthrone-cli<br/>• CLI Commands<br/>• TUI Dashboard<br/>• REPL Shell<br/>• Wizard Mode"]
+        VIEWER["🌐 overthrone-viewer<br/>• Web GUI<br/>• D3.js Graphs<br/>• Three.js 3D<br/>• Path Finder"]
     end
 
-    subgraph L2["Orchestrator"]
-        PILOT["overthrone-pilot<br/>Auto-Pwn · Wizard · Q-Learning"]
+    subgraph ORCH["🧠 Orchestration & Intelligence"]
+        direction TB
+        PILOT["🎲 overthrone-pilot<br/>• Auto-Pwn Engine<br/>• Q-Learning AI<br/>• Attack Planning<br/>• Strategy Adaptation"]
     end
 
-    subgraph L3["Reconnaissance"]
-        REAPER["overthrone-reaper<br/>LDAP enum · LAPS · GPP · ADCS"]
-        CRAWLER["overthrone-crawler<br/>Cross-domain · Foreign LDAP · Trusts"]
+    subgraph RECON["🔍 Reconnaissance & Discovery"]
+        direction TB
+        REAPER["📊 overthrone-reaper<br/>• LDAP Enumeration<br/>• LAPS v1/v2<br/>• GPP Decryption<br/>• ADCS Templates<br/>• BloodHound Export"]
+        CRAWLER["🕸️ overthrone-crawler<br/>• Cross-Domain Trusts<br/>• Foreign LDAP<br/>• MSSQL Links<br/>• SID Filter Analysis<br/>• PAM Detection"]
     end
 
-    subgraph L4["Core Engine"]
-        CORE["overthrone-core<br/>LDAP · Kerberos · SMB · NTLM · DRSR · MSSQL · ADCS<br/>Attack Graph · EDR Evasion · Azure AD / Entra"]
+    subgraph CORE["⚙️ Core Protocol Engine"]
+        direction TB
+        CORE_ENGINE["🔥 overthrone-core<br/><br/>Protocols: LDAP • Kerberos • SMB2/3 • NTLM • MS-DRSR • MSSQL • DNS • PKINIT<br/><br/>Features: Attack Graph • Dijkstra Pathfinding • Port Scanner • Crypto Primitives<br/>EDR Evasion • Credential Guard Detection • Azure AD/Entra ID • C2 Integration<br/>Plugin System • Remote Execution • SecretsDump • RID Cycling"]
     end
 
-    subgraph L5["Attack"]
-        HUNTER["overthrone-hunter<br/>Kerberoast · Coercion · RBCD"]
-        RELAY["overthrone-relay<br/>NTLM relay · Poison · ESC8"]
+    subgraph ATTACK["⚔️ Attack & Exploitation"]
+        direction TB
+        HUNTER["🎯 overthrone-hunter<br/>• Kerberoasting<br/>• AS-REP Roasting<br/>• Auth Coercion<br/>• RBCD Abuse<br/>• Delegation Chains<br/>• Hash Cracking"]
+        RELAY["🔄 overthrone-relay<br/>• NTLM Relay<br/>• LLMNR/NBT-NS Poison<br/>• ADCS ESC8<br/>• Exchange Relay<br/>• SOCKS5 Proxy<br/>• LDAP Signing Bypass"]
     end
 
-    subgraph L6["Persistence"]
-        FORGE["overthrone-forge<br/>Tickets · DCSync · Shadow Creds"]
+    subgraph PERSIST["🔐 Persistence & Post-Ex"]
+        direction TB
+        FORGE["🎭 overthrone-forge<br/>• Golden/Silver Tickets<br/>• Diamond/Sapphire Tickets<br/>• DCSync<br/>• Shadow Credentials<br/>• ACL Backdoors<br/>• Skeleton Key<br/>• S4U2Self+PKINIT"]
     end
 
-    subgraph L7["Output"]
-        SCRIBE["overthrone-scribe<br/>Markdown · PDF · JSON"]
-        VIEWER["overthrone-viewer<br/>Web GUI · D3 · Three.js"]
+    subgraph REPORT["📝 Reporting & Output"]
+        direction TB
+        SCRIBE["📄 overthrone-scribe<br/>• Markdown Reports<br/>• PDF Generation<br/>• JSON Export<br/>• MITRE ATT&CK<br/>• Remediation Guide"]
     end
 
-    CLI --> PILOT
-    CLI --> REAPER
-    CLI --> CRAWLER
-    CLI --> HUNTER
-    CLI --> RELAY
-    CLI --> FORGE
-    CLI --> CORE
-    CLI --> SCRIBE
-    CLI --> VIEWER
+    subgraph EXT["🏢 External Systems"]
+        direction TB
+        DC["🖥️ Domain Controller<br/>LDAP • Kerberos • SMB"]
+        ADCS["🎫 ADCS CA Server<br/>ESC1-ESC16"]
+        EXCHANGE["📧 Exchange Server<br/>MAPI • EWS • OAB"]
+        AZURE["☁️ Azure AD/Entra ID<br/>Managed Identity<br/>App Registration"]
+    end
 
-    PILOT --> REAPER
-    PILOT --> CRAWLER
-    PILOT --> HUNTER
-    PILOT --> RELAY
-    PILOT --> FORGE
-    PILOT --> SCRIBE
+    %% User Interface connections
+    CLI -->|commands| PILOT
+    CLI -->|enum| REAPER
+    CLI -->|cross-domain| CRAWLER
+    CLI -->|roast| HUNTER
+    CLI -->|relay| RELAY
+    CLI -->|forge| FORGE
+    CLI -->|protocols| CORE_ENGINE
+    CLI -->|generate| SCRIBE
+    VIEWER -->|graph data| CORE_ENGINE
 
-    REAPER --> CORE
-    CRAWLER --> CORE
-    HUNTER --> CORE
-    RELAY --> CORE
-    FORGE --> CORE
-    CORE --> SCRIBE
-    CORE --> VIEWER
-    CORE --> PILOT
+    %% Orchestrator connections
+    PILOT -->|plan & execute| REAPER
+    PILOT -->|trust mapping| CRAWLER
+    PILOT -->|attack chain| HUNTER
+    PILOT -->|intercept| RELAY
+    PILOT -->|persist| FORGE
+    PILOT -->|report| SCRIBE
+    PILOT -->|Q-learning feedback| CORE_ENGINE
+
+    %% Recon to Core
+    REAPER -->|LDAP/Kerberos data| CORE_ENGINE
+    CRAWLER -->|cross-realm data| CORE_ENGINE
+
+    %% Attack to Core
+    HUNTER -->|ticket requests| CORE_ENGINE
+    RELAY -->|NTLM/LDAP relay| CORE_ENGINE
+
+    %% Persistence to Core
+    FORGE -->|ticket forging| CORE_ENGINE
+    FORGE -->|DCSync| CORE_ENGINE
+
+    %% Core to Output
+    CORE_ENGINE -->|graph & loot| SCRIBE
+    CORE_ENGINE -->|visualization| VIEWER
+
+    %% External system connections
+    CORE_ENGINE -.->|query| DC
+    CORE_ENGINE -.->|enroll| ADCS
+    RELAY -.->|target| EXCHANGE
+    CORE_ENGINE -.->|hybrid attack| AZURE
+
+    %% Apply styles
+    class CLI,VIEWER userInterface
+    class PILOT orchestrator
+    class REAPER,CRAWLER recon
+    class CORE_ENGINE core
+    class HUNTER,RELAY attack
+    class FORGE persistence
+    class SCRIBE output
+    class DC,ADCS,EXCHANGE,AZURE external
 ```
 
 ## The Crate Breakdown
