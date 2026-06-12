@@ -251,9 +251,7 @@ impl DpapiDecryptor {
         let mut masterkey_guid = [0u8; 16];
         masterkey_guid.copy_from_slice(&data[4..20]);
 
-        let flags = u32::from_le_bytes([
-            data[28], data[29], data[30], data[31],
-        ]);
+        let flags = u32::from_le_bytes([data[28], data[29], data[30], data[31]]);
 
         // Encrypted data follows the header (offset 36)
         let encrypted_data = if data.len() > 36 {
@@ -319,13 +317,12 @@ fn decrypt_dpapi_payload(encrypted: &[u8], key: &[u8]) -> Result<Vec<u8>> {
     // Encrypted data + tag follows the nonce
     let ciphertext = &encrypted[12..];
 
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
-        OverthroneError::Decryption(format!("AES-GCM initialization failed: {e}"))
-    })?;
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| OverthroneError::Decryption(format!("AES-GCM initialization failed: {e}")))?;
 
-    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|e| {
-        OverthroneError::Decryption(format!("AES-GCM decryption failed: {e}"))
-    })?;
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| OverthroneError::Decryption(format!("AES-GCM decryption failed: {e}")))?;
 
     Ok(plaintext)
 }
@@ -457,7 +454,10 @@ mod tests {
         let short_blob = vec![0x01, 0x00, 0x00];
         let result = LapsDecryptor::parse_encrypted_blob(&short_blob);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), OverthroneError::Decryption(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OverthroneError::Decryption(_)
+        ));
     }
 
     #[test]

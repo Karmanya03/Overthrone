@@ -22,10 +22,10 @@ pub use relay::RelayStats;
 pub use responder::CapturedCredential;
 pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 // Re-export RelayError from overthrone_core
+use futures::stream::{FuturesUnordered, StreamExt};
 pub use overthrone_core::error::RelayError;
 use overthrone_core::error::Result;
 use overthrone_core::proto::{trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug};
-use futures::stream::{FuturesUnordered, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -443,10 +443,14 @@ impl RelayController {
         } else {
             for target in &self.config.auto_coerce_targets {
                 let result = coerce_target(
-                    target, &smb_listener, &webdav_listener,
-                    &technique_names, max_retries,
+                    target,
+                    &smb_listener,
+                    &webdav_listener,
+                    &technique_names,
+                    max_retries,
                     self.config.http_relay_config.is_some(),
-                ).await;
+                )
+                .await;
                 info!("{}", result);
             }
         }

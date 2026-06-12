@@ -181,7 +181,9 @@ pub async fn enumerate_gmsa(config: &ReaperConfig) -> Result<Vec<GmsaEntry>> {
             .and_then(|v| v.first())
             .cloned();
 
-        let password_header = managed_password_blob.as_deref().and_then(parse_gmsa_password_blob);
+        let password_header = managed_password_blob
+            .as_deref()
+            .and_then(parse_gmsa_password_blob);
 
         if let Some(ref header) = password_header {
             debug!(
@@ -274,11 +276,14 @@ mod tests {
     fn test_gmsa_entry_can_have_password_header() {
         let entry = GmsaEntry {
             sam_account_name: "svc_gmsa$".to_string(),
-            distinguished_name: "CN=svc_gmsa,CN=Managed Service Accounts,DC=corp,DC=local".to_string(),
+            distinguished_name: "CN=svc_gmsa,CN=Managed Service Accounts,DC=corp,DC=local"
+                .to_string(),
             dns_host_name: None,
             managed_by: Some("CN=GMSA Admins,OU=Groups,DC=corp,DC=local".to_string()),
             member_of_dn: Some("CN=Allowed Group,OU=Groups,DC=corp,DC=local".to_string()),
-            managed_password_blob: Some(vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            managed_password_blob: Some(vec![
+                1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]),
             password_last_set: Some("2025-01-01".to_string()),
             password_header: Some(GmsaPasswordHeader {
                 version: 1,

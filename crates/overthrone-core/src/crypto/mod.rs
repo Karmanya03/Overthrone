@@ -20,8 +20,8 @@ pub use cracker::{
 pub use smart_wordlist::SmartWordlist;
 
 pub use dpapi::{
-    DpapiBackupKey, DpapiBlob, DpapiCredential, DpapiDecryptor, DpapiMasterkey,
-    DpapiMasterkeyFile, LapsCredentials, LapsDecryptor, LapsEncryptedBlob,
+    DpapiBackupKey, DpapiBlob, DpapiCredential, DpapiDecryptor, DpapiMasterkey, DpapiMasterkeyFile,
+    LapsCredentials, LapsDecryptor, LapsEncryptedBlob,
 };
 
 // Re-export crypto primitives

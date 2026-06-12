@@ -674,13 +674,17 @@ mod tests {
         let config = ReaperConfig::default();
         let s = Snaffler::new(config);
         // A file named "certificate.pfx" should match the pfx pattern
-        let matched_ext: Vec<&SnafflePattern> = s.patterns.iter().filter(|p| {
-            if let Some(ext) = &p.extension {
-                "certificate.pfx".ends_with(ext)
-            } else {
-                false
-            }
-        }).collect();
+        let matched_ext: Vec<&SnafflePattern> = s
+            .patterns
+            .iter()
+            .filter(|p| {
+                if let Some(ext) = &p.extension {
+                    "certificate.pfx".ends_with(ext)
+                } else {
+                    false
+                }
+            })
+            .collect();
         assert!(matched_ext.iter().any(|p| p.severity == 1));
     }
 
@@ -689,13 +693,17 @@ mod tests {
         let config = ReaperConfig::default();
         let s = Snaffler::new(config);
         // A file named "production-passwords.xlsx" should match a pattern
-        let matched_name: Vec<&SnafflePattern> = s.patterns.iter().filter(|p| {
-            if let Some(name) = &p.name_contains {
-                "production-passwords.xlsx".contains(name.as_str())
-            } else {
-                false
-            }
-        }).collect();
+        let matched_name: Vec<&SnafflePattern> = s
+            .patterns
+            .iter()
+            .filter(|p| {
+                if let Some(name) = &p.name_contains {
+                    "production-passwords.xlsx".contains(name.as_str())
+                } else {
+                    false
+                }
+            })
+            .collect();
         assert!(!matched_name.is_empty());
         assert!(matched_name.iter().any(|p| p.reason.contains("password")));
     }

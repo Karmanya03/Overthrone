@@ -48,8 +48,8 @@ pub mod validate;
 
 pub use adcs_dispatcher::{AdcsAction, AdcsConfig, AdcsResult, run_adcs};
 pub use cert_store::{
-    request_cert_via_rpc, request_cert_via_rpc_with_creds, request_cert_via_tcp_rpc,
-    parse_icertrequest_response,
+    parse_icertrequest_response, request_cert_via_rpc, request_cert_via_rpc_with_creds,
+    request_cert_via_tcp_rpc,
 };
 pub use runner::{ForgeConfig, ForgeResult, run_forge};
 pub use s4u2self_pkinit::{

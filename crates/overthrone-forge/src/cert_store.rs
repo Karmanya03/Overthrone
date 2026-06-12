@@ -11,7 +11,7 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::epm::{
-    build_rpc_bind, build_rpc_request, btf_read_frame, btf_write_frame, ndr_conformant_string,
+    btf_read_frame, btf_write_frame, build_rpc_bind, build_rpc_request, ndr_conformant_string,
     resolve_uuid_via_epm_tcp,
 };
 use overthrone_core::proto::smb::SmbSession;
@@ -208,8 +208,7 @@ pub async fn request_cert_via_tcp_rpc(
         ca_name, ca_host
     );
 
-    let (_resolved_host, port) =
-        resolve_uuid_via_epm_tcp(ca_host, &ICERTREQUEST_D_UUID).await?;
+    let (_resolved_host, port) = resolve_uuid_via_epm_tcp(ca_host, &ICERTREQUEST_D_UUID).await?;
 
     let addr = format!("{}:{}", ca_host, port);
     debug!("[ICertRequestD/TCP] Connecting to {addr}");
@@ -483,7 +482,4 @@ mod tests {
         assert_eq!(req_tcp[2], 0);
         assert!(req_tcp.len() > 100);
     }
-
-
-
 }
