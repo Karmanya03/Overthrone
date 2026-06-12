@@ -433,11 +433,8 @@ fn replay_authenticated_request(
     auth_b64: &str,
     socks5_proxy: Option<&str>,
 ) -> Result<String> {
-    let mut target_stream = crate::utils::socks5_connect_sync(
-        target.address,
-        Duration::from_secs(10),
-        socks5_proxy,
-    )?;
+    let mut target_stream =
+        crate::utils::socks5_connect_sync(target.address, Duration::from_secs(10), socks5_proxy)?;
 
     target_stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     target_stream.set_write_timeout(Some(IO_TIMEOUT)).ok();

@@ -340,9 +340,10 @@ async fn handle_exchange_relay(
 async fn connect_exchange_stream(
     config: &ExchangeRelayConfig,
 ) -> Result<Box<dyn ExchangeIo + Send>> {
-    let target: std::net::SocketAddr = crate::utils::format_addr(&config.target_host, config.target_port)
-        .parse()
-        .map_err(|e| RelayError::Config(format!("Invalid Exchange target address: {e}")))?;
+    let target: std::net::SocketAddr =
+        crate::utils::format_addr(&config.target_host, config.target_port)
+            .parse()
+            .map_err(|e| RelayError::Config(format!("Invalid Exchange target address: {e}")))?;
     let tcp = crate::utils::socks5_connect(target, IO_TIMEOUT, config.socks5_proxy.as_deref())
         .await
         .map_err(|e| RelayError::Network(format!("Exchange connect failed: {e}")))?;

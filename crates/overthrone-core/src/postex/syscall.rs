@@ -339,10 +339,7 @@ pub unsafe fn syscall_4(
 // ─── Non-Windows stubs ─────────────────────────────────────────────
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-pub unsafe fn syscall_1(
-    _syscall_number: u32,
-    _arg1: *const std::ffi::c_void,
-) -> SyscallStatus {
+pub unsafe fn syscall_1(_syscall_number: u32, _arg1: *const std::ffi::c_void) -> SyscallStatus {
     SyscallStatus(-1)
 }
 

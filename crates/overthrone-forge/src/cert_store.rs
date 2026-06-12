@@ -343,19 +343,15 @@ pub async fn request_cert_via_tcp_rpc_auth(
     }
 
     // ── Step 2: Extract NTLMSSP Type 2 (Challenge) from bind_ack auth verifier ──
-    let challenge_bytes = extract_auth_body(&bind_resp).ok_or_else(|| OverthroneError::Ntlm(
-        "Bind_ack missing NTLMSSP challenge in auth verifier".to_string()
-    ))?;
+    let challenge_bytes = extract_auth_body(&bind_resp).ok_or_else(|| {
+        OverthroneError::Ntlm("Bind_ack missing NTLMSSP challenge in auth verifier".to_string())
+    })?;
 
     let challenge = parse_ntlmssp_challenge(challenge_bytes)?;
 
     // ── Step 3: Build NTLMSSP Type 3 (Authenticate) ──
-    let (type3, _session_key) = build_ntlmssp_authenticate_hash(
-        cred.domain,
-        cred.username,
-        cred.nt_hash,
-        &challenge,
-    )?;
+    let (type3, _session_key) =
+        build_ntlmssp_authenticate_hash(cred.domain, cred.username, cred.nt_hash, &challenge)?;
 
     // ── Step 4: Send AUTH3 PDU with Type 3 ──
     let auth3 = build_auth3_pdu(&type3, 2);

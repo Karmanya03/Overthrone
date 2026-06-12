@@ -165,10 +165,7 @@ pub fn build_rpc_bind_auth(
 ///
 /// The AUTH3 PDU (type 17) has only a 16-byte common header followed by the
 /// authentication verifier — no alloc_hint, context_id, or opnum fields.
-pub fn build_auth3_pdu(
-    auth_body: &[u8],
-    auth_level: u8,
-) -> Vec<u8> {
+pub fn build_auth3_pdu(auth_body: &[u8], auth_level: u8) -> Vec<u8> {
     let auth_hdr_len: u16 = 8;
     let auth_total = auth_hdr_len + auth_body.len() as u16;
 

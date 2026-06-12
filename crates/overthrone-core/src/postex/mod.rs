@@ -58,8 +58,8 @@ pub use skeleton_key::{
     assess_skeleton_key_preflight_from_registry,
 };
 pub use syscall::{
-    DynamicSyscallStub, SyscallNumbers, SyscallStatus,
-    syscall_0, syscall_1, syscall_2, syscall_3, syscall_4,
+    DynamicSyscallStub, SyscallNumbers, SyscallStatus, syscall_0, syscall_1, syscall_2, syscall_3,
+    syscall_4,
 };
 #[cfg(target_os = "windows")]
 pub use syscall::{
