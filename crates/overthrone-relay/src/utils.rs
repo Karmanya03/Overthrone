@@ -61,6 +61,88 @@ pub async fn socks5_connect(
     }
 }
 
+/// Synchronous SOCKS5-aware TCP connect for sync contexts (std threads).
+/// Uses manual SOCKS5 handshake over `std::net::TcpStream`.
+pub fn socks5_connect_sync(
+    target: SocketAddr,
+    timeout: Duration,
+    socks5: Option<&str>,
+) -> std::result::Result<std::net::TcpStream, RelayError> {
+    match socks5 {
+        Some(proxy) => {
+            let proxy_addr: SocketAddr = proxy.parse().map_err(|e| {
+                RelayError::Config(format!("Invalid SOCKS5 proxy '{}': {}", proxy, e))
+            })?;
+            let mut s = std::net::TcpStream::connect_timeout(&proxy_addr, timeout)
+                .map_err(|e| RelayError::Connection(format!("SOCKS5 proxy connect: {e}")))?;
+            s.set_read_timeout(Some(timeout)).ok();
+            s.set_write_timeout(Some(timeout)).ok();
+
+            use std::io::{Read, Write};
+
+            // SOCKS5 handshake: greet
+            s.write_all(&[0x05, 0x01, 0x00])
+                .map_err(|e| RelayError::Connection(format!("SOCKS5 greet: {e}")))?;
+            let mut resp = [0u8; 2];
+            s.read_exact(&mut resp)
+                .map_err(|e| RelayError::Connection(format!("SOCKS5 greet response: {e}")))?;
+            if resp != [0x05, 0x00] {
+                return Err(RelayError::Connection(format!(
+                    "SOCKS5 server rejected greeting: {:02x?}",
+                    resp
+                )));
+            }
+
+            // SOCKS5 connect request
+            let addr_bytes = match target {
+                SocketAddr::V4(v4) => {
+                    let mut b = Vec::with_capacity(10);
+                    b.extend_from_slice(&[0x05, 0x01, 0x00, 0x01]);
+                    b.extend_from_slice(&v4.ip().octets());
+                    b.extend_from_slice(&v4.port().to_be_bytes());
+                    b
+                }
+                SocketAddr::V6(v6) => {
+                    let mut b = Vec::with_capacity(22);
+                    b.extend_from_slice(&[0x05, 0x01, 0x00, 0x04]);
+                    b.extend_from_slice(&v6.ip().octets());
+                    b.extend_from_slice(&v6.port().to_be_bytes());
+                    b
+                }
+            };
+            s.write_all(&addr_bytes)
+                .map_err(|e| RelayError::Connection(format!("SOCKS5 connect: {e}")))?;
+
+            let mut conn_resp = [0u8; 4];
+            s.read_exact(&mut conn_resp)
+                .map_err(|e| RelayError::Connection(format!("SOCKS5 connect response: {e}")))?;
+            if conn_resp[1] != 0x00 {
+                return Err(RelayError::Connection(format!(
+                    "SOCKS5 connect failed: status={:02x}",
+                    conn_resp[1]
+                )));
+            }
+            // Read remaining response (bind address + port)
+            let bind_len = match conn_resp[3] {
+                0x01 => 4,
+                0x04 => 16,
+                0x03 => {
+                    let mut len = [0u8; 1];
+                    s.read_exact(&mut len).ok();
+                    len[0] as usize
+                }
+                _ => return Err(RelayError::Connection("Unknown SOCKS5 address type".into())),
+            };
+            let mut _bind_extra = vec![0u8; bind_len + 2];
+            let _ = s.read_exact(&mut _bind_extra);
+
+            Ok(s)
+        }
+        None => std::net::TcpStream::connect_timeout(&target, timeout)
+            .map_err(|e| RelayError::Connection(format!("Connect to {}: {}", target, e))),
+    }
+}
+
 /// Calculate NTLMv2 response for a given challenge.
 /// This is used for offline cracking validation — NOT for relay
 /// (relay forwards the victim's response directly).

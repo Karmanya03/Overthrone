@@ -58,9 +58,12 @@ pub use skeleton_key::{
     assess_skeleton_key_preflight_from_registry,
 };
 pub use syscall::{
-    DynamicSyscallStub, SyscallNumbers, SyscallStatus, nt_allocate_virtual_memory, nt_close,
-    nt_delay_execution, nt_open_key, nt_open_process, nt_protect_virtual_memory,
-    nt_query_system_information, nt_query_value_key, nt_read_virtual_memory,
-    nt_write_virtual_memory, prepare_syscall_stub, syscall_0, syscall_1, syscall_2, syscall_3,
-    syscall_4,
+    DynamicSyscallStub, SyscallNumbers, SyscallStatus,
+    syscall_0, syscall_1, syscall_2, syscall_3, syscall_4,
+};
+#[cfg(target_os = "windows")]
+pub use syscall::{
+    nt_allocate_virtual_memory, nt_close, nt_delay_execution, nt_open_key, nt_open_process,
+    nt_protect_virtual_memory, nt_query_system_information, nt_query_value_key,
+    nt_read_virtual_memory, nt_write_virtual_memory, prepare_syscall_stub,
 };

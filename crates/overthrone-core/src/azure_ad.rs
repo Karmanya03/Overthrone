@@ -763,19 +763,8 @@ async fn exchange_saml_for_oauth(saml_assertion: &str, tenant: &str) -> Result<V
 // ═══════════════════════════════════════════════════════════
 
 async fn steal_prt() -> Result<Vec<String>> {
-    #[cfg(not(target_os = "windows"))]
-    {
-        warn!("PRT theft requires Windows with TokenBroker plugin");
-        return Err(OverthroneError::custom(
-            "PRT theft is only supported on Windows",
-        ));
-    }
-
-    #[allow(unused_mut, unused_variables)]
-    let mut creds = Vec::new();
-
     #[cfg(target_os = "windows")]
-    {
+    let creds: Vec<String> = {
         let mut creds = Vec::new();
 
         let broker_paths = [
@@ -857,7 +846,9 @@ async fn steal_prt() -> Result<Vec<String>> {
         } else {
             warn!("LOCALAPPDATA not set — cannot locate TokenBroker cache");
         }
-    }
+
+        creds
+    };
 
     #[cfg(not(target_os = "windows"))]
     {
@@ -867,10 +858,13 @@ async fn steal_prt() -> Result<Vec<String>> {
         ));
     }
 
+    #[cfg(target_os = "windows")]
     if creds.is_empty() {
-        creds.push("prt: <no_tokens_found>".to_string());
+        // Can't use push since creds is immutable, reconstruct with the default
+        return Ok(vec!["prt: <no_tokens_found>".to_string()]);
     }
 
+    #[cfg(target_os = "windows")]
     Ok(creds)
 }
 

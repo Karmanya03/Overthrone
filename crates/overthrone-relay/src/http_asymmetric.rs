@@ -129,6 +129,7 @@ impl HttpAsymmetricRelay {
         };
         let pending: PendingState = Arc::new(StdMutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
+        let socks5_proxy = self.config.socks5_proxy.clone();
 
         let handle = thread::spawn(move || {
             let listener = match TcpListener::bind(&listen_addr) {
@@ -153,8 +154,9 @@ impl HttpAsymmetricRelay {
                         let r = bridge.clone();
                         let p = Arc::clone(&pending);
                         let nid = Arc::clone(&next_id);
+                        let proxy = socks5_proxy.clone();
                         thread::spawn(move || {
-                            if let Err(e) = handle_client(stream, r, p, nid) {
+                            if let Err(e) = handle_client(stream, r, p, nid, proxy) {
                                 debug!("HTTP asymmetric relay client error: {}", e);
                             }
                         });
@@ -190,6 +192,7 @@ fn handle_client(
     bridge: RelayBridge,
     pending_relays: PendingState,
     next_id: Arc<AtomicU64>,
+    socks5_proxy: Option<String>,
 ) -> Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
@@ -268,7 +271,7 @@ fn handle_client(
                     &session.target,
                     &captured_request,
                     &auth_b64_for_replay,
-                    None, // SPDY: pass socks5 from config
+                    socks5_proxy.as_deref(),
                 )
             } else {
                 // For non-HTTP targets (SMB, LDAP, etc.), return relay success
@@ -428,10 +431,13 @@ fn replay_authenticated_request(
     target: &RelayTarget,
     request: &CapturedHttpRequest,
     auth_b64: &str,
-    _socks5_proxy: Option<&str>,
+    socks5_proxy: Option<&str>,
 ) -> Result<String> {
-    let mut target_stream = TcpStream::connect_timeout(&target.address, Duration::from_secs(10))
-        .map_err(|e| RelayError::Network(format!("Target connect: {}", e)))?;
+    let mut target_stream = crate::utils::socks5_connect_sync(
+        target.address,
+        Duration::from_secs(10),
+        socks5_proxy,
+    )?;
 
     target_stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     target_stream.set_write_timeout(Some(IO_TIMEOUT)).ok();

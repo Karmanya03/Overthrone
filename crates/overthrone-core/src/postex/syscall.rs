@@ -339,29 +339,42 @@ pub unsafe fn syscall_4(
 // ─── Non-Windows stubs ─────────────────────────────────────────────
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-macro_rules! stub_fn {
-    ($name:ident, $nargs:expr) => {
-        pub unsafe fn $name(_syscall_number: u32 $(, $_arg: *const std::ffi::c_void),*) -> SyscallStatus {
-            let _ = $nargs;
-            SyscallStatus(-1)
-        }
-    };
+pub unsafe fn syscall_1(
+    _syscall_number: u32,
+    _arg1: *const std::ffi::c_void,
+) -> SyscallStatus {
+    SyscallStatus(-1)
 }
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-stub_fn!(syscall_0, 0);
+pub unsafe fn syscall_2(
+    _syscall_number: u32,
+    _arg1: *const std::ffi::c_void,
+    _arg2: *const std::ffi::c_void,
+) -> SyscallStatus {
+    SyscallStatus(-1)
+}
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-stub_fn!(syscall_1, 1);
+pub unsafe fn syscall_3(
+    _syscall_number: u32,
+    _arg1: *const std::ffi::c_void,
+    _arg2: *const std::ffi::c_void,
+    _arg3: *const std::ffi::c_void,
+) -> SyscallStatus {
+    SyscallStatus(-1)
+}
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-stub_fn!(syscall_2, 2);
-
-#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-stub_fn!(syscall_3, 3);
-
-#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-stub_fn!(syscall_4, 4);
+pub unsafe fn syscall_4(
+    _syscall_number: u32,
+    _arg1: *const std::ffi::c_void,
+    _arg2: *const std::ffi::c_void,
+    _arg3: *const std::ffi::c_void,
+    _arg4: *const std::ffi::c_void,
+) -> SyscallStatus {
+    SyscallStatus(-1)
+}
 
 // ─── Runtime syscall stub generator (for 5+ args) ──────────────────
 

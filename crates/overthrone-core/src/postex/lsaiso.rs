@@ -20,6 +20,7 @@ use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::mem;
+#[cfg(windows)]
 use tracing::{debug, info, warn};
 
 /// Maximum size of an LSAISO ALPC message

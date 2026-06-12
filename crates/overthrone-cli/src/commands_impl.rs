@@ -1276,6 +1276,26 @@ fn build_runner_action(
                 output_format: format.clone(),
             }
         }
+        ForgeAction::AsRepToTgt { cracked_password } => {
+            opts.insert("cracked_password".to_string(), cracked_password.clone());
+            RunnerForgeAction::AsRepToTgt {
+                cracked_password: cracked_password.clone(),
+            }
+        }
+        ForgeAction::AsRepToTgtOffline {
+            cracked_password,
+            domain_sid,
+            user_rid,
+        } => {
+            opts.insert("cracked_password".to_string(), cracked_password.clone());
+            opts.insert("domain_sid".to_string(), domain_sid.clone());
+            opts.insert("user_rid".to_string(), user_rid.to_string());
+            RunnerForgeAction::AsRepToTgtOffline {
+                cracked_password: cracked_password.clone(),
+                domain_sid: domain_sid.clone(),
+                user_rid: *user_rid,
+            }
+        }
         _ => {
             return Err("unexpected ForgeAction variant in build_runner_action (Golden/Silver should be handled before routing)".to_string());
         }

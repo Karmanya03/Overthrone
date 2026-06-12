@@ -15,6 +15,7 @@
 use crate::error::{OverthroneError, Result};
 use crate::postex::SyscallNumbers;
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
 use tracing::{info, warn};
 
 /// OPSEC configuration profile
@@ -460,8 +461,16 @@ pub unsafe fn apply_opsec(config: &OpsecConfig) -> Result<Vec<OpsecPatchReport>>
     let mut reports = Vec::new();
 
     // Resolve syscall numbers if direct syscalls are requested
+    #[cfg(target_os = "windows")]
     let numbers = if config.direct_syscalls {
         Some(crate::postex::syscall::SyscallNumbers::resolve())
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "windows"))]
+    let numbers = if config.direct_syscalls {
+        tracing::warn!("Direct syscalls not supported on this platform");
+        None
     } else {
         None
     };

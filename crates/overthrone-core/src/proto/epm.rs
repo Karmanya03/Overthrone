@@ -92,55 +92,189 @@ pub struct EpEndpoint {
 //  RPC Bind Helpers
 // ═══════════════════════════════════════════════════════════
 
-/// Build DCE/RPC bind request for a given interface UUID.
+/// Build an unauthenticated DCE/RPC bind request for a given interface UUID.
+/// Delegates to [`build_rpc_bind_auth`] with no auth body.
 pub fn build_rpc_bind(
     interface_uuid: &[u8; 16],
     version_major: u16,
     version_minor: u16,
 ) -> Vec<u8> {
+    build_rpc_bind_auth(interface_uuid, version_major, version_minor, None, 0)
+}
+
+/// Build DCE/RPC bind request with optional NTLMSSP auth verifier.
+///
+/// When `auth_body` is `Some`, the bind PDU includes an NTLMSSP auth verifier
+/// (auth_type=0x0A) with the given auth_level. Use this for authenticated RPC
+/// against AD CS or other RPC servers that require NTLM authentication.
+pub fn build_rpc_bind_auth(
+    interface_uuid: &[u8; 16],
+    version_major: u16,
+    version_minor: u16,
+    auth_body: Option<&[u8]>,
+    auth_level: u8,
+) -> Vec<u8> {
     let mut buf = Vec::new();
-    // RPC header
     buf.extend_from_slice(&[5, 0]); // version 5.0
     buf.push(11); // packet type = Bind
     buf.push(3); // flags = first+last
-    buf.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data representation (little-endian, ASCII)
-    buf.extend_from_slice(&[0x48, 0x00]); // frag length (72)
-    buf.extend_from_slice(&[0x00, 0x00]); // auth length
+    buf.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // data representation
+
+    let base_len: u16 = 72;
+    let auth_hdr: u16 = 8; // auth_type(1)+level(1)+pad(1)+reserved(1)+ctx_id(4)
+    let auth_len = match auth_body {
+        Some(body) => auth_hdr + body.len() as u16,
+        None => 0,
+    };
+    let frag_len = base_len + auth_len;
+
+    buf.extend_from_slice(&frag_len.to_le_bytes());
+    buf.extend_from_slice(&auth_len.to_le_bytes());
     buf.extend_from_slice(&1u32.to_le_bytes()); // call ID
-    buf.extend_from_slice(&4096u16.to_le_bytes()); // max xmit frag
-    buf.extend_from_slice(&4096u16.to_le_bytes()); // max recv frag
+    buf.extend_from_slice(&4096u16.to_le_bytes()); // max xmit
+    buf.extend_from_slice(&4096u16.to_le_bytes()); // max recv
     buf.extend_from_slice(&0u32.to_le_bytes()); // assoc group
     buf.push(1); // num context items
     buf.extend_from_slice(&[0, 0, 0]); // padding
     buf.extend_from_slice(&0u16.to_le_bytes()); // context ID
     buf.push(1); // num transfer syntaxes
     buf.push(0); // padding
-    // Interface UUID
     buf.extend_from_slice(interface_uuid);
     buf.extend_from_slice(&version_major.to_le_bytes());
     buf.extend_from_slice(&version_minor.to_le_bytes());
-    // NDR transfer syntax: 8a885d04-1ceb-11c9-9fe8-08002b104860
     buf.extend_from_slice(&[
         0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
         0x60,
     ]);
-    buf.extend_from_slice(&2u32.to_le_bytes()); // version
+    buf.extend_from_slice(&2u32.to_le_bytes());
+
+    if let Some(body) = auth_body {
+        buf.push(0x0A); // auth_type = NTLMSSP
+        buf.push(auth_level); // auth_level
+        buf.push(0x00); // auth_pad_length
+        buf.push(0x00); // auth_reserved
+        buf.extend_from_slice(&0u32.to_le_bytes()); // auth_context_id = 0
+        buf.extend_from_slice(body);
+    }
     buf
 }
 
-/// Build DCE/RPC request PDU with opnum and stub data.
-pub fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
+/// Build an RPC AUTH3 PDU for NTLMSSP Authenticate (second leg of NTLM auth).
+/// AUTH3 carries the NTLMSSP Type 3 message after receiving the Type 2 challenge
+/// in the bind_ack auth verifier.
+///
+/// The AUTH3 PDU (type 17) has only a 16-byte common header followed by the
+/// authentication verifier — no alloc_hint, context_id, or opnum fields.
+pub fn build_auth3_pdu(
+    auth_body: &[u8],
+    auth_level: u8,
+) -> Vec<u8> {
+    let auth_hdr_len: u16 = 8;
+    let auth_total = auth_hdr_len + auth_body.len() as u16;
+
+    let mut pdu = vec![5, 0, 17, 0x03]; // version 5.0, type=Auth3(17), flags=first+last
+    pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR
+    let frag_len = 16 + auth_total; // AUTH3 header is 16 bytes (no alloc_hint/ctx_id/opnum)
+    pdu.extend_from_slice(&frag_len.to_le_bytes());
+    pdu.extend_from_slice(&auth_total.to_le_bytes()); // auth_length
+    pdu.extend_from_slice(&1u32.to_le_bytes()); // call_id
+
+    // Auth verifier aligned to 8-byte boundary — byte 16 is already 8-byte aligned
+    pdu.push(0x0A); // auth_type = NTLMSSP
+    pdu.push(auth_level);
+    pdu.push(0x00); // auth_pad_length
+    pdu.push(0x00); // auth_reserved
+    pdu.extend_from_slice(&0u32.to_le_bytes()); // auth_context_id = 0
+    pdu.extend_from_slice(auth_body);
+    pdu
+}
+
+/// Extract the authentication body from a DCE/RPC bind_ack response.
+///
+/// Returns `Some(body_bytes)` if the response contains an auth verifier,
+/// `None` if `auth_length` is 0.
+pub fn extract_auth_body(resp: &[u8]) -> Option<&[u8]> {
+    if resp.len() < 24 {
+        return None;
+    }
+    let auth_len = u16::from_le_bytes([resp[10], resp[11]]) as usize;
+    if auth_len < 8 {
+        return None;
+    }
+    // For bind_ack (type 12), the body starts after the header and context list.
+    // Bind_ack format: 16-byte header + 4-byte alloc_hint + 2-byte p_cont_id +
+    // 2-byte cancel_count + (n_syntax*20) + auth_verifier
+    // For a standard bind_ack (ptype=12):
+    // Offset 0-1: version
+    // Offset 2: ptype (12)
+    // Offset 3: pfc_flags
+    // Offset 4-7: drep
+    // Offset 8-9: frag_length
+    // Offset 10-11: auth_length
+    // Offset 12-15: call_id
+    // Offset 16-17: max_xmit
+    // Offset 18-19: max_recv
+    // Offset 20-23: assoc_group_id
+    // Offset 24: n_cont_elem
+    // Offset 25: reserved
+    // Offset 26-27: n_syntax
+    // Offset 28+: syntax entries (20 bytes each for single transfer syntax)
+    // Then auth verifier
+
+    let context_items_end = if resp.len() > 28 {
+        28 + (u16::from_le_bytes([resp[26], resp[27]]) as usize) * 20
+    } else {
+        return None;
+    };
+
+    let auth_start = context_items_end;
+    if auth_start + auth_len <= resp.len() && auth_len >= 8 {
+        Some(&resp[auth_start + 8..auth_start + auth_len])
+    } else {
+        None
+    }
+}
+
+/// Build DCE/RPC request PDU with opnum, stub data, and optional auth verifier.
+pub fn build_rpc_request_auth(
+    opnum: u16,
+    stub_data: &[u8],
+    auth_body: Option<&[u8]>,
+    auth_level: u8,
+) -> Vec<u8> {
+    // Stub data must be padded to 8-byte boundary from PDU start
+    // Header is 24 bytes, so stub_data should start at 24 (already 8-byte aligned)
     let mut pdu = vec![5, 0, 0, 0x03]; // version 5.0, type=Request, flags=first+last
     pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR data representation
-    let frag_len = (24 + stub_data.len()) as u16;
+
+    let auth_hdr: u16 = 8;
+    let auth_len = match auth_body {
+        Some(body) => auth_hdr + body.len() as u16,
+        None => 0,
+    };
+    let frag_len = (24 + stub_data.len()) as u16 + auth_len;
     pdu.extend_from_slice(&frag_len.to_le_bytes());
-    pdu.extend_from_slice(&0u16.to_le_bytes()); // auth length
+    pdu.extend_from_slice(&auth_len.to_le_bytes());
     pdu.extend_from_slice(&1u32.to_le_bytes()); // call ID
     pdu.extend_from_slice(&(stub_data.len() as u32).to_le_bytes()); // alloc hint
     pdu.extend_from_slice(&0u16.to_le_bytes()); // context ID
     pdu.extend_from_slice(&opnum.to_le_bytes()); // opnum
     pdu.extend_from_slice(stub_data);
+
+    if let Some(body) = auth_body {
+        pdu.push(0x0A); // auth_type = NTLMSSP
+        pdu.push(auth_level);
+        pdu.push(0x00); // auth_pad_length
+        pdu.push(0x00); // auth_reserved
+        pdu.extend_from_slice(&0u32.to_le_bytes()); // auth_context_id
+        pdu.extend_from_slice(body);
+    }
     pdu
+}
+
+/// Build DCE/RPC request PDU with opnum and stub data (no auth).
+pub fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
+    build_rpc_request_auth(opnum, stub_data, None, 0)
 }
 
 /// Check if RPC bind was accepted.

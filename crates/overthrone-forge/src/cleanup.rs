@@ -534,6 +534,12 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
                 "Request TGT during business hours to blend with normal traffic".into(),
             ],
         },
+        ForgeAction::AsRepToTgtOffline { .. } => DetectionAssessment {
+            overall_risk: RiskLevel::VeryLow,
+            description: "Offline TGT forging produces no network traffic — zero detection risk".into(),
+            indicators: vec![],
+            mitigations: vec![],
+        },
         ForgeAction::PkinitAuth => DetectionAssessment {
             overall_risk: RiskLevel::Low,
             description: "PKINIT authentication uses legitimate certificate-based Kerberos authentication".into(),

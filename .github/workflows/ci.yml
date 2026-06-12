@@ -21,11 +21,17 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Fetch dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: cargo fetch --locked
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --lib --bins -- -D warnings
+      - run: cargo clippy --workspace --lib --bins --locked -- -D warnings
 
   test:
-    name: Test
+    name: Test (${{ matrix.os }})
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -37,7 +43,13 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --lib
+      - name: Fetch dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: cargo fetch --locked
+      - run: cargo test --workspace --lib --locked
 
   build:
     name: Build (${{ matrix.os }})
@@ -52,4 +64,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --workspace
+      - name: Fetch dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: cargo fetch --locked
+      - run: cargo build --release --workspace --locked
