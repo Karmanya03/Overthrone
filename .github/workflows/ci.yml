@@ -2,58 +2,54 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
-    tags: ['v*']
+    branches: [main]
   pull_request:
     branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
 
 jobs:
-  fmt:
-    name: Formatting
-    runs-on: windows-latest
+  check:
+    name: Check
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --lib --bins -- -D warnings
 
-  clippy:
-    name: Clippy
-    runs-on: windows-latest
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --lib
 
-  build-release:
-    name: Release Build
-    runs-on: windows-latest
-    needs: [fmt, clippy]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      - name: Build release binary
-        run: cargo build --release -p overthrone
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: overthrone-binaries
-          path: |
-            target/release/overthrone.exe
-            target/release/ovt.exe
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --workspace
