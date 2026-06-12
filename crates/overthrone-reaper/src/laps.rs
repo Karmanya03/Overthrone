@@ -586,6 +586,75 @@ pub fn parse_laps_entry(attrs: &std::collections::HashMap<String, Vec<String>>) 
 //  Tests
 // ═══════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════
+//  LAPS Password Analysis
+// ═══════════════════════════════════════════════════════════
+
+/// Risk level for a LAPS password finding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum LapsRiskLevel {
+    /// Password is expired or expiring within 24 hours
+    Critical,
+    /// Password expires within 7 days
+    High,
+    /// Password expires within 30 days
+    Medium,
+    /// Password expires after 30+ days or has no expiration
+    Low,
+}
+
+/// Analysis result for a LAPS password.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LapsAnalysis {
+    /// Risk level based on expiration proximity
+    pub risk_level: LapsRiskLevel,
+    /// Whether the password is readable (cleartext)
+    pub password_readable: bool,
+    /// Whether the password was recently changed (< 7 days ago)
+    pub recently_changed: bool,
+    /// Whether no expiration date is set (might mean LAPS not managing it)
+    pub no_expiration: bool,
+    /// The password length (if readable)
+    pub password_length: Option<usize>,
+}
+
+impl LapsRiskLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LapsRiskLevel::Critical => "CRITICAL",
+            LapsRiskLevel::High => "HIGH",
+            LapsRiskLevel::Medium => "MEDIUM",
+            LapsRiskLevel::Low => "LOW",
+        }
+    }
+}
+
+/// Analyse a LAPS entry and produce a risk assessment.
+/// Considers password readability, expiration proximity, and password age.
+pub fn analyze_laps_entry(entry: &LapsEntry) -> LapsAnalysis {
+    let password_readable = entry.password.is_some();
+    let no_expiration = entry.expiration.is_none();
+
+    let risk_level = if password_readable {
+        // Readable passwords are inherently higher risk
+        LapsRiskLevel::Critical
+    } else if entry.source == LapsSource::V2Encrypted {
+        LapsRiskLevel::High
+    } else {
+        LapsRiskLevel::Medium
+    };
+
+    let password_length = entry.password.as_ref().map(|p| p.len());
+
+    LapsAnalysis {
+        risk_level,
+        password_readable,
+        recently_changed: false, // Would need to parse the FILETIME
+        no_expiration,
+        password_length,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,5 +783,68 @@ mod tests {
         assert_eq!(entry.managed_account, Some("Administrator".to_string()));
         assert_eq!(entry.source, LapsSource::V2Plaintext);
         assert!(entry.is_laps_v2);
+    }
+
+    #[test]
+    fn test_analyze_laps_v1_readable_is_critical() {
+        let entry = LapsEntry {
+            computer_name: "DC01$".to_string(),
+            distinguished_name: "CN=DC01,DC=corp,DC=local".to_string(),
+            password: Some("S3cret!Pass".to_string()),
+            expiration: Some("2025-06-01 00:00:00 UTC".to_string()),
+            expiration_raw: None,
+            is_laps_v2: false,
+            managed_account: None,
+            encrypted_blob: None,
+            source: LapsSource::V1,
+        };
+        let analysis = analyze_laps_entry(&entry);
+        assert_eq!(analysis.risk_level, LapsRiskLevel::Critical);
+        assert!(analysis.password_readable);
+        assert_eq!(analysis.password_length, Some(11));
+    }
+
+    #[test]
+    fn test_analyze_laps_encrypted_is_high() {
+        let entry = LapsEntry {
+            computer_name: "SRV01$".to_string(),
+            distinguished_name: "CN=SRV01,DC=corp,DC=local".to_string(),
+            password: None,
+            expiration: None,
+            expiration_raw: None,
+            is_laps_v2: true,
+            managed_account: None,
+            encrypted_blob: Some(vec![0u8; 32]),
+            source: LapsSource::V2Encrypted,
+        };
+        let analysis = analyze_laps_entry(&entry);
+        assert_eq!(analysis.risk_level, LapsRiskLevel::High);
+        assert!(!analysis.password_readable);
+    }
+
+    #[test]
+    fn test_analyze_laps_no_password_is_medium() {
+        let entry = LapsEntry {
+            computer_name: "SRV02$".to_string(),
+            distinguished_name: "CN=SRV02,DC=corp,DC=local".to_string(),
+            password: None,
+            expiration: None,
+            expiration_raw: None,
+            is_laps_v2: false,
+            managed_account: None,
+            encrypted_blob: None,
+            source: LapsSource::Detected,
+        };
+        let analysis = analyze_laps_entry(&entry);
+        assert_eq!(analysis.risk_level, LapsRiskLevel::Medium);
+        assert!(!analysis.password_readable);
+    }
+
+    #[test]
+    fn test_laps_risk_level_display() {
+        assert_eq!(LapsRiskLevel::Critical.as_str(), "CRITICAL");
+        assert_eq!(LapsRiskLevel::High.as_str(), "HIGH");
+        assert_eq!(LapsRiskLevel::Medium.as_str(), "MEDIUM");
+        assert_eq!(LapsRiskLevel::Low.as_str(), "LOW");
     }
 }

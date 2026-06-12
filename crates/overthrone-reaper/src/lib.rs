@@ -9,6 +9,7 @@ pub mod adcs;
 pub mod computers;
 pub mod delegations;
 pub mod export;
+pub mod file_carver;
 pub mod gmsa;
 pub mod gpos;
 pub mod gpp_fetch;
@@ -26,6 +27,10 @@ pub mod spns;
 pub mod trusts;
 pub mod users;
 
-pub use runner::{ReaperConfig, ReaperResult, run_reaper};
+pub use file_carver::{CarveResult, CarvedSecret, FileCarver, FileCarverConfig, carve_files};
 pub use ntlm_to_tgt::{NtlmToTgtConfig, NtlmToTgtResult, TgtCredential, run_ntlm_to_tgt};
-pub use ntlmv1_detection::{NtlmV1Analysis, NtlmV1WorkflowResult, DowngradeGuidance, run_ntlmv1_workflow, analyze_ntlm_hashes, generate_downgrade_guidance};
+pub use ntlmv1_detection::{
+    DowngradeGuidance, NtlmV1Analysis, NtlmV1WorkflowResult, analyze_ntlm_hashes,
+    generate_downgrade_guidance, run_ntlmv1_workflow,
+};
+pub use runner::{ReaperConfig, ReaperResult, run_reaper};

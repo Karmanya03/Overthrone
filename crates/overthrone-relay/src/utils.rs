@@ -1,4 +1,4 @@
-﻿//! Utility functions for NTLM relay and responder
+//! Utility functions for NTLM relay and responder
 //!
 //! Provides helper functions for NTLM calculations,
 //! challenge generation, and response validation using
@@ -37,35 +37,27 @@ pub async fn socks5_connect(
             let proxy_addr: SocketAddr = proxy.parse().map_err(|e| {
                 RelayError::Config(format!("Invalid SOCKS5 proxy '{}': {}", proxy, e))
             })?;
-            let socks5_stream = tokio::time::timeout(
-                timeout,
-                Socks5Stream::connect(proxy_addr, target),
-            )
-            .await
-            .map_err(|_| {
-                RelayError::Connection(format!(
-                    "Timeout connecting to {} via SOCKS5 proxy {}",
-                    target, proxy
-                ))
-            })?
-            .map_err(|e| {
-                RelayError::Connection(format!(
-                    "SOCKS5 connect to {} via {}: {}",
-                    target, proxy, e
-                ))
-            })?;
+            let socks5_stream =
+                tokio::time::timeout(timeout, Socks5Stream::connect(proxy_addr, target))
+                    .await
+                    .map_err(|_| {
+                        RelayError::Connection(format!(
+                            "Timeout connecting to {} via SOCKS5 proxy {}",
+                            target, proxy
+                        ))
+                    })?
+                    .map_err(|e| {
+                        RelayError::Connection(format!(
+                            "SOCKS5 connect to {} via {}: {}",
+                            target, proxy, e
+                        ))
+                    })?;
             Ok(socks5_stream.into_inner())
         }
-        None => {
-            tokio::time::timeout(timeout, TcpStream::connect(target))
-                .await
-                .map_err(|_| {
-                    RelayError::Connection(format!("Timeout connecting to {}", target))
-                })?
-                .map_err(|e| {
-                    RelayError::Connection(format!("Connect to {}: {}", target, e))
-                })
-        }
+        None => tokio::time::timeout(timeout, TcpStream::connect(target))
+            .await
+            .map_err(|_| RelayError::Connection(format!("Timeout connecting to {}", target)))?
+            .map_err(|e| RelayError::Connection(format!("Connect to {}: {}", target, e))),
     }
 }
 

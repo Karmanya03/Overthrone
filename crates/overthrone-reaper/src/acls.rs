@@ -234,10 +234,16 @@ impl DangerousRight {
             Self::EnrollCertificate => "Enroll in certificate template → ADCS privilege escalation",
             Self::Enroll => "Certificate enrollment right → request cert as target user",
             Self::ManageCA => "CA management → issue/revoke certs, modify CA settings",
-            Self::ManageCertificates => "Certificate management → approve pending requests, revoke certs",
+            Self::ManageCertificates => {
+                "Certificate management → approve pending requests, revoke certs"
+            }
             Self::ManageCertTemplate => "Template management → modify template for ESC abuse",
-            Self::UserForceChangePassword => "Reset target password without knowing current password (alias)",
-            Self::AllowedToAct => "Resource-based constrained delegation → impersonate any user to target",
+            Self::UserForceChangePassword => {
+                "Reset target password without knowing current password (alias)"
+            }
+            Self::AllowedToAct => {
+                "Resource-based constrained delegation → impersonate any user to target"
+            }
             Self::WriteProperty { .. } => "Write non-standard property — review GUID for impact",
             Self::Custom(_) => "Custom/delegation right — review carefully",
         }

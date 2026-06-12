@@ -765,9 +765,7 @@ impl EngagementState {
                 };
                 if self.loot.iter().any(|l| l.loot_type == target_loot) {
                     GoalStatus::Achieved
-                } else if self.has_domain_admin
-                    || !self.credentials.is_empty()
-                {
+                } else if self.has_domain_admin || !self.credentials.is_empty() {
                     GoalStatus::InProgress
                 } else {
                     GoalStatus::Pending

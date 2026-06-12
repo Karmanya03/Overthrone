@@ -11,8 +11,8 @@
 //! - AS-REP roasting (if pre-auth is disabled)
 //! - Password analysis and harvesting
 
-use crate::kerberoast::{self, KerberoastConfig, RoastedService};
 use crate::asreproast::{self, AsRepRoastConfig, RoastedAccount};
+use crate::kerberoast::{self, KerberoastConfig, RoastedService};
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use overthrone_core::error::Result;
@@ -176,8 +176,11 @@ pub async fn harvest_machine_accounts(
 
     // Step 3: Kerberoast machine accounts
     if machine_config.run_kerberoast && !result.kerberoastable_machines.is_empty() {
-        info!("Step 3/4: Kerberoasting {} machine accounts...", result.kerberoastable_machines.len());
-        
+        info!(
+            "Step 3/4: Kerberoasting {} machine accounts...",
+            result.kerberoastable_machines.len()
+        );
+
         let kerb_config = KerberoastConfig {
             skip_machine_accounts: false, // We WANT machine accounts
             downgrade_to_rc4: machine_config.downgrade_to_rc4,
@@ -188,14 +191,15 @@ pub async fn harvest_machine_accounts(
         match kerberoast::run(hunt_config, &kerb_config).await {
             Ok(kerb_result) => {
                 // Filter to only machine accounts
-                let machine_hashes: Vec<RoastedService> = kerb_result.hashes
+                let machine_hashes: Vec<RoastedService> = kerb_result
+                    .hashes
                     .into_iter()
                     .filter(|h| h.username.ends_with('$'))
                     .collect();
 
                 result.summary.kerberoast_success = machine_hashes.len();
                 result.kerberoast_results = machine_hashes;
-                
+
                 info!(
                     "  ✓ Extracted {} machine account hashes",
                     result.kerberoast_results.len()
@@ -209,8 +213,11 @@ pub async fn harvest_machine_accounts(
 
     // Step 4: AS-REP roast machine accounts
     if machine_config.run_asrep && !result.asrep_roastable_machines.is_empty() {
-        info!("Step 4/4: AS-REP roasting {} machine accounts...", result.asrep_roastable_machines.len());
-        
+        info!(
+            "Step 4/4: AS-REP roasting {} machine accounts...",
+            result.asrep_roastable_machines.len()
+        );
+
         let asrep_config = AsRepRoastConfig {
             output_file: machine_config.output_file.clone(),
             ..Default::default()
@@ -219,14 +226,15 @@ pub async fn harvest_machine_accounts(
         match asreproast::run(hunt_config, &asrep_config).await {
             Ok(asrep_result) => {
                 // Filter to only machine accounts
-                let machine_hashes: Vec<RoastedAccount> = asrep_result.hashes
+                let machine_hashes: Vec<RoastedAccount> = asrep_result
+                    .hashes
                     .into_iter()
                     .filter(|h| h.username.ends_with('$'))
                     .collect();
 
                 result.summary.asrep_success = machine_hashes.len();
                 result.asrep_results = machine_hashes;
-                
+
                 info!(
                     "  ✓ Extracted {} AS-REP machine hashes",
                     result.asrep_results.len()
@@ -288,7 +296,7 @@ async fn enumerate_machine_accounts(
         // Filter by enabled status (check UAC flag)
         const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
         let is_enabled = (computer.user_account_control & UAC_ACCOUNT_DISABLE) == 0;
-        
+
         if machine_config.enabled_only && !is_enabled {
             continue;
         }
@@ -322,7 +330,10 @@ async fn enumerate_machine_accounts(
         });
     }
 
-    info!("  Enumerated {} machine accounts (after filters)", machines.len());
+    info!(
+        "  Enumerated {} machine accounts (after filters)",
+        machines.len()
+    );
 
     Ok(machines)
 }

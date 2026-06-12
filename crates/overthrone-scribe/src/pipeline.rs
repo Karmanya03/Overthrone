@@ -141,9 +141,14 @@ mod tests {
         let events = findings_to_events(Some("corp.local".to_string()), &[finding]);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "finding");
-        assert!(events[0].data["cvss"].as_f64().unwrap() - 7.5 < f64::EPSILON);
+        assert!((events[0].data["cvss"].as_f64().unwrap() - 7.5).abs() < f64::EPSILON);
         assert_eq!(events[0].domain.as_deref(), Some("corp.local"));
-        assert!(events[0].data["mitre_techniques"].as_array().unwrap().len() > 0);
+        assert!(
+            !events[0].data["mitre_techniques"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -162,7 +167,7 @@ mod tests {
             };
             serde_json::to_string(&event).unwrap()
         };
-        assert!(true);
+        // test passes if no panic
     }
 
     #[test]

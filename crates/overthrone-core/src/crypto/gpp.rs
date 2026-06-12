@@ -103,8 +103,8 @@ pub fn parse_gpp_xml(xml_content: &str, source_file: &str) -> Vec<GppCredential>
         let line = line.trim();
 
         // Check for cpassword attribute (standard GPP)
-        let cpassword = extract_xml_attr(line, "cpassword")
-            .or_else(|| extract_xml_attr(line, "password"));
+        let cpassword =
+            extract_xml_attr(line, "cpassword").or_else(|| extract_xml_attr(line, "password"));
 
         let cpassword = match cpassword {
             Some(cp) if !cp.is_empty() => cp,

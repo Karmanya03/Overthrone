@@ -123,7 +123,10 @@ pub async fn kerberoast_auto_crack(
     }
 
     // Step 3: Request TGTs for cracked credentials
-    info!("Step 3/3: Requesting TGTs for {} cracked credentials...", crack_report.cracked.len());
+    info!(
+        "Step 3/3: Requesting TGTs for {} cracked credentials...",
+        crack_report.cracked.len()
+    );
     let mut cracked_with_tickets = Vec::new();
     let mut cracked_failed_ticket = Vec::new();
 
@@ -171,10 +174,22 @@ pub async fn kerberoast_auto_crack(
 
     info!("╔══════════════════════════════════════════════════════╗");
     info!("║  Auto-Crack Loop Complete                           ║");
-    info!("║  Total hashes: {}                              ║", roast_result.hashes.len());
-    info!("║  Cracked with TGTs: {}                          ║", cracked_with_tickets.len());
-    info!("║  Cracked (no TGT): {}                           ║", cracked_failed_ticket.len());
-    info!("║  Failed to crack: {}                              ║", crack_report.failed.len());
+    info!(
+        "║  Total hashes: {}                              ║",
+        roast_result.hashes.len()
+    );
+    info!(
+        "║  Cracked with TGTs: {}                          ║",
+        cracked_with_tickets.len()
+    );
+    info!(
+        "║  Cracked (no TGT): {}                           ║",
+        cracked_failed_ticket.len()
+    );
+    info!(
+        "║  Failed to crack: {}                              ║",
+        crack_report.failed.len()
+    );
     info!("║  Total time: {}ms                          ║", total_time);
     info!("╚══════════════════════════════════════════════════════╝");
 
@@ -243,7 +258,10 @@ pub async fn asrep_auto_crack(
     }
 
     // Step 3: Request TGTs for cracked credentials
-    info!("Step 3/3: Requesting TGTs for {} cracked credentials...", crack_report.cracked.len());
+    info!(
+        "Step 3/3: Requesting TGTs for {} cracked credentials...",
+        crack_report.cracked.len()
+    );
     let mut cracked_with_tickets = Vec::new();
     let mut cracked_failed_ticket = Vec::new();
 
@@ -291,10 +309,22 @@ pub async fn asrep_auto_crack(
 
     info!("╔══════════════════════════════════════════════════════╗");
     info!("║  Auto-Crack Loop Complete                           ║");
-    info!("║  Total hashes: {}                              ║", roast_result.hashes.len());
-    info!("║  Cracked with TGTs: {}                          ║", cracked_with_tickets.len());
-    info!("║  Cracked (no TGT): {}                           ║", cracked_failed_ticket.len());
-    info!("║  Failed to crack: {}                              ║", crack_report.failed.len());
+    info!(
+        "║  Total hashes: {}                              ║",
+        roast_result.hashes.len()
+    );
+    info!(
+        "║  Cracked with TGTs: {}                          ║",
+        cracked_with_tickets.len()
+    );
+    info!(
+        "║  Cracked (no TGT): {}                           ║",
+        cracked_failed_ticket.len()
+    );
+    info!(
+        "║  Failed to crack: {}                              ║",
+        crack_report.failed.len()
+    );
     info!("║  Total time: {}ms                          ║", total_time);
     info!("╚══════════════════════════════════════════════════════╝");
 
@@ -341,7 +371,7 @@ mod tests {
 
     #[test]
     fn cracked_ticket_serializes() {
-        use crate::crack::{CrackedCredential, CrackSource};
+        use crate::crack::{CrackSource, CrackedCredential};
 
         let ticket = CrackedTicket {
             credential: CrackedCredential {

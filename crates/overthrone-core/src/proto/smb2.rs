@@ -1459,14 +1459,14 @@ impl Smb2Connection {
 // ═══════════════════════════════════════════════════════════
 
 /// Parsed NTLMSSP Type 2 (Challenge) message.
-struct NtlmChallenge {
-    server_challenge: [u8; 8],
-    target_info: Vec<u8>,
-    negotiate_flags: u32,
+pub struct NtlmChallenge {
+    pub server_challenge: [u8; 8],
+    pub target_info: Vec<u8>,
+    pub negotiate_flags: u32,
 }
 
 /// Build NTLMSSP Type 1 (Negotiate) message.
-fn build_ntlmssp_negotiate() -> Vec<u8> {
+pub fn build_ntlmssp_negotiate() -> Vec<u8> {
     let flags = NTLMSSP_NEGOTIATE_56
         | NTLMSSP_NEGOTIATE_KEY_EXCH
         | NTLMSSP_NEGOTIATE_128
@@ -1494,7 +1494,7 @@ fn build_ntlmssp_negotiate() -> Vec<u8> {
 }
 
 /// Parse NTLMSSP Type 2 (Challenge) message.
-fn parse_ntlmssp_challenge(data: &[u8]) -> Result<NtlmChallenge> {
+pub fn parse_ntlmssp_challenge(data: &[u8]) -> Result<NtlmChallenge> {
     if data.len() < 32 {
         return Err(OverthroneError::Smb("NTLMSSP Type 2 too short".to_string()));
     }
@@ -1540,7 +1540,7 @@ fn parse_ntlmssp_challenge(data: &[u8]) -> Result<NtlmChallenge> {
 
 /// Build NTLMSSP Type 3 (Authenticate) from password.
 /// Returns (type3_message, session_key).
-fn build_ntlmssp_authenticate(
+pub fn build_ntlmssp_authenticate(
     domain: &str,
     username: &str,
     password: &str,
@@ -1561,7 +1561,7 @@ fn build_ntlmssp_authenticate(
 }
 
 /// Build NTLMSSP Type 3 from raw NT hash (for pass-the-hash).
-fn build_ntlmssp_authenticate_hash(
+pub fn build_ntlmssp_authenticate_hash(
     domain: &str,
     username: &str,
     nt_hash: &[u8],

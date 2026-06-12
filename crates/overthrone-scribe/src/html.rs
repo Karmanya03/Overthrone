@@ -124,8 +124,14 @@ pub fn render(session: &EngagementSession) -> String {
     html.push_str("<section id=\"stats\">\n");
     html.push_str("<h2>Key Metrics</h2>\n");
     html.push_str("<div class=\"stats-grid\">\n");
-    html.push_str(&stat_card("Users Enumerated", session.total_users_enumerated));
-    html.push_str(&stat_card("Computers Enumerated", session.total_computers_enumerated));
+    html.push_str(&stat_card(
+        "Users Enumerated",
+        session.total_users_enumerated,
+    ));
+    html.push_str(&stat_card(
+        "Computers Enumerated",
+        session.total_computers_enumerated,
+    ));
     html.push_str(&stat_card(
         "Credentials Compromised",
         session.total_credentials_compromised,
@@ -518,8 +524,10 @@ mod tests {
 
     #[test]
     fn test_escape_html() {
-        assert_eq!(escape_html("<script>alert('xss')</script>"),
-            "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;");
+        assert_eq!(
+            escape_html("<script>alert('xss')</script>"),
+            "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"
+        );
         assert_eq!(escape_html("a & b"), "a &amp; b");
     }
 
@@ -530,6 +538,9 @@ mod tests {
         assert!(ev.verify_integrity());
         let hash = ev.sha256_hash.as_ref().unwrap();
         // SHA-256 of "hello world" is well-known
-        assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 }

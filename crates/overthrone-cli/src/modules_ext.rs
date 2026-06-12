@@ -308,6 +308,9 @@ impl OvtModule for NtdsDumpModule {
             skeleton_master_password: None,
             pkinit_cert_path: None,
             pkinit_key_path: None,
+            pkinit_keyed_ticket: false,
+            pkinit_session_key: None,
+            pkinit_ticket_data: None,
             dry_run: false,
         };
 

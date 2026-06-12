@@ -699,9 +699,12 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     let ctx_clone = ctx.clone();
                     let state_snapshot = state.clone();
                     handles.push(tokio::spawn(async move {
-                        let result =
-                            executor::execute_step(&step_clone, &ctx_clone, &mut state_snapshot.clone())
-                                .await;
+                        let result = executor::execute_step(
+                            &step_clone,
+                            &ctx_clone,
+                            &mut state_snapshot.clone(),
+                        )
+                        .await;
                         (idx, result)
                     }));
                 }
@@ -770,11 +773,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 (s.noise, s.priority, s.description.clone())
             };
             let has_creds = !state.credentials.is_empty();
-            let decision = effective_opsec.should_execute(
-                step_noise,
-                step_priority,
-                has_creds,
-            );
+            let decision = effective_opsec.should_execute(step_noise, step_priority, has_creds);
             match &decision {
                 crate::planner::OpsecDecision::Allow { reason } => {
                     tracing::debug!("OPSEC: allowing '{}' — {}", step_desc, reason);
@@ -2046,7 +2045,10 @@ mod tests {
         // Critical noise (95 priority, no creds) -> still Critical > Medium -> override
         let d = profile.should_execute(crate::planner::NoiseLevel::Critical, 95, false);
         assert!(d.is_allowed());
-        assert!(matches!(d, crate::planner::OpsecDecision::AllowOverride { .. }));
+        assert!(matches!(
+            d,
+            crate::planner::OpsecDecision::AllowOverride { .. }
+        ));
         // Critical noise with low priority -> denied
         let d = profile.should_execute(crate::planner::NoiseLevel::Critical, 50, false);
         assert!(!d.is_allowed());
@@ -2068,7 +2070,9 @@ mod tests {
     #[test]
     fn multi_dc_config_round_robin() {
         let mut m = crate::planner::MultiDcConfig::new(vec![
-            "10.0.0.1".into(), "10.0.0.2".into(), "10.0.0.3".into(),
+            "10.0.0.1".into(),
+            "10.0.0.2".into(),
+            "10.0.0.3".into(),
         ]);
         assert!(m.enabled);
         assert_eq!(m.len(), 3);
@@ -2080,9 +2084,7 @@ mod tests {
 
     #[test]
     fn multi_dc_failover() {
-        let mut m = crate::planner::MultiDcConfig::new(vec![
-            "10.0.0.1".into(), "10.0.0.2".into(),
-        ]);
+        let mut m = crate::planner::MultiDcConfig::new(vec!["10.0.0.1".into(), "10.0.0.2".into()]);
         assert_eq!(m.active_host(), Some("10.0.0.1"));
         assert_eq!(m.failover(), Some("10.0.0.2"));
         assert_eq!(m.active_host(), Some("10.0.0.2"));

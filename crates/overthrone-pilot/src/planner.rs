@@ -1098,10 +1098,7 @@ impl OpsecProfile {
 
         if effective_noise <= self.max_noise {
             return OpsecDecision::Allow {
-                reason: format!(
-                    "noise {} within budget {}",
-                    effective_noise, self.max_noise
-                ),
+                reason: format!("noise {} within budget {}", effective_noise, self.max_noise),
             };
         }
 
@@ -1218,10 +1215,7 @@ impl MultiDcConfig {
             return None;
         }
         self.active_index = (self.active_index + 1) % self.dc_hosts.len();
-        warn!(
-            "Multi-DC failover to {}",
-            self.dc_hosts[self.active_index]
-        );
+        warn!("Multi-DC failover to {}", self.dc_hosts[self.active_index]);
         self.dc_hosts.get(self.active_index).map(|s| s.as_str())
     }
 
@@ -1377,7 +1371,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
-                                            parallel_safe: false,
+                        parallel_safe: false,
                     });
                 }
 
@@ -1400,7 +1394,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
-                                            parallel_safe: false,
+                        parallel_safe: false,
                     });
                 }
             }
@@ -1563,7 +1557,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
         }
 
@@ -1598,7 +1592,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
         }
 
@@ -1624,7 +1618,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
         }
 
@@ -1648,7 +1642,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
         }
 
@@ -1687,7 +1681,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
         }
@@ -1713,7 +1707,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
 
             // ESC1 — enrollee supplies SAN (most common ADCS vuln)
@@ -1737,7 +1731,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
 
@@ -1760,7 +1754,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
 
@@ -1786,7 +1780,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
 
@@ -1945,7 +1939,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
         }
@@ -1982,7 +1976,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
         }
@@ -2007,7 +2001,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
         }
@@ -2034,7 +2028,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
         }
@@ -2067,7 +2061,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
-                                            parallel_safe: false,
+                        parallel_safe: false,
                     });
                 }
             }
@@ -2100,7 +2094,7 @@ impl Planner {
                         max_retries: 2,
                         reversible: false,
                         compensation: None,
-                                            parallel_safe: false,
+                        parallel_safe: false,
                     });
                 }
             }
@@ -2127,7 +2121,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
-                                            parallel_safe: false,
+                        parallel_safe: false,
                     });
                 }
                 if !failed_actions.contains(&format!("dump_sam_{}", host)) {
@@ -2147,7 +2141,7 @@ impl Planner {
                         max_retries: 1,
                         reversible: false,
                         compensation: None,
-                                            parallel_safe: false,
+                        parallel_safe: false,
                     });
                 }
             }
@@ -2181,7 +2175,7 @@ impl Planner {
                     max_retries: 1,
                     reversible: false,
                     compensation: None,
-                                        parallel_safe: false,
+                    parallel_safe: false,
                 });
             }
         }
@@ -2213,7 +2207,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
         }
 
@@ -2245,7 +2239,7 @@ impl Planner {
                 max_retries: 1,
                 reversible: false,
                 compensation: None,
-                                    parallel_safe: false,
+                parallel_safe: false,
             });
         }
 

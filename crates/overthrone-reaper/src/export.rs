@@ -559,36 +559,62 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 pub fn known_bloodhound_v4_edges() -> Vec<&'static str> {
     vec![
         // Core ACL rights
-        "GenericAll", "GenericWrite", "WriteDacl", "WriteOwner",
-        "Owns", "AllExtendedRights", "CreateChild", "WriteSelf",
-        "ForceChangePassword", "ReadLapsPassword", "ReadLapsPasswordExpiry",
+        "GenericAll",
+        "GenericWrite",
+        "WriteDacl",
+        "WriteOwner",
+        "Owns",
+        "AllExtendedRights",
+        "CreateChild",
+        "WriteSelf",
+        "ForceChangePassword",
+        "ReadLapsPassword",
+        "ReadLapsPasswordExpiry",
         "ReadGmsaPassword",
         // Group membership
-        "AddMembers", "AddSelf",
+        "AddMembers",
+        "AddSelf",
         // Kerberos/SPN abuse
-        "WriteSPN", "WriteAllowedToDelegateTo", "AddAllowedToAct",
-        "AddKeyCredentialLink", "WriteKeyCredentialLink",
+        "WriteSPN",
+        "WriteAllowedToDelegateTo",
+        "AddAllowedToAct",
+        "AddKeyCredentialLink",
+        "WriteKeyCredentialLink",
         "WriteMsDsKeyCredentialLink",
         // Account restrictions
-        "WriteAccountRestrictions", "WriteLogonScript",
-        "WriteProfilePath", "WriteScriptPath", "WriteDnsHostName",
-        "WriteServicePrincipalName", "WriteUserCertificate",
-        "WriteUserParameters", "WriteAltSecurityIdentities",
+        "WriteAccountRestrictions",
+        "WriteLogonScript",
+        "WriteProfilePath",
+        "WriteScriptPath",
+        "WriteDnsHostName",
+        "WriteServicePrincipalName",
+        "WriteUserCertificate",
+        "WriteUserParameters",
+        "WriteAltSecurityIdentities",
         // Password policy
-        "WritePwdProperties", "WriteLockoutThreshold", "WriteMinPwdLength",
-        "WritePwdHistoryLength", "WritePwdComplexity",
-        "WritePwdReversibleEncryption", "WritePwdAge",
-        "WriteLockoutDuration", "WriteLockoutObservationWindow",
+        "WritePwdProperties",
+        "WriteLockoutThreshold",
+        "WriteMinPwdLength",
+        "WritePwdHistoryLength",
+        "WritePwdComplexity",
+        "WritePwdReversibleEncryption",
+        "WritePwdAge",
+        "WriteLockoutDuration",
+        "WriteLockoutObservationWindow",
         // GPO
         "WriteGPLink",
         // DCSync
         "DcSync",
         // Certificate enrollment
-        "Enroll", "EnrollCertificate",
+        "Enroll",
+        "EnrollCertificate",
         // CA management
-        "ManageCA", "ManageCertificates", "ManageCertTemplate",
+        "ManageCA",
+        "ManageCertificates",
+        "ManageCertTemplate",
         // Extended rights
-        "UserForceChangePassword", "AllowedToAct",
+        "UserForceChangePassword",
+        "AllowedToAct",
     ]
 }
 
@@ -664,10 +690,7 @@ fn all_mapped_bloodhound_edges() -> Vec<String> {
         DangerousRight::UserForceChangePassword,
         DangerousRight::AllowedToAct,
     ];
-    variants
-        .iter()
-        .map(right_to_bloodhound_name)
-        .collect()
+    variants.iter().map(right_to_bloodhound_name).collect()
 }
 
 #[cfg(test)]
@@ -768,6 +791,10 @@ mod tests {
         assert!(edges.contains(&"Enroll"));
         assert!(edges.contains(&"AllExtendedRights"));
         // Verify count is reasonable (BloodHound v4 has ~50 edge types)
-        assert!(edges.len() >= 40, "Expected >= 40 known edges, got {}", edges.len());
+        assert!(
+            edges.len() >= 40,
+            "Expected >= 40 known edges, got {}",
+            edges.len()
+        );
     }
 }

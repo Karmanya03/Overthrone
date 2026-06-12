@@ -504,7 +504,7 @@ mod tests {
             is_machine: bool,
             spns: Vec<&'static str>,
         }
-        let users = vec![
+        let users = [
             MockUser {
                 sam: "normaluser",
                 enabled: true,
@@ -566,7 +566,7 @@ mod tests {
         struct MockUser {
             dont_req_preauth: bool,
         }
-        let users = vec![
+        let users = [
             MockUser {
                 dont_req_preauth: false,
             },

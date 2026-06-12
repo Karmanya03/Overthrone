@@ -139,9 +139,20 @@ pub struct ReasoningSummary {
 
 /// Keywords that indicate high-value accounts
 const HIGH_VALUE_KEYWORDS: &[&str] = &[
-    "admin", "da", "ea", "domain admin", "enterprise admin",
-    "schema admin", "key admin", "dnsadmin", "backup",
-    "restore", "service", "sql", "exchange", "sccm",
+    "admin",
+    "da",
+    "ea",
+    "domain admin",
+    "enterprise admin",
+    "schema admin",
+    "key admin",
+    "dnsadmin",
+    "backup",
+    "restore",
+    "service",
+    "sql",
+    "exchange",
+    "sccm",
 ];
 
 // ═══════════════════════════════════════════════════════════
@@ -163,11 +174,11 @@ pub async fn analyze_roast_targets(
     target_accounts: &[String],
     spn_map: &std::collections::HashMap<String, Vec<String>>,
 ) -> Result<AclReasoningResult> {
+    info!("{}", "═══ ACL REASONING ANALYSIS ═══".bold().bright_cyan());
     info!(
-        "{}",
-        "═══ ACL REASONING ANALYSIS ═══".bold().bright_cyan()
+        "Analyzing {} targets for attack value...",
+        target_accounts.len()
     );
-    info!("Analyzing {} targets for attack value...", target_accounts.len());
 
     let mut targets = Vec::new();
     let mut summary = ReasoningSummary {
@@ -197,9 +208,7 @@ pub async fn analyze_roast_targets(
         }
 
         // Track top targets (critical/high priority)
-        if analysis.risk_level == RiskLevel::Critical
-            || analysis.risk_level == RiskLevel::High
-        {
+        if analysis.risk_level == RiskLevel::Critical || analysis.risk_level == RiskLevel::High {
             summary.top_targets.push(account.clone());
         }
 
@@ -211,27 +220,17 @@ pub async fn analyze_roast_targets(
 
     info!(
         "Analysis complete: {} critical, {} high, {} medium, {} low",
-        summary.critical_count,
-        summary.high_count,
-        summary.medium_count,
-        summary.low_count
+        summary.critical_count, summary.high_count, summary.medium_count, summary.low_count
     );
 
-    Ok(AclReasoningResult {
-        targets,
-        summary,
-    })
+    Ok(AclReasoningResult { targets, summary })
 }
 
 // ═══════════════════════════════════════════════════════════
 // Single Target Analysis
 // ═══════════════════════════════════════════════════════════
 
-fn analyze_single_target(
-    account_name: &str,
-    spns: Vec<String>,
-    domain: &str,
-) -> TargetAnalysis {
+fn analyze_single_target(account_name: &str, spns: Vec<String>, domain: &str) -> TargetAnalysis {
     let mut reasons = Vec::new();
     let mut attack_paths = Vec::new();
     let mut high_value_groups = Vec::new();
@@ -295,7 +294,10 @@ fn analyze_account_name(
             });
 
             if keyword.contains("admin") {
-                high_value_groups.push(format!("Potential Admin Group (based on name '{}')", account_name));
+                high_value_groups.push(format!(
+                    "Potential Admin Group (based on name '{}')",
+                    account_name
+                ));
             }
             break; // Only count once
         }
@@ -306,7 +308,8 @@ fn analyze_account_name(
         reasons.push(AttackReason {
             category: "Service Account".to_string(),
             description: "Follows service account naming pattern (svc_ or service_)".to_string(),
-            impact: "Service accounts often have elevated privileges and weak passwords".to_string(),
+            impact: "Service accounts often have elevated privileges and weak passwords"
+                .to_string(),
         });
     }
 
@@ -315,7 +318,8 @@ fn analyze_account_name(
         reasons.push(AttackReason {
             category: "Backup Account".to_string(),
             description: "Account name suggests backup/restore privileges".to_string(),
-            impact: "Backup operators can access domain controller backups with NTDS.dit".to_string(),
+            impact: "Backup operators can access domain controller backups with NTDS.dit"
+                .to_string(),
         });
     }
 }
@@ -357,7 +361,8 @@ fn analyze_spns(
             reasons.push(AttackReason {
                 category: "SPN Analysis".to_string(),
                 description: format!("HOST SPN: {}", spn),
-                impact: "HOST SPN often indicates computer account with local admin rights".to_string(),
+                impact: "HOST SPN often indicates computer account with local admin rights"
+                    .to_string(),
             });
         }
 
@@ -366,7 +371,8 @@ fn analyze_spns(
             reasons.push(AttackReason {
                 category: "SPN Analysis".to_string(),
                 description: format!("Exchange SPN: {}", spn),
-                impact: "Exchange servers often have high privileges and sensitive data".to_string(),
+                impact: "Exchange servers often have high privileges and sensitive data"
+                    .to_string(),
             });
             attack_paths.push(AttackPath {
                 path: format!("Exchange SPN → {} → Email access", spn),
@@ -395,9 +401,9 @@ fn calculate_risk_level(
     }
 
     if reasons.iter().any(|r| {
-        r.description.contains("Domain Admin") || 
-        r.description.contains("Enterprise Admin") ||
-        r.description.contains("Schema Admin")
+        r.description.contains("Domain Admin")
+            || r.description.contains("Enterprise Admin")
+            || r.description.contains("Schema Admin")
     }) {
         return RiskLevel::Critical;
     }
@@ -408,23 +414,26 @@ fn calculate_risk_level(
     }
 
     if reasons.iter().any(|r| {
-        r.category.contains("SPN") && (
-            r.description.contains("SQL") || 
-            r.description.contains("Exchange") ||
-            r.description.contains("HOST")
-        )
+        r.category.contains("SPN")
+            && (r.description.contains("SQL")
+                || r.description.contains("Exchange")
+                || r.description.contains("HOST"))
     }) {
         return RiskLevel::High;
     }
 
-    if reasons.iter().any(|r| {
-        r.category.contains("Backup") || r.category.contains("Service Account")
-    }) {
+    if reasons
+        .iter()
+        .any(|r| r.category.contains("Backup") || r.category.contains("Service Account"))
+    {
         return RiskLevel::High;
     }
 
     // Medium: Any named-based admin indicators OR single attack path
-    if reasons.iter().any(|r| r.category.contains("Account Name") && r.description.contains("admin")) {
+    if reasons
+        .iter()
+        .any(|r| r.category.contains("Account Name") && r.description.contains("admin"))
+    {
         return RiskLevel::Medium;
     }
 

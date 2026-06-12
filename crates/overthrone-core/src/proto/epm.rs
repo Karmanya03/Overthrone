@@ -747,7 +747,7 @@ async fn enumerate_epmapper(smb: &SmbSession) -> Result<Vec<EpEndpoint>> {
 // ═══════════════════════════════════════════════════════════
 
 /// Write a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
-async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
+pub async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
     let len = (pdu.len() as u32).to_le_bytes();
     stream
         .write_all(&len)
@@ -761,7 +761,7 @@ async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
 }
 
 /// Read a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
-async fn btf_read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
+pub async fn btf_read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     stream
         .read_exact(&mut len_buf)

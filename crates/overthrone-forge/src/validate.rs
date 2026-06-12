@@ -403,6 +403,72 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
                 ));
             }
         }
+        crate::runner::ForgeAction::PkinitAuth => {
+            if config.pkinit_cert_path.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "PKINIT authentication requires --pkinit-cert".into(),
+                ));
+            }
+            if config.pkinit_key_path.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "PKINIT authentication requires --pkinit-key".into(),
+                ));
+            }
+        }
+        crate::runner::ForgeAction::AdcsExploit {
+            ca_url,
+            action,
+            template,
+            ..
+        } => {
+            if ca_url.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "ADCS exploit requires --ca-url".into(),
+                ));
+            }
+            if action.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "ADCS exploit requires --adcs-action (auto, esc1-esc9)".into(),
+                ));
+            }
+            if template.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "ADCS exploit requires --template".into(),
+                ));
+            }
+
+            // Validate ADCS action is one of the supported values
+            let action_lower = action.to_lowercase();
+            match action_lower.as_str() {
+                "auto" | "esc1" | "esc2" | "esc3" | "esc4" | "esc5" | "esc6" | "esc7" | "esc8"
+                | "esc9" => {}
+                _ => {
+                    return Err(OverthroneError::TicketForge(format!(
+                        "Invalid ADCS action '{}'. Must be one of: auto, esc1, esc2, esc3, esc4, esc5, esc6, esc7, esc8, esc9",
+                        action
+                    )));
+                }
+            }
+        }
+        crate::runner::ForgeAction::S4u2SelfPkinit {
+            impersonate_user, ..
+        } => {
+            if config.pkinit_cert_path.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "S4U2Self+PKINIT requires --pkinit-cert".into(),
+                ));
+            }
+            if config.pkinit_key_path.is_none() {
+                return Err(OverthroneError::TicketForge(
+                    "S4U2Self+PKINIT requires --pkinit-key".into(),
+                ));
+            }
+            if impersonate_user.is_empty() {
+                return Err(OverthroneError::TicketForge(
+                    "S4U2Self+PKINIT requires --impersonate-user".into(),
+                ));
+            }
+        }
     }
 
     debug!("ForgeConfig validation passed");

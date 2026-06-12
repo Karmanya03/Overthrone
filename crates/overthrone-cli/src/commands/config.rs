@@ -910,9 +910,11 @@ mod tests {
     #[test]
     fn set_value_writes_pretty_toml() {
         let path = isolated_path("pretty-toml");
-        let mut cfg = cli_config::CliConfig::default();
-        cfg.dc_host = Some("10.0.0.1".to_string());
-        cfg.verbose = Some(2);
+        let cfg = cli_config::CliConfig {
+            dc_host: Some("10.0.0.1".to_string()),
+            verbose: Some(2),
+            ..Default::default()
+        };
         cli_config::save_config(&path, &cfg).unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("dc_host"));

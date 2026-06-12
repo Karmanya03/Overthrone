@@ -239,6 +239,61 @@ pub fn extract_tactics(mappings: &[MitreMapping]) -> Vec<String> {
     tactics
 }
 
+/// Build a MITRE ATT&CK matrix summary from all findings
+pub fn build_attack_matrix(
+    findings: &[super::session::Finding],
+) -> Vec<(String, Vec<MitreMapping>)> {
+    let mut by_tactic: std::collections::HashMap<String, Vec<MitreMapping>> =
+        std::collections::HashMap::new();
+
+    for finding in findings {
+        for mapping in &finding.mitre {
+            by_tactic
+                .entry(mapping.tactic.clone())
+                .or_default()
+                .push(mapping.clone());
+        }
+    }
+
+    // Deduplicate within each tactic
+    for techniques in by_tactic.values_mut() {
+        techniques.sort_by_key(|a| (a.technique_id.clone(), a.sub_technique_id.clone()));
+        techniques.dedup_by(|a, b| {
+            a.technique_id == b.technique_id && a.sub_technique_id == b.sub_technique_id
+        });
+    }
+
+    // Order by kill chain
+    let tactic_order = [
+        "Reconnaissance",
+        "Resource Development",
+        "Initial Access",
+        "Execution",
+        "Persistence",
+        "Privilege Escalation",
+        "Defense Evasion",
+        "Credential Access",
+        "Discovery",
+        "Lateral Movement",
+        "Collection",
+        "Exfiltration",
+        "Command and Control",
+        "Impact",
+    ];
+
+    let mut result: Vec<(String, Vec<MitreMapping>)> = Vec::new();
+    for tactic in &tactic_order {
+        if let Some(techniques) = by_tactic.remove(*tactic) {
+            result.push((tactic.to_string(), techniques));
+        }
+    }
+    // Append any remaining
+    for (tactic, techniques) in by_tactic {
+        result.push((tactic, techniques));
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,59 +352,4 @@ mod tests {
         let matrix = build_attack_matrix(&[]);
         assert!(matrix.is_empty());
     }
-}
-
-/// Build a MITRE ATT&CK matrix summary from all findings
-pub fn build_attack_matrix(
-    findings: &[super::session::Finding],
-) -> Vec<(String, Vec<MitreMapping>)> {
-    let mut by_tactic: std::collections::HashMap<String, Vec<MitreMapping>> =
-        std::collections::HashMap::new();
-
-    for finding in findings {
-        for mapping in &finding.mitre {
-            by_tactic
-                .entry(mapping.tactic.clone())
-                .or_default()
-                .push(mapping.clone());
-        }
-    }
-
-    // Deduplicate within each tactic
-    for techniques in by_tactic.values_mut() {
-        techniques.sort_by_key(|a| (a.technique_id.clone(), a.sub_technique_id.clone()));
-        techniques.dedup_by(|a, b| {
-            a.technique_id == b.technique_id && a.sub_technique_id == b.sub_technique_id
-        });
-    }
-
-    // Order by kill chain
-    let tactic_order = [
-        "Reconnaissance",
-        "Resource Development",
-        "Initial Access",
-        "Execution",
-        "Persistence",
-        "Privilege Escalation",
-        "Defense Evasion",
-        "Credential Access",
-        "Discovery",
-        "Lateral Movement",
-        "Collection",
-        "Exfiltration",
-        "Command and Control",
-        "Impact",
-    ];
-
-    let mut result: Vec<(String, Vec<MitreMapping>)> = Vec::new();
-    for tactic in &tactic_order {
-        if let Some(techniques) = by_tactic.remove(*tactic) {
-            result.push((tactic.to_string(), techniques));
-        }
-    }
-    // Append any remaining
-    for (tactic, techniques) in by_tactic {
-        result.push((tactic, techniques));
-    }
-    result
 }

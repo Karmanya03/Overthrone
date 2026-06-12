@@ -12,6 +12,7 @@ pub mod http;
 pub mod mssql;
 pub mod output;
 pub mod peas;
+pub mod pivot;
 pub mod plugin;
 pub mod postex;
 pub mod proto;

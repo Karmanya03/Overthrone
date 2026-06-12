@@ -167,11 +167,11 @@ impl DnsRotator {
     pub fn new(resolvers: Vec<String>) -> Self {
         let resolvers = if resolvers.is_empty() {
             vec![
-                "8.8.8.8".into(),     // Google
-                "8.8.4.4".into(),     // Google
-                "1.1.1.1".into(),     // Cloudflare
-                "1.0.0.1".into(),     // Cloudflare
-                "9.9.9.9".into(),     // Quad9
+                "8.8.8.8".into(),        // Google
+                "8.8.4.4".into(),        // Google
+                "1.1.1.1".into(),        // Cloudflare
+                "1.0.0.1".into(),        // Cloudflare
+                "9.9.9.9".into(),        // Quad9
                 "208.67.222.222".into(), // OpenDNS
             ]
         } else {

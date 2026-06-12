@@ -139,12 +139,12 @@ pub async fn generate_smart_wordlist(
 
         for user in &users {
             let username = &user.sam_account_name;
-            
+
             // Add username variations
             passwords.insert(username.clone());
             passwords.insert(username.to_lowercase());
             passwords.insert(username.to_uppercase());
-            
+
             // Username + number patterns
             for num in &[1, 123, 2024, 2025] {
                 passwords.insert(format!("{}{}", username, num));
@@ -165,12 +165,12 @@ pub async fn generate_smart_wordlist(
         for computer in &computers {
             // Remove trailing $ for base name
             let base_name = computer.sam_account_name.trim_end_matches('$');
-            
+
             // Service account patterns
             passwords.insert(format!("svc_{}", base_name));
             passwords.insert(format!("service_{}", base_name));
             passwords.insert(format!("{}svc", base_name));
-            
+
             // Computer name patterns
             if let Some(hostname) = &computer.dns_hostname {
                 let hostname_base = hostname.split('.').next().unwrap_or(hostname);
@@ -179,7 +179,10 @@ pub async fn generate_smart_wordlist(
             }
         }
 
-        info!("    Added service patterns for {} computers", computers.len());
+        info!(
+            "    Added service patterns for {} computers",
+            computers.len()
+        );
     }
 
     // Step 3: Apply base word patterns
@@ -201,7 +204,7 @@ pub async fn generate_smart_wordlist(
 
     // Convert to vector and limit
     let mut password_vec: Vec<String> = passwords.into_iter().collect();
-    
+
     if wordlist_config.max_passwords > 0 && password_vec.len() > wordlist_config.max_passwords {
         info!(
             "  Truncating wordlist from {} to {} passwords",
@@ -234,7 +237,7 @@ pub async fn generate_smart_wordlist(
 
 fn extract_domain_words(domain: &str) -> Vec<String> {
     let mut words = Vec::new();
-    
+
     // Split domain: corp.local -> ["corp", "local"]
     let parts: Vec<&str> = domain.split('.').collect();
     if !parts.is_empty() {
@@ -252,19 +255,19 @@ fn extract_domain_words(domain: &str) -> Vec<String> {
 
 fn apply_base_word_patterns(base_words: &[String], passwords: &mut HashSet<String>) -> usize {
     let mut count = 0;
-    
+
     for word in base_words {
         // Word + common suffixes
         for suffix in &["123", "123!", "1234", "12345", "!", "#", "@"] {
             passwords.insert(format!("{}{}", word, suffix));
         }
-        
+
         // Word + year
         for year in &["2023", "2024", "2025", "2026"] {
             passwords.insert(format!("{}{}", word, year));
             passwords.insert(format!("{}!{}", word, year));
         }
-        
+
         // Capitalized variations
         if word.len() > 1 {
             let mut capitalized = word.clone();
@@ -273,10 +276,10 @@ fn apply_base_word_patterns(base_words: &[String], passwords: &mut HashSet<Strin
             passwords.insert(format!("{}123", capitalized));
             passwords.insert(format!("{}2024", capitalized));
         }
-        
+
         count += 1;
     }
-    
+
     count
 }
 
@@ -297,7 +300,7 @@ fn apply_seasonal_patterns(base_words: &[String], passwords: &mut HashSet<String
             passwords.insert(format!("{}{}!", season, year));
             passwords.insert(format!("{}{}", season, year));
             passwords.insert(format!("{}#{}", season, year));
-            
+
             // Base words + season
             for word in base_words {
                 passwords.insert(format!("{}{}!", word, season));
@@ -310,34 +313,43 @@ fn apply_seasonal_patterns(base_words: &[String], passwords: &mut HashSet<String
 fn apply_common_ad_patterns(base_words: &[String], passwords: &mut HashSet<String>) {
     // Most common AD passwords (security studies show these appear frequently)
     let common_passwords = &[
-        "Password1", "Password1!", "Password123", "Password123!",
-        "Welcome1", "Welcome123", "Welcome2024!",
-        "P@ssw0rd", "P@ssw0rd1", "P@ssw0rd123",
-        "Company123!", "Domain123!", "Admin123!",
-        "Default1", "Default123!",
-        "Changeme1", "Changeme123!",
-        "Letmein1", "Letmein123!",
+        "Password1",
+        "Password1!",
+        "Password123",
+        "Password123!",
+        "Welcome1",
+        "Welcome123",
+        "Welcome2024!",
+        "P@ssw0rd",
+        "P@ssw0rd1",
+        "P@ssw0rd123",
+        "Company123!",
+        "Domain123!",
+        "Admin123!",
+        "Default1",
+        "Default123!",
+        "Changeme1",
+        "Changeme123!",
+        "Letmein1",
+        "Letmein123!",
     ];
 
     for pwd in common_passwords {
         passwords.insert(pwd.to_string());
-        
+
         // Replace with org name
         for word in base_words {
-            let customized = pwd.replace("Company", word)
-                                .replace("Domain", word)
-                                .replace("company", &word.to_lowercase())
-                                .replace("domain", &word.to_lowercase());
+            let customized = pwd
+                .replace("Company", word)
+                .replace("Domain", word)
+                .replace("company", &word.to_lowercase())
+                .replace("domain", &word.to_lowercase());
             passwords.insert(customized);
         }
     }
 
     // Common patterns with symbols
-    let patterns = &[
-        ("Pass", "w0rd"),
-        ("Adm", "in"),
-        ("Svc", "Account"),
-    ];
+    let patterns = &[("Pass", "w0rd"), ("Adm", "in"), ("Svc", "Account")];
 
     for (prefix, suffix) in patterns {
         for word in base_words {
@@ -359,7 +371,7 @@ fn apply_leet_speak(passwords: &mut HashSet<String>) {
     ];
 
     let existing: Vec<String> = passwords.iter().cloned().collect();
-    
+
     for pwd in &existing {
         for &(char_from, char_to) in &leet_map {
             if pwd.contains(char_from) {

@@ -74,7 +74,7 @@ mod wizard_stage_tests {
 
     #[test]
     fn wizard_stage_count_is_six() {
-        let stages = vec![
+        let stages = [
             Stage::Enumerate,
             Stage::Attack,
             Stage::Escalate,
@@ -87,7 +87,7 @@ mod wizard_stage_tests {
 
     #[test]
     fn wizard_stages_in_correct_order() {
-        let stages = vec![
+        let stages = [
             Stage::Enumerate,
             Stage::Attack,
             Stage::Escalate,

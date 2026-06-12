@@ -154,9 +154,7 @@ pub async fn run_ntlm_to_tgt(config: &NtlmToTgtConfig) -> Result<NtlmToTgtResult
     // Print summary
     info!(
         "NTLM→TGT pipeline complete: {}/{} successful ({}ms)",
-        result.total_successful,
-        result.total_attempted,
-        result.processing_time_ms
+        result.total_successful, result.total_attempted, result.processing_time_ms
     );
 
     if result.total_successful > 0 {
@@ -202,10 +200,7 @@ async fn process_single_ntlm(
     {
         Ok(tgt) => tgt,
         Err(e) => {
-            return Err((
-                username.to_string(),
-                format!("TGT request failed: {}", e),
-            ));
+            return Err((username.to_string(), format!("TGT request failed: {}", e)));
         }
     };
 
@@ -225,13 +220,7 @@ async fn process_single_ntlm(
     let mut service_tickets = Vec::new();
 
     for spn in &config.target_spns {
-        match kerberos::request_service_ticket(
-            &config.dc_ip,
-            &tgt,
-            spn,
-        )
-        .await
-        {
+        match kerberos::request_service_ticket(&config.dc_ip, &tgt, spn).await {
             Ok(st) => {
                 let st_data = st.ticket.enc_part.cipher.clone();
                 let st_expiry = if let Some(end_time) = &st.end_time {
@@ -259,7 +248,11 @@ async fn process_single_ntlm(
 
     // Redact hash for safe display (show first 4 and last 4 chars)
     let hash_redacted = if ntlm_hash.len() > 8 {
-        format!("{}********{}", &ntlm_hash[..4], &ntlm_hash[ntlm_hash.len() - 4..])
+        format!(
+            "{}********{}",
+            &ntlm_hash[..4],
+            &ntlm_hash[ntlm_hash.len() - 4..]
+        )
     } else {
         "****".to_string()
     };
@@ -282,15 +275,24 @@ async fn process_single_ntlm(
 /// - Credential dumping (Mimikatz, lsass dump)
 /// - NTLM relay captures (overthrone-relay)
 /// - SAM/LSA extraction (registry hives)
-/// 
+///
 /// LDAP enumeration (reaper) does NOT return NTLM hashes -
 /// they must be obtained through other means.
 #[cfg(test)]
 pub fn generate_test_hashes() -> Vec<(String, String)> {
     vec![
-        ("testuser1".to_string(), "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4".to_string()),
-        ("testuser2".to_string(), "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5".to_string()),
-        ("admin".to_string(), "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6".to_string()),
+        (
+            "testuser1".to_string(),
+            "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4".to_string(),
+        ),
+        (
+            "testuser2".to_string(),
+            "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5".to_string(),
+        ),
+        (
+            "admin".to_string(),
+            "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6".to_string(),
+        ),
     ]
 }
 
@@ -401,13 +403,11 @@ mod tests {
             ticket_data: vec![1, 2, 3],
             session_key: vec![4, 5, 6],
             ticket_expiry: "2024-01-01 00:00:00 UTC".to_string(),
-            service_tickets: vec![
-                ServiceTicket {
-                    spn: "ldap/dc01.test.local".to_string(),
-                    ticket_data: vec![7, 8, 9],
-                    ticket_expiry: "2024-01-01 10:00:00 UTC".to_string(),
-                },
-            ],
+            service_tickets: vec![ServiceTicket {
+                spn: "ldap/dc01.test.local".to_string(),
+                ticket_data: vec![7, 8, 9],
+                ticket_expiry: "2024-01-01 10:00:00 UTC".to_string(),
+            }],
             validation_success: true,
         };
 

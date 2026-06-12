@@ -69,10 +69,9 @@ impl HttpRelay {
         }
 
         if self.config.targets.is_empty() {
-            return Err(RelayError::Config(
-                "No relay targets configured for HTTP relay".into(),
-            )
-            .into());
+            return Err(
+                RelayError::Config("No relay targets configured for HTTP relay".into()).into(),
+            );
         }
 
         let relay_config = RelayConfig {
@@ -168,12 +167,8 @@ fn handle_client(
     bridge: RelayBridge,
     pending_relays: PendingRelays,
 ) -> Result<()> {
-    stream
-        .set_read_timeout(Some(IO_TIMEOUT))
-        .ok();
-    stream
-        .set_write_timeout(Some(IO_TIMEOUT))
-        .ok();
+    stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
+    stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
 
     let mut buf = vec![0u8; BUF];
 
@@ -187,8 +182,7 @@ fn handle_client(
     let negotiate_b64 = if let Some(hdr) = auth_header {
         hdr.to_owned()
     } else {
-        let resp =
-            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+        let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
         stream
             .write_all(resp.as_bytes())
             .map_err(|e| RelayError::Network(format!("HTTP write error: {}", e)))?;
@@ -242,7 +236,9 @@ fn handle_client(
 
     let session = bridge.handle.block_on(async {
         let mut guard = bridge.relay.lock().await;
-        guard.relay_authenticate(relay_id, &authenticate_bytes).await
+        guard
+            .relay_authenticate(relay_id, &authenticate_bytes)
+            .await
     });
 
     match session {
@@ -256,7 +252,10 @@ fn handle_client(
             Ok(())
         }
         Err(e) => {
-            warn!("HTTP relay failed for {} (id={}): {}", client_ip, relay_id, e);
+            warn!(
+                "HTTP relay failed for {} (id={}): {}",
+                client_ip, relay_id, e
+            );
             let resp =
                 "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes());

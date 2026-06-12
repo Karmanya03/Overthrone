@@ -655,12 +655,14 @@ mod tests {
         let path = tmp_file("roundtrip");
         rm(&path);
 
-        let mut c = CliConfig::default();
-        c.dc_host = Some("10.0.0.1".to_string());
-        c.domain = Some("CORP".to_string());
-        c.auth_method = Some("kerberos".to_string());
-        c.verbose = Some(1);
-        c.dry_run = Some(true);
+        let c = CliConfig {
+            dc_host: Some("10.0.0.1".to_string()),
+            domain: Some("CORP".to_string()),
+            auth_method: Some("kerberos".to_string()),
+            verbose: Some(1),
+            dry_run: Some(true),
+            ..Default::default()
+        };
         save_config(&path, &c).expect("save");
 
         let loaded = load_config(Some(path.to_str().unwrap())).expect("load");
@@ -679,8 +681,10 @@ mod tests {
         path.push("config.toml");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
 
-        let mut c = CliConfig::default();
-        c.dc_host = Some("10.0.0.1".to_string());
+        let c = CliConfig {
+            dc_host: Some("10.0.0.1".to_string()),
+            ..Default::default()
+        };
         save_config(&path, &c).expect("save should create parent dir");
         assert!(path.exists());
 
@@ -820,9 +824,11 @@ mod tests {
 
     #[test]
     fn display_shows_set_keys_hides_none() {
-        let mut c = CliConfig::default();
-        c.dc_host = Some("10.0.0.1".to_string());
-        c.verbose = Some(2);
+        let c = CliConfig {
+            dc_host: Some("10.0.0.1".to_string()),
+            verbose: Some(2),
+            ..Default::default()
+        };
         let s = display(&c);
         assert!(s.contains("dc_host = 10.0.0.1"));
         assert!(s.contains("verbose = 2"));
@@ -831,10 +837,12 @@ mod tests {
 
     #[test]
     fn display_masks_secrets() {
-        let mut c = CliConfig::default();
-        c.password = Some("hunter2-secret".to_string());
-        c.nt_hash = Some("aad3b435b51404eeaad3b435b51404ee".to_string());
-        c.dc_host = Some("10.0.0.1".to_string());
+        let c = CliConfig {
+            password: Some("hunter2-secret".to_string()),
+            nt_hash: Some("aad3b435b51404eeaad3b435b51404ee".to_string()),
+            dc_host: Some("10.0.0.1".to_string()),
+            ..Default::default()
+        };
         let s = display(&c);
         assert!(!s.contains("hunter2-secret"), "password leaked: {}", s);
         assert!(s.contains("hu"), "prefix should still be visible: {}", s);
@@ -1003,11 +1011,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let profile_file = dir.join("test-roundtrip.toml");
-        let mut cfg = CliConfig::default();
-        cfg.dc_host = Some("10.0.0.1".to_string());
-        cfg.domain = Some("CORP".to_string());
-        cfg.auth_method = Some("kerberos".to_string());
-        cfg.verbose = Some(1);
+        let cfg = CliConfig {
+            dc_host: Some("10.0.0.1".to_string()),
+            domain: Some("CORP".to_string()),
+            auth_method: Some("kerberos".to_string()),
+            verbose: Some(1),
+            ..Default::default()
+        };
 
         let serialized = toml::to_string_pretty(&cfg).unwrap();
         std::fs::write(&profile_file, &serialized).unwrap();
@@ -1098,9 +1108,11 @@ mod tests {
     fn clone_profile_roundtrip() {
         // Exercise the struct clone via save/load since we can't
         // easily override the real profiles dir.
-        let mut a = CliConfig::default();
-        a.dc_host = Some("1.1.1.1".to_string());
-        a.verbose = Some(2);
+        let a = CliConfig {
+            dc_host: Some("1.1.1.1".to_string()),
+            verbose: Some(2),
+            ..Default::default()
+        };
 
         let serialized = toml::to_string_pretty(&a).unwrap();
         let b: CliConfig = toml::from_str(&serialized).unwrap();

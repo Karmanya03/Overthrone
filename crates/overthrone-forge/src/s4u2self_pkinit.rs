@@ -90,8 +90,11 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
     };
 
     // Step 1: Authenticate via PKINIT to obtain TGT
-    info!("  Step 1: PKINIT authentication as {}@{}", config.username, config.domain);
-    
+    info!(
+        "  Step 1: PKINIT authentication as {}@{}",
+        config.username, config.domain
+    );
+
     let tgt = match crate::pkinit_auth::pkinit_authenticate(
         &config.dc_ip,
         &config.domain,
@@ -143,13 +146,7 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
         }
     } else {
         // Standard S4U2Self
-        match kerberos::s4u2self(
-            &config.dc_ip,
-            &tgt,
-            &config.impersonate_user,
-        )
-        .await
-        {
+        match kerberos::s4u2self(&config.dc_ip, &tgt, &config.impersonate_user).await {
             Ok(ticket) => {
                 result.s4u2self_success = true;
                 info!("  ✓ S4U2Self succeeded");
@@ -167,13 +164,7 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
     if let Some(target_spn) = &config.target_spn {
         info!("  Step 3: S4U2Proxy to {}", target_spn);
 
-        match kerberos::request_service_ticket(
-            &config.dc_ip,
-            &s4u_ticket,
-            target_spn,
-        )
-        .await
-        {
+        match kerberos::request_service_ticket(&config.dc_ip, &s4u_ticket, target_spn).await {
             Ok(service_ticket) => {
                 result.s4u2proxy_success = true;
                 result.final_ticket_data = service_ticket.ticket.enc_part.cipher.clone();

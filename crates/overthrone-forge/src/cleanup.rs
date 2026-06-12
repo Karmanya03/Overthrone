@@ -534,6 +534,91 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
                 "Request TGT during business hours to blend with normal traffic".into(),
             ],
         },
+        ForgeAction::PkinitAuth => DetectionAssessment {
+            overall_risk: RiskLevel::Low,
+            description: "PKINIT authentication uses legitimate certificate-based Kerberos authentication".into(),
+            indicators: vec![
+                DetectionIndicator {
+                    source: "Event ID 4768".into(),
+                    detail: "AS-REQ with PKINIT certificate authentication — normal for cert-based logons".into(),
+                    severity: RiskLevel::VeryLow,
+                },
+                DetectionIndicator {
+                    source: "Event ID 4768".into(),
+                    detail: "Certificate mapping logs principal name to certificate issuer/serial".into(),
+                    severity: RiskLevel::VeryLow,
+                },
+            ],
+            mitigations: vec![
+                "Use during business hours to blend with normal certificate authentication traffic".into(),
+                "Ensure PKINIT certificate is valid and properly issued to avoid suspicion".into(),
+            ],
+        },
+        ForgeAction::AdcsExploit { action, .. } => {
+            let action_upper = action.to_uppercase();
+            let action_lower = action.to_lowercase();
+            DetectionAssessment {
+                overall_risk: match action_lower.as_str() {
+                    "auto" | "esc1" | "esc2" | "esc3" | "esc6" | "esc9" => RiskLevel::Medium,
+                    "esc4" | "esc5" | "esc7" => RiskLevel::High,
+                    "esc8" => RiskLevel::Critical, // NTLM relay to ADCS is highly detectable
+                    _ => RiskLevel::Medium,
+                },
+                description: format!("ADCS {} involves certificate enrollment/modification operations", action_upper),
+                indicators: vec![
+                    DetectionIndicator {
+                        source: "Event ID 4886/4887".into(),
+                        detail: format!("Certificate enrollment/request activity on CA for {}", action_upper),
+                        severity: RiskLevel::Medium,
+                    },
+                    DetectionIndicator {
+                        source: "Event ID 140 (CertificateServicesClient)".into(),
+                        detail: format!("Certificate request submitted via Web Enrollment or RPC for {}", action_upper),
+                        severity: RiskLevel::Medium,
+                    },
+                ],
+                mitigations: vec![
+                    format!("Use {} during off-hours to reduce visibility", action_upper),
+                    "Monitor CA logs for unusual enrollment patterns".into(),
+                    "ESC4/ESC5/ESC7 modify ACLs — restore original permissions after exploitation".into(),
+                ],
+            }
+        },
+        ForgeAction::S4u2SelfPkinit { target_spn, .. } => DetectionAssessment {
+            overall_risk: if target_spn.is_some() {
+                RiskLevel::High // S4U2Self+Proxy chain is more detectable
+            } else {
+                RiskLevel::Medium // S4U2Self alone is moderate risk
+            },
+            description: "S4U2Self with PKINIT uses certificate authentication followed by delegation".into(),
+            indicators: vec![
+                DetectionIndicator {
+                    source: "Event ID 4768".into(),
+                    detail: "PKINIT AS-REQ — certificate-based authentication".into(),
+                    severity: RiskLevel::Low,
+                },
+                DetectionIndicator {
+                    source: "Event ID 4769".into(),
+                    detail: "S4U2Self TGS-REQ — impersonation request (user-to-user)".into(),
+                    severity: RiskLevel::High,
+                },
+                DetectionIndicator {
+                    source: "Event ID 4769".into(),
+                    detail: if target_spn.is_some() {
+                        "S4U2Proxy TGS-REQ — constrained delegation to target service".into()
+                    } else {
+                        "No S4U2Proxy — only S4U2Self performed".into()
+                    },
+                    severity: if target_spn.is_some() { RiskLevel::High } else { RiskLevel::VeryLow },
+                },
+            ],
+            mitigations: vec![
+                "Use during business hours to blend with normal certificate authentication".into(),
+                "Ensure PKINIT certificate is legitimately issued".into(),
+                "S4U2Self generates 4769 events — monitor for unusual impersonation patterns".into(),
+                "If using S4U2Proxy, ensure target account has proper delegation configured".into(),
+            ],
+        },
     }
 }
 

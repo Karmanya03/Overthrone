@@ -23,6 +23,7 @@
 //! - **Validate** (`validate`): Verify ticket validity
 
 pub mod acl_backdoor;
+pub mod adcs_dispatcher;
 pub mod bronze_bit;
 pub mod cert_auto_enroll;
 pub mod cert_store;
@@ -45,9 +46,16 @@ pub mod skeleton;
 pub mod stealth;
 pub mod validate;
 
-pub use cert_store::{request_cert_via_rpc, request_cert_via_rpc_with_creds};
+pub use adcs_dispatcher::{AdcsAction, AdcsConfig, AdcsResult, run_adcs};
+pub use cert_store::{
+    request_cert_via_rpc, request_cert_via_rpc_with_creds, request_cert_via_tcp_rpc,
+    parse_icertrequest_response,
+};
 pub use runner::{ForgeConfig, ForgeResult, run_forge};
-pub use s4u2self_pkinit::{S4U2SelfPkinitConfig, S4U2SelfPkinitResult, run_s4u2self_pkinit, s4u2self_pkinit_only, s4u2self_pkinit_with_proxy};
+pub use s4u2self_pkinit::{
+    S4U2SelfPkinitConfig, S4U2SelfPkinitResult, run_s4u2self_pkinit, s4u2self_pkinit_only,
+    s4u2self_pkinit_with_proxy,
+};
 pub use shadow_credentials::{
     ShadowCredentialsConfig, ShadowCredentialsResult, execute as shadow_credentials_attack,
 };

@@ -177,10 +177,9 @@ pub fn extract_relay_hashes(
                 }
             }
             Err(e) => {
-                result.failed.push((
-                    format!("{}@{}", cred.username, cred.domain),
-                    e.to_string(),
-                ));
+                result
+                    .failed
+                    .push((format!("{}@{}", cred.username, cred.domain), e.to_string()));
             }
         }
     }
@@ -238,23 +237,19 @@ pub fn ntlm_response_to_hash(
 
     // Generate hashcat hash
     let hashcat_hash = match hash_type {
-        HashType::NetNTLMv1 => {
-            format_netntlmv1_hash(
-                &response.username,
-                &response.domain,
-                &response.lm_response,
-                &response.nt_response,
-                challenge,
-            )
-        }
-        HashType::NetNTLMv2 => {
-            format_netntlmv2_hash(
-                &response.username,
-                &response.domain,
-                &response.nt_response,
-                challenge,
-            )
-        }
+        HashType::NetNTLMv1 => format_netntlmv1_hash(
+            &response.username,
+            &response.domain,
+            &response.lm_response,
+            &response.nt_response,
+            challenge,
+        ),
+        HashType::NetNTLMv2 => format_netntlmv2_hash(
+            &response.username,
+            &response.domain,
+            &response.nt_response,
+            challenge,
+        ),
     };
 
     let hashcat_mode = match hash_type {
@@ -296,9 +291,8 @@ fn extract_hash_from_credential(
     let lm_response = if cred.lm_response.is_empty() {
         Vec::new()
     } else {
-        hex::decode(&cred.lm_response).map_err(|e| {
-            OverthroneError::custom(format!("Invalid LM response hex: {}", e))
-        })?
+        hex::decode(&cred.lm_response)
+            .map_err(|e| OverthroneError::custom(format!("Invalid LM response hex: {}", e)))?
     };
 
     let nt_response = hex::decode(&cred.nt_response)
@@ -307,9 +301,8 @@ fn extract_hash_from_credential(
     let challenge = if cred.challenge.is_empty() {
         Vec::new()
     } else {
-        hex::decode(&cred.challenge).map_err(|e| {
-            OverthroneError::custom(format!("Invalid challenge hex: {}", e))
-        })?
+        hex::decode(&cred.challenge)
+            .map_err(|e| OverthroneError::custom(format!("Invalid challenge hex: {}", e)))?
     };
 
     // Determine hash type
@@ -318,28 +311,21 @@ fn extract_hash_from_credential(
     // Filter by NTLMv1-only if requested
     if config.ntlmv1_only && matches!(hash_type, HashType::NetNTLMv2) {
         return Err(OverthroneError::custom(
-            "Filtered out (NetNTLMv2, ntlmv1_only mode)"
+            "Filtered out (NetNTLMv2, ntlmv1_only mode)",
         ));
     }
 
     // Generate hashcat hash
     let hashcat_hash = match hash_type {
-        HashType::NetNTLMv1 => {
-            format_netntlmv1_hash(
-                &cred.username,
-                &cred.domain,
-                &lm_response,
-                &nt_response,
-                &challenge,
-            )
-        }
+        HashType::NetNTLMv1 => format_netntlmv1_hash(
+            &cred.username,
+            &cred.domain,
+            &lm_response,
+            &nt_response,
+            &challenge,
+        ),
         HashType::NetNTLMv2 => {
-            format_netntlmv2_hash(
-                &cred.username,
-                &cred.domain,
-                &nt_response,
-                &challenge,
-            )
+            format_netntlmv2_hash(&cred.username, &cred.domain, &nt_response, &challenge)
         }
     };
 
@@ -375,7 +361,7 @@ fn extract_hash_from_credential(
 fn determine_hash_type(lm_response: &[u8], nt_response: &[u8]) -> HashType {
     // NetNTLMv1: LM response is 24 bytes, NT response is 24 bytes
     // NetNTLMv2: LM response may be empty or different structure, NT response is variable length
-    
+
     if lm_response.len() == 24 && nt_response.len() == 24 {
         HashType::NetNTLMv1
     } else {
@@ -394,7 +380,7 @@ fn format_netntlmv1_hash(
     // username::domain:lm_response:nt_response:challenge
     //
     // hashcat mode 5500
-    
+
     format!(
         "{}::{}:{}:{}:{}",
         username,
@@ -415,7 +401,7 @@ fn format_netntlmv2_hash(
     // username::domain:server_challenge:ntlmv2_response
     //
     // hashcat mode 5600
-    
+
     // NTLMv2 response structure: first 16 bytes is the response, rest is client challenge
     let ntlmv2_response = if nt_response.len() >= 16 {
         hex::encode(&nt_response[..16])
@@ -445,8 +431,12 @@ pub fn write_hashes_to_file(
     use std::fs::File;
     use std::io::Write;
 
-    let mut file = File::create(output_file)
-        .map_err(|e| OverthroneError::custom(format!("Failed to create output file {}: {}", output_file, e)))?;
+    let mut file = File::create(output_file).map_err(|e| {
+        OverthroneError::custom(format!(
+            "Failed to create output file {}: {}",
+            output_file, e
+        ))
+    })?;
 
     for hash in &result.hashes {
         let line = match format {
@@ -522,9 +512,7 @@ pub fn document_postex_path() -> String {
 /// For operators: After successful relay, use extracted NetNTLM hashes with hashcat:
 /// - NetNTLMv1: `hashcat -m 5500 hashes.txt wordlist.txt`
 /// - NetNTLMv2: `hashcat -m 5600 hashes.txt wordlist.txt`
-pub async fn extract_credentials_from_relay(
-    _target: &RelayTarget,
-) -> Result<String> {
+pub async fn extract_credentials_from_relay(_target: &RelayTarget) -> Result<String> {
     // Direct credential extraction from relayed sessions requires:
     // 1. SMB session object with read/write capabilities
     // 2. Ability to execute commands via MS-SCMR or similar
@@ -542,9 +530,9 @@ pub async fn extract_credentials_from_relay(
     // 1. Use extract_relay_hashes() to get NetNTLM hashes
     // 2. Crack hashes offline with hashcat
     // 3. Use cracked NTLM hashes for pass-the-hash attacks
-    
+
     Err(OverthroneError::custom(
-        "Direct credential extraction requires SMB session infrastructure. Use extract_relay_hashes() for NetNTLM extraction instead."
+        "Direct credential extraction requires SMB session infrastructure. Use extract_relay_hashes() for NetNTLM extraction instead.",
     ))
 }
 
@@ -558,13 +546,8 @@ mod tests {
         let nt_response = vec![0xBB; 24];
         let challenge = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
 
-        let hash = format_netntlmv1_hash(
-            "testuser",
-            "CORP",
-            &lm_response,
-            &nt_response,
-            &challenge,
-        );
+        let hash =
+            format_netntlmv1_hash("testuser", "CORP", &lm_response, &nt_response, &challenge);
 
         assert!(hash.contains("testuser"));
         assert!(hash.contains("CORP"));

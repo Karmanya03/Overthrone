@@ -3419,7 +3419,6 @@ async fn auth_middleware(
     Err(StatusCode::UNAUTHORIZED)
 }
 
-
 /// Rate limiting middleware — checks per-IP request counts against the
 /// configured window and maximum. Also applies per-user rate limits when
 /// a bearer token is present.
@@ -3435,7 +3434,10 @@ async fn rate_limit_middleware(
     }
 
     // Per-user rate limit (when session token is present)
-    if let Some(auth_header) = req.headers().get("authorization").and_then(|v| v.to_str().ok())
+    if let Some(auth_header) = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
         && let Some(token) = auth_header.strip_prefix("Bearer ")
         && let Some(username) = state.sessions.validate_token(token).await
         && !state.user_rate_limiter.check(&username, addr.ip()).await

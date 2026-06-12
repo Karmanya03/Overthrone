@@ -646,8 +646,10 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.json");
-        let mut s = EngagementState::default();
-        s.domain = Some("round.trip".into());
+        let mut s = EngagementState {
+            domain: Some("round.trip".into()),
+            ..Default::default()
+        };
         s.users.push(Default::default());
         overthrone_pilot::session::save_session(&path, &s).unwrap();
         let loaded = load_session(&path).unwrap();
@@ -676,12 +678,16 @@ mod tests {
         // Write one non-session file to ensure it's filtered out
         fs::write(dir.join("ignore.txt"), "noise").unwrap();
         // Write two session files
-        let mut s1 = EngagementState::default();
-        s1.domain = Some("one.local".into());
+        let mut s1 = EngagementState {
+            domain: Some("one.local".into()),
+            ..Default::default()
+        };
         s1.users.push(Default::default());
         overthrone_pilot::session::save_session(&dir.join("one.json"), &s1).unwrap();
-        let mut s2 = EngagementState::default();
-        s2.domain = Some("two.local".into());
+        let s2 = EngagementState {
+            domain: Some("two.local".into()),
+            ..Default::default()
+        };
         overthrone_pilot::session::save_session(&dir.join("two.json"), &s2).unwrap();
         let entries = read_session_dir(&dir).unwrap();
         assert_eq!(entries.len(), 2);

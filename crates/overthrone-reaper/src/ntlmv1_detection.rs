@@ -73,8 +73,7 @@ impl std::fmt::Display for CrackingDifficulty {
 }
 
 /// Analyze a collection of hashes for NTLMv1 detection
-pub fn analyze_ntlm_hashes(
-    hashes: &[(String, String)], // (username, hash)
+pub fn analyze_ntlm_hashes(hashes: &[(String, String)], // (username, hash)
 ) -> NtlmV1Analysis {
     let mut analysis = NtlmV1Analysis {
         total_analyzed: hashes.len(),
@@ -212,7 +211,8 @@ pub fn generate_downgrade_guidance(
             "Target machines must support NTLMv1 (legacy Windows or misconfigured)".to_string(),
         ];
         guidance.expected_success_rate = "High on Windows 2000/2003/XP, low on Vista+".to_string();
-        guidance.opsec_risk = "HIGH: Generates network noise, easily detectable by NDR/IDS".to_string();
+        guidance.opsec_risk =
+            "HIGH: Generates network noise, easily detectable by NDR/IDS".to_string();
         guidance.mitigation_notes = "Modern domains (2012+) enforce NTLMv2 via LmCompatibilityLevel=5. \
                                     Downgrade only works on legacy systems or when GPO misconfigurations exist."
             .to_string();
@@ -225,8 +225,8 @@ pub fn generate_downgrade_guidance(
         ];
         guidance.expected_success_rate = "Very low on modern domains".to_string();
         guidance.opsec_risk = "N/A - downgrade not feasible".to_string();
-        guidance.mitigation_notes = "Focus on NTLMv2 cracking with smart wordlists instead."
-            .to_string();
+        guidance.mitigation_notes =
+            "Focus on NTLMv2 cracking with smart wordlists instead.".to_string();
     }
 
     guidance
@@ -295,7 +295,8 @@ mod tests {
     #[test]
     fn test_detect_ntlmv1_format() {
         // NTLMv1: user::DOMAIN:LM_hash(16):NT_hash(32):challenge(16)
-        let hash = "user::DOMAIN:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:0102030405060708";
+        let hash =
+            "user::DOMAIN:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:0102030405060708";
         assert_eq!(detect_ntlm_type(hash), NtlmHashType::NtlmV1);
     }
 
@@ -333,8 +334,16 @@ mod tests {
     #[test]
     fn test_analyze_all_ntlmv1() {
         let hashes = vec![
-            ("user1".to_string(), "user1::DOMAIN:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:0102030405060708".to_string()),
-            ("user2".to_string(), "user2::DOMAIN:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:1122334455667788".to_string()),
+            (
+                "user1".to_string(),
+                "user1::DOMAIN:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:0102030405060708"
+                    .to_string(),
+            ),
+            (
+                "user2".to_string(),
+                "user2::DOMAIN:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:1122334455667788"
+                    .to_string(),
+            ),
         ];
 
         let analysis = analyze_ntlm_hashes(&hashes);
@@ -362,7 +371,11 @@ mod tests {
     fn test_cracking_difficulty_display() {
         assert!(CrackingDifficulty::Trivial.to_string().contains("Trivial"));
         assert!(CrackingDifficulty::Easy.to_string().contains("Easy"));
-        assert!(CrackingDifficulty::Moderate.to_string().contains("Moderate"));
+        assert!(
+            CrackingDifficulty::Moderate
+                .to_string()
+                .contains("Moderate")
+        );
         assert!(CrackingDifficulty::Hard.to_string().contains("Hard"));
     }
 }

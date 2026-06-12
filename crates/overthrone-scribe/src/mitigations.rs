@@ -295,6 +295,18 @@ pub fn get_mitigations(finding_type: &str) -> Vec<Mitigation> {
     }
 }
 
+/// Get all unique mitigations across all finding types, deduplicated by title
+pub fn aggregate_mitigations(finding_types: &[&str]) -> Vec<Mitigation> {
+    let mut all: Vec<Mitigation> = finding_types
+        .iter()
+        .flat_map(|ft| get_mitigations(ft))
+        .collect();
+
+    all.sort_by_key(|a| a.priority);
+    all.dedup_by(|a, b| a.title == b.title);
+    all
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,16 +355,4 @@ mod tests {
         let m = aggregate_mitigations(&[]);
         assert!(m.is_empty());
     }
-}
-
-/// Get all unique mitigations across all finding types, deduplicated by title
-pub fn aggregate_mitigations(finding_types: &[&str]) -> Vec<Mitigation> {
-    let mut all: Vec<Mitigation> = finding_types
-        .iter()
-        .flat_map(|ft| get_mitigations(ft))
-        .collect();
-
-    all.sort_by_key(|a| a.priority);
-    all.dedup_by(|a, b| a.title == b.title);
-    all
 }

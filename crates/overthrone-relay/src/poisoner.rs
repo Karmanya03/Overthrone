@@ -1,4 +1,4 @@
-﻿//! LLMNR/NBT-NS/mDNS Poisoner Module
+//! LLMNR/NBT-NS/mDNS Poisoner Module
 //!
 //! Poisons multicast name resolution protocols to capture
 //! authentication attempts and redirect traffic.
@@ -404,8 +404,12 @@ impl Poisoner {
         captured: Arc<std::sync::Mutex<Vec<CapturedQuery>>>,
     ) -> Result<()> {
         // Parse listen IP to determine if we need IPv4, IPv6, or both
-        let listen_addr: IpAddr = listen_ip.parse().unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
-        let _poison_addr: IpAddr = poison_ip.parse().unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        let listen_addr: IpAddr = listen_ip
+            .parse()
+            .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        let _poison_addr: IpAddr = poison_ip
+            .parse()
+            .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
 
         let mut sockets: Vec<UdpSocket> = Vec::new();
 
@@ -416,8 +420,10 @@ impl Poisoner {
             } else {
                 listen_ip.to_string()
             };
-            let socket_v4 = UdpSocket::bind(format!("{}:{}", v4_bind, LLMNR_PORT))
-                .map_err(|e| RelayError::Socket(format!("Failed to bind LLMNR IPv4 socket: {}", e)))?;
+            let socket_v4 =
+                UdpSocket::bind(format!("{}:{}", v4_bind, LLMNR_PORT)).map_err(|e| {
+                    RelayError::Socket(format!("Failed to bind LLMNR IPv4 socket: {}", e))
+                })?;
 
             let multicast_v4 = LLMNR_MULTICAST_V4;
             let local_v4: Ipv4Addr = if listen_addr.is_unspecified() {
@@ -431,7 +437,9 @@ impl Poisoner {
 
             socket_v4
                 .join_multicast_v4(&multicast_v4, &local_v4)
-                .map_err(|e| RelayError::Socket(format!("Failed to join LLMNR IPv4 multicast: {}", e)))?;
+                .map_err(|e| {
+                    RelayError::Socket(format!("Failed to join LLMNR IPv4 multicast: {}", e))
+                })?;
 
             socket_v4
                 .set_read_timeout(Some(Duration::from_millis(100)))
@@ -448,8 +456,10 @@ impl Poisoner {
             } else {
                 listen_ip.to_string()
             };
-            let socket_v6 = UdpSocket::bind(format!("{}:{}", v6_bind, LLMNR_PORT))
-                .map_err(|e| RelayError::Socket(format!("Failed to bind LLMNR IPv6 socket: {}", e)))?;
+            let socket_v6 =
+                UdpSocket::bind(format!("{}:{}", v6_bind, LLMNR_PORT)).map_err(|e| {
+                    RelayError::Socket(format!("Failed to bind LLMNR IPv6 socket: {}", e))
+                })?;
 
             let multicast_v6 = LLMNR_MULTICAST_V6;
             let _local_v6: Ipv6Addr = if listen_addr.is_unspecified() {
@@ -461,9 +471,9 @@ impl Poisoner {
                 }
             };
 
-            socket_v6
-                .join_multicast_v6(&multicast_v6, 0)
-                .map_err(|e| RelayError::Socket(format!("Failed to join LLMNR IPv6 multicast: {}", e)))?;
+            socket_v6.join_multicast_v6(&multicast_v6, 0).map_err(|e| {
+                RelayError::Socket(format!("Failed to join LLMNR IPv6 multicast: {}", e))
+            })?;
 
             socket_v6
                 .set_read_timeout(Some(Duration::from_millis(100)))
@@ -493,7 +503,8 @@ impl Poisoner {
                                     source_ip: src.ip().to_string(),
                                     source_port: src.port(),
                                     query_name: query_name.clone(),
-                                    query_type: if src.ip().is_ipv6() { "AAAA" } else { "A" }.to_string(),
+                                    query_type: if src.ip().is_ipv6() { "AAAA" } else { "A" }
+                                        .to_string(),
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
@@ -509,7 +520,8 @@ impl Poisoner {
 
                             if should_poison && !analyze_only {
                                 // Send poisoned response (use appropriate IP version)
-                                if let Ok(response) = Self::build_llmnr_response(&buf[..len], poison_ip, src.ip())
+                                if let Ok(response) =
+                                    Self::build_llmnr_response(&buf[..len], poison_ip, src.ip())
                                 {
                                     if let Err(e) = socket.send_to(&response, src) {
                                         warn!("Failed to send LLMNR response: {}", e);
@@ -731,8 +743,12 @@ impl Poisoner {
         captured: Arc<std::sync::Mutex<Vec<CapturedQuery>>>,
     ) -> Result<()> {
         // Parse listen IP to determine if we need IPv4, IPv6, or both
-        let listen_addr: IpAddr = listen_ip.parse().unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
-        let _poison_addr: IpAddr = poison_ip.parse().unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        let listen_addr: IpAddr = listen_ip
+            .parse()
+            .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        let _poison_addr: IpAddr = poison_ip
+            .parse()
+            .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
 
         let mut sockets: Vec<UdpSocket> = Vec::new();
 
@@ -743,8 +759,9 @@ impl Poisoner {
             } else {
                 listen_ip.to_string()
             };
-            let socket_v4 = UdpSocket::bind(format!("{}:{}", v4_bind, MDNS_PORT))
-                .map_err(|e| RelayError::Socket(format!("Failed to bind mDNS IPv4 socket: {}", e)))?;
+            let socket_v4 = UdpSocket::bind(format!("{}:{}", v4_bind, MDNS_PORT)).map_err(|e| {
+                RelayError::Socket(format!("Failed to bind mDNS IPv4 socket: {}", e))
+            })?;
 
             let multicast_v4 = MDNS_MULTICAST_V4;
             let local_v4: Ipv4Addr = if listen_addr.is_unspecified() {
@@ -758,7 +775,9 @@ impl Poisoner {
 
             socket_v4
                 .join_multicast_v4(&multicast_v4, &local_v4)
-                .map_err(|e| RelayError::Socket(format!("Failed to join mDNS IPv4 multicast: {}", e)))?;
+                .map_err(|e| {
+                    RelayError::Socket(format!("Failed to join mDNS IPv4 multicast: {}", e))
+                })?;
 
             socket_v4
                 .set_read_timeout(Some(Duration::from_millis(100)))
@@ -775,8 +794,9 @@ impl Poisoner {
             } else {
                 listen_ip.to_string()
             };
-            let socket_v6 = UdpSocket::bind(format!("{}:{}", v6_bind, MDNS_PORT))
-                .map_err(|e| RelayError::Socket(format!("Failed to bind mDNS IPv6 socket: {}", e)))?;
+            let socket_v6 = UdpSocket::bind(format!("{}:{}", v6_bind, MDNS_PORT)).map_err(|e| {
+                RelayError::Socket(format!("Failed to bind mDNS IPv6 socket: {}", e))
+            })?;
 
             let multicast_v6 = MDNS_MULTICAST_V6;
             let _local_v6: Ipv6Addr = if listen_addr.is_unspecified() {
@@ -788,9 +808,9 @@ impl Poisoner {
                 }
             };
 
-            socket_v6
-                .join_multicast_v6(&multicast_v6, 0)
-                .map_err(|e| RelayError::Socket(format!("Failed to join mDNS IPv6 multicast: {}", e)))?;
+            socket_v6.join_multicast_v6(&multicast_v6, 0).map_err(|e| {
+                RelayError::Socket(format!("Failed to join mDNS IPv6 multicast: {}", e))
+            })?;
 
             socket_v6
                 .set_read_timeout(Some(Duration::from_millis(100)))
@@ -821,7 +841,8 @@ impl Poisoner {
                                     source_ip: src.ip().to_string(),
                                     source_port: src.port(),
                                     query_name: query_name.clone(),
-                                    query_type: if src.ip().is_ipv6() { "AAAA" } else { "A" }.to_string(),
+                                    query_type: if src.ip().is_ipv6() { "AAAA" } else { "A" }
+                                        .to_string(),
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
@@ -837,7 +858,8 @@ impl Poisoner {
 
                             if should_poison && !analyze_only {
                                 // Build response - reuse LLMNR responder (same DNS wire format)
-                                if let Ok(response) = Self::build_llmnr_response(&buf[..len], poison_ip, src.ip())
+                                if let Ok(response) =
+                                    Self::build_llmnr_response(&buf[..len], poison_ip, src.ip())
                                 {
                                     // mDNS responses are sent via unicast to the source port
                                     if let Err(e) = socket.send_to(&response, src) {
@@ -1003,7 +1025,12 @@ mod tests {
             0x00, 0x01, // Class IN
         ];
 
-        let response = Poisoner::build_llmnr_response(&query, "192.168.1.100", "192.168.1.50".parse().unwrap()).unwrap();
+        let response = Poisoner::build_llmnr_response(
+            &query,
+            "192.168.1.100",
+            "192.168.1.50".parse().unwrap(),
+        )
+        .unwrap();
 
         // Check transaction ID copied
         assert_eq!(response[0..2], [0x00, 0x01]);
