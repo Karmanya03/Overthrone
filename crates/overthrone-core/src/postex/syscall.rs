@@ -981,7 +981,7 @@ mod tests {
     fn test_syscall_numbers_resolve_graceful_fallback() {
         #[cfg(not(target_os = "windows"))]
         {
-            let nums = SyscallNumbers::resolve();
+            let nums = SyscallNumbers::default();
             assert_eq!(nums.nt_open_process, 0x26);
         }
         #[cfg(target_os = "windows")]
