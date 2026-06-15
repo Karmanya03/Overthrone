@@ -28,3 +28,4 @@ rustls-native-certs = "0.8.3"
 rustls = { version = "0.23" }
 tokio-rustls = "0.26.4"
 tokio-socks = "0.5"
+rustls-pemfile = "2"

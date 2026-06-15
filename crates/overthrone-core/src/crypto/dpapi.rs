@@ -98,6 +98,30 @@ impl DpapiDecryptor {
         }
     }
 
+    /// Manually cache a pre-decrypted masterkey (e.g., extracted from LSASS dump).
+    ///
+    /// This is used by `dpapi_extract` when masterkey material is found
+    /// in an LSASS memory dump or from offline analysis.
+    pub fn cache_masterkey(&mut self, guid: [u8; 16], key: Vec<u8>) {
+        self.masterkey_cache
+            .insert(guid, DpapiMasterkey { guid, key });
+    }
+
+    /// Access the cached masterkey count (for diagnostics).
+    pub fn cached_count(&self) -> usize {
+        self.masterkey_cache.len()
+    }
+
+    /// Check if a specific masterkey GUID is already cached.
+    pub fn is_cached(&self, guid: &[u8; 16]) -> bool {
+        self.masterkey_cache.contains_key(guid)
+    }
+
+    /// Get an iterator over cached masterkey GUIDs.
+    pub fn cached_guids(&self) -> Vec<[u8; 16]> {
+        self.masterkey_cache.keys().copied().collect()
+    }
+
     /// Parse and decrypt a DPAPI masterkey file.
     ///
     /// Masterkey files are encrypted with the domain backup key.

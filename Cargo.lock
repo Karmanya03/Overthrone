@@ -4265,6 +4265,7 @@ dependencies = [
  "rand 0.10.1",
  "rustls",
  "rustls-native-certs",
+ "rustls-pemfile",
  "sha2 0.10.9",
  "tokio",
  "tokio-rustls",

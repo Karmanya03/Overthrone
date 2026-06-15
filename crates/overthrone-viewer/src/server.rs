@@ -122,6 +122,10 @@ pub struct TlsConfig {
     pub cert_pem: PathBuf,
     /// Path to the TLS private key PEM file
     pub key_pem: PathBuf,
+    /// Optional path to a CA certificate PEM file for mTLS client cert verification.
+    /// When set, clients MUST present a certificate signed by this CA.
+    /// When None, no client certificate is required (standard TLS).
+    pub mtls_client_ca_path: Option<PathBuf>,
 }
 
 /// Configuration for the viewer web server.
@@ -3647,12 +3651,29 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
             ))?
             .ok_or_else(|| anyhow!("No private key found in {}", tls.key_pem.display()))?;
 
-            let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            let builder = rustls::ServerConfig::builder_with_provider(Arc::new(
                 rustls::crypto::ring::default_provider(),
             ))
-            .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?
-            .with_no_client_auth()
-            .with_single_cert(tls_certs, tls_key)?;
+            .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?;
+
+            let server_config = if let Some(ref ca_path) = tls.mtls_client_ca_path {
+                // mTLS mode: require client certificate signed by the specified CA
+                let mut root_store = rustls::RootCertStore::empty();
+                let mut ca_reader = std::io::BufReader::new(fs::File::open(ca_path)?);
+                for cert in rustls_pemfile::certs(&mut ca_reader) {
+                    root_store.add(cert?)?;
+                }
+                let verifier =
+                    rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
+                builder
+                    .with_client_cert_verifier(verifier)
+                    .with_single_cert(tls_certs, tls_key)?
+            } else {
+                // Standard TLS: no client certificate required
+                builder
+                    .with_no_client_auth()
+                    .with_single_cert(tls_certs, tls_key)?
+            };
 
             Some(Arc::new(tokio_rustls::TlsAcceptor::from(Arc::new(
                 server_config,
@@ -3965,9 +3986,25 @@ mod tests {
         let cfg = TlsConfig {
             cert_pem: PathBuf::from("/tmp/cert.pem"),
             key_pem: PathBuf::from("/tmp/key.pem"),
+            mtls_client_ca_path: None,
         };
         assert_eq!(cfg.cert_pem, PathBuf::from("/tmp/cert.pem"));
         assert_eq!(cfg.key_pem, PathBuf::from("/tmp/key.pem"));
+        assert!(cfg.mtls_client_ca_path.is_none());
+    }
+
+    #[test]
+    fn test_tls_config_with_mtls_ca() {
+        let cfg = TlsConfig {
+            cert_pem: PathBuf::from("/tmp/cert.pem"),
+            key_pem: PathBuf::from("/tmp/key.pem"),
+            mtls_client_ca_path: Some(PathBuf::from("/tmp/ca.pem")),
+        };
+        assert!(cfg.mtls_client_ca_path.is_some());
+        assert_eq!(
+            cfg.mtls_client_ca_path.unwrap(),
+            PathBuf::from("/tmp/ca.pem")
+        );
     }
 
     #[test]

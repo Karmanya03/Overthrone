@@ -695,6 +695,16 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                     template: template.clone(),
                     target_upn: target_upn.clone(),
                 },
+                "esc8-rpc" => AdcsAction::Esc8Rpc {
+                    ca_server: ca_url.clone(),
+                    template: template.clone(),
+                    target_upn: target_upn.clone(),
+                },
+                "esc8-dcom" => AdcsAction::Esc8RpcDcom {
+                    ca_server: ca_url.clone(),
+                    template: template.clone(),
+                    target_upn: target_upn.clone(),
+                },
                 "esc9" => AdcsAction::Esc9 {
                     template: template.clone(),
                     target_upn: target_upn.clone().unwrap_or_default(),

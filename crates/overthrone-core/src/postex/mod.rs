@@ -13,6 +13,7 @@
 pub mod cg_check;
 pub mod cred_dump;
 pub mod cves;
+pub mod dpapi_extract;
 pub mod edr_bypass;
 pub mod lsaiso;
 pub mod opsec;
@@ -22,9 +23,9 @@ pub mod syscall;
 
 pub use cg_check::{
     CgPreflightResult, CgSignal, ComprehensiveCgResult, CredentialGuardStatus, DomainCgAssessment,
-    DomainCgPosture, assess_domain_credential_guard, check_credential_guard_preflight,
-    check_credential_guard_remote, check_credential_guard_via_wmi, choose_cred_extraction,
-    comprehensive_cg_check,
+    DomainCgPosture, ExtractionDecision, assess_domain_credential_guard,
+    check_credential_guard_preflight, check_credential_guard_remote,
+    check_credential_guard_via_wmi, choose_cred_extraction, comprehensive_cg_check,
 };
 pub use cred_dump::{
     CredDumpConfig, CredDumpResult, DumpMethod, ExtractedCredential, extract_lsass_creds,
@@ -34,6 +35,10 @@ pub use cves::{
     cleanup_samname_spoof, cleanup_shadow_credentials, exploit_rbcd, exploit_samname_spoof,
     exploit_shadow_credentials,
 };
+pub use dpapi_extract::{
+    DecryptedCredential, DecryptedMasterkeyInfo, DpapiExtractConfig, DpapiExtractResult,
+    extract_dpapi_credentials,
+};
 pub use edr_bypass::{
     EdrAssessment, EdrProduct, EtwAbolitionResult, EvasionStrategy, HookDetection, SleepMaskConfig,
     StealthResult, UnhookResult, abolish_etw_providers, apply_stealth_profile,
@@ -41,8 +46,9 @@ pub use edr_bypass::{
     obfuscate_memory, resolve_clean_syscall_numbers, scan_ntdll_hooks, unhook_ntdll,
 };
 pub use lsaiso::{
-    LsaIsoCredType, LsaIsoCredential, LsaIsoExtractionResult, LsaIsoExtractionStats, LsaIsoOpCode,
-    extract_credentials_via_lsaiso, is_lsaiso_available,
+    CgBypassResult, LsaIsoBypassMethod, LsaIsoCredType, LsaIsoCredential, LsaIsoExtractionResult,
+    LsaIsoExtractionStats, LsaIsoOpCode, LsaisoBypassConfig, extract_credentials_cg_bypass,
+    extract_credentials_via_lsaiso, extract_credentials_via_lsaiso_memory, is_lsaiso_available,
 };
 pub use opsec::{
     AmsiBypassResult, EtwSuppressResult, HONEYPOT_ATTRS, OpsecConfig, OpsecPatchReport,
@@ -65,5 +71,5 @@ pub use syscall::{
 pub use syscall::{
     nt_allocate_virtual_memory, nt_close, nt_delay_execution, nt_open_key, nt_open_process,
     nt_protect_virtual_memory, nt_query_system_information, nt_query_value_key,
-    nt_read_virtual_memory, nt_write_virtual_memory, prepare_syscall_stub,
+    nt_query_virtual_memory, nt_read_virtual_memory, nt_write_virtual_memory, prepare_syscall_stub,
 };

@@ -30,6 +30,7 @@ use crate::postex::syscall::DynamicSyscallStub;
 use crate::postex::syscall::SyscallNumbers;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
 use tracing::{debug, info, warn};
 
 // ─── Constants ────────────────────────────────────────────────────

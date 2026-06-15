@@ -110,12 +110,12 @@ pub async fn check_credential_guard_remote(
     let (status, recommendation) = match (lsa_cfg_flags, secret_present) {
         (_, Some(true)) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via IsolatedCredentialsRootSecret; route to ADCS Shadow Credentials, RBCD, or dMSA"
+            "CG confirmed via IsolatedCredentialsRootSecret; use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
         (Some(1) | Some(2), _) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via LsaCfgFlags — route to ADCS Shadow Credentials, RBCD, or dMSA"
+            "CG confirmed via LsaCfgFlags — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
         (Some(0), _) => (
@@ -234,18 +234,57 @@ pub fn check_credential_guard_preflight(
     }
 }
 
+/// Decision result from `choose_cred_extraction`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionDecision {
+    /// Recommended strategy name
+    pub strategy: String,
+    /// Human-readable recommendation
+    pub recommendation: String,
+    /// Priority order of methods to try
+    pub method_priority: Vec<String>,
+}
+
+impl ExtractionDecision {
+    fn new(strategy: &str, recommendation: String, methods: Vec<&str>) -> Self {
+        Self {
+            strategy: strategy.to_string(),
+            recommendation,
+            method_priority: methods.into_iter().map(String::from).collect(),
+        }
+    }
+}
+
 /// Decide which credential extraction technique to use based on CG status.
 /// Choose credential extraction strategy based on Credential Guard status.
 ///
-/// Returns the recommended strategy name:
-/// - `"lsaiso_bypass"` — CG is enabled, try ALPC-based extraction from LSAISO
-/// - `"shadow_credentials"` — CG unknown, fall back to ADCS shadow credentials
-/// - `"lsass_dump"` — CG disabled, direct LSASS memory dumping
-pub fn choose_cred_extraction(cg: &CgPreflightResult) -> &'static str {
+/// Returns an `ExtractionDecision` with:
+/// - `strategy`: Short name of the primary strategy
+/// - `recommendation`: Human-readable guidance
+/// - `method_priority`: Ordered list of methods to try
+pub fn choose_cred_extraction(cg: &CgPreflightResult) -> ExtractionDecision {
     match cg.status {
-        CredentialGuardStatus::Enabled => "lsaiso_bypass",
-        CredentialGuardStatus::Unknown => "shadow_credentials",
-        CredentialGuardStatus::Disabled => "lsass_dump",
+        CredentialGuardStatus::Enabled => ExtractionDecision::new(
+            "lsaiso_bypass",
+            "CG confirmed — use LSAISO bypass (ALPC → process memory → WDigest fallback)".into(),
+            vec![
+                "alpc",
+                "process_memory",
+                "wdigest",
+                "shadow_credentials",
+                "rbcd",
+            ],
+        ),
+        CredentialGuardStatus::Unknown => ExtractionDecision::new(
+            "shadow_credentials",
+            "CG status unknown — prefer non-LSASS techniques (Shadow Credentials, RBCD)".into(),
+            vec!["shadow_credentials", "rbcd", "lsaiso_bypass", "lsass_dump"],
+        ),
+        CredentialGuardStatus::Disabled => ExtractionDecision::new(
+            "lsass_dump",
+            "CG not detected — proceed with LSASS memory dumping".into(),
+            vec!["lsass_dump", "wdigest"],
+        ),
     }
 }
 
@@ -329,11 +368,11 @@ pub fn check_credential_guard_via_wmi(
     let (status, recommendation) = match (lsa_cfg_flags, isolated_secret_present) {
         (Some(1) | Some(2), _) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via WMI (VBS running) — route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
+            "CG confirmed via WMI (VBS running) — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
         ),
         (_, Some(true)) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via WMI (CredentialGuard field) — route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
+            "CG confirmed via WMI (CredentialGuard field) — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
         ),
         (Some(0), _) => (
             CredentialGuardStatus::Disabled,
@@ -679,7 +718,7 @@ pub async fn comprehensive_cg_check(
 
     let recommendation = match final_status {
         CredentialGuardStatus::Enabled => {
-            "CG confirmed — route to ADCS Shadow Credentials, RBCD, or dMSA".to_string()
+            "CG confirmed — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string()
         }
         CredentialGuardStatus::Disabled => {
             "CG not detected — proceed with LSASS techniques".to_string()
@@ -753,7 +792,14 @@ mod tests {
             recommendation: "Use ADCS".to_string(),
             findings: vec![],
         };
-        assert_eq!(choose_cred_extraction(&cg), "lsaiso_bypass");
+        let decision = choose_cred_extraction(&cg);
+        assert_eq!(decision.strategy, "lsaiso_bypass");
+        assert!(decision.method_priority.contains(&"alpc".to_string()));
+        assert!(
+            decision
+                .method_priority
+                .contains(&"process_memory".to_string())
+        );
     }
 
     #[test]
@@ -768,7 +814,9 @@ mod tests {
             recommendation: "Use LSASS".to_string(),
             findings: vec![],
         };
-        assert_eq!(choose_cred_extraction(&cg), "lsass_dump");
+        let decision = choose_cred_extraction(&cg);
+        assert_eq!(decision.strategy, "lsass_dump");
+        assert!(decision.method_priority.contains(&"lsass_dump".to_string()));
     }
 
     #[test]
@@ -783,6 +831,27 @@ mod tests {
             recommendation: "Unknown — using legacy".to_string(),
             findings: vec![],
         };
-        assert_eq!(choose_cred_extraction(&cg), "shadow_credentials");
+        let decision = choose_cred_extraction(&cg);
+        assert_eq!(decision.strategy, "shadow_credentials");
+        assert!(
+            decision
+                .method_priority
+                .contains(&"lsaiso_bypass".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extraction_decision_serde() {
+        let d = ExtractionDecision::new(
+            "test_strat",
+            "test recommendation".into(),
+            vec!["method1", "method2"],
+        );
+        let json = serde_json::to_string(&d).unwrap();
+        let deserialized: ExtractionDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.strategy, "test_strat");
+        assert_eq!(deserialized.recommendation, "test recommendation");
+        let expected: Vec<String> = vec!["method1".into(), "method2".into()];
+        assert_eq!(deserialized.method_priority, expected);
     }
 }

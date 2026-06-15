@@ -339,6 +339,11 @@ pub unsafe fn syscall_4(
 // ─── Non-Windows stubs ─────────────────────────────────────────────
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+pub unsafe fn syscall_0(_syscall_number: u32) -> SyscallStatus {
+    SyscallStatus(-1)
+}
+
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
 pub unsafe fn syscall_1(_syscall_number: u32, _arg1: *const std::ffi::c_void) -> SyscallStatus {
     SyscallStatus(-1)
 }
@@ -777,6 +782,34 @@ pub unsafe fn nt_delay_execution(
             syscall_num,
             alertable as usize as *const std::ffi::c_void,
             delay_interval as *const std::ffi::c_void,
+        )
+    }
+}
+
+/// Wrapper: NtQueryVirtualMemory — query memory region information.
+/// (6 args: ProcessHandle, BaseAddress, MemoryInformationClass,
+///  MemoryInformation, MemoryInformationLength, ReturnLength)
+#[cfg(target_os = "windows")]
+pub unsafe fn nt_query_virtual_memory(
+    syscall_num: u32,
+    handle: isize,
+    base_address: *const std::ffi::c_void,
+    memory_information_class: u32,
+    memory_information: *mut std::ffi::c_void,
+    memory_information_length: u32,
+    return_length: *mut u32,
+) -> SyscallStatus {
+    let Some(stub) = DynamicSyscallStub::new(syscall_num) else {
+        return SyscallStatus(-1);
+    };
+    unsafe {
+        stub.call6(
+            handle as *const std::ffi::c_void,
+            base_address,
+            memory_information_class as usize as *const std::ffi::c_void,
+            memory_information,
+            memory_information_length as usize as *const std::ffi::c_void,
+            return_length as *const std::ffi::c_void,
         )
     }
 }

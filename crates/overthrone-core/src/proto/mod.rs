@@ -1,6 +1,7 @@
 //! Protocol implementations for AD enumeration
 
 pub mod coerce;
+pub mod dcom;
 pub mod dns;
 pub mod drsr;
 pub mod epm;

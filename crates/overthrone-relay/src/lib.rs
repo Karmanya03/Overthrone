@@ -12,6 +12,7 @@ pub mod poisoner;
 pub mod relay;
 pub mod responder;
 pub mod smb_daemon;
+pub mod tls_relay;
 pub mod utils;
 
 // Re-export types from submodules
@@ -21,6 +22,7 @@ pub use http_relay::{HttpRelay, HttpRelayConfig};
 pub use relay::RelayStats;
 pub use responder::CapturedCredential;
 pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
+pub use tls_relay::{CbtMode, TlsRelay, TlsRelayConfig};
 // Re-export RelayError from overthrone_core
 use futures::stream::{FuturesUnordered, StreamExt};
 pub use overthrone_core::error::RelayError;
@@ -144,6 +146,7 @@ pub struct RelayController {
     responder: Option<responder::Responder>,
     relay: Option<Arc<TokioMutex<relay::NtlmRelay>>>,
     http_relay: Option<http_relay::HttpRelay>,
+    tls_relay: Option<tls_relay::TlsRelay>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +198,14 @@ pub struct RelayControllerConfig {
     /// Independent of the responder/poisoner — useful when coerced auth
     /// lands directly on HTTP and needs to pivot to SMB.
     pub http_relay_config: Option<HttpRelayConfig>,
+    /// Configuration for TLS-wrapped relay listener.
+    /// When set, starts a TLS listener (typically on port 443 for HTTPS relay)
+    /// with optional mTLS client certificate verification.
+    /// After TLS termination, NTLM tokens are extracted from HTTP requests
+    /// and relayed to the configured targets.
+    /// Useful for legitimate proxy/auditing deployments or when the relay
+    /// must accept connections over encrypted channels.
+    pub tls_relay_config: Option<TlsRelayConfig>,
     /// Enable automatic coercion technique cycling.
     /// When true, tries all available coercion techniques in parallel against each target
     /// instead of sequentially. Faster but noisier.
@@ -228,6 +239,7 @@ impl Default for RelayControllerConfig {
             auto_coerce_parallel: false,
             auto_coerce_mode: "all".to_string(),
             auto_coerce_max_retries: 1,
+            tls_relay_config: None,
         }
     }
 }
@@ -243,6 +255,7 @@ impl RelayController {
             responder: None,
             relay: None,
             http_relay: None,
+            tls_relay: None,
         }
     }
 
@@ -337,6 +350,16 @@ impl RelayController {
             self.http_relay = Some(http_relay);
         }
 
+        // Initialize TLS relay if configured
+        if let Some(ref tls_config) = self.config.tls_relay_config {
+            let tls_relay = tls_relay::TlsRelay::new(tls_config.clone());
+            info!(
+                "TLS relay initialized with {} target(s)",
+                tls_config.targets.len()
+            );
+            self.tls_relay = Some(tls_relay);
+        }
+
         Ok(())
     }
 
@@ -368,6 +391,11 @@ impl RelayController {
         if let Some(ref mut http_relay) = self.http_relay {
             http_relay.start().await?;
             info!("HTTP asymmetric relay started");
+        }
+
+        if let Some(ref mut tls_relay) = self.tls_relay {
+            tls_relay.start().await?;
+            info!("TLS relay started");
         }
 
         info!("All services started successfully");
@@ -479,6 +507,10 @@ impl RelayController {
 
         if let Some(ref mut http_relay) = self.http_relay {
             http_relay.stop().await?;
+        }
+
+        if let Some(ref mut tls_relay) = self.tls_relay {
+            tls_relay.stop().await;
         }
 
         info!("All services stopped");
@@ -598,6 +630,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
         auto_coerce_max_retries: 1,
+        tls_relay_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -634,6 +667,7 @@ pub async fn run_relay_attack(
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
         auto_coerce_max_retries: 1,
+        tls_relay_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -678,6 +712,7 @@ pub async fn run_http_asymmetric_relay(
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
         auto_coerce_max_retries: 1,
+        tls_relay_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -753,6 +788,41 @@ mod tests {
     }
 
     #[test]
+    fn test_tls_relay_config_default_is_none() {
+        let config = RelayControllerConfig::default();
+        assert!(config.tls_relay_config.is_none());
+    }
+
+    #[test]
+    fn test_tls_relay_config_custom() {
+        let config = RelayControllerConfig {
+            tls_relay_config: Some(tls_relay::TlsRelayConfig {
+                listen_ip: "0.0.0.0".to_string(),
+                listen_port: 8443,
+                tls_cert_path: "/tmp/cert.pem".to_string(),
+                tls_key_path: "/tmp/key.pem".to_string(),
+                mtls_client_ca_path: None,
+                targets: vec![RelayTarget {
+                    address: "10.0.0.1:445".parse().unwrap(),
+                    protocol: Protocol::Smb,
+                    username: None,
+                }],
+                socks5_proxy: None,
+                ldap_signing_bypass: true,
+                max_retries: 3,
+                timeout_secs: 30,
+                cbt_mode: tls_relay::CbtMode::Strip,
+            }),
+            ..RelayControllerConfig::default()
+        };
+        assert!(config.tls_relay_config.is_some());
+        let tls_cfg = config.tls_relay_config.unwrap();
+        assert_eq!(tls_cfg.listen_port, 8443);
+        assert_eq!(tls_cfg.targets.len(), 1);
+        assert_eq!(tls_cfg.cbt_mode, tls_relay::CbtMode::Strip);
+    }
+
+    #[test]
     fn test_auto_coerce_config_stealth_mode() {
         let config = RelayControllerConfig {
             auto_coerce_mode: "stealth".to_string(),
@@ -813,6 +883,7 @@ mod tests {
             auto_coerce_parallel: false,
             auto_coerce_mode: "all".to_string(),
             auto_coerce_max_retries: 1,
+            tls_relay_config: None,
         };
         assert_eq!(config.auto_coerce_mode, "all");
         assert!(!config.auto_coerce_parallel);

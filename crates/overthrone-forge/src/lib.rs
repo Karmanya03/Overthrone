@@ -35,6 +35,7 @@ pub mod dsrm;
 pub mod exec_util;
 pub mod golden;
 pub mod icert_passage;
+pub mod ms_wcce_dcom;
 pub mod nopac;
 pub mod pkinit_auth;
 pub mod runner;
@@ -51,6 +52,7 @@ pub use cert_store::{
     parse_icertrequest_response, request_cert_via_rpc, request_cert_via_rpc_with_creds,
     request_cert_via_tcp_rpc,
 };
+pub use ms_wcce_dcom::{backup_ca_via_dcom, get_ca_certificate, request_cert_via_dcom};
 pub use runner::{ForgeConfig, ForgeResult, run_forge};
 pub use s4u2self_pkinit::{
     S4U2SelfPkinitConfig, S4U2SelfPkinitResult, run_s4u2self_pkinit, s4u2self_pkinit_only,

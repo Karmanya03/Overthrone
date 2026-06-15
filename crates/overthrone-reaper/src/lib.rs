@@ -15,6 +15,7 @@ pub mod gpos;
 pub mod gpp_fetch;
 pub mod groups;
 pub mod laps;
+pub mod laps_gmsa;
 pub mod mssql;
 pub mod ntlm_to_tgt;
 pub mod ntlmv1_detection;
@@ -28,6 +29,10 @@ pub mod trusts;
 pub mod users;
 
 pub use file_carver::{CarveResult, CarvedSecret, FileCarver, FileCarverConfig, carve_files};
+pub use laps_gmsa::{
+    CredentialEntry, CredentialSource, LapsGmsaResult, LapsGmsaStats, enumerate_laps_and_gmsa,
+    format_entry,
+};
 pub use ntlm_to_tgt::{NtlmToTgtConfig, NtlmToTgtResult, TgtCredential, run_ntlm_to_tgt};
 pub use ntlmv1_detection::{
     DowngradeGuidance, NtlmV1Analysis, NtlmV1WorkflowResult, analyze_ntlm_hashes,

