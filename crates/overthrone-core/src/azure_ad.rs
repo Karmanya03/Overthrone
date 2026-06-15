@@ -853,9 +853,9 @@ async fn steal_prt() -> Result<Vec<String>> {
     #[cfg(not(target_os = "windows"))]
     {
         warn!("PRT theft requires Windows with TokenBroker plugin");
-        return Err(OverthroneError::custom(
+        Err(OverthroneError::custom(
             "PRT theft is only supported on Windows",
-        ));
+        ))
     }
 
     #[cfg(target_os = "windows")]

@@ -14,6 +14,8 @@
 //! 7. **Process Protection** — set `PsProtectedProcessLight`, hide from ETW
 //! 8. **Injection Diversity** — early-bird APC, module stomp, process hollow, hell's gate
 
+#![allow(dead_code)]
+
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

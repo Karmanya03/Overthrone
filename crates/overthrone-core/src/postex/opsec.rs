@@ -153,6 +153,9 @@ pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
     tracing::debug!("AMSI bypass: not available on this platform");
@@ -209,6 +212,9 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
     tracing::debug!("ETW suppress: not available on this platform");
@@ -341,6 +347,9 @@ unsafe fn nt_flush_instruction_cache_if_available(numbers: &SyscallNumbers) {
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn patch_amsi_direct(_numbers: &SyscallNumbers) -> Result<AmsiBypassResult> {
     tracing::debug!("AMSI direct: not available on this platform");
@@ -435,6 +444,9 @@ pub unsafe fn suppress_etw_direct(numbers: &SyscallNumbers) -> Result<EtwSuppres
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn suppress_etw_direct(_numbers: &SyscallNumbers) -> Result<EtwSuppressResult> {
     tracing::debug!("ETW direct: not available on this platform");
@@ -988,6 +1000,9 @@ pub unsafe fn module_stomping_injection(
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn module_stomping_injection(
     _target_pid: u32,
@@ -1091,6 +1106,9 @@ pub unsafe fn early_bird_apc_injection(target_exe: &str, shellcode: &[u8]) -> Re
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn early_bird_apc_injection(_target_exe: &str, _shellcode: &[u8]) -> Result<u32> {
     Err(OverthroneError::PostExploitation(
@@ -1180,6 +1198,9 @@ pub unsafe fn process_hollowing_injection(target_exe: &str, shellcode: &[u8]) ->
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn process_hollowing_injection(_target_exe: &str, _shellcode: &[u8]) -> Result<u32> {
     Err(OverthroneError::PostExploitation(

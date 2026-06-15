@@ -25,6 +25,8 @@
 //! }
 //! ```
 
+#![allow(dead_code)]
+
 use crate::crypto::dpapi::DpapiDecryptor;
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};

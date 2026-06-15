@@ -21,6 +21,8 @@
 //! - Windows Internals (7th Ed.) — LSAISO architecture
 //! - LSAISO process memory structure research (Mimikatz, NoReboot)
 
+#![allow(dead_code)]
+
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -1240,6 +1242,9 @@ pub unsafe fn extract_credentials_via_lsaiso_memory(
     }
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn extract_credentials_via_lsaiso_memory(
     _numbers: &crate::postex::syscall::SyscallNumbers,

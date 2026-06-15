@@ -28,6 +28,8 @@
 //! - **AV/EDR**: LSASS memory modification is heavily monitored
 //! - **LSA Protection**: Requires elevated privileges to bypass
 
+#![allow(dead_code)]
+
 use crate::error::{OverthroneError, Result};
 use crate::postex::skeleton_key_dll::SKELETON_KEY_DLL_BYTES;
 use crate::proto::registry::{

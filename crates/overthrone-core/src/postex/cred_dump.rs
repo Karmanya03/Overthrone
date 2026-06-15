@@ -24,6 +24,8 @@
 //! 4. `dump_lsass_direct()`  – NtReadVirtualMemory page walk (fallback)
 //! 5. `parse_creds_from_dump()` – Extract NTLM/Kerberos from dumped memory
 
+#![allow(dead_code)]
+
 use crate::error::{OverthroneError, Result};
 #[cfg(target_os = "windows")]
 use crate::postex::syscall::DynamicSyscallStub;
@@ -292,6 +294,9 @@ pub unsafe fn extract_lsass_creds(config: &CredDumpConfig) -> Result<CredDumpRes
     Ok(result)
 }
 
+/// # Safety
+/// This function performs no actual operations on non-Windows platforms.
+/// It is marked `unsafe` for API compatibility with the Windows variant.
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn extract_lsass_creds(_config: &CredDumpConfig) -> Result<CredDumpResult> {
     Err(OverthroneError::PostExploitation(
