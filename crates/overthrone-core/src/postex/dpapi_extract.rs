@@ -696,9 +696,13 @@ mod tests {
 
     #[test]
     fn test_guess_guid_from_path_with_hyphens() {
-        let path = Path::new(
-            "C:\\Users\\test\\AppData\\Roaming\\Microsoft\\Protect\\S-1-5-21-12345\\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}",
-        );
+        let path = Path::new("test")
+            .join("AppData")
+            .join("Roaming")
+            .join("Microsoft")
+            .join("Protect")
+            .join("S-1-5-21-12345")
+            .join("{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}");
         let guid = guess_guid_from_path(&path);
         // The filename includes hyphens; we don't strip them
         assert!(guid.contains("A1B2C3D4") || guid.contains("{"));
@@ -706,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_guess_guid_from_path_simple() {
-        let path = Path::new("C:\\keys\\deadbeef1234");
+        let path = Path::new("keys").join("deadbeef1234");
         let guid = guess_guid_from_path(&path);
         assert_eq!(guid, "deadbeef1234");
     }
@@ -855,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_discover_protect_dirs_nonexistent_base() {
-        let dirs = discover_protect_dirs(Some(Path::new("Z:\\nonexistent\\path")));
+        let dirs = discover_protect_dirs(Some(&Path::new("nonexistent").join("path")));
         assert!(dirs.is_empty());
     }
 
