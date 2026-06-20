@@ -279,7 +279,8 @@ impl TlsRelay {
 
         let tls_acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(server_config));
 
-        let listen_addr = format_addr(&self.config.listen_ip, self.config.listen_port);
+        let listen_addr =
+            crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Network(format!("TLS relay bind failed: {}", e)))?;
@@ -293,7 +294,7 @@ impl TlsRelay {
             ldap_signing_bypass: self.config.ldap_signing_bypass,
             max_retries: self.config.max_retries,
             max_connections: 64,
-            tls_client_identity: None,
+            tls_config: None,
             socks5_proxy: self.config.socks5_proxy.clone(),
         };
         let relay = Arc::new(TokioMutex::new(NtlmRelay::new(relay_config)));
@@ -661,13 +662,6 @@ fn validate_channel_bindings(authenticate: &[u8]) -> std::result::Result<(), Str
 // Utilities
 // ============================================================
 
-fn format_addr(ip: &str, port: u16) -> String {
-    match ip.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V6(_)) => format!("[{}]:{}", ip, port),
-        _ => format!("{}:{}", ip, port),
-    }
-}
-
 fn strip_ntlm_prefix(header: &str) -> &str {
     let h = header.trim();
     for prefix in &[
@@ -759,9 +753,12 @@ mod tests {
 
     #[test]
     fn test_format_addr_tls() {
-        assert_eq!(format_addr("0.0.0.0", 443), "0.0.0.0:443");
-        assert_eq!(format_addr("::", 8443), "[::]:8443");
-        assert_eq!(format_addr("127.0.0.1", 8443), "127.0.0.1:8443");
+        assert_eq!(crate::utils::format_addr("0.0.0.0", 443), "0.0.0.0:443");
+        assert_eq!(crate::utils::format_addr("::", 8443), "[::]:8443");
+        assert_eq!(
+            crate::utils::format_addr("127.0.0.1", 8443),
+            "127.0.0.1:8443"
+        );
     }
 
     #[test]

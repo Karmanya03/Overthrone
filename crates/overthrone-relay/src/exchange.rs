@@ -6,22 +6,15 @@
 //! relay of captured Net-NTLMv2 hashes to access mailboxes or perform Exchange
 //! admin operations.
 
+use crate::tls::TlsConfig;
+#[cfg(test)]
+use crate::tls::TlsVerificationMode;
 use crate::{RelayError, Result};
 use base64::Engine;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::client::danger::{
-    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-};
-use tokio_rustls::rustls::crypto::{
-    CryptoProvider, aws_lc_rs::default_provider, verify_tls12_signature, verify_tls13_signature,
-};
-use tokio_rustls::rustls::pki_types::pem::PemObject;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tracing::{debug, info, warn};
 
 const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -37,7 +30,6 @@ pub struct ExchangeRelayConfig {
     pub target_host: String,
     pub target_port: u16,
     pub use_tls: bool,
-    pub accept_self_signed: bool,
     pub ews_path: String,
     pub mapi_path: String,
     pub autodiscover_path: String,
@@ -48,8 +40,10 @@ pub struct ExchangeRelayConfig {
     pub socks5_proxy: Option<String>,
     /// Target endpoint type for relay
     pub endpoint_type: ExchangeEndpoint,
-    /// Optional mTLS client identity for connections to the Exchange server.
-    pub tls_client_identity: Option<crate::relay::TlsIdentity>,
+    /// Shared TLS configuration (verification mode + optional mTLS identity).
+    /// - `None` (default): `TlsConfig::relay_default()` — AcceptAll mode, no client cert.
+    /// - `Some(TlsConfig::verify_server(...))`: validates server certs against native root store.
+    pub tls_config: Option<TlsConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +101,6 @@ impl Default for ExchangeRelayConfig {
             target_host: "exchange.corp.local".into(),
             target_port: 443,
             use_tls: true,
-            accept_self_signed: true,
             ews_path: "/EWS/Exchange.asmx".into(),
             mapi_path: "/mapi/".into(),
             autodiscover_path: "/autodiscover/autodiscover.xml".into(),
@@ -116,7 +109,7 @@ impl Default for ExchangeRelayConfig {
             exchange_version: ExchangeVersion::AutoDetect,
             socks5_proxy: None,
             endpoint_type: ExchangeEndpoint::Auto,
-            tls_client_identity: None,
+            tls_config: None,
         }
     }
 }
@@ -352,111 +345,17 @@ async fn connect_exchange_stream(
         return Ok(Box::new(tcp));
     }
 
-    let client_config = build_tls_client_config(
-        config.accept_self_signed,
-        config.tls_client_identity.as_ref(),
-    )?;
-    let connector = TlsConnector::from(Arc::new(client_config));
-    let server_name = ServerName::try_from(config.target_host.clone())
-        .map_err(|e| RelayError::Config(format!("Invalid Exchange TLS server name: {e}")))?;
-    let tls = connector
-        .connect(server_name, tcp)
-        .await
-        .map_err(|e| RelayError::Network(format!("Exchange TLS handshake failed: {e}")))?;
+    let tls_cfg = config.tls_config.clone().unwrap_or_default();
+    let tls_stream = crate::tls::wrap_tls(
+        tcp,
+        config.target_host.clone(),
+        tls_cfg.verification_mode,
+        tls_cfg.identity.as_ref(),
+    )
+    .await
+    .map_err(|e| RelayError::Network(format!("Exchange TLS handshake failed: {e}")))?;
 
-    Ok(Box::new(tls))
-}
-
-fn build_tls_client_config(
-    accept_self_signed: bool,
-    identity: Option<&crate::relay::TlsIdentity>,
-) -> std::result::Result<ClientConfig, RelayError> {
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let mut root_store = RootCertStore::empty();
-    let native_certs = rustls_native_certs::load_native_certs();
-    for cert in native_certs.certs {
-        let _ = root_store.add(cert);
-    }
-
-    let builder = ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
-        .map_err(|e| RelayError::Config(format!("TLS protocol version error: {e}")))?
-        .with_root_certificates(root_store);
-
-    let mut config = match identity {
-        Some(id) => {
-            let cert = CertificateDer::from_pem_slice(id.cert_pem.as_bytes())
-                .map_err(|e| RelayError::Config(format!("failed to parse client cert PEM: {e}")))?;
-            let key = PrivateKeyDer::from_pem_slice(id.key_pem.as_bytes())
-                .map_err(|e| RelayError::Config(format!("failed to parse client key PEM: {e}")))?;
-            builder
-                .with_client_auth_cert(vec![cert], key)
-                .map_err(|e| RelayError::Config(format!("failed to set client auth cert: {e}")))?
-        }
-        None => builder.with_no_client_auth(),
-    };
-
-    if accept_self_signed {
-        config
-            .dangerous()
-            .set_certificate_verifier(Arc::new(NoCertificateVerification::default()));
-    }
-
-    Ok(config)
-}
-
-#[derive(Debug)]
-struct NoCertificateVerification(CryptoProvider);
-
-impl Default for NoCertificateVerification {
-    fn default() -> Self {
-        Self(default_provider())
-    }
-}
-
-impl ServerCertVerifier for NoCertificateVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> std::result::Result<ServerCertVerified, tokio_rustls::rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
+    Ok(Box::new(tls_stream))
 }
 
 fn build_exchange_http_request(path: &str, host: &str, ntlm_blob: &[u8]) -> Vec<u8> {
@@ -599,29 +498,21 @@ mod tests {
     }
 
     #[test]
-    fn test_exchange_config_tls_identity_default_none() {
+    fn test_exchange_config_tls_config_default_none() {
         let cfg = ExchangeRelayConfig::default();
-        assert!(cfg.tls_client_identity.is_none());
+        assert!(cfg.tls_config.is_none());
     }
 
     #[test]
-    fn test_build_tls_client_config_no_identity_succeeds() {
-        let config = build_tls_client_config(false, None);
-        assert!(config.is_ok());
-    }
-
-    #[test]
-    fn test_build_tls_client_config_with_bad_pem_fails() {
-        let identity = crate::relay::TlsIdentity {
-            cert_pem: "not-a-cert".into(),
-            key_pem: "not-a-key".into(),
+    fn test_exchange_config_tls_config_custom() {
+        let cfg = ExchangeRelayConfig {
+            tls_config: Some(TlsConfig::verify_server(None)),
+            ..ExchangeRelayConfig::default()
         };
-        let result = build_tls_client_config(false, Some(&identity));
-        assert!(result.is_err());
-        let err = format!("{}", result.unwrap_err());
-        assert!(
-            err.contains("failed to parse"),
-            "error should mention parse: got '{err}'"
+        assert!(cfg.tls_config.is_some());
+        assert_eq!(
+            cfg.tls_config.unwrap().verification_mode,
+            TlsVerificationMode::VerifyServerCert
         );
     }
 }

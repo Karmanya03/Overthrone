@@ -37,6 +37,12 @@
   const MAX_HIGHLIGHT_NODES   = 3500;
   const MAX_LIVE_DRAG_NODES   = 300;
 
+  // LOD thresholds
+  const LARGE_GRAPH_NODES     = 3000;
+  const MASSIVE_GRAPH_NODES   = 10000;
+  const ZOOM_LABEL_HIDE       = 0.08;  // Below this zoom, hide most labels on large graphs
+  const ZOOM_LABEL_DETAIL     = 0.30;  // Above this zoom, show all labels
+
   const NODE_Z    = 0;
   const GLOW_Z    = -0.5;
   const LABEL_Z   = 2;
@@ -172,8 +178,10 @@
   }
 
   function shouldShowLabel(node, zoom) {
-    // Always show labels — BloodHound CE style shows them at all practical zoom levels
-    return zoom > 0.04;
+    // LOD: always show important nodes; show normal nodes only when zoomed in enough
+    const isImportant = node.high_value || node.owned || node.type === 'Domain' || node.type === 'User';
+    if (isImportant) return zoom > 0.03;
+    return zoom > 0.05;
   }
 
   // ============================================================================
@@ -534,6 +542,8 @@
       this.canvas    = canvas;
       this.container = canvas.parentElement;
       this.selectionBox = document.getElementById('selection-box');
+      this._largeGraph = false;
+      this._massiveGraph = false;
 
       this._applyContainerStyles();
 
@@ -744,10 +754,16 @@
       nodes.forEach((n, i) => { n._index = i; this.nodeById.set(n.id, n); });
       edges.forEach(e => this.edgeByKey.set(e.key, e));
 
+      // LOD: detect large graphs
+      this._largeGraph = nodes.length > LARGE_GRAPH_NODES;
+      this._massiveGraph = nodes.length > MASSIVE_GRAPH_NODES;
+
       this.buildNodeMesh();
       this.buildEdgeMeshes();
-      const arrowMeshes = this.buildArrowMesh(this.edgeArray) || [];
-      arrowMeshes.forEach(mesh => this.baseEdgeGroup.add(mesh));
+      if (!this._massiveGraph) {
+        const arrowMeshes = this.buildArrowMesh(this.edgeArray) || [];
+        arrowMeshes.forEach(mesh => this.baseEdgeGroup.add(mesh));
+      }
 
       this.fitToGraph();
       this.refreshLabels();
@@ -803,7 +819,11 @@
       const color = new THREE.Color();
 
       // Glow for high-value / owned / domain nodes (additive bloom effect)
-      const glowNodes = this.nodeArray.filter(n => n.high_value || n.owned || n.type === 'Domain');
+      // Limit glow count for large graphs to avoid GPU fill-rate issues
+      let glowNodes = this.nodeArray.filter(n => n.high_value || n.owned || n.type === 'Domain');
+      if (this._massiveGraph && glowNodes.length > 500) {
+        glowNodes = glowNodes.slice(0, 500);
+      }
       if (glowNodes.length) {
         const gm = new THREE.InstancedMesh(this.glowGeometry, this.glowMaterial.clone(), glowNodes.length);
         gm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -848,37 +868,41 @@
       });
       this.baseNodeMesh = this.baseNodeMeshes[0] || null;
 
-      // Subtle dark border ring
-      const bm = new THREE.InstancedMesh(this.nodeBorderGeometry, this.nodeBorderMaterial.clone(), this.nodeArray.length);
-      bm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      this.nodeArray.forEach((n, i) => {
-        dummy.position.set(n.x, n.y, NODE_Z + 0.05);
-        dummy.scale.setScalar(Math.max(4, n.radius));
-        dummy.updateMatrix();
-        bm.setMatrixAt(i, dummy.matrix);
-      });
-      bm.instanceMatrix.needsUpdate = true;
-      this.nodeBorderMesh = bm;
-      this.baseNodeGroup.add(bm);
-
-      // Special ring (high_value = gold, owned = green)
-      const specNodes = this.nodeArray.filter(n => n.high_value || n.owned);
-      if (specNodes.length) {
-        const sm = new THREE.InstancedMesh(this.highlightNodeGeometry, this.highlightNodeMaterial.clone(), specNodes.length);
-        sm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        specNodes.forEach((n, i) => {
-          dummy.position.set(n.x, n.y, NODE_Z - 0.3);
-          dummy.scale.setScalar(Math.max(4, n.radius * 1.08));
+      // Subtle dark border ring — skip for massive graphs
+      if (!this._massiveGraph) {
+        const bm = new THREE.InstancedMesh(this.nodeBorderGeometry, this.nodeBorderMaterial.clone(), this.nodeArray.length);
+        bm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        this.nodeArray.forEach((n, i) => {
+          dummy.position.set(n.x, n.y, NODE_Z + 0.05);
+          dummy.scale.setScalar(Math.max(4, n.radius));
           dummy.updateMatrix();
-          sm.setMatrixAt(i, dummy.matrix);
-          color.set(n.owned ? '#00d084' : '#f4c95d');
-          sm.setColorAt(i, color);
+          bm.setMatrixAt(i, dummy.matrix);
         });
-        sm.instanceMatrix.needsUpdate = true;
-        if (sm.instanceColor) sm.instanceColor.needsUpdate = true;
-        this.specialNodeMesh  = sm;
-        this.specialNodeArray = specNodes;
-        this.baseNodeGroup.add(sm);
+        bm.instanceMatrix.needsUpdate = true;
+        this.nodeBorderMesh = bm;
+        this.baseNodeGroup.add(bm);
+      }
+
+      // Special ring (high_value = gold, owned = green) — skip for large graphs
+      if (!this._largeGraph) {
+        const specNodes = this.nodeArray.filter(n => n.high_value || n.owned);
+        if (specNodes.length) {
+          const sm = new THREE.InstancedMesh(this.highlightNodeGeometry, this.highlightNodeMaterial.clone(), specNodes.length);
+          sm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          specNodes.forEach((n, i) => {
+            dummy.position.set(n.x, n.y, NODE_Z - 0.3);
+            dummy.scale.setScalar(Math.max(4, n.radius * 1.08));
+            dummy.updateMatrix();
+            sm.setMatrixAt(i, dummy.matrix);
+            color.set(n.owned ? '#00d084' : '#f4c95d');
+            sm.setColorAt(i, color);
+          });
+          sm.instanceMatrix.needsUpdate = true;
+          if (sm.instanceColor) sm.instanceColor.needsUpdate = true;
+          this.specialNodeMesh  = sm;
+          this.specialNodeArray = specNodes;
+          this.baseNodeGroup.add(sm);
+        }
       }
 
       // Icon layer — BloodHound CE style icons inside each node circle
@@ -888,7 +912,7 @@
     buildNodeIconLayer() {
       this.nodeIconSprites = [];
       // Skip for very large graphs (performance)
-      if (!this.nodeArray.length || this.nodeArray.length > 3000) return;
+      if (this._largeGraph || !this.nodeArray.length) return;
 
       this.nodeArray.forEach(node => {
         const te  = makeNodeIconTexture(node.type);
@@ -1447,9 +1471,10 @@
         this.labelSprites.push(label);
       });
 
-      // ── Edge relationship labels — always show all edges ──────────────────
-      // Show all edges when zoom is reasonable; for very zoomed out graphs cap it
-      const showAllEdgeLabels = zoom > 0.06;
+      // ── Edge relationship labels — LOD aware ──────────────────────────────
+      // For large graphs, require more zoom to show all edge labels
+      const edgeLabelZoomThreshold = this._largeGraph ? 0.12 : 0.06;
+      const showAllEdgeLabels = zoom > edgeLabelZoomThreshold;
       const edgeLabelKeys = new Set();
       const edgesToLabel = (showAllEdgeLabels
         ? this.edgeArray

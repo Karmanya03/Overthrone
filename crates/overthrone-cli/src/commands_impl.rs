@@ -16,7 +16,7 @@ use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
 use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
 #[cfg(feature = "crawler")]
-use overthrone_crawler::{CrawlerConfig, run_crawler};
+use overthrone_crawler::CrawlerConfig;
 #[cfg(feature = "forge")]
 use overthrone_forge::runner::{ForgeAction as RunnerForgeAction, ForgeConfig, run_forge};
 #[cfg(feature = "reaper")]
@@ -1276,10 +1276,23 @@ fn build_runner_action(
                 output_format: format.clone(),
             }
         }
-        ForgeAction::AsRepToTgt { cracked_password } => {
+        ForgeAction::AsRepToTgt {
+            cracked_password,
+            hash,
+            output,
+        } => {
             opts.insert("cracked_password".to_string(), cracked_password.clone());
+            if let Some(h) = hash {
+                opts.insert("hash".to_string(), h.clone());
+            }
+            if let Some(o) = output {
+                opts.insert("output_path".to_string(), o.clone());
+                opts.insert("output".to_string(), o.clone());
+            }
             RunnerForgeAction::AsRepToTgt {
                 cracked_password: cracked_password.clone(),
+                hash: hash.clone(),
+                output_path: output.clone(),
             }
         }
         ForgeAction::AsRepToTgtOffline {
@@ -1938,8 +1951,66 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
 // cmd_move â€” Lateral Movement
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+/// Display captured NTLM credentials from the responder.
+#[cfg(feature = "responder")]
+fn print_captured_creds(creds: &[overthrone_crawler::CapturedCredential]) {
+    if creds.is_empty() {
+        return;
+    }
+    for cred in creds {
+        println!(
+            "  {} {}@{} (via {})",
+            "♪".red(),
+            cred.username.bright_white(),
+            cred.domain.bright_cyan(),
+            cred.protocol.bright_black()
+        );
+        println!(
+            "     {} {}",
+            "hashcat:".dimmed(),
+            cred.to_hashcat_format().bright_green()
+        );
+    }
+}
+
+/// Run the crawler with optional responder/poisoner in the background.
+/// Only available when the `responder` feature is enabled.
+#[cfg(all(feature = "crawler", feature = "responder"))]
+async fn run_crawl(
+    config: &overthrone_crawler::CrawlerConfig,
+    reaper: &overthrone_reaper::ReaperResult,
+    rcfg: Option<&overthrone_crawler::CrawlerResponderConfig>,
+) -> anyhow::Result<overthrone_crawler::CrawlerResult> {
+    if let Some(cfg) = rcfg {
+        let (result, creds, _queries) =
+            overthrone_crawler::run_crawler_with_services(config, reaper, Some(cfg)).await?;
+        print_captured_creds(&creds);
+        Ok(result)
+    } else {
+        overthrone_crawler::run_crawler(config, reaper)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+/// Fallback — responder is not available, just run the plain crawler.
+#[cfg(all(feature = "crawler", not(feature = "responder")))]
+async fn run_crawl(
+    config: &overthrone_crawler::CrawlerConfig,
+    reaper: &overthrone_reaper::ReaperResult,
+) -> anyhow::Result<overthrone_crawler::CrawlerResult> {
+    overthrone_crawler::run_crawler(config, reaper)
+        .await
+        .map_err(Into::into)
+}
+
 #[cfg(feature = "reaper")]
-pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
+pub async fn cmd_move(
+    cli: &Cli,
+    action: &MoveAction,
+    poison_ip: Option<&str>,
+    respond: bool,
+) -> i32 {
     banner::print_module_banner("MOVE");
 
     let creds = match crate::require_creds(cli) {
@@ -1964,6 +2035,19 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
         modules: vec![],
         max_depth: 5,
         auto_pivot: false,
+    };
+
+    // Build responder config from CLI flags (if feature enabled)
+    #[cfg(feature = "responder")]
+    let responder_config: Option<overthrone_crawler::CrawlerResponderConfig> = {
+        if poison_ip.is_some() || respond {
+            Some(overthrone_crawler::CrawlerResponderConfig::from_cli(
+                poison_ip.map(|s| s.to_string()),
+                respond,
+            ))
+        } else {
+            None
+        }
     };
 
     match action {
@@ -2046,7 +2130,18 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
                 Ok(reaper_result) => {
-                    match run_crawler(&crawler_config, &reaper_result).await {
+                    let crawl_result = {
+                        #[cfg(feature = "responder")]
+                        {
+                            run_crawl(&crawler_config, &reaper_result, responder_config.as_ref())
+                                .await
+                        }
+                        #[cfg(not(feature = "responder"))]
+                        {
+                            run_crawl(&crawler_config, &reaper_result).await
+                        }
+                    };
+                    match crawl_result {
                         Ok(crawler_result) => {
                             let path_count = crawler_result.escalation_paths.len();
                             println!(
@@ -2121,45 +2216,58 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
             };
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
-                Ok(reaper_result) => match run_crawler(&crawler_config, &reaper_result).await {
-                    Ok(crawler_result) => {
-                        let chain_count = crawler_result.mssql_chains.len();
-                        println!(
-                            "  {} Found {} MSSQL link chain(s)",
-                            "[+]".green(),
-                            chain_count
-                        );
-
-                        for chain in &crawler_result.mssql_chains {
-                            let chain_str: Vec<String> = chain
-                                .links
-                                .iter()
-                                .map(|l| format!("{} -> {}", l.source_server, l.target_server))
-                                .collect();
-                            println!("    Chain: {}", chain_str.join(" | ").cyan());
-                            println!(
-                                "      Depth: {}  Cross-domain: {}  Risk: {}",
-                                chain.depth,
-                                if chain.crosses_domain {
-                                    "Yes".red()
-                                } else {
-                                    "No".green()
-                                },
-                                chain.risk_level.yellow()
-                            );
-                            println!("      {}", chain.description.dimmed());
+                Ok(reaper_result) => {
+                    let crawl_result = {
+                        #[cfg(feature = "responder")]
+                        {
+                            run_crawl(&crawler_config, &reaper_result, responder_config.as_ref())
+                                .await
                         }
+                        #[cfg(not(feature = "responder"))]
+                        {
+                            run_crawl(&crawler_config, &reaper_result).await
+                        }
+                    };
+                    match crawl_result {
+                        Ok(crawler_result) => {
+                            let chain_count = crawler_result.mssql_chains.len();
+                            println!(
+                                "  {} Found {} MSSQL link chain(s)",
+                                "[+]".green(),
+                                chain_count
+                            );
 
-                        banner::print_success(&format!(
-                            "MSSQL analysis completed - {} chains",
-                            chain_count
-                        ));
+                            for chain in &crawler_result.mssql_chains {
+                                let chain_str: Vec<String> = chain
+                                    .links
+                                    .iter()
+                                    .map(|l| format!("{} -> {}", l.source_server, l.target_server))
+                                    .collect();
+                                println!("    Chain: {}", chain_str.join(" | ").cyan());
+                                println!(
+                                    "      Depth: {}  Cross-domain: {}  Risk: {}",
+                                    chain.depth,
+                                    if chain.crosses_domain {
+                                        "Yes".red()
+                                    } else {
+                                        "No".green()
+                                    },
+                                    chain.risk_level.yellow()
+                                );
+                                println!("      {}", chain.description.dimmed());
+                            }
+
+                            banner::print_success(&format!(
+                                "MSSQL analysis completed - {} chains",
+                                chain_count
+                            ));
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("MSSQL analysis failed: {}", e));
+                            return 1;
+                        }
                     }
-                    Err(e) => {
-                        banner::print_fail(&format!("MSSQL analysis failed: {}", e));
-                        return 1;
-                    }
-                },
+                }
                 Err(e) => {
                     banner::print_fail(&format!("Data collection failed: {}", e));
                     return 1;
@@ -2183,7 +2291,18 @@ pub async fn cmd_move(cli: &Cli, action: &MoveAction) -> i32 {
 
             match overthrone_reaper::runner::run_reaper(&reaper_config).await {
                 Ok(reaper_result) => {
-                    match run_crawler(&crawler_config, &reaper_result).await {
+                    let crawl_result = {
+                        #[cfg(feature = "responder")]
+                        {
+                            run_crawl(&crawler_config, &reaper_result, responder_config.as_ref())
+                                .await
+                        }
+                        #[cfg(not(feature = "responder"))]
+                        {
+                            run_crawl(&crawler_config, &reaper_result).await
+                        }
+                    };
+                    match crawl_result {
                         Ok(crawler_result) => {
                             println!("  {} Trust map generated", "[+]".green());
 

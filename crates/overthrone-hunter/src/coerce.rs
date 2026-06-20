@@ -320,7 +320,16 @@ async fn try_coerce(
             CoerceMethod::ShadowCoerce => (PIPE_EFSR, EFSR_UUID, 1, build_efsr_request),
             CoerceMethod::PrinterBug => (PIPE_SPOOLSS, RPRN_UUID, 1, build_rprn_request),
             CoerceMethod::DfsCoerce => (PIPE_NETDFS, DFSNM_UUID, 3, build_dfsnm_request),
-            CoerceMethod::XpDirtree => unreachable!("XpDirtree is handled separately"),
+            CoerceMethod::XpDirtree => {
+                return CoercionAttempt {
+                    method: "XpDirtree".to_string(),
+                    pipe: String::new(),
+                    success: false,
+                    error: Some(
+                        "XpDirtree is handled via WebDAV path, not SMB named pipe".to_string(),
+                    ),
+                };
+            }
         };
 
     info!("  {} Trying {} via \\\\pipe\\{}", "→".cyan(), method, pipe);

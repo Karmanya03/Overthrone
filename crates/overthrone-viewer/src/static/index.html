@@ -52,6 +52,35 @@ window.addEventListener('load', function() {
   --graph-ink-stroke: #0b0b12;
 }
 
+:root.light {
+  --bg: #f5f5f7;
+  --panel: #ffffff;
+  --panel-2: #f0f0f2;
+  --panel-3: #e8e8ec;
+  --line: #d4d4d8;
+  --line-strong: #a1a1aa;
+  --text: #18181b;
+  --soft: #52525b;
+  --muted: #a1a1aa;
+  --red: #dc2626;
+  --green: #16a34a;
+  --blue: #2563eb;
+  --yellow: #d97706;
+  --cyan: #0d9488;
+  --magenta: #7c3aed;
+  --pink: #db2777;
+  --node-user: #2563eb;
+  --node-computer: #16a34a;
+  --node-group: #d97706;
+  --node-domain: #dc2626;
+  --node-gpo: #7c3aed;
+  --node-ou: #db2777;
+  --node-cert: #0d9488;
+  --graph-bg: #fafafa;
+  --graph-ink: #18181b;
+  --graph-ink-stroke: #fafafa;
+}
+
 * { box-sizing: border-box; }
 
 html,
@@ -168,6 +197,96 @@ select {
   min-height: 0;
   overflow-y: auto;
   padding: 6px 0 18px;
+}
+
+/* Loading spinner */
+.spinner-overlay {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.4);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+}
+.spinner-overlay.active {
+  display: flex;
+}
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--line);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.spinner-label {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Theme toggle button */
+#theme-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 30;
+  width: 36px;
+  height: 36px;
+  color: var(--text);
+  background: rgba(13, 13, 15, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+#theme-toggle:hover {
+  border-color: var(--cyan);
+  background: var(--panel-3);
+}
+
+/* Export buttons */
+.export-bar {
+  display: none;
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  gap: 8px;
+}
+.export-bar.active {
+  display: flex;
+}
+.export-btn {
+  padding: 8px 16px;
+  color: var(--text);
+  background: rgba(13, 13, 15, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.export-btn:hover {
+  border-color: var(--cyan);
+  background: var(--panel-3);
 }
 
 #sidebar-toggle {
@@ -1687,6 +1806,15 @@ input:disabled {
         <div class="legend-item"><span class="legend-dot" style="background:var(--muted)"></span>Unknown</div>
       </div>
     </div>
+    <div id="theme-toggle" title="Toggle dark/light theme">🌙</div>
+    <div class="spinner-overlay" id="spinner-overlay">
+      <div class="spinner"></div>
+      <div class="spinner-label" id="spinner-label">Loading...</div>
+    </div>
+    <div class="export-bar" id="export-bar">
+      <button class="export-btn" id="export-png" title="Export graph as PNG">📷 Export PNG</button>
+      <button class="export-btn" id="export-json" title="Export graph data as JSON">📄 Export JSON</button>
+    </div>
     <div id="empty-state">
       <div class="empty-card">
         <div class="empty-title">Select a JSON graph</div>
@@ -1841,6 +1969,9 @@ async function init() {
   document.getElementById('zoom-fit').addEventListener('click', fitGraph);
   document.getElementById('render-button').addEventListener('click', () => renderSelectedChunk());
   document.getElementById('path-button').addEventListener('click', findAttackPath);
+  document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+  document.getElementById('export-png').addEventListener('click', exportPng);
+  document.getElementById('export-json').addEventListener('click', exportJson);
   document.getElementById('upload-btn').addEventListener('click', () => {
     document.getElementById('json-upload').click();
   });
@@ -2057,6 +2188,21 @@ async function init() {
     if (event.key === 'Escape') {
       hideSearchResults();
       deselectAll();
+      return;
+    }
+    if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+      event.preventDefault();
+      document.getElementById('search-input').focus();
+      return;
+    }
+    if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey) {
+      if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+        return;
+      }
+      event.preventDefault();
+      const app = document.getElementById('app');
+      app.classList.toggle('sidebar-collapsed');
+      return;
     }
   });
 
@@ -2072,6 +2218,49 @@ async function init() {
   });
 
 await loadGraphList();
+connectWebSocket();
+}
+
+/// WebSocket — live notifications for graph list / graph changes
+let ws = null;
+let wsReconnectTimer = null;
+
+function connectWebSocket() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  if (wsReconnectTimer) return; // already scheduled
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+  ws.onmessage = function(event) {
+    try {
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
+        case 'graph_list_updated':
+          loadGraphList();
+          break;
+        case 'graph_updated':
+          if (msg.graph_id && msg.graph_id === currentGraphId) {
+            loadGraph(msg.graph_id);
+          }
+          break;
+      }
+    } catch (e) {
+      console.error('WS message error:', e);
+    }
+  };
+
+  ws.onclose = function() {
+    ws = null;
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectTimer = null;
+      connectWebSocket();
+    }, 3000);
+  };
+
+  ws.onerror = function() {
+    // Triggers onclose
+  };
 }
 
 async function loadGraphList(options = {}) {
@@ -2184,6 +2373,7 @@ async function loadGraph(graphId) {
   const graphInfo = graphList.find(graph => graph.id === graphId);
   document.getElementById('graph-select').value = graphId;
   setInteractiveEnabled(false);
+  showSpinner('Loading graph...');
   setEmptyMessage('Indexing graph', graphInfo ? graphInfo.label : graphId);
   document.getElementById('empty-state').classList.remove('hidden');
   document.getElementById('graph-badge').textContent = 'Indexing graph';
@@ -2227,6 +2417,7 @@ async function loadGraph(graphId) {
     setEmptyMessage('Graph failed to load', error.message);
     document.getElementById('graph-badge').textContent = 'Load failed';
     document.getElementById('render-badge').textContent = 'Error';
+    hideSpinner();
     return;
   }
 
@@ -2236,6 +2427,7 @@ async function loadGraph(graphId) {
   updateRenderBadge(graphData);
   updateChunkControls(graphData);
   setInteractiveEnabled(true);
+  hideSpinner();
   setEmptyMessage('Blank graph ready', 'Search a source or destination node, find a path, or render a small chunk.');
   document.getElementById('empty-state').classList.remove('hidden');
 }
@@ -3555,6 +3747,89 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/* ── Spinner ─────────────────────────────────────────── */
+function showSpinner(label) {
+  const overlay = document.getElementById('spinner-overlay');
+  document.getElementById('spinner-label').textContent = label || 'Loading...';
+  overlay.classList.add('active');
+}
+function hideSpinner() {
+  document.getElementById('spinner-overlay').classList.remove('active');
+}
+
+/* ── Theme toggle ────────────────────────────────────── */
+function toggleTheme() {
+  const root = document.documentElement;
+  const isLight = root.classList.toggle('light');
+  document.getElementById('theme-toggle').textContent = isLight ? '☀️' : '🌙';
+  try { localStorage.setItem('ovt-theme', isLight ? 'light' : 'dark'); } catch(e) {}
+}
+(function loadTheme() {
+  try {
+    const saved = localStorage.getItem('ovt-theme');
+    if (saved === 'light') {
+      document.documentElement.classList.add('light');
+      document.getElementById('theme-toggle').textContent = '☀️';
+    }
+  } catch(e) {}
+})();
+
+/* ── Export ──────────────────────────────────────────── */
+function exportPng() {
+  const canvas = document.getElementById('graph-canvas');
+  if (!canvas) return;
+  try {
+    const dataUrl = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = (currentGraphId || 'graph') + '.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch(e) {
+    console.error('PNG export failed:', e);
+    alert('PNG export failed: ' + e.message);
+  }
+}
+
+async function exportJson() {
+  if (!currentGraphId) {
+    alert('No graph loaded to export');
+    return;
+  }
+  showSpinner('Exporting JSON...');
+  try {
+    const resp = await fetch(`/api/graph?graph=${encodeURIComponent(currentGraphId)}&all=true`);
+    if (!resp.ok) throw new Error(await readApiError(resp));
+    const data = await resp.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (currentGraphId || 'graph') + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  } catch(e) {
+    console.error('JSON export failed:', e);
+    alert('JSON export failed: ' + e.message);
+  } finally {
+    hideSpinner();
+  }
+}
+
+/* ── Show export bar when graph is loaded ─────────────── */
+const origRenderStats = renderStats;
+renderStats = function(stats) {
+  origRenderStats(stats);
+  const bar = document.getElementById('export-bar');
+  if (stats && stats.total_nodes > 0) {
+    bar.classList.add('active');
+  } else {
+    bar.classList.remove('active');
+  }
+};
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');

@@ -8,6 +8,7 @@ pub mod cross_forest;
 pub mod escalation;
 pub mod foreign;
 pub mod mssql_links;
+pub mod oplock;
 /// OpSec pacing, rate limiting, and jitter for network operations.
 pub mod pacing;
 pub mod pam;
@@ -22,8 +23,28 @@ pub mod interrealm;
 
 pub use runner::{CrawlerConfig, CrawlerResult, run_crawler};
 
+#[cfg(feature = "responder")]
+pub use runner::run_crawler_with_services;
+
 // Re-export OPSEC pacing and rotation types
 pub use pacing::{DnsRotator, OpsecPacer, PacingConfig, UserAgentPool};
+
+// Re-export OPLOCK types
+pub use oplock::{OplockConfig, OplockLevel, OplockSession};
+
+/// Responder/poisoner integration (requires `responder` feature).
+#[cfg(feature = "responder")]
+pub mod responder;
+
+#[cfg(feature = "responder")]
+pub use responder::{CapturedCredential, CapturedQuery, CrawlerResponder, CrawlerResponderConfig};
+
+/// JA3/JA4 TLS fingerprint randomization (requires `tls_fingerprint` feature).
+#[cfg(feature = "tls_fingerprint")]
+pub mod tls_fingerprint;
+
+#[cfg(feature = "tls_fingerprint")]
+pub use tls_fingerprint::TlsFingerprintConfig;
 
 // Re-export cross-forest analysis types
 pub use cross_forest::{

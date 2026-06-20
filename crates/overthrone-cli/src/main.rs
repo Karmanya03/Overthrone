@@ -467,6 +467,12 @@ enum Commands {
     Move {
         #[command(subcommand)]
         action: MoveAction,
+        /// Enable LLMNR/NBT-NS/mDNS poisoning with the given response IP
+        #[arg(long)]
+        poison_ip: Option<String>,
+        /// Enable HTTP/SMB/LDAP/MSMQ responder for NTLM credential capture
+        #[arg(long, default_value_t = false)]
+        respond: bool,
     },
 
     /// GPP password decryption — decrypt cpassword from Group Policy XML
@@ -1691,12 +1697,24 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// Domain for authenticated coercion triggers (default: null session)
+        #[arg(long)]
+        auto_coerce_domain: Option<String>,
+        /// Username for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_user: Option<String>,
+        /// Password for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_password: Option<String>,
         /// mTLS client certificate PEM file path
         #[arg(long)]
         tls_client_cert: Option<String>,
         /// mTLS client private key PEM file path
         #[arg(long)]
         tls_client_key: Option<String>,
+        /// Validate TLS server certificates (non-relay/auditing mode)
+        #[arg(long)]
+        tls_verify: bool,
     },
     /// NTLM relay via SMB protocol
     SmbRelay {
@@ -1721,12 +1739,24 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// Domain for authenticated coercion triggers (default: null session)
+        #[arg(long)]
+        auto_coerce_domain: Option<String>,
+        /// Username for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_user: Option<String>,
+        /// Password for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_password: Option<String>,
         /// mTLS client certificate PEM file path
         #[arg(long)]
         tls_client_cert: Option<String>,
         /// mTLS client private key PEM file path
         #[arg(long)]
         tls_client_key: Option<String>,
+        /// Validate TLS server certificates (non-relay/auditing mode)
+        #[arg(long)]
+        tls_verify: bool,
     },
     /// NTLM relay via HTTP protocol
     HttpRelay {
@@ -1751,12 +1781,24 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// Domain for authenticated coercion triggers (default: null session)
+        #[arg(long)]
+        auto_coerce_domain: Option<String>,
+        /// Username for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_user: Option<String>,
+        /// Password for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_password: Option<String>,
         /// mTLS client certificate PEM file path
         #[arg(long)]
         tls_client_cert: Option<String>,
         /// mTLS client private key PEM file path
         #[arg(long)]
         tls_client_key: Option<String>,
+        /// Validate TLS server certificates (non-relay/auditing mode)
+        #[arg(long)]
+        tls_verify: bool,
     },
     /// Enhanced HTTP asymmetric relay — full request capture and replay
     HttpAsymmetric {
@@ -1793,12 +1835,24 @@ enum NtlmAction {
         /// Listener IP for coerced connections
         #[arg(long)]
         auto_coerce_listener: Option<String>,
+        /// Domain for authenticated coercion triggers (default: null session)
+        #[arg(long)]
+        auto_coerce_domain: Option<String>,
+        /// Username for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_user: Option<String>,
+        /// Password for authenticated coercion triggers
+        #[arg(long)]
+        auto_coerce_password: Option<String>,
         /// mTLS client certificate PEM file path
         #[arg(long)]
         tls_client_cert: Option<String>,
         /// mTLS client private key PEM file path
         #[arg(long)]
         tls_client_key: Option<String>,
+        /// Validate TLS server certificates (non-relay/auditing mode)
+        #[arg(long)]
+        tls_verify: bool,
     },
     /// Standalone SMB daemon for credential capture
     SmbDaemon {
@@ -1865,6 +1919,9 @@ enum NtlmAction {
         /// mTLS client private key PEM file path
         #[arg(long)]
         tls_client_key: Option<String>,
+        /// Validate TLS server certificates (non-relay/auditing mode)
+        #[arg(long)]
+        tls_verify: bool,
     },
 }
 
@@ -2018,11 +2075,19 @@ enum ForgeAction {
         #[arg(short, long, required = true)]
         format: String,
     },
-    /// Convert a cracked AS-REP roast password into a usable TGT
+    /// Convert a cracked AS-REP roast password into a usable TGT.
+    /// If --hash is provided, the username and domain are auto-extracted from the hash.
+    /// Ticket is saved to --output or auto-named in the current directory.
     AsRepToTgt {
         /// Cracked plaintext password from AS-REP roast
         #[arg(short, long, required = true)]
         cracked_password: String,
+        /// Raw $krb5asrep$ hash — auto-fills username/domain
+        #[arg(long)]
+        hash: Option<String>,
+        /// Path to save the ticket (.kirbi)
+        #[arg(short, long)]
+        output: Option<String>,
     },
     /// Forge a TGT offline from cracked AS-REP password (no KDC contact)
     AsRepToTgtOffline {
@@ -2477,7 +2542,11 @@ async fn async_main() -> i32 {
             null_session,
         } => commands_impl::cmd_rid(&cli, start_rid, end_rid, null_session).await,
         #[cfg(feature = "reaper")]
-        Commands::Move { ref action } => commands_impl::cmd_move(&cli, action).await,
+        Commands::Move {
+            ref action,
+            ref poison_ip,
+            respond,
+        } => commands_impl::cmd_move(&cli, action, poison_ip.as_deref(), respond).await,
         Commands::Gpp {
             ref file,
             ref cpassword,
@@ -3484,18 +3553,59 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
     }
 }
 
-/// Load mTLS identity from optional cert/key file paths.
-/// Returns `None` when both paths are `None`, or a loaded `TlsIdentity`
-/// when both are provided. Errors if only one is provided or file loading fails.
-fn load_tls_identity(
+/// Load mTLS identity from optional cert/key file paths and build a TlsConfig.
+/// Returns `None` when both paths are `None`, or a loaded `TlsConfig` with
+/// Build optional coercion credentials from CLI flags.
+/// Returns `Some(CoerceCreds)` when both user and password are provided.
+fn build_coerce_creds(
+    domain: Option<String>,
+    user: Option<String>,
+    password: Option<String>,
+) -> Option<overthrone_core::proto::coerce::CoerceCreds> {
+    match (user, password) {
+        (Some(u), Some(p)) => Some(overthrone_core::proto::coerce::CoerceCreds {
+            domain: domain.unwrap_or_else(|| ".".to_string()),
+            username: u,
+            password: p,
+        }),
+        _ => None,
+    }
+}
+
+/// Load TLS configuration from optional PEM file paths with
+/// the specified verification mode and optional client identity.
+/// Errors if only one is provided or file loading fails.
+fn load_tls_config(
     cert_path: Option<&str>,
     key_path: Option<&str>,
-) -> Result<Option<overthrone_relay::relay::TlsIdentity>, String> {
+    tls_verify: bool,
+) -> Result<Option<overthrone_relay::tls::TlsConfig>, String> {
+    let verification_mode = if tls_verify {
+        overthrone_relay::tls::TlsVerificationMode::VerifyServerCert
+    } else {
+        overthrone_relay::tls::TlsVerificationMode::AcceptAll
+    };
     match (cert_path, key_path) {
-        (Some(cert), Some(key)) => overthrone_relay::relay::TlsIdentity::load(cert, key).map(Some),
+        (Some(cert), Some(key)) => {
+            let identity =
+                overthrone_relay::tls::TlsIdentity::load(cert, key).map_err(|e| format!("{e}"))?;
+            Ok(Some(overthrone_relay::tls::TlsConfig {
+                verification_mode,
+                identity: Some(identity),
+            }))
+        }
         (Some(_), None) => Err("--tls-client-cert requires --tls-client-key".into()),
         (None, Some(_)) => Err("--tls-client-key requires --tls-client-cert".into()),
-        (None, None) => Ok(None),
+        (None, None) => {
+            if tls_verify {
+                Ok(Some(overthrone_relay::tls::TlsConfig {
+                    verification_mode: overthrone_relay::tls::TlsVerificationMode::VerifyServerCert,
+                    identity: None,
+                }))
+            } else {
+                Ok(None)
+            }
+        }
     }
 }
 
@@ -3593,7 +3703,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison,
                 ldap_signing_bypass: true,
-                tls_client_identity: None,
+                tls_config: None,
                 auto_coerce_targets: Vec::new(),
                 auto_coerce_listener: None,
                 socks5_proxy: None,
@@ -3601,6 +3711,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                auto_coerce_credentials: None,
                 tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
@@ -3630,8 +3741,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             ldap_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            auto_coerce_domain,
+            auto_coerce_user,
+            auto_coerce_password,
             tls_client_cert,
             tls_client_key,
+            tls_verify,
         } => {
             println!(
                 "{} Starting NTLM relay to {} targets {}",
@@ -3640,14 +3755,17 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 if no_poison { "(relay-only)" } else { "" }
             );
 
-            let tls_identity =
-                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        banner::print_fail(&e);
-                        return 1;
-                    }
-                };
+            let tls_config = match load_tls_config(
+                tls_client_cert.as_deref(),
+                tls_client_key.as_deref(),
+                tls_verify,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3684,7 +3802,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison,
                 ldap_signing_bypass,
-                tls_client_identity: tls_identity,
+                tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
@@ -3692,9 +3810,13 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                auto_coerce_credentials: build_coerce_creds(
+                    auto_coerce_domain,
+                    auto_coerce_user,
+                    auto_coerce_password,
+                ),
                 tls_relay_config: None,
             };
-
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
@@ -3724,8 +3846,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             ldap_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            auto_coerce_domain,
+            auto_coerce_user,
+            auto_coerce_password,
             tls_client_cert,
             tls_client_key,
+            tls_verify,
         } => {
             println!(
                 "{} Starting SMB relay to {} targets",
@@ -3733,14 +3859,17 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 targets.join(", ").cyan()
             );
 
-            let tls_identity =
-                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        banner::print_fail(&e);
-                        return 1;
-                    }
-                };
+            let tls_config = match load_tls_config(
+                tls_client_cert.as_deref(),
+                tls_client_key.as_deref(),
+                tls_verify,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3769,7 +3898,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass,
-                tls_client_identity: tls_identity,
+                tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
@@ -3777,6 +3906,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                auto_coerce_credentials: build_coerce_creds(
+                    auto_coerce_domain,
+                    auto_coerce_user,
+                    auto_coerce_password,
+                ),
                 tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
@@ -3808,8 +3942,12 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             ldap_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            auto_coerce_domain,
+            auto_coerce_user,
+            auto_coerce_password,
             tls_client_cert,
             tls_client_key,
+            tls_verify,
         } => {
             println!(
                 "{} Starting HTTP relay to {} targets",
@@ -3817,14 +3955,17 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 targets.join(", ").cyan()
             );
 
-            let tls_identity =
-                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        banner::print_fail(&e);
-                        return 1;
-                    }
-                };
+            let tls_config = match load_tls_config(
+                tls_client_cert.as_deref(),
+                tls_client_key.as_deref(),
+                tls_verify,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             let relay_targets: Vec<RelayTarget> = targets
                 .iter()
@@ -3857,7 +3998,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass,
-                tls_client_identity: tls_identity,
+                tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
@@ -3865,6 +4006,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                auto_coerce_credentials: build_coerce_creds(
+                    auto_coerce_domain,
+                    auto_coerce_user,
+                    auto_coerce_password,
+                ),
                 tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
@@ -3990,30 +4136,45 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             no_signing_bypass,
             auto_coerce_targets,
             auto_coerce_listener,
+            auto_coerce_domain,
+            auto_coerce_user,
+            auto_coerce_password,
             tls_client_cert,
             tls_client_key,
+            tls_verify,
         } => {
-            let tls_identity =
-                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        banner::print_fail(&e);
-                        return 1;
-                    }
-                };
+            let tls_config = match load_tls_config(
+                tls_client_cert.as_deref(),
+                tls_client_key.as_deref(),
+                tls_verify,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             let proto = if ldaps {
                 Protocol::Ldaps
             } else {
                 Protocol::Ldap
             };
-            let addr: SocketAddr = format!("{}:{}", target, port).parse().unwrap_or_else(|_| {
-                // If target has no port in the string, use the parsed port
-                let host = target.split(':').next().unwrap_or(&target);
-                format!("{}:{}", host, port)
-                    .parse()
-                    .unwrap_or_else(|_| panic!("Invalid target address: {host}:{port}"))
-            });
+            let addr = match format!("{}:{}", target, port).parse::<SocketAddr>() {
+                Ok(a) => a,
+                Err(_) => {
+                    // If target has no port in the string, use the parsed port
+                    let host = target.split(':').next().unwrap_or(&target);
+                    let addr_str = format!("{}:{}", host, port);
+                    match addr_str.parse::<SocketAddr>() {
+                        Ok(a) => a,
+                        Err(_) => {
+                            banner::print_fail(&format!("Invalid target address: {host}:{port}"));
+                            return 1;
+                        }
+                    }
+                }
+            };
             println!(
                 "{} Starting LDAP{} relay to {} with GSS-SPNEGO signing bypass {}",
                 "🎯".bright_black(),
@@ -4044,7 +4205,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 downgrade_auth: false,
                 no_poison: false,
                 ldap_signing_bypass: !no_signing_bypass,
-                tls_client_identity: tls_identity,
+                tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
                 socks5_proxy: None,
@@ -4052,6 +4213,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
+                auto_coerce_credentials: build_coerce_creds(
+                    auto_coerce_domain,
+                    auto_coerce_user,
+                    auto_coerce_password,
+                ),
                 tls_relay_config: None,
             };
             let mut controller = RelayController::new(config);
@@ -4189,6 +4355,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             version,
             tls_client_cert,
             tls_client_key,
+            tls_verify,
         } => {
             println!(
                 "{} Starting Exchange NTLM relay to {}{}",
@@ -4199,21 +4366,23 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
 
             use overthrone_relay::exchange::{ExchangeRelay, ExchangeRelayConfig};
 
-            let tls_identity =
-                match load_tls_identity(tls_client_cert.as_deref(), tls_client_key.as_deref()) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        banner::print_fail(&e);
-                        return 1;
-                    }
-                };
+            let tls_config = match load_tls_config(
+                tls_client_cert.as_deref(),
+                tls_client_key.as_deref(),
+                tls_verify,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
 
             let config = ExchangeRelayConfig {
                 listen_ip: "0.0.0.0".into(),
                 target_host: target.clone(),
                 target_port: port,
                 use_tls: !no_tls,
-                accept_self_signed: true,
                 ews_path: ews_path.clone(),
                 mapi_path: mapi_path.clone(),
                 autodiscover_path: "/autodiscover/autodiscover.xml".into(),
@@ -4236,7 +4405,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 },
                 socks5_proxy: None,
                 endpoint_type: overthrone_relay::exchange::ExchangeEndpoint::Auto,
-                tls_client_identity: tls_identity,
+                tls_config,
             };
             let mut relay = ExchangeRelay::new(config);
             match relay.start().await {

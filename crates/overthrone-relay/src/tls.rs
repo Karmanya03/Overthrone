@@ -1,16 +1,78 @@
-﻿//! TLS relay support — RelayStream, RelayIo, build_relay_tls_config, mTLS identity.
+//! TLS relay support — RelayStream, RelayIo, build_relay_tls_config, mTLS identity,
+//! TLS verification modes, and the shared TlsConfig builder.
 
+use rustls::client::danger::ServerCertVerifier;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use rustls::client::danger::ServerCertVerifier;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::pki_types::pem::PemObject;
-
 pub use tokio_rustls::client::TlsStream;
+
+// ===========================================================
+// TlsVerificationMode — controls server certificate verification
+// ===========================================================
+
+/// How to verify TLS server certificates for outbound connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TlsVerificationMode {
+    /// Accept any server certificate (relay attack mode, like ntlmrelayx).
+    #[default]
+    AcceptAll,
+    /// Verify server certificates against the system root store.
+    /// Rejects self-signed or untrusted certificates.
+    VerifyServerCert,
+}
+
+impl std::fmt::Display for TlsVerificationMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AcceptAll => write!(f, "accept-all"),
+            Self::VerifyServerCert => write!(f, "verify-server-cert"),
+        }
+    }
+}
+
+// ===========================================================
+// TlsConfig — shared configuration for TLS connections
+// ===========================================================
+
+/// Shared TLS configuration bundling verification mode and optional mTLS identity.
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    /// How to verify the server certificate.
+    pub verification_mode: TlsVerificationMode,
+    /// Optional mTLS client identity (certificate + private key) for client auth.
+    /// When set, the client presents this certificate during the TLS handshake.
+    pub identity: Option<TlsIdentity>,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            verification_mode: TlsVerificationMode::AcceptAll,
+            identity: None,
+        }
+    }
+}
+
+impl TlsConfig {
+    /// Create a new TlsConfig with AcceptAll mode (relay default).
+    pub fn relay_default() -> Self {
+        Self::default()
+    }
+
+    /// Create a new TlsConfig with server certificate verification.
+    pub fn verify_server(identity: Option<TlsIdentity>) -> Self {
+        Self {
+            verification_mode: TlsVerificationMode::VerifyServerCert,
+            identity,
+        }
+    }
+}
 
 // ===========================================================
 // AcceptAllVerifier — accepts any server certificate
@@ -157,7 +219,9 @@ impl<S: Unpin> Unpin for RelayStream<S> {}
 
 impl<S: fmt::Debug> fmt::Debug for RelayStream<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RelayStream").field("inner", &self.inner).finish()
+        f.debug_struct("RelayStream")
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 
@@ -189,45 +253,77 @@ impl TlsIdentity {
 // TLS configuration
 // ===========================================================
 
-/// Build a rustls `ClientConfig` for relay outbound connections.
-/// Certificate verification is **disabled** (same trust model as ntlmrelayx).
+/// Build a rustls `ClientConfig` for outbound TLS connections.
+///
+/// The `mode` parameter controls certificate verification:
+/// - `AcceptAll`: accept any server certificate (relay attack mode)
+/// - `VerifyServerCert`: validate against the system root store
+///
 /// When `identity` is provided, the client certificate is presented
 /// for mTLS-protected targets.
 pub fn build_relay_tls_config(
+    mode: TlsVerificationMode,
     identity: Option<&TlsIdentity>,
 ) -> Result<rustls::ClientConfig, Box<dyn std::error::Error>> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = Arc::new(AcceptAllVerifier);
 
-    let builder = rustls::ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?
-        .dangerous()
-        .with_custom_certificate_verifier(verifier);
-
-    match identity {
-        Some(id) => {
-            let certs = CertificateDer::from_pem_slice(id.cert_pem.as_bytes())
-                .map_err(|e| format!("failed to parse client cert PEM: {}", e))?;
-            let key = PrivateKeyDer::from_pem_slice(id.key_pem.as_bytes())
-                .map_err(|e| format!("failed to parse client key PEM: {}", e))?;
-            Ok(builder.with_client_auth_cert(certs, key)?)
+    match mode {
+        TlsVerificationMode::AcceptAll => {
+            let verifier = Arc::new(AcceptAllVerifier);
+            let builder = rustls::ClientConfig::builder_with_provider(provider)
+                .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?
+                .dangerous()
+                .with_custom_certificate_verifier(verifier);
+            match identity {
+                Some(id) => {
+                    let certs = vec![
+                        CertificateDer::from_pem_slice(id.cert_pem.as_bytes())
+                            .map_err(|e| format!("failed to parse client cert PEM: {}", e))?,
+                    ];
+                    let key = PrivateKeyDer::from_pem_slice(id.key_pem.as_bytes())
+                        .map_err(|e| format!("failed to parse client key PEM: {}", e))?;
+                    Ok(builder.with_client_auth_cert(certs, key)?)
+                }
+                None => Ok(builder.with_no_client_auth()),
+            }
         }
-        None => Ok(builder.with_no_client_auth()),
+        TlsVerificationMode::VerifyServerCert => {
+            let mut root_store = rustls::RootCertStore::empty();
+            let native_certs = rustls_native_certs::load_native_certs();
+            for cert in native_certs.certs {
+                let _ = root_store.add(cert);
+            }
+            let builder = rustls::ClientConfig::builder_with_provider(provider)
+                .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])?
+                .with_root_certificates(root_store);
+            match identity {
+                Some(id) => {
+                    let certs = vec![
+                        CertificateDer::from_pem_slice(id.cert_pem.as_bytes())
+                            .map_err(|e| format!("failed to parse client cert PEM: {}", e))?,
+                    ];
+                    let key = PrivateKeyDer::from_pem_slice(id.key_pem.as_bytes())
+                        .map_err(|e| format!("failed to parse client key PEM: {}", e))?;
+                    Ok(builder.with_client_auth_cert(certs, key)?)
+                }
+                None => Ok(builder.with_no_client_auth()),
+            }
+        }
     }
 }
 
-/// Wrap a TCP stream with TLS for LDAPS relay.
+/// Wrap a TCP stream with TLS for outbound connections.
 /// Accepts any AsyncRead+AsyncWrite+Unpin+Send stream.
-/// When `identity` is provided, mTLS client authentication is used.
 pub async fn wrap_tls<S>(
     stream: S,
     hostname: String,
+    mode: TlsVerificationMode,
     identity: Option<&TlsIdentity>,
 ) -> Result<RelayStream<tokio_rustls::client::TlsStream<S>>, Box<dyn std::error::Error>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let config = Arc::new(build_relay_tls_config(identity)?);
+    let config = Arc::new(build_relay_tls_config(mode, identity)?);
     let connector = tokio_rustls::TlsConnector::from(config);
 
     let domain = rustls::pki_types::ServerName::try_from(hostname.clone())
@@ -249,8 +345,65 @@ mod tests {
 
     #[test]
     fn test_build_relay_tls_config_succeeds() {
-        let config = build_relay_tls_config(None);
+        let config = build_relay_tls_config(TlsVerificationMode::AcceptAll, None);
         assert!(config.is_ok(), "TLS config should build without errors");
+    }
+
+    #[test]
+    fn test_build_relay_tls_config_accept_all_disables_verification() {
+        let config = build_relay_tls_config(TlsVerificationMode::AcceptAll, None).unwrap();
+        let _ = config.alpn_protocols;
+    }
+
+    #[test]
+    fn test_build_relay_tls_config_verify_server_cert_succeeds() {
+        let config = build_relay_tls_config(TlsVerificationMode::VerifyServerCert, None);
+        assert!(
+            config.is_ok(),
+            "VerifyServerCert config should build without errors"
+        );
+    }
+
+    #[test]
+    fn test_tls_config_relay_default() {
+        let cfg = TlsConfig::relay_default();
+        assert_eq!(cfg.verification_mode, TlsVerificationMode::AcceptAll);
+        assert!(cfg.identity.is_none());
+    }
+
+    #[test]
+    fn test_tls_config_verify_server() {
+        let cfg = TlsConfig::verify_server(None);
+        assert_eq!(cfg.verification_mode, TlsVerificationMode::VerifyServerCert);
+        assert!(cfg.identity.is_none());
+
+        let identity = TlsIdentity {
+            cert_pem: "cert".into(),
+            key_pem: "key".into(),
+        };
+        let cfg2 = TlsConfig::verify_server(Some(identity));
+        assert_eq!(
+            cfg2.verification_mode,
+            TlsVerificationMode::VerifyServerCert
+        );
+        assert!(cfg2.identity.is_some());
+    }
+
+    #[test]
+    fn test_verification_mode_display() {
+        assert_eq!(format!("{}", TlsVerificationMode::AcceptAll), "accept-all");
+        assert_eq!(
+            format!("{}", TlsVerificationMode::VerifyServerCert),
+            "verify-server-cert"
+        );
+    }
+
+    #[test]
+    fn test_verification_mode_default() {
+        assert_eq!(
+            TlsVerificationMode::default(),
+            TlsVerificationMode::AcceptAll
+        );
     }
 
     #[test]
@@ -330,25 +483,11 @@ mod tests {
         // should fail fast.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let (client, _server) = tokio::join!(
-            tokio::net::TcpStream::connect(addr),
-            listener.accept(),
-        );
+        let (client, _server) =
+            tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept(),);
         let stream = client.unwrap();
-        let result = wrap_tls(stream, "".to_string(), None).await;
+        let result = wrap_tls(stream, "".to_string(), TlsVerificationMode::AcceptAll, None).await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_tls_config_disables_certificate_verification() {
-        // The verifier is AcceptAllVerifier which always succeeds.
-        // We can't directly inspect the verifier, but we can verify that
-        // the config builds and uses a custom verifier by checking
-        // the alpn_protocols and others are empty.
-        let config = build_relay_tls_config(None).unwrap();
-        // AcceptAllVerifier accepts any cert, so this test just verifies
-        // the config is constructed without panic.
-        let _ = config.alpn_protocols;
     }
 
     #[test]
@@ -378,11 +517,15 @@ mod tests {
             cert_pem: "not-valid-pem".to_string(),
             key_pem: "not-valid-pem".to_string(),
         };
-        let config = build_relay_tls_config(Some(&identity));
+        let config = build_relay_tls_config(TlsVerificationMode::AcceptAll, Some(&identity));
         assert!(config.is_err(), "mTLS config should fail with bad PEM");
         let err = config.unwrap_err();
         let msg = format!("{}", err);
-        assert!(msg.contains("failed to parse"), "error should mention parse failure: got '{}'", msg);
+        assert!(
+            msg.contains("failed to parse"),
+            "error should mention parse failure: got '{}'",
+            msg
+        );
     }
 
     #[test]

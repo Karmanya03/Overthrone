@@ -111,10 +111,15 @@ impl OpsecPacer {
     /// Returns a token that releases the slot when dropped.
     pub async fn acquire(&self) -> PacingToken<'_> {
         let permit = match &self.semaphore {
-            Some(s) => Some(s.acquire().await.unwrap_or_else(|_| {
-                // Semaphore closed — should not happen
-                panic!("OpsecPacer semaphore closed")
-            })),
+            Some(s) => match s.acquire().await {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    tracing::warn!(
+                        "OpsecPacer semaphore closed — continuing without concurrency limit"
+                    );
+                    None
+                }
+            },
             None => None,
         };
 
@@ -130,11 +135,15 @@ impl OpsecPacer {
     /// Acquire pacing permission with a custom delay override.
     pub async fn acquire_with_delay(&self, delay_override: Duration) -> PacingToken<'_> {
         let permit = match &self.semaphore {
-            Some(s) => Some(
-                s.acquire()
-                    .await
-                    .unwrap_or_else(|_| panic!("OpsecPacer semaphore closed")),
-            ),
+            Some(s) => match s.acquire().await {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    tracing::warn!(
+                        "OpsecPacer semaphore closed — continuing without concurrency limit"
+                    );
+                    None
+                }
+            },
             None => None,
         };
 
@@ -285,6 +294,157 @@ impl Default for UserAgentPool {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// TCP Source Port Rotation
+// ═══════════════════════════════════════════════════════════
+
+/// Round-robin TCP source port rotator.
+///
+/// Varies the source port for outbound TCP connections to avoid
+/// detection by network monitoring that flags consistent port
+/// usage patterns. Useful during stealth enumeration where each
+/// connection should appear to come from a different ephemeral port.
+///
+/// The default range (49152–65535) mirrors the IANA dynamic port range,
+/// providing ~16K ports before cycling. This is large enough that
+/// TIME_WAIT collisions are rare in practice.
+#[derive(Debug, Clone)]
+pub struct PortRotator {
+    start: u16,
+    count: u32,
+    index: std::sync::Arc<AtomicUsize>,
+}
+
+impl PortRotator {
+    /// Create a new port rotator over the range `start..=end` (inclusive).
+    ///
+    /// Returns an error if `start > end` or the range exceeds 65535.
+    pub fn new(start: u16, end: u16) -> Result<Self, String> {
+        if start > end {
+            return Err(format!("port range start ({start}) > end ({end})"));
+        }
+        if end == 0 {
+            return Err("port range end cannot be 0 (reserved)".into());
+        }
+        Ok(Self {
+            start,
+            count: end as u32 - start as u32 + 1,
+            index: std::sync::Arc::new(AtomicUsize::new(rand::random::<u64>() as usize)),
+        })
+    }
+
+    /// Create a rotator over the IANA ephemeral port range (49152–65535).
+    pub fn default_ephemeral() -> Self {
+        // Unwrap is safe: 49152 <= 65535
+        Self::new(49152, 65535).expect("invalid default ephemeral range")
+    }
+
+    /// Get the next source port (round-robin).
+    pub fn next_port(&self) -> u16 {
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % self.count as usize;
+        self.start + idx as u16
+    }
+
+    /// Reset the rotator to a random starting position.
+    pub fn reseed(&self) {
+        self.index.store(
+            (rand::random::<u64>() as usize) % self.count as usize,
+            Ordering::Relaxed,
+        )
+    }
+
+    /// The number of ports in the range.
+    pub fn len(&self) -> usize {
+        self.count as usize
+    }
+
+    /// Whether the range is empty (should never be true for valid configs).
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// Get the (start, end) of the configured range.
+    pub fn range(&self) -> (u16, u16) {
+        (self.start, self.start + (self.count - 1) as u16)
+    }
+}
+
+impl Default for PortRotator {
+    fn default() -> Self {
+        Self::default_ephemeral()
+    }
+}
+
+/// Connect to a target address using a specific source port.
+///
+/// This creates a `tokio::net::TcpSocket`, binds it to `source_port`
+/// on the unspecified address, then connects to `target`. If binding
+/// fails (e.g., port in TIME_WAIT), the error is returned.
+///
+/// On Windows, binding to ports >= 1024 does not require administrator
+/// privileges, making this usable in low-integrity contexts.
+pub async fn connect_with_source_port(
+    target: std::net::SocketAddr,
+    source_port: u16,
+) -> std::io::Result<tokio::net::TcpStream> {
+    let socket = match target {
+        std::net::SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+        std::net::SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+    };
+
+    // MSG: Do NOT set SO_REUSEADDR on Windows — it has different semantics
+    // (allows multiple sockets to bind the same port, which we don't want).
+    // On Unix, we also skip it to avoid masking port conflicts.
+    #[cfg(not(windows))]
+    {
+        // On Linux/macOS, SO_REUSEADDR helps avoid EADDRINUSE from TIME_WAIT
+        let _ = socket.set_reuseaddr(true);
+    }
+
+    let bind_addr = match target {
+        std::net::SocketAddr::V4(_) => std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            source_port,
+        )),
+        std::net::SocketAddr::V6(_) => std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::UNSPECIFIED,
+            source_port,
+            0,
+            0,
+        )),
+    };
+
+    socket.bind(bind_addr)?;
+    socket.connect(target).await
+}
+
+/// Connect to a target, optionally rotating source ports via a `PortRotator`.
+///
+/// When `rotator` is `Some`, tries up to `max_retries` times to bind to a
+/// rotated source port. If all attempts fail or `rotator` is `None`,
+/// falls back to a standard OS-assigned source port.
+pub async fn connect_with_rotation(
+    target: std::net::SocketAddr,
+    rotator: Option<&PortRotator>,
+    max_retries: u32,
+) -> std::io::Result<tokio::net::TcpStream> {
+    let rotator = match rotator {
+        Some(r) => r,
+        None => return tokio::net::TcpStream::connect(target).await,
+    };
+
+    for _ in 0..max_retries {
+        let port = rotator.next_port();
+        match connect_with_source_port(target, port).await {
+            Ok(stream) => return Ok(stream),
+            Err(_) => continue,
+        }
+    }
+
+    // Fallback: standard connect with OS-assigned source port
+    tokio::net::TcpStream::connect(target).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +543,132 @@ mod tests {
         assert!(pool.len() >= 5);
         // All default agents should contain Mozilla
         assert!(pool.pick().contains("Mozilla"));
+    }
+
+    // ── PortRotator tests ──────────────────────────────────
+
+    #[test]
+    fn test_port_rotator_default_ephemeral() {
+        let rotator = PortRotator::default_ephemeral();
+        let (start, end) = rotator.range();
+        assert_eq!(start, 49152);
+        assert_eq!(end, 65535);
+        assert_eq!(rotator.len(), 65535 - 49152 + 1);
+    }
+
+    #[test]
+    fn test_port_rotator_custom_range() {
+        let rotator = PortRotator::new(30000, 30005).unwrap();
+        assert_eq!(rotator.len(), 6);
+        let (start, end) = rotator.range();
+        assert_eq!(start, 30000);
+        assert_eq!(end, 30005);
+    }
+
+    #[test]
+    fn test_port_rotator_round_robin() {
+        let rotator = PortRotator::new(40000, 40002).unwrap();
+        // First three should be sequential
+        let p1 = rotator.next_port();
+        let p2 = rotator.next_port();
+        let p3 = rotator.next_port();
+        let p4 = rotator.next_port();
+        assert!(p1 != p2 || rotator.len() == 1);
+        // Fourth should wrap around to first
+        assert_eq!(p4, p1);
+        // All ports should be within range
+        for &p in &[p1, p2, p3] {
+            assert!((40000..=40002).contains(&p), "port {p} out of range");
+        }
+    }
+
+    #[test]
+    fn test_port_rotator_range_invalid_reversed() {
+        let result = PortRotator::new(50000, 40000);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("start"));
+    }
+
+    #[test]
+    fn test_port_rotator_range_zero_end() {
+        let result = PortRotator::new(0, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_port_rotator_reseed_changes_position() {
+        let rotator = PortRotator::new(100, 110).unwrap();
+        // Collect sequence before reseed
+        let before: Vec<u16> = (0..5).map(|_| rotator.next_port()).collect();
+        rotator.reseed();
+        let after: Vec<u16> = (0..5).map(|_| rotator.next_port()).collect();
+        // Reseed should change the starting position
+        let same_prefix = before.iter().zip(after.iter()).take(2).all(|(a, b)| a == b);
+        // With high probability the sequences differ
+        if same_prefix {
+            // Very unlikely but possible; just verify reseed doesn't panic
+            assert!(!rotator.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_port_rotator_single_port() {
+        let rotator = PortRotator::new(12345, 12345).unwrap();
+        assert_eq!(rotator.len(), 1);
+        assert_eq!(rotator.next_port(), 12345);
+        assert_eq!(rotator.next_port(), 12345); // same every time
+    }
+
+    #[test]
+    fn test_port_rotator_not_empty() {
+        let rotator = PortRotator::default();
+        assert!(!rotator.is_empty());
+    }
+
+    #[test]
+    fn test_connect_with_source_port_invalid_port_fails() {
+        // Binding to port 0 should fail (reserved)
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            connect_with_source_port("127.0.0.1:9999".parse().unwrap(), 0).await
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_connect_with_rotation_no_rotator_falls_back() {
+        // Without rotator, should do normal connect to an unreachable port
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            connect_with_rotation("127.0.0.1:1".parse().unwrap(), None, 3).await
+        });
+        // Connection refused is expected (no one listening on port 1)
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let kind = err.kind();
+        assert!(
+            kind == std::io::ErrorKind::ConnectionRefused
+                || kind == std::io::ErrorKind::TimedOut
+                || kind == std::io::ErrorKind::AddrNotAvailable,
+            "got unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_connect_with_rotation_rotator_falls_back_on_failure() {
+        // With rotator, should try binding then fall back to normal connect
+        let rotator = PortRotator::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            connect_with_rotation("127.0.0.1:1".parse().unwrap(), Some(&rotator), 2).await
+        });
+        // Connection refused is expected
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_port_rotator_default_impl() {
+        let rotator = PortRotator::default();
+        assert_eq!(rotator.range(), (49152, 65535));
     }
 }

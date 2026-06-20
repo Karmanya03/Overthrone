@@ -76,19 +76,49 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_graph_tab(f: &mut Frame, area: Rect, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(70), // Graph canvas
-            Constraint::Percentage(30), // Detail panel
-        ])
-        .split(area);
-
-    graph_view::render_graph(f, chunks[0], app);
-    graph_view::render_node_detail(f, chunks[1], app);
+    if app.show_legend {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(10),    // Graph + detail
+                Constraint::Length(14), // Legend overlay
+            ])
+            .split(area);
+        let inner = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(chunks[0]);
+        graph_view::render_graph(f, inner[0], app);
+        graph_view::render_node_detail(f, inner[1], app);
+        graph_view::render_legend(f, chunks[1]);
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(area);
+        graph_view::render_graph(f, chunks[0], app);
+        graph_view::render_node_detail(f, chunks[1], app);
+    }
 }
 
 fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
+    // If ACL findings are available, show them in a sub-panel
+    if app.acl_findings.is_some() {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(50), // Node table
+                Constraint::Percentage(50), // ACL findings
+            ])
+            .split(area);
+        draw_node_table(f, chunks[0], app);
+        graph_view::render_acl_findings(f, chunks[1], app);
+    } else {
+        draw_node_table(f, area, app);
+    }
+}
+
+fn draw_node_table(f: &mut Frame, area: Rect, app: &App) {
     let graph = app.graph.lock().unwrap_or_else(|e| {
         warn!("Mutex poisoned in UI — recovering data");
         e.into_inner()
@@ -198,15 +228,11 @@ fn draw_nodes_tab(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
-    let graph = app.graph.lock().unwrap_or_else(|e| {
-        warn!("Mutex poisoned in UI — recovering data");
-        e.into_inner()
-    });
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Stats bar
+            Constraint::Length(3), // Computed path section
             Constraint::Min(5),    // Attack paths list
         ])
         .split(area);
@@ -224,6 +250,15 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().fg(Color::LightRed));
     f.render_widget(stats, chunks[0]);
 
+    // Render computed attack path
+    graph_view::render_paths(f, chunks[1], app);
+
+    // Render high-value target enumeration from graph
+    let graph = app.graph.lock().unwrap_or_else(|e| {
+        warn!("Mutex poisoned in UI — recovering data");
+        e.into_inner()
+    });
+
     let mut path_lines: Vec<Line> = Vec::new();
 
     let high_value_targets: Vec<_> = graph
@@ -238,7 +273,7 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
     for (target_id, target) in &high_value_targets {
         path_lines.push(Line::from(vec![
             Span::styled(
-                format!("🎯 {} ", target.name),
+                format!("{} ", target.name),
                 Style::default()
                     .fg(Color::LightRed)
                     .add_modifier(Modifier::BOLD),
@@ -272,12 +307,12 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
     let paths_list = Paragraph::new(path_lines)
         .block(
             Block::default()
-                .title(" 🚀 Attack Paths ")
+                .title(" High-Value Targets ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red)),
         )
         .scroll((app.path_scroll as u16, 0));
-    f.render_widget(paths_list, chunks[1]);
+    f.render_widget(paths_list, chunks[2]);
 
     let scrollbar = Scrollbar::default()
         .orientation(ScrollbarOrientation::VerticalRight)
@@ -286,7 +321,7 @@ fn draw_paths_tab(f: &mut Frame, area: Rect, app: &App) {
     let mut scrollbar_state = ScrollbarState::new(200).position(app.path_scroll);
     f.render_stateful_widget(
         scrollbar,
-        chunks[1].inner(Margin {
+        chunks[2].inner(Margin {
             vertical: 1,
             horizontal: 0,
         }),

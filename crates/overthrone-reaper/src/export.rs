@@ -80,6 +80,19 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
         info!("[export] â†’ {}", path.display());
     }
 
+    if !result.snaffle_findings.is_empty() {
+        let path = dir.join(format!("{stem}_snaffle.csv"));
+        let mut lines = vec!["hostname,share,path,reason,severity,size".to_string()];
+        for f in &result.snaffle_findings {
+            lines.push(format!(
+                "{},{},{},{},{},{}",
+                f.hostname, f.share, f.path, f.reason, f.severity, f.size,
+            ));
+        }
+        tokio::fs::write(&path, lines.join("\n")).await?;
+        info!("[export] -> {}", path.display());
+    }
+
     if !result.computers.is_empty() {
         let path = dir.join(format!("{stem}_computers.csv"));
         let mut lines =

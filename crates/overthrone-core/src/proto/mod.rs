@@ -18,7 +18,11 @@ pub mod secretsdump;
 pub mod smb;
 pub mod smb2;
 
-pub use coerce::{CoercionResult, trigger_dfs_coerce, trigger_petitpotam, trigger_printer_bug};
+pub use coerce::{
+    CoerceCreds, CoerceProtocol, CoercionResult, trigger_coerce_tcp, trigger_dfs_coerce,
+    trigger_dfs_coerce_ex, trigger_petitpotam, trigger_petitpotam_ex, trigger_printer_bug,
+    trigger_printer_bug_ex,
+};
 pub use epm::rpc_null_session_enumeration;
 pub use kerberos::{
     Checksum, FastArmorParams, RequestTgtOptions, build_encrypted_authenticator_with_authdata,

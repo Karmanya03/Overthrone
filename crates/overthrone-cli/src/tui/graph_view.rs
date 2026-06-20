@@ -121,7 +121,6 @@ pub fn edge_color(edge_type: &EdgeType, highlighted: bool) -> Color {
 }
 
 /// Severity-mapped colour for ACL finding rows (1 = most severe).
-#[allow(dead_code)]
 fn severity_color(severity: u8) -> Color {
     match severity {
         1 => Color::Red,
@@ -1465,7 +1464,6 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
 // â”€â”€â”€ ACL findings panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the full ACL findings list in a scrollable panel.
-#[allow(dead_code)]
 pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
     let scroll = app.acl_scroll;
 
@@ -1529,7 +1527,6 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
 // â”€â”€â”€ Attack-path panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render the current computed attack path.
-#[allow(dead_code)]
 pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
     let scroll = app.path_scroll;
     let mut lines: Vec<Line> = Vec::new();
@@ -1653,7 +1650,6 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
 // â”€â”€â”€ Legend overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Render a colour-coded edge-type legend in the given area.
-#[allow(dead_code)]
 pub fn render_legend(f: &mut Frame, area: Rect) {
     let entries: &[(&str, Color, &str)] = &[
         ("AdminTo", Color::Red, "Local admin access"),

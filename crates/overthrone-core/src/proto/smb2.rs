@@ -45,10 +45,37 @@ const SMB2_TREE_CONNECT: u16 = 0x0003;
 const SMB2_TREE_DISCONNECT: u16 = 0x0004;
 const SMB2_CREATE: u16 = 0x0005;
 const SMB2_CLOSE: u16 = 0x0006;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_FLUSH: u16 = 0x0007;
 const SMB2_READ: u16 = 0x0008;
 const SMB2_WRITE: u16 = 0x0009;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_LOCK: u16 = 0x000A;
 const SMB2_IOCTL: u16 = 0x000B;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_CANCEL: u16 = 0x000C;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_ECHO: u16 = 0x000D;
 const SMB2_QUERY_DIRECTORY: u16 = 0x000E;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_CHANGE_NOTIFY: u16 = 0x000F;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_QUERY_INFO: u16 = 0x0010;
+#[allow(dead_code)] // Protocol reference constant
+const SMB2_SET_INFO: u16 = 0x0011;
+const SMB2_OPLOCK_BREAK: u16 = 0x0012;
+
+// SMB2 OPLOCK levels
+#[allow(dead_code)] // Protocol reference constant
+const OPLOCK_LEVEL_NONE: u8 = 0x00;
+#[allow(dead_code)] // Protocol reference constant
+const OPLOCK_LEVEL_II: u8 = 0x01;
+#[allow(dead_code)] // Protocol reference constant
+const OPLOCK_LEVEL_EXCLUSIVE: u8 = 0x08;
+#[allow(dead_code)] // Protocol reference constant
+const OPLOCK_LEVEL_BATCH: u8 = 0x09;
+#[allow(dead_code)] // Protocol reference constant
+const OPLOCK_LEVEL_LEASE: u8 = 0xFF;
 
 // SMB2 Dialects
 const SMB2_DIALECT_210: u16 = 0x0210; // SMB 2.1
@@ -990,6 +1017,79 @@ impl Smb2Connection {
         Ok(file_id)
     }
 
+    /// Open a file with a requested OPLOCK level.
+    ///
+    /// Returns `(file_id, granted_oplock_level)`.
+    /// Supported levels: 0 (none), 1 (II), 8 (exclusive), 9 (batch).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_with_oplock(
+        &self,
+        path: &str,
+        desired_access: u32,
+        file_attributes: u32,
+        share_access: u32,
+        create_disposition: u32,
+        create_options: u32,
+        oplock_level: u8,
+    ) -> Result<([u8; 32], u8)> {
+        trace!("SMB2: Create '{path}' with oplock 0x{oplock_level:02X}");
+
+        let path_utf16: Vec<u8> = path.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+
+        let hdr = self.build_header(SMB2_CREATE, 0).await;
+        let mut body = Vec::new();
+        body.extend_from_slice(&57u16.to_le_bytes());
+        body.push(0); // SecurityFlags
+        body.push(oplock_level); // RequestedOplockLevel
+        body.extend_from_slice(&2u32.to_le_bytes()); // ImpersonationLevel
+        body.extend_from_slice(&0u64.to_le_bytes()); // SmbCreateFlags
+        body.extend_from_slice(&0u64.to_le_bytes()); // Reserved
+        body.extend_from_slice(&desired_access.to_le_bytes());
+        body.extend_from_slice(&file_attributes.to_le_bytes());
+        body.extend_from_slice(&share_access.to_le_bytes());
+        body.extend_from_slice(&create_disposition.to_le_bytes());
+        body.extend_from_slice(&create_options.to_le_bytes());
+        let name_offset = (SMB2_HEADER_SIZE + 56) as u16;
+        body.extend_from_slice(&name_offset.to_le_bytes());
+        body.extend_from_slice(&(path_utf16.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes()); // CreateContextsOffset
+        body.extend_from_slice(&0u32.to_le_bytes()); // CreateContextsLength
+        while body.len() < 56 {
+            body.push(0);
+        }
+        body.extend_from_slice(&path_utf16);
+
+        let mut pkt = hdr;
+        pkt.extend_from_slice(&body);
+        self.send_signed(&mut pkt).await?;
+        let resp = self.recv_verified().await?;
+
+        let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
+        if status != STATUS_SUCCESS {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Create '{path}' failed: 0x{status:08X}"
+            )));
+        }
+
+        let rb = &resp[SMB2_HEADER_SIZE..];
+        if rb.len() < 80 {
+            return Err(OverthroneError::Smb(
+                "SMB2 Create response too short for FileId".to_string(),
+            ));
+        }
+
+        let granted_oplock = rb[2]; // OplockLevel at body offset 2
+
+        let mut file_id = [0u8; 32];
+        file_id[..16].copy_from_slice(&rb[64..80]);
+
+        trace!(
+            "SMB2: Opened '{path}' => FileId {:02x?} oplock=0x{granted_oplock:02X}",
+            &file_id[..16]
+        );
+        Ok((file_id, granted_oplock))
+    }
+
     /// Open a named pipe for read/write (e.g. "srvsvc", "samr", "lsarpc").
     pub async fn open_pipe(&self, pipe_name: &str) -> Result<[u8; 32]> {
         self.create(
@@ -1392,6 +1492,97 @@ impl Smb2Connection {
             )
             .await?;
         self.close(&file_id).await?;
+        Ok(())
+    }
+
+    // ───────────────── OPLOCK Break ─────────────────
+
+    /// Wait for an OPLOCK break notification from the server.
+    ///
+    /// Blocks until the server sends an `SMB2_OPLOCK_BREAK` notification
+    /// or the timeout expires.  On success returns the **new** (downgraded)
+    /// OplockLevel and the FileId of the file whose oplock was broken.
+    ///
+    /// After receiving the break, the caller **must** acknowledge it via
+    /// [`acknowledge_oplock_break`] to unblock the server.
+    pub async fn wait_for_oplock_break(&self, timeout_secs: u64) -> Result<(u8, [u8; 32])> {
+        let mut stream = self.stream.lock().await;
+        let mut len_buf = [0u8; 4];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            stream.read_exact(&mut len_buf),
+        )
+        .await
+        .map_err(|_| OverthroneError::Timeout(timeout_secs))?
+        .map_err(|e| OverthroneError::Smb(format!("SMB2 OPLOCK recv header: {e}")))?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        if len > 16 * 1024 * 1024 {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 OPLOCK response too large: {len} bytes"
+            )));
+        }
+        let mut buf = vec![0u8; len];
+        stream
+            .read_exact(&mut buf)
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("SMB2 OPLOCK recv body: {e}")))?;
+        // Release the stream lock; the caller will send the ack separately.
+        drop(stream);
+
+        // SMB2 header: command is at bytes 12-13
+        if buf.len() < 14 {
+            return Err(OverthroneError::Smb("OPLOCK break packet too short".into()));
+        }
+        let command = u16::from_le_bytes([buf[12], buf[13]]);
+        if command != SMB2_OPLOCK_BREAK {
+            return Err(OverthroneError::Smb(format!(
+                "Expected OPLOCK_BREAK (0x{SMB2_OPLOCK_BREAK:04X}) but got 0x{command:04X}"
+            )));
+        }
+
+        // OPLOCK_BREAK response body (MS-SMB2 2.2.24):
+        //   StructureSize(2) + OplockLevel(1) + Flags(1) + Reserved(4) +
+        //   PersistentFileId(8) + VolatileFileId(8)
+        let rb = &buf[SMB2_HEADER_SIZE..];
+        if rb.len() < 24 {
+            return Err(OverthroneError::Smb("OPLOCK_BREAK body too short".into()));
+        }
+        let new_level = rb[2];
+        let mut file_id = [0u8; 32];
+        file_id[..8].copy_from_slice(&rb[8..16]); // Persistent
+        file_id[16..24].copy_from_slice(&rb[16..24]); // Volatile
+
+        Ok((new_level, file_id))
+    }
+
+    /// Acknowledge (ack) an OPLOCK break notification.
+    ///
+    /// Sends an `SMB2_OPLOCK_BREAK` acknowledgment packet telling the server
+    /// the client accepts the oplock downgrade to `new_level`.
+    pub async fn acknowledge_oplock_break(
+        &self,
+        file_id: &[u8; 32],
+        new_oplock_level: u8,
+    ) -> Result<()> {
+        // The OPLOCK_BREAK ack is a special case: it uses a fresh header but
+        // is NOT signed (MS-SMB2: OPLOCK_BREAK is not signed).
+        let hdr = self.build_header(SMB2_OPLOCK_BREAK, 0).await;
+
+        let mut body = Vec::new();
+        // StructureSize = 24
+        body.extend_from_slice(&24u16.to_le_bytes());
+        body.push(new_oplock_level); // OplockLevel
+        body.push(0); // Flags (reserved)
+        body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+        // FileId: Persistent[0..8] + Volatile[16..24]
+        body.extend_from_slice(&file_id[..8]);
+        body.extend_from_slice(&file_id[16..24]);
+
+        let mut pkt = hdr;
+        pkt.extend_from_slice(&body);
+
+        // Send without signing (OPLOCK_BREAK ack is explicitly unsigned)
+        self.send(&pkt).await?;
         Ok(())
     }
 

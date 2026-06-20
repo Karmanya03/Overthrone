@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, Request, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
@@ -24,11 +25,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use chrono::Utc;
+use futures::{SinkExt, StreamExt};
 use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use zip::ZipArchive;
@@ -322,6 +325,7 @@ struct AppState {
     rate_limiter: RateLimiter,
     user_rate_limiter: UserRateLimiter,
     sessions: SessionStore,
+    ws_tx: broadcast::Sender<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -507,6 +511,17 @@ impl ApiError {
             error: error.into(),
         }
     }
+}
+
+/// WebSocket push notification sent to all connected clients.
+#[derive(Clone, Serialize, Deserialize)]
+struct WsMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3365,6 +3380,8 @@ async fn upload_graph(
         .insert(bundle.id.clone(), Arc::new(graph));
     state.graphs.write().await.push(bundle);
 
+    notify_graph_list_updated(&state);
+
     Ok(Json(info))
 }
 
@@ -3378,6 +3395,61 @@ fn json_load_error(status: StatusCode) -> (StatusCode, Json<ApiError>) {
         _ => ("graph_error", "The graph request failed"),
     };
     (status, Json(ApiError::new(code, message)))
+}
+
+// ============================================================
+//  WebSocket — live notifications
+// ============================================================
+
+/// WebSocket upgrade handler.  Clients connect here to receive push
+/// notifications (graph list changes, uploads, etc.).
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
+}
+
+async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
+    let mut rx = state.ws_tx.subscribe();
+    let (mut sender, mut receiver) = socket.split();
+
+    // Forward broadcast messages to the WebSocket client.
+    let send_task = tokio::spawn(async move {
+        while let Ok(msg) = rx.recv().await {
+            if sender.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Keep reading until the client disconnects (discard incoming messages).
+    let recv_task = tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
+
+    tokio::select! {
+        _ = send_task => {},
+        _ = recv_task => {},
+    }
+}
+
+/// Broadcast a `graph_list_updated` event to all connected WebSocket clients.
+fn notify_graph_list_updated(state: &AppState) {
+    let msg = serde_json::to_string(&WsMessage {
+        msg_type: "graph_list_updated".to_string(),
+        graph_id: None,
+        label: None,
+    })
+    .unwrap_or_default();
+    let _ = state.ws_tx.send(msg);
+}
+
+/// Broadcast a `graph_updated` event for a specific graph ID.
+#[allow(dead_code)]
+fn notify_graph_updated(state: &AppState, graph_id: &str, label: &str) {
+    let msg = serde_json::to_string(&WsMessage {
+        msg_type: "graph_updated".to_string(),
+        graph_id: Some(graph_id.to_string()),
+        label: Some(label.to_string()),
+    })
+    .unwrap_or_default();
+    let _ = state.ws_tx.send(msg);
 }
 
 // ============================================================
@@ -3581,6 +3653,9 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
     // Sessions expire after 8 hours of inactivity
     let sessions = SessionStore::new(8 * 3600);
 
+    // Broadcast channel for WebSocket notifications (capacity 256).
+    let (ws_tx, _) = broadcast::channel(256);
+
     let state = Arc::new(AppState {
         graphs: RwLock::new(graphs),
         default_graph,
@@ -3589,6 +3664,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         rate_limiter,
         user_rate_limiter,
         sessions,
+        ws_tx,
     });
 
     let app = Router::new()
@@ -3607,6 +3683,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         .route("/api/path", post(find_path))
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))
+        .route("/ws", get(ws_handler))
         // auth middleware only wraps routes above (everything except /api/login)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -3848,6 +3925,7 @@ mod tests {
     }
 
     fn test_state() -> Arc<AppState> {
+        let (ws_tx, _) = broadcast::channel(256);
         Arc::new(AppState {
             graphs: RwLock::new(Vec::new()),
             default_graph: "graph-1".to_string(),
@@ -3856,6 +3934,7 @@ mod tests {
             rate_limiter: RateLimiter::new(60, 100),
             user_rate_limiter: UserRateLimiter::new(60, 100),
             sessions: SessionStore::new(3600),
+            ws_tx,
         })
     }
 
@@ -4106,5 +4185,84 @@ mod tests {
         assert_ne!(a.username, b.username);
         assert_ne!(a.password, b.password);
         assert_ne!(a.csrf_token, b.csrf_token);
+    }
+
+    // ── WebSocket message tests ──────────────────────────────────
+
+    #[test]
+    fn test_ws_message_list_updated_serialization() {
+        let msg = WsMessage {
+            msg_type: "graph_list_updated".to_string(),
+            graph_id: None,
+            label: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(json, r#"{"type":"graph_list_updated"}"#);
+    }
+
+    #[test]
+    fn test_ws_message_graph_updated_serialization() {
+        let msg = WsMessage {
+            msg_type: "graph_updated".to_string(),
+            graph_id: Some("abc-123".to_string()),
+            label: Some("My Graph".to_string()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"graph_updated","graph_id":"abc-123","label":"My Graph"}"#
+        );
+    }
+
+    #[test]
+    fn test_ws_message_roundtrip() {
+        let msg = WsMessage {
+            msg_type: "graph_updated".to_string(),
+            graph_id: Some("test-id".to_string()),
+            label: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: WsMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.msg_type, "graph_updated");
+        assert_eq!(parsed.graph_id.as_deref(), Some("test-id"));
+        assert!(parsed.label.is_none());
+    }
+
+    #[test]
+    fn test_notify_graph_list_updated_sends_message() {
+        let (ws_tx, mut ws_rx) = broadcast::channel(10);
+        let state = AppState {
+            graphs: RwLock::new(Vec::new()),
+            default_graph: "g1".to_string(),
+            cache: RwLock::new(HashMap::new()),
+            config: ViewerConfig::default(),
+            rate_limiter: RateLimiter::new(60, 100),
+            user_rate_limiter: UserRateLimiter::new(60, 100),
+            sessions: SessionStore::new(3600),
+            ws_tx,
+        };
+        notify_graph_list_updated(&state);
+        let received: String = ws_rx.try_recv().unwrap();
+        assert_eq!(received, r#"{"type":"graph_list_updated"}"#);
+    }
+
+    #[test]
+    fn test_notify_graph_updated_sends_message() {
+        let (ws_tx, mut ws_rx) = broadcast::channel(10);
+        let state = AppState {
+            graphs: RwLock::new(Vec::new()),
+            default_graph: "g1".to_string(),
+            cache: RwLock::new(HashMap::new()),
+            config: ViewerConfig::default(),
+            rate_limiter: RateLimiter::new(60, 100),
+            user_rate_limiter: UserRateLimiter::new(60, 100),
+            sessions: SessionStore::new(3600),
+            ws_tx,
+        };
+        notify_graph_updated(&state, "graph-1", "Test Graph");
+        let received: String = ws_rx.try_recv().unwrap();
+        assert!(received.contains(r#""type":"graph_updated""#));
+        assert!(received.contains(r#""graph_id":"graph-1""#));
+        assert!(received.contains(r#""label":"Test Graph""#));
     }
 }

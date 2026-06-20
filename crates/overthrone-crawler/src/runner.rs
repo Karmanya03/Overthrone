@@ -241,6 +241,54 @@ pub async fn run_crawler(
     })
 }
 
+/// Run the crawler analysis pipeline with optional background responder/poisoner.
+///
+/// Unlike [`run_crawler`], this function also manages the lifecycle of an
+/// optional responder (HTTP/SMB/LDAP/MSMQ capture) and poisoner
+/// (LLMNR/NBT-NS/mDNS). Available only when the `responder` feature is enabled.
+#[cfg(feature = "responder")]
+pub async fn run_crawler_with_services(
+    config: &CrawlerConfig,
+    reaper_data: &ReaperResult,
+    responder_config: Option<&crate::responder::CrawlerResponderConfig>,
+) -> Result<(
+    CrawlerResult,
+    Vec<crate::responder::CapturedCredential>,
+    Vec<crate::responder::CapturedQuery>,
+)> {
+    // Start background services if configured
+    let mut responder = match responder_config {
+        Some(cfg) => Some(
+            crate::responder::CrawlerResponder::new(cfg)
+                .map_err(overthrone_core::OverthroneError::Internal)?,
+        ),
+        None => None,
+    };
+
+    if let Some(ref mut r) = responder {
+        r.start()
+            .await
+            .map_err(overthrone_core::OverthroneError::Internal)?;
+    }
+
+    // Run the standard analysis pipeline
+    let result = run_crawler(config, reaper_data).await?;
+
+    // Stop background services and collect captured data
+    let (creds, queries) = if let Some(ref mut r) = responder {
+        let creds = r
+            .stop()
+            .await
+            .map_err(overthrone_core::OverthroneError::Internal)?;
+        let queries = r.captured_queries();
+        (creds, queries)
+    } else {
+        (vec![], vec![])
+    };
+
+    Ok((result, creds, queries))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

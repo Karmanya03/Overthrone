@@ -722,7 +722,6 @@ async fn run_cve_exchange_relay(
         target_host: target_exchange.to_string(),
         target_port: relay_port,
         use_tls: false,
-        accept_self_signed: true,
         ..Default::default()
     };
 

@@ -24,6 +24,7 @@
 
 pub mod acl_backdoor;
 pub mod adcs_dispatcher;
+pub mod asrep_pipeline;
 pub mod bronze_bit;
 pub mod cert_auto_enroll;
 pub mod cert_store;

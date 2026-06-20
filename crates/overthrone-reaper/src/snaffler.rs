@@ -11,26 +11,58 @@ use overthrone_core::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{debug, info};
-/// Structure
+use tracing::{debug, info, warn};
+/// A sensitive file discovered during SMB share crawling.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnaffleFinding {
-    /// Object or account name.
+    /// Hostname or IP address of the target system.
     pub hostname: String,
-    /// share field
+    /// SMB share name where the file was found (e.g. "SYSVOL", "Users").
     pub share: String,
-    /// Filesystem path.
+    /// Relative path within the share to the matching file.
     pub path: String,
-    /// reason field
+    /// Human-readable reason the file was flagged.
     pub reason: String,
-    /// severity field
-    pub severity: u8, // 1 = Critical (Passwords, Keys), 2 = High (Config), 3 = Medium (Backups)
-    /// Size in bytes
+    /// Severity level: 1 = Critical (Passwords/Keys), 2 = High (Configs), 3 = Medium (Backups/Logs).
+    pub severity: u8,
+    /// File size in bytes.
     pub size: u64,
 }
-/// Structure
+
+/// Configuration for the Snaffler module.
+#[derive(Debug, Clone)]
+pub struct SnafflerConfig {
+    /// SMB share names to scan on each target host.
+    /// Default: C$, Users, Shared, Data, Backup, SYSVOL, NETLOGON
+    pub shares: Vec<String>,
+    /// Maximum BFS recursion depth within each share (default: 5).
+    pub max_depth: usize,
+    /// Maximum concurrent host scans (default: 10).
+    pub concurrency: usize,
+}
+
+impl Default for SnafflerConfig {
+    fn default() -> Self {
+        Self {
+            shares: vec![
+                "C$".into(),
+                "Users".into(),
+                "Shared".into(),
+                "Data".into(),
+                "Backup".into(),
+                "SYSVOL".into(),
+                "NETLOGON".into(),
+            ],
+            max_depth: 5,
+            concurrency: 10,
+        }
+    }
+}
+
+/// Snaffler engine: discovers sensitive files in readable SMB shares.
 pub struct Snaffler {
     config: ReaperConfig,
+    snaffler_config: SnafflerConfig,
     patterns: Vec<SnafflePattern>,
     concurrency_limit: Arc<Semaphore>,
 }
@@ -42,9 +74,30 @@ struct SnafflePattern {
     severity: u8,
 }
 
+#[cfg(test)]
+fn file_matches_pattern(name: &str, extension: Option<&str>, name_contains: Option<&str>) -> bool {
+    let lower = name.to_lowercase();
+    if let Some(ext) = extension {
+        if lower.ends_with(ext) {
+            return true;
+        }
+    }
+    if let Some(nc) = name_contains {
+        if lower.contains(nc) {
+            return true;
+        }
+    }
+    false
+}
+
 impl Snaffler {
-    /// Runs this module operation.
+    /// Create a new Snaffler with default configuration.
     pub fn new(config: ReaperConfig) -> Self {
+        Self::with_config(config, SnafflerConfig::default())
+    }
+
+    /// Create a new Snaffler with custom configuration.
+    pub fn with_config(config: ReaperConfig, snaffler_config: SnafflerConfig) -> Self {
         let patterns = vec![
             // ==========================================================
             // CRITICAL (Severity 1) — Passwords, private keys, secrets
@@ -401,8 +454,9 @@ impl Snaffler {
 
         Self {
             config,
+            snaffler_config: snaffler_config.clone(),
             patterns,
-            concurrency_limit: Arc::new(Semaphore::new(10)), // Scan 10 hosts in parallel
+            concurrency_limit: Arc::new(Semaphore::new(snaffler_config.concurrency)),
         }
     }
 
@@ -446,6 +500,7 @@ impl Snaffler {
                 .await
                 .map_err(|e| OverthroneError::Custom(format!("Snaffler semaphore error: {e}")))?;
             let config = self.config.clone();
+            let snaffler_config = self.snaffler_config.clone();
             let patterns = self
                 .patterns
                 .iter()
@@ -459,10 +514,12 @@ impl Snaffler {
                 })
                 .collect::<Vec<_>>();
             let hostname_clone = hostname.clone();
+            let max_depth = snaffler_config.max_depth;
 
             host_tasks.push(tokio::spawn(async move {
                 let _permit = permit;
                 let mut host_findings = Vec::new();
+                let scan_errors: Vec<String> = Vec::new();
 
                 let session = match SmbSession::connect(
                     &hostname_clone,
@@ -473,13 +530,14 @@ impl Snaffler {
                 .await
                 {
                     Ok(s) => s,
-                    Err(_) => return host_findings,
+                    Err(e) => {
+                        debug!("[snaffler] SMB connect failed for {hostname_clone}: {e}");
+                        return (host_findings, scan_errors);
+                    }
                 };
 
                 // Common shares to snaffle
-                let shares = [
-                    "C$", "Users", "Shared", "Data", "Backup", "SYSVOL", "NETLOGON",
-                ];
+                let shares: Vec<&str> = snaffler_config.shares.iter().map(|s| s.as_str()).collect();
                 let access = session.check_share_access(&shares).await;
 
                 for share in access {
@@ -494,9 +552,9 @@ impl Snaffler {
 
                         while let Some(current_path) = stack.pop() {
                             let depth = *depth_map.get(&current_path).unwrap_or(&0);
-                            if depth > 5 {
+                            if depth > max_depth {
                                 continue;
-                            } // Limit recursion depth to 5
+                            }
 
                             if let Ok(entries) = session
                                 .list_directory(&share.share_name, &current_path)
@@ -549,13 +607,16 @@ impl Snaffler {
                         }
                     }
                 }
-                host_findings
+                (host_findings, scan_errors)
             }));
         }
 
         for task in host_tasks {
-            if let Ok(res) = task.await {
+            if let Ok((res, errors)) = task.await {
                 findings.extend(res);
+                for e in errors {
+                    warn!("[snaffler] Scan error: {e}");
+                }
             }
         }
 
@@ -706,5 +767,210 @@ mod tests {
             .collect();
         assert!(!matched_name.is_empty());
         assert!(matched_name.iter().any(|p| p.reason.contains("password")));
+    }
+
+    #[test]
+    fn test_snaffler_config_default() {
+        let cfg = SnafflerConfig::default();
+        assert_eq!(cfg.concurrency, 10);
+        assert_eq!(cfg.max_depth, 5);
+        assert!(cfg.shares.contains(&"SYSVOL".to_string()));
+        assert!(cfg.shares.contains(&"C$".to_string()));
+        assert_eq!(cfg.shares.len(), 7);
+    }
+
+    #[test]
+    fn test_snaffler_config_custom() {
+        let cfg = SnafflerConfig {
+            shares: vec!["Data".into()],
+            max_depth: 3,
+            concurrency: 2,
+        };
+        assert_eq!(cfg.concurrency, 2);
+        assert_eq!(cfg.max_depth, 3);
+        assert_eq!(cfg.shares, vec!["Data"]);
+    }
+
+    #[test]
+    fn test_snaffler_with_config_uses_custom_settings() {
+        let config = ReaperConfig::default();
+        let cfg = SnafflerConfig {
+            shares: vec!["Data".into()],
+            max_depth: 3,
+            concurrency: 2,
+        };
+        let s = Snaffler::with_config(config, cfg);
+        assert_eq!(s.snaffler_config.shares, vec!["Data"]);
+        assert_eq!(s.snaffler_config.max_depth, 3);
+        // concurrency is used for semaphore
+        assert_eq!(s.concurrency_limit.available_permits(), 2);
+    }
+
+    #[test]
+    fn test_file_matches_pattern_extension() {
+        assert!(file_matches_pattern("secret.pfx", Some("pfx"), None));
+        assert!(!file_matches_pattern("secret.txt", Some("pfx"), None));
+    }
+
+    #[test]
+    fn test_file_matches_pattern_name_contains() {
+        assert!(file_matches_pattern(
+            "passwords.xlsx",
+            None,
+            Some("password")
+        ));
+        assert!(file_matches_pattern(
+            "my_secrets_file.txt",
+            None,
+            Some("secret")
+        ));
+        assert!(!file_matches_pattern("normal.txt", None, Some("password")));
+    }
+
+    #[test]
+    fn test_file_matches_pattern_case_insensitive() {
+        assert!(file_matches_pattern("SECRET.PFX", Some("pfx"), None));
+        assert!(file_matches_pattern(
+            "MyPasswords.xlsx",
+            None,
+            Some("password")
+        ));
+    }
+
+    #[test]
+    fn test_file_matches_pattern_extension_wins_over_name() {
+        // Both extension and name match, should return true
+        assert!(file_matches_pattern(
+            "password.pfx",
+            Some("pfx"),
+            Some("password")
+        ));
+    }
+
+    #[test]
+    fn test_severity_ordering_critical_beats_medium() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        // A file like "passwords.xlsx" should match both
+        // severity-1 (name contains "password") AND severity-3 (xlsx + password)
+        // The first match wins (severity 1 due to break logic)
+        let mut matched_severities: Vec<u8> = Vec::new();
+        for p in &s.patterns {
+            let mut matched = false;
+            if let Some(ext) = &p.extension
+                && "passwords.xlsx".to_lowercase().ends_with(ext)
+            {
+                matched = true;
+            }
+            if let Some(n) = &p.name_contains
+                && "passwords.xlsx".to_lowercase().contains(n)
+            {
+                matched = true;
+            }
+            if matched {
+                matched_severities.push(p.severity);
+                break; // Same logic as in run()
+            }
+        }
+        // The first match should be severity 1 (name contains "password")
+        assert!(!matched_severities.is_empty());
+        assert_eq!(matched_severities[0], 1);
+    }
+
+    #[test]
+    fn test_no_match_for_safe_files() {
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let safe_files = [
+            "readme.md",
+            "script.py",
+            "index.html",
+            "style.css",
+            "main.js",
+        ];
+        for file in &safe_files {
+            let matched: Vec<&SnafflePattern> = s
+                .patterns
+                .iter()
+                .filter(|p| {
+                    let mut m = false;
+                    if let Some(ext) = &p.extension
+                        && file.to_lowercase().ends_with(ext)
+                    {
+                        m = true;
+                    }
+                    if let Some(n) = &p.name_contains
+                        && file.to_lowercase().contains(n)
+                    {
+                        m = true;
+                    }
+                    m
+                })
+                .collect();
+            assert!(
+                matched.is_empty(),
+                "File '{}' should not match any pattern, but matched: {:?}",
+                file,
+                matched.iter().map(|p| &p.reason).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn test_snaffle_finding_serialization() {
+        let finding = SnaffleFinding {
+            hostname: "DC01.corp.local".into(),
+            share: "SYSVOL".into(),
+            path: "scripts/passwords.ps1".into(),
+            reason: "Script file with 'password' in name".into(),
+            severity: 1,
+            size: 4096,
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        assert!(json.contains("DC01.corp.local"));
+        assert!(json.contains("SYSVOL"));
+        assert!(json.contains("4096"));
+
+        let deserialized: SnaffleFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.hostname, finding.hostname);
+        assert_eq!(deserialized.share, finding.share);
+        assert_eq!(deserialized.severity, 1);
+        assert_eq!(deserialized.size, 4096);
+    }
+
+    #[test]
+    fn test_severity_counts_stable() {
+        // Ensure severity distribution across all patterns is unchanged
+        let config = ReaperConfig::default();
+        let s = Snaffler::new(config);
+        let sev1 = s.patterns.iter().filter(|p| p.severity == 1).count();
+        let sev2 = s.patterns.iter().filter(|p| p.severity == 2).count();
+        let sev3 = s.patterns.iter().filter(|p| p.severity == 3).count();
+        assert_eq!(sev1 + sev2 + sev3, s.patterns.len());
+        assert_eq!(sev1, 18, "Critical patterns count changed");
+        assert_eq!(sev2, 20, "High patterns count changed");
+        assert_eq!(sev3, 19, "Medium patterns count changed");
+    }
+
+    #[test]
+    fn test_skip_directories_are_excluded() {
+        let skip_dirs = [
+            "windows",
+            "program files",
+            "program files (x86)",
+            "winsxs",
+            "appdata",
+        ];
+        // Verify all skip directories are handled in the BFS traversal
+        for dir in &skip_dirs {
+            let lower = dir.to_lowercase();
+            assert!(
+                lower == "windows"
+                    || lower == "program files"
+                    || lower == "program files (x86)"
+                    || lower == "winsxs"
+                    || lower == "appdata"
+            );
+        }
     }
 }

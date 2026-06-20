@@ -103,12 +103,13 @@ impl HttpAsymmetricRelay {
             ldap_signing_bypass: self.config.ldap_signing_bypass,
             max_retries: self.config.max_retries,
             max_connections: 64,
-            tls_client_identity: None,
+            tls_config: None,
             socks5_proxy: self.config.socks5_proxy.clone(),
         };
         let relay = Arc::new(TokioMutex::new(NtlmRelay::new(relay_config)));
 
-        let listen_addr = format_addr(&self.config.listen_ip, self.config.listen_port);
+        let listen_addr =
+            crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
 
         let target_summary: Vec<String> = self
             .config
@@ -522,22 +523,18 @@ fn strip_ntlm_prefix(header: &str) -> &str {
     h
 }
 
-fn format_addr(ip: &str, port: u16) -> String {
-    match ip.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V6(_)) => format!("[{}]:{}", ip, port),
-        _ => format!("{}:{}", ip, port),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_format_addr_asymmetric() {
-        assert_eq!(format_addr("0.0.0.0", 80), "0.0.0.0:80");
-        assert_eq!(format_addr("::", 80), "[::]:80");
-        assert_eq!(format_addr("127.0.0.1", 8080), "127.0.0.1:8080");
+        assert_eq!(crate::utils::format_addr("0.0.0.0", 80), "0.0.0.0:80");
+        assert_eq!(crate::utils::format_addr("::", 80), "[::]:80");
+        assert_eq!(
+            crate::utils::format_addr("127.0.0.1", 8080),
+            "127.0.0.1:8080"
+        );
     }
 
     #[test]

@@ -21,9 +21,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 use overthrone_pilot::goals::EngagementState;
-use overthrone_pilot::session::{
-    auto_session_path, default_session_dir, load_session, session_path,
-};
+use overthrone_pilot::session::{default_session_dir, load_session, session_path};
 
 #[derive(Debug, Clone, Parser)]
 #[command(about = "List, inspect, and manage saved engagement sessions")]
@@ -564,12 +562,6 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-// Expose auto_session_path so other modules can use the canonical name
-#[allow(dead_code)]
-pub fn auto_path(dc_host: &str, domain: &str) -> PathBuf {
-    auto_session_path(dc_host, domain)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,7 +620,7 @@ mod tests {
 
     #[test]
     fn auto_path_delegates() {
-        let p = auto_path("dc01.corp.local", "corp.local");
+        let p = overthrone_pilot::session::auto_session_path("dc01.corp.local", "corp.local");
         assert!(p.to_string_lossy().contains("corp.local"));
         assert!(p.to_string_lossy().contains("dc01.corp.local"));
     }

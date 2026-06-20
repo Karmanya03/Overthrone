@@ -29,6 +29,7 @@ pub struct App {
     pub overview_scroll: usize,
     pub current_path: Option<overthrone_core::graph::AttackPath>,
     pub acl_findings: Option<Vec<AclFinding>>,
+    pub show_legend: bool,
     // Visibility toggles for graph nodes
     pub show_users: bool,
     pub show_computers: bool,
@@ -72,7 +73,7 @@ pub struct LogEntry {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // TUI log severity levels
+#[allow(dead_code)]
 pub enum LogLevel {
     Info,
     Warn,
@@ -82,7 +83,7 @@ pub enum LogLevel {
 }
 
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // Populated from graph analysis
+#[allow(dead_code)]
 pub struct GraphStats {
     pub total_nodes: usize,
     pub users: usize,
@@ -149,6 +150,7 @@ impl App {
             overview_scroll: 0,
             current_path: None,
             acl_findings: None,
+            show_legend: false,
             // Default: show all node types
             show_users: true,
             show_computers: true,

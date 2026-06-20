@@ -39,3 +39,4 @@ pub use ntlmv1_detection::{
     generate_downgrade_guidance, run_ntlmv1_workflow,
 };
 pub use runner::{ReaperConfig, ReaperResult, run_reaper};
+pub use snaffler::{SnaffleFinding, SnafflerConfig, run_snaffler};

@@ -7,9 +7,10 @@ license.workspace = true
 description = "AD trust traversal & cross-domain escalation engine"
 
 [dependencies]
-overthrone-core = { version = "0.2.2-beta", path = "../overthrone-core" }
-overthrone-reaper = { version = "0.2.2-beta", path = "../overthrone-reaper" }
-overthrone-forge = { version = "0.2.2-beta", path = "../overthrone-forge", optional = true }
+overthrone-core = { version = "0.3.0-beta", path = "../overthrone-core" }
+overthrone-reaper = { version = "0.3.0-beta", path = "../overthrone-reaper" }
+overthrone-forge = { version = "0.3.0-beta", path = "../overthrone-forge", optional = true }
+overthrone-relay = { version = "0.3.0-beta", path = "../overthrone-relay", optional = true }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,10 +24,13 @@ hex.workspace = true
 base64.workspace = true
 log = "0.4.29"
 rand.workspace = true
+rustls = { version = "0.23", optional = true }
 
 [features]
 default = []
 interrealm = ["dep:overthrone-forge"]
+tls_fingerprint = ["dep:rustls"]
+responder = ["dep:overthrone-relay"]
 
 [dev-dependencies]
 tokio-test.workspace = true
