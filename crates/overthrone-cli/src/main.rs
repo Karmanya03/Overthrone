@@ -77,7 +77,8 @@ struct Cli {
         long,
         global = true,
         env = "OT_PASSWORD",
-        hide_env_values = true
+        hide_env_values = true,
+        allow_hyphen_values = true
     )]
     password: Option<String>,
 
@@ -173,7 +174,7 @@ struct Cli {
     profile: Option<String>,
 
     /// List compiled-in feature modules and exit
-    #[arg(long, global = true)]
+    #[arg(long)]
     modules: bool,
 }
 
@@ -5624,11 +5625,38 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                 };
                 match overthrone_hunter::kerberoast::run(&hunt_config, &kc).await {
                     Ok(result) => {
+                        if result.hashes.is_empty() {
+                            banner::print_fail("No kerberoastable accounts found");
+                            return 1;
+                        }
                         println!(
                             "{} Kerberoast complete: {} hashes captured",
                             "✓".green(),
                             result.hashes.len()
                         );
+                        let loot_dir = std::path::PathBuf::from("./loot");
+                        let _ = std::fs::create_dir_all(&loot_dir);
+                        let hash_file = loot_dir.join("kerberoast_hashes.txt");
+                        for h in &result.hashes {
+                            println!(
+                                "{} {}: {}",
+                                "✓".green(),
+                                h.spn.cyan(),
+                                &h.hash_string[..80.min(h.hash_string.len())]
+                            );
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&hash_file)
+                            {
+                                use std::io::Write;
+                                let _ = writeln!(f, "{}", h.hash_string);
+                            }
+                        }
+                        banner::print_success(&format!(
+                            "Hashes written to {}",
+                            hash_file.display()
+                        ));
                         return 0;
                     }
                     Err(e) => {
@@ -5698,7 +5726,12 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     for user in &users {
                         match kerberos::asrep_roast(&dc, &domain, user).await {
                             Ok(hash) => {
-                                println!("{} AS-REP hash: {}", "✓".green(), user.cyan());
+                                println!(
+                                    "{} {}: {}",
+                                    "✓".green(),
+                                    user.cyan(),
+                                    &hash.hash_string[..80.min(hash.hash_string.len())]
+                                );
                                 if let Ok(mut f) = std::fs::OpenOptions::new()
                                     .create(true)
                                     .append(true)
@@ -5800,6 +5833,14 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                         if result.hashes.is_empty() {
                             banner::print_fail("No AS-REP roastable accounts found");
                             return 1;
+                        }
+                        for h in &result.hashes {
+                            println!(
+                                "{} {}: {}",
+                                "✓".green(),
+                                h.username.cyan(),
+                                &h.hash_string[..80.min(h.hash_string.len())]
+                            );
                         }
                         banner::print_success(&format!(
                             "{} AS-REP hashes written to {}",
