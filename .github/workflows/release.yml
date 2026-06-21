@@ -16,18 +16,23 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ""
+            platform: linux-x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             suffix: ""
+            platform: linux-x86_64-musl
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: ".exe"
+            platform: windows-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
             suffix: ""
+            platform: macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             suffix: ""
+            platform: macos-aarch64
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
@@ -56,36 +61,21 @@ jobs:
       - name: Build release
         run: cargo build --release --workspace --locked --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Stage binaries for release
         shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          DIR="overthrone-${TAG}-${{ matrix.target }}"
-          mkdir -p "$DIR"
-          cp "target/${{ matrix.target }}/release/overthrone${{ matrix.suffix }}" "$DIR/"
-          cp "target/${{ matrix.target }}/release/ovt${{ matrix.suffix }}" "$DIR/"
-          cp LICENSE "$DIR/" 2>/dev/null || true
-          cp README.md "$DIR/" 2>/dev/null || true
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a "${DIR}.zip" "$DIR/"
-          else
-            tar czf "${DIR}.tar.gz" "$DIR/"
-          fi
+          mkdir -p staging
+          cp "target/${{ matrix.target }}/release/overthrone${{ matrix.suffix }}" \
+             "staging/overthrone-${{ matrix.platform }}${{ matrix.suffix }}"
+          cp "target/${{ matrix.target }}/release/ovt${{ matrix.suffix }}" \
+             "staging/ovt-${{ matrix.platform }}${{ matrix.suffix }}"
 
-      - name: Upload artifact
+      - name: Upload staged binaries
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: overthrone-*.tar.gz
-          if-no-files-found: ignore
-
-      - name: Upload artifact (Windows zip)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: overthrone-*.zip
-          if-no-files-found: ignore
+          name: ${{ matrix.platform }}
+          path: staging/*
+          if-no-files-found: error
 
   create-release:
     name: Create Release
@@ -108,6 +98,10 @@ jobs:
           TAG="${GITHUB_REF_NAME#v}"
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: List artifacts
+        shell: bash
+        run: find artifacts -type f
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -117,14 +111,23 @@ jobs:
             ## Overthrone ${{ steps.notes.outputs.version }}
 
             ### Installation
-            Download the archive for your platform from the assets below.
+            Download the binary for your platform from the assets below.
+
+            ### Quick install (Linux/macOS)
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/Karmanya03/Overthrone/main/install.sh | bash
+            ```
+
+            ### Quick install (Windows PowerShell)
+            ```powershell
+            irm https://raw.githubusercontent.com/Karmanya03/Overthrone/main/install.ps1 | iex
+            ```
 
             ### Build from source
             ```bash
             cargo install overthrone --tag ${{ github.ref_name }}
             ```
           files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
+            artifacts/**/*
           draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
