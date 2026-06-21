@@ -2081,7 +2081,7 @@
     if (booted) return;
     booted = true;
     ensureRenderer();
-    if (typeof window.init === 'function') { window.init(); return; }
+    if (typeof window.init === 'function') window.init();
     installControls();
     if (typeof renderStats === 'function' && typeof emptyStats === 'function') renderStats(emptyStats());
     if (typeof renderEmptyState === 'function') renderEmptyState();

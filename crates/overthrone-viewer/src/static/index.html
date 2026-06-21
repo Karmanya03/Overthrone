@@ -3937,8 +3937,11 @@ function initResizeHandles() {
 
 function bootViewerFallback() {
   try {
-    renderStats(emptyStats());
-    renderEmptyState();
+    if (typeof window.init === 'function') window.init();
+    else {
+      renderStats(emptyStats());
+      renderEmptyState();
+    }
     loadGraphList();
     const panel = document.getElementById('panel-stats');
     if (panel) panel.classList.remove('collapsed');
