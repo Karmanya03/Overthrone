@@ -4,21 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Overthrone Graph Viewer</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="/three.min.js"></script>
 <script>
-// Fallback: if CDN fails, try local bundled copy
+// Keep the control layer usable even if WebGL cannot start.
 window.addEventListener('load', function() {
   if (typeof THREE === 'undefined') {
-    var s = document.createElement('script');
-    s.src = '/three-graph.js';
-    s.onload = function() {
-      if (typeof window.bootViewer === 'function') window.bootViewer();
-    };
-    s.onerror = function() {
-      document.getElementById('empty-state').classList.remove('hidden');
-      setEmptyMessage('Three.js Load Failed', 'Could not load the graph renderer library. Check your network connection.');
-    };
-    document.head.appendChild(s);
+    if (typeof window.init === 'function') window.init();
+    document.getElementById('empty-state').classList.remove('hidden');
+    setEmptyMessage('Three.js Load Failed', 'Could not load the local graph renderer runtime.');
   }
 });
 </script>
@@ -1926,6 +1919,7 @@ let perfHudVisible = false;
 let pathFromId = '';
 let pathToId = '';
 let activeQuery = '';
+let appInitialized = false;
 
 async function readApiError(resp) {
   const text = await resp.text();
@@ -1964,6 +1958,9 @@ const QUERY_CHIPS = [
 ];
 
 async function init() {
+  if (appInitialized) return;
+  appInitialized = true;
+
   document.getElementById('zoom-in').addEventListener('click', zoomIn);
   document.getElementById('zoom-out').addEventListener('click', zoomOut);
   document.getElementById('zoom-fit').addEventListener('click', fitGraph);
@@ -1995,7 +1992,9 @@ async function init() {
     event.target.value = '';
   });
   async function uploadSelectedFiles(fileList, { source }) {
-    const files = Array.from(fileList || []).filter(file => file && !file.name.startsWith('.'));
+    const files = Array.from(fileList || [])
+      .filter(file => file && !file.name.startsWith('.'))
+      .sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
     if (!files.length) return;
     const jsonFiles = files.filter(file => file.name.toLowerCase().endsWith('.json') || file.type === 'application/json');
     const zipFiles = files.filter(file => file.name.toLowerCase().endsWith('.zip') || file.type === "application/zip" || file.type === "application/x-zip-compressed");
@@ -2016,9 +2015,7 @@ async function init() {
     try {
       const uploaded = [];
       if (source === 'folder') {
-        for (const jsonFile of jsonFiles) {
-          uploaded.push(await uploadSingleGraphFile(jsonFile));
-        }
+        uploaded.push(await uploadJsonCollection(jsonFiles, source));
       } else if (jsonFiles.length > 1) {
         uploaded.push(await uploadJsonCollection(jsonFiles, source));
       } else if (jsonFiles.length === 1) {
@@ -2216,6 +2213,7 @@ async function init() {
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     document.getElementById('app').classList.remove('sidebar-collapsed');
   });
+  initResizeHandles();
 
 await loadGraphList();
 connectWebSocket();

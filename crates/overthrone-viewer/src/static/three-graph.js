@@ -6,19 +6,39 @@
 (() => {
   const THREE = window.THREE;
   if (!THREE) {
+    let fallbackBooted = false;
+    const rendererError = 'The local Three.js runtime did not load. Upload, folder parsing, stats, search, and query controls remain available, but graph rendering is disabled.';
+
+    window.ensureRenderer = function ensureRendererFallback() {
+      return null;
+    };
+    window.renderGraph = function renderGraphFallback() {
+      if (typeof window.setEmptyMessage === 'function') {
+        window.setEmptyMessage('Renderer unavailable', rendererError);
+      }
+      document.getElementById('empty-state')?.classList.remove('hidden');
+    };
+    window.teardownGraph = function teardownGraphFallback() {
+      window._nodesMap = {};
+    };
+    window.highlightPath = function highlightPathFallback() {};
+    window.zoomIn = function zoomInFallback() {};
+    window.zoomOut = function zoomOutFallback() {};
+    window.fitGraph = function fitGraphFallback() {};
+    window.zoomToNode = function zoomToNodeFallback() {};
     window.bootViewer = function bootViewerFallback() {
-      const canInitD3 = typeof window.init === 'function' && typeof window.d3 !== 'undefined';
-      if (canInitD3) { window.init(); return; }
+      if (fallbackBooted) return;
+      fallbackBooted = true;
+      if (typeof window.init === 'function') {
+        window.init();
+      }
       const empty = typeof window.emptyStats === 'function'
         ? window.emptyStats()
         : { users:0, computers:0, groups:0, domains:0, gpos:0, ous:0,
             cert_templates:0, high_value:0, owned:0, total_nodes:0, total_edges:0 };
       if (typeof window.renderStats === 'function') window.renderStats(empty);
-      if (typeof window.renderEmptyState === 'function') window.renderEmptyState();
-      if (typeof window.loadGraphList === 'function') window.loadGraphList();
       if (typeof window.setEmptyMessage === 'function') {
-        window.setEmptyMessage('Three.js unavailable',
-          'WebGL could not be loaded. Graph stats and sources are still available.');
+        window.setEmptyMessage('Three.js unavailable', rendererError);
       }
       try {
         const p = document.getElementById('panel-stats');

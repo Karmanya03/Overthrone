@@ -104,6 +104,8 @@ fn sanitize_ad_string(input: &str) -> String {
 
 /// Embedded HTML content (built from static/index.html)
 const INDEX_HTML: &str = include_str!("static/index.html");
+/// Embedded Three.js runtime used by the graph renderer.
+const THREE_MIN_JS: &str = include_str!("static/three.min.js");
 /// Embedded Three.js renderer (built from static/three-graph.js)
 const THREE_GRAPH_JS: &str = include_str!("static/three-graph.js");
 /// Maximum upload body size accepted by the API (250 MB).
@@ -2230,59 +2232,72 @@ fn collect_json_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn expand_graph_sources(sources: &[String]) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for source in sources {
-        let path = PathBuf::from(source);
-        if !path.exists() {
-            return Err(anyhow!("graph source does not exist: {}", path.display()));
-        }
-
-        if path.is_dir() {
-            collect_json_files(&path, &mut paths)?;
-        } else {
-            paths.push(path);
-        }
-    }
-
-    paths.sort();
-    Ok(paths)
+fn graph_label_from_directory_file(root: &Path, file: &Path) -> String {
+    file.strip_prefix(root)
+        .unwrap_or(file)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn build_graph_bundles(sources: &[String]) -> Result<Vec<GraphBundle>> {
     let mut bundles = Vec::new();
     let mut seen_ids = HashSet::new();
 
-    let files = expand_graph_sources(sources)?;
-
-    for file in files {
-        let label = file
-            .file_stem()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown-graph")
-            .to_string();
-
-        let mut base_id = graph_id_from_label(&label);
-        if base_id.is_empty() {
-            base_id = format!("graph-{}", bundles.len() + 1);
+    for source in sources {
+        let path = PathBuf::from(source);
+        if !path.exists() {
+            return Err(anyhow!("graph source does not exist: {}", path.display()));
         }
 
-        let mut graph_id = base_id.clone();
-        let mut counter = 2;
-        while seen_ids.contains(&graph_id) {
-            graph_id = format!("{}-{}", base_id, counter);
-            counter += 1;
+        let candidates = if path.is_dir() {
+            let mut files = Vec::new();
+            collect_json_files(&path, &mut files)?;
+            files.sort();
+            if files.is_empty() {
+                continue;
+            }
+            files
+                .iter()
+                .map(|file| {
+                    (
+                        graph_label_from_directory_file(&path, file),
+                        vec![file.display().to_string()],
+                        fs::metadata(file).map(|m| m.len()).unwrap_or(0),
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![(
+                path.file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown-graph")
+                    .to_string(),
+                vec![path.display().to_string()],
+                fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+            )]
+        };
+
+        for (label, bundle_sources, file_bytes) in candidates {
+            let mut base_id = graph_id_from_label(&label);
+            if base_id.is_empty() {
+                base_id = format!("graph-{}", bundles.len() + 1);
+            }
+
+            let mut graph_id = base_id.clone();
+            let mut counter = 2;
+            while seen_ids.contains(&graph_id) {
+                graph_id = format!("{}-{}", base_id, counter);
+                counter += 1;
+            }
+            seen_ids.insert(graph_id.clone());
+
+            bundles.push(GraphBundle {
+                id: graph_id,
+                label,
+                sources: bundle_sources,
+                file_bytes,
+            });
         }
-        seen_ids.insert(graph_id.clone());
-
-        let file_bytes = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
-
-        bundles.push(GraphBundle {
-            id: graph_id,
-            label,
-            sources: vec![file.display().to_string()],
-            file_bytes,
-        });
     }
 
     if bundles.is_empty() {
@@ -2544,6 +2559,20 @@ async fn three_graph_js() -> impl IntoResponse {
 }
 
 /// GET /api/graphs — List available graphs
+async fn three_min_js() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        THREE_MIN_JS,
+    )
+}
+
 async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>> {
     let cache = state.cache.read().await;
     let graphs_lock = state.graphs.read().await;
@@ -3570,6 +3599,8 @@ fn loopback_cors() -> CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::HeaderName::from_static("x-csrf-token"),
+            header::HeaderName::from_static("x-overthrone-filename"),
+            header::HeaderName::from_static("x-overthrone-upload-type"),
         ])
 }
 
@@ -3685,6 +3716,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/three.min.js", get(three_min_js))
         .route("/three-graph.js", get(three_graph_js))
         .route("/api/graphs", get(list_graphs))
         .route("/api/graph", get(get_graph))
@@ -3936,6 +3968,31 @@ mod tests {
         let config = ViewerConfig::default();
         assert_ne!(config.username.as_deref(), Some(TEST_VIEWER_USER));
         assert_ne!(config.password.as_deref(), Some(TEST_VIEWER_PASS));
+    }
+
+    #[test]
+    fn test_build_graph_bundles_expands_directory_to_individual_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(nested.join("users.json"), r#"{"data":[]}"#).expect("write users");
+        std::fs::write(nested.join("groups.json"), r#"{"data":[]}"#).expect("write groups");
+
+        let bundles = build_graph_bundles(&[dir.path().display().to_string()])
+            .expect("directory bundle should build");
+
+        assert_eq!(bundles.len(), 2);
+        assert_eq!(bundles[0].label, "nested/groups.json");
+        assert_eq!(bundles[1].label, "nested/users.json");
+        assert_eq!(
+            bundles[0].sources,
+            vec![nested.join("groups.json").display().to_string()]
+        );
+        assert_eq!(
+            bundles[1].sources,
+            vec![nested.join("users.json").display().to_string()]
+        );
+        assert!(bundles.iter().all(|bundle| bundle.file_bytes > 0));
     }
 
     fn test_state() -> Arc<AppState> {

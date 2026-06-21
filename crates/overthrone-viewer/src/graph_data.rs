@@ -1139,19 +1139,7 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
             return Err(format!("source file does not exist: {}", path.display()));
         }
         if path.is_dir() {
-            let mut entries = fs::read_dir(&path)
-                .map_err(|e| format!("failed to read directory {}: {e}", path.display()))?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|entry| {
-                    entry
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-                })
-                .collect::<Vec<_>>();
-            entries.sort();
-            paths.extend(entries);
+            collect_json_sources(&path, &mut paths)?;
         } else if path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -1165,6 +1153,30 @@ fn expand_sources(sources: &[String]) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(paths)
+}
+
+fn collect_json_sources(root: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir)
+            .map_err(|e| format!("failed to read directory {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| format!("failed to read entry in {}: {e}", dir.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    Ok(())
 }
 
 fn expand_zip_source(path: &Path) -> Result<Vec<PathBuf>, String> {
@@ -2320,5 +2332,89 @@ mod tests {
             .shortest_path("CONTRACTINGF@INTERNAL.LOCAL", "INTERNAL.LOCAL")
             .expect("demo fixture should expose a membership-to-domain path");
         assert!(!path.hops.is_empty());
+    }
+
+    #[test]
+    fn directory_sources_are_expanded_recursively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("bloodhound").join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(
+            nested.join("users.json"),
+            r#"{
+              "meta": {"type": "users"},
+              "data": [
+                {
+                  "ObjectIdentifier": "S-1-5-21-U1",
+                  "Properties": {"name": "ALICE@CORP.LOCAL", "domain": "CORP.LOCAL"},
+                  "MemberOf": [{"ObjectIdentifier": "S-1-5-21-G1"}]
+                }
+              ]
+            }"#,
+        )
+        .expect("write users");
+        std::fs::write(
+            nested.join("groups.json"),
+            r#"{
+              "meta": {"type": "groups"},
+              "data": [
+                {
+                  "ObjectIdentifier": "S-1-5-21-G1",
+                  "Properties": {"name": "DOMAIN ADMINS@CORP.LOCAL", "domain": "CORP.LOCAL"}
+                }
+              ]
+            }"#,
+        )
+        .expect("write groups");
+
+        let graph = ViewerGraph::from_sources(&[dir.path().display().to_string()])
+            .expect("recursive directory should load");
+
+        assert_eq!(graph.stats().users, 1);
+        assert_eq!(graph.stats().groups, 1);
+        assert_eq!(graph.stats().total_edges, 1);
+        assert!(
+            graph
+                .shortest_path("ALICE@CORP.LOCAL", "S-1-5-21-G1")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn array_collection_merges_multiple_bloodhound_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("folder-collection.json");
+        std::fs::write(
+            &path,
+            r#"[
+              {
+                "meta": {"type": "users"},
+                "data": [
+                  {
+                    "ObjectIdentifier": "S-1-5-21-U1",
+                    "Properties": {"name": "ALICE@CORP.LOCAL", "domain": "CORP.LOCAL"},
+                    "MemberOf": [{"ObjectIdentifier": "S-1-5-21-G1"}]
+                  }
+                ]
+              },
+              {
+                "meta": {"type": "groups"},
+                "data": [
+                  {
+                    "ObjectIdentifier": "S-1-5-21-G1",
+                    "Properties": {"name": "DOMAIN ADMINS@CORP.LOCAL", "domain": "CORP.LOCAL"}
+                  }
+                ]
+              }
+            ]"#,
+        )
+        .expect("write collection");
+
+        let graph = ViewerGraph::from_sources(&[path.display().to_string()])
+            .expect("folder collection should load");
+
+        assert_eq!(graph.stats().users, 1);
+        assert_eq!(graph.stats().groups, 1);
+        assert_eq!(graph.stats().total_edges, 1);
     }
 }
