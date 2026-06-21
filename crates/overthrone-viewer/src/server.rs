@@ -3463,6 +3463,10 @@ async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<impl IntoResponse, StatusCode> {
+    // No-auth mode (localhost) — pass through all requests
+    if state.config.username.is_none() || state.config.password.is_none() {
+        return Ok(next.run(req).await);
+    }
     let config = &state.config;
     let (expected_user, expected_pass) = match (&config.username, &config.password) {
         (Some(u), Some(p)) => (u, p),
@@ -3525,11 +3529,16 @@ async fn rate_limit_middleware(
 }
 
 /// CSRF middleware — requires `X-CSRF-Token` header on POST/PUT/DELETE.
+/// In no-auth localhost mode, CSRF is also bypassed.
 async fn csrf_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<impl IntoResponse, StatusCode> {
+    // No-auth mode — skip CSRF checks (bound to localhost only)
+    if state.config.username.is_none() || state.config.password.is_none() {
+        return Ok(next.run(req).await);
+    }
     if req.method() == axum::http::Method::GET || req.method() == axum::http::Method::HEAD {
         return Ok(next.run(req).await);
     }
@@ -3620,8 +3629,15 @@ pub async fn launch(sources: &[String], port: u16) -> Result<()> {
 /// Launch the viewer web server with the given configuration.
 pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerConfig) -> Result<()> {
     let has_auth = config.username.is_some() && config.password.is_some();
-    if !has_auth {
-        bail!("Viewer requires authentication credentials in config");
+    let bind_ip = config
+        .bind_address
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    if !has_auth && !bind_ip.is_loopback() {
+        bail!(
+            "Authentication is required when binding to non-loopback address {}. \
+             Provide username/password in config or bind to 127.0.0.1.",
+            bind_ip
+        );
     }
 
     let graphs = build_graph_bundles(sources)?;
@@ -3668,7 +3684,6 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
     });
 
     let app = Router::new()
-        // All routes (auth handled by auth_middleware; login via Basic auth or Bearer token)
         .route("/", get(index))
         .route("/three-graph.js", get(three_graph_js))
         .route("/api/graphs", get(list_graphs))
@@ -3684,12 +3699,12 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))
         .route("/ws", get(ws_handler))
-        // auth middleware only wraps routes above (everything except /api/login)
+        // auth middleware (pass-through when no credentials configured — localhost mode)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
-        // Global middleware layers wrap everything, outermost last
+        // Global middleware layers
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -3701,10 +3716,6 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         ))
         .layer(loopback_cors())
         .with_state(state);
-
-    let bind_ip = config
-        .bind_address
-        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
     let addr = SocketAddr::new(bind_ip, port);
 
     if !bind_ip.is_loopback() && config.tls.is_none() {
@@ -3781,17 +3792,20 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         }
     };
 
-    let auth_user = config.username.as_deref().unwrap_or("unknown");
-    let auth_pass = config.password.as_deref().unwrap_or("unknown");
-
     info!("Graph viewer running at {}", url);
     println!("\n  Overthrone Graph Viewer");
     println!("  ------------------------");
     println!("  URL:    {}", url);
-    println!("  User:   {}", auth_user);
-    println!("  Pass:   {}", auth_pass);
-    if let Some(ref csrf) = config.csrf_token {
-        println!("  CSRF:   {}", csrf);
+    if has_auth {
+        let auth_user = config.username.as_deref().unwrap_or("unknown");
+        let auth_pass = config.password.as_deref().unwrap_or("unknown");
+        println!("  User:   {}", auth_user);
+        println!("  Pass:   {}", auth_pass);
+        if let Some(ref csrf) = config.csrf_token {
+            println!("  CSRF:   {}", csrf);
+        }
+    } else {
+        println!("  (no auth — bound to localhost only)");
     }
     println!("  Press Ctrl+C to stop.\n");
 

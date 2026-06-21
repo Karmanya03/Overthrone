@@ -6524,7 +6524,13 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
                 return 1;
             }
 
-            if let Err(e) = overthrone_viewer::launch(&sources, port).await {
+            let viewer_cfg = overthrone_viewer::ViewerConfig {
+                username: None,
+                password: None,
+                bind_address: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                ..Default::default()
+            };
+            if let Err(e) = overthrone_viewer::launch_with_config(&sources, port, viewer_cfg).await {
                 banner::print_fail(&format!("Graph GUI failed: {}", e));
                 return 1;
             }
