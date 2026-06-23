@@ -231,7 +231,7 @@ flowchart TB
 Here's what's inside the box. Every module. Every protocol. Every hilarious amount of Rust the borrow checker screamed at us about. The table below is the **complete inventory** of what each crate actually does - no marketing fluff, no "coming soon" handwaving.
 
 | Crate | Codename | What It Does | The Implementation |
-|---|---|---|---|---|
+|---|---|---|---|
 | `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling, **EDR evasion (ntdll unhooking, ETW abolition, sleep masking, syscall resurrection), Credential Guard bypass (3-tier: ALPC/process-memory/WDigest), DPAPI masterkey extraction, file-format carver (docx/xlsx/etc), raw asm! syscalls with DynamicSyscallStub, SMB OPLOCK hijacking, Azure AD / Entra ID hybrid attack depth (8 ops)** | The absolute unit that ate the gym, then built a home gym, then ate that too. Every protocol is real. 761 tests. Credential Guard bypass now has 3 tiers because one wasn't enough. DPAPI extraction, file carver, and OPLOCK joined the party. The borrow checker needed therapy. Multiple sessions. |
 | `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 + v2), GPP password decryption, **Snaffler module (configurable share crawling with pattern matching, 23 tests)**, **LAPS/gMSA-specific enumeration (276 lines, 12 tests)**, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export, **NTLM-to-TGT pipeline, NTLMv1 detection, full BH edge-type coverage (19 new variants)** | BloodHound's data collection arc but without Neo4j eating 4GB of RAM. Snaffler module audited and fixed. LAPS/gMSA purpose-built. NTLM hashes go straight to TGTs now. 202 tests. The Collector became a curator. |
 | `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, zero-knowledge username enumeration via Kerberos AS-REQ, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism, **auto-crack loop, delegation chain automation (628 lines), ACL reasoning (439 lines), machine account harvesting (328 lines), smart wordlists (374 lines), NTLMv1 downgrade roast (496 lines), relay hash extraction (588 lines)** | The crate that did all its homework, extra credit, and the teacher's homework too. 76 tests. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class, got a PhD, and came back to teach the other crates. |
@@ -350,7 +350,7 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 No sugarcoating. These are genuinely not done.
 
 | What | Why It Matters | Status | Notes |
-|---|---|---|---|---|---|
+|---|---|---|---|
 | **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ? Not yet | Unit tests pass. Nobody has run this against GOAD or a real lab yet. The bravery check is still scheduled. |
 | **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ?? Partial | Bypass works when policy is "Negotiate". When "Require", can't derive session key in relay scenario. `ovt doctor` tells you which mode the DC uses. |
 | **EDR evasion CLI integration** | `ovt edr assess` / `ovt edr evade` already wired via `EdrAction`. Library: `edr_bypass.rs` - 2,127 lines, 25 tests. | ✅ Wired | Fully integrated CLI. EDR assessment + stealth profile application. |
@@ -396,7 +396,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~160,000 lines of Rust across 9 crates (~175,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **1,618 library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~204,000 lines of Rust across 10 crates (~225,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **1,618 library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
@@ -558,7 +558,7 @@ The browser GUI runs a local Rust HTTP server, opens a tab automatically, and se
 Born complete. Stayed complete. Added more features just to flex. Still zero stubs.
 
 | Feature | Details | Status |
-|---|---|---|---|
+|---|---|---|
 | **NTLM Relay Engine** | Full relay - capture NTLM auth from one protocol, replay to another. SMB→LDAP, HTTP→SMB, mix and match like a deadly cocktail. | ✅ Full |
 | **HTTP→SMB Asymmetric Relay** | `http_asymmetric.rs` - full HTTP request capture and replay. Captures method/URI/headers/body, extracts NTLM token, replays authenticated request to target. Connection-based state tracking (NAT-safe). Post-auth modes for HTTP/HTTPS/WebDAV/Exchange vs SMB/LDAP/MSSQL. CLI: `ovt ntlm http-asymmetric`. | ✅ Full |
 | **Exchange Relay** | CVE-2024-21410 - NTLM relay to Exchange MAPI-over-HTTP and EWS endpoints. TLS support, self-signed cert acceptance, EPA/channel binding bypass. Pre-CU14 Exchange servers accept relayed NTLM auth without Extended Protection. | ✅ Full |
@@ -1223,7 +1223,7 @@ MIT - use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 <p align="center">
   <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>9 crates. ~160,000 lines of Rust. 1,618 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
+  <sub>10 crates. ~204,000 lines of Rust. 1,618 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>
