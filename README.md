@@ -127,50 +127,50 @@ flowchart TB
     classDef output fill:#ec4899,color:#fff,stroke:#db2777,stroke-width:2px,rx:8px,ry:8px
     classDef external fill:#64748b,color:#fff,stroke:#475569,stroke-width:2px,stroke-dasharray: 5 5,rx:8px,ry:8px
 
-    subgraph UI["🎯 User Interface Layer"]
+    subgraph UI["User Interface Layer"]
         direction TB
-        CLI["⚡ overthrone-cli<br/>• CLI Commands<br/>• TUI Dashboard<br/>• REPL Shell<br/>• Wizard Mode<br/>• Config + Profiles<br/>• Session Management"]
-        VIEWER["🌐 overthrone-viewer<br/>• Web GUI<br/>• D3.js Graphs<br/>• Three.js 3D<br/>• Path Finder"]
+        CLI["overthrone-cli<br/>• CLI Commands<br/>• TUI Dashboard<br/>• REPL Shell<br/>• Wizard Mode<br/>• Config + Profiles<br/>• Session Management"]
+        VIEWER["overthrone-viewer<br/>• Web GUI<br/>• D3.js Graphs<br/>• Three.js 3D<br/>• Path Finder"]
     end
 
-    subgraph ORCH["🧠 Orchestration & Intelligence"]
+    subgraph ORCH["Orchestration & Intelligence"]
         direction TB
-        PILOT["🎲 overthrone-pilot<br/>• Auto-Pwn Engine<br/>• Q-Learning AI<br/>• Attack Planning<br/>• Strategy Adaptation"]
+        PILOT["overthrone-pilot<br/>• Auto-Pwn Engine<br/>• Q-Learning AI<br/>• Attack Planning<br/>• Strategy Adaptation"]
     end
 
-    subgraph RECON["🔍 Reconnaissance & Discovery"]
+    subgraph RECON["Reconnaissance & Discovery"]
         direction TB
-        REAPER["📊 overthrone-reaper<br/>• LDAP Enumeration<br/>• LAPS v1/v2 + gMSA<br/>• GPP Decryption + Snaffler<br/>• ADCS Templates + NTLM→TGT<br/>• BloodHound Export + BH Edges<br/>• NTLMv1 Detection"]
-        CRAWLER["🕸️ overthrone-crawler<br/>• Cross-Domain Trusts<br/>• Foreign LDAP + OPLOCK<br/>• MSSQL Links + JA3/JA4<br/>• SID Filter Analysis<br/>• PAM Detection + Responder<br/>• TCP Source-Port Rotation"]
+        REAPER["overthrone-reaper<br/>• LDAP Enumeration<br/>• LAPS v1/v2 + gMSA<br/>• GPP Decryption + Snaffler<br/>• ADCS Templates + NTLM→TGT<br/>• BloodHound Export + BH Edges<br/>• NTLMv1 Detection"]
+        CRAWLER["overthrone-crawler<br/>• Cross-Domain Trusts<br/>• Foreign LDAP + OPLOCK<br/>• MSSQL Links + JA3/JA4<br/>• SID Filter Analysis<br/>• PAM Detection + Responder<br/>• TCP Source-Port Rotation"]
     end
 
-    subgraph CORE["⚙️ Core Protocol Engine"]
+    subgraph CORE["Core Protocol Engine"]
         direction TB
-        CORE_ENGINE["🔥 overthrone-core<br/><br/>Protocols: LDAP • Kerberos • SMB2/3 • NTLM • MS-DRSR • MSSQL • DNS • PKINIT<br/><br/>Features: Attack Graph • Dijkstra Pathfinding • Port Scanner • Crypto Primitives<br/>EDR Evasion • Credential Guard Detection • Azure AD/Entra ID • C2 Integration<br/>Plugin System • Remote Execution • SecretsDump • RID Cycling"]
+        CORE_ENGINE["overthrone-core<br/><br/>Protocols: LDAP • Kerberos • SMB2/3 • NTLM • MS-DRSR • MSSQL • DNS • PKINIT<br/><br/>Features: Attack Graph • Dijkstra Pathfinding • Port Scanner • Crypto Primitives<br/>EDR Evasion • Credential Guard Detection • Azure AD/Entra ID • C2 Integration<br/>Plugin System • Remote Execution • SecretsDump • RID Cycling"]
     end
 
-    subgraph ATTACK["⚔️ Attack & Exploitation"]
+    subgraph ATTACK["Attack & Exploitation"]
         direction TB
-        HUNTER["🎯 overthrone-hunter<br/>• Kerberoasting<br/>• AS-REP Roasting<br/>• Auth Coercion<br/>• RBCD Abuse<br/>• Delegation Chains<br/>• Hash Cracking"]
-        RELAY["🔄 overthrone-relay<br/>• NTLM Relay + IPv6<br/>• LLMNR/NBT-NS/mDNS Poison<br/>• ADCS ESC8 + Exchange Relay<br/>• HTTP→SMB Asymmetric Relay<br/>• SOCKS5 Proxy + mTLS mode<br/>• LDAP Signing Bypass (CVE-2019-1040)<br/>• DCE/RPC Strip + Auto-Coercion"]
+        HUNTER["overthrone-hunter<br/>• Kerberoasting<br/>• AS-REP Roasting<br/>• Auth Coercion<br/>• RBCD Abuse<br/>• Delegation Chains<br/>• Hash Cracking"]
+        RELAY["overthrone-relay<br/>• NTLM Relay + IPv6<br/>• LLMNR/NBT-NS/mDNS Poison<br/>• ADCS ESC8 + Exchange Relay<br/>• HTTP→SMB Asymmetric Relay<br/>• SOCKS5 Proxy + mTLS mode<br/>• LDAP Signing Bypass (CVE-2019-1040)<br/>• DCE/RPC Strip + Auto-Coercion"]
     end
 
-    subgraph PERSIST["🔐 Persistence & Post-Ex"]
+    subgraph PERSIST["Persistence & Post-Ex"]
         direction TB
-        FORGE["🎭 overthrone-forge<br/>• Golden/Silver/Diamond/Sapphire<br/>• Enhanced Diamond + Bronze Bit<br/>• DCSync + ADCS Dispatcher<br/>• Shadow Credentials<br/>• ACL Backdoors + RBCD<br/>• Skeleton Key + PKINIT Paths<br/>• S4U2Self+PKINIT + AS-REP→TGT<br/>• MS-WCCE DCOM + InterRealmTgt"]
+        FORGE["overthrone-forge<br/>• Golden/Silver/Diamond/Sapphire<br/>• Enhanced Diamond + Bronze Bit<br/>• DCSync + ADCS Dispatcher<br/>• Shadow Credentials<br/>• ACL Backdoors + RBCD<br/>• Skeleton Key + PKINIT Paths<br/>• S4U2Self+PKINIT + AS-REP→TGT<br/>• MS-WCCE DCOM + InterRealmTgt"]
     end
 
-    subgraph REPORT["📝 Reporting & Output"]
+    subgraph REPORT["Reporting & Output"]
         direction TB
-        SCRIBE["📄 overthrone-scribe<br/>• Markdown Reports<br/>• PDF Generation<br/>• JSON Export<br/>• MITRE ATT&CK<br/>• Remediation Guide"]
+        SCRIBE["overthrone-scribe<br/>• Markdown Reports<br/>• PDF Generation<br/>• JSON Export<br/>• MITRE ATT&CK<br/>• Remediation Guide"]
     end
 
-    subgraph EXT["🏢 External Systems"]
+    subgraph EXT["External Systems"]
         direction TB
-        DC["🖥️ Domain Controller<br/>LDAP • Kerberos • SMB"]
-        ADCS["🎫 ADCS CA Server<br/>ESC1-ESC16"]
-        EXCHANGE["📧 Exchange Server<br/>MAPI • EWS • OAB"]
-        AZURE["☁️ Azure AD/Entra ID<br/>Managed Identity<br/>App Registration"]
+        DC["Domain Controller<br/>LDAP • Kerberos • SMB"]
+        ADCS["ADCS CA Server<br/>ESC1-ESC16"]
+        EXCHANGE["Exchange Server<br/>MAPI • EWS • OAB"]
+        AZURE["Azure AD/Entra ID<br/>Managed Identity<br/>App Registration"]
     end
 
     %% User Interface connections
