@@ -77,153 +77,198 @@ This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is no
 
 ```mermaid
 sequenceDiagram
-    participant Op as Operator (ovt)
-    participant OV as Overthrone
+    participant Op as Operator
+    participant CLI as overthrone-cli
+    participant PILOT as overthrone-pilot
+    participant REAPER as overthrone-reaper
+    participant HUNTER as overthrone-hunter
+    participant FORGE as overthrone-forge
+    participant CORE as overthrone-core
     participant DC as Domain Controller
 
-    Op->>OV: ovt auto-pwn -d BANK -u j.smith -p 'P@ssw0rd!'
+    Note over Op,DC: Phase 0: Initial Access (T1078)
+    Op->>CLI: ovt enum / scan / kerberos commands
+    CLI->>CORE: TCP/TLS connect to target
 
-    Note over OV,DC: Phase 1: Reconnaissance
-    OV->>DC: LDAP enum (users, groups, SPNs, trusts, ACLs, GPOs, LAPS, ADCS)
-    DC-->>OV: Complete AD data dump (AD has no chill)
+    Note over CLI,DC: Phase 1: Discovery & Enumeration (T1087, T1069, T1482)
+    CLI->>REAPER: enum_all(target, domain, credentials)
+    REAPER->>CORE: LDAP bind + paginated search
+    CORE->>DC: LDAP query (port 389/636)
+    DC-->>CORE: RootDSE + namingContexts
+    CORE->>DC: Search base DN: users, groups, computers
+    DC-->>CORE: LDAP entries with attributes
+    CORE-->>REAPER: Structured ADData
+    Note over REAPER: Enrich: LAPS v1/v2 decrypt, GPP decrypt,<br/>Snaffler share crawl, ADCS template scan
+    REAPER-->>CLI: ADData { users, groups, trusts, ACLs,<br/>GPOs, LAPS, SPNs, delegations }
 
-    Note over OV: Phase 2: Attack Graph
-    OV->>OV: Build graph (petgraph + Dijkstra)
-    Note right of OV: Find shortest path to Domain Admin<br/>(usually 3-5 hops, always concerning)
+    Note over CLI,DC: Phase 2: Attack Graph Analysis (TA0007)
+    CLI->>CORE: build_graph(ADData)
+    CORE->>CORE: petgraph DiGraph construction<br/>30+ edge types with weighted costs
+    CORE->>CORE: Reverse Dijkstra from Domain Admins
+    CORE-->>CLI: AttackGraph + shortest paths to goal
+    Note over CLI: Output: Path from current position to DA,<br/>broken down hop-by-hop with technique
 
-    Note over OV,DC: Phase 3: Exploitation
-    OV->>DC: Kerberoast MSSQLSvc/db.bank.anz
-    DC-->>OV: TGS ticket (encrypted with svc_sql hash)
-    OV->>OV: Crack offline (rayon + embedded wordlist)
-    OV->>DC: Pass-the-Hash → SMB auth (the hash IS the password)
-    DC-->>OV: Lateral movement granted
-    OV->>DC: Coerce auth → NTLM relay → LDAP group add
-    DC-->>OV: Target added to Domain Admins (oops)
+    Note over CLI,DC: Phase 3: Credential Access (T1558, T1110)
+    CLI->>HUNTER: kerberoast(SPN accounts)
+    HUNTER->>CORE: TGS-REQ for each SPN
+    CORE->>DC: TCP:88 → Kerberos TGS exchange
+    DC-->>CORE: TGS-REP with encrypted ticket
+    CORE-->>HUNTER: ServiceTicket hash (etype 17/18/23)
+    HUNTER->>HUNTER: Offline crack: embedded wordlist +<br/>rayon parallel + rule engine
+    HUNTER-->>CLI: CrackedCredentials
 
-    Note over OV,DC: Phase 4: Persistence
-    OV->>DC: DCSync (MS-DRSR → krbtgt hash)
-    DC-->>OV: krbtgt AES256 + NTLM (as requested)
-    OV->>OV: Forge Golden Ticket + Diamond Ticket
+    CLI->>HUNTER: password_spray(userlist, candidates)
+    HUNTER->>CORE: Kerberos AS-REQ for each user
+    CORE->>DC: pre-auth attempt (TCP:88)
+    DC-->>CORE: KDC error or success
+    CORE-->>HUNTER: SprayResult { valid, locked, exists }
+    HUNTER-->>CLI: SprayResults with lockout-safe delay
 
-    Note over OV: Phase 5: Reporting
-    OV->>OV: Generate PDF + JSON with MITRE ATT&CK mapping<br/>Credential tables · Loot summary · Remediation guide
+    Note over CLI,DC: Phase 4: Lateral Movement (T1550, T1021)
+    CLI->>CORE: exec(target, command, method)
+    CORE->>DC: Method: PsExec → SVCCTL named pipe
+    CORE->>DC: Method: SmbExec → SCM over SMB
+    CORE->>DC: Method: WinRM → WSMan HTTP/5985
+    CORE->>DC: Method: WmiExec → DCOM (Windows only)
+    DC-->>CORE: Command output (stdout/stderr)
+    CORE-->>CLI: ExecResult { output, pid, exit_code }
 
-    OV-->>Op: Domain owned. The forest hasn't noticed yet.
+    Note over CLI,DC: Phase 5: Persistence & Privilege Escalation (T1098, T1556)
+    CLI->>FORGE: forge_golden_ticket(krbtgt_hash, domain_sid)
+    FORGE->>CORE: Build PAC with KERB_VALIDATION_INFO
+    CORE->>CORE: Encrypt with krbtgt key (AES256/RC4)
+    FORGE-->>CLI: GoldenTicket .kirbi / .ccache
+
+    CLI->>FORGE: forge_diamond_ticket(legitimate_tgt)
+    CLI->>FORGE: forge_silver_ticket(service_hash)
+    CLI->>FORGE: dcsync(krbtgt) → MS-DRSR replication
+    CORE->>DC: DRSGetNCChanges named pipe
+    DC-->>CORE: Replication data with all hashes
+
+    Note over CLI,DC: Phase 6: Reporting (TA0043)
+    CLI->>REAPER: collect_all_findings()
+    REAPER-->>CLI: EngagementSession
+    CLI->>FORGE: attach_forge_results(session)
+    CLI->>HUNTER: attach_hunt_results(session)
+    CLI->>CORE: generate_report(session, format)
+    Note over CLI: Output: markdown / JSON / PDF<br/>with MITRE ATT&CK mapping,<br/>credential tables, remediation guide
+
+    CLI-->>Op: Domain owned. Full report generated.
 ```
 
 ## Architecture
 
-Overthrone is a Rust workspace with 10 crates, because monoliths are for cathedrals, not offensive tooling. Each crate handles one phase of making sysadmins regret their GPO configurations:
+Overthrone is organized as a five-layer security architecture. Each layer has a specific responsibility, and data flows strictly between adjacent layers. This separation ensures that protocol logic, attack execution, and user interfaces remain independently testable and replaceable.
+
+```
+OPERATOR LAYER    : CLI, TUI, REPL, Web GUI
+ORCHESTRATION     : Wizard, Session management, Q-Learning advisor
+CAPABILITY LAYER  : Enumeration, Attack, Relay, Forge, Crawl, Report
+CORE ENGINE       : Protocols, Crypto, Graph, Post-exploitation, C2, Plugins
+TARGET LAYER      : Domain Controllers, ADCS, Exchange, Azure AD
+```
 
 ```mermaid
 flowchart TB
-    %% Modern styling with gradients and shadows
-    classDef userInterface fill:#6366f1,color:#fff,stroke:#4f46e5,stroke-width:2px,rx:8px,ry:8px
-    classDef orchestrator fill:#8b5cf6,color:#fff,stroke:#7c3aed,stroke-width:2px,rx:8px,ry:8px
-    classDef recon fill:#06b6d4,color:#fff,stroke:#0891b2,stroke-width:2px,rx:8px,ry:8px
-    classDef core fill:#ef4444,color:#fff,stroke:#dc2626,stroke-width:3px,rx:10px,ry:10px
-    classDef attack fill:#f59e0b,color:#000,stroke:#d97706,stroke-width:2px,rx:8px,ry:8px
-    classDef persistence fill:#10b981,color:#fff,stroke:#059669,stroke-width:2px,rx:8px,ry:8px
-    classDef output fill:#ec4899,color:#fff,stroke:#db2777,stroke-width:2px,rx:8px,ry:8px
-    classDef external fill:#64748b,color:#fff,stroke:#475569,stroke-width:2px,stroke-dasharray: 5 5,rx:8px,ry:8px
+    %% ── Professional color palette ──
+    classDef operator fill:#4338ca,color:#fff,stroke:#3730a3,stroke-width:2px,rx:6px,ry:6px
+    classDef orchestrator fill:#7c3aed,color:#fff,stroke:#6d28d9,stroke-width:2px,rx:6px,ry:6px
+    classDef capability fill:#0891b2,color:#fff,stroke:#0e7490,stroke-width:2px,rx:6px,ry:6px
+    classDef core fill:#dc2626,color:#fff,stroke:#b91c1c,stroke-width:3px,rx:8px,ry:8px
+    classDef target fill:#475569,color:#fff,stroke:#334155,stroke-width:2px,stroke-dasharray:6 4,rx:6px,ry:6px
+    classDef layerLabel fill:transparent,color:#94a3b8,font-size:11px,font-weight:bold
 
-    subgraph UI["User Interface Layer"]
+    %% ── Layer 5: Operator Interface ──
+    L5["LAYER 5: OPERATOR INTERFACE"]:::layerLabel
+
+    subgraph OperatorInterface[" "]
         direction TB
-        CLI["overthrone-cli<br/>• CLI Commands<br/>• TUI Dashboard<br/>• REPL Shell<br/>• Wizard Mode<br/>• Config + Profiles<br/>• Session Management"]
-        VIEWER["overthrone-viewer<br/>• Web GUI<br/>• D3.js Graphs<br/>• Three.js 3D<br/>• Path Finder"]
+        CLI["overthrone-cli<br/>CLI Parser (clap) • TUI (ratatui) • REPL (rustyline)<br/>Config (TOML/XDG) • Profiles • Session mgmt<br/>Doctor • Completions"]
+        VIEWER["overthrone-viewer<br/>Web GUI (Axum + Three.js)<br/>Graph visualization • Path finder<br/>Auth • CSRF • Rate limiting • mTLS"]
     end
+    class CLI,VIEWER operator
 
-    subgraph ORCH["Orchestration & Intelligence"]
+    %% ── Layer 4: Orchestration ──
+    L4["LAYER 4: ORCHESTRATION"]:::layerLabel
+
+    subgraph OrchestrationLayer[" "]
+        PILOT["overthrone-pilot<br/>Wizard-guided workflow • Session lifecycle<br/>Hostile-DC detection (5 checks)<br/>Q-Learning advisor (optional)<br/>State persistence & resume"]
+    end
+    class PILOT orchestrator
+
+    %% ── Layer 3: Capabilities ──
+    L3["LAYER 3: ATTACK CAPABILITIES"]:::layerLabel
+
+    subgraph CapabilityLayer[" "]
         direction TB
-        PILOT["overthrone-pilot<br/>• Auto-Pwn Engine<br/>• Q-Learning AI<br/>• Attack Planning<br/>• Strategy Adaptation"]
+        REAPER["overthrone-reaper<br/>LDAP enum • LAPS v1/v2 • GPP decrypt<br/>Snaffler share crawl • ADCS template scan<br/>BloodHound JSON export • BH edge coverage<br/>NTLM→TGT pipeline • NTLMv1 detection"]
+        CRAWLER["overthrone-crawler<br/>Cross-domain trust mapping • Foreign LDAP<br/>MSSQL linked server crawl • SID filter analysis<br/>Port rotation • JA3/JA4 fingerprint • OPLOCK<br/>Responder integration"]
+        HUNTER["overthrone-hunter<br/>Kerberoast • AS-REP roast • User enum (zero-KB)<br/>Auth coercion (5 techniques) • RBCD abuse<br/>Delegation chains • Hash cracking (rayon)"]
+        RELAY["overthrone-relay<br/>NTLM relay engine (SMB↔LDAP↔HTTP)<br/>HTTP→SMB asymmetric • IPv6 dual-stack<br/>mTLS/TLS verification • SOCKS5 proxy<br/>LDAP signing bypass • DCE/RPC strip<br/>Auto-coercion • LLMNR/NBT-NS/mDNS poison"]
+        FORGE["overthrone-forge<br/>Golden/Silver/Diamond/Sapphire tickets<br/>Enhanced Diamond • Bronze Bit (CVE-2020-17049)<br/>ADCS dispatcher (ESC1-9) • DCSync<br/>Shadow Credentials • ACL backdoors<br/>S4U2Self+PKINIT • Inter-realm TGT<br/>MS-WCCE DCOM • Skeleton Key<br/>17 ForgeAction variants"]
+        SCRIBE["overthrone-scribe<br/>Markdown reports • PDF generation<br/>JSON export • MITRE ATT&CK mapping<br/>Timeline view • Evidence hashing (SHA-256)<br/>Operator attribution • Remediation guide"]
     end
+    class REAPER,CRAWLER,HUNTER,RELAY,FORGE,SCRIBE capability
 
-    subgraph RECON["Reconnaissance & Discovery"]
-        direction TB
-        REAPER["overthrone-reaper<br/>• LDAP Enumeration<br/>• LAPS v1/v2 + gMSA<br/>• GPP Decryption + Snaffler<br/>• ADCS Templates + NTLM→TGT<br/>• BloodHound Export + BH Edges<br/>• NTLMv1 Detection"]
-        CRAWLER["overthrone-crawler<br/>• Cross-Domain Trusts<br/>• Foreign LDAP + OPLOCK<br/>• MSSQL Links + JA3/JA4<br/>• SID Filter Analysis<br/>• PAM Detection + Responder<br/>• TCP Source-Port Rotation"]
+    %% ── Layer 2: Core Engine ──
+    L2["LAYER 2: CORE PROTOCOL ENGINE"]:::layerLabel
+
+    subgraph CoreLayer[" "]
+        CORE["overthrone-core<br/><br/>Protocols: LDAP/LDAPS • Kerberos (TGT/TGS/FAST/PKINIT) • SMB2/3<br/>NTLM (hash/MIC strip/DCE strip) • MS-DRSR (DCSync) • MSSQL/TDS<br/>DNS (SRV resolution) • Remote Registry • MS-SAMR (RID cycling)<br/><br/>Crypto: AES-CTS (etype 17/18) • RC4 (etype 23) • HMAC • MD4<br/>DPAPI (LAPS v2) • GPP (cpassword) • Cracker (embedded/hashcat)<br/><br/>Post-Ex: EDR bypass (ntdll unhook/ETW kill/syscall/masking)<br/>Credential Guard bypass (3-tier: ALPC/memory/WDigest)<br/>DPAPI masterkey extraction • File-format carver (docx/xlsx)<br/>Raw syscalls (core::arch::asm!) • Skeleton Key DLL injection<br/><br/>Attack Graph: petgraph DiGraph • 30+ BH edge types<br/>Dijkstra pathfinding • High-value target identification<br/><br/>C2: Sliver (mTLS) • Havoc (REST) • Cobalt Strike (Aggressor)<br/><br/>Plugins: Native DLL (libloading) • WASM (wasmtime)"]
     end
+    class CORE core
 
-    subgraph CORE["Core Protocol Engine"]
-        direction TB
-        CORE_ENGINE["overthrone-core<br/><br/>Protocols: LDAP • Kerberos • SMB2/3 • NTLM • MS-DRSR • MSSQL • DNS • PKINIT<br/><br/>Features: Attack Graph • Dijkstra Pathfinding • Port Scanner • Crypto Primitives<br/>EDR Evasion • Credential Guard Detection • Azure AD/Entra ID • C2 Integration<br/>Plugin System • Remote Execution • SecretsDump • RID Cycling"]
+    %% ── Layer 1: Target Systems ──
+    L1["LAYER 1: TARGET SYSTEMS"]:::layerLabel
+
+    subgraph TargetLayer[" "]
+        DC["Domain Controller<br/>LDAP:389/636 • Kerberos:88<br/>SMB:445 • MS-DRSR named pipe"]
+        ADCS["AD CS Server<br/>Web enrollment:443<br/>ICertRequest DCOM • CES"]
+        EXCHANGE["Exchange Server<br/>MAPI-over-HTTP • EWS<br/>OAB • ActiveSync"]
+        AZURE["Azure AD / Entra ID<br/>MS Graph API • Device code<br/>Managed Identity • App Reg"]
     end
+    class DC,ADCS,EXCHANGE,AZURE target
 
-    subgraph ATTACK["Attack & Exploitation"]
-        direction TB
-        HUNTER["overthrone-hunter<br/>• Kerberoasting<br/>• AS-REP Roasting<br/>• Auth Coercion<br/>• RBCD Abuse<br/>• Delegation Chains<br/>• Hash Cracking"]
-        RELAY["overthrone-relay<br/>• NTLM Relay + IPv6<br/>• LLMNR/NBT-NS/mDNS Poison<br/>• ADCS ESC8 + Exchange Relay<br/>• HTTP→SMB Asymmetric Relay<br/>• SOCKS5 Proxy + mTLS mode<br/>• LDAP Signing Bypass (CVE-2019-1040)<br/>• DCE/RPC Strip + Auto-Coercion"]
-    end
+    %% ── Layer 5 → Layer 4 flow ──
+    CLI -.->|config/target/creds| PILOT
+    VIEWER -.->|graph query| PILOT
 
-    subgraph PERSIST["Persistence & Post-Ex"]
-        direction TB
-        FORGE["overthrone-forge<br/>• Golden/Silver/Diamond/Sapphire<br/>• Enhanced Diamond + Bronze Bit<br/>• DCSync + ADCS Dispatcher<br/>• Shadow Credentials<br/>• ACL Backdoors + RBCD<br/>• Skeleton Key + PKINIT Paths<br/>• S4U2Self+PKINIT + AS-REP→TGT<br/>• MS-WCCE DCOM + InterRealmTgt"]
-    end
+    %% ── Layer 4 → Layer 3 flow ──
+    PILOT -->|enumeration plan| REAPER
+    PILOT -->|cross-domain recon| CRAWLER
+    PILOT -->|attack execution| HUNTER
+    PILOT -->|relay intercept| RELAY
+    PILOT -->|persistence ops| FORGE
+    PILOT -->|report generation| SCRIBE
 
-    subgraph REPORT["Reporting & Output"]
-        direction TB
-        SCRIBE["overthrone-scribe<br/>• Markdown Reports<br/>• PDF Generation<br/>• JSON Export<br/>• MITRE ATT&CK<br/>• Remediation Guide"]
-    end
+    %% ── CLI → Layer 3 direct ──
+    CLI -->|"ovt enum *"| REAPER
+    CLI -->|"ovt kerberos *"| HUNTER
+    CLI -->|"ovt ntlm/relay"| RELAY
+    CLI -->|"ovt forge"| FORGE
+    CLI -->|"ovt report"| SCRIBE
+    CLI -->|"ovt move"| CRAWLER
+    CLI -->|"ovt adcs / exec / dump"| CORE
 
-    subgraph EXT["External Systems"]
-        direction TB
-        DC["Domain Controller<br/>LDAP • Kerberos • SMB"]
-        ADCS["ADCS CA Server<br/>ESC1-ESC16"]
-        EXCHANGE["Exchange Server<br/>MAPI • EWS • OAB"]
-        AZURE["Azure AD/Entra ID<br/>Managed Identity<br/>App Registration"]
-    end
+    %% ── Layer 3 → Layer 2 flow ──
+    REAPER -->|LDAP search / modify| CORE
+    CRAWLER -->|cross-domain queries| CORE
+    HUNTER -->|Kerberos TGS-REQ| CORE
+    RELAY -->|NTLM forward / modify| CORE
+    FORGE -->|ticket crypto / LDAP| CORE
+    SCRIBE -->|graph & loot data| CORE
 
-    %% User Interface connections
-    CLI -->|commands| PILOT
-    CLI -->|enum| REAPER
-    CLI -->|cross-domain| CRAWLER
-    CLI -->|roast| HUNTER
-    CLI -->|relay| RELAY
-    CLI -->|forge| FORGE
-    CLI -->|protocols| CORE_ENGINE
-    CLI -->|generate| SCRIBE
-    VIEWER -->|graph data| CORE_ENGINE
-
-    %% Orchestrator connections
-    PILOT -->|plan & execute| REAPER
-    PILOT -->|trust mapping| CRAWLER
-    PILOT -->|attack chain| HUNTER
-    PILOT -->|intercept| RELAY
-    PILOT -->|persist| FORGE
-    PILOT -->|report| SCRIBE
-    PILOT -->|Q-learning feedback| CORE_ENGINE
-
-    %% Recon to Core
-    REAPER -->|LDAP/Kerberos data| CORE_ENGINE
-    CRAWLER -->|cross-realm data| CORE_ENGINE
-
-    %% Attack to Core
-    HUNTER -->|ticket requests| CORE_ENGINE
-    RELAY -->|NTLM/LDAP relay| CORE_ENGINE
-
-    %% Persistence to Core
-    FORGE -->|ticket forging| CORE_ENGINE
-    FORGE -->|DCSync| CORE_ENGINE
-
-    %% Core to Output
-    CORE_ENGINE -->|graph & loot| SCRIBE
-    CORE_ENGINE -->|visualization| VIEWER
-
-    %% External system connections
-    CORE_ENGINE -.->|query| DC
-    CORE_ENGINE -.->|enroll| ADCS
-    RELAY -.->|target| EXCHANGE
-    CORE_ENGINE -.->|hybrid attack| AZURE
+    %% ── Layer 2 → Layer 1 flow ──
+    CORE ===|TCP:88 / Kerberos| DC
+    CORE ===|TCP:389/636 / LDAP| DC
+    CORE ===|TCP:445 / SMB2| DC
+    CORE ===|TCP:135/445 / MS-DRSR| DC
+    CORE -..-|TCP:443 / Web enroll| ADCS
+    RELAY -..-|TCP:443 / MAPI/EWS| EXCHANGE
+    CORE -..-|HTTPS / MS Graph| AZURE
 
     %% Apply styles
-    class CLI,VIEWER userInterface
-    class PILOT orchestrator
-    class REAPER,CRAWLER recon
-    class CORE_ENGINE core
-    class HUNTER,RELAY attack
-    class FORGE persistence
-    class SCRIBE output
-    class DC,ADCS,EXCHANGE,AZURE external
+    class L5,L4,L3,L2,L1 layerLabel
 ```
 
 ## The Crate Breakdown
