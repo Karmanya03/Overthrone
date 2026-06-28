@@ -148,12 +148,21 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
 
     let bind_resp = smb.pipe_transact("samr", &build_samr_bind()).await?;
     if !is_rpc_bind_accepted(&bind_resp) {
-        return Err(OverthroneError::Smb("SAMR RPC bind failed".to_string()));
+        return Err(OverthroneError::Smb(format!(
+            "SAMR RPC bind on {} failed: response {} bytes, expected BIND-ACK",
+            config.target,
+            bind_resp.len()
+        )));
     }
 
     let connect_resp = smb.pipe_transact("samr", &build_samr_connect()).await?;
-    let server_handle = extract_rpc_handle(&connect_resp)
-        .ok_or_else(|| OverthroneError::Smb("SamrConnect failed".to_string()))?;
+    let server_handle = extract_rpc_handle(&connect_resp).ok_or_else(|| {
+        OverthroneError::Smb(format!(
+            "SamrConnect on {} failed: response {} bytes, cannot extract handle",
+            config.target,
+            connect_resp.len()
+        ))
+    })?;
 
     let enum_resp = smb
         .pipe_transact("samr", &build_samr_enumerate_domains(&server_handle))

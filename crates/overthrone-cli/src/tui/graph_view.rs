@@ -275,7 +275,7 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
         EdgeType::ExecuteDCOM => Some("Invoke-DCOM / MMC20.Application lateral movement"),
         EdgeType::SQLAdmin => Some("SQL Server sysadmin â†’ xp_cmdshell / CLR assembly RCE"),
         EdgeType::HasSession => {
-            Some("Token impersonation if admin on host (Incognito / mimikatz tokens)")
+            Some("Token impersonation if admin on host (Incognito / credential tool tokens)")
         }
         EdgeType::HasSpn => Some("GetUserSPNs.py â†’ offline TGS crack (Kerberoast)"),
         EdgeType::DontReqPreauth => Some("GetNPUsers.py â†’ AS-REP roast (DONT_REQ_PREAUTH set)"),

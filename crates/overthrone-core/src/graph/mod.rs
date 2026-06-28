@@ -16,6 +16,9 @@ use std::collections::HashMap;
 use tracing::{debug, info, warn};
 // use hashbrown::HashMap as HashBrownMap;
 
+pub mod bh_import;
+pub mod queries;
+
 // ============================================================
 //  Type Aliases
 // ============================================================
@@ -350,7 +353,7 @@ impl std::fmt::Display for EdgeType {
 // ============================================================
 
 /// A single hop in an attack path
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathHop {
     /// Source domain FQDN
     pub source: String,
@@ -367,7 +370,7 @@ pub struct PathHop {
 }
 
 /// A complete attack path from source to target
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttackPath {
     /// Source domain FQDN
     pub source: String,
@@ -403,7 +406,7 @@ impl std::fmt::Display for AttackPath {
 }
 
 /// Statistics about the attack graph
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphStats {
     /// Total count
     pub total_nodes: usize,

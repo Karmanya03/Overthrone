@@ -3,6 +3,7 @@
 
 use crate::session::{EngagementSession, Severity};
 use chrono::Utc;
+use overthrone_pilot::goals::EngagementState;
 
 /// Render an engagement session as a standalone HTML document
 pub fn render(session: &EngagementSession) -> String {
@@ -338,6 +339,11 @@ pub fn render(session: &EngagementSession) -> String {
     }
     html.push_str("</section>\n");
 
+    // ── ADRecon Inventory Sections ──
+    if let Some(ref state) = session.engagement_state {
+        render_html_adrecon_inventory(&mut html, state);
+    }
+
     // ── Footer ──
     html.push_str("<footer>\n");
     html.push_str(&format!(
@@ -428,6 +434,415 @@ ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; } li { margin: 0.25rem 0; }
 footer { text-align: center; padding-top: 2rem; border-top: 1px solid var(--border); color: #777; font-size: 0.85rem; }
 </style>
 "#;
+
+// ═══════════════════════════════════════════════════════════
+// ADRecon-Style HTML Inventory Sections
+// ═══════════════════════════════════════════════════════════
+
+/// Render ADRecon-style inventory sections in HTML
+fn render_html_adrecon_inventory(html: &mut String, state: &EngagementState) {
+    // Section 9: Domain Inventory
+    html.push_str("<section id=\"domain-inventory\">\n");
+    html.push_str("<h2>9. Domain Inventory</h2>\n");
+    render_html_user_inventory(html, state);
+    render_html_computer_inventory(html, state);
+    render_html_group_inventory(html, state);
+    html.push_str("</section>\n");
+
+    // Section 10: Service & Delegation Inventory
+    html.push_str("<section id=\"service-delegation-inventory\">\n");
+    html.push_str("<h2>10. Service & Delegation Inventory</h2>\n");
+    render_html_spn_inventory(html, state);
+    render_html_trust_inventory(html, state);
+    render_html_delegation_inventory(html, state);
+    html.push_str("</section>\n");
+
+    // Section 11: Configuration Audit
+    html.push_str("<section id=\"configuration-audit\">\n");
+    html.push_str("<h2>11. Configuration Audit</h2>\n");
+    render_html_password_policy(html, state);
+    render_html_gpo_inventory(html, state);
+    render_html_laps_inventory(html, state);
+    html.push_str("</section>\n");
+}
+
+fn render_html_user_inventory(html: &mut String, state: &EngagementState) {
+    if state.users.is_empty() {
+        html.push_str("<h3>User Inventory</h3>\n<p>No users discovered.</p>\n");
+        return;
+    }
+
+    html.push_str(&format!(
+        "<h3>User Inventory ({} total)</h3>\n",
+        state.users.len()
+    ));
+    html.push_str(
+        "<table class=\"info-table\">\n<thead><tr>\
+        <th>sAMAccountName</th><th>UPN</th><th>Enabled</th>\
+        <th>Admin</th><th>SPN</th><th>PreAuth Disabled</th><th>Description</th>\
+        </tr></thead>\n<tbody>\n",
+    );
+    let max_users = state.users.len().min(200);
+    for user in state.users.iter().take(max_users) {
+        let upn = user.user_principal_name.as_deref().unwrap_or("-");
+        let desc = user.description.as_deref().unwrap_or("-");
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            escape_html(&user.sam_account_name),
+            escape_html(upn),
+            if user.enabled { "✓" } else { "✗" },
+            if user.admin_count { "✓" } else { "" },
+            if user.has_spn { "✓" } else { "" },
+            if user.dont_req_preauth { "✓" } else { "" },
+            escape_html(desc),
+        ));
+    }
+    html.push_str("</tbody>\n</table>\n");
+    if state.users.len() > 200 {
+        html.push_str(&format!(
+            "<p><em>Showing 200 of {} users. Full list available in raw data.</em></p>\n",
+            state.users.len()
+        ));
+    }
+}
+
+fn render_html_computer_inventory(html: &mut String, state: &EngagementState) {
+    if state.computers.is_empty() {
+        html.push_str("<h3>Computer Inventory</h3>\n<p>No computers discovered.</p>\n");
+        return;
+    }
+
+    html.push_str(&format!(
+        "<h3>Computer Inventory ({} total)</h3>\n",
+        state.computers.len()
+    ));
+    html.push_str(
+        "<table class=\"info-table\">\n<thead><tr>\
+        <th>sAMAccountName</th><th>DNS Hostname</th><th>Operating System</th>\
+        <th>DC</th><th>Unconstrained Del.</th></tr></thead>\n<tbody>\n",
+    );
+    for comp in state.computers.iter().take(200) {
+        let dns = comp.dns_hostname.as_deref().unwrap_or("-");
+        let os = comp.operating_system.as_deref().unwrap_or("Unknown");
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            escape_html(&comp.sam_account_name),
+            escape_html(dns),
+            escape_html(os),
+            if comp.is_dc { "✓" } else { "" },
+            if comp.unconstrained_delegation {
+                "✓"
+            } else {
+                ""
+            },
+        ));
+    }
+    html.push_str("</tbody>\n</table>\n");
+    if state.computers.len() > 200 {
+        html.push_str(&format!(
+            "<p><em>Showing 200 of {} computers. Full list available in raw data.</em></p>\n",
+            state.computers.len()
+        ));
+    }
+}
+
+fn render_html_group_inventory(html: &mut String, state: &EngagementState) {
+    if state.groups.is_empty() {
+        html.push_str("<h3>Group Membership</h3>\n<p>No groups discovered.</p>\n");
+        return;
+    }
+
+    html.push_str(&format!(
+        "<h3>Group Membership ({} groups)</h3>\n",
+        state.groups.len()
+    ));
+
+    let mut groups: Vec<(&String, &Vec<String>)> = state.groups.iter().collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    html.push_str("<div class=\"group-list\">\n");
+    for (group, members) in groups.iter().take(50) {
+        html.push_str(&format!(
+            "<details><summary><strong>{}</strong> ({} members)</summary>\n<ul>\n",
+            escape_html(group),
+            members.len()
+        ));
+        for member in members.iter().take(20) {
+            html.push_str(&format!("<li>{}</li>\n", escape_html(member)));
+        }
+        if members.len() > 20 {
+            html.push_str(&format!(
+                "<li><em>...and {} more</em></li>\n",
+                members.len() - 20
+            ));
+        }
+        html.push_str("</ul>\n</details>\n");
+    }
+    html.push_str("</div>\n");
+}
+
+fn render_html_spn_inventory(html: &mut String, state: &EngagementState) {
+    if state.spn_map.is_empty() {
+        html.push_str("<h3>Service Principal Names</h3>\n<p>No SPNs discovered.</p>\n");
+        return;
+    }
+
+    html.push_str(&format!(
+        "<h3>Service Principal Names ({} accounts with SPNs)</h3>\n",
+        state.spn_map.len()
+    ));
+    html.push_str("<table class=\"info-table\">\n<thead><tr><th>Account</th><th>SPNs</th></tr></thead>\n<tbody>\n");
+    let mut spns: Vec<(&String, &Vec<String>)> = state.spn_map.iter().collect();
+    spns.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (account, spn_list) in spns.iter().take(100) {
+        let spn_str = escape_html(&spn_list.join(", "));
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td></tr>\n",
+            escape_html(account),
+            spn_str,
+        ));
+    }
+    html.push_str("</tbody>\n</table>\n");
+}
+
+fn render_html_trust_inventory(html: &mut String, state: &EngagementState) {
+    if state.trusts.is_empty() {
+        html.push_str("<h3>Trust Relationships</h3>\n<p>No domain trusts discovered.</p>\n");
+        return;
+    }
+
+    html.push_str(&format!(
+        "<h3>Trust Relationships ({} trusts)</h3>\n<ul>\n",
+        state.trusts.len()
+    ));
+    for trust in &state.trusts {
+        html.push_str(&format!("<li>{}</li>\n", escape_html(trust)));
+    }
+    html.push_str("</ul>\n");
+}
+
+fn render_html_delegation_inventory(html: &mut String, state: &EngagementState) {
+    let has_uncon = !state.unconstrained_delegation.is_empty();
+    let has_con = !state.constrained_delegation.is_empty();
+    let has_rbcd = !state.rbcd_targets.is_empty();
+
+    if !has_uncon && !has_con && !has_rbcd {
+        html.push_str(
+            "<h3>Delegation Configuration</h3>\n<p>No delegation configurations found.</p>\n",
+        );
+        return;
+    }
+
+    html.push_str("<h3>Delegation Configuration</h3>\n");
+
+    if has_uncon {
+        html.push_str(&format!(
+            "<h4>Unconstrained Delegation ({} hosts)</h4>\n<ul>\n",
+            state.unconstrained_delegation.len()
+        ));
+        for host in &state.unconstrained_delegation {
+            html.push_str(&format!("<li>{}</li>\n", escape_html(host)));
+        }
+        html.push_str("</ul>\n");
+    }
+
+    if has_con {
+        html.push_str(&format!(
+            "<h4>Constrained Delegation ({} accounts)</h4>\n",
+            state.constrained_delegation.len()
+        ));
+        html.push_str(
+            "<table class=\"info-table\">\n<thead><tr>\
+            <th>Account</th><th>Type</th><th>Targets</th><th>Protocol Transition</th>\
+            </tr></thead>\n<tbody>\n",
+        );
+        for d in &state.constrained_delegation {
+            html.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                escape_html(&d.account),
+                escape_html(&d.delegation_type),
+                escape_html(&d.targets.join(", ")),
+                if d.protocol_transition { "✓" } else { "" },
+            ));
+        }
+        html.push_str("</tbody>\n</table>\n");
+    }
+
+    if has_rbcd {
+        html.push_str(&format!(
+            "<h4>Resource-Based Constrained Delegation ({} targets)</h4>\n<ul>\n",
+            state.rbcd_targets.len()
+        ));
+        for target in &state.rbcd_targets {
+            html.push_str(&format!("<li>{}</li>\n", escape_html(target)));
+        }
+        html.push_str("</ul>\n");
+    }
+}
+
+fn render_html_password_policy(html: &mut String, state: &EngagementState) {
+    html.push_str("<h3>Password Policy</h3>\n");
+
+    match &state.password_policy {
+        Some(policy) => {
+            html.push_str("<table class=\"info-table\">\n<tbody>\n");
+            if let Some(v) = policy.min_password_length {
+                html.push_str(&format!(
+                    "<tr><td>Minimum Password Length</td><td>{}</td></tr>\n",
+                    v
+                ));
+            }
+            if let Some(v) = policy.lockout_threshold {
+                html.push_str(&format!(
+                    "<tr><td>Lockout Threshold</td><td>{} attempts</td></tr>\n",
+                    v
+                ));
+            }
+            if let Some(ref v) = policy.lockout_duration {
+                html.push_str(&format!(
+                    "<tr><td>Lockout Duration</td><td>{}</td></tr>\n",
+                    escape_html(v)
+                ));
+            }
+            if let Some(ref v) = policy.lockout_observation_window {
+                html.push_str(&format!(
+                    "<tr><td>Lockout Observation Window</td><td>{}</td></tr>\n",
+                    escape_html(v)
+                ));
+            }
+            if let Some(ref v) = policy.max_password_age {
+                html.push_str(&format!(
+                    "<tr><td>Maximum Password Age</td><td>{}</td></tr>\n",
+                    escape_html(v)
+                ));
+            }
+            if let Some(ref v) = policy.min_password_age {
+                html.push_str(&format!(
+                    "<tr><td>Minimum Password Age</td><td>{}</td></tr>\n",
+                    escape_html(v)
+                ));
+            }
+            if let Some(v) = policy.password_history_length {
+                html.push_str(&format!(
+                    "<tr><td>Password History Length</td><td>{}</td></tr>\n",
+                    v
+                ));
+            }
+            html.push_str(&format!(
+                "<tr><td>Password Complexity Enabled</td><td>{}</td></tr>\n",
+                if policy.password_complexity_enabled {
+                    "✓"
+                } else {
+                    "✗"
+                }
+            ));
+            html.push_str(&format!(
+                "<tr><td>Reversible Encryption Enabled</td><td>{}</td></tr>\n",
+                if policy.reversible_encryption_enabled {
+                    "⚠"
+                } else {
+                    "✗"
+                }
+            ));
+            html.push_str(&format!(
+                "<tr><td>Fine-Grained Password Policies</td><td>{}</td></tr>\n",
+                policy.fine_grained_policy_count
+            ));
+            html.push_str("</tbody>\n</table>\n");
+        }
+        None => {
+            html.push_str("<p>Password policy was not enumerated during the assessment.</p>\n");
+        }
+    }
+}
+
+fn render_html_gpo_inventory(html: &mut String, state: &EngagementState) {
+    if state.gpos.is_empty() && state.gpo_details.is_empty() {
+        html.push_str("<h3>Group Policy Objects</h3>\n<p>No GPOs discovered.</p>\n");
+        return;
+    }
+
+    if !state.gpos.is_empty() {
+        html.push_str(&format!(
+            "<h3>Group Policy Objects ({} total)</h3>\n<ul>\n",
+            state.gpos.len()
+        ));
+        for gpo in &state.gpos {
+            html.push_str(&format!("<li>{}</li>\n", escape_html(gpo)));
+        }
+        html.push_str("</ul>\n");
+    }
+
+    if !state.gpo_details.is_empty() {
+        html.push_str(&format!(
+            "<h4>GPO Details ({} parsed)</h4>\n",
+            state.gpo_details.len()
+        ));
+        html.push_str(
+            "<table class=\"info-table\">\n<thead><tr>\
+            <th>Name</th><th>SYSVOL Path</th><th>Version</th>\
+            <th>User Disabled</th><th>Computer Disabled</th>\
+            </tr></thead>\n<tbody>\n",
+        );
+        for gpo in &state.gpo_details {
+            let path = gpo.sysvol_path.as_deref().unwrap_or("-");
+            let ver = gpo
+                .version
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            html.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                escape_html(&gpo.name),
+                escape_html(path),
+                escape_html(&ver),
+                if gpo.user_settings_disabled {
+                    "✓"
+                } else {
+                    ""
+                },
+                if gpo.computer_settings_disabled {
+                    "✓"
+                } else {
+                    ""
+                },
+            ));
+        }
+        html.push_str("</tbody>\n</table>\n");
+    }
+}
+
+fn render_html_laps_inventory(html: &mut String, state: &EngagementState) {
+    if state.laps.is_empty() {
+        html.push_str("<h3>LAPS Configuration</h3>\n<p>No LAPS-enabled computers discovered or LAPS not deployed.</p>\n");
+        return;
+    }
+
+    html.push_str(&format!(
+        "<h3>LAPS Configuration ({} computers)</h3>\n",
+        state.laps.len()
+    ));
+    html.push_str(
+        "<table class=\"info-table\">\n<thead><tr>\
+        <th>Computer</th><th>DNS Name</th><th>Username</th>\
+        <th>Password Available</th><th>Expiration</th>\
+        </tr></thead>\n<tbody>\n",
+    );
+    for laps in &state.laps {
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            escape_html(&laps.computer_name),
+            escape_html(laps.dns_name.as_deref().unwrap_or("-")),
+            escape_html(&laps.username),
+            if laps.password.is_some() {
+                "✓"
+            } else {
+                "✗"
+            },
+            escape_html(laps.expiration.as_deref().unwrap_or("-")),
+        ));
+    }
+    html.push_str("</tbody>\n</table>\n");
+}
 
 #[cfg(test)]
 mod tests {

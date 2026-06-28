@@ -163,16 +163,18 @@ pub fn extract_relay_hashes(
                     continue;
                 }
 
+                let hash_type = hash.hash_type.clone();
+                let has_lm = hash.lm_response_hex.is_some();
                 result.hashes.push(hash);
                 result.successful_extractions += 1;
 
                 // Update stats
-                match &result.hashes.last().unwrap().hash_type {
+                match &hash_type {
                     HashType::NetNTLMv1 => result.stats.ntlmv1_count += 1,
                     HashType::NetNTLMv2 => result.stats.ntlmv2_count += 1,
                 }
 
-                if result.hashes.last().unwrap().lm_response_hex.is_some() {
+                if has_lm {
                     result.stats.with_lm_response += 1;
                 }
             }

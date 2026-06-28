@@ -4,6 +4,16 @@ use crate::error::Result;
 use colored::Colorize;
 use serde::Serialize;
 
+/// Standard JSON output envelope with status, data, metadata.
+/// All commands should use this for consistent --output-format json output.
+pub fn json_envelope<T: Serialize>(status: &str, data: &T) -> serde_json::Value {
+    serde_json::json!({
+        "status": status,
+        "data": data,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    })
+}
+
 /// Print data as formatted JSON
 pub fn print_json<T: Serialize>(data: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(data)?;

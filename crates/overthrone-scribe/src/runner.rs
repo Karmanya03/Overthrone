@@ -27,6 +27,8 @@ pub enum ReportFormat {
     Json,
     /// `Html` variant
     Html,
+    /// `Xlsx` variant
+    Xlsx,
     /// `All` variant
     All,
 }
@@ -38,6 +40,7 @@ impl std::fmt::Display for ReportFormat {
             Self::Pdf => write!(f, "PDF"),
             Self::Json => write!(f, "JSON"),
             Self::Html => write!(f, "HTML"),
+            Self::Xlsx => write!(f, "XLSX"),
             Self::All => write!(f, "All Formats"),
         }
     }
@@ -246,11 +249,16 @@ pub async fn generate_from_session(
             let path = generate_html(session, config).await?;
             output.files.push(path);
         }
+        ReportFormat::Xlsx => {
+            let path = generate_xlsx(session, config).await?;
+            output.files.push(path);
+        }
         ReportFormat::All => {
             output.files.push(generate_markdown(session, config).await?);
             output.files.push(generate_pdf(session, config).await?);
             output.files.push(generate_json(session, config).await?);
             output.files.push(generate_html(session, config).await?);
+            output.files.push(generate_xlsx(session, config).await?);
         }
     }
 
@@ -351,6 +359,19 @@ async fn generate_json(
         path.display(),
         json_session.len() as f64 / 1024.0
     );
+    Ok(path)
+}
+
+async fn generate_xlsx(
+    session: &EngagementSession,
+    config: &ReportConfig,
+) -> anyhow::Result<PathBuf> {
+    let path = config
+        .output_dir
+        .join(format!("{}.xlsx", config.filename_base));
+
+    crate::xlsx::generate_xlsx_report(session, &path)?;
+    info!("  {} XLSX: {}", "✓".green(), path.display());
     Ok(path)
 }
 

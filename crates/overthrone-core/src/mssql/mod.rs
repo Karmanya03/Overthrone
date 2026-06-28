@@ -50,6 +50,8 @@ pub struct MssqlConfig {
     pub timeout_secs: u64,
     /// Enable encryption
     pub encrypt: bool,
+    /// SOCKS5 proxy address (host:port)
+    pub proxy: Option<String>,
 }
 
 impl Default for MssqlConfig {
@@ -64,6 +66,7 @@ impl Default for MssqlConfig {
             trust_cert: true,
             timeout_secs: 30,
             encrypt: false,
+            proxy: None,
         }
     }
 }
@@ -95,6 +98,12 @@ impl MssqlConfig {
     /// Set the target database
     pub fn with_database(mut self, database: &str) -> Self {
         self.database = database.to_string();
+        self
+    }
+
+    /// Set SOCKS5 proxy address (host:port). Pass `None` to skip.
+    pub fn with_proxy(mut self, proxy: Option<&str>) -> Self {
+        self.proxy = proxy.map(|s| s.to_string());
         self
     }
 }
@@ -212,16 +221,33 @@ impl MssqlClient {
         debug!("Connecting to MSSQL at {}", addr);
 
         let timeout = Duration::from_secs(config.timeout_secs);
-        let stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
+        let stream: TcpStream = if let Some(ref proxy) = config.proxy {
+            let proxy_addr = proxy.clone();
+            let target_addr = addr.clone();
+            tokio::time::timeout(timeout, async move {
+                socks5_connect(&proxy_addr, &target_addr).await
+            })
             .await
             .map_err(|_| OverthroneError::Connection {
                 target: addr.clone(),
-                reason: "Connection timeout".to_string(),
+                reason: "SOCKS5 proxy connection timeout".to_string(),
             })?
             .map_err(|e| OverthroneError::Connection {
                 target: addr.clone(),
-                reason: format!("Failed to connect: {}", e),
-            })?;
+                reason: format!("SOCKS5 proxy connection failed: {}", e),
+            })?
+        } else {
+            tokio::time::timeout(timeout, TcpStream::connect(&addr))
+                .await
+                .map_err(|_| OverthroneError::Connection {
+                    target: addr.clone(),
+                    reason: "Connection timeout".to_string(),
+                })?
+                .map_err(|e| OverthroneError::Connection {
+                    target: addr.clone(),
+                    reason: format!("Failed to connect: {}", e),
+                })?
+        };
 
         let mut client = Self {
             stream: Some(stream),
@@ -1803,6 +1829,127 @@ fn parse_fixed_numeric(data: &[u8], _type_hint: u8) -> String {
 // ═══════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════
+// SOCKS5 proxy connect helper
+// ═══════════════════════════════════════════════════════════
+
+/// Connect to a target via a SOCKS5 proxy (RFC 1928).
+/// Performs no-auth handshake followed by a CONNECT request.
+async fn socks5_connect(proxy_addr: &str, target_addr: &str) -> Result<TcpStream> {
+    use tokio::io::AsyncWriteExt;
+
+    let stream = TcpStream::connect(proxy_addr)
+        .await
+        .map_err(|e| OverthroneError::Connection {
+            target: proxy_addr.to_string(),
+            reason: format!("SOCKS5 proxy unreachable: {}", e),
+        })?;
+
+    let mut s = stream;
+    let mut buf = [0u8; 512];
+
+    // Handshake: send supported auth methods (0x00 = no auth)
+    s.write_all(&[0x05, 0x01, 0x00])
+        .await
+        .map_err(|e| OverthroneError::Connection {
+            target: proxy_addr.to_string(),
+            reason: format!("SOCKS5 handshake write failed: {}", e),
+        })?;
+
+    let n = s
+        .read(&mut buf)
+        .await
+        .map_err(|e| OverthroneError::Connection {
+            target: proxy_addr.to_string(),
+            reason: format!("SOCKS5 handshake read failed: {}", e),
+        })?;
+
+    if n < 2 || buf[0] != 0x05 || buf[1] != 0x00 {
+        return Err(OverthroneError::Connection {
+            target: proxy_addr.to_string(),
+            reason: format!(
+                "SOCKS5 handshake rejected (method: {})",
+                if n > 1 { buf[1] } else { 0xFF }
+            ),
+        });
+    }
+
+    // CONNECT request
+    let (host, port_str) = match target_addr.rsplit_once(':') {
+        Some((h, p)) => (h, p),
+        None => {
+            return Err(OverthroneError::Connection {
+                target: target_addr.to_string(),
+                reason: "Invalid target address (no port)".to_string(),
+            });
+        }
+    };
+    let port: u16 = port_str.parse().map_err(|_| OverthroneError::Connection {
+        target: target_addr.to_string(),
+        reason: "Invalid target port".to_string(),
+    })?;
+
+    // Build CONNECT request: VER(1) + CMD(1) + RSV(1) + ATYP(1) + DST.ADDR(var) + DST.PORT(2)
+    let mut req = Vec::with_capacity(10 + host.len());
+    req.push(0x05); // VER
+    req.push(0x01); // CMD = CONNECT
+    req.push(0x00); // RSV
+
+    // Try IPv4 first, then domain name
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        req.push(0x01); // ATYP = IPv4
+        req.extend_from_slice(&ip.octets());
+    } else if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
+        req.push(0x04); // ATYP = IPv6
+        req.extend_from_slice(&ip.octets());
+    } else {
+        req.push(0x03); // ATYP = DOMAINNAME
+        req.push(host.len() as u8);
+        req.extend_from_slice(host.as_bytes());
+    }
+
+    req.extend_from_slice(&port.to_be_bytes());
+
+    s.write_all(&req)
+        .await
+        .map_err(|e| OverthroneError::Connection {
+            target: proxy_addr.to_string(),
+            reason: format!("SOCKS5 CONNECT write failed: {}", e),
+        })?;
+
+    let n = s
+        .read(&mut buf)
+        .await
+        .map_err(|e| OverthroneError::Connection {
+            target: proxy_addr.to_string(),
+            reason: format!("SOCKS5 CONNECT read failed: {}", e),
+        })?;
+
+    if n < 2 || buf[0] != 0x05 || buf[1] != 0x00 {
+        let reply_code = if n > 1 { buf[1] } else { 0xFF };
+        let reason = match reply_code {
+            0x01 => "General SOCKS server failure",
+            0x02 => "Connection not allowed by ruleset",
+            0x03 => "Network unreachable",
+            0x04 => "Host unreachable",
+            0x05 => "Connection refused by destination",
+            0x06 => "TTL expired",
+            0x07 => "Command not supported",
+            0x08 => "Address type not supported",
+            _ => "Unknown SOCKS error",
+        };
+        return Err(OverthroneError::Connection {
+            target: target_addr.to_string(),
+            reason: format!(
+                "SOCKS5 CONNECT failed: {} (code: 0x{:02X})",
+                reason, reply_code
+            ),
+        });
+    }
+
+    Ok(s)
+}
 
 #[cfg(test)]
 mod tests {

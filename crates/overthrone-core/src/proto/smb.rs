@@ -1177,7 +1177,12 @@ impl SmbSession {
         let bind_resp = self.pipe_transact("samr", &samr_bind).await?;
 
         if bind_resp.len() < 4 || bind_resp[2] != 12 {
-            return Err(OverthroneError::Smb("SAMR RPC bind failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SAMR RPC bind to {} failed: response {} bytes (expected >=4 with PDU type 12), target_user={}",
+                self.target,
+                bind_resp.len(),
+                target_user
+            )));
         }
 
         // SamrConnect (opnum 0) - get handle to SAM
@@ -1185,7 +1190,11 @@ impl SmbSession {
         let connect_resp = self.pipe_transact("samr", &connect_req).await?;
 
         if connect_resp.len() < 48 {
-            return Err(OverthroneError::Smb("SamrConnect failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SamrConnect on {} failed: response only {} bytes (expected >=48)",
+                self.target,
+                connect_resp.len()
+            )));
         }
         let sam_handle = &connect_resp[24..44];
 
@@ -1194,7 +1203,12 @@ impl SmbSession {
         let domain_resp = self.pipe_transact("samr", &open_domain_req).await?;
 
         if domain_resp.len() < 48 {
-            return Err(OverthroneError::Smb("SamrOpenDomain failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SamrOpenDomain on {} failed: response only {} bytes (expected >=48), domain={}",
+                self.target,
+                domain_resp.len(),
+                self.domain
+            )));
         }
         let domain_handle = &domain_resp[24..44];
 
@@ -1210,7 +1224,13 @@ impl SmbSession {
         let user_resp = self.pipe_transact("samr", &open_user_req).await?;
 
         if user_resp.len() < 48 {
-            return Err(OverthroneError::Smb("SamrOpenUser failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SamrOpenUser on {} failed: response {} bytes (expected >=48), rid={}, user={}",
+                self.target,
+                user_resp.len(),
+                rid,
+                target_user
+            )));
         }
         let user_handle = &user_resp[24..44];
 
@@ -2094,14 +2114,22 @@ impl SmbSession {
         let bind_resp = self.pipe_transact("samr", &samr_bind).await?;
 
         if bind_resp.len() < 4 || bind_resp[2] != 12 {
-            return Err(OverthroneError::Smb("SAMR RPC bind failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SAMR RPC bind to {} failed: response {} bytes (expected >=4 with PDU type 12)",
+                self.target,
+                bind_resp.len()
+            )));
         }
 
         let connect_req = build_samr_connect();
         let connect_resp = self.pipe_transact("samr", &connect_req).await?;
 
         if connect_resp.len() < 48 {
-            return Err(OverthroneError::Smb("SamrConnect failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SamrConnect on {} failed: response {} bytes (expected >=48)",
+                self.target,
+                connect_resp.len()
+            )));
         }
         let sam_handle = &connect_resp[24..44];
 
@@ -2109,7 +2137,12 @@ impl SmbSession {
         let domain_resp = self.pipe_transact("samr", &open_domain_req).await?;
 
         if domain_resp.len() < 48 {
-            return Err(OverthroneError::Smb("SamrOpenDomain failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SamrOpenDomain on {} failed: response {} bytes (expected >=48), domain={}",
+                self.target,
+                domain_resp.len(),
+                self.domain
+            )));
         }
         let domain_handle = &domain_resp[24..44];
 
@@ -2121,7 +2154,13 @@ impl SmbSession {
         let user_resp = self.pipe_transact("samr", &open_user_req).await?;
 
         if user_resp.len() < 48 {
-            return Err(OverthroneError::Smb("SamrOpenUser failed".to_string()));
+            return Err(OverthroneError::Smb(format!(
+                "SamrOpenUser on {} failed: response {} bytes (expected >=48), rid={}, user={}",
+                self.target,
+                user_resp.len(),
+                rid,
+                target_user
+            )));
         }
         let user_handle = &user_resp[24..44];
 

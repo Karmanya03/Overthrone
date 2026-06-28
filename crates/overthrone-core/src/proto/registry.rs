@@ -100,12 +100,19 @@ impl RegistryHive {
     /// Parse a registry hive from raw bytes (as saved by `reg save`)
     pub fn parse(data: Vec<u8>) -> Result<Self> {
         if data.len() < 0x1000 {
-            return Err(OverthroneError::custom("Registry hive too small"));
+            return Err(OverthroneError::custom(format!(
+                "Registry hive too small: {} bytes (expected >= {})",
+                data.len(),
+                0x1000
+            )));
         }
 
         // Validate regf header
         if &data[0..4] != REGF_MAGIC {
-            return Err(OverthroneError::custom("Invalid registry hive: bad magic"));
+            let actual = &data[0..4];
+            return Err(OverthroneError::custom(format!(
+                "Invalid registry hive at offset 0: expected magic regf, got {actual:02x?}"
+            )));
         }
 
         // Root cell offset is at header offset 0x24
@@ -225,7 +232,11 @@ impl RegistryHive {
     fn parse_nk_cell(&self, offset: usize) -> Result<RegKey> {
         // Cell layout: [size:i32][sig:u16][flags:u16][timestamp:u64]...
         if offset + 0x50 > self.data.len() {
-            return Err(OverthroneError::custom("NK cell out of bounds"));
+            return Err(OverthroneError::custom(format!(
+                "NK cell at offset 0x{offset:x}: out of bounds (needs {} bytes, data len {})",
+                offset + 0x50,
+                self.data.len()
+            )));
         }
 
         let sig = self.read_u16(offset + 4);
@@ -275,7 +286,11 @@ impl RegistryHive {
 
     fn parse_vk_cell(&self, offset: usize) -> Result<RegValue> {
         if offset + 0x18 > self.data.len() {
-            return Err(OverthroneError::custom("VK cell out of bounds"));
+            return Err(OverthroneError::custom(format!(
+                "VK cell at offset 0x{offset:x}: out of bounds (needs {} bytes, data len {})",
+                offset + 0x18,
+                self.data.len()
+            )));
         }
 
         let sig = self.read_u16(offset + 4);
@@ -774,7 +789,10 @@ impl RemoteRegistry {
     pub fn parse_open_hive_response(&mut self, response: &[u8]) -> Result<[u8; 20]> {
         // Skip to the handle (after RPC header ~24 bytes + status)
         if response.len() < 48 {
-            return Err(OverthroneError::custom("OpenHive response too short"));
+            return Err(OverthroneError::custom(format!(
+                "OpenHive response too short: {} bytes (expected >=48)",
+                response.len()
+            )));
         }
 
         let mut handle = [0u8; 20];
@@ -787,7 +805,10 @@ impl RemoteRegistry {
     /// Parse QueryValue response
     pub fn parse_query_value_response(&self, response: &[u8]) -> Result<RemoteRegValue> {
         if response.len() < 32 {
-            return Err(OverthroneError::custom("QueryValue response too short"));
+            return Err(OverthroneError::custom(format!(
+                "QueryValue response too short: {} bytes (expected >=32)",
+                response.len()
+            )));
         }
 
         // Parse the response structure

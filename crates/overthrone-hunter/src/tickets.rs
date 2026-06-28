@@ -363,7 +363,10 @@ fn write_ccache_credential(buf: &mut Vec<u8>, tgd: &TicketGrantingData) {
 /// (Simplified: extracts the first credential entry)
 pub fn from_ccache(data: &[u8]) -> Result<TicketGrantingData> {
     if data.len() < 4 {
-        return Err(OverthroneError::Kerberos("CCache too small".to_string()));
+        return Err(OverthroneError::Kerberos(format!(
+            "CCache too small: expected at least 4 bytes (file header), got {}",
+            data.len()
+        )));
     }
 
     // Verify magic

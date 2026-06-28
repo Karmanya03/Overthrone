@@ -6,6 +6,7 @@ use crate::mapper;
 use crate::narrative;
 use crate::session::{EngagementSession, EvidenceType, Finding, Severity};
 use chrono::Utc;
+use overthrone_pilot::goals::EngagementState;
 
 /// Render a complete Markdown report from the session
 pub fn render(session: &EngagementSession) -> String {
@@ -60,6 +61,11 @@ pub fn render(session: &EngagementSession) -> String {
     // ── Domain Statistics ──
     md.push_str("---\n\n## 8. Domain Statistics\n\n");
     render_domain_stats(&mut md, session);
+
+    // ── ADRecon Inventory Sections ──
+    if let Some(ref state) = session.engagement_state {
+        render_adrecon_inventory(&mut md, state);
+    }
 
     // ── Appendix: Action Log ──
     md.push_str("---\n\n## Appendix A: Full Action Log\n\n");
@@ -131,6 +137,11 @@ fn render_toc(md: &mut String, session: &EngagementSession) {
     md.push_str("6. [MITRE ATT&CK Mapping](#6-mitre-attck-mapping)\n");
     md.push_str("7. [Remediation Roadmap](#7-remediation-roadmap)\n");
     md.push_str("8. [Domain Statistics](#8-domain-statistics)\n");
+    if session.engagement_state.is_some() {
+        md.push_str("9. [Domain Inventory](#9-domain-inventory)\n");
+        md.push_str("10. [Service & Delegation Inventory](#10-service--delegation-inventory)\n");
+        md.push_str("11. [Configuration Audit](#11-configuration-audit)\n");
+    }
     md.push_str("- [Appendix A: Full Action Log](#appendix-a-full-action-log)\n");
     md.push_str("\n\n");
 }
@@ -406,4 +417,712 @@ fn render_action_log(md: &mut String, session: &EngagementSession) {
         ));
     }
     md.push('\n');
+}
+
+// ═══════════════════════════════════════════════════════════
+// ADRecon-Style Inventory Sections
+// ═══════════════════════════════════════════════════════════
+
+/// Render ADRecon-style inventory sections (9-11) when engagement state is available
+fn render_adrecon_inventory(md: &mut String, state: &EngagementState) {
+    // Section 9: Domain Inventory
+    md.push_str("---\n\n## 9. Domain Inventory\n\n");
+    render_user_inventory(md, state);
+    render_computer_inventory(md, state);
+    render_group_inventory(md, state);
+
+    // Section 10: Service & Delegation Inventory
+    md.push_str("---\n\n## 10. Service & Delegation Inventory\n\n");
+    render_spn_inventory(md, state);
+    render_trust_inventory(md, state);
+    render_delegation_inventory(md, state);
+
+    // Section 11: Configuration Audit
+    md.push_str("---\n\n## 11. Configuration Audit\n\n");
+    render_password_policy(md, state);
+    render_gpo_inventory(md, state);
+    render_laps_inventory(md, state);
+}
+
+/// Render user inventory table
+fn render_user_inventory(md: &mut String, state: &EngagementState) {
+    if state.users.is_empty() {
+        md.push_str("### User Inventory\n\nNo users discovered.\n\n");
+        return;
+    }
+
+    md.push_str(&format!(
+        "### User Inventory ({} total)\n\n",
+        state.users.len()
+    ));
+    md.push_str(
+        "| sAMAccountName | UPN | Enabled | Admin | SPN | PreAuth Disabled | Description |\n\
+         |---|---|---|---|---|---|---|\n",
+    );
+    let max_users = state.users.len().min(200);
+    for user in state.users.iter().take(max_users) {
+        let upn = user.user_principal_name.as_deref().unwrap_or("-");
+        let desc = user
+            .description
+            .as_deref()
+            .unwrap_or("-")
+            .chars()
+            .take(40)
+            .collect::<String>();
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            user.sam_account_name,
+            upn,
+            if user.enabled { "✓" } else { "✗" },
+            if user.admin_count { "✓" } else { "" },
+            if user.has_spn { "✓" } else { "" },
+            if user.dont_req_preauth { "✓" } else { "" },
+            desc,
+        ));
+    }
+    if state.users.len() > 200 {
+        md.push_str(&format!(
+            "\n*Showing 200 of {} users. Full list available in raw data.*\n\n",
+            state.users.len()
+        ));
+    }
+    md.push('\n');
+
+    let enabled = state.users.iter().filter(|u| u.enabled).count();
+    let admins = state.users.iter().filter(|u| u.admin_count).count();
+    let spns = state.users.iter().filter(|u| u.has_spn).count();
+    let no_preauth = state.users.iter().filter(|u| u.dont_req_preauth).count();
+    md.push_str(&format!(
+        "- **Enabled**: {} | **Disabled**: {} | **Admin accounts**: {}\n",
+        enabled,
+        state.users.len() - enabled,
+        admins
+    ));
+    md.push_str(&format!(
+        "- **SPN-enabled**: {} | **Pre-auth disabled**: {}\n\n",
+        spns, no_preauth
+    ));
+}
+
+/// Render computer inventory table
+fn render_computer_inventory(md: &mut String, state: &EngagementState) {
+    if state.computers.is_empty() {
+        md.push_str("### Computer Inventory\n\nNo computers discovered.\n\n");
+        return;
+    }
+
+    md.push_str(&format!(
+        "### Computer Inventory ({} total)\n\n",
+        state.computers.len()
+    ));
+    md.push_str(
+        "| sAMAccountName | DNS Hostname | Operating System | DC | Unconstrained Del. |\n\
+         |---|---|---|---|---|\n",
+    );
+    let max_computers = state.computers.len().min(200);
+    for comp in state.computers.iter().take(max_computers) {
+        let dns = comp.dns_hostname.as_deref().unwrap_or("-");
+        let os = comp
+            .operating_system
+            .as_deref()
+            .unwrap_or("Unknown")
+            .chars()
+            .take(40)
+            .collect::<String>();
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            comp.sam_account_name,
+            dns,
+            os,
+            if comp.is_dc { "✓" } else { "" },
+            if comp.unconstrained_delegation {
+                "✓"
+            } else {
+                ""
+            },
+        ));
+    }
+    if state.computers.len() > 200 {
+        md.push_str(&format!(
+            "\n*Showing 200 of {} computers. Full list available in raw data.*\n\n",
+            state.computers.len()
+        ));
+    }
+    md.push('\n');
+
+    let dcs = state.computers.iter().filter(|c| c.is_dc).count();
+    let uncon = state
+        .computers
+        .iter()
+        .filter(|c| c.unconstrained_delegation)
+        .count();
+    md.push_str(&format!(
+        "- **Domain Controllers**: {} | **Unconstrained Delegation**: {}\n\n",
+        dcs, uncon
+    ));
+}
+
+/// Render group membership inventory
+fn render_group_inventory(md: &mut String, state: &EngagementState) {
+    if state.groups.is_empty() {
+        md.push_str("### Group Membership\n\nNo groups discovered.\n\n");
+        return;
+    }
+
+    md.push_str(&format!(
+        "### Group Membership ({} groups)\n\n",
+        state.groups.len()
+    ));
+
+    let mut groups: Vec<(&String, &Vec<String>)> = state.groups.iter().collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    for (group, members) in groups.iter().take(50) {
+        md.push_str(&format!("- **{}** ({} members)\n", group, members.len()));
+        for member in members.iter().take(20) {
+            md.push_str(&format!("  - {}\n", member));
+        }
+        if members.len() > 20 {
+            md.push_str(&format!("  - *... and {} more*\n", members.len() - 20));
+        }
+    }
+    if groups.len() > 50 {
+        md.push_str(&format!(
+            "\n*Showing 50 of {} groups. Full list available in raw data.*\n\n",
+            groups.len()
+        ));
+    }
+    md.push('\n');
+}
+
+/// Render SPN inventory
+fn render_spn_inventory(md: &mut String, state: &EngagementState) {
+    if state.spn_map.is_empty() {
+        md.push_str("### Service Principal Names\n\nNo SPNs discovered.\n\n");
+        return;
+    }
+
+    md.push_str(&format!(
+        "### Service Principal Names ({} accounts with SPNs)\n\n",
+        state.spn_map.len()
+    ));
+    md.push_str("| Account | SPNs |\n|---|---|\n");
+    let mut spns: Vec<(&String, &Vec<String>)> = state.spn_map.iter().collect();
+    spns.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (account, spn_list) in spns.iter().take(100) {
+        let spn_str = spn_list.join(", ");
+        let truncated: String = spn_str.chars().take(200).collect();
+        if spn_str.len() > 200 {
+            md.push_str(&format!("| {} | {}… |\n", account, truncated));
+        } else {
+            md.push_str(&format!("| {} | {} |\n", account, truncated));
+        }
+    }
+    if spns.len() > 100 {
+        md.push_str(&format!(
+            "\n*Showing 100 of {} SPN-enabled accounts.*\n\n",
+            spns.len()
+        ));
+    }
+    md.push('\n');
+}
+
+/// Render trust relationships
+fn render_trust_inventory(md: &mut String, state: &EngagementState) {
+    if state.trusts.is_empty() {
+        md.push_str("### Trust Relationships\n\nNo domain trusts discovered.\n\n");
+        return;
+    }
+
+    md.push_str(&format!(
+        "### Trust Relationships ({} trusts)\n\n",
+        state.trusts.len()
+    ));
+    for trust in &state.trusts {
+        md.push_str(&format!("- {}\n", trust));
+    }
+    md.push('\n');
+}
+
+/// Render delegation configuration
+fn render_delegation_inventory(md: &mut String, state: &EngagementState) {
+    let has_uncon = !state.unconstrained_delegation.is_empty();
+    let has_con = !state.constrained_delegation.is_empty();
+    let has_rbcd = !state.rbcd_targets.is_empty();
+
+    if !has_uncon && !has_con && !has_rbcd {
+        md.push_str("### Delegation Configuration\n\nNo delegation configurations found.\n\n");
+        return;
+    }
+
+    md.push_str("### Delegation Configuration\n\n");
+
+    if has_uncon {
+        md.push_str(&format!(
+            "#### Unconstrained Delegation ({} hosts)\n\n",
+            state.unconstrained_delegation.len()
+        ));
+        for host in &state.unconstrained_delegation {
+            md.push_str(&format!("- {}\n", host));
+        }
+        md.push('\n');
+    }
+
+    if has_con {
+        md.push_str(&format!(
+            "#### Constrained Delegation ({} accounts)\n\n",
+            state.constrained_delegation.len()
+        ));
+        md.push_str("| Account | Type | Targets | Protocol Transition |\n|---|---|---|---|\n");
+        for d in &state.constrained_delegation {
+            md.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                d.account,
+                d.delegation_type,
+                d.targets.join(", "),
+                if d.protocol_transition { "✓" } else { "" },
+            ));
+        }
+        md.push('\n');
+    }
+
+    if has_rbcd {
+        md.push_str(&format!(
+            "#### Resource-Based Constrained Delegation ({} targets)\n\n",
+            state.rbcd_targets.len()
+        ));
+        for target in &state.rbcd_targets {
+            md.push_str(&format!("- {}\n", target));
+        }
+        md.push('\n');
+    }
+}
+
+/// Render password policy information
+fn render_password_policy(md: &mut String, state: &EngagementState) {
+    md.push_str("### Password Policy\n\n");
+
+    match &state.password_policy {
+        Some(policy) => {
+            md.push_str("| Setting | Value |\n|---|---|\n");
+            if let Some(v) = policy.min_password_length {
+                md.push_str(&format!("| Minimum Password Length | {} |\n", v));
+            }
+            if let Some(v) = policy.lockout_threshold {
+                md.push_str(&format!("| Lockout Threshold | {} attempts |\n", v));
+            }
+            if let Some(ref v) = policy.lockout_duration {
+                md.push_str(&format!("| Lockout Duration | {} |\n", v));
+            }
+            if let Some(ref v) = policy.lockout_observation_window {
+                md.push_str(&format!("| Lockout Observation Window | {} |\n", v));
+            }
+            if let Some(ref v) = policy.max_password_age {
+                md.push_str(&format!("| Maximum Password Age | {} |\n", v));
+            }
+            if let Some(ref v) = policy.min_password_age {
+                md.push_str(&format!("| Minimum Password Age | {} |\n", v));
+            }
+            if let Some(v) = policy.password_history_length {
+                md.push_str(&format!("| Password History Length | {} |\n", v));
+            }
+            md.push_str(&format!(
+                "| Password Complexity Enabled | {} |\n",
+                if policy.password_complexity_enabled {
+                    "✓"
+                } else {
+                    "✗"
+                }
+            ));
+            md.push_str(&format!(
+                "| Reversible Encryption Enabled | {} |\n",
+                if policy.reversible_encryption_enabled {
+                    "⚠"
+                } else {
+                    "✗"
+                }
+            ));
+            md.push_str(&format!(
+                "| Fine-Grained Password Policies | {} |\n",
+                policy.fine_grained_policy_count
+            ));
+            md.push('\n');
+
+            let issues: Vec<&str> = {
+                let mut v = Vec::new();
+                if policy.min_password_length.unwrap_or(0) < 8 {
+                    v.push("⚠ Minimum password length < 8 characters");
+                }
+                if policy.lockout_threshold.unwrap_or(0) == 0 {
+                    v.push("⚠ No account lockout policy configured");
+                }
+                if !policy.password_complexity_enabled {
+                    v.push("⚠ Password complexity not enforced");
+                }
+                if policy.reversible_encryption_enabled {
+                    v.push("⚠ Reversible encryption enabled (weak hash storage)");
+                }
+                v
+            };
+            if !issues.is_empty() {
+                md.push_str("**Security Issues:**\n\n");
+                for issue in issues {
+                    md.push_str(&format!("- {}\n", issue));
+                }
+                md.push('\n');
+            }
+        }
+        None => {
+            md.push_str("Password policy was not enumerated during the assessment.\n\n");
+        }
+    }
+}
+
+/// Render GPO inventory
+fn render_gpo_inventory(md: &mut String, state: &EngagementState) {
+    if state.gpos.is_empty() && state.gpo_details.is_empty() {
+        md.push_str("### Group Policy Objects\n\nNo GPOs discovered.\n\n");
+        return;
+    }
+
+    if !state.gpos.is_empty() {
+        md.push_str(&format!(
+            "### Group Policy Objects ({} total)\n\n",
+            state.gpos.len()
+        ));
+        for gpo in &state.gpos {
+            md.push_str(&format!("- {}\n", gpo));
+        }
+        md.push('\n');
+    }
+
+    if !state.gpo_details.is_empty() {
+        md.push_str(&format!(
+            "#### GPO Details ({} parsed)\n\n",
+            state.gpo_details.len()
+        ));
+        md.push_str("| Name | SYSVOL Path | Version | User Disabled | Computer Disabled |\n|---|---|---|---|---|\n");
+        for gpo in &state.gpo_details {
+            let path = gpo.sysvol_path.as_deref().unwrap_or("-");
+            let ver = gpo
+                .version
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            md.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                gpo.name,
+                path,
+                ver,
+                if gpo.user_settings_disabled {
+                    "✓"
+                } else {
+                    ""
+                },
+                if gpo.computer_settings_disabled {
+                    "✓"
+                } else {
+                    ""
+                },
+            ));
+        }
+        md.push('\n');
+    }
+}
+
+/// Render LAPS inventory
+fn render_laps_inventory(md: &mut String, state: &EngagementState) {
+    if state.laps.is_empty() {
+        md.push_str("### LAPS Configuration\n\nNo LAPS-enabled computers discovered or LAPS not deployed.\n\n");
+        return;
+    }
+
+    md.push_str(&format!(
+        "### LAPS Configuration ({} computers)\n\n",
+        state.laps.len()
+    ));
+    md.push_str("| Computer | DNS Name | Username | Password Available | Expiration |\n|---|---|---|---|---|\n");
+    for laps in &state.laps {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            laps.computer_name,
+            laps.dns_name.as_deref().unwrap_or("-"),
+            laps.username,
+            if laps.password.is_some() {
+                "✓"
+            } else {
+                "✗"
+            },
+            laps.expiration.as_deref().unwrap_or("-"),
+        ));
+    }
+    md.push('\n');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mock_state() -> EngagementState {
+        let mut state = EngagementState::new();
+        state.domain = Some("test.local".into());
+        state.dc_ip = Some("192.168.1.10".into());
+
+        state.users.push(overthrone_pilot::goals::DiscoveredUser {
+            sam_account_name: "Administrator".into(),
+            distinguished_name: "CN=Administrator,CN=Users,DC=test,DC=local".into(),
+            admin_count: true,
+            has_spn: false,
+            dont_req_preauth: false,
+            enabled: true,
+            description: Some("Built-in admin".into()),
+            bad_pwd_count: Some(0),
+            bad_pwd_time: None,
+            lockout_time: None,
+            logon_count: Some(128),
+            pwd_last_set: Some("2025-01-01".into()),
+            last_logon_timestamp: Some("2025-06-01".into()),
+            user_principal_name: Some("admin@test.local".into()),
+        });
+        state.users.push(overthrone_pilot::goals::DiscoveredUser {
+            sam_account_name: "svc_sql".into(),
+            distinguished_name: "CN=svc_sql,CN=Users,DC=test,DC=local".into(),
+            admin_count: false,
+            has_spn: true,
+            dont_req_preauth: false,
+            enabled: true,
+            description: Some("SQL service account".into()),
+            bad_pwd_count: None,
+            bad_pwd_time: None,
+            lockout_time: None,
+            logon_count: None,
+            pwd_last_set: None,
+            last_logon_timestamp: None,
+            user_principal_name: None,
+        });
+        state.users.push(overthrone_pilot::goals::DiscoveredUser {
+            sam_account_name: "jdoe".into(),
+            distinguished_name: "CN=John Doe,CN=Users,DC=test,DC=local".into(),
+            admin_count: false,
+            has_spn: false,
+            dont_req_preauth: true,
+            enabled: true,
+            description: None,
+            bad_pwd_count: None,
+            bad_pwd_time: None,
+            lockout_time: None,
+            logon_count: None,
+            pwd_last_set: None,
+            last_logon_timestamp: None,
+            user_principal_name: Some("jdoe@test.local".into()),
+        });
+
+        state
+            .computers
+            .push(overthrone_pilot::goals::DiscoveredComputer {
+                sam_account_name: "DC01$".into(),
+                dns_hostname: Some("dc01.test.local".into()),
+                operating_system: Some("Windows Server 2019 Datacenter".into()),
+                unconstrained_delegation: false,
+                is_dc: true,
+            });
+        state
+            .computers
+            .push(overthrone_pilot::goals::DiscoveredComputer {
+                sam_account_name: "SRV001$".into(),
+                dns_hostname: Some("srv001.test.local".into()),
+                operating_system: Some("Windows Server 2016 Standard".into()),
+                unconstrained_delegation: true,
+                is_dc: false,
+            });
+
+        state
+            .groups
+            .insert("Domain Admins".into(), vec!["Administrator".into()]);
+        state.groups.insert(
+            "Domain Users".into(),
+            vec!["Administrator".into(), "svc_sql".into(), "jdoe".into()],
+        );
+
+        state.spn_map.insert(
+            "svc_sql".into(),
+            vec!["MSSQLSvc/srv001.test.local:1433".into()],
+        );
+
+        state.trusts.push("child.test.local (outbound)".into());
+
+        state.unconstrained_delegation.push("SRV001$".into());
+        state
+            .constrained_delegation
+            .push(overthrone_pilot::goals::DelegationInfo {
+                account: "svc_deleg$".into(),
+                delegation_type: "constrained".into(),
+                targets: vec!["cifs/dc01.test.local".into()],
+                protocol_transition: true,
+            });
+        state.rbcd_targets.push("dc02$".into());
+
+        state.password_policy = Some(overthrone_pilot::goals::PasswordPolicyInfo {
+            min_password_length: Some(8),
+            lockout_threshold: Some(5),
+            lockout_duration: Some("30 minutes".into()),
+            lockout_observation_window: Some("30 minutes".into()),
+            max_password_age: Some("42 days".into()),
+            min_password_age: Some("1 day".into()),
+            password_history_length: Some(24),
+            password_complexity_enabled: true,
+            reversible_encryption_enabled: false,
+            fine_grained_policy_count: 0,
+        });
+
+        state.gpos.push("Default Domain Policy".into());
+        state.gpos.push("Default Domain Controllers Policy".into());
+        state.gpo_details.push(overthrone_pilot::goals::GpoInfo {
+            name: "Default Domain Policy".into(),
+            distinguished_name: Some("CN={...},CN=Policies,CN=System,DC=test,DC=local".into()),
+            sysvol_path: Some("\\\\test.local\\sysvol\\test.local\\Policies\\{...}".into()),
+            flags: Some(0),
+            version: Some(1),
+            when_changed: Some("2025-01-01".into()),
+            user_settings_disabled: false,
+            computer_settings_disabled: false,
+        });
+
+        state.laps.push(overthrone_pilot::goals::LapsInfo {
+            computer_name: "SRV001$".into(),
+            dns_name: Some("srv001.test.local".into()),
+            username: "testadmin".into(),
+            password: Some("TempP@ss123".into()),
+            expiration: Some("2025-07-01".into()),
+            source: "test.local".into(),
+            readable: true,
+        });
+
+        state
+    }
+
+    #[test]
+    fn test_render_user_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_user_inventory(&mut md, &state);
+        assert!(md.contains("User Inventory"));
+        assert!(md.contains("Administrator"));
+        assert!(md.contains("svc_sql"));
+        assert!(md.contains("jdoe"));
+        assert!(md.contains("admin@test.local"));
+        assert!(md.contains("Built-in admin"));
+    }
+
+    #[test]
+    fn test_render_computer_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_computer_inventory(&mut md, &state);
+        assert!(md.contains("Computer Inventory"));
+        assert!(md.contains("DC01$"));
+        assert!(md.contains("SRV001$"));
+        assert!(md.contains("Windows Server 2019"));
+    }
+
+    #[test]
+    fn test_render_group_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_group_inventory(&mut md, &state);
+        assert!(md.contains("Group Membership"));
+        assert!(md.contains("Domain Admins"));
+        assert!(md.contains("Domain Users"));
+    }
+
+    #[test]
+    fn test_render_spn_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_spn_inventory(&mut md, &state);
+        assert!(md.contains("Service Principal Names"));
+        assert!(md.contains("MSSQLSvc/srv001.test.local"));
+    }
+
+    #[test]
+    fn test_render_trust_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_trust_inventory(&mut md, &state);
+        assert!(md.contains("Trust Relationships"));
+        assert!(md.contains("child.test.local"));
+    }
+
+    #[test]
+    fn test_render_password_policy() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_password_policy(&mut md, &state);
+        assert!(md.contains("Password Policy"));
+        assert!(md.contains("Minimum Password Length"));
+        assert!(md.contains("42 days"));
+    }
+
+    #[test]
+    fn test_render_gpo_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_gpo_inventory(&mut md, &state);
+        assert!(md.contains("Group Policy"));
+        assert!(md.contains("Default Domain Policy"));
+    }
+
+    #[test]
+    fn test_render_laps_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_laps_inventory(&mut md, &state);
+        assert!(md.contains("LAPS Configuration"));
+        assert!(md.contains("SRV001$"));
+        assert!(md.contains("srv001.test.local"));
+    }
+
+    #[test]
+    fn test_render_delegation_inventory() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_delegation_inventory(&mut md, &state);
+        assert!(md.contains("Delegation Configuration"));
+        assert!(md.contains("Unconstrained Delegation"));
+        assert!(md.contains("SRV001$"));
+        assert!(md.contains("Constrained Delegation"));
+        assert!(md.contains("Resource-Based Constrained Delegation"));
+    }
+
+    #[test]
+    fn test_render_empty_state() {
+        let state = EngagementState::new();
+        let mut md = String::new();
+        render_user_inventory(&mut md, &state);
+        assert!(md.contains("No users discovered"));
+        md.clear();
+        render_computer_inventory(&mut md, &state);
+        assert!(md.contains("No computers discovered"));
+        md.clear();
+        render_password_policy(&mut md, &state);
+        assert!(md.contains("not enumerated"));
+    }
+
+    #[test]
+    fn test_adrecon_inventory_renders_sections() {
+        let state = mock_state();
+        let mut md = String::new();
+        render_adrecon_inventory(&mut md, &state);
+        assert!(md.contains("## 9. Domain Inventory"));
+        assert!(md.contains("## 10. Service & Delegation Inventory"));
+        assert!(md.contains("## 11. Configuration Audit"));
+        assert!(md.contains("User Inventory"));
+        assert!(md.contains("Computer Inventory"));
+        assert!(md.contains("Group Membership"));
+        assert!(md.contains("Service Principal Names"));
+        assert!(md.contains("Trust Relationships"));
+        assert!(md.contains("Delegation Configuration"));
+        assert!(md.contains("Password Policy"));
+        assert!(md.contains("Group Policy Objects"));
+        assert!(md.contains("LAPS Configuration"));
+    }
 }

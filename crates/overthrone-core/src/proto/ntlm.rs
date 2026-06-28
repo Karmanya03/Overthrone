@@ -232,19 +232,22 @@ pub fn parse_secretsdump_line(line: &str) -> Result<(String, u32, Vec<u8>)> {
 /// This appears in virtually all modern Windows environments since
 /// LM hashes are disabled by default on Vista+.
 pub fn lm_hash_empty() -> Vec<u8> {
-    hex::decode("aad3b435b51404eeaad3b435b51404ee").unwrap()
+    hex::decode("aad3b435b51404eeaad3b435b51404ee")
+        .expect("compile-time hex constant for empty LM hash")
 }
 
 /// Check if an NT hash represents an empty/blank password.
 pub fn is_empty_nt_hash(hash: &[u8]) -> bool {
     // NT hash of "" = 31d6cfe0d16ae931b73c59d7e0c089c0
-    let empty_nt = hex::decode("31d6cfe0d16ae931b73c59d7e0c089c0").unwrap();
+    let empty_nt = hex::decode("31d6cfe0d16ae931b73c59d7e0c089c0")
+        .expect("compile-time hex constant for empty NT hash");
     hash == empty_nt.as_slice()
 }
 
 /// Check if an LM hash is the "disabled/empty" sentinel value.
 pub fn is_empty_lm_hash(hash: &[u8]) -> bool {
-    let empty_lm = hex::decode("aad3b435b51404eeaad3b435b51404ee").unwrap();
+    let empty_lm = hex::decode("aad3b435b51404eeaad3b435b51404ee")
+        .expect("compile-time hex constant for empty LM hash");
     hash == empty_lm.as_slice()
 }
 
@@ -337,14 +340,19 @@ pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
 /// Parse NTLM Type 2 (Challenge) message from server
 pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
     if data.len() < 48 {
-        return Err(OverthroneError::Ntlm(
-            "Challenge message too short".to_string(),
-        ));
+        return Err(OverthroneError::Ntlm(format!(
+            "NTLM Challenge (Type 2) too short: {} bytes (expected >=48)",
+            data.len()
+        )));
     }
 
     // Verify signature
     if &data[0..8] != NTLM_SIGNATURE {
-        return Err(OverthroneError::Ntlm("Invalid NTLM signature".to_string()));
+        let first_bytes = &data[0..8.min(data.len())];
+        return Err(OverthroneError::Ntlm(format!(
+            "Invalid NTLM signature: expected 'NTLMSSP\\x00', got {:02x?}",
+            first_bytes
+        )));
     }
 
     // Check message type

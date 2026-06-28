@@ -6,6 +6,7 @@
 use crate::narrative;
 use crate::session::{EngagementSession, EvidenceType, Finding, Severity};
 use anyhow::Context;
+use overthrone_pilot::goals::EngagementState;
 use printpdf::*;
 
 /// PDF page dimensions (A4)
@@ -324,6 +325,11 @@ pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
         ctx.skip_lines(1);
     }
 
+    // ── ADRecon Inventory Pages ──
+    if let Some(ref state) = session.engagement_state {
+        render_pdf_adrecon_inventory(&mut ctx, state);
+    }
+
     // Finalize all pages and save
     let pages = ctx.finish();
     let mut warnings = Vec::new();
@@ -532,6 +538,303 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         for r in &finding.references {
             ctx.write_body(&format!("  • {}", r));
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ADRecon-Style PDF Inventory Pages
+// ═══════════════════════════════════════════════════════════
+
+fn render_pdf_adrecon_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    // Section 9: Domain Inventory
+    ctx.new_page("Domain Inventory");
+    render_pdf_user_inventory(ctx, state);
+    ctx.new_page("Computers & Groups");
+    render_pdf_computer_inventory(ctx, state);
+    render_pdf_group_inventory(ctx, state);
+
+    // Section 10: Service & Delegation Inventory
+    ctx.new_page("Service & Delegation");
+    render_pdf_spn_inventory(ctx, state);
+    ctx.new_page("Trusts & Delegation");
+    render_pdf_trust_inventory(ctx, state);
+    render_pdf_delegation_inventory(ctx, state);
+
+    // Section 11: Configuration Audit
+    ctx.new_page("Configuration Audit");
+    render_pdf_password_policy(ctx, state);
+    ctx.new_page("GPOs & LAPS");
+    render_pdf_gpo_inventory(ctx, state);
+    render_pdf_laps_inventory(ctx, state);
+}
+
+fn render_pdf_user_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    ctx.write_heading1("9. Domain Inventory");
+    ctx.write_heading2(&format!("User Inventory ({} total)", state.users.len()));
+    ctx.skip_lines(1);
+
+    if state.users.is_empty() {
+        ctx.write_body("No users discovered.");
+        return;
+    }
+
+    let max_users = state.users.len().min(50);
+    for user in state.users.iter().take(max_users) {
+        let upn = user.user_principal_name.as_deref().unwrap_or("-");
+        let flags = format!(
+            "{}{}{}{}",
+            if user.enabled { "E" } else { "D" },
+            if user.admin_count { "A" } else { "" },
+            if user.has_spn { "S" } else { "" },
+            if user.dont_req_preauth { "P" } else { "" },
+        );
+        ctx.write_body(&format!(
+            "  {} ({}) [{}]",
+            user.sam_account_name, upn, flags
+        ));
+    }
+    if state.users.len() > 50 {
+        ctx.write_body(&format!("... and {} more users", state.users.len() - 50));
+    }
+    ctx.skip_lines(1);
+
+    let enabled = state.users.iter().filter(|u| u.enabled).count();
+    let admins = state.users.iter().filter(|u| u.admin_count).count();
+    let spns = state.users.iter().filter(|u| u.has_spn).count();
+    let no_preauth = state.users.iter().filter(|u| u.dont_req_preauth).count();
+    ctx.write_body(&format!(
+        "Enabled: {} | Disabled: {} | Admins: {} | SPNs: {} | No-PreAuth: {}",
+        enabled,
+        state.users.len() - enabled,
+        admins,
+        spns,
+        no_preauth,
+    ));
+}
+
+fn render_pdf_computer_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    ctx.write_heading2(&format!(
+        "Computer Inventory ({} total)",
+        state.computers.len()
+    ));
+
+    if state.computers.is_empty() {
+        ctx.write_body("No computers discovered.");
+        return;
+    }
+
+    let max_computers = state.computers.len().min(50);
+    for comp in state.computers.iter().take(max_computers) {
+        let dns = comp.dns_hostname.as_deref().unwrap_or("-");
+        let os = comp.operating_system.as_deref().unwrap_or("Unknown");
+        let flags = format!(
+            "{}{}",
+            if comp.is_dc { "DC " } else { "" },
+            if comp.unconstrained_delegation {
+                "UCD "
+            } else {
+                ""
+            },
+        );
+        ctx.write_body(&format!(
+            "  {} ({}) [{}] - {}",
+            comp.sam_account_name, dns, flags, os
+        ));
+    }
+    if state.computers.len() > 50 {
+        ctx.write_body(&format!(
+            "... and {} more computers",
+            state.computers.len() - 50
+        ));
+    }
+}
+
+fn render_pdf_group_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    ctx.write_heading2(&format!("Group Membership ({} groups)", state.groups.len()));
+
+    if state.groups.is_empty() {
+        ctx.write_body("No groups discovered.");
+        return;
+    }
+
+    let mut groups: Vec<(&String, &Vec<String>)> = state.groups.iter().collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (group, members) in groups.iter().take(20) {
+        ctx.write_body(&format!("  {} ({} members)", group, members.len()));
+    }
+}
+
+fn render_pdf_spn_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    ctx.write_heading1("10. Service & Delegation Inventory");
+    ctx.write_heading2(&format!(
+        "Service Principal Names ({} accounts)",
+        state.spn_map.len()
+    ));
+
+    if state.spn_map.is_empty() {
+        ctx.write_body("No SPNs discovered.");
+        return;
+    }
+
+    let mut spns: Vec<(&String, &Vec<String>)> = state.spn_map.iter().collect();
+    spns.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (account, spn_list) in spns.iter().take(30) {
+        ctx.write_body(&format!("  {}: {}", account, spn_list.join(", ")));
+    }
+    if spns.len() > 30 {
+        ctx.write_body(&format!("... and {} more", spns.len() - 30));
+    }
+}
+
+fn render_pdf_trust_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    ctx.write_heading2(&format!(
+        "Trust Relationships ({} trusts)",
+        state.trusts.len()
+    ));
+
+    if state.trusts.is_empty() {
+        ctx.write_body("No domain trusts discovered.");
+        return;
+    }
+
+    for trust in &state.trusts {
+        ctx.write_body(&format!("  - {}", trust));
+    }
+}
+
+fn render_pdf_delegation_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    let has_uncon = !state.unconstrained_delegation.is_empty();
+    let has_con = !state.constrained_delegation.is_empty();
+    let has_rbcd = !state.rbcd_targets.is_empty();
+
+    if !has_uncon && !has_con && !has_rbcd {
+        ctx.write_body("No delegation configurations found.");
+        return;
+    }
+
+    if has_uncon {
+        ctx.write_heading2(&format!(
+            "Unconstrained Delegation ({} hosts)",
+            state.unconstrained_delegation.len()
+        ));
+        for host in &state.unconstrained_delegation {
+            ctx.write_body(&format!("  - {}", host));
+        }
+        ctx.skip_lines(1);
+    }
+
+    if has_con {
+        ctx.write_heading2(&format!(
+            "Constrained Delegation ({} accounts)",
+            state.constrained_delegation.len()
+        ));
+        for d in &state.constrained_delegation {
+            ctx.write_body(&format!(
+                "  {} -> {} [{}]",
+                d.account,
+                d.targets.join(", "),
+                d.delegation_type
+            ));
+        }
+        ctx.skip_lines(1);
+    }
+
+    if has_rbcd {
+        ctx.write_heading2(&format!(
+            "Resource-Based Constrained Delegation ({} targets)",
+            state.rbcd_targets.len()
+        ));
+        for target in &state.rbcd_targets {
+            ctx.write_body(&format!("  - {}", target));
+        }
+    }
+}
+
+fn render_pdf_password_policy(ctx: &mut PdfContext, state: &EngagementState) {
+    ctx.write_heading1("11. Configuration Audit");
+
+    match &state.password_policy {
+        Some(policy) => {
+            ctx.write_heading2("Password Policy");
+            if let Some(v) = policy.min_password_length {
+                ctx.write_body(&format!("  Min Password Length: {}", v));
+            }
+            if let Some(v) = policy.lockout_threshold {
+                ctx.write_body(&format!("  Lockout Threshold: {} attempts", v));
+            }
+            if let Some(ref v) = policy.lockout_duration {
+                ctx.write_body(&format!("  Lockout Duration: {}", v));
+            }
+            if let Some(ref v) = policy.lockout_observation_window {
+                ctx.write_body(&format!("  Lockout Window: {}", v));
+            }
+            if let Some(ref v) = policy.max_password_age {
+                ctx.write_body(&format!("  Max Password Age: {}", v));
+            }
+            if let Some(ref v) = policy.min_password_age {
+                ctx.write_body(&format!("  Min Password Age: {}", v));
+            }
+            if let Some(v) = policy.password_history_length {
+                ctx.write_body(&format!("  Password History: {}", v));
+            }
+            ctx.write_body(&format!(
+                "  Complexity: {} | Reversible Encryption: {}",
+                if policy.password_complexity_enabled {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                },
+                if policy.reversible_encryption_enabled {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                },
+            ));
+        }
+        None => {
+            ctx.write_body("Password policy was not enumerated.");
+        }
+    }
+}
+
+fn render_pdf_gpo_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    if state.gpos.is_empty() && state.gpo_details.is_empty() {
+        ctx.write_body("No GPOs discovered.");
+        return;
+    }
+
+    ctx.write_heading2(&format!(
+        "Group Policy Objects ({} total)",
+        state.gpos.len()
+    ));
+    for gpo in &state.gpos {
+        ctx.write_body(&format!("  - {}", gpo));
+    }
+}
+
+fn render_pdf_laps_inventory(ctx: &mut PdfContext, state: &EngagementState) {
+    if state.laps.is_empty() {
+        ctx.write_body("No LAPS-enabled computers discovered or LAPS not deployed.");
+        return;
+    }
+
+    ctx.write_heading2(&format!(
+        "LAPS Configuration ({} computers)",
+        state.laps.len()
+    ));
+    for laps in &state.laps {
+        ctx.write_body(&format!(
+            "  {} ({}) - user: {} - pwd: {} - expires: {}",
+            laps.computer_name,
+            laps.dns_name.as_deref().unwrap_or("-"),
+            laps.username,
+            if laps.password.is_some() {
+                "Available"
+            } else {
+                "Not readable"
+            },
+            laps.expiration.as_deref().unwrap_or("N/A"),
+        ));
     }
 }
 

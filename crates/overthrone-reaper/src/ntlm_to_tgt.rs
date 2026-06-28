@@ -124,7 +124,12 @@ pub async fn run_ntlm_to_tgt(config: &NtlmToTgtConfig) -> Result<NtlmToTgtResult
         let ntlm_hash = ntlm_hash.clone();
 
         let handle = tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = sem.acquire().await.map_err(|e| {
+                (
+                    "<internal>".to_string(),
+                    format!("Semaphore acquire failed: {e}"),
+                )
+            })?;
             process_single_ntlm(&config, &username, &ntlm_hash).await
         });
 

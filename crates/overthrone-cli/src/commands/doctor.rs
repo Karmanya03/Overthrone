@@ -1,14 +1,13 @@
 //! Environment diagnostics command — `ovt doctor`
 //!
 //! Checks your environment for required dependencies, network connectivity,
-//! and platform-specific features. Because knowing is half the battle.
-//! (The other half is actually hacking things, but we can't help you there.)
+//! and platform-specific features. Provides a protocol-level status summary
+//! that tells you which Overthrone modules will work against the target DC.
 
 use crate::banner;
 use chrono::{NaiveDateTime, Utc};
 use colored::Colorize;
-use std::net::TcpStream;
-
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// Result of a single diagnostic check
@@ -19,8 +18,9 @@ pub struct CheckResult {
     pub hint: Option<String>,
 }
 
-/// Run all environment diagnostics
-pub async fn run(checks: Option<Vec<String>>) -> i32 {
+/// Run all environment diagnostics.
+/// If `dc` is provided, also runs full DC connectivity checks with a capability summary.
+pub async fn run(checks: Option<Vec<String>>, dc: Option<&str>) -> i32 {
     banner::print_module_banner("DOCTOR");
 
     println!(
@@ -32,10 +32,9 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
         check_platform(),
         check_kerberos_config(),
         check_winrm_adapter(),
-        check_network_ports(),
     ];
 
-    let results: Vec<CheckResult> = if let Some(specific) = checks {
+    let mut results: Vec<CheckResult> = if let Some(specific) = checks {
         all_checks
             .into_iter()
             .filter(|c| {
@@ -48,10 +47,10 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
         all_checks
     };
 
-    // Print results
     let mut passed = 0usize;
     let mut failed = 0usize;
 
+    // Print local environment checks
     for result in &results {
         let status = if result.passed {
             passed += 1;
@@ -60,12 +59,42 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
             failed += 1;
             "✗".red().bold()
         };
-
         println!("  {} {}: {}", status, result.name, result.message);
-
         if let Some(ref hint) = result.hint {
             println!("    {} {}", "→".yellow(), hint.yellow().dimmed());
         }
+    }
+
+    // DC connectivity checks (if target provided)
+    if let Some(dc_host) = dc {
+        println!();
+        println!(
+            "  {} Checking DC: {}\n",
+            "▸".bright_black(),
+            dc_host.cyan().bold()
+        );
+
+        let dc_results = check_dc_connectivity(dc_host).await;
+
+        for result in &dc_results {
+            let status = if result.passed {
+                passed += 1;
+                "✓".green().bold()
+            } else {
+                failed += 1;
+                "✗".red().bold()
+            };
+            println!("  {} {}", status, result.message);
+            if let Some(ref hint) = result.hint {
+                println!("    {} {}", "→".yellow(), hint.yellow().dimmed());
+            }
+        }
+
+        // Capability summary
+        println!();
+        println!("  {} Capability Summary", "▸".bright_black().bold());
+        print_capability_summary(&dc_results);
+        results.extend(dc_results);
     }
 
     // Summary
@@ -91,6 +120,141 @@ pub async fn run(checks: Option<Vec<String>>) -> i32 {
     }
 
     if failed > 0 { 1 } else { 0 }
+}
+
+/// Print a capability summary table showing which Overthrone modules are available
+/// based on DC protocol check results.
+fn print_capability_summary(results: &[CheckResult]) {
+    // Match port checks by suffix (names are like "10.0.0.1:389") and protocol checks by exact name
+    let port_open = |port: u16| -> bool {
+        let suffix = format!(":{port}");
+        results
+            .iter()
+            .any(|r| r.name.ends_with(&suffix) && r.passed)
+    };
+    let check_pass = |name: &str| -> bool { results.iter().any(|r| r.name == name && r.passed) };
+
+    let rdap = port_open(389);
+    let _ldaps = port_open(636);
+    let smb = port_open(445);
+    let kerberos = port_open(88) && check_pass("kdc_probe");
+    let winrm = port_open(5985) || port_open(5986);
+    let rpc = port_open(135);
+    let dns_ok = check_pass("dns_resolution");
+    let skew_ok = check_pass("clock_skew");
+
+    // Define all Overthrone capabilities with their protocol requirements
+    let capabilities: Vec<(&str, &str, bool, &str)> = vec![
+        (
+            "Enumeration",
+            "LDAP on 389",
+            rdap,
+            "ovt enum, ovt ldap search",
+        ),
+        (
+            "Shadow Credentials",
+            "LDAP + Kerberos",
+            rdap && kerberos,
+            "ovt shadow-cred add",
+        ),
+        (
+            "DCSync",
+            "RPC on 135 + Kerberos",
+            rpc && kerberos,
+            "ovt kerberos dcsync",
+        ),
+        (
+            "Kerberoasting",
+            "Kerberos on 88",
+            kerberos && skew_ok,
+            "ovt kerberos roast",
+        ),
+        (
+            "AS-REP Roasting",
+            "Kerberos on 88",
+            kerberos && skew_ok,
+            "ovt kerberos asreproast",
+        ),
+        (
+            "TGT/TGS",
+            "Kerberos on 88",
+            kerberos && skew_ok,
+            "ovt kerberos get-tgt, get-tgs",
+        ),
+        ("SMB Exec", "SMB on 445", smb, "ovt smb exec"),
+        ("SMB Spider", "SMB on 445", smb, "ovt smb spider"),
+        ("WinRM Exec", "WinRM 5985/6", winrm, "ovt winrm exec"),
+        (
+            "NTLM Relay",
+            "SMB + LDAP on 389",
+            smb && rdap,
+            "ovt ntlm relay",
+        ),
+        (
+            "NTLM Capture",
+            "SMB + LDAP on 389",
+            smb && rdap,
+            "ovt ntlm capture",
+        ),
+        (
+            "Spoofing",
+            "DNS + WPAD + SMB",
+            dns_ok && smb,
+            "ovt ntlm capture --wpad",
+        ),
+        (
+            "Forge Tickets",
+            "N/A (local)",
+            true,
+            "ovt forge golden/silver/diamond/skeleton",
+        ),
+        ("ADCS Relay", "SMB on 445", smb, "ovt ntlm relay --adcs"),
+        (
+            "BloodHound",
+            "LDAP on 389",
+            rdap,
+            "ovt bh analyze --source ldap",
+        ),
+    ];
+
+    println!(
+        "  {:25} {:15}  {:20}  {}",
+        "module".cyan(),
+        "proto".cyan(),
+        "ready".cyan(),
+        "commands".cyan()
+    );
+    println!("  {}", "─".repeat(95).dimmed());
+
+    for (module, proto, ready, cmds) in &capabilities {
+        let status = if *ready {
+            "✓".green().bold()
+        } else {
+            "✗".red().bold()
+        };
+        println!(
+            "  {:25} {:15}  {} {:17}  {}",
+            module,
+            proto,
+            status,
+            if *ready { "ready" } else { "blocked" },
+            cmds.dimmed(),
+        );
+    }
+
+    println!();
+    println!(
+        "  {} Legend: ✓ = available, ✗ = blocked by failed prerequisite",
+        "ℹ".bright_black()
+    );
+
+    // If clock skew is bad, warn about Kerberos globally
+    if !skew_ok {
+        println!(
+            "  {} WARNING: Clock skew >5 min — ALL Kerberos operations will fail. Sync your clock first.",
+            "!".yellow().bold()
+        );
+    }
 }
 
 /// Check platform and available features
@@ -171,45 +335,6 @@ fn check_winrm_adapter() -> CheckResult {
     }
 }
 
-/// Check network connectivity to common AD ports
-fn check_network_ports() -> CheckResult {
-    // Default ports to check (localhost for now, user should specify DC)
-    let ports = [
-        (389, "LDAP"),
-        (636, "LDAPS"),
-        (445, "SMB"),
-        (5985, "WinRM HTTP"),
-        (5986, "WinRM HTTPS"),
-        (88, "Kerberos"),
-    ];
-
-    let mut available = Vec::new();
-    let mut unavailable = Vec::new();
-
-    for (port, name) in &ports {
-        // We check if we can bind to the port locally (not ideal, but safe)
-        // For actual DC connectivity, user should test with actual target
-        if let Ok(addr) = format!("127.0.0.1:{}", port).parse::<std::net::SocketAddr>() {
-            if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-                available.push(*name);
-            } else {
-                unavailable.push(*name);
-            }
-        } else {
-            tracing::warn!("Failed to parse address for port {}", port);
-            unavailable.push(*name);
-        }
-    }
-
-    // This check always passes since we're not actually testing a DC
-    CheckResult {
-        name: "network".to_string(),
-        passed: true,
-        message: "ports checked (use --dc to test specific DC)".to_string(),
-        hint: Some("Run 'ovt doctor --dc 10.10.10.1' to test actual DC connectivity".to_string()),
-    }
-}
-
 /// Run connectivity checks against a specific DC
 pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
     let ports = [
@@ -271,6 +396,21 @@ pub async fn check_dc_connectivity(dc: &str) -> Vec<CheckResult> {
 
     // NTLM authentication policy check
     results.push(check_ntlm_policy(dc).await);
+
+    // SMB protocol negotiation check
+    results.push(check_smb_negotiate(dc).await);
+
+    // DNS resolution check
+    results.push(check_dns_resolution(dc).await);
+
+    // Kerberos protocol-level probe
+    results.push(check_kdc_probe(dc).await);
+
+    // WinRM protocol-level probe
+    results.push(check_winrm_probe(dc).await);
+
+    // RPC Endpoint Mapper probe
+    results.push(check_epm_probe(dc).await);
 
     results
 }
@@ -698,5 +838,199 @@ async fn check_ntlm_policy(dc_ip: &str) -> CheckResult {
             message: format!("NTLM appears available on {os_label}"),
             hint: None,
         }
+    }
+}
+
+/// Perform SMB protocol negotiation against the target DC.
+/// Tests SMB2 transport and reports highest dialect and signing configuration.
+async fn check_smb_negotiate(dc: &str) -> CheckResult {
+    match overthrone_core::proto::netbios::smb_negotiate(dc).await {
+        Ok(result) => {
+            let mut details = vec![format!("dialect: {}", result.highest_dialect)];
+            if result.signing_required {
+                details.push("signing: REQUIRED".to_string());
+            } else if result.signing_enabled {
+                details.push("signing: enabled (not required)".to_string());
+            } else {
+                details.push("signing: disabled".to_string());
+            }
+            if let Some(ref os) = result.native_os {
+                details.push(format!("OS: {os}"));
+            }
+            CheckResult {
+                name: "smb_negotiate".to_string(),
+                passed: true,
+                message: details.join(", "),
+                hint: if result.signing_required {
+                    Some("SMB signing is required. NTLM relay to SMB will fail. Use Kerberos-based relay instead.".to_string())
+                } else {
+                    None
+                },
+            }
+        }
+        Err(e) => CheckResult {
+            name: "smb_negotiate".to_string(),
+            passed: false,
+            message: format!("SMB2 negotiate failed: {e}"),
+            hint: Some("Ensure port 445 is open and the target is running SMB2+".to_string()),
+        },
+    }
+}
+
+/// Check DNS resolution for the target DC.
+/// Tests forward resolution and LDAP/Kerberos SRV record availability.
+async fn check_dns_resolution(dc: &str) -> CheckResult {
+    // Forward resolution
+    let forward_ok = match format!("{dc}:0").to_socket_addrs() {
+        Ok(mut addrs) => addrs.any(|a| a.is_ipv4() || a.is_ipv6()),
+        Err(_) => false,
+    };
+
+    // Try SRV lookups via system DNS
+    let srv_results = match overthrone_core::proto::dns::DnsResolver::system() {
+        Ok(resolver) => {
+            let ldap_srv = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                resolver.lookup_srv("_ldap._tcp"),
+            )
+            .await;
+
+            let kerb_srv = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                resolver.lookup_srv("_kerberos._tcp"),
+            )
+            .await;
+
+            match (ldap_srv, kerb_srv) {
+                (Ok(Ok(ldap)), Ok(Ok(kerb))) => {
+                    let l = ldap.len();
+                    let k = kerb.len();
+                    Some(format!(
+                        "LDAP SRV: {l} record(s), Kerberos SRV: {k} record(s)"
+                    ))
+                }
+                _ => None,
+            }
+        }
+        Err(_) => None,
+    };
+
+    let message = if forward_ok {
+        let mut msg = "forward resolution OK".to_string();
+        if let Some(srv) = &srv_results {
+            msg.push_str(&format!(", {srv}"));
+        }
+        msg
+    } else {
+        "forward resolution FAILED".to_string()
+    };
+
+    CheckResult {
+        name: "dns_resolution".to_string(),
+        passed: forward_ok,
+        message,
+        hint: if !forward_ok {
+            Some("DC hostname does not resolve. Check DNS configuration or use --dc with an IP address.".to_string())
+        } else if srv_results.is_none() {
+            Some("SRV records not resolvable via system DNS. Kerberos DNS discovery may not work without proper DNS configuration.".to_string())
+        } else {
+            None
+        },
+    }
+}
+
+/// Send a minimal Kerberos AS-REQ to the target DC to verify the KDC is alive
+/// and processing requests at the protocol level.
+async fn check_kdc_probe(dc: &str) -> CheckResult {
+    match overthrone_core::proto::kerberos::probe_kdc(dc).await {
+        Ok(status) => {
+            let passed = !status.contains("unreachable");
+            let hint = if !passed {
+                Some("Ensure port 88 (TCP/UDP) is accessible and the KDC service is running on the target DC".to_string())
+            } else if status.contains("PREAUTH_REQUIRED") {
+                None // This is the normal/healthy response
+            } else if status.contains("no pre-auth required") {
+                Some("The KDC does not require pre-authentication for this user. Consider checking for AS-REP roasting targets.".to_string())
+            } else {
+                None
+            };
+            CheckResult {
+                name: "kdc_probe".to_string(),
+                passed,
+                message: format!("Kerberos KDC: {status}"),
+                hint,
+            }
+        }
+        Err(e) => CheckResult {
+            name: "kdc_probe".to_string(),
+            passed: false,
+            message: format!("Kerberos probe failed: {e}"),
+            hint: Some("The KDC request could not be completed. Check network connectivity and KDC health.".to_string()),
+        },
+    }
+}
+
+/// Probe the WinRM HTTP listener on the target.
+/// Sends a minimal HTTP GET to port 5985 and checks for an HTTP response
+/// with WWW-Authenticate header (proves WinRM is alive).
+async fn check_winrm_probe(dc: &str) -> CheckResult {
+    match overthrone_core::exec::winrm::probe_winrm(dc).await {
+        Ok(status) => {
+            let passed = !status.contains("unreachable") && !status.contains("timeout");
+            let hint = if !passed {
+                Some(
+                    "Ensure port 5985 is open and the WinRM service is running on the target"
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            CheckResult {
+                name: "winrm_probe".to_string(),
+                passed,
+                message: status,
+                hint,
+            }
+        }
+        Err(e) => CheckResult {
+            name: "winrm_probe".to_string(),
+            passed: false,
+            message: format!("WinRM probe failed: {e}"),
+            hint: Some(
+                "The WinRM request could not be completed. Check WinRM configuration.".to_string(),
+            ),
+        },
+    }
+}
+
+/// Probe the RPC Endpoint Mapper on the target.
+/// Connects to port 135, performs a DCE/RPC bind to EPMAPPER_UUID.
+async fn check_epm_probe(dc: &str) -> CheckResult {
+    match overthrone_core::proto::epm::probe_epm(dc).await {
+        Ok(status) => {
+            let passed = !status.contains("unreachable")
+                && !status.contains("timeout")
+                && status.contains("accepted");
+            let hint = if !passed {
+                Some(
+                    "Ensure port 135 is open and the RPC Endpoint Mapper service is running"
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            CheckResult {
+                name: "epm_probe".to_string(),
+                passed,
+                message: status,
+                hint,
+            }
+        }
+        Err(e) => CheckResult {
+            name: "epm_probe".to_string(),
+            passed: false,
+            message: format!("EPM probe failed: {e}"),
+            hint: Some("The RPC EPM request could not be completed.".to_string()),
+        },
     }
 }

@@ -23,6 +23,7 @@ pub mod pdf;
 pub mod pipeline;
 pub mod runner;
 pub mod session;
+pub mod xlsx;
 
 // Re-exports
 pub use runner::{
@@ -32,6 +33,7 @@ pub use runner::{
 pub use session::{
     EngagementSession, EvidenceItem, Finding, OperatorMetadata, Severity, TimelineDay,
 };
+pub use xlsx::generate_xlsx_report;
 
 #[cfg(test)]
 mod tests {

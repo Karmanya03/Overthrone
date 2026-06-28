@@ -736,18 +736,19 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
             // S4U2Self with PKINIT certificate chain
             use crate::s4u2self_pkinit::{S4U2SelfPkinitConfig, run_s4u2self_pkinit};
 
-            if config.pkinit_cert_path.is_none() || config.pkinit_key_path.is_none() {
-                return Err(OverthroneError::TicketForge(
-                    "S4U2Self+PKINIT requires --pkinit-cert and --pkinit-key".into(),
-                ));
-            }
+            let cert_path = config.pkinit_cert_path.clone().ok_or_else(|| {
+                OverthroneError::TicketForge("S4U2Self+PKINIT requires --pkinit-cert".into())
+            })?;
+            let key_path = config.pkinit_key_path.clone().ok_or_else(|| {
+                OverthroneError::TicketForge("S4U2Self+PKINIT requires --pkinit-key".into())
+            })?;
 
             let s4u_config = S4U2SelfPkinitConfig {
                 dc_ip: config.dc_ip.clone(),
                 domain: config.domain.clone(),
                 username: config.username.clone(),
-                cert_path: config.pkinit_cert_path.clone().unwrap(),
-                key_path: config.pkinit_key_path.clone().unwrap(),
+                cert_path,
+                key_path,
                 impersonate_user: impersonate_user.clone(),
                 target_spn: target_spn.clone(),
                 checksum_bypass: false,

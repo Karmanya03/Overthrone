@@ -3,6 +3,7 @@ pub mod adcs;
 pub mod azure_ad;
 pub mod c2;
 pub mod config;
+pub mod cred_cache;
 pub mod cred_store;
 pub mod crypto;
 pub mod error;

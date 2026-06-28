@@ -159,6 +159,35 @@ const KERBEROS_OID: &[u8] = &[
 const STATUS_SUCCESS: u32 = 0x0000_0000;
 const STATUS_MORE_PROCESSING_REQUIRED: u32 = 0xC000_0016;
 const STATUS_NO_MORE_FILES: u32 = 0x8000_0006;
+const STATUS_INVALID_PARAMETER: u32 = 0xC000_000D;
+const STATUS_NOT_SUPPORTED: u32 = 0xC000_00BB;
+const STATUS_INVALID_DEVICE_REQUEST: u32 = 0xC000_0010;
+const STATUS_ACCESS_DENIED: u32 = 0xC000_0022;
+const STATUS_LOGON_FAILURE: u32 = 0xC000_006D;
+const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
+
+fn ntstatus_to_name(code: u32) -> &'static str {
+    match code {
+        STATUS_SUCCESS => "SUCCESS",
+        STATUS_MORE_PROCESSING_REQUIRED => "MORE_PROCESSING_REQUIRED",
+        STATUS_NO_MORE_FILES => "NO_MORE_FILES",
+        STATUS_INVALID_PARAMETER => "INVALID_PARAMETER",
+        STATUS_NOT_SUPPORTED => "NOT_SUPPORTED",
+        STATUS_INVALID_DEVICE_REQUEST => "INVALID_DEVICE_REQUEST",
+        STATUS_ACCESS_DENIED => "ACCESS_DENIED",
+        STATUS_LOGON_FAILURE => "LOGON_FAILURE",
+        STATUS_OBJECT_NAME_NOT_FOUND => "OBJECT_NAME_NOT_FOUND",
+        0xC000_0005 => "ACCESS_VIOLATION",
+        0xC000_0023 => "INVALID_HANDLE",
+        0xC000_0071 => "INVALID_SMB",
+        0xC000_00C0 => "BUFFER_OVERFLOW",
+        0xC000_010B => "INVALID_DEVICE_STATE",
+        0xC000_01C3 => "USER_SESSION_DELETED",
+        0xC000_0225 => "NOT_FOUND",
+        0x8000_0005 => "BUFFER_OVERFLOW",
+        _ => "UNKNOWN",
+    }
+}
 
 // SMB3 Transform_Header (MS-SMB2 §2.2.41)
 const SMB3_TRANSFORM_MAGIC: &[u8; 4] = b"\xfdSMB";
@@ -502,8 +531,9 @@ impl Smb2Connection {
         let mut guid = [0u8; 16];
         rand::rng().fill(&mut guid);
         body.extend_from_slice(&guid);
-        // NegotiateContextOffset (for 3.1.1)
-        let context_offset = (SMB2_HEADER_SIZE + 36 + 8) as u32; // Header + Body + Dialects
+        // NegotiateContextOffset (for 3.1.1) — 8-byte aligned from SMB2 header start
+        // Body: 36 fixed + 8 dialects + 4 padding = 48 bytes → header + 48 = 112 (aligned)
+        let context_offset = (SMB2_HEADER_SIZE + 36 + 8 + 4) as u32;
         body.extend_from_slice(&context_offset.to_le_bytes());
         // NegotiateContextCount
         body.extend_from_slice(&1u16.to_le_bytes());
@@ -514,8 +544,8 @@ impl Smb2Connection {
         body.extend_from_slice(&SMB2_DIALECT_300.to_le_bytes());
         body.extend_from_slice(&SMB2_DIALECT_302.to_le_bytes());
         body.extend_from_slice(&SMB2_DIALECT_311.to_le_bytes());
-        // Padding for context
-        body.extend_from_slice(&[0, 0]);
+        // Padding for 8-byte alignment of negotiate context
+        body.extend_from_slice(&[0, 0, 0, 0]);
 
         // Pre-Auth Integrity Context (SHA-512)
         // ContextType = 0x0001, DataLength = 38
@@ -538,19 +568,37 @@ impl Smb2Connection {
         self.send(&pkt).await?;
         let resp = self.recv_verified().await?;
 
-        // Validate response
-        if resp.len() < SMB2_HEADER_SIZE + 65 {
+        // Check for SMB1 response first (72 bytes = 4 magic + 32 header + 36 body)
+        if resp.len() >= 4 && resp[..4] == [0xff, b'S', b'M', b'B'] {
+            return Err(OverthroneError::Smb(
+                "SMB2 Negotiate failed: server responded with SMB1 (SMB1 dialect not supported)"
+                    .to_string(),
+            ));
+        }
+
+        // Validate minimum SMB2 header size
+        if resp.len() < SMB2_HEADER_SIZE {
             return Err(OverthroneError::Smb(format!(
                 "SMB2 Negotiate response too short: {} bytes",
                 resp.len()
             )));
         }
 
-        // Check status
+        // Check NTSTATUS — the server may return an error PDU (64+ bytes) before negotiate body
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
+            let status_name = ntstatus_to_name(status);
             return Err(OverthroneError::Smb(format!(
-                "SMB2 Negotiate failed: 0x{status:08X}"
+                "SMB2 Negotiate failed: {status_name} (0x{status:08X})"
+            )));
+        }
+
+        // Now validate negotiate response body size (64-header + 65-body = 129 minimum)
+        if resp.len() < SMB2_HEADER_SIZE + 65 {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Negotiate response body too short: {} bytes (expected at least {} for negotiate response)",
+                resp.len() - SMB2_HEADER_SIZE,
+                65
             )));
         }
 
@@ -630,9 +678,11 @@ impl Smb2Connection {
         let resp = self.recv_verified().await?;
 
         if resp.len() < SMB2_HEADER_SIZE + 9 {
-            return Err(OverthroneError::Smb(
-                "SMB2 Session Setup Type1 response too short".to_string(),
-            ));
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Session Setup Type1 response too short: {} bytes (expected >={})",
+                resp.len(),
+                SMB2_HEADER_SIZE + 9
+            )));
         }
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -843,9 +893,11 @@ impl Smb2Connection {
         let resp = self.recv_verified().await?;
 
         if resp.len() < SMB2_HEADER_SIZE {
-            return Err(OverthroneError::Smb(
-                "SMB2 Kerberos Session Setup response too short".to_string(),
-            ));
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Kerberos Session Setup response too short: {} bytes (expected >={})",
+                resp.len(),
+                SMB2_HEADER_SIZE
+            )));
         }
 
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
@@ -1000,9 +1052,10 @@ impl Smb2Connection {
         // FileId: Persistent (8 bytes at offset 64) + Volatile (8 bytes at offset 72)
         // In the Create response body: offset 64 from start of response body
         if rb.len() < 80 {
-            return Err(OverthroneError::Smb(
-                "SMB2 Create response too short for FileId".to_string(),
-            ));
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Create '{path}' response body too short for FileId: {} bytes (expected >=80)",
+                rb.len()
+            )));
         }
 
         let mut file_id = [0u8; 32];
@@ -1073,9 +1126,11 @@ impl Smb2Connection {
 
         let rb = &resp[SMB2_HEADER_SIZE..];
         if rb.len() < 80 {
-            return Err(OverthroneError::Smb(
-                "SMB2 Create response too short for FileId".to_string(),
-            ));
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Create '{}' response body too short for FileId: {} bytes (expected >=80)",
+                path,
+                rb.len()
+            )));
         }
 
         let granted_oplock = rb[2]; // OplockLevel at body offset 2
@@ -1531,7 +1586,10 @@ impl Smb2Connection {
 
         // SMB2 header: command is at bytes 12-13
         if buf.len() < 14 {
-            return Err(OverthroneError::Smb("OPLOCK break packet too short".into()));
+            return Err(OverthroneError::Smb(format!(
+                "OPLOCK break packet too short: {} bytes (expected >=14)",
+                buf.len()
+            )));
         }
         let command = u16::from_le_bytes([buf[12], buf[13]]);
         if command != SMB2_OPLOCK_BREAK {
@@ -1545,7 +1603,10 @@ impl Smb2Connection {
         //   PersistentFileId(8) + VolatileFileId(8)
         let rb = &buf[SMB2_HEADER_SIZE..];
         if rb.len() < 24 {
-            return Err(OverthroneError::Smb("OPLOCK_BREAK body too short".into()));
+            return Err(OverthroneError::Smb(format!(
+                "OPLOCK_BREAK body too short: {} bytes (expected >=24)",
+                rb.len()
+            )));
         }
         let new_level = rb[2];
         let mut file_id = [0u8; 32];
@@ -1687,7 +1748,10 @@ pub fn build_ntlmssp_negotiate() -> Vec<u8> {
 /// Parse NTLMSSP Type 2 (Challenge) message.
 pub fn parse_ntlmssp_challenge(data: &[u8]) -> Result<NtlmChallenge> {
     if data.len() < 32 {
-        return Err(OverthroneError::Smb("NTLMSSP Type 2 too short".to_string()));
+        return Err(OverthroneError::Smb(format!(
+            "NTLMSSP Type 2 challenge too short: {} bytes (expected >=32)",
+            data.len()
+        )));
     }
 
     // Verify signature

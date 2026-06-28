@@ -220,7 +220,9 @@ impl RpcClient {
     }
 
     fn session(&self) -> Result<&SmbSession> {
-        self.smb_session.as_ref().ok_or_else(|| OverthroneError::Smb("Not connected".to_string()))
+        self.smb_session.as_ref().ok_or_else(|| OverthroneError::Smb(format!(
+            "RPC not connected to {}", self.target
+        )))
     }
 
     async fn lsa_open_policy2(&self, session: &SmbSession, system_name: &str) -> Result<[u8; 20]> {

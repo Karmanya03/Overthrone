@@ -217,7 +217,7 @@ impl MssqlEnumerator {
     fn client(&mut self) -> Result<&mut MssqlClient> {
         self.client.as_mut().ok_or_else(|| OverthroneError::Connection {
             target: self.target.clone(),
-            reason: "Not connected".to_string(),
+            reason: format!("MSSQL not connected to {}", self.target),
         })
     }
 }

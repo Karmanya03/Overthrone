@@ -4009,7 +4009,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4040,6 +4040,7 @@ dependencies = [
  "pretty_assertions",
  "rand 0.10.1",
  "ratatui",
+ "regex",
  "rpassword",
  "rustls",
  "rustyline",
@@ -4055,7 +4056,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-core"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -4124,7 +4125,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-crawler"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -4151,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-forge"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "base64",
  "chrono",
@@ -4179,7 +4180,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-hunter"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -4206,7 +4207,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-pilot"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4232,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-reaper"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -4256,7 +4257,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-relay"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "aes 0.8.4",
  "async-trait",
@@ -4271,6 +4272,8 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tokio-rustls",
@@ -4280,7 +4283,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-scribe"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -4290,6 +4293,7 @@ dependencies = [
  "overthrone-pilot",
  "pretty_assertions",
  "printpdf",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4301,7 +4305,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-viewer"
-version = "0.3.0-beta"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -5825,6 +5829,15 @@ dependencies = [
  "base64",
  "mmapio",
  "xmlparser",
+]
+
+[[package]]
+name = "rust_xlsxwriter"
+version = "0.82.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d61a82de4e7b30fc427909f2c5aafaada88cc7ae8316edabae435f74341f9278"
+dependencies = [
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -9092,6 +9105,23 @@ dependencies = [
  "sha1 0.10.6",
  "time",
  "zstd 0.11.2+zstd.1.5.2",
+]
+
+[[package]]
+name = "zip"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "displaydoc",
+ "flate2",
+ "indexmap 2.14.0",
+ "memchr",
+ "thiserror 2.0.18",
+ "zopfli",
 ]
 
 [[package]]

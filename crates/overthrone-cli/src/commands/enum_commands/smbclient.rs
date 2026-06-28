@@ -180,6 +180,13 @@ impl SmbClient {
     }
 
     fn session(&self) -> Result<&SmbSession> {
-        self.smb_session.as_ref().ok_or_else(|| OverthroneError::Smb("Not connected".to_string()))
+        self.smb_session.as_ref().ok_or_else(|| {
+    let msg = if let Some(ref cfg) = self.config {
+        format!("SMB not connected to {}", cfg.server)
+    } else {
+        "SMB not connected (no config)".to_string()
+    };
+    OverthroneError::Smb(msg)
+})
     }
 }

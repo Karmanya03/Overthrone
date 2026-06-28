@@ -353,7 +353,7 @@ fn define_wasm_host_functions(linker: &mut Linker<WasmPluginState>) -> Result<()
             |mut caller: Caller<'_, WasmPluginState>, ptr: i32, len: i32| -> anyhow::Result<()> {
                 let mem = match caller.get_export("memory") {
                     Some(Extern::Memory(mem)) => mem,
-                    _ => anyhow::bail!("failed to find memory export"),
+                    _ => anyhow::bail!("WASM plugin: failed to find memory export in log function"),
                 };
 
                 let data = mem.data(&caller);
@@ -361,7 +361,12 @@ fn define_wasm_host_functions(linker: &mut Linker<WasmPluginState>) -> Result<()
                 let end = start + len as usize;
 
                 if end > data.len() {
-                    anyhow::bail!("memory access out of bounds");
+                    anyhow::bail!(
+                        "WASM plugin: memory access out of bounds in log: ptr={}, len={}, memory_size={}",
+                        ptr,
+                        len,
+                        data.len()
+                    );
                 }
 
                 let message = String::from_utf8_lossy(&data[start..end]).to_string();
@@ -633,7 +638,10 @@ impl Plugin for WasmPlugin {
 
 unsafe fn cstr_to_string(ptr: *const std::ffi::c_char) -> Result<String> {
     if ptr.is_null() {
-        return Err(OverthroneError::Plugin("Null C string pointer".to_string()));
+        return Err(OverthroneError::Plugin(
+            "cstr_to_string received null pointer — a native plugin returned a null C string"
+                .to_string(),
+        ));
     }
     // Using unsafe block as required by #[warn(unsafe_op_in_unsafe_fn)]
     Ok(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().to_string())

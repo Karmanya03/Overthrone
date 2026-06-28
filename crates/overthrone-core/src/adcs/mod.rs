@@ -788,19 +788,11 @@ impl AdcsClient {
 }
 
 impl AdcsClient {
-    /// Try to create a default client, returning an error instead of panicking.
-    pub fn try_default() -> Result<Self> {
-        Self::new("localhost").map_err(|e| {
-            OverthroneError::Adcs(format!("Failed to create default ADCS client: {e}"))
+    /// Try to create a client for the given CA server.
+    pub fn try_new(server: &str) -> Result<Self> {
+        Self::new(server).map_err(|e| {
+            OverthroneError::Adcs(format!("Failed to create ADCS client for {server}: {e}"))
         })
-    }
-}
-
-impl Default for AdcsClient {
-    fn default() -> Self {
-        // LEGACY: panics on failure — prefer AdcsClient::try_default()
-        Self::new("localhost")
-            .expect("Failed to create default ADCS client (use try_default() for fallible path)")
     }
 }
 
@@ -860,8 +852,8 @@ impl SccmClient {
     /// (default: `https://<server>/AdminService/wmi/SMS_Site`).
     /// When the admin service is unreachable we attempt legacy HTTP
     /// endpoint `/SMS_MP/.sms_aut?SITESIGNCERT` for site code discovery.
-    pub async fn enumerate(&self, site_server: Option<&str>) -> Result<SccmConfig> {
-        let server = site_server.unwrap_or("localhost");
+    pub async fn enumerate(&self, site_server: &str) -> Result<SccmConfig> {
+        let server = site_server;
 
         info!("SCCM: Enumerating site configuration from {}", server);
 
@@ -967,15 +959,15 @@ impl SccmClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("{}", e))?;
+            .map_err(|e| format!("AdminService GET {url} failed: {e}"))?;
 
         if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
+            return Err(format!("AdminService {url}: HTTP {}", resp.status()));
         }
 
         resp.json::<serde_json::Value>()
             .await
-            .map_err(|e| format!("JSON parse: {}", e))
+            .map_err(|e| format!("AdminService JSON parse from {url}: {e}"))
     }
 
     /// Legacy site-code discovery via management-point signature cert endpoint
@@ -988,9 +980,12 @@ impl SccmClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("{}", e))?;
+            .map_err(|e| format!("SCCM legacy site code GET {url} failed: {e}"))?;
 
-        let body = resp.bytes().await.map_err(|e| format!("{}", e))?;
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("SCCM legacy response body read from {url} failed: {e}"))?;
 
         // Try to extract site code from the signing cert CN
         if let Ok((_, cert)) = x509_parser::parse_x509_certificate(&body)

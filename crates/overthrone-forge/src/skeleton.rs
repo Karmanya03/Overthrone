@@ -282,7 +282,7 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         None => {
             warn!(
                 "[skeleton] No payload_path specified — generating metadata only. \
-                 Set config.payload_path to a patching binary (e.g. mimikatz.exe) for execution."
+                 Set config.payload_path to a patching binary (e.g. a credential tool binary) for execution."
             );
             (String::new(), false)
         }

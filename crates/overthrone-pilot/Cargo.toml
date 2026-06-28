@@ -7,9 +7,9 @@ license.workspace = true
 description = "Autonomous attack orchestration — goal-driven planning, playbook execution, adaptive re-planning"
 
 [dependencies]
-overthrone-core   = { version = "0.3.0-beta", path = "../overthrone-core" }
-overthrone-hunter = { version = "0.3.0-beta", path = "../overthrone-hunter" }
-overthrone-crawler = { version = "0.3.0-beta", path = "../overthrone-crawler" }
+overthrone-core   = { version = "0.3.1", path = "../overthrone-core" }
+overthrone-hunter = { version = "0.3.1", path = "../overthrone-hunter" }
+overthrone-crawler = { version = "0.3.1", path = "../overthrone-crawler" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

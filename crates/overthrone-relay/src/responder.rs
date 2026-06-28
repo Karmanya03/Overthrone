@@ -858,7 +858,11 @@ impl Responder {
             .map_err(|e| RelayError::Network(format!("SMB read error: {}", e)))?;
 
         if len < 4 {
-            return Err(RelayError::Protocol("SMB message too short".to_string()).into());
+            return Err(RelayError::Protocol(format!(
+                "SMB message too short: got {} bytes, expected at least 4",
+                len
+            ))
+            .into());
         }
 
         // Check for NetBIOS header

@@ -1030,7 +1030,10 @@ pub async fn resolve_uuid_via_epm_tcp(
 
     let bind_resp = btf_read_frame(&mut stream).await?;
     if !is_bind_accepted(&bind_resp) {
-        return Err(OverthroneError::custom("EPM TCP bind rejected"));
+        let resp_len = bind_resp.len();
+        return Err(OverthroneError::custom(format!(
+            "EPM TCP bind rejected by {target}: response {resp_len} bytes, expected accepted BIND-ACK"
+        )));
     }
 
     // ept_map (opnum 3) for the target interface
@@ -1041,9 +1044,9 @@ pub async fn resolve_uuid_via_epm_tcp(
     let port = parse_ept_map_tcp_port(&map_resp);
 
     if port == 0 {
-        return Err(OverthroneError::custom(
-            "EPM TCP: no TCP endpoint found for interface".to_string(),
-        ));
+        return Err(OverthroneError::custom(format!(
+            "EPM TCP on {target}: no TCP endpoint found for interface {interface_uuid:02x?}"
+        )));
     }
 
     let host = parse_ept_map_addr(&map_resp).unwrap_or_else(|| target.to_string());
@@ -1055,6 +1058,39 @@ pub async fn resolve_uuid_via_epm_tcp(
 // ═══════════════════════════════════════════════════════════
 //  Tests
 // ═══════════════════════════════════════════════════════════
+
+/// Probe the RPC Endpoint Mapper on the target host.
+/// Connects to port 135, performs a DCE/RPC bind to EPMAPPER_UUID,
+/// and reports whether the bind was accepted.
+pub async fn probe_epm(target: &str) -> Result<String> {
+    let addr = format!("{target}:135");
+    let mut stream = match tokio::net::TcpStream::connect(&addr).await {
+        Ok(s) => s,
+        Err(e) => return Ok(format!("EPM unreachable: {e}")),
+    };
+
+    let bind_req = build_rpc_bind(&EPMAPPER_UUID, 3, 0);
+    if let Err(e) = btf_write_frame(&mut stream, &bind_req).await {
+        return Ok(format!("EPM bind write failed: {e}"));
+    }
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        btf_read_frame(&mut stream),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => {
+            if is_bind_accepted(&resp) {
+                Ok("EPM v3.0 — bind accepted".to_string())
+            } else {
+                Ok("EPM — bind rejected".to_string())
+            }
+        }
+        Ok(Err(e)) => Ok(format!("EPM response error: {e}")),
+        Err(_) => Ok("EPM — bind timeout (no response)".to_string()),
+    }
+}
 
 #[cfg(test)]
 mod tests {

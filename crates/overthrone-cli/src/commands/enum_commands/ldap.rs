@@ -120,7 +120,7 @@ impl LdapEnumerator {
             })?;
         let (entries, _) = search_result.success().map_err(|e| OverthroneError::Ldap {
             target: self.server.clone(),
-            reason: format!("Count search failed: {e}"),
+            reason: format!("Count search on base={base_dn} failed: {e}"),
         })?;
         Ok(entries.len() as u64)
     }
@@ -146,7 +146,7 @@ impl LdapEnumerator {
             })?;
         let (entries, _) = search_result.success().map_err(|e| OverthroneError::Ldap {
             target: self.server.clone(),
-            reason: format!("Search failed: {e}"),
+            reason: format!("LDAP search failed for base={base_dn} filter={filter}: {e}"),
         })?;
         let mut results = Vec::new();
         for entry in entries {
@@ -266,7 +266,7 @@ impl LdapEnumerator {
     fn ldap(&mut self) -> Result<&mut Ldap> {
         self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
             target: self.server.clone(),
-            reason: "Not connected".to_string(),
+            reason: format!("LDAP not connected to {}", self.server),
         })
     }
 }

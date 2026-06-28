@@ -104,9 +104,10 @@ pub struct DcSyncResult {
 pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result<DcSyncResult> {
     // Skip RPC PDU header (24 bytes for request PDU)
     if response.len() < 28 {
-        return Err(OverthroneError::custom(
-            "DRSGetNCChanges response too short",
-        ));
+        return Err(OverthroneError::custom(format!(
+            "DRSGetNCChanges response too short: {} bytes (expected >=28)",
+            response.len()
+        )));
     }
 
     let stub_data = &response[24..];
@@ -164,9 +165,10 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
     const FIXED_HDR: usize = 140;
 
     if stub_data.len() < FIXED_HDR {
-        return Err(OverthroneError::custom(
-            "DRS reply stub too short for fixed v6 header",
-        ));
+        return Err(OverthroneError::custom(format!(
+            "DRS reply stub too short for fixed v6 header: {} bytes (expected >={FIXED_HDR})",
+            stub_data.len()
+        )));
     }
 
     // Parse cursor for pagination
@@ -324,12 +326,19 @@ fn parse_replicated_object(
     };
 
     if start + 4 > data.len() {
-        return Err(OverthroneError::custom("Object start out of bounds"));
+        return Err(OverthroneError::custom(format!(
+            "Object at offset {start}: out of bounds (needs {} bytes, data len {})",
+            start + 4,
+            data.len()
+        )));
     }
 
     let attr_count = read_u32(data, start) as usize;
     if attr_count > 100 || attr_count == 0 {
-        return Err(OverthroneError::custom("Invalid attr count"));
+        return Err(OverthroneError::custom(format!(
+            "DRSR invalid attribute count in replication data: got {}, expected 1-100",
+            attr_count
+        )));
     }
 
     let mut pos = start + 4;
@@ -460,7 +469,10 @@ fn normalize_attid(attid: u32) -> u32 {
 /// Decrypt a replicated secret (unicodePwd, supplementalCredentials, etc.)
 fn decrypt_replicated_secret(enc_data: &[u8], session_key: &[u8]) -> Result<Vec<u8>> {
     if enc_data.len() < 28 {
-        return Err(OverthroneError::custom("Encrypted attribute too short"));
+        return Err(OverthroneError::custom(format!(
+            "Encrypted DRSR attribute too short: {} bytes (expected >=28)",
+            enc_data.len()
+        )));
     }
 
     let version = read_u32(enc_data, 0);

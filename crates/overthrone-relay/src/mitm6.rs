@@ -453,15 +453,12 @@ async fn handle_dns_query(
     debug!("DNS query for: {}", domain);
 
     // Determine if we should spoof this query
-    let spoof_ip = should_spoof_domain(&domain, config);
-
-    if spoof_ip.is_none() {
+    let Some(spoof_ip) = should_spoof_domain(&domain, config) else {
         // Don't spoof — forward or ignore
         debug!("Not spoofing DNS query for {}", domain);
         return Ok(());
-    }
+    };
 
-    let spoof_ip = spoof_ip.unwrap();
     info!("Spoofing DNS: {} -> {}", domain, spoof_ip);
 
     // Build spoofed DNS response

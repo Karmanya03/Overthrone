@@ -196,7 +196,10 @@ fn show() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let cfg = cli_config::load_config(Some(path.to_str().unwrap())).map_err(anyhow::Error::msg)?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Config path contains invalid UTF-8: {:?}", path))?;
+    let cfg = cli_config::load_config(Some(path_str)).map_err(anyhow::Error::msg)?;
     println!("{} Loaded values:", "[*]".blue());
     print!("{}", cli_config::display(&cfg));
     Ok(())

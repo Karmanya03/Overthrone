@@ -21,6 +21,10 @@ use tracing::{debug, info, warn};
 pub const LDAP_PORT: u16 = 389;
 /// Default LDAPS port (TLS)
 pub const LDAPS_PORT: u16 = 636;
+/// Global Catalog port (LDAP)
+pub const GC_PORT: u16 = 3268;
+/// Global Catalog port (LDAPS)
+pub const GC_LDAPS_PORT: u16 = 3269;
 
 /// UserAccountControl flag: account is disabled
 pub const UAC_ACCOUNT_DISABLE: u32 = 0x0002;
@@ -273,13 +277,25 @@ impl RawLdapConn {
                     }
                 }
                 LdapMsgKind::SearchDone(rc) => {
-                    if rc != 0 && rc != 4 {
-                        // rc=4 = sizeLimitExceeded (partial results OK)
-                        return Err(OverthroneError::Ldap {
-                            target: base.to_string(),
-                            reason: format!("Search failed (rc={rc})"),
-                        });
+                    if rc == 0 || rc == 4 {
+                        // 0 = success, 4 = sizeLimitExceeded (partial results OK)
+                        break;
                     }
+                    if rc == 10 {
+                        // Referral — return what we have, caller decides whether to chase
+                        break;
+                    }
+                    return Err(OverthroneError::Ldap {
+                        target: base.to_string(),
+                        reason: format!(
+                            "Search failed (rc={rc}): {}",
+                            ldap_rc_to_string(rc as u32)
+                        ),
+                    });
+                }
+                LdapMsgKind::SearchReferral(uris) => {
+                    warn!("LDAP referral received: {:?}", uris);
+                    // Return what we have — caller decides whether to chase
                     break;
                 }
                 LdapMsgKind::Other => {
@@ -613,6 +629,7 @@ async fn raw_ldap_recv(stream: &mut tokio::net::TcpStream) -> crate::error::Resu
 enum LdapMsgKind {
     SearchEntry,
     SearchDone(u8),
+    SearchReferral(Vec<String>),
     Other,
 }
 
@@ -629,7 +646,7 @@ fn classify_ldap_message(msg: &[u8]) -> LdapMsgKind {
     let _ = ber_read_tlv(&rest, &mut inner); // skip messageID
     if let Some((op_tag, op_data)) = ber_read_tlv(&rest, &mut inner) {
         match op_tag {
-            0x64 => LdapMsgKind::SearchEntry, // [APPLICATION 4]
+            0x64 => LdapMsgKind::SearchEntry, // SearchResultEntry [APPLICATION 4]
             0x65 => {
                 // SearchResultDone [APPLICATION 5]
                 let mut oi = 0usize;
@@ -639,6 +656,17 @@ fn classify_ldap_message(msg: &[u8]) -> LdapMsgKind {
                 } else {
                     LdapMsgKind::SearchDone(80)
                 }
+            }
+            0x73 => {
+                // SearchResultReference [APPLICATION 19] — SEQUENCE OF URI
+                let mut uris = Vec::new();
+                let mut oi = 0usize;
+                while let Some((_, uri_data)) = ber_read_tlv(&op_data, &mut oi) {
+                    if let Ok(s) = String::from_utf8(uri_data.to_vec()) {
+                        uris.push(s);
+                    }
+                }
+                LdapMsgKind::SearchReferral(uris)
             }
             _ => LdapMsgKind::Other,
         }
@@ -1375,7 +1403,7 @@ async fn raw_ldap_recv_from_buf(
         stream
             .read_exact(&mut tag_buf)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("LDAP BER read tag byte failed: {e}"))?;
         buf.push(tag_buf[0]);
     }
 
@@ -1385,7 +1413,7 @@ async fn raw_ldap_recv_from_buf(
         stream
             .read_exact(&mut len_first)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("LDAP BER read length byte failed: {e}"))?;
         buf.push(len_first[0]);
 
         let extra = if len_first[0] < 0x80 {
@@ -1395,7 +1423,10 @@ async fn raw_ldap_recv_from_buf(
         };
         for _ in 0..extra {
             let mut b = [0u8; 1];
-            stream.read_exact(&mut b).await.map_err(|e| e.to_string())?;
+            stream
+                .read_exact(&mut b)
+                .await
+                .map_err(|e| format!("LDAP BER read extended length byte failed: {e}"))?;
             buf.push(b[0]);
         }
     }
@@ -1414,15 +1445,26 @@ async fn raw_ldap_recv_from_buf(
             2 + extra + l
         }
     } else {
-        return Err("incomplete header".to_string());
+        return Err(format!(
+            "LDAP BER incomplete header: expected at least 2 bytes, got {}",
+            buf.len()
+        ));
     };
 
     // Read remaining data
     while buf.len() < total_len {
         let mut chunk = vec![0u8; total_len - buf.len()];
-        let n = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|e| format!("LDAP BER read payload failed: {e}"))?;
         if n == 0 {
-            return Err("connection closed".to_string());
+            return Err(format!(
+                "LDAP BER connection closed: expected {} bytes, got {}/{}",
+                total_len - buf.len(),
+                buf.len(),
+                total_len
+            ));
         }
         buf.extend_from_slice(&chunk[..n]);
     }
@@ -1599,6 +1641,69 @@ impl LdapSession {
             dc_ip: dc_ip.to_string(),
             bind_type: BindType::Authenticated,
         })
+    }
+
+    /// Connect to the Global Catalog (port 3268/3269).
+    /// GC holds a partial replica of all forest objects, avoiding cross-domain referrals.
+    /// Supports password auth and simple bind.
+    pub async fn connect_gc(
+        dc_ip: &str,
+        domain: &str,
+        username: &str,
+        password: &str,
+        use_tls: bool,
+    ) -> Result<Self> {
+        let port = if use_tls { GC_LDAPS_PORT } else { GC_PORT };
+        let scheme = if use_tls { "ldaps" } else { "ldap" };
+        let url = format!("{scheme}://{dc_ip}:{port}");
+
+        info!("Connecting to Global Catalog: {url}");
+
+        let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(10));
+
+        let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
+            .await
+            .map_err(|e| OverthroneError::Ldap {
+                target: url.clone(),
+                reason: format!("GC connection failed: {e}"),
+            })?;
+
+        drive!(conn);
+
+        let bind_dn = if username.contains('\\') || username.contains('@') {
+            username.to_string()
+        } else {
+            format!("{username}@{domain}")
+        };
+
+        let result = ldap.simple_bind(&bind_dn, password).await;
+
+        match result {
+            Ok(res) if res.rc == 0 => {
+                let base_dn = String::new(); // GC uses empty base DN for forest-wide search
+                info!("GC bind successful. Forest-wide search available via empty base DN.");
+                Ok(LdapSession {
+                    ldap: Some(ldap),
+                    raw: None,
+                    base_dn,
+                    domain: domain.to_string(),
+                    dc_ip: dc_ip.to_string(),
+                    bind_type: BindType::Authenticated,
+                })
+            }
+            Ok(res) => {
+                let rc = res.rc;
+                let reason = ldap_rc_to_string(rc);
+                Err(OverthroneError::Ldap {
+                    target: dc_ip.to_string(),
+                    reason: format!("GC bind failed (rc={rc}): {reason}"),
+                })
+            }
+            Err(e) => Err(OverthroneError::Ldap {
+                target: dc_ip.to_string(),
+                reason: format!("GC bind failed: {e}"),
+            }),
+        }
     }
 
     /// Connect anonymously to LDAP/LDAPS.
@@ -2217,19 +2322,47 @@ impl LdapSession {
         loop {
             let ctrl = build_paged_results_control(PAGE_SIZE, &cookie);
 
-            let (rs, res) = ldap
+            let search_result = ldap
                 .with_controls(vec![ctrl])
                 .search(base, Scope::Subtree, filter, attrs)
                 .await
                 .map_err(|e| OverthroneError::Ldap {
                     target: base.to_string(),
                     reason: format!("Search failed: {e}"),
-                })?
-                .success()
-                .map_err(|e| OverthroneError::Ldap {
-                    target: base.to_string(),
-                    reason: format!("Search error: {e}"),
                 })?;
+
+            let (rs, res) = match search_result.success() {
+                Ok(result) => result,
+                Err(ldap_err) => {
+                    if let ldap3::LdapError::LdapResult {
+                        result: ref ldap_res,
+                    } = ldap_err
+                    {
+                        if ldap_res.rc == 10 {
+                            // Referral — return what we have
+                            warn!("LDAP referral (rc=10), returning partial results");
+                            break;
+                        }
+                        if ldap_res.rc == 4 {
+                            // sizeLimitExceeded — partial results OK
+                            warn!("LDAP size limit exceeded, returning partial results");
+                            break;
+                        }
+                        return Err(OverthroneError::Ldap {
+                            target: base.to_string(),
+                            reason: format!(
+                                "Search error (rc={}): {}",
+                                ldap_res.rc,
+                                ldap_rc_to_string(ldap_res.rc)
+                            ),
+                        });
+                    }
+                    return Err(OverthroneError::Ldap {
+                        target: base.to_string(),
+                        reason: format!("Search error: {ldap_err}"),
+                    });
+                }
+            };
 
             let page_count = rs.len();
             all_entries.extend(rs.into_iter().map(SearchEntry::construct));
@@ -3335,6 +3468,7 @@ fn ldap_rc_to_string(rc: u32) -> &'static str {
         4 => "Size limit exceeded",
         7 => "Auth method not supported",
         8 => "Strong auth required",
+        10 => "Referral",
         32 => "No such object",
         34 => "Invalid DN syntax",
         48 => "Inappropriate authentication",
@@ -3466,7 +3600,10 @@ fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<Ac
     //  12-15: OffsetSacl (u32 LE)
     //  16-19: OffsetDacl (u32 LE)
     if data.len() < 20 {
-        return Err("SD too short".to_string());
+        return Err(format!(
+            "Security Descriptor too short: expected at least 20 bytes, got {}",
+            data.len()
+        ));
     }
 
     let _revision = data[0];
@@ -3489,7 +3626,10 @@ fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<Ac
     // Parse ACL header
     let acl = &data[offset_dacl..];
     if acl.len() < 8 {
-        return Err("ACL too short".to_string());
+        return Err(format!(
+            "Security Descriptor ACL section too short: expected at least 8 bytes, got {}",
+            acl.len()
+        ));
     }
 
     let _acl_revision = acl[0];

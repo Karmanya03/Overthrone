@@ -9,14 +9,16 @@ use chrono::Utc;
 pub use kerberos_asn1::Checksum;
 use kerberos_asn1::{
     ApReq, AsRep, AsReq, Asn1Object, Authenticator as KrbAuthenticator, EncAsRepPart,
-    EncTgsRepPart, EncryptedData, KdcReqBody, KerbPaPacRequest, KerberosFlags, KerberosTime,
-    KrbError, PaData, PaEncTsEnc, PaForUser, PaPacOptions, PrincipalName, TgsRep, TgsReq, Ticket,
+    EncKrbCredPart, EncTgsRepPart, EncryptedData, EncryptionKey, KdcReqBody, KerbPaPacRequest,
+    KerberosFlags, KerberosTime, KrbCred, KrbCredInfo, KrbError, PaData, PaEncTsEnc, PaForUser,
+    PaPacOptions, PrincipalName, TgsRep, TgsReq, Ticket,
 };
 use kerberos_crypto::new_kerberos_cipher;
 use md5::Md5;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -185,7 +187,55 @@ async fn kdc_recv(stream: &mut TcpStream) -> Result<Vec<u8>> {
 }
 
 /// Connect to KDC, send request, receive response
+/// Tries UDP first for small messages, falls back to TCP on failure.
 async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
+    // Try UDP first for small messages (avoids TCP handshake overhead)
+    // Most Kerberos requests fit in a single UDP datagram (< 1400 bytes).
+    if request_bytes.len() < 1400 {
+        match kdc_exchange_udp(dc_ip, request_bytes).await {
+            Ok(data) => return Ok(data),
+            Err(e) => {
+                debug!("UDP KDC exchange failed, falling back to TCP: {e}");
+            }
+        }
+    }
+    kdc_exchange_tcp(dc_ip, request_bytes).await
+}
+
+/// Kerberos exchange over UDP (connectionless, no length prefix)
+async fn kdc_exchange_udp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
+    let addr: SocketAddr = format!("{dc_ip}:{KDC_PORT}")
+        .parse()
+        .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
+
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| OverthroneError::Kerberos(format!("Cannot create UDP socket: {e}")))?;
+
+    socket
+        .connect(addr)
+        .await
+        .map_err(|e| OverthroneError::Kerberos(format!("UDP connect to KDC at {addr}: {e}")))?;
+
+    socket
+        .send(request_bytes)
+        .await
+        .map_err(|e| OverthroneError::Kerberos(format!("UDP send to KDC failed: {e}")))?;
+
+    let mut buf = vec![0u8; 65535];
+    let len = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv(&mut buf))
+        .await
+        .map_err(|_| {
+            OverthroneError::Kerberos(format!("UDP KDC response timed out after 5s: {addr}"))
+        })?
+        .map_err(|e| OverthroneError::Kerberos(format!("UDP recv from KDC failed: {e}")))?;
+
+    buf.truncate(len);
+    Ok(buf)
+}
+
+/// Kerberos exchange over TCP (4-byte BE length prefix)
+async fn kdc_exchange_tcp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
     let addr: SocketAddr = format!("{dc_ip}:{KDC_PORT}")
         .parse()
         .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
@@ -564,16 +614,27 @@ fn extract_wrong_realm(data: &[u8]) -> Option<String> {
 }
 
 /// Resolve a KDC IP for the given realm via DNS SRV lookup.
-async fn resolve_realm_kdc(realm: &str) -> Result<String> {
+async fn resolve_realm_kdc(realm: &str, fallback_dc_ip: Option<&str>) -> Result<String> {
     let query = format!("{}.{}", super::dns::SRV_KERBEROS, realm);
     let resolver = super::dns::DnsResolver::system()?;
-    let records = resolver.lookup_srv(&query).await?;
-    records
-        .first()
-        .and_then(|r| r.ips.first().cloned())
-        .ok_or_else(|| {
-            OverthroneError::Kerberos(format!("No KDC found via DNS SRV for realm '{realm}'"))
-        })
+    match resolver.lookup_srv(&query).await {
+        Ok(records) => records
+            .first()
+            .and_then(|r| r.ips.first().cloned())
+            .ok_or_else(|| {
+                OverthroneError::Kerberos(format!("No KDC found via DNS SRV for realm '{realm}'"))
+            }),
+        Err(e) => {
+            if let Some(fallback) = fallback_dc_ip {
+                warn!("DNS SRV lookup failed for realm '{realm}': {e}. Falling back to {fallback}");
+                Ok(fallback.to_string())
+            } else {
+                Err(OverthroneError::Kerberos(format!(
+                    "DNS SRV lookup failed for realm '{realm}': {e}"
+                )))
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -740,7 +801,8 @@ pub async fn request_tgt(
         (ntlm::nt_hash(secret), ETYPE_RC4_HMAC)
     };
 
-    let mut current_dc = dc_ip.to_string();
+    let original_dc_ip = dc_ip.to_string();
+    let mut current_dc = original_dc_ip.clone();
     let mut current_realm = realm.clone();
 
     for hop in 0..=2 {
@@ -797,7 +859,7 @@ pub async fn request_tgt(
                     info!("KDC referred us to realm '{suggested}' (hop {hop})");
 
                     // Resolve the new realm's KDC via DNS SRV
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, Some(&original_dc_ip)).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -970,7 +1032,7 @@ pub async fn request_tgt_opsec(
                     }
                     info!("KDC referred us to realm '{suggested}' (hop {hop})");
 
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -1351,7 +1413,7 @@ pub async fn request_service_ticket(
                     info!(
                         "request_service_ticket: KDC referred to realm '{suggested}' (hop {hop})"
                     );
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -1470,7 +1532,7 @@ pub async fn request_service_ticket_fast(
                         )));
                     }
                     info!("FAST TGS: KDC referred to realm '{suggested}' (hop {hop})");
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -1597,7 +1659,7 @@ pub async fn s4u2self(
                         )));
                     }
                     info!("S4U2Self: KDC referred to realm '{suggested}' (hop {hop})");
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -1749,7 +1811,7 @@ pub async fn s4u2self_with_checksum_bypass(
                         )));
                     }
                     info!("S4U2Self-bypass: KDC referred to realm '{suggested}' (hop {hop})");
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -1863,7 +1925,7 @@ pub async fn s4u2proxy(
                         )));
                     }
                     info!("S4U2Proxy: KDC referred to realm '{suggested}' (hop {hop})");
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -1988,7 +2050,7 @@ pub async fn s4u2proxy_bronzebit(
                         )));
                     }
                     info!("BronzeBit: KDC referred to realm '{suggested}' (hop {hop})");
-                    match resolve_realm_kdc(&suggested).await {
+                    match resolve_realm_kdc(&suggested, None).await {
                         Ok(new_dc) => {
                             current_dc = new_dc;
                             current_realm = suggested;
@@ -2979,6 +3041,126 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
     let pa_data = asn1_sequence(&[&pa_type, &pa_value]);
 
     Ok(pa_data)
+}
+
+/// Convert a TicketGrantingData into KRB-CRED (.kirbi) format bytes.
+/// Re-exported from core so both CLI and hunter can use it without duplication.
+pub fn tgd_to_kirbi(tgd: &TicketGrantingData) -> Vec<u8> {
+    let cred_info = KrbCredInfo {
+        key: EncryptionKey {
+            keytype: tgd.session_key_etype,
+            keyvalue: tgd.session_key.clone(),
+        },
+        prealm: Some(tgd.client_realm.clone()),
+        pname: Some(PrincipalName {
+            name_type: NT_PRINCIPAL,
+            name_string: vec![tgd.client_principal.clone()],
+        }),
+        flags: None,
+        authtime: None,
+        starttime: None,
+        endtime: tgd.end_time.clone(),
+        renew_till: None,
+        srealm: Some(tgd.client_realm.clone()),
+        sname: Some(tgd.ticket.sname.clone()),
+        caddr: None,
+    };
+
+    let enc_part = EncKrbCredPart {
+        ticket_info: vec![cred_info],
+        nonce: None,
+        timestamp: None,
+        usec: None,
+        s_address: None,
+        r_address: None,
+    };
+
+    let krb_cred = KrbCred {
+        pvno: 5,
+        msg_type: 22,
+        tickets: vec![tgd.ticket.clone()],
+        enc_part: EncryptedData {
+            etype: 0,
+            kvno: None,
+            cipher: enc_part.build(),
+        },
+    };
+
+    krb_cred.build()
+}
+
+/// Parse KRB-CRED (.kirbi) bytes back into a TicketGrantingData.
+pub fn kirbi_to_tgd(data: &[u8]) -> Result<TicketGrantingData> {
+    let (_, krb_cred) = KrbCred::parse(data)
+        .map_err(|e| OverthroneError::Kerberos(format!("Invalid kirbi: {e}")))?;
+
+    let ticket = krb_cred
+        .tickets
+        .first()
+        .ok_or_else(|| OverthroneError::Kerberos("No tickets in kirbi".to_string()))?
+        .clone();
+
+    let (_, enc_part) = EncKrbCredPart::parse(&krb_cred.enc_part.cipher)
+        .map_err(|e| OverthroneError::Kerberos(format!("Invalid kirbi enc-part: {e}")))?;
+
+    let info = enc_part
+        .ticket_info
+        .first()
+        .ok_or_else(|| OverthroneError::Kerberos("No ticket info in kirbi".to_string()))?;
+
+    let client_principal = info
+        .pname
+        .as_ref()
+        .map(|p| p.name_string.join("/"))
+        .unwrap_or_default();
+    let client_realm = info.prealm.clone().unwrap_or_default();
+
+    Ok(TicketGrantingData {
+        ticket,
+        session_key: info.key.keyvalue.clone(),
+        session_key_etype: info.key.keytype,
+        client_principal,
+        client_realm,
+        end_time: info.endtime.clone(),
+    })
+}
+
+/// Send a minimal AS-REQ to probe whether the KDC is alive and responding.
+/// Uses an unauthenticated request for a non-existent user.
+/// A KRB_ERROR response confirms the KDC processes Kerberos messages.
+pub async fn probe_kdc(dc_ip: &str) -> Result<String> {
+    let req_body = build_as_req_body("PROBE", ".", &[18, 17, 23]);
+    let as_req = AsReq {
+        pvno: 5,
+        msg_type: 10,
+        padata: None,
+        req_body,
+    };
+
+    let response_bytes = match kdc_exchange(dc_ip, &as_req.build()).await {
+        Ok(data) => data,
+        Err(e) => return Ok(format!("KDC unreachable: {e}")),
+    };
+
+    // Expect KRB_ERROR (most common response for an unauthenticated probe)
+    if let Ok((_, krb_err)) = KrbError::parse(&response_bytes) {
+        let error_name = match krb_err.error_code {
+            0 => "KDC_ERR_NONE",
+            6 => "KDC_ERR_C_PRINCIPAL_UNKNOWN",
+            25 => "KDC_ERR_PREAUTH_REQUIRED",
+            52 => "KDC_ERR_GENERIC",
+            68 => "KDC_ERR_WRONG_REALM",
+            _ => "unknown",
+        };
+        return Ok(format!("KRB_ERROR {} ({error_name})", krb_err.error_code));
+    }
+
+    // If we got an AS-REP, the KDC gave us a ticket without pre-auth
+    if let Ok((_, _as_rep)) = AsRep::parse(&response_bytes) {
+        return Ok("AS-REP received (no pre-auth required!)".to_string());
+    }
+
+    Ok("Unexpected response (neither KRB_ERROR nor AS-REP)".to_string())
 }
 
 #[cfg(test)]

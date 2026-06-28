@@ -192,7 +192,7 @@ pub async fn run(config: &HuntConfig, uc: &UnconstrainedConfig) -> Result<Uncons
         info!("");
         info!("{}", "  Exploitation guidance:".bold());
         info!("  1. Compromise one of the unconstrained delegation hosts above");
-        info!("  2. Use Rubeus/mimikatz to monitor for incoming TGTs");
+        info!("  2. Use Kerberos monitoring tools to monitor for incoming TGTs");
         info!("  3. Coerce a high-value target (e.g., DC) to authenticate to the host");
         info!("  4. Extract the cached TGT and pass-the-ticket");
         info!("");

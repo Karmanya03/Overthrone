@@ -9,12 +9,14 @@
 //! - `opsec`: AMSI bypass, ETW patching, direct syscall infrastructure
 //! - `edr_bypass`: Next-gen EDR detection, ntdll unhooking, ETW abolition, sleep masking
 //! - `cves`: CVE exploit modules (sAMAccountName spoofing, Shadow Credentials, RBCD)
+//! - `litterbox`: Compile-time string obfuscation (static signature evasion)
 
 pub mod cg_check;
 pub mod cred_dump;
 pub mod cves;
 pub mod dpapi_extract;
 pub mod edr_bypass;
+pub mod litterbox;
 pub mod lsaiso;
 pub mod opsec;
 pub mod skeleton_key;
@@ -58,10 +60,10 @@ pub use opsec::{
     strip_honeypot_attrs, suppress_etw, suppress_etw_direct,
 };
 pub use skeleton_key::{
-    DEFAULT_SKELETON_KEY, DeploymentMethod, SkeletonKeyConfig, SkeletonKeyExploiter,
-    SkeletonKeyPreflight, SkeletonKeyPreflightStatus, SkeletonKeyResult,
-    assess_lsa_protection_values, assess_lsa_protection_values_with_isolated_secret,
-    assess_skeleton_key_preflight_from_registry,
+    DeploymentMethod, SkeletonKeyConfig, SkeletonKeyExploiter, SkeletonKeyPreflight,
+    SkeletonKeyPreflightStatus, SkeletonKeyResult, assess_lsa_protection_values,
+    assess_lsa_protection_values_with_isolated_secret, assess_skeleton_key_preflight_from_registry,
+    default_skeleton_key,
 };
 pub use syscall::{
     DynamicSyscallStub, SyscallNumbers, SyscallStatus, syscall_0, syscall_1, syscall_2, syscall_3,

@@ -4,6 +4,7 @@
 //! for credential capture and relay to other services.
 
 pub mod adcs_relay;
+pub mod captive_portal;
 pub mod exchange;
 pub mod http_asymmetric;
 pub mod http_relay;
@@ -15,15 +16,20 @@ pub mod smb_daemon;
 pub mod tls;
 pub mod tls_relay;
 pub mod utils;
+pub mod wpad;
 
 // Re-export types from submodules
 pub use adcs_relay::{AdcsRelay, AdcsRelayConfig};
+pub use captive_portal::{
+    CaptivePortal, CaptivePortalConfig, CaptivePortalTemplate, CapturedFormCredential,
+};
 pub use http_asymmetric::{HttpAsymmetricConfig, HttpAsymmetricRelay};
 pub use http_relay::{HttpRelay, HttpRelayConfig};
 pub use relay::RelayStats;
 pub use responder::CapturedCredential;
 pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 pub use tls_relay::{CbtMode, TlsRelay, TlsRelayConfig};
+pub use wpad::{WpadConfig, WpadServer};
 // Re-export RelayError from overthrone_core
 use futures::stream::{FuturesUnordered, StreamExt};
 pub use overthrone_core::error::RelayError;
@@ -225,6 +231,12 @@ pub struct RelayControllerConfig {
     /// When `None`, uses SMB null session fallback.
     /// When `Some`, uses these credentials for authenticated SMB binds.
     pub auto_coerce_credentials: Option<CoerceCreds>,
+    /// Passive analysis mode — log LLMNR/NBT-NS/mDNS queries without poisoning
+    pub analyze_only: bool,
+    /// IP address to use in poisoned responses (defaults to interface IP when None)
+    pub poison_ip: Option<String>,
+    /// Configuration for standalone WPAD proxy server (None = disabled)
+    pub wpad_config: Option<WpadConfig>,
 }
 
 impl Default for RelayControllerConfig {
@@ -252,6 +264,9 @@ impl Default for RelayControllerConfig {
             auto_coerce_max_retries: 1,
             auto_coerce_credentials: None,
             tls_relay_config: None,
+            analyze_only: false,
+            poison_ip: None,
+            wpad_config: None,
         }
     }
 }
@@ -280,15 +295,20 @@ impl RelayController {
 
         // Initialize poisoner if enabled (skipped in no-poison / relay-only mode)
         if !self.config.no_poison && (self.config.llmnr || self.config.nbtns || self.config.mdns) {
+            let poison_ip = self
+                .config
+                .poison_ip
+                .clone()
+                .unwrap_or_else(|| self.config.interface.clone());
             let poisoner_config = poisoner::PoisonerConfig {
                 listen_ip: self.config.interface.clone(),
-                poison_ip: self.config.interface.clone(),
+                poison_ip,
                 attack_mode: AttackMode::Capture,
                 timeout: 30,
                 llmnr: self.config.llmnr,
                 nbtns: self.config.nbtns,
                 mdns: self.config.mdns,
-                analyze_only: false,
+                analyze_only: self.config.analyze_only,
                 target_hosts: Vec::new(),
             };
             self.poisoner = Some(poisoner::Poisoner::new(poisoner_config)?);
@@ -317,6 +337,16 @@ impl RelayController {
             };
             self.responder = Some(responder::Responder::new(responder_config));
             info!("Responder initialized for credential capture");
+        }
+
+        // Initialize standalone WPAD proxy server if configured
+        if let Some(ref wpad_cfg) = self.config.wpad_config {
+            let wpad = wpad::WpadServer::new(wpad_cfg.clone());
+            match wpad.start().await {
+                Ok(_) => info!("WPAD proxy server started"),
+                Err(e) => warn!("WPAD proxy server failed to start: {}", e),
+            }
+            info!("WPAD proxy configured");
         }
 
         // Initialize relay if targets specified
@@ -684,7 +714,9 @@ async fn wait_for_listener_ready(port: u16, timeout: Duration) {
     let mut delay = Duration::from_millis(100);
     while start.elapsed() < timeout {
         match TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().unwrap(),
+            &format!("127.0.0.1:{port}")
+                .parse()
+                .expect("127.0.0.1:{u16} is always a valid SocketAddr"),
             Duration::from_millis(200),
         ) {
             Ok(_) => {
@@ -725,6 +757,9 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         auto_coerce_max_retries: 1,
         auto_coerce_credentials: None,
         tls_relay_config: None,
+        analyze_only: false,
+        poison_ip: None,
+        wpad_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -763,6 +798,9 @@ pub async fn run_relay_attack(
         auto_coerce_max_retries: 1,
         auto_coerce_credentials: None,
         tls_relay_config: None,
+        analyze_only: false,
+        poison_ip: None,
+        wpad_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -809,6 +847,9 @@ pub async fn run_http_asymmetric_relay(
         auto_coerce_max_retries: 1,
         auto_coerce_credentials: None,
         tls_relay_config: None,
+        analyze_only: false,
+        poison_ip: None,
+        wpad_config: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -981,6 +1022,9 @@ mod tests {
             auto_coerce_max_retries: 1,
             auto_coerce_credentials: None,
             tls_relay_config: None,
+            analyze_only: false,
+            poison_ip: None,
+            wpad_config: None,
         };
         assert_eq!(config.auto_coerce_mode, "all");
         assert!(!config.auto_coerce_parallel);

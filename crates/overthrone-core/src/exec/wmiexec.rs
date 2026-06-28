@@ -161,7 +161,10 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         .map_err(|e| OverthroneError::Smb(format!("EPM bind failed: {e}")))?;
 
     if epm_resp.len() < 24 {
-        return Err(OverthroneError::Smb("EPM bind response too short".into()));
+        return Err(OverthroneError::Smb(format!(
+            "EPM bind response too short: {} bytes (expected >=24)",
+            epm_resp.len()
+        )));
     }
     let ptype = epm_resp.get(2).copied().unwrap_or(0);
     if ptype != 12 {

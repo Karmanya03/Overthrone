@@ -167,7 +167,10 @@ fn parse_nbns_node_status(data: &[u8]) -> Result<NbnsNodeStatus> {
     if data.len() < 57 {
         return Err(OverthroneError::Dns {
             target: "nbns".to_string(),
-            reason: "Response too short".to_string(),
+            reason: format!(
+                "NBNS response too short: {} bytes (expected >=57)",
+                data.len()
+            ),
         });
     }
 
@@ -314,7 +317,10 @@ pub async fn smb_negotiate(target: &str) -> Result<SmbNegotiateResult> {
 
     // Verify SMB2 protocol ID
     if &header[0..4] != b"\xfeSMB" {
-        return Err(OverthroneError::Smb("Not an SMB2 response".to_string()));
+        let actual: Vec<u8> = header.get(0..4).unwrap_or_default().to_vec();
+        return Err(OverthroneError::Smb(format!(
+            "Not an SMB2 response: first 4 bytes = {actual:02x?} (expected fe SMB), remote may be SMB1 or non-SMB service",
+        )));
     }
 
     // Parse SMB2 header

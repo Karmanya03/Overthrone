@@ -442,7 +442,7 @@ impl SccmScanner {
     pub fn generate_wmi_discovery_command(&self) -> String {
         let cred_block = if let Some(hash) = &self.config.pth_hash {
             format!(
-                "# Pass-the-hash requires external tools like Rubeus or mimikatz to inject the hash for WMI\n# Hash: {}",
+                "# Pass-the-hash requires external tools like Rubeus or an external credential tool to inject the hash for WMI\n# Hash: {}",
                 hash
             )
         } else {

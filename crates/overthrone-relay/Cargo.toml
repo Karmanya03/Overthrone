@@ -11,12 +11,14 @@ name = "overthrone_relay"
 path = "src/lib.rs"
 
 [dependencies]
-overthrone-core = { version = "0.3.0-beta", path = "../overthrone-core" }
+overthrone-core = { version = "0.3.1", path = "../overthrone-core" }
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 aes.workspace = true
