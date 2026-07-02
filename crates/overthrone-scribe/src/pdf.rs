@@ -658,7 +658,7 @@ fn render_pdf_group_inventory(ctx: &mut PdfContext, state: &EngagementState) {
     }
 
     let mut groups: Vec<(&String, &Vec<String>)> = state.groups.iter().collect();
-    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    groups.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     for (group, members) in groups.iter().take(20) {
         ctx.write_body(&format!("  {} ({} members)", group, members.len()));
     }
@@ -677,7 +677,7 @@ fn render_pdf_spn_inventory(ctx: &mut PdfContext, state: &EngagementState) {
     }
 
     let mut spns: Vec<(&String, &Vec<String>)> = state.spn_map.iter().collect();
-    spns.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    spns.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     for (account, spn_list) in spns.iter().take(30) {
         ctx.write_body(&format!("  {}: {}", account, spn_list.join(", ")));
     }

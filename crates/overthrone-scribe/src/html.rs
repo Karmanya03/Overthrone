@@ -558,7 +558,7 @@ fn render_html_group_inventory(html: &mut String, state: &EngagementState) {
     ));
 
     let mut groups: Vec<(&String, &Vec<String>)> = state.groups.iter().collect();
-    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    groups.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     html.push_str("<div class=\"group-list\">\n");
     for (group, members) in groups.iter().take(50) {
@@ -593,7 +593,7 @@ fn render_html_spn_inventory(html: &mut String, state: &EngagementState) {
     ));
     html.push_str("<table class=\"info-table\">\n<thead><tr><th>Account</th><th>SPNs</th></tr></thead>\n<tbody>\n");
     let mut spns: Vec<(&String, &Vec<String>)> = state.spn_map.iter().collect();
-    spns.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    spns.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     for (account, spn_list) in spns.iter().take(100) {
         let spn_str = escape_html(&spn_list.join(", "));
         html.push_str(&format!(

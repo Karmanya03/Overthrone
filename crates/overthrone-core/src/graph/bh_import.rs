@@ -186,7 +186,7 @@ fn bh_right_to_edge(right: &str) -> Option<EdgeType> {
         "FORCECHANGEPASSWORD" | "FORCE_CHANGE_PASSWORD" => Some(EdgeType::ForceChangePassword),
         "ADDMEMBERS" | "ADD_MEMBER" | "WRITEMEMBER" => Some(EdgeType::AddMembers),
         "ADDSELF" | "ADD_SELF" => Some(EdgeType::AddSelf),
-        "WRITESPIN" | "WRITE_SPN" => Some(EdgeType::WriteSPN),
+        "WRITESPN" | "WRITE_SPN" => Some(EdgeType::WriteSPN),
         "WRITEKEYCREDENTIALLINK" | "WRITE_KEY_CREDENTIAL_LINK" => {
             Some(EdgeType::WriteKeyCredentialLink)
         }

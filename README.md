@@ -52,7 +52,7 @@
   <a href="#installation"><b>Install</b></a> &nbsp;·&nbsp;
   <a href="#wordlists"><b>Wordlists</b></a> &nbsp;·&nbsp;
   <a href="#commands"><b>Commands</b></a> &nbsp;·&nbsp;
-  <a href="#usage"><b>Auto-Pwn Usage</b></a> &nbsp;·&nbsp;
+  <a href="#usage"><b>Wizard Usage</b></a> &nbsp;·&nbsp;
   <a href="#architecture"><b>Architecture</b></a> &nbsp;·&nbsp;
   <a href="#features"><b>Features</b></a> &nbsp;·&nbsp;
   <a href="#examples"><b>Examples</b></a> &nbsp;·&nbsp;
@@ -69,7 +69,9 @@ Overthrone is a full-spectrum AD red team framework that handles the entire kill
 
 This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is not another Python wrapper that breaks when you look at it funny. This is the whole siege engine. One binary. Minimal runtime dependencies\*. All regret (for the blue team).
 
-> **Shorthand:** Every command works with both `overthrone` and `ovt`. Because life is too short to type 10 characters when 3 will do. `ovt auto-pwn` = `overthrone auto-pwn`. Same war crimes against Active Directory, fewer keystrokes.
+> **Shorthand:** Every command works with both `overthrone` and `ovt`. Because life is too short to type 10 characters when 3 will do. `ovt wizard` = `overthrone wizard`. Same war crimes against Active Directory, fewer keystrokes.
+
+> **⚠️ Deprecation notice:** The `ovt auto-pwn` command from earlier betas has been **removed** and replaced by `ovt wizard`. If your muscle memory still types `auto-pwn`, don't worry - your fingers will adapt. The wizard is what auto-pwn always wanted to be when it grew up: interactive, resumable, Q-learning-optimized, and with per-stage pause/approve so you don't accidentally DCSync during a demo.
 
 \*The binary is statically linked with ~35 Rust crates (Tokio, ldap3, kerberos\_asn1, etc.) - no Python, no .NET, no JVM. On Linux you need `smbclient` for some legacy SMB paths; most features use the built-in pure-Rust SMB2 client.
 
@@ -282,10 +284,10 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 | `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, zero-knowledge username enumeration via Kerberos AS-REQ, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism, **auto-crack loop, delegation chain automation (628 lines), ACL reasoning (439 lines), machine account harvesting (328 lines), smart wordlists (374 lines), NTLMv1 downgrade roast (496 lines), relay hash extraction (588 lines)** | The crate that did all its homework, extra credit, and the teacher's homework too. 76 tests. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class, got a PhD, and came back to teach the other crates. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, foreign trust LDAP enumeration (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning, **TCP source-port rotation (PortRotator, 12 tests), JA3/JA4 TLS fingerprint randomization (9 tests), SMB OPLOCK hijacking (3 tests), Responder integration (CrawlerResponder, 9 tests)** | Used to have 5 functions that all returned "not implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries, AND the missing gaps got filled. Source-port rotation, JA3/JA4, OPLOCK, and Responder all done. 121 tests. ALL GAPS CLOSED. |
 | `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond/Sapphire ticket forging with full PAC construction, Enhanced Diamond (KDC checksum preservation), Bronze Bit (CVE-2020-17049), DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL/PKINIT, DSRM backdoor via remote registry, forensic cleanup, **ADCS Dispatcher (ESC1-9 orchestration, 1,147 lines, 9 tests), S4U2Self with PKINIT chain, AS-REP-to-TGT pipeline, PKINIT-keyed InterRealmTgt + SkeletonKey, MS-WCCE DCOM (30 tests)** | Golden Tickets? Forged. Silver? Minted. Diamond? Polished. Sapphire? Cut. Bronze Bit? Bent. ADCS dispatcher orchestrates ESC1-9 automatically. PKINIT-keyed everything. S4U2Self with certificates. MS-WCCE DCOM direct enrollment. 17 ForgeAction variants. 103 tests. The forge is now a factory. |
-| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy, Q-Learning RL engine (compiled by default), goal-based planning, YAML playbook engine, interactive wizard mode, full auto-pwn orchestration, live kill-chain pipeline visualization, per-step Q-state/decision/reward readout, 9-section final report, **Hostile-DC detection (dc_verify.rs, 5 checks), Session management CLI (ovt session, 7 actions, 12 tests), WizardSession::new_with_state() for skip-Enumerate resume, Coercion cred passthrough** | The "hold my beer" engine. Now with session management - list/show/info/delete/clean/path/stats. Hostile-DC detection keeps you from trusting the enemy. `new_with_state()` skips enumeration on resume. 105 tests. It plans, adapts, executes, explains itself, cleans up, and files your paperwork. |
+| `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy, Q-Learning RL engine (compiled by default), goal-based planning, YAML playbook engine, interactive wizard mode (`ovt wizard`), full kill-chain orchestration, live pipeline visualization, per-step Q-state/decision/reward readout, 9-section final report, **Hostile-DC detection (dc_verify.rs, 5 checks), Session management CLI (ovt session, 7 actions, 12 tests), WizardSession::new_with_state() for skip-Enumerate resume, Coercion cred passthrough** | The "hold my beer" engine. Now with session management - list/show/info/delete/clean/path/stats. Hostile-DC detection keeps you from trusting the enemy. `new_with_state()` skips enumeration on resume. 105 tests. Plans, adapts, executes, explains itself, cleans up, and files your paperwork. All without ever mentioning the words "auto-pwn." |
 | `overthrone-relay` | The Interceptor | NTLM relay engine (SMB->LDAP, HTTP->SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8), Exchange relay (CVE-2024-21410 with EPA bypass), SMB signing awareness (pre-flight check), LDAP signing bypass (CVE-2019-1040 Drop the MIC), **HTTP->SMB asymmetric relay (360 lines, 13 tests), IPv6 transport (16 tests), mTLS/TLS verification mode (TlsVerificationMode, 22 tests), Channel binding validation (CbtMode), Auto-trigger coercion with CoerceCreds + ShadowCoerce, DCE/RPC signature stripping, SOCKS5 proxy output** | Born complete. Stayed complete. Added HTTP->SMB asymmetric relay, IPv6, mTLS verification, auto-coercion, DCE/RPC stripping, and SOCKS5 just because. 165 tests. Responder.py walked so this crate could sprint, then it learned to fly, then it built an airplane. |
 | `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording, **timeline view, evidence hashing (sha256), operator attribution (OperatorMetadata), findings-population path (auto_generate_findings made pub)** | Turns "I hacked everything" into "here's why you should pay us." All three formats work. PDF renders actual content. Timeline view, evidence integrity, and operator attribution added. 54 tests. The paperwork is immaculate. |
-| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts, 3,263 lines), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, auto-pwn, C2 implant deploy, PDF/Markdown/JSON report output, **Config file loading (TOML XDG-style, 1,111 lines, 39 tests), Profile system (9 subcommands, 31 tests, OT_CONFIG/OT_PROFILE env), Session management subcommand (7 actions), --dry-run, --output-format json, --downgrade-rc4 flag** | The interactive shell alone is 3,263 lines. Config system with TOML + XDG + env vars. Profile system for named configurations. Session subcommand. 6 TUI modules. Zero `unreachable!()` calls. The banner ASCII art is still *chef's kiss*. |
+| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts, 3,263 lines), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, C2 implant deploy, PDF/Markdown/JSON report output, **Config file loading (TOML XDG-style, 1,111 lines, 39 tests), Profile system (9 subcommands, 31 tests, OT_CONFIG/OT_PROFILE env), Session management subcommand (7 actions), --dry-run, --output-format json, --downgrade-rc4 flag** | The interactive shell alone is 3,263 lines. Config system with TOML + XDG + env vars. Profile system for named configurations. Session subcommand. 6 TUI modules. Zero `unreachable!()` calls. The banner ASCII art is still *chef's kiss*. `auto-pwn` command graduated to `ovt wizard`. Same kill chain, fewer edge cases. |
 | `overthrone-viewer` | The Window | Browser-based graph GUI served locally. D3.js migrated to Three.js (GPU-accelerated WebGL). Node search, path finder, detail panels with ACE/ACL guidance, stats, blank-first search/chunk render with render budgets (50-ALL). mTLS client cert support. Multi-user sessions with per-user rate limits. CSRF middleware. Auth always-on. Random credentials default. Non-loopback TLS enforcement. | When you want BloodHound vibes in a browser tab, but with GPU acceleration and no Neo4j. Three.js migration gave it superpowers. Auth, rate limits, mTLS, and CSRF make it production-safe. 31 tests. No WebSocket yet (you still have to refresh), but everything else is there. |
 
 ### The Crate Report Card
@@ -357,7 +359,7 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **CLI PDF + C2 + TUI wiring** | `cli/src/commands_impl.rs`, `tui/runner.rs` | PDF reports, C2 implant deploy, TUI crawler - all actually call real code now. |
 | **WinRM Windows output** | `core/src/exec/winrm/windows.rs` | `WSManReceiveShellOutput` loop collects real output. |
 | **Session resume + TOML config** | `cli/src/main.rs`, `pilot/src/runner.rs` | `--resume <file>` picks up mid-chain. `--config <file>` loads DC, domain, auth, stealth, jitter from TOML. |
-| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final auto-pwn report. |
+| **Credential Vault** | `core/src/lib.rs` (`CredStore`) | Thread-safe, privilege-ranked (DA > EA > Local Admin > Service > User), surfaced in the final wizard report. |
 | **OPSEC Noise Gate** | `pilot/src/runner.rs` | `--stealth` caps the noise budget at `Medium`. High/Critical-noise steps are skipped and logged. |
 | **Skeleton Key native DLL** | `tools/skeleton_key/`, `core/src/postex/skeleton_key_dll.rs` | 92KB x64 MSVC-compiled DLL with `MsvpPasswordValidate` hook. Embedded as Rust const bytes. Exports: Enable/Disable/IsActive. |
 | **EDR Evasion Module** | `core/src/postex/edr_bypass.rs` | 1,575-line next-gen stealth: EDR detection (22 vendors), ntdll unhooking, ETW abolition, syscall resurrection, sleep masking. |
@@ -437,7 +439,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **SOCKS5 proxy / pivoting** | ✅ | ✅ | ✅ | ✅ | Full RFC 1928 SOCKS5 server on the compromised box. IPv4/IPv6/domain. Nothing extra needed on target. Pivot deeper into the network. |
 | **Forge + C2 + ADCS + MSSQL** | ✅ | ✅ | ✅ | ✅ | Diamond tickets, Shadow Creds, Cobalt Strike/Sliver/Havoc integration, MSSQL `xp_cmdshell`, SCCM abuse. It's all in there. |
 | **Skeleton Key (native DLL)** | ✅ | ✅ | ✅ | ✅ | 92KB x64 MSVC-compiled DLL embedded in binary. Reflective LSASS injection with `MsvpPasswordValidate` hook. Exports: Enable/Disable/IsActive. PatchGuard will notice. Credential Guard will block it. Everything else? Game over. |
-| **auto-pwn (full kill chain)** | ✅ | ✅ | ✅ | ✅ | Enum ? graph ? roast ? crack ? escalate ? persist ? report. One command. Live per-step output with Q-learning decisions. Ends with a kill-chain completion report, credential tables, and loot summary. Use `--stealth` on WS 2025 for the noisier phases. |
+| **Wizard (guided kill chain)** | ✅ | ✅ | ✅ | ✅ | `ovt wizard` - interactive or headless, enumerates, graphs, roasts, cracks, escalates, persists, reports. Per-stage pause/approve, Q-learning decisions, session resume. Live kill-chain pipeline with credential tables and loot summary. Use `--no-pause` for full automation, `--stealth` on WS 2025 for quieter ops. |
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
@@ -452,9 +454,9 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 **Quick taste:**
 
 ```bash
-ovt auto-pwn -H DC -d DOMAIN -u USER -p PASS                        # Full AI killchain
-ovt auto-pwn --config ./eng.toml --resume session.json               # Resume with config
-ovt wizard   -t DA --dc-host DC -d DOMAIN -u USER                   # Guided mode
+ovt wizard --target "Domain Admins" -H DC -d DOMAIN -u USER          # Interactive killchain
+ovt wizard --target "Domain Admins" --resume session.json            # Resume saved session
+ovt wizard --target DA -H DC -d DOMAIN -u USER --no-pause            # Full auto (headless)
 ovt shell                                                            # Interactive REPL
 ovt enum all -H DC -d DOMAIN -u USER -p PASS                        # Enumerate everything
 ovt enum policy -H DC -d DOMAIN -u USER -p PASS                     # Lockout/password policy
@@ -736,7 +738,7 @@ The "I'll hack it myself" engine. Now with machine learning and a filing system.
 | **TOML Config** | ✅ `--config <file>` loads engagement params from a TOML file. |
 | **Credential Vault** | ✅ Thread-safe `CredStore` with privilege ranking. |
 | **OPSEC Noise Gate** | ✅ `--stealth` caps noise at `Medium`. High/Critical steps are skipped. |
-| **Auto-Pwn Runner** | ✅ Full engagement orchestrator: enum -> graph -> exploit -> persist -> report. Live kill-chain pipeline, per-step output, 9-section final report. |
+| **Wizard Runner** | ✅ Full engagement orchestrator: enum -> graph -> exploit -> persist -> report. Interactive or headless (`--no-pause`). Live kill-chain pipeline, per-step Q-learner output, 9-section final report. |
 | **WizardSession::new_with_state()** | ✅ Constructs WizardSession from pre-populated EngagementState. Enables skip-Enumerate resume flow. |
 
 ### Reporting (overthrone-scribe)
@@ -938,7 +940,7 @@ git clone --depth=1 https://github.com/danielmiessler/SecLists.git ~/seclists
 # AD service account patterns
 /usr/share/seclists/Usernames/Names/names.txt
 
-# No list? Kerberos user-enum and auto-pwn-preauth can fall back to a small embedded candidate set.
+# No list? Kerberos user-enum can fall back to a small embedded candidate set.
 ```
 
 ### Password Lists
@@ -990,46 +992,46 @@ done < /usr/share/seclists/Passwords/Common-Credentials/10-million-password-list
 
 ## Usage
 
-### Quick Start - Auto-Pwn
+### Quick Start - Wizard (formerly auto-pwn)
 
-For when you want to go from "I have creds" to "I own the domain" in one command:
+The `ovt auto-pwn` command was in the beta. It served us well. It's been promoted. Meet `ovt wizard` - the same kill chain, but with guardrails, pause/approve, session resume, and Q-learning that remembers your engagements across VPN drops, coffee breaks, and existential crises.
 
 ```bash
-# Full form - let the AI handle it
-overthrone auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
+# Interactive - pauses after each stage for operator review
+ovt wizard --target "Domain Admins" -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
-# Shorthand - for every occasion
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
+# Shorthand target
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!'
 
-# Stealth mode - when the SOC is awake
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --stealth --jitter-ms 3000
+# Headless mode - full auto, no pauses
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --no-pause
 
-# Load engagement params from a TOML config file
-ovt auto-pwn --config ./corp-local.toml
+# Load engagement params from config
+ovt wizard --target DA --config ./corp-local.toml
 
 # Resume a previous session (VPN dropped? no problem)
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' \
   --resume ~/.overthrone/sessions/corp.local-10.10.10.1.json
 
-# Recon only - enumerate everything, touch nothing
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --max-stage enumerate
+# Or resume from a named session (skips enum if state has data)
+ovt wizard --from-session corp.local-10.10.10.1
+
+# Stealth mode - when the SOC is awake
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --stealth --jitter-ms 3000
+
+# Skip enumeration, load from previous state file
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' \
+  --skip-enum --from-file ./previous_enum.json
 
 # Q-Learning AI with persistent brain (gets smarter every run)
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' \
   --adaptive hybrid --q-table ./engagement_brain.json
 
-# Run a canned playbook instead of goal-driven AI
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' \
-  --playbook full-auto-pwn
-
 # Dry run - plan the attack without pulling the trigger
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --dry-run
-
-# No-credential bootstrap with LDAP source selection and concurrency
-ovt auto-pwn-preauth -H 10.10.10.1 -d corp.local --use-ldap --concurrency 20
+ovt wizard --target DA -H 10.10.10.1 -d corp.local -u jsmith -p 'Summer2026!' --dry-run
 ```
 
-That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. Kerberos user-enum supports file-backed, LDAP-backed, and embedded-fallback source selection, and spray now runs with bounded concurrency while still honoring lockout policy. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. In stealth mode it starts with low-volume LDAP baseline and delegation probes before heavier enumeration. This time you can actually watch it work: every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. Auto-pwn and Wizard also write a single phase-wise Markdown trail under `loot/trails/overthrone_<domain>_<dc>_runNNN.md`; repeated runs detect prior trails and never overwrite. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
+That's it. Overthrone enumerates users, computers, groups, trusts, GPOs, password policy, badPwdCount/badPwdTime/lockoutTime telemetry, delegation/RBCD, readable LAPS, and shares - builds the attack graph - finds the shortest path to DA - Kerberoasts, sprays, cracks hashes - escalates, moves laterally, DCSyncs, and generates a report. Kerberos user-enum supports file-backed, LDAP-backed, and embedded-fallback source selection, and spray runs with bounded concurrency while still honoring lockout policy. The Q-Learning engine (compiled by default in hybrid mode) remembers what worked and optimizes future runs. In stealth mode it starts with low-volume LDAP baseline and delegation probes before heavier enumeration. Every step announces itself with stage, noise level, and priority, then shows the result with credential/host gains. The Q-learner prints its state encoding, action decision, and reward after each step. The wizard writes a phase-wise Markdown trail under `loot/trails/overthrone_<domain>_<dc>_runNNN.md`; repeated runs detect prior trails and never overwrite. The final report is a full breakdown - kill-chain completion visual, per-stage success/fail stats, credential table, admin host list, loot summary, Q-learner session stats, and audit trail. Go get coffee if you want, but you might actually enjoy watching this one.
 
 ### Manual Mode
 
@@ -1140,10 +1142,10 @@ ovt dump --target 10.10.10.1 ntds -d corp.local -u SVC-BACKUP -p 'Backup2019!'
 ovt report --format markdown --output corp-local-report.md
 ```
 
-### Scenario 2: "Full auto-pwn, I have a meeting in an hour"
+### Scenario 2: "Full wizard, I have a meeting in an hour"
 
 ```bash
-ovt auto-pwn -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!'
+ovt wizard --target "Domain Admins" -H 10.10.10.1 --domain corp.local -u jsmith -p 'Summer2026!' --no-pause
 # Go get coffee. Come back to: engagement-report.md
 ```
 
@@ -1163,7 +1165,7 @@ ovt config profile set mega-corp domain corp.local
 ovt config profile use mega-corp
 
 # Now every command picks up the settings automatically
-ovt auto-pwn
+ovt wizard --target "Domain Admins"           # Uses saved config
 ovt adcs enum                                 # Use saved config
 ovt forge adcs --ca-server CA01.corp.local    # Auto-exploit ESC1-9
 ovt shell                                     # Interactive REPL with creds pre-loaded
@@ -1234,7 +1236,7 @@ A: They work now. Sliver (mTLS REST), Havoc (REST with auth), Cobalt Strike (Agg
 A: Use `ovt config` for persistent settings (TOML, XDG-aware). `ovt config set dc-host 10.0.0.1` and never type it again. Or create named profiles with `ovt config profile create cobalt-op` and activate with `ovt config profile use cobalt-op`. Also supports `OT_CONFIG` and `OT_PROFILE` env vars. Your fingers will thank you.
 
 **Q: Can I resume a crashed engagement?**
-A: `ovt session list` shows all saved sessions. `ovt auto-pwn --from-session <name>` picks up where you left off - skips enumeration if the state already has users/computers/groups, goes straight to attack. Also `--resume <file>` for the traditional approach. Overthrone saves state after every phase. VPN drops, reboots, coffee breaks - none of them stop the show.
+A: `ovt session list` shows all saved sessions. `ovt wizard --from-session <name>` picks up where you left off - skips enumeration if the state already has users/computers/groups, goes straight to attack. Also `--resume <file>` for the traditional approach. Overthrone saves state after every phase. VPN drops, reboots, coffee breaks - none of them stop the show.
 
 **Q: What's the deal with the interactive shell?**
 A: `ovt shell` drops you into a full REPL with rustyline - tab completion, command history, context-aware prompts, syntax highlighting. Has forge modules (golden/silver/diamond/skeleton) with `use`/`set`/`run`. Also supports WinRM, SMB, and WMI shell types for remote command execution. Think of it as a poor man's Metasploit console, but in Rust and without the warmongering aesthetic.

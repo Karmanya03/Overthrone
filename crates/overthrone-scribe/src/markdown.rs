@@ -575,7 +575,7 @@ fn render_group_inventory(md: &mut String, state: &EngagementState) {
     ));
 
     let mut groups: Vec<(&String, &Vec<String>)> = state.groups.iter().collect();
-    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    groups.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     for (group, members) in groups.iter().take(50) {
         md.push_str(&format!("- **{}** ({} members)\n", group, members.len()));
@@ -608,7 +608,7 @@ fn render_spn_inventory(md: &mut String, state: &EngagementState) {
     ));
     md.push_str("| Account | SPNs |\n|---|---|\n");
     let mut spns: Vec<(&String, &Vec<String>)> = state.spn_map.iter().collect();
-    spns.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    spns.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     for (account, spn_list) in spns.iter().take(100) {
         let spn_str = spn_list.join(", ");
         let truncated: String = spn_str.chars().take(200).collect();

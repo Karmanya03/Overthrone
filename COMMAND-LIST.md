@@ -96,7 +96,7 @@ These work on every single command:
 
 ## `ovt wizard` - Interactive Guided Mode
 
-The autopwn with guardrails. Pauses after each stage for operator review.
+The successor to auto-pwn. Same kill chain, but with guardrails — pauses after each stage for operator review, supports session resume, and a Q-learning brain that gets smarter the more you use it.
 
 ```bash
 # Start a new wizard session
