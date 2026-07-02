@@ -3991,7 +3991,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 if mdns { " (mDNS enabled)" } else { "" },
             );
 
-            let wpad_config = wpad.map(|url| overthrone_relay::WpadConfig::new(url));
+            let wpad_config = wpad.map(overthrone_relay::WpadConfig::new);
 
             let config = RelayControllerConfig {
                 interface: interface.clone(),
