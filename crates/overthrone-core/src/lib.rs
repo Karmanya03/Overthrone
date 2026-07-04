@@ -2,6 +2,7 @@
 pub mod adcs;
 pub mod azure_ad;
 pub mod c2;
+pub mod checkpoint;
 pub mod config;
 pub mod cred_cache;
 pub mod cred_store;

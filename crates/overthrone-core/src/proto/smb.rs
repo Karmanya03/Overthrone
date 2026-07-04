@@ -202,39 +202,29 @@ pub struct AdminCheckResult {
 #[cfg(windows)]
 impl SmbSession {
     /// Runs this module operation.
+    /// Uses the pure-Rust SMB2 client (smb2.rs) for reliable SMB2-only negotiation.
     pub async fn connect(
         target: &str,
         domain: &str,
         username: &str,
         password: &str,
     ) -> Result<Self> {
-        info!("SMB: Connecting to \\\\{target} as {domain}\\{username}");
+        info!("SMB: Connecting to \\\\{target} as {domain}\\{username} (pure-Rust SMB2)");
 
-        let client = Client::new(ClientConfig::default());
-        let ipc_path = format!(r"\\{}\IPC$", target);
-        let unc = UncPath::from_str(&ipc_path)
-            .map_err(|e| OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}")))?;
-
-        let qualified_user = format!("{}\\{}", domain, username);
-        client
-            .share_connect(&unc, &qualified_user, password.to_string())
-            .await
-            .map_err(|e| {
-                OverthroneError::Smb(format!(
-                    "Auth failed to \\\\{target}\\IPC$ as {domain}\\{username}: {e}"
-                ))
-            })?;
+        let conn = super::smb2::Smb2Connection::connect(target, SMB_PORT).await?;
+        conn.negotiate().await?;
+        let session_key = conn.session_setup(domain, username, password).await?;
 
         info!("SMB: Authenticated to \\\\{target}");
 
         Ok(SmbSession {
-            client: Some(client),
-            inner: None,
+            client: None,
+            inner: Some(std::sync::Arc::new(tokio::sync::Mutex::new(conn))),
             target: target.to_string(),
             username: username.to_string(),
             domain: domain.to_string(),
             ticket: None,
-            session_key: None,
+            session_key: Some(session_key),
         })
     }
 

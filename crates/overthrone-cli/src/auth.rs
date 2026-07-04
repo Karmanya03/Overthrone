@@ -1,6 +1,6 @@
 //! Credential management and authentication helpers for the CLI.
 use clap::ValueEnum;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
@@ -313,6 +313,9 @@ impl Default for Credentials {
 }
 
 fn prompt_password() -> Result<String, String> {
+    if !io::stdin().is_terminal() {
+        return Err("--password required for password auth in non-interactive mode".to_string());
+    }
     eprint!("  Password: ");
     io::stderr().flush().map_err(|e| e.to_string())?;
     rpassword::read_password().map_err(|e| format!("Failed to read password: {}", e))

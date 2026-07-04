@@ -5389,6 +5389,7 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
 // cmd_scan â€” Port Scanner
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_scan(
     cli: &Cli,
     targets: &str,
@@ -5397,6 +5398,7 @@ pub async fn cmd_scan(
     timeout: u64,
     ldap: bool,
     smb: bool,
+    ad_only: bool,
 ) -> i32 {
     use overthrone_core::scan::{PortScanner, ScanConfig, ScanType as CoreScanType};
 
@@ -5466,7 +5468,18 @@ pub async fn cmd_scan(
     }
 
     // 2. Port Scanning
-    println!("  {} Ports: {}", ">".bright_black(), ports.cyan());
+    let effective_ports = if ad_only {
+        "88,135,389,445,636,3268,3269,5985,5986"
+    } else {
+        ports
+    };
+    if ad_only {
+        println!(
+            "  {} AD-only mode: scanning critical ports 88,135,389,445,636,3268,3269,5985,5986",
+            ">".bright_black()
+        );
+    }
+    println!("  {} Ports: {}", ">".bright_black(), effective_ports.cyan());
     println!("  {} Type: {:?}", ">".bright_black(), scan_type);
     println!("  {} Timeout: {}ms", ">".bright_black(), timeout);
 
@@ -5478,10 +5491,10 @@ pub async fn cmd_scan(
 
     let config = ScanConfig {
         targets: targets.to_string(),
-        ports: ports.to_string(),
+        ports: effective_ports.to_string(),
         scan_type: core_scan_type,
         timeout_ms: timeout,
-        concurrency: 50,
+        concurrency: if ad_only { 10 } else { 50 },
     };
 
     let scanner = PortScanner::new(config);

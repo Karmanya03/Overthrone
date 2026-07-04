@@ -78,6 +78,7 @@ const OPLOCK_LEVEL_BATCH: u8 = 0x09;
 const OPLOCK_LEVEL_LEASE: u8 = 0xFF;
 
 // SMB2 Dialects
+const SMB2_DIALECT_202: u16 = 0x0202; // SMB 2.0.2 (required by some servers)
 const SMB2_DIALECT_210: u16 = 0x0210; // SMB 2.1
 const SMB2_DIALECT_300: u16 = 0x0300; // SMB 3.0
 const SMB2_DIALECT_302: u16 = 0x0302; // SMB 3.0.2
@@ -509,18 +510,69 @@ impl Smb2Connection {
 
     // ───────────────── Negotiate ─────────────────
 
-    /// SMB2 Negotiate — establishes dialect (2.1 / 3.0.2).
+    /// SMB2 Negotiate — establishes dialect.
+    ///
+    /// Strategy (matching Impacket's compatibility-first approach):
+    /// 1. Offer dialects 2.0.2 through 3.0.2 (no 3.1.1 pre-auth integrity).
+    /// 2. If that fails, retry with all dialects including 3.1.1 + contexts.
+    ///
+    /// This avoids SMB 3.1.1 pre-auth integrity hashing which isn't implemented
+    /// in the session setup path. Most servers work fine with 3.0.2.
     pub async fn negotiate(&self) -> Result<()> {
-        debug!("SMB2: Negotiate");
+        let result = self.negotiate_dialects(false).await;
+        if result.is_ok() {
+            return result;
+        }
+
+        let err_msg = match &result {
+            Err(e) => e.to_string(),
+            Ok(_) => unreachable!(),
+        };
+        if err_msg.contains("TCP")
+            || err_msg.contains("read timed out")
+            || err_msg.contains("send timed out")
+            || err_msg.contains("header read failed")
+        {
+            return result;
+        }
+
+        debug!("SMB2: Basic negotiate failed, retrying with SMB 3.1.1 and contexts");
+        self.negotiate_dialects(true).await
+    }
+
+    /// Offer a dialect list. When `include_311` is false, exclude SMB 3.1.1
+    /// (avoiding pre-auth integrity complexity in session setup).
+    async fn negotiate_dialects(&self, include_311: bool) -> Result<()> {
+        debug!("SMB2: Negotiate (include_311={include_311})");
 
         let hdr = self.build_header(SMB2_NEGOTIATE, 0).await;
 
+        let dialects: Vec<u16> = if include_311 {
+            vec![
+                SMB2_DIALECT_202,
+                SMB2_DIALECT_210,
+                SMB2_DIALECT_300,
+                SMB2_DIALECT_302,
+                SMB2_DIALECT_311,
+            ]
+        } else {
+            vec![
+                SMB2_DIALECT_202,
+                SMB2_DIALECT_210,
+                SMB2_DIALECT_300,
+                SMB2_DIALECT_302,
+            ]
+        };
+
+        let dialect_count = dialects.len() as u16;
+        let dialects_byte_len = dialects.len() * 2;
+
         // Negotiate request body
-        let mut body = Vec::with_capacity(64);
+        let mut body = Vec::with_capacity(128);
         // StructureSize = 36
         body.extend_from_slice(&36u16.to_le_bytes());
-        // DialectCount = 4
-        body.extend_from_slice(&4u16.to_le_bytes());
+        // DialectCount
+        body.extend_from_slice(&dialect_count.to_le_bytes());
         // SecurityMode = Signing Enabled (0x01)
         body.extend_from_slice(&0x01u16.to_le_bytes());
         // Reserved
@@ -531,36 +583,47 @@ impl Smb2Connection {
         let mut guid = [0u8; 16];
         rand::rng().fill(&mut guid);
         body.extend_from_slice(&guid);
-        // NegotiateContextOffset (for 3.1.1) — 8-byte aligned from SMB2 header start
-        // Body: 36 fixed + 8 dialects + 4 padding = 48 bytes → header + 48 = 112 (aligned)
-        let context_offset = (SMB2_HEADER_SIZE + 36 + 8 + 4) as u32;
-        body.extend_from_slice(&context_offset.to_le_bytes());
-        // NegotiateContextCount
-        body.extend_from_slice(&1u16.to_le_bytes());
-        // Reserved
-        body.extend_from_slice(&0u16.to_le_bytes());
-        // Dialects: 2.1, 3.0, 3.0.2, 3.1.1
-        body.extend_from_slice(&SMB2_DIALECT_210.to_le_bytes());
-        body.extend_from_slice(&SMB2_DIALECT_300.to_le_bytes());
-        body.extend_from_slice(&SMB2_DIALECT_302.to_le_bytes());
-        body.extend_from_slice(&SMB2_DIALECT_311.to_le_bytes());
-        // Padding for 8-byte alignment of negotiate context
-        body.extend_from_slice(&[0, 0, 0, 0]);
 
-        // Pre-Auth Integrity Context (SHA-512)
-        // ContextType = 0x0001, DataLength = 38
-        body.extend_from_slice(&1u16.to_le_bytes());
-        body.extend_from_slice(&38u16.to_le_bytes());
-        body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
-        // HashAlgorithmCount = 1, SaltLength = 32
-        body.extend_from_slice(&1u16.to_le_bytes());
-        body.extend_from_slice(&32u16.to_le_bytes());
-        // HashAlgorithm = SHA-512 (0x0001)
-        body.extend_from_slice(&1u16.to_le_bytes());
-        // Salt (32 bytes random)
-        let mut salt = [0u8; 32];
-        rand::rng().fill(&mut salt);
-        body.extend_from_slice(&salt);
+        if include_311 {
+            // Body: 36 fixed + dialects + padding to 8-byte boundary
+            let body_prefix = 36 + dialects_byte_len;
+            let padding = (8 - body_prefix % 8) % 8;
+            let context_offset = (SMB2_HEADER_SIZE + body_prefix + padding) as u32;
+            body.extend_from_slice(&context_offset.to_le_bytes());
+            body.extend_from_slice(&1u16.to_le_bytes()); // NegotiateContextCount
+            body.extend_from_slice(&0u16.to_le_bytes()); // Reserved2
+        } else {
+            body.extend_from_slice(&0u32.to_le_bytes()); // No NegotiateContextOffset
+            body.extend_from_slice(&0u16.to_le_bytes()); // NegotiateContextCount = 0
+            body.extend_from_slice(&0u16.to_le_bytes()); // Reserved2
+        }
+
+        // Dialects
+        for d in &dialects {
+            body.extend_from_slice(&d.to_le_bytes());
+        }
+
+        if include_311 {
+            // Padding for 8-byte alignment of negotiate context
+            let body_prefix = 36 + dialects_byte_len;
+            let padding = (8 - body_prefix % 8) % 8;
+            body.extend(std::iter::repeat_n(0, padding));
+
+            // Pre-Auth Integrity Context (SHA-512)
+            // ContextType = 0x0001, DataLength = 38
+            body.extend_from_slice(&1u16.to_le_bytes());
+            body.extend_from_slice(&38u16.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            // HashAlgorithmCount = 1, SaltLength = 32
+            body.extend_from_slice(&1u16.to_le_bytes());
+            body.extend_from_slice(&32u16.to_le_bytes());
+            // HashAlgorithm = SHA-512 (0x0001)
+            body.extend_from_slice(&1u16.to_le_bytes());
+            // Salt (32 bytes random)
+            let mut salt = [0u8; 32];
+            rand::rng().fill(&mut salt);
+            body.extend_from_slice(&salt);
+        }
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
@@ -568,7 +631,19 @@ impl Smb2Connection {
         self.send(&pkt).await?;
         let resp = self.recv_verified().await?;
 
-        // Check for SMB1 response first (72 bytes = 4 magic + 32 header + 36 body)
+        debug!("SMB2: Negotiate response {} bytes", resp.len());
+
+        // Log raw response bytes for debugging (truncated to first 80 bytes)
+        if resp.len() <= 80 {
+            trace!("SMB2: Negotiate response raw = {resp:02x?}");
+        } else {
+            trace!(
+                "SMB2: Negotiate response raw (first 80) = {:02x?}",
+                &resp[..80]
+            );
+        }
+
+        // Check for SMB1 response first
         if resp.len() >= 4 && resp[..4] == [0xff, b'S', b'M', b'B'] {
             return Err(OverthroneError::Smb(
                 "SMB2 Negotiate failed: server responded with SMB1 (SMB1 dialect not supported)"
@@ -576,15 +651,27 @@ impl Smb2Connection {
             ));
         }
 
+        // Validate SMB2 magic
+        if resp.len() >= 4 && resp[..4] != [0xfe, b'S', b'M', b'B'] {
+            let magic_hex: Vec<String> = resp[..4.min(resp.len())]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Negotiate response has invalid magic: [{magic_hex:?}] (expected fe534d42 '\\xfeSMB'), \
+                 server may not support SMB2 or response is garbled"
+            )));
+        }
+
         // Validate minimum SMB2 header size
         if resp.len() < SMB2_HEADER_SIZE {
             return Err(OverthroneError::Smb(format!(
-                "SMB2 Negotiate response too short: {} bytes",
+                "SMB2 Negotiate response too short: {} bytes (expected >=64 for SMB2 header)",
                 resp.len()
             )));
         }
 
-        // Check NTSTATUS — the server may return an error PDU (64+ bytes) before negotiate body
+        // Check NTSTATUS before anything else — server may return error PDU
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
             let status_name = ntstatus_to_name(status);
@@ -593,17 +680,27 @@ impl Smb2Connection {
             )));
         }
 
-        // Now validate negotiate response body size (64-header + 65-body = 129 minimum)
-        if resp.len() < SMB2_HEADER_SIZE + 65 {
+        // Now validate negotiate response body size
+        // Per MS-SMB2: negotiate response body minimum = 64 bytes (without 3.1.1 contexts)
+        if resp.len() < SMB2_HEADER_SIZE + 64 {
             return Err(OverthroneError::Smb(format!(
-                "SMB2 Negotiate response body too short: {} bytes (expected at least {} for negotiate response)",
+                "SMB2 Negotiate response body too short: {} bytes (expected >=64 for negotiate response)",
                 resp.len() - SMB2_HEADER_SIZE,
-                65
             )));
         }
 
         // Parse negotiate response (starts at offset 64)
         let body = &resp[SMB2_HEADER_SIZE..];
+
+        // Validate StructureSize = 65 (negotiate response)
+        let body_struct_size = u16::from_le_bytes([body[0], body[1]]);
+        if body_struct_size != 65 {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 Negotiate response unexpected StructureSize: {} (expected 65)",
+                body_struct_size
+            )));
+        }
+
         let dialect = u16::from_le_bytes([body[4], body[5]]);
         debug!("SMB2: Negotiated dialect 0x{:04X}", dialect);
         // Store dialect for use in signing key derivation
@@ -1823,11 +1920,15 @@ pub fn build_ntlmssp_authenticate_hash(
     challenge: &NtlmChallenge,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     // ── NTLMv2 computation ──
-    // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + domain)
+    // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + domain_name)
+    // The spec says server_name SHOULD be the Type 2 TargetName, but in practice
+    // Windows Server 2016+ expects the uppercased DNS domain name matching the
+    // DomainName field we send in the Type 3 message.
+    let domain_upper = domain.to_uppercase();
     let user_domain: Vec<u8> = username
         .to_uppercase()
         .encode_utf16()
-        .chain(domain.encode_utf16())
+        .chain(domain_upper.encode_utf16())
         .flat_map(|c| c.to_le_bytes())
         .collect();
 
@@ -1887,7 +1988,7 @@ pub fn build_ntlmssp_authenticate_hash(
         Vec::new()
     };
 
-    // Calculate offsets (header=88 bytes for authenticate)
+    // Calculate offsets (header=88 bytes with OS Version)
     let header_len = 88u32;
     let lm_offset = header_len;
     let nt_offset = lm_offset + lm_response.len() as u32;
@@ -1927,6 +2028,13 @@ pub fn build_ntlmssp_authenticate_hash(
     msg.extend_from_slice(&enc_key_offset.to_le_bytes());
     // NegotiateFlags
     msg.extend_from_slice(&flags.to_le_bytes());
+    // OS Version field (8 bytes, MS-NLMP §2.2.2.10)
+    msg.push(10); // ProductMajorVersion
+    msg.push(0); // ProductMinorVersion
+    msg.extend_from_slice(&0u16.to_le_bytes()); // ProductBuild
+    msg.extend_from_slice(&0u16.to_le_bytes()); // Reserved (3 bytes used + padding)
+    msg.push(0); // Reserved (3rd byte)
+    msg.push(15); // NTLMRevisionCurrent (NTLMSSP_REVISION_W2K3)
     // MIC (16 bytes of zeros — we don't compute MIC for simplicity)
     msg.extend_from_slice(&[0u8; 16]);
 
@@ -1962,10 +2070,11 @@ fn build_ntlmv2_blob(
     blob.extend_from_slice(client_challenge);
     // Reserved3 = 0 (4 bytes)
     blob.extend_from_slice(&0u32.to_le_bytes());
-    // AvPairs (target info from server)
+    // AvPairs (target info from server — already includes terminating null AvPair)
     blob.extend_from_slice(target_info);
-    // Padding (4 bytes)
-    blob.extend_from_slice(&0u32.to_le_bytes());
+    // NOTE: no extra padding — the server's AvPair sequence in target_info
+    // already ends with AvId=0 / AvLen=0 (4 zero bytes).  Adding more zeros
+    // would make the blob 4 bytes too long, causing HMAC mismatch.
     blob
 }
 

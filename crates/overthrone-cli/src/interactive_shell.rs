@@ -2221,6 +2221,9 @@ impl InteractiveSession {
                     save_asrep_hashes: true,
                     concurrency: 10,
                     use_ldap: false,
+                    checkpoint_path: None,
+                    resume: false,
+                    live_output: true,
                 };
                 match overthrone_hunter::userenum::run(&dc_ip, &domain, &uc, delay).await {
                     Ok(result) => {

