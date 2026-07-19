@@ -33,7 +33,9 @@ impl Default for SmbExecConfig {
         SmbExecConfig {
             service_name: format!("SmbEx{:04X}", id),
             output_share: "C$".to_string(),
-            output_path: format!("Windows\\Temp\\__smbexec_{:04X}.tmp", id),
+            // Use root of C:\ (writeable by SYSTEM/Administrators) — WS2025 may
+            // restrict service writes to C:\Windows\Temp\ and C:\Users\Public\.
+            output_path: format!("__smbexec_{:04X}.tmp", id),
             cleanup: true,
         }
     }
@@ -94,15 +96,17 @@ pub async fn execute(
     );
     debug!("SMBExec: Command: {}", command);
 
-    // Build the service binary path that redirects output to a file
-    let output_unc = format!(
-        "\\\\127.0.0.1\\{}\\{}",
-        config.output_share, config.output_path
-    );
+    // Build the service binary path that redirects output to a file.
+    // Use a local path (C:\Windows\Temp\...) instead of UNC (\\127.0.0.1\C$\...)
+    // because the loopback admin share may not be accessible from the service context.
+    // C$ maps to C:\ so the local path is C:\Windows\Temp\{output_path_file}.
+    let output_local_path = format!("C:\\{}", config.output_path);
     let escaped_command = escape_cmd_metacharacters(command);
+    // Use explicit cmd.exe path instead of %COMSPEC% to avoid WS2025
+    // environment variable resolution issues in the service context.
     let binary_path = format!(
-        "%COMSPEC% /Q /c echo {} ^> {} 2^>^&1 > {} 2>&1",
-        escaped_command, output_unc, output_unc
+        "cmd.exe /Q /c {} > {} 2>&1",
+        escaped_command, output_local_path
     );
 
     // Use PSExec-style SCM interaction to create and start the service

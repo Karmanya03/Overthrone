@@ -19,10 +19,10 @@ use tracing::{debug, info, warn};
 const DEFAULT_OUTPUT_SHARE: &str = "C$";
 
 /// Prefix for output files
-const OUTPUT_PREFIX: &str = "Windows\\Temp\\__wmiexec_";
+const OUTPUT_PREFIX: &str = "__wmiexec_";
 
 /// Default timeout for command completion (seconds)
-const DEFAULT_TIMEOUT_SECS: u64 = 15;
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 // ═══════════════════════════════════════════════════════════
 //  Public Types
@@ -95,11 +95,10 @@ pub async fn execute(
     let id = rand::random::<u32>();
     let output_filename = format!("{}_{:08X}.tmp", OUTPUT_PREFIX, id);
 
-    // Build the WMI-style command that captures output
-    let output_unc = format!(
-        "\\\\127.0.0.1\\{}\\{}",
-        config.output_share, output_filename
-    );
+    // Build the WMI-style command that captures output to a LOCAL path.
+    // UNC paths (\\127.0.0.1\C$\...) may not be writable from the service context;
+    // use C:\Windows\Temp\... instead, which is accessible via SMB as C$\Windows\Temp\...
+    let output_local = format!("C:\\{}", output_filename);
 
     let working_dir = config
         .working_directory
@@ -109,7 +108,7 @@ pub async fn execute(
     // Use cmd.exe to execute and redirect output
     let wrapped_command = format!(
         "cmd.exe /Q /c cd /d {} && {} 1> {} 2>&1",
-        working_dir, command, output_unc
+        working_dir, command, output_local
     );
 
     // Try DCOM-based WMI first, fall back to SCM

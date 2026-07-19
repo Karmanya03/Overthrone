@@ -24,9 +24,14 @@ pub struct Esc6Exploiter {
 }
 
 impl Esc6Exploiter {
-    /// Create a new ESC6 exploiter targeting the given CA server.
+    /// Create a new ESC6 exploiter targeting the given CA server (HTTPS).
     pub fn new(ca_server: &str) -> Result<Self> {
-        let web_client = WebEnrollmentClient::new(ca_server)?;
+        Self::with_ssl(ca_server, true)
+    }
+
+    /// Create a new ESC6 exploiter with explicit SSL choice.
+    pub fn with_ssl(ca_server: &str, use_ssl: bool) -> Result<Self> {
+        let web_client = WebEnrollmentClient::with_ssl(ca_server, use_ssl)?;
         Ok(Self { web_client })
     }
 

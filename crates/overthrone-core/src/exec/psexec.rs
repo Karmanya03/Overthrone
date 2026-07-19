@@ -26,6 +26,7 @@ const OP_OPEN_SC_MANAGER_W: u16 = 15;
 const OP_CREATE_SERVICE_W: u16 = 12;
 const OP_START_SERVICE_W: u16 = 19;
 const OP_DELETE_SERVICE: u16 = 2;
+#[allow(dead_code)] // Reserved for future cleanup protocol completeness
 const OP_CLOSE_SERVICE_HANDLE: u16 = 0;
 #[allow(dead_code)] // SVCCTL opcode kept for protocol completeness
 const OP_OPEN_SERVICE_W: u16 = 16;
@@ -276,6 +277,7 @@ fn build_delete_service_stub(service_handle: &[u8; 20]) -> Vec<u8> {
 }
 
 /// Build CloseServiceHandle stub
+#[allow(dead_code)] // Reserved for future DCE/RPC handle cleanup
 fn build_close_handle_stub(handle: &[u8; 20]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(handle);
@@ -345,17 +347,20 @@ async fn execute_inner(
     scm_handle: &mut Option<[u8; 20]>,
     svc_handle: &mut Option<[u8; 20]>,
 ) -> Result<PsExecResult> {
-    // Step 1: Bind to SVCCTL
+    // Step 0: Open persistent pipe for all SVCCTL transactions
     info!("PSExec: Binding to SVCCTL pipe");
+    let fid = session.open_pipe_persistent(SVCCTL_PIPE).await?;
+
+    // Step 1: Bind to SVCCTL
     let bind_pkt = build_bind_packet();
-    let bind_resp = session.pipe_transact(SVCCTL_PIPE, &bind_pkt).await?;
+    let bind_resp = session.ioctl_pipe_persistent(&fid, &bind_pkt).await?;
     debug!("PSExec: Bind response: {} bytes", bind_resp.len());
 
     // Step 2: OpenSCManagerW
     info!("PSExec: Opening SCM on {}", session.target);
     let open_stub = build_open_scmanager_stub(&session.target);
     let open_pkt = build_request_packet(OP_OPEN_SC_MANAGER_W, &open_stub, 1);
-    let open_resp = session.pipe_transact(SVCCTL_PIPE, &open_pkt).await?;
+    let open_resp = session.ioctl_pipe_persistent(&fid, &open_pkt).await?;
     let scm = extract_handle(&open_resp)?;
     *scm_handle = Some(scm);
     info!("PSExec: SCM handle acquired");
@@ -369,7 +374,7 @@ async fn execute_inner(
         &config.command,
     );
     let create_pkt = build_request_packet(OP_CREATE_SERVICE_W, &create_stub, 2);
-    let create_resp = session.pipe_transact(SVCCTL_PIPE, &create_pkt).await?;
+    let create_resp = session.ioctl_pipe_persistent(&fid, &create_pkt).await?;
     let svc = extract_handle(&create_resp)?;
     *svc_handle = Some(svc);
     info!("PSExec: Service '{}' created", config.service_name);
@@ -378,19 +383,32 @@ async fn execute_inner(
     info!("PSExec: Starting service '{}'", config.service_name);
     let start_stub = build_start_service_stub(&svc);
     let start_pkt = build_request_packet(OP_START_SERVICE_W, &start_stub, 3);
-    let start_resp = session.pipe_transact(SVCCTL_PIPE, &start_pkt).await?;
+    let start_resp = session.ioctl_pipe_persistent(&fid, &start_pkt).await?;
+
+    // Close the SVCCTL pipe — the DCE/RPC session is done
+    let _ = session.close_pipe_persistent(&fid).await;
 
     // Check if start succeeded (return code at end of stub)
-    let started = if start_resp.len() >= 28 {
+    let response_len = start_resp.len();
+    let started = if response_len >= 28 {
         let rc = u32::from_le_bytes([
-            start_resp[start_resp.len() - 4],
-            start_resp[start_resp.len() - 3],
-            start_resp[start_resp.len() - 2],
-            start_resp[start_resp.len() - 1],
+            start_resp[response_len - 4],
+            start_resp[response_len - 3],
+            start_resp[response_len - 2],
+            start_resp[response_len - 1],
         ]);
+        debug!(
+            "PSExec: StartServiceW response: {} bytes, rc=0x{rc:08X}",
+            response_len
+        );
         // 0 = success, 0x420 = ERROR_SERVICE_ALREADY_RUNNING
         rc == 0 || rc == 0x420
     } else {
+        debug!(
+            "PSExec: StartServiceW response too short: {} bytes (first={:02x?})",
+            response_len,
+            &start_resp[..response_len.min(32)]
+        );
         false
     };
 
@@ -440,33 +458,32 @@ async fn try_read_output(session: &SmbSession, service_name: &str) -> Option<Str
     None
 }
 
-/// Cleanup: delete service and close handles
+/// Cleanup: delete service and close handles.
+/// Uses a fresh pipe bind — old DCE/RPC handles are invalid on a new pipe,
+/// so this is best-effort. The main service execution uses `open_pipe_persistent`.
 async fn cleanup(
     session: &SmbSession,
-    scm_handle: &Option<[u8; 20]>,
+    _scm_handle: &Option<[u8; 20]>,
     svc_handle: &Option<[u8; 20]>,
 ) {
-    // Delete the service
+    let fid = match session.open_pipe_persistent(SVCCTL_PIPE).await {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    // Fresh BIND for the new pipe
+    let _ = session
+        .ioctl_pipe_persistent(&fid, &build_bind_packet())
+        .await;
+
     if let Some(svc) = svc_handle {
-        let del_stub = build_delete_service_stub(svc);
-        let del_pkt = build_request_packet(OP_DELETE_SERVICE, &del_stub, 10);
-        match session.pipe_transact(SVCCTL_PIPE, &del_pkt).await {
+        let del_pkt = build_request_packet(OP_DELETE_SERVICE, &build_delete_service_stub(svc), 10);
+        match session.ioctl_pipe_persistent(&fid, &del_pkt).await {
             Ok(_) => info!("PSExec: Service deleted"),
             Err(e) => warn!("PSExec: Failed to delete service: {e}"),
         }
-
-        // Close service handle
-        let close_stub = build_close_handle_stub(svc);
-        let close_pkt = build_request_packet(OP_CLOSE_SERVICE_HANDLE, &close_stub, 11);
-        let _ = session.pipe_transact(SVCCTL_PIPE, &close_pkt).await;
     }
 
-    // Close SCM handle
-    if let Some(scm) = scm_handle {
-        let close_stub = build_close_handle_stub(scm);
-        let close_pkt = build_request_packet(OP_CLOSE_SERVICE_HANDLE, &close_stub, 12);
-        let _ = session.pipe_transact(SVCCTL_PIPE, &close_pkt).await;
-    }
+    let _ = session.close_pipe_persistent(&fid).await;
 }
 
 /// Convenience: execute a single command via PSExec

@@ -350,7 +350,7 @@ pub async fn request_cert_via_tcp_rpc_auth(
     let challenge = parse_ntlmssp_challenge(challenge_bytes)?;
 
     // ── Step 3: Build NTLMSSP Type 3 (Authenticate) ──
-    let (type3, _session_key) =
+    let (type3, _session_key, _session_base_key) =
         build_ntlmssp_authenticate_hash(cred.domain, cred.username, cred.nt_hash, &challenge)?;
 
     // ── Step 4: Send AUTH3 PDU with Type 3 ──

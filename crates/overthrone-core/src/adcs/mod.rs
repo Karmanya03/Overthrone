@@ -375,18 +375,28 @@ pub struct AdcsClient {
 }
 
 impl AdcsClient {
-    /// Create a new ADCS client
+    /// Create a new ADCS client (HTTPS).
     pub fn new(ca_server: &str) -> Result<Self> {
-        let web_client = WebEnrollmentClient::new(ca_server)?;
+        Self::with_ssl(ca_server, true)
+    }
+
+    /// Create a new ADCS client with explicit SSL choice.
+    pub fn with_ssl(ca_server: &str, use_ssl: bool) -> Result<Self> {
+        let web_client = WebEnrollmentClient::with_ssl(ca_server, use_ssl)?;
         Ok(Self {
             web_client,
             templates: Vec::new(),
         })
     }
 
-    /// Create client with custom timeout
+    /// Create client with custom timeout (HTTPS).
     pub fn with_timeout(ca_server: &str, timeout_secs: u64) -> Result<Self> {
-        let web_client = WebEnrollmentClient::with_timeout(ca_server, timeout_secs)?;
+        Self::with_timeout_ssl(ca_server, timeout_secs, true)
+    }
+
+    /// Create client with custom timeout and explicit SSL choice.
+    pub fn with_timeout_ssl(ca_server: &str, timeout_secs: u64, use_ssl: bool) -> Result<Self> {
+        let web_client = WebEnrollmentClient::with_timeout_ssl(ca_server, timeout_secs, use_ssl)?;
         Ok(Self {
             web_client,
             templates: Vec::new(),

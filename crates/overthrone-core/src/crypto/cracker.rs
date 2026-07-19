@@ -13,6 +13,7 @@
 //! - AES128/AES256 Kerberos key derivation via PBKDF2-HMAC-SHA1 (etype 17/18)
 //! - Hashcat subprocess fallback for GPU acceleration
 
+use crate::crypto::rc4_util::rc4_hmac_decrypt;
 use crate::error::{OverthroneError, Result};
 use rayon::prelude::*;
 use std::process::Command;
@@ -1081,13 +1082,13 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
         } => {
             match *etype {
                 23 => {
-                    // RC4-HMAC verification
+                    // RC4-HMAC verification using proper checksum validation (RFC 4757)
+                    // Key usage 3 = AS-REP enc-part (RFC 4120 §7.5.1)
                     let nt_hash = password_to_nt_hash(password);
-                    if cipher.len() < 32 {
+                    if cipher.len() < 24 {
                         return false;
                     }
-                    let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
-                    decrypted.len() >= 32 && (decrypted[0] == 0x30 || decrypted[0] == 0x7A)
+                    rc4_hmac_decrypt(&nt_hash, cipher, 3).is_ok()
                 }
                 17 | 18 => {
                     // AES verification — salt is REALM + username
@@ -1107,13 +1108,13 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
         } => {
             match *etype {
                 23 => {
-                    // RC4-HMAC — service account's NT hash
+                    // RC4-HMAC verification using proper checksum validation (RFC 4757)
+                    // Key usage 8 = TGS-REP enc-part (RFC 4120 §7.5.1)
                     let nt_hash = password_to_nt_hash(password);
-                    if cipher.len() < 32 {
+                    if cipher.len() < 24 {
                         return false;
                     }
-                    let decrypted = rc4_decrypt_kerberos(&nt_hash, cipher);
-                    decrypted.len() >= 32 && decrypted[0] == 0x63
+                    rc4_hmac_decrypt(&nt_hash, cipher, 8).is_ok()
                 }
                 17 | 18 => {
                     // AES — salt is REALM + service principal (from SPN)

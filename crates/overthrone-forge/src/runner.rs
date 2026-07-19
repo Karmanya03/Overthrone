@@ -699,6 +699,7 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                 action: adcs_action,
                 output_path: config.output_path.clone(),
                 dry_run: config.dry_run,
+                use_ssl: true,
             };
 
             let adcs_result = run_adcs(&adcs_config).await?;

@@ -28,11 +28,10 @@ pub struct CheckpointData {
 /// Tracks brute‑force progress, persists to disk, supports resume.
 ///
 /// Usage:
-/// ```
-/// let ckpt = Checkpoint::load_or_new("path.json", "user-enum", "dc", "dom");
-/// for user in users {
+/// ```ignore
+/// let ckpt = Checkpoint::load_or_new("path.json", "user-enum", "dc", "dom", 10);
+/// for user in &["alice", "bob"] {
 ///     if ckpt.is_processed(user) { continue; }
-///     let result = do_probe(user);
 ///     ckpt.record(user, "valid", Some("KRB_ERROR 25"));
 /// }
 /// ```
@@ -205,9 +204,13 @@ pub fn checkpoint_path(
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::AtomicU64;
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn tmp_path() -> PathBuf {
-        let p = std::env::temp_dir().join(format!("ckpt_test_{}.json", std::process::id()));
+        let n = TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!("ckpt_test_{}_{}.json", std::process::id(), n));
         let _ = fs::remove_file(&p);
         p
     }

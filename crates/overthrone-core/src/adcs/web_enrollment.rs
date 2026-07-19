@@ -22,9 +22,30 @@ pub struct WebEnrollmentClient {
     use_ssl: bool,
 }
 
+/// Extract hostname from a CA server string.
+/// Handles "server\\CA-Name" (Certipy style) -> "server"
+/// and plain "server" -> "server".
+fn extract_ca_hostname(ca_server: &str) -> &str {
+    // Strip protocol prefix (http:// or https://)
+    let stripped = ca_server
+        .strip_prefix("https://")
+        .or_else(|| ca_server.strip_prefix("http://"))
+        .unwrap_or(ca_server);
+    // Strip CA name suffix (server\\CA-Name -> server)
+    stripped.split('\\').next().unwrap_or(stripped)
+}
+
 impl WebEnrollmentClient {
-    /// Create a new Web Enrollment client
+    /// Create a new Web Enrollment client with HTTPS (default).
+    /// `ca_server` is the hostname (e.g., "ca.corp.local").
     pub fn new(ca_server: &str) -> Result<Self> {
+        Self::with_ssl(ca_server, true)
+    }
+
+    /// Create a new Web Enrollment client with explicit SSL choice.
+    /// `ca_server` is the hostname.
+    /// `use_ssl` controls whether HTTPS (true) or HTTP (false) is used.
+    pub fn with_ssl(ca_server: &str, use_ssl: bool) -> Result<Self> {
         let http_client = Client::builder()
             .danger_accept_invalid_certs(true) // Often needed for internal CAs
             .timeout(Duration::from_secs(60))
@@ -39,12 +60,17 @@ impl WebEnrollmentClient {
         Ok(Self {
             http_client,
             ca_server: ca_server.to_string(),
-            use_ssl: true,
+            use_ssl,
         })
     }
 
-    /// Create client with custom timeout
+    /// Create client with custom timeout (HTTPS by default).
     pub fn with_timeout(ca_server: &str, timeout_secs: u64) -> Result<Self> {
+        Self::with_timeout_ssl(ca_server, timeout_secs, true)
+    }
+
+    /// Create client with custom timeout and explicit SSL choice.
+    pub fn with_timeout_ssl(ca_server: &str, timeout_secs: u64, use_ssl: bool) -> Result<Self> {
         let http_client = Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_secs(timeout_secs))
@@ -59,7 +85,7 @@ impl WebEnrollmentClient {
         Ok(Self {
             http_client,
             ca_server: ca_server.to_string(),
-            use_ssl: true,
+            use_ssl,
         })
     }
 
@@ -69,9 +95,11 @@ impl WebEnrollmentClient {
     }
 
     /// Get the base URL for Web Enrollment
+    /// Automatically strips the CA name suffix ("server\\CA-Name" -> "server").
     pub fn base_url(&self) -> String {
         let scheme = if self.use_ssl { "https" } else { "http" };
-        format!("{}://{}/certsrv", scheme, self.ca_server)
+        let hostname = extract_ca_hostname(&self.ca_server);
+        format!("{}://{}/certsrv", scheme, hostname)
     }
 
     // ─────────────────────────────────────────────────────────
@@ -680,12 +708,16 @@ mod tests {
     fn test_client_creation() {
         let client = WebEnrollmentClient::new("ca.example.com");
         assert!(client.is_ok());
+        let client_http = WebEnrollmentClient::with_ssl("ca.example.com", false);
+        assert!(client_http.is_ok());
     }
 
     #[test]
     fn test_base_url() {
         let client = WebEnrollmentClient::new("ca.example.com").unwrap();
         assert_eq!(client.base_url(), "https://ca.example.com/certsrv");
+        let client_http = WebEnrollmentClient::with_ssl("ca.example.com", false).unwrap();
+        assert_eq!(client_http.base_url(), "http://ca.example.com/certsrv");
     }
 
     #[test]

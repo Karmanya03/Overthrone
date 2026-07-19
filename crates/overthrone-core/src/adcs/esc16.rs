@@ -194,9 +194,14 @@ pub struct Esc16Exploiter {
 }
 
 impl Esc16Exploiter {
-    /// Create a new ESC16 exploiter
+    /// Create a new ESC16 exploiter (HTTPS).
     pub fn new(ca_server: &str) -> Result<Self> {
-        let web_client = WebEnrollmentClient::new(ca_server)?;
+        Self::with_ssl(ca_server, true)
+    }
+
+    /// Create a new ESC16 exploiter with explicit SSL choice.
+    pub fn with_ssl(ca_server: &str, use_ssl: bool) -> Result<Self> {
+        let web_client = WebEnrollmentClient::with_ssl(ca_server, use_ssl)?;
         Ok(Self { web_client })
     }
 

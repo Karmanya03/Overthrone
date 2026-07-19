@@ -811,6 +811,9 @@ enum AdcsAction {
             default_value = "esc1_cert.pfx"
         )]
         output: String,
+        /// Use HTTP instead of HTTPS for Web Enrollment
+        #[arg(long)]
+        http: bool,
     },
     /// ESC2 — Web Enrollment with any template
     Esc2 {
@@ -2153,7 +2156,7 @@ enum ForgeAction {
         #[arg(long, required = true)]
         domain_sid: String,
         /// Username to impersonate
-        #[arg(short, long, default_value = "Administrator")]
+        #[arg(long, default_value = "Administrator")]
         user: String,
         /// RID of the user (default: 500 = Administrator)
         #[arg(long, default_value = "500")]
@@ -2162,7 +2165,7 @@ enum ForgeAction {
         #[arg(long, required = true)]
         krbtgt_hash: String,
         /// Output file for the forged ticket
-        #[arg(short, long, default_value = "golden.kirbi")]
+        #[arg(long, default_value = "golden.kirbi")]
         output: String,
     },
     /// Forge a Silver Ticket (service)
@@ -2171,19 +2174,19 @@ enum ForgeAction {
         #[arg(long, required = true)]
         domain_sid: String,
         /// Username to impersonate
-        #[arg(short, long, default_value = "Administrator")]
+        #[arg(long, default_value = "Administrator")]
         user: String,
         /// RID of the user (default: 500 = Administrator)
         #[arg(long, default_value = "500")]
         rid: u32,
         /// Target SPN (e.g. cifs/dc01.corp.local)
-        #[arg(short, long, required = true)]
+        #[arg(long, required = true)]
         spn: String,
         /// Service RC4 hash (32 hex chars)
         #[arg(long, required = true)]
         service_hash: String,
         /// Output file for the forged ticket
-        #[arg(short, long, default_value = "silver.kirbi")]
+        #[arg(long, default_value = "silver.kirbi")]
         output: String,
     },
     /// Forge a Diamond Ticket (modify legitimate TGT PAC)
@@ -2192,7 +2195,7 @@ enum ForgeAction {
         #[arg(long, required = true)]
         domain_sid: String,
         /// Username to impersonate
-        #[arg(short, long, default_value = "Administrator")]
+        #[arg(long, default_value = "Administrator")]
         user: String,
         /// RID of the user (default: 500 = Administrator)
         #[arg(long, default_value = "500")]
@@ -2204,7 +2207,7 @@ enum ForgeAction {
         #[arg(long)]
         krbtgt_aes256: Option<String>,
         /// Output file for the forged ticket
-        #[arg(short, long, default_value = "diamond.kirbi")]
+        #[arg(long, default_value = "diamond.kirbi")]
         output: String,
     },
     /// Forge a Sapphire Ticket (KDC-issued PAC bypass)
@@ -2213,25 +2216,25 @@ enum ForgeAction {
         #[arg(long, required = true)]
         domain_sid: String,
         /// Username to impersonate
-        #[arg(short, long, default_value = "Administrator")]
+        #[arg(long, default_value = "Administrator")]
         user: String,
         /// Output file for the forged ticket
-        #[arg(short, long, default_value = "sapphire.kirbi")]
+        #[arg(long, default_value = "sapphire.kirbi")]
         output: String,
     },
     /// Bronze Bit (CVE-2020-17049) — S4U2Proxy forwardable flag bypass
     BronzeBit {
         /// Target SPN (e.g. cifs/dc01.corp.local)
-        #[arg(short, long, required = true)]
+        #[arg(long, required = true)]
         spn: String,
         /// Output file
-        #[arg(short, long, default_value = "bronzebit.kirbi")]
+        #[arg(long, default_value = "bronzebit.kirbi")]
         output: String,
     },
     /// Inter-realm TGT
     InterRealmTgt {
         /// Target domain FQDN
-        #[arg(short, long, required = true)]
+        #[arg(long, required = true)]
         target_domain: String,
         /// Domain SID
         #[arg(long, required = true)]
@@ -2239,8 +2242,11 @@ enum ForgeAction {
         /// krbtgt RC4 hash (32 hex chars)
         #[arg(long, required = true)]
         krbtgt_hash: String,
+        /// Extra SIDs to inject (e.g. S-1-5-21-...-519 for Enterprise Admins)
+        #[arg(long)]
+        extra_sid: Option<String>,
         /// Output file
-        #[arg(short, long, default_value = "interrealm.kirbi")]
+        #[arg(long, default_value = "interrealm.kirbi")]
         output: String,
     },
     /// Skeleton Key — LSASS patching orchestration
@@ -2264,7 +2270,7 @@ enum ForgeAction {
     /// DCSync specific user
     DcSyncUser {
         /// User to DCSync
-        #[arg(short, long, required = true)]
+        #[arg(long, required = true)]
         user: String,
     },
     /// ACL Backdoor — inject DCSync rights

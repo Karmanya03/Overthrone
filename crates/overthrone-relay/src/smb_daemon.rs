@@ -1472,9 +1472,11 @@ impl SmbDaemon {
     // SMB2 Signing
     // ===========================================================
 
-    /// Derive the SMB signing key from the NTLM session key
-    /// For SMB 2.xx: signing_key = session_key (used directly with HMAC-SHA256)
-    /// For SMB 3.xx: signing_key = KDF(session_key, "SMB2AESCMAC", "SmbSign\0", 128)
+    /// Derive the SMB signing key from the NTLM session key.
+    /// For SMB 2.xx: signing_key = session_key (used directly with HMAC-SHA256).
+    /// For SMB 3.xx: signing_key = SP800-108 KDF(session_key, "SMBSigningKey\x00", "SmbSign\x00")
+    /// Per MS-SMB2 §3.1.4.1: SigningKey = KDF(ExportedSessionKey, Label, Context)
+    /// KDF Format: Counter(4B BE) || Label || 0x00 || Context || L(4B BE)
     fn derive_smb_signing_key(
         session_key: &[u8],
         dialect: u16,
@@ -1482,21 +1484,22 @@ impl SmbDaemon {
     ) -> Vec<u8> {
         match dialect {
             SMB2_DIALECT_300 | SMB2_DIALECT_302 | SMB2_DIALECT_311 => {
-                // KDF(Key, Label, Context) = HMAC-SHA256(Key, Label || 0x00 || Context || OutputLenBits)
-                let mut input = Vec::new();
-                input.extend_from_slice(b"SMB2AESCMAC");
-                input.push(0x00);
-                input.extend_from_slice(b"SmbSign");
-                input.push(0x00);
-                // Output length in bits as 32-bit big-endian
-                input.extend_from_slice(&128u32.to_be_bytes());
+                // SP800-108 counter mode KDF with HMAC-SHA256
+                // Per MS-SMB2: Label = "SMBSigningKey\x00" (null-terminated),
+                // Context = "SmbSign\x00" (null-terminated), L = 128 bits
+                let mut input = Vec::with_capacity(4 + 15 + 1 + 8 + 4);
+                input.extend_from_slice(&1u32.to_be_bytes()); // Counter i=1
+                input.extend_from_slice(b"SMBSigningKey\x00"); // Label with null terminator
+                input.push(0x00); // SP800-108 separator
+                input.extend_from_slice(b"SmbSign\x00"); // Context with null terminator
+                input.extend_from_slice(&128u32.to_be_bytes()); // L = 128 bits
 
                 let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(session_key) else {
                     return session_key.to_vec();
                 };
                 mac.update(&input);
                 let result = mac.finalize().into_bytes();
-                result[..16].to_vec() // 128-bit key
+                result[..16].to_vec() // 128-bit signing key
             }
             _ => session_key.to_vec(), // SMB 2.0.2/2.1 uses session key directly
         }

