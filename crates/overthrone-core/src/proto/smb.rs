@@ -1744,6 +1744,8 @@ impl SmbSession {
             domain: domain.to_string(),
             ticket: None,
             session_key: Some(session_key),
+            reconnect_password: Some(password.to_string()),
+            reconnect_nt_hash: None,
         })
     }
 
@@ -1768,6 +1770,8 @@ impl SmbSession {
             domain: domain.to_string(),
             ticket: None,
             session_key: Some(session_key),
+            reconnect_password: None,
+            reconnect_nt_hash: Some(nt_hash.to_string()),
         })
     }
 
@@ -2222,6 +2226,8 @@ impl SmbSession {
             domain: domain.to_string(),
             ticket: Some(ticket),
             session_key: Some(session_key),
+            reconnect_password: None,
+            reconnect_nt_hash: None,
         })
     }
 
