@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.3.0--beta-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.3.2-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -392,23 +392,23 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **File-format-aware carver** | `core/src/postex/file_carver.rs` | Carves secrets from docx/xlsx/etc. 720 lines. |
 | **DCE/RPC signature stripping** | `core/src/proto/ntlm.rs` | `strip_dce_rpc_signature` -- strips NTLM auth verifier from DCE/RPC request PDUs. 10 tests. |
 
-### ? Still Pending
+### ⚠️ Still Pending
 
 No sugarcoating. These are genuinely not done.
 
 | What | Why It Matters | Status | Notes |
 |---|---|---|---|
-| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ? Not yet | Unit tests pass. Nobody has run this against GOAD or a real lab yet. The bravery check is still scheduled. |
-| **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ?? Partial | Bypass works when policy is "Negotiate". When "Require", can't derive session key in relay scenario. `ovt doctor` tells you which mode the DC uses. |
+| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ❌ Not yet | Unit tests pass. Nobody has run this against GOAD or a real lab yet. The bravery check is still scheduled. |
+| **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ⚠️ Partial | Bypass works when policy is "Negotiate". When "Require", can't derive session key in relay scenario. `ovt doctor` tells you which mode the DC uses. |
 | **EDR evasion CLI integration** | `ovt edr assess` / `ovt edr evade` already wired via `EdrAction`. Library: `edr_bypass.rs` - 2,127 lines, 25 tests. | ✅ Wired | Fully integrated CLI. EDR assessment + stealth profile application. |
 | **CG check CLI integration** | Multi-signal CG detection (`ovt cg <target>`) already wired via `CgAction`. | ✅ Wired | Fully integrated CLI. Credential Guard detection with multiple signal sources. |
 | **4 Azure AD ops CLI** | All 8 Azure AD operations have CLI subcommands (Enum, SeamlessSso, GoldenSaml, PrtTheft, ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse, DeviceCodePhish). | ✅ Wired | Library code exists for all 8, CLI wired for all 8. SeamlessSSO/GoldenSAML need end-to-end flow testing. |
 | **Exchange relay CLI** | Exchange relay (`ovt ntlm exchange`) already wired in CLI relay subsystem. | ✅ Wired | Fully integrated with `--tls-verify` and `--tls-cert`/`--tls-key` flags. |
-| **SMBDaemon** | A dedicated SMB server for capturing credentials outside of responder. | ? Not yet | Does not exist anywhere in the codebase. |
-| **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ?? Windows only | Use `--method psexec` or `--method smbexec` on Linux. |
-| **Azure AD Seamless SSO + Golden SAML** | Full Azure AD Kerberos/SAML integration - the big cloud-AD gap. | ? Not yet | Azure AD ops exist but no full Seamless SSO or Golden SAML end-to-end flows. |
-| **Ticket encryption rotation** | Re-encrypt a forged ticket under a different krbtgt key without forging again. | ? Not yet | Feature request, not a blocker. |
-| **Viewer WebSocket** | Live graph updates without page reload. | ? Not yet | Largest UX improvement per effort. |
+| **SMBDaemon** | A dedicated SMB server for capturing credentials outside of responder. | ❌ Not yet | Does not exist anywhere in the codebase. |
+| **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ❌ Windows only | Use `--method psexec` or `--method smbexec` on Linux. |
+| **Azure AD Seamless SSO + Golden SAML** | Full Azure AD Kerberos/SAML integration - the big cloud-AD gap. | ❌ Not yet | Azure AD ops exist but no full Seamless SSO or Golden SAML end-to-end flows. |
+| **Ticket encryption rotation** | Re-encrypt a forged ticket under a different krbtgt key without forging again. | ❌ Not yet | Feature request, not a blocker. |
+| **Viewer WebSocket** | Live graph updates without page reload. | ❌ Not yet | Largest UX improvement per effort. |
 
 ## Does It Actually Work?
 
@@ -416,15 +416,15 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 | Attack / Feature | WS 2019 | WS 2022 | WS 2025 | CTF / HTB / THM | What it does |
 |---|:---:|:---:|:---:|:---:|---|
-| **LDAP enumeration** | ✅ | ✅ | ✅ | ✅ | Real LDAP bind ? search ? parse. Pulls users, groups, SPNs, ACLs, trusts, GPOs, LAPS, GPP. The DC will tell you everything. It can't help itself. |
+| **LDAP enumeration** | ✅ | ✅ | ✅ | ✅ | Real LDAP bind → search → parse. Pulls users, groups, SPNs, ACLs, trusts, GPOs, LAPS, GPP. The DC will tell you everything. It can't help itself. |
 | **Kerberoast** | ✅ | ✅ | ✅ | ✅ | Real AS-REQ + TGS-REQ over TCP:88. Hashes drop into `./loot/` in correct `$krb5tgs$23$` hashcat format. Feed directly to hashcat, no cleanup needed. |
 | **AS-REP roast** | ✅ | ✅ | ✅ | ✅ | AS-REQ without pre-auth, captures enc-part, outputs `$krb5asrep$23$`. Your GPU will enjoy this. |
 | **Password spray** | ✅ | ✅ | ✅ | ✅ | Kerberos-based. Bails automatically after 3 `KDC_ERR_CLIENT_REVOKED` responses. Supports delay + jitter. Doesn't get you fired. Well, doesn't get *the accounts* locked. |
 | **Pass-the-Hash** | ✅ | ✅ | ✅ | ✅ | `--nt-hash` on any SMB/exec command. NTLMv2 over SMB2. The hash is the password. `Password123!` becomes optional. |
 | **SMB2 client** | ✅ | ✅ | ✅ | ✅ | Pure Rust SMB2 - negotiate, session setup, share enum, file read/write, admin check. WS 2025 requires outbound SMB signing by default, so Overthrone treats signing support as table stakes instead of a fun optional hat. |
-| **Remote exec - PsExec** | ✅ | ✅ | ✅ | ✅ | Real `svcctl` named pipe. Creates ? starts ? reads ? deletes the service. 543 lines of legit service control manager abuse. |
-| **Remote exec - SmbExec** | ✅ | ✅ | ✅ | ✅ | Temp service + cmd.exe redirect ? output via C$ share. Quieter than PsExec. |
-| **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via DCOM over SMB (?? Windows only - use PsExec/SmbExec on Linux). WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
+| **Remote exec - PsExec** | ✅ | ✅ | ✅ | ✅ | Real `svcctl` named pipe. Creates → starts → reads → deletes the service. 543 lines of legit service control manager abuse. |
+| **Remote exec - SmbExec** | ✅ | ✅ | ✅ | ✅ | Temp service + cmd.exe redirect → output via C$ share. Quieter than PsExec. |
+| **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via DCOM over SMB (❌ Windows only - use PsExec/SmbExec on Linux). WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
 | **DCSync** | ✅ | ✅ | ✅ | ✅ | MS-DRSR `DRSGetNCChanges` over named pipe. Asks the DC to replicate hashes. The DC complies. WS 2025 tightened some defaults - use `--stealth`. |
 | **Golden Ticket** | ✅ | ✅ | ✅ | ✅ | Full PAC construction with `KERB_VALIDATION_INFO`, server + KDC checksums. Needs krbtgt hash. WS 2025 may need `FAST` armor depending on config. |
 | **Silver Ticket** | ✅ | ✅ | ✅ | ✅ | Forge a TGS for any service. No DC contact at all. Quieter than Golden, harder to detect. |
@@ -433,7 +433,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **ADCS ESC9-ESC13** | ✅ | ✅ | ✅ | ✅ | Advanced mapping/policy/CA key abuse paths are implemented (some are operator-guided depending on privileges and CA hardening). |
 | **NTLM relay** | ✅ | ✅ | ⚠️ | ✅ | LLMNR/NBT-NS/mDNS poisoner + relay engine (SMB→LDAP, HTTP→SMB, Exchange MAPI/EWS). SMB signing pre-flight check refuses relay when signing required. Exchange relay (CVE-2024-21410) with EPA bypass. LDAP signing bypass (CVE-2019-1040). WS 2025 LDAP signing required by default on new AD deployments; `ovt doctor` tells you what terrain you're on before you relay. |
 | **LAPS (v1 + v2)** | ✅ | ✅ | ✅ | ✅ | LAPS v1 reads `ms-Mcs-AdmPwd` in plaintext. LAPS v2 decrypts `msLAPS-EncryptedPassword` via DPAPI/AES-256-GCM. Both work. |
-| **GPP decrypt** | ✅ | ✅ | ✅ | ✅ | Microsoft literally shipped the AES key in their documentation. We use it. `cpassword` ? plaintext, every time. Thanks, Microsoft. |
+| **GPP decrypt** | ✅ | ✅ | ✅ | ✅ | Microsoft literally shipped the AES key in their documentation. We use it. `cpassword` → plaintext, every time. Thanks, Microsoft. |
 | **RID cycling** | ✅ | ✅ | ✅ | ✅ | Enumerate users by RID even without valid creds (`--null-session`). Still works on misconfigured/legacy hosts. |
 | **Hash cracking** | ✅ | ✅ | ✅ | ✅ | Offline cracking engine built in. Embedded 10K wordlist + mask attacks (`?u?l?l?d?d?d?d`) + hybrid mode + rayon parallelism. No hashcat required. |
 | **SOCKS5 proxy / pivoting** | ✅ | ✅ | ✅ | ✅ | Full RFC 1928 SOCKS5 server on the compromised box. IPv4/IPv6/domain. Nothing extra needed on target. Pivot deeper into the network. |
@@ -680,7 +680,7 @@ Six lateral movement methods. All implemented. The `todo!()` trio graduated.
 | **AtExec** | ATSVC over SMB | ✅ Full | Scheduled task creation via named pipe. "Task Scheduler is a feature, not a vulnerability." |
 | **PsExec** | DCE/RPC + SMB | ✅ Full | Real DCE/RPC bind packet building, service creation, payload upload to ADMIN$, execution, cleanup. The sports car now has a steering wheel. |
 | **SmbExec** | SCM over SMB | ✅ Full | Service-based command execution via SMB named pipes. Clean, simple, effective. |
-| **WmiExec** | DCOM/WMI | ✅ Full (Windows) | WMI-based semi-interactive command execution with output retrieval via SMB. ?? Windows only - returns a clear error on Linux/macOS. |
+| **WmiExec** | DCOM/WMI | ✅ Full (Windows) | WMI-based semi-interactive command execution with output retrieval via SMB. ❌ Windows only - returns a clear error on Linux/macOS. |
 
 ### C2 Framework Integration (overthrone-core)
 

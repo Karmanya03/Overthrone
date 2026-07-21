@@ -368,7 +368,10 @@ pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
     let target_len = u16::from_le_bytes([data[12], data[13]]) as usize;
     let target_offset = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
 
-    let target_name = if target_len > 0 && target_offset + target_len <= data.len() {
+    let target_name = if target_len > 0
+        && target_offset + target_len <= data.len()
+        && target_len.is_multiple_of(2)
+    {
         Some(String::from_utf16_lossy(
             &data[target_offset..target_offset + target_len]
                 .chunks(2)

@@ -35,6 +35,12 @@ impl Esc6Exploiter {
         Ok(Self { web_client })
     }
 
+    /// Set NTLM credentials for Windows Integrated Authentication
+    pub fn with_credentials(mut self, domain: &str, username: &str, password: &str) -> Self {
+        self.web_client = self.web_client.with_credentials(domain, username, password);
+        self
+    }
+
     /// Probe whether the CA has `EDITF_ATTRIBUTESUBJECTALTNAME2` enabled.
     /// Delegates to [`WebEnrollmentClient::check_esc6_vulnerable`] which sends
     /// a crafted request and inspects the response.

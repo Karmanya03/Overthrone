@@ -35,7 +35,7 @@ impl Default for SmbExecConfig {
             output_share: "C$".to_string(),
             // Use root of C:\ (writeable by SYSTEM/Administrators) — WS2025 may
             // restrict service writes to C:\Windows\Temp\ and C:\Users\Public\.
-            output_path: format!("__smbexec_{:04X}.tmp", id),
+            output_path: format!("Windows\\Temp\\__smbexec_{:04X}.tmp", id),
             cleanup: true,
         }
     }

@@ -15,7 +15,7 @@ pub fn print_banner() {
     println!("{}", banner.red().bold());
     println!(
         "  {} {} | {} | {}",
-        "⚔".red(),
+        ">".red(),
         format!("v{VERSION}").yellow().bold(),
         "Active Directory Offensive Toolkit".white(),
         "by Karmanya03".bright_black(),
@@ -25,18 +25,18 @@ pub fn print_banner() {
 pub fn print_module_banner(module: &str) {
     println!(
         "\n{} {} {}\n",
-        "━━━".red(),
+        "===".red(),
         module.to_uppercase().yellow().bold(),
-        "━━━".red(),
+        "===".red(),
     );
 }
 
 pub fn print_success(msg: &str) {
-    println!("  {} {}", "[✓]".green().bold(), msg);
+    println!("  {} {}", "[+]".green().bold(), msg);
 }
 
 pub fn print_fail(msg: &str) {
-    println!("  {} {}", "[✗]".red().bold(), msg);
+    println!("  {} {}", "[-]".red().bold(), msg);
 }
 
 pub fn print_info(msg: &str) {
@@ -47,16 +47,16 @@ pub fn print_warn(msg: &str) {
     println!("  {} {}", "[!]".yellow().bold(), msg);
 }
 
-// ═══════════════════════════════════════════════════════
+// --------------
 // Enhanced Error Reporting with Context & Remediation
-// ═══════════════════════════════════════════════════════
+// --------------
 
 /// Print a detailed error with context and remediation hint
 pub fn _print_fail_detail(context: &str, error: &str, hint: &str) {
     println!();
-    println!("  {} {}", "✗ ERROR:".red().bold(), context.red());
+    println!("  {} {}", "[-] ERROR:".red().bold(), context.red());
     println!("  {} {}", "  Cause:".bright_black(), error.white());
-    println!("  {} {}", "  → Hint:".yellow(), hint.yellow().bold());
+    println!("  {} {}", "  -> Hint:".yellow(), hint.yellow().bold());
     println!();
 }
 
@@ -65,7 +65,7 @@ pub fn _print_critical(title: &str, details: &str) {
     println!();
     println!(
         "  {} {}",
-        "⭐ CRITICAL:".red().bold().blink(),
+        "[!] CRITICAL:".red().bold().blink(),
         title.red().bold()
     );
     println!("  {}", details.yellow());
@@ -76,7 +76,7 @@ pub fn _print_critical(title: &str, details: &str) {
 pub fn _print_high_value(title: &str, details: &str) {
     println!(
         "  {} {}: {}",
-        "💎".cyan(),
+        "[*]".cyan(),
         title.white().bold(),
         details.cyan()
     );
@@ -85,11 +85,11 @@ pub fn _print_high_value(title: &str, details: &str) {
 /// Print an attack path discovery
 pub fn _print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
     println!();
-    println!("  {} ATTACK PATH FOUND", "🎯".green().bold());
-    println!("  {} {} → {}", "•".white(), from.cyan(), to.red().bold());
+    println!("  {} ATTACK PATH FOUND", "*".green().bold());
+    println!("  {} {} -> {}", "-".white(), from.cyan(), to.red().bold());
     println!(
         "  {} {} hops, cost {}",
-        "•".white(),
+        "-".white(),
         hops.to_string().yellow(),
         cost.to_string().yellow()
     );
@@ -100,7 +100,7 @@ pub fn _print_attack_path(from: &str, to: &str, hops: usize, cost: u32) {
 pub fn _print_credential(username: &str, cred_type: &str, source: &str) {
     println!(
         "  {} {}: {} ({})",
-        "🔑".green(),
+        "[key]".green(),
         username.white().bold(),
         cred_type.yellow(),
         source.bright_black()
@@ -110,8 +110,8 @@ pub fn _print_credential(username: &str, cred_type: &str, source: &str) {
 /// Print hash capture for cracking
 pub fn _print_hash_capture(hash_type: &str, username: &str, hash_preview: &str) {
     println!(
-        "  {} {} hash: {} → {}",
-        "🔓".red(),
+        "  {} {} hash: {} -> {}",
+        "[unlock]".red(),
         hash_type.yellow().bold(),
         username.white().bold(),
         hash_preview.bright_black()
@@ -124,23 +124,23 @@ pub fn print_da_achieved(username: &str, host: &str) {
     println!();
     println!(
         "{}",
-        "╔═══════════════════════════════════════════════════════╗".green()
+        "+===============================================+".green()
     );
     println!(
         "{}",
-        "║        🎉 DOMAIN ADMIN ACCESS ACHIEVED 🎉              ║".green()
+        "|        [+] DOMAIN ADMIN ACCESS ACHIEVED [+]              |".green()
     );
     println!(
         "{}",
-        "╚═══════════════════════════════════════════════════════╝".green()
+        "+===============================================+".green()
     );
     println!();
     println!(
         "  {} User: {}",
-        "⭐".yellow().bold(),
+        "[!]".yellow().bold(),
         username.white().bold()
     );
-    println!("  {} Host: {}", "💻".cyan(), host.cyan());
+    println!("  {} Host: {}", "[exec]".cyan(), host.cyan());
     println!();
 }
 
@@ -148,7 +148,7 @@ pub fn print_da_achieved(username: &str, host: &str) {
 #[allow(dead_code)]
 pub fn print_stage_summary(stage: &str, succeeded: usize, failed: usize) {
     let status = if failed == 0 {
-        "✓".green()
+        "[+]".green()
     } else {
         "!".yellow()
     };

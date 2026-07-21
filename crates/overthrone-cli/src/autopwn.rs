@@ -172,21 +172,25 @@ pub async fn run(
         None => discovered_domain.clone().unwrap_or_default(),
     };
 
-    println!("{} Target:    {}", "🎯".bright_black(), args.target.cyan());
-    println!("{} DC:        {}", "🏰".bright_black(), dc.cyan());
+    println!("{} Target:    {}", "[*]".bright_black(), args.target.cyan());
+    println!("{} DC:        {}", "[+]".bright_black(), dc.cyan());
     if !pilot_domain_display.is_empty() {
         println!(
             "{} Domain:    {}",
-            "🌐".bright_black(),
+            "[net]".bright_black(),
             pilot_domain_display.cyan()
         );
     }
-    println!("{} Method:    {:?}", "🔧".bright_black(), args.method);
-    println!("{} Max Stage: {:?}", "📊".bright_black(), args.max_stage);
-    println!("{} Adaptive:  {:?}", "🧠".bright_black(), args.adaptive);
+    println!("{} Method:    {:?}", "[cfg]".bright_black(), args.method);
+    println!(
+        "{} Max Stage: {:?}",
+        "[stats]".bright_black(),
+        args.max_stage
+    );
+    println!("{} Adaptive:  {:?}", "[info]".bright_black(), args.adaptive);
     println!(
         "{} Stealth:   {}",
-        "🥷".bright_black(),
+        "[+]".bright_black(),
         if args.stealth {
             "ON".green()
         } else {
@@ -195,7 +199,7 @@ pub async fn run(
     );
     println!(
         "{} Dry Run:   {}",
-        "📝".bright_black(),
+        "[log]".bright_black(),
         if args.dry_run {
             "YES".yellow()
         } else {
@@ -249,7 +253,7 @@ pub async fn run(
     } else {
         println!(
             "\n{} Goal not achieved. {} steps succeeded, {} failed.",
-            "⚠".yellow().bold(),
+            "[!]".yellow().bold(),
             result.steps_succeeded.to_string().green(),
             result.steps_failed.to_string().red(),
         );

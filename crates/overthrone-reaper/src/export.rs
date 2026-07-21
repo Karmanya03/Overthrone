@@ -44,7 +44,7 @@ pub async fn export_results(
         }
     }
 
-    info!("[export] Done â†’ {}", path.display());
+    info!("[export] Done -> {}", path.display());
     Ok(())
 }
 
@@ -77,7 +77,7 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
             ));
         }
         tokio::fs::write(&path, lines.join("\n")).await?;
-        info!("[export] â†’ {}", path.display());
+        info!("[export] -> {}", path.display());
     }
 
     if !result.snaffle_findings.is_empty() {
@@ -109,15 +109,15 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
             ));
         }
         tokio::fs::write(&path, lines.join("\n")).await?;
-        info!("[export] â†’ {}", path.display());
+        info!("[export] -> {}", path.display());
     }
 
     Ok(())
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 //  BloodHound v4 Export
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 fn right_to_bloodhound_name(right: &DangerousRight) -> String {
     match right {
@@ -228,7 +228,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
         }
     }
 
-    // â”€â”€ Users â”€â”€
+    // -- Users --
     if !result.users.is_empty() {
         let users_json: Vec<Value> = result
             .users
@@ -296,10 +296,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_users.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound users â†’ {}", path.display());
+        info!("[export] BloodHound users -> {}", path.display());
     }
 
-    // â”€â”€ Computers â”€â”€
+    // -- Computers --
     if !result.computers.is_empty() {
         let computers_json: Vec<Value> = result
             .computers
@@ -357,10 +357,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_computers.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound computers â†’ {}", path.display());
+        info!("[export] BloodHound computers -> {}", path.display());
     }
 
-    // â”€â”€ Groups â”€â”€
+    // -- Groups --
     if !result.groups.is_empty() {
         let groups_json: Vec<Value> = result.groups.iter().map(|g| {
             let domain_upper = result.domain.to_uppercase();
@@ -399,10 +399,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_groups.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound groups â†’ {}", path.display());
+        info!("[export] BloodHound groups -> {}", path.display());
     }
 
-    // â”€â”€ OUs â”€â”€
+    // -- OUs --
     if !result.ous.is_empty() {
         let ous_json: Vec<Value> = result
             .ous
@@ -443,10 +443,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_ous.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound OUs â†’ {}", path.display());
+        info!("[export] BloodHound OUs -> {}", path.display());
     }
 
-    // â”€â”€ GPOs â”€â”€
+    // -- GPOs --
     if !result.gpos.is_empty() {
         let gpos_json: Vec<Value> = result.gpos.iter().map(|g| {
             let gpo_aces_for_this: Vec<Value> = gpo_aces
@@ -482,10 +482,10 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
         let path = dir.join(format!("{}_gpos.json", timestamp));
         tokio::fs::write(&path, serde_json::to_string_pretty(&output)?).await?;
-        info!("[export] BloodHound GPOs â†’ {}", path.display());
+        info!("[export] BloodHound GPOs -> {}", path.display());
     }
 
-    // â”€â”€ Domains â”€â”€
+    // -- Domains --
     let domain_upper = result.domain.to_uppercase();
 
     // Derive domain SID from an enumerated object's SID (strip the last RID component).
@@ -557,7 +557,7 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
 
     let path = dir.join(format!("{}_domains.json", timestamp));
     tokio::fs::write(&path, serde_json::to_string_pretty(&domain_json)?).await?;
-    info!("[export] BloodHound domains â†’ {}", path.display());
+    info!("[export] BloodHound domains -> {}", path.display());
 
     Ok(())
 }

@@ -28,9 +28,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, warn};
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ----------------------------------------------
 // Output helpers
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ----------------------------------------------
 
 /// Emit result as JSON to stdout (and optionally to a file), then return 0.
 /// Callers should return the result of this function directly.
@@ -52,11 +52,11 @@ fn wants_json(cli: &Cli) -> bool {
     matches!(cli.stdout_format, OutputFormat::Json)
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_dump â€” Credential Dumping
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
-pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
+pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource, user: Option<&str>) -> i32 {
     banner::print_module_banner("DUMP");
     println!("  {} Target: {}", ">".bright_black(), target.cyan());
     println!("  {} Source: {:?}", ">".bright_black(), source);
@@ -86,7 +86,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     state.dc_ip = Some(target.to_string());
     state.domain = Some(creds.domain.clone());
 
-    // Map DumpSource â†’ PlannedAction
+    // Map DumpSource -> PlannedAction
     let (action, description) = match source {
         DumpSource::Sam => (
             overthrone_pilot::planner::PlannedAction::DumpSam {
@@ -100,12 +100,18 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
             },
             format!("Dump LSA secrets from {}", target),
         ),
-        DumpSource::Ntds => (
-            overthrone_pilot::planner::PlannedAction::DumpNtds {
-                target: target.to_string(),
-            },
-            format!("Dump NTDS.dit from {}", target),
-        ),
+        DumpSource::Ntds | DumpSource::Dcsync => {
+            let target_user = user.map(|s| s.to_string());
+            let desc = if let Some(u) = user {
+                format!("DCSync user {} from {}", u, target)
+            } else {
+                format!("DCSync all domain credentials from {}", target)
+            };
+            (
+                overthrone_pilot::planner::PlannedAction::DcsSync { target_user },
+                desc,
+            )
+        }
         DumpSource::Dcc2 => (
             overthrone_pilot::planner::PlannedAction::DumpDcc2 {
                 target: target.to_string(),
@@ -200,9 +206,9 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource) -> i32 {
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ----------------------------------------------
 // cmd_dump_lsass — Evasive LSASS Credential Dump (BetterSafetyKatz)
-// ═════════════════════════════════════════════════════════════════════════════
+// ----------------------------------------------
 
 pub async fn cmd_dump_lsass(
     _cli: &Cli,
@@ -317,9 +323,9 @@ pub async fn cmd_dump_lsass(
     0
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ----------------------------------------------
 // cmd_doctor — Environment Diagnostics
-// ═════════════════════════════════════════════════════════════════════════════
+// ----------------------------------------------
 
 pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i32 {
     banner::print_module_banner("DOCTOR");
@@ -452,9 +458,9 @@ pub async fn _cmd_doctor(_cli: &Cli, checks: Vec<String>, dc: Option<&str>) -> i
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_report â€” Report Generation
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 #[cfg(feature = "scribe")]
 pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFormat) -> i32 {
@@ -576,9 +582,9 @@ pub async fn cmd_report(_cli: &Cli, input: &str, output: &str, format: ReportFor
     0
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ----------------------------------------------
 // Module command handlers
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ----------------------------------------------
 
 pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
     use overthrone_core::exec::modules;
@@ -640,7 +646,7 @@ pub async fn cmd_module_list(cli: &Cli, category: Option<&str>) -> i32 {
             current_cat = cat_label.to_string();
             println!(
                 "\n  {} {} {}",
-                "â– ".cyan(),
+                "#".cyan(),
                 cat_label.cyan().bold(),
                 format!(
                     "({})",
@@ -957,13 +963,76 @@ pub async fn cmd_module_run_parallel(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_forge â€” Ticket Forging
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 #[cfg(feature = "forge")]
+/// Convert a ticket format (kirbi/ccache/base64) — purely local operation, no DC needed.
+async fn cmd_forge_convert_ticket(cli: &Cli, input: &str, format: &str) -> i32 {
+    use overthrone_forge::convert;
+    let input_bytes = match tokio::fs::read(input).await {
+        Ok(b) => b,
+        Err(e) => {
+            banner::print_fail(&format!("Cannot read input file {input}: {e}"));
+            return 1;
+        }
+    };
+    let from_fmt = match convert::detect_format(&input_bytes) {
+        Ok(f) => f,
+        Err(e) => {
+            banner::print_fail(&format!("Cannot detect input format: {e}"));
+            return 1;
+        }
+    };
+    let to_fmt = match convert::parse_format(format) {
+        Ok(f) => f,
+        Err(e) => {
+            banner::print_fail(&format!("Invalid output format: {e}"));
+            return 1;
+        }
+    };
+    let output_bytes = match convert::convert_format(&input_bytes, from_fmt, to_fmt) {
+        Ok(b) => b,
+        Err(e) => {
+            banner::print_fail(&format!("Conversion failed: {e}"));
+            return 1;
+        }
+    };
+    let output_path = input
+        .replace(".kirbi", &format!(".{}", format))
+        .replace(".ccache", &format!(".{}", format))
+        .replace(".b64", &format!(".{}", format));
+    if let Err(e) = tokio::fs::write(&output_path, &output_bytes).await {
+        banner::print_fail(&format!("Cannot write {output_path}: {e}"));
+        return 1;
+    }
+    banner::print_success(&format!(
+        "Ticket converted: {} -> {} ({} bytes)",
+        input,
+        output_path,
+        output_bytes.len()
+    ));
+    if let Some(path) = &cli.outfile {
+        // Also copy to outfile if requested
+        let _ = tokio::fs::write(path, &output_bytes).await;
+    }
+    0
+}
+
 pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
     banner::print_module_banner("FORGE");
+
+    // Some forge operations are purely local (no DC needed).
+    // Handle those first before requiring domain/DC.
+    if matches!(action, ForgeAction::ConvertTicket { .. }) {
+        return match action {
+            ForgeAction::ConvertTicket { input, format } => {
+                cmd_forge_convert_ticket(cli, input, format).await
+            }
+            _ => unreachable!(),
+        };
+    }
 
     let domain = match crate::require_dc_only_creds(cli) {
         Ok(d) => d,
@@ -1746,9 +1815,9 @@ pub async fn cmd_crack(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_rid â€” RID Cycling
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool) -> i32 {
     banner::print_module_banner("RID CYCLING");
@@ -1920,7 +1989,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         .filter(|r| r.account_type == RidAccountType::User)
         .collect();
     if !user_results.is_empty() {
-        println!("  {} Users:", "â– ".green());
+        println!("  {} Users:", "#".green());
         for r in &user_results {
             println!(
                 "    {} RID {:>5}: {}",
@@ -1938,7 +2007,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         .filter(|r| r.account_type == RidAccountType::Group)
         .collect();
     if !group_results.is_empty() {
-        println!("  {} Groups:", "â– ".yellow());
+        println!("  {} Groups:", "#".yellow());
         for r in &group_results {
             println!(
                 "    {} RID {:>5}: {}",
@@ -1956,7 +2025,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         .filter(|r| r.account_type == RidAccountType::Alias)
         .collect();
     if !alias_results.is_empty() {
-        println!("  {} Aliases:", "â– ".yellow());
+        println!("  {} Aliases:", "#".yellow());
         for r in &alias_results {
             println!(
                 "    {} RID {:>5}: {}",
@@ -1973,9 +2042,9 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
     ));
     0
 }
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_move â€” Lateral Movement
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 /// Display captured NTLM credentials from the responder.
 #[cfg(feature = "responder")]
@@ -2410,9 +2479,9 @@ pub async fn cmd_move(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_gpp â€” GPP Password Decryption
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> i32 {
     banner::print_module_banner("GPP");
@@ -2556,9 +2625,9 @@ pub async fn cmd_gpp(cli: &Cli, file: Option<&str>, cpassword: Option<&str>) -> 
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_laps â€” LAPS Password Reading
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 #[cfg(feature = "reaper")]
 pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
@@ -2720,9 +2789,9 @@ pub async fn cmd_laps(cli: &Cli, computer: Option<&str>) -> i32 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 // cmd_shadow_cred — Shadow Credential Lifecycle
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 
 #[cfg(feature = "reaper")]
 pub async fn cmd_shadow_cred(cli: &Cli, action: &ShadowCredAction) -> i32 {
@@ -3019,9 +3088,9 @@ async fn resolve_shadow_target_dn(
         .ok_or_else(|| format!("Target '{target}' not found in domain {domain}"))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 // cmd_bloodhound — BloodHound Attack Path Analysis
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 
 fn load_graph_from(path: &str) -> std::result::Result<overthrone_core::graph::AttackGraph, String> {
     match overthrone_core::graph::AttackGraph::from_json_file(path) {
@@ -3364,9 +3433,9 @@ pub async fn cmd_bloodhound(_cli: &Cli, action: &BloodHoundAction) -> i32 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 // cmd_assess — Domain Risk Assessment
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 
 #[cfg(feature = "reaper")]
 pub async fn cmd_assess(cli: &Cli, _modules: &[String]) -> i32 {
@@ -3475,9 +3544,9 @@ pub async fn cmd_assess(cli: &Cli, _modules: &[String]) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_secrets â€” Secrets Dumping
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
     banner::print_module_banner("SECRETS");
@@ -3641,9 +3710,9 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_adcs â€” ADCS Certificate Abuse
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
     banner::print_module_banner("ADCS");
@@ -3841,7 +3910,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 if use_http { "HTTP" } else { "HTTPS" }.cyan()
             );
 
-            let exploiter = match if use_http {
+            let mut exploiter = match if use_http {
                 overthrone_core::adcs::Esc1Exploiter::with_ssl(ca_host, false)
             } else {
                 overthrone_core::adcs::Esc1Exploiter::new(ca_host)
@@ -3852,6 +3921,14 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     return 1;
                 }
             };
+
+            // Attach NTLM credentials if provided
+            let domain = cli.domain.as_deref().unwrap_or("");
+            let username = cli.username.as_deref().unwrap_or("");
+            let password = cli.password.as_deref().unwrap_or("");
+            if !domain.is_empty() && !username.is_empty() && !password.is_empty() {
+                exploiter = exploiter.with_credentials(domain, username, password);
+            }
 
             match exploiter.exploit(template, target_user, None).await {
                 Ok(cert) => {
@@ -5073,9 +5150,9 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_shell â€” Interactive Shell
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
     banner::print_module_banner("SHELL");
@@ -5100,9 +5177,9 @@ pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
     }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_sccm â€” SCCM Abuse
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
     use overthrone_core::sccm;
@@ -5426,9 +5503,9 @@ pub async fn cmd_sccm(cli: &Cli, action: &SccmAction) -> i32 {
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_scan â€” Port Scanner
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_scan(
@@ -5611,9 +5688,9 @@ pub async fn cmd_scan(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_tui â€” Interactive TUI
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -> i32 {
     let graph = Arc::new(Mutex::new(if let Some(path) = load {
@@ -5668,9 +5745,9 @@ pub async fn cmd_tui(cli: &Cli, domain: &str, crawl: bool, load: Option<&str>) -
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_plugin â€” Plugin System
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_plugin(
     _cli: &Cli,
@@ -5798,9 +5875,9 @@ pub async fn cmd_plugin(
     0
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 // cmd_c2 â€” C2 Integration
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ----------------------------------------------
 
 pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
     banner::print_module_banner("C2 INTEGRATION");
@@ -6004,9 +6081,9 @@ pub async fn cmd_c2(manager: &mut C2Manager, action: C2Action) -> i32 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 // cmd_azure — Azure AD / Entra ID Attacks
-// ═══════════════════════════════════════════════════════════
+// ----------------------------------------------
 
 pub async fn cmd_azure(cli: &Cli, action: &AzureAction) -> i32 {
     banner::print_module_banner("AZURE AD");

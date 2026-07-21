@@ -719,6 +719,32 @@ impl SmbSession {
         info!("SMB: Deleted {}", remote_path);
         Ok(())
     }
+
+    /// Create a directory on the remote share (or succeed if it already exists).
+    pub async fn create_dir(&self, share: &str, remote_path: &str) -> Result<()> {
+        info!(
+            "SMB: Creating directory \\\\{}\\{}\\{}",
+            self.target, share, remote_path
+        );
+        // PTH path via SMB2 client
+        if let Some(inner) = &self.inner {
+            let share_path = format!(r"\\{}\{}", self.target, share);
+            let conn = inner.lock().await;
+            let _tree_id = conn.tree_connect(&share_path).await?;
+            let dir_path = remote_path.replace('/', "\\");
+            conn.create_directory(&dir_path).await?;
+            info!("SMB: Directory created/verified (PTH): {}", remote_path);
+            return Ok(());
+        }
+        // Standard path — skip directory creation; the smb crate doesn't expose
+        // a direct create_dir API. Users should ensure parent dirs exist.
+        info!(
+            "SMB: Directory creation skipped (no PTH client): {}",
+            remote_path
+        );
+        Ok(())
+    }
+
     pub async fn download_file(
         &self,
         share: &str,
@@ -1923,6 +1949,26 @@ impl SmbSession {
         conn.delete_file(&file_path).await?;
 
         info!("SMB: Deleted {}", remote_path);
+        Ok(())
+    }
+
+    /// Create a directory on the remote share.
+    /// If the directory already exists, succeeds silently.
+    /// Only the final path component is created — parent directories must exist.
+    pub async fn create_dir(&self, share: &str, remote_path: &str) -> Result<()> {
+        info!(
+            "SMB: Creating directory \\\\{}\\{}\\{}",
+            self.target, share, remote_path
+        );
+
+        let share_path = format!(r"\\{}\{}", self.target, share);
+        let conn = self.inner.lock().await;
+        let _tree_id = conn.tree_connect(&share_path).await?;
+
+        let dir_path = remote_path.replace('/', "\\");
+        conn.create_directory(&dir_path).await?;
+
+        info!("SMB: Directory created/verified: {}", remote_path);
         Ok(())
     }
 

@@ -468,7 +468,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let mut state = if let Some(initial) = config.initial_state.clone() {
         println!(
             "  {} Resuming from saved session state",
-            colored::Colorize::cyan("â–º")
+            colored::Colorize::cyan(">")
         );
         initial
     } else {
@@ -1467,7 +1467,7 @@ fn print_kill_chain_pipeline(current: Option<Stage>, stats: &HashMap<Stage, (usi
         } else if fail > 0 {
             "✗".red().bold()
         } else if current == Some(*stage) {
-            "â–¸".cyan().bold()
+            ">".cyan().bold()
         } else {
             "·".dimmed()
         };
@@ -1505,7 +1505,7 @@ async fn rollback_successful_steps(
 
     println!(
         "\n  {} Rolling back {} successful step(s)",
-        "â†©".yellow().bold(),
+        "<-".yellow().bold(),
         steps.len()
     );
 

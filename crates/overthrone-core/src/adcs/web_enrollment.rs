@@ -6,10 +6,15 @@
 //! Supports both legacy (/certsrv/) and modern ICertRequest interfaces.
 
 use crate::error::{OverthroneError, Result};
+use crate::proto::ntlm::nt_hash;
 use base64::Engine;
+use reqwest::header::HeaderValue;
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
 use tracing::{debug, info};
+
+// Re-use SMB2's NTLMSSP Type3 builder which includes the MIC field
+use crate::proto::smb2::{build_ntlmssp_authenticate_hash, compute_ntlmv2_mic};
 
 // ═══════════════════════════════════════════════════════════
 // Web Enrollment Client
@@ -20,6 +25,10 @@ pub struct WebEnrollmentClient {
     http_client: Client,
     ca_server: String,
     use_ssl: bool,
+    /// Optional NTLM credentials for Windows Integrated Auth
+    domain: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 /// Extract hostname from a CA server string.
@@ -61,7 +70,18 @@ impl WebEnrollmentClient {
             http_client,
             ca_server: ca_server.to_string(),
             use_ssl,
+            domain: None,
+            username: None,
+            password: None,
         })
+    }
+
+    /// Create client with NTLM credentials for Windows Integrated Auth.
+    pub fn with_credentials(mut self, domain: &str, username: &str, password: &str) -> Self {
+        self.domain = Some(domain.to_string());
+        self.username = Some(username.to_string());
+        self.password = Some(password.to_string());
+        self
     }
 
     /// Create client with custom timeout (HTTPS by default).
@@ -86,6 +106,9 @@ impl WebEnrollmentClient {
             http_client,
             ca_server: ca_server.to_string(),
             use_ssl,
+            domain: None,
+            username: None,
+            password: None,
         })
     }
 
@@ -100,6 +123,109 @@ impl WebEnrollmentClient {
         let scheme = if self.use_ssl { "https" } else { "http" };
         let hostname = extract_ca_hostname(&self.ca_server);
         format!("{}://{}/certsrv", scheme, hostname)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // NTLM HTTP Authentication for Windows Integrated Auth
+    // ─────────────────────────────────────────────────────────
+
+    /// Perform NTLM HTTP authentication and return an Authorization header value.
+    /// This implements the NTLM over HTTP handshake:
+    /// 1. Type 1 (Negotiate) → 401 + Type 2 (Challenge)
+    /// 2. Compute Type 3 (Authenticate) → return Authorization header
+    ///
+    /// Returns None if no credentials are configured.
+    #[allow(dead_code)]
+    async fn ntlm_auth_header(&self) -> Result<Option<HeaderValue>> {
+        let domain = match &self.domain {
+            Some(d) => d.clone(),
+            None => return Ok(None),
+        };
+        let username = match &self.username {
+            Some(u) => u.clone(),
+            None => return Ok(None),
+        };
+        let password = match &self.password {
+            Some(p) => p.clone(),
+            None => return Ok(None),
+        };
+
+        // Use GET for the Type1→Type2 exchange because IIS returns 411 Length Required
+        // for POST requests without body + Content-Type. GET requests work fine for
+        // extracting the NTLM challenge without needing form data.
+        let url = format!("{}/default.asp", self.base_url());
+
+        // Step 1: Send Type 1 (Negotiate) message via GET
+        let type1 = crate::proto::smb2::build_ntlmssp_negotiate();
+        let type1_b64 = base64::engine::general_purpose::STANDARD.encode(&type1);
+
+        let negotiate_val = format!("NTLM {}", type1_b64);
+        let negotiate_header = HeaderValue::from_str(&negotiate_val)
+            .map_err(|e| OverthroneError::Adcs(format!("Invalid NTLM header: {e}")))?;
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .header("Authorization", &negotiate_header)
+            .send()
+            .await
+            .map_err(|e| OverthroneError::Connection {
+                target: url.clone(),
+                reason: format!("NTLM negotiate request failed: {e}"),
+            })?;
+
+        let status = resp.status();
+        if !status.is_server_error() && status != StatusCode::UNAUTHORIZED {
+            // Server accepted without NTLM — no auth needed
+            return Ok(None);
+        }
+
+        // Step 2: Extract Type 2 (Challenge) from WWW-Authenticate header
+        let www_auth = resp
+            .headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        let type2_b64 = www_auth
+            .strip_prefix("NTLM ")
+            .or_else(|| www_auth.strip_prefix("Negotiate "))
+            .unwrap_or("")
+            .trim();
+        if type2_b64.is_empty() {
+            return Err(OverthroneError::Adcs(
+                "NTLM auth: No NTLM challenge in WWW-Authenticate header".to_string(),
+            ));
+        }
+
+        let type2_bytes = base64::engine::general_purpose::STANDARD
+            .decode(type2_b64)
+            .map_err(|e| {
+                OverthroneError::Adcs(format!("NTLM auth: Invalid base64 in challenge: {e}"))
+            })?;
+
+        // Parse Type 2 message using the SMB2 parser
+        let challenge = crate::proto::smb2::parse_ntlmssp_challenge(&type2_bytes)?;
+
+        // Step 3: Compute Type 3 (Authenticate) response with MIC
+        let password_hash = nt_hash(&password);
+        let (mut type3, exported_session_key, _session_base_key) =
+            build_ntlmssp_authenticate_hash(&domain, &username, &password_hash, &challenge)?;
+
+        // Compute and fill in the MIC if SIGN or SEAL is negotiated
+        let sign_flags = 0x0000_0010 | 0x0000_0020;
+        if challenge.negotiate_flags & sign_flags != 0 && type3.len() >= 72 + 16 {
+            type3[72..88].fill(0);
+            let mic = compute_ntlmv2_mic(&exported_session_key, &type1, &type2_bytes, &type3)?;
+            type3[72..88].copy_from_slice(&mic);
+        }
+
+        let type3_b64 = base64::engine::general_purpose::STANDARD.encode(&type3);
+        let auth_val = format!("NTLM {}", type3_b64);
+
+        HeaderValue::from_str(&auth_val)
+            .map(Some)
+            .map_err(|e| OverthroneError::Adcs(format!("Invalid NTLM Type3 header: {e}")))
     }
 
     // ─────────────────────────────────────────────────────────
@@ -146,10 +272,30 @@ impl WebEnrollmentClient {
 
         debug!("Submitting to: {}", url);
 
-        let response = self
-            .http_client
-            .post(&url)
-            .form(&form_data)
+        // Helper to build the POST request
+        let build_post = |auth_header: Option<&HeaderValue>| {
+            let mut req = self.http_client.post(&url).form(&form_data);
+            if let Some(h) = auth_header {
+                req = req.header("Authorization", h);
+            }
+            req
+        };
+
+        // Get NTLM Type1 negotiate header if credentials are configured.
+        // We use the SMB2 negotiate builder which includes SIGN/SEAL flags
+        // so the server knows a MIC (Message Integrity Code) is expected.
+        let (negotiate_header, type1_bytes) = if self.domain.is_some() && self.username.is_some() {
+            let type1 = crate::proto::smb2::build_ntlmssp_negotiate();
+            let type1_b64 = base64::engine::general_purpose::STANDARD.encode(&type1);
+            let negotiate_val = format!("NTLM {}", type1_b64);
+            let hdr = HeaderValue::from_str(&negotiate_val)
+                .map_err(|e| OverthroneError::Adcs(format!("Invalid NTLM header: {e}")))?;
+            (Some(hdr), Some(type1))
+        } else {
+            (None, None)
+        };
+
+        let response = build_post(negotiate_header.as_ref())
             .send()
             .await
             .map_err(|e| OverthroneError::Connection {
@@ -157,8 +303,91 @@ impl WebEnrollmentClient {
                 reason: format!("Request failed: {}", e),
             })?;
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let mut status = response.status();
+
+        // Extract WWW-Authenticate BEFORE consuming response body (headers must be read first)
+        let www_auth = response
+            .headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        let mut body = response.text().await.unwrap_or_default();
+
+        // If 401 Unauthorized, extract NTLM Type2 challenge and retry with Type3
+        if status == StatusCode::UNAUTHORIZED && self.domain.is_some() {
+            debug!("Got 401 Unauthorized — completing NTLM auth handshake");
+
+            let type2_b64 = www_auth
+                .strip_prefix("NTLM ")
+                .or_else(|| {
+                    // Try Negotiate prefix too (sometimes IIS uses Negotiate for NTLM)
+                    www_auth.strip_prefix("Negotiate ")
+                })
+                .unwrap_or("")
+                .trim();
+
+            if !type2_b64.is_empty() {
+                let type2_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(type2_b64)
+                    .map_err(|e| {
+                        OverthroneError::Adcs(format!(
+                            "NTLM auth: Invalid base64 in challenge: {e}"
+                        ))
+                    })?;
+
+                // Parse Type 2 message using the SMB2 parser (handles MIC flags)
+                let challenge = crate::proto::smb2::parse_ntlmssp_challenge(&type2_bytes)?;
+
+                // Compute NT hash from password
+                let password_hash = nt_hash(self.password.as_deref().unwrap_or(""));
+
+                // Build Type3 using the SMB2 authenticator which includes the MIC field
+                let (mut type3, exported_session_key, _session_base_key) =
+                    build_ntlmssp_authenticate_hash(
+                        self.domain.as_deref().unwrap_or(""),
+                        self.username.as_deref().unwrap_or(""),
+                        &password_hash,
+                        &challenge,
+                    )?;
+
+                // Compute and fill in the MIC if SIGN or SEAL is negotiated
+                let sign_flags = 0x0000_0010 | 0x0000_0020; // NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL
+                if challenge.negotiate_flags & sign_flags != 0
+                    && type3.len() >= 72 + 16
+                    && let Some(type1_ref) = type1_bytes.as_ref()
+                {
+                    // Zero out the MIC field before computing (per NTLM spec)
+                    type3[72..88].fill(0);
+                    let mic =
+                        compute_ntlmv2_mic(&exported_session_key, type1_ref, &type2_bytes, &type3)?;
+                    type3[72..88].copy_from_slice(&mic);
+                }
+
+                let type3_b64 = base64::engine::general_purpose::STANDARD.encode(&type3);
+                let auth_val = format!("NTLM {}", type3_b64);
+                let auth_header = HeaderValue::from_str(&auth_val).map_err(|e| {
+                    OverthroneError::Adcs(format!("Invalid NTLM Type3 header: {e}"))
+                })?;
+
+                // Retry with Type3
+                let retry = build_post(Some(&auth_header)).send().await.map_err(|e| {
+                    OverthroneError::Connection {
+                        target: url.clone(),
+                        reason: format!("NTLM auth retry failed: {e}"),
+                    }
+                })?;
+                status = retry.status();
+                body = retry.text().await.unwrap_or_default();
+                info!("NTLM auth result: {}", status);
+            } else {
+                debug!(
+                    "No NTLM/ Negotiate challenge in WWW-Authenticate header: {:?}",
+                    &www_auth
+                );
+            }
+        }
 
         debug!("Response status: {}", status);
         debug!("Response body length: {} bytes", body.len());
@@ -477,8 +706,16 @@ impl WebEnrollmentClient {
             "error:",
             "Denied:",
             "denied:",
+            "Denied",
+            "denied",
             "The request failed",
             "Certificate request failed",
+            "Not allowed",
+            "not allowed",
+            "access denied",
+            "Access is denied",
+            "Invalid certificate request",
+            "unsupported",
         ];
 
         for pattern in &patterns {
@@ -488,8 +725,17 @@ impl WebEnrollmentClient {
             }
         }
 
-        // Return generic error
-        "Unknown error occurred".to_string()
+        // Check for 401/login page indicators
+        if body.contains("401") || body.contains("Log On") || body.contains("login") {
+            return format!(
+                "Authentication required (401). NTLM auth may have failed. Body starts: {}",
+                body.chars().take(300).collect::<String>()
+            );
+        }
+
+        // Include body excerpt for debugging if verbose
+        let excerpt: String = body.chars().take(2000).collect();
+        format!("Unknown error. Body: {}", excerpt)
     }
 
     // ─────────────────────────────────────────────────────────
@@ -710,6 +956,58 @@ mod tests {
         assert!(client.is_ok());
         let client_http = WebEnrollmentClient::with_ssl("ca.example.com", false);
         assert!(client_http.is_ok());
+    }
+
+    #[test]
+    fn test_with_credentials() {
+        let client = WebEnrollmentClient::new("ca.example.com")
+            .unwrap()
+            .with_credentials("DOMAIN", "user", "pass123");
+
+        assert_eq!(client.domain.as_deref(), Some("DOMAIN"));
+        assert_eq!(client.username.as_deref(), Some("user"));
+        assert_eq!(client.password.as_deref(), Some("pass123"));
+    }
+
+    #[test]
+    fn test_with_timeout_credentials() {
+        let client = WebEnrollmentClient::with_timeout("ca.example.com", 60)
+            .unwrap()
+            .with_credentials("WORKGROUP", "admin", "sekret");
+
+        assert_eq!(client.domain.as_deref(), Some("WORKGROUP"));
+        assert_eq!(client.username.as_deref(), Some("admin"));
+        assert_eq!(client.password.as_deref(), Some("sekret"));
+    }
+
+    #[test]
+    fn test_with_ssl_credentials() {
+        let client = WebEnrollmentClient::with_ssl("ca.example.com", false)
+            .unwrap()
+            .with_credentials("CORP", "jsmith", "P@ssw0rd");
+
+        assert_eq!(client.domain.as_deref(), Some("CORP"));
+        assert_eq!(client.username.as_deref(), Some("jsmith"));
+        assert_eq!(client.password.as_deref(), Some("P@ssw0rd"));
+    }
+
+    #[test]
+    fn test_with_timeout_ssl_credentials() {
+        let client = WebEnrollmentClient::with_timeout_ssl("ca.example.com", 30, true)
+            .unwrap()
+            .with_credentials("TEST", "alice", "bob!");
+
+        assert_eq!(client.domain.as_deref(), Some("TEST"));
+        assert_eq!(client.username.as_deref(), Some("alice"));
+        assert_eq!(client.password.as_deref(), Some("bob!"));
+    }
+
+    #[test]
+    fn test_ntlm_auth_no_credentials_returns_none() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let client = WebEnrollmentClient::new("ca.example.com").unwrap();
+        let result = rt.block_on(client.ntlm_auth_header()).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]

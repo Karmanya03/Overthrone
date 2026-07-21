@@ -265,6 +265,7 @@ const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_OPEN: u32 = 0x0000_0001;
 #[allow(dead_code)]
 const FILE_CREATE: u32 = 0x0000_0002;
+const FILE_OPEN_IF: u32 = 0x0000_0003;
 const FILE_OVERWRITE_IF: u32 = 0x0000_0005;
 #[allow(dead_code)]
 const FILE_SUPERSEDE: u32 = 0x0000_0000;
@@ -1095,7 +1096,7 @@ impl Smb2Connection {
         );
 
         // ── Step 3: Build NTLMSSP Authenticate (Type 3) ──
-        let (mut type3, session_key, _session_base_key) =
+        let (mut type3, session_key, session_base_key) =
             build_ntlmssp_authenticate(domain, username, password, &challenge)?;
 
         // Compute NTLMv2 MIC if SIGN or SEAL is negotiated
@@ -1154,7 +1155,10 @@ impl Smb2Connection {
         // Impacket confirms this behavior — no SessionKey XOR on WS2025.
         *self.session_key.lock().await = Some(session_key.clone());
 
-        // Verify the server's response signature now that the key is stored
+        // Verify the server's response signature now that the key is stored.
+        // IMPORTANT: The server computed the signing key using preauth_hash that
+        // does NOT include the session setup leg 2 response (the server signed before
+        // sending). So we must verify BEFORE updating preauth_hash with leg 2 response.
         if self
             .sign_required
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1167,11 +1171,140 @@ impl Smb2Connection {
             let expected = derive_signing_key(&session_key, dialect, preauth_hash.as_deref());
             let expected_cmac = aes_cmac_16(&expected, &verify_buf);
             if &expected_cmac[..] != claimed_sig {
-                warn!("SMB2 Session Setup sig mismatch — disabling signing (WS2025 workaround)");
+                warn!("SMB2 Session Setup sig mismatch — trying all diagnostic KDF variants");
+                // ── Comprehensive diagnostic: try ALL KDF variants ──
+                let ph = preauth_hash.as_deref();
+                let mut found = "none";
+                // A: primary _sep already tried above
+                // B: _imp (no 0x00 separator, mimic older Windows)
+                {
+                    let key_b = sp800_108_counter_kdf_imp(
+                        &session_key,
+                        b"SMBSigningKey\x00",
+                        ph.unwrap_or(b""),
+                    );
+                    let arr: [u8; 16] = key_b[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "B (_imp)";
+                    }
+                }
+                // C: label without trailing null, _sep
+                if found == "none" {
+                    let key_c = sp800_108_counter_kdf_sep(
+                        &session_key,
+                        b"SMBSigningKey",
+                        ph.unwrap_or(b""),
+                    );
+                    let arr: [u8; 16] = key_c[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "C (_sep, no-null label)";
+                    }
+                }
+                // D: label without trailing null, _imp
+                if found == "none" {
+                    let key_d = sp800_108_counter_kdf_imp(
+                        &session_key,
+                        b"SMBSigningKey",
+                        ph.unwrap_or(b""),
+                    );
+                    let arr: [u8; 16] = key_d[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "D (_imp, no-null label)";
+                    }
+                }
+                // E: XOR session_key with first 16 bytes of preauth_hash
+                if found == "none" && ph.is_some_and(|h| h.len() >= 16) {
+                    let hash = ph.unwrap();
+                    let xored: Vec<u8> = session_key
+                        .iter()
+                        .zip(hash.iter())
+                        .map(|(a, b)| a ^ b)
+                        .collect();
+                    let key_e = sp800_108_counter_kdf_sep(&xored, b"SMBSigningKey\x00", hash);
+                    let arr: [u8; 16] = key_e[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "E (XOR'd session_key)";
+                    }
+                }
+                // F: HMAC-SHA512 as PRF
+                if found == "none"
+                    && aes_cmac_16(
+                        &derive_signing_key_sha512(&session_key, dialect, ph),
+                        &verify_buf,
+                    ) == claimed_sig
+                {
+                    found = "F (SHA-512 PRF)";
+                }
+                // G: no counter
+                if found == "none"
+                    && aes_cmac_16(
+                        &derive_signing_key_nocounter(&session_key, dialect, ph),
+                        &verify_buf,
+                    ) == claimed_sig
+                {
+                    found = "G (no counter)";
+                }
+                // H: raw session_key (no KDF at all)
+                if found == "none" && aes_cmac_16(&session_key, &verify_buf) == claimed_sig {
+                    found = "H (raw session_key, no KDF)";
+                }
+                // I: session_base_key (without KDF)
+                if found == "none" && aes_cmac_16(&session_base_key, &verify_buf) == claimed_sig {
+                    found = "I (raw session_base_key, no KDF)";
+                }
+                // J: session_key + SMB2AESCMAC with _sep (SMB 3.0.x label)
+                if found == "none"
+                    && let Some(hash) = ph
+                {
+                    let key_j = sp800_108_counter_kdf_sep(&session_key, b"SMB2AESCMAC\x00", hash);
+                    let arr: [u8; 16] = key_j[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "J (SMB2AESCMAC label, _sep, 3.1.1 context)";
+                    }
+                }
+                // K: session_key + SmbSign context + SMBSigningKey label (no preauth_hash context)
+                if found == "none" {
+                    let key_k = sp800_108_counter_kdf_sep(
+                        &session_key,
+                        b"SMBSigningKey\x00",
+                        b"SmbSign\x00",
+                    );
+                    let arr: [u8; 16] = key_k[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "K (SmbSign context, SMBSigningKey label)";
+                    }
+                }
+                // L: HMAC-SHA256(session_key, preauth_hash[0:16]) as signing key (non-standard KDF extraction)
+                if found == "none" && ph.is_some_and(|h| h.len() >= 16) {
+                    let mut mac = HmacSha256::new_from_slice(&session_key).expect("HMAC");
+                    mac.update(&ph.unwrap()[..16]);
+                    let result = mac.finalize().into_bytes();
+                    let arr: [u8; 16] = result[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "L (HMAC-SHA256(session_key, preauth_hash[0:16]))";
+                    }
+                }
+                // M: preauth_hash first 16 bytes AS signing key
+                if found == "none" && ph.is_some_and(|h| h.len() >= 16) {
+                    let arr: [u8; 16] = ph.unwrap()[..16].try_into().unwrap_or([0u8; 16]);
+                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
+                        found = "M (preauth_hash[0:16] as signing key)";
+                    }
+                }
+                warn!(
+                    "SMB2 Session Setup sig mismatch: found={found}, claimed_sig={claimed_sig:02x?}, session_key={session_key:02x?}, session_base_key={session_base_key:02x?}, preauth_hash={:02x?}",
+                    preauth_hash.as_deref().unwrap_or(&[])
+                );
                 self.signing_known_broken
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
+
+        // DO NOT update preauth_hash with the leg 2 response! The server computed
+        // its signing key using preauth_hash that includes only messages 1-5
+        // (negotiate req/res, session setup leg 1 req/res, leg 2 req). Adding the
+        // leg 2 response would change the preauth_hash and produce a different
+        // signing key for all subsequent outbound operations.
 
         Ok(session_key)
     }
@@ -1322,6 +1455,9 @@ impl Smb2Connection {
         *self.session_key.lock().await = Some(session_key.clone());
 
         // Verify the server's response signature now that the key is stored.
+        // IMPORTANT: The server computed the signing key using preauth_hash that
+        // does NOT include the session setup leg 2 response (signed before sending).
+        // Verify BEFORE updating preauth_hash with the leg 2 response.
         // Use derive_signing_key which handles both 3.0.x (SMB2AESCMAC) and
         // 3.1.1 (SMBSigningKey + PreauthIntegrityHashValue context).
         if self
@@ -1504,6 +1640,11 @@ impl Smb2Connection {
         }
 
         debug!("SMB2: PtH authenticated as {domain}\\{username}");
+
+        // DO NOT update preauth_hash with the leg 2 response! The server computed
+        // its signing key using preauth_hash that includes only messages 1-5.
+        // Adding the leg 2 response would corrupt subsequent signing operations.
+
         Ok(session_key)
     }
 
@@ -1872,6 +2013,21 @@ impl Smb2Connection {
             0,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             FILE_OPEN,
+            FILE_DIRECTORY_FILE,
+        )
+        .await
+    }
+
+    /// Create a directory on the remote share (or open if it already exists).
+    /// Uses FILE_OPEN_IF + FILE_DIRECTORY_FILE to create the directory
+    /// if it does not already exist.
+    pub async fn create_directory(&self, path: &str) -> Result<[u8; 32]> {
+        self.create(
+            path,
+            GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+            FILE_ATTRIBUTE_NORMAL,
+            0,
+            FILE_OPEN_IF,
             FILE_DIRECTORY_FILE,
         )
         .await
@@ -2934,7 +3090,7 @@ const NTLMSSP_TYPE3_MIC_OFFSET: usize = 72;
 /// MIC = HMAC_MD5(exported_session_key, type1_raw || type2_raw || type3_with_mic_zeroed)
 /// The type3 message MUST have bytes [72..88] set to zero before calling this.
 /// Returns the MIC bytes (16 bytes).
-fn compute_ntlmv2_mic(
+pub fn compute_ntlmv2_mic(
     exported_session_key: &[u8],
     type1_raw: &[u8],
     type2_raw: &[u8],

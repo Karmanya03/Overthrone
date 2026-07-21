@@ -97,6 +97,12 @@ impl Esc9Exploiter {
         Ok(Self { web_client })
     }
 
+    /// Set NTLM credentials for Windows Integrated Authentication
+    pub fn with_credentials(mut self, domain: &str, username: &str, password: &str) -> Self {
+        self.web_client = self.web_client.with_credentials(domain, username, password);
+        self
+    }
+
     /// Execute the ESC9 attack.
     /// This is an **offline** / **dry-run** implementation — the LDAP UPN
     /// modification is **not** performed here (that requires a live LDAP session

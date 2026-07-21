@@ -250,36 +250,36 @@ fn edge_abuse_info(edge_type: &EdgeType) -> Option<&'static str> {
             Some("Manage Certificate Template -> modify EKU/issuance settings")
         }
         EdgeType::AllowedToDelegate => {
-            Some("S4U2Self + S4U2Proxy â†’ impersonate any user to target service")
+            Some("S4U2Self + S4U2Proxy -> impersonate any user to target service")
         }
         EdgeType::AllowedToAct => {
             Some("RBCD ACE -> getST.py to impersonate Domain Admin to target computer")
         }
-        EdgeType::DcSync => Some("secretsdump.py -just-dc â†’ dump NTDS + all NTLM hashes"),
+        EdgeType::DcSync => Some("secretsdump.py -just-dc -> dump NTDS + all NTLM hashes"),
         EdgeType::GetChanges | EdgeType::GetChangesAll => {
             Some("Part of DCSync right â€” principal needs both GetChanges flags")
         }
         EdgeType::ReadLapsPassword => {
-            Some("Read ms-Mcs-AdmPwd / ms-LAPS-Password â†’ cleartext local admin cred")
+            Some("Read ms-Mcs-AdmPwd / ms-LAPS-Password -> cleartext local admin cred")
         }
         EdgeType::ReadGmsaPassword => {
-            Some("GMSAPasswordReader â†’ NT hash for lateral movement as gMSA")
+            Some("GMSAPasswordReader -> NT hash for lateral movement as gMSA")
         }
         EdgeType::HasSidHistory => {
-            Some("SID in SIDHistory â†’ principal implicitly member of historical group")
+            Some("SID in SIDHistory -> principal implicitly member of historical group")
         }
         EdgeType::CanRDP => {
             Some("xfreerdp / mstsc â€” GUI access; local admin may not be required")
         }
         EdgeType::CanPSRemote => Some("Enter-PSSession / evil-winrm â€” PowerShell remoting"),
         EdgeType::ExecuteDCOM => Some("Invoke-DCOM / MMC20.Application lateral movement"),
-        EdgeType::SQLAdmin => Some("SQL Server sysadmin â†’ xp_cmdshell / CLR assembly RCE"),
+        EdgeType::SQLAdmin => Some("SQL Server sysadmin -> xp_cmdshell / CLR assembly RCE"),
         EdgeType::HasSession => {
             Some("Token impersonation if admin on host (Incognito / credential tool tokens)")
         }
-        EdgeType::HasSpn => Some("GetUserSPNs.py â†’ offline TGS crack (Kerberoast)"),
-        EdgeType::DontReqPreauth => Some("GetNPUsers.py â†’ AS-REP roast (DONT_REQ_PREAUTH set)"),
-        EdgeType::GpoLink => Some("Link GPO to OU â†’ immediate exec on Group Policy refresh"),
+        EdgeType::HasSpn => Some("GetUserSPNs.py -> offline TGS crack (Kerberoast)"),
+        EdgeType::DontReqPreauth => Some("GetNPUsers.py -> AS-REP roast (DONT_REQ_PREAUTH set)"),
+        EdgeType::GpoLink => Some("Link GPO to OU -> immediate exec on Group Policy refresh"),
         EdgeType::TrustedBy => {
             Some("Cross-domain trust â€” SID injection / trust escalation potential")
         }
@@ -1060,7 +1060,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
                 Span::raw("  "),
                 Span::styled("âš  ", Style::default().fg(Color::Red)),
                 Span::styled(
-                    format!("{} â†’ {:?}", finding.principal, finding.right),
+                    format!("{} -> {:?}", finding.principal, finding.right),
                     Style::default().fg(Color::LightRed),
                 ),
                 Span::raw("  on "),
@@ -1090,7 +1090,7 @@ pub fn render_graph(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(Span::styled(
-                    " Graph Canvas [â†‘/â†“ scroll] ",
+                    " Graph Canvas [^/v scroll] ",
                     Style::default().fg(Color::Cyan),
                 ))
                 .borders(Borders::ALL)
@@ -1146,7 +1146,7 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(Span::styled(
-                    " Node Details [â†‘/â†“ scroll] ",
+                    " Node Details [^/v scroll] ",
                     Style::default().fg(Color::Yellow),
                 ))
                 .borders(Borders::ALL)
@@ -1159,8 +1159,8 @@ pub fn render_node_detail(f: &mut Frame, area: Rect, app: &App) {
 
     let scrollbar = Scrollbar::default()
         .orientation(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("â†‘"))
-        .end_symbol(Some("â†“"));
+        .begin_symbol(Some("^"))
+        .end_symbol(Some("v"));
     let mut scrollbar_state = ScrollbarState::new(lines.len()).position(scroll);
     f.render_stateful_widget(
         scrollbar,
@@ -1310,7 +1310,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     format!("{:<30}", format!("{:?}", edge.weight())),
                     Style::default().fg(color).add_modifier(modifier),
                 ),
-                Span::styled("â†’ ", Style::default().fg(Color::DarkGray)),
+                Span::styled("-> ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     target_node.name.clone(),
                     Style::default().fg(node_color(&target_node.node_type)),
@@ -1351,7 +1351,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
                     src_node.name.clone(),
                     Style::default().fg(node_color(&src_node.node_type)),
                 ),
-                Span::styled(" â†’ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:?}", edge.weight()),
                     Style::default().fg(color).add_modifier(modifier),
@@ -1390,7 +1390,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
             for edge in &member_of_out {
                 if let Some(target) = graph.get_node(edge.target()) {
                     lines.push(Line::from(vec![
-                        Span::raw("      â†’ "),
+                        Span::raw("      -> "),
                         Span::styled(
                             target.name.clone(),
                             Style::default().fg(node_color(&target.node_type)),
@@ -1415,7 +1415,7 @@ fn build_node_detail_lines(app: &App) -> Vec<Line<'_>> {
             for edge in &member_of_in {
                 if let Some(src) = graph.get_node(edge.source()) {
                     lines.push(Line::from(vec![
-                        Span::raw("      â† "),
+                        Span::raw("      <- "),
                         Span::styled(
                             src.name.clone(),
                             Style::default().fg(node_color(&src.node_type)),
@@ -1487,7 +1487,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
                         format!("{:<30}", f.principal),
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::styled(" â†’ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<35}", format!("{:?}", f.right)),
                         Style::default().fg(color),
@@ -1506,7 +1506,7 @@ pub fn render_acl_findings(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let total = app.acl_findings.as_ref().map(|v| v.len()).unwrap_or(0);
-    let title = format!(" ACL / ACE Findings ({} total) [â†‘/â†“ scroll] ", total);
+    let title = format!(" ACL / ACE Findings ({} total) [^/v scroll] ", total);
 
     let widget = List::new(items)
         .block(
@@ -1636,7 +1636,7 @@ pub fn render_paths(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .title(Span::styled(
-                    " Attack Path [â†‘/â†“ scroll] ",
+                    " Attack Path [^/v scroll] ",
                     Style::default().fg(Color::LightRed),
                 ))
                 .borders(Borders::ALL)
@@ -1662,12 +1662,12 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
         (
             "WriteDacl / ACE",
             Color::LightRed,
-            "Modify DACL â†’ grant GenericAll",
+            "Modify DACL -> grant GenericAll",
         ),
         (
             "WriteOwner",
             Color::LightRed,
-            "Take ownership â†’ modify DACL",
+            "Take ownership -> modify DACL",
         ),
         ("DcSync", Color::Magenta, "Replicate all secrets from DC"),
         (
@@ -1683,7 +1683,7 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
         (
             "AllowedToDelegate",
             Color::Magenta,
-            "Constrained delegation â†’ TGT",
+            "Constrained delegation -> TGT",
         ),
         (
             "HasSession",
@@ -1693,11 +1693,11 @@ pub fn render_legend(f: &mut Frame, area: Rect) {
         (
             "HasSpn / Kerberoast",
             Color::Yellow,
-            "Account has SPN â†’ offline crack",
+            "Account has SPN -> offline crack",
         ),
         ("AddMembers", Color::Yellow, "Add members to group"),
         ("CanRDP", Color::Cyan, "Remote Desktop access"),
-        ("GpoLink", Color::Green, "GPO linked to OU â†’ policy exec"),
+        ("GpoLink", Color::Green, "GPO linked to OU -> policy exec"),
         (
             "MemberOf / Contains",
             Color::DarkGray,

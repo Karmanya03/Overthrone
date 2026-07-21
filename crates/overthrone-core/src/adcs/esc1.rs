@@ -34,6 +34,12 @@ impl Esc1Exploiter {
         Ok(Self { web_client })
     }
 
+    /// Set NTLM credentials for Windows Integrated Authentication
+    pub fn with_credentials(mut self, domain: &str, username: &str, password: &str) -> Self {
+        self.web_client = self.web_client.with_credentials(domain, username, password);
+        self
+    }
+
     /// Execute ESC1 attack — request a certificate with an arbitrary SAN UPN.
     /// # Arguments
     /// * `template` - Vulnerable template name (e.g. "ESC1-Vulnerable")
