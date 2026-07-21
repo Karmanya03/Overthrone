@@ -11,9 +11,9 @@ use tracing::{debug, info, warn};
 // Reuse DCE/RPC helpers from psexec
 use super::psexec;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for SMBExec
 pub struct SmbExecConfig {
@@ -33,7 +33,7 @@ impl Default for SmbExecConfig {
         SmbExecConfig {
             service_name: format!("SmbEx{:04X}", id),
             output_share: "C$".to_string(),
-            // Use root of C:\ (writeable by SYSTEM/Administrators) — WS2025 may
+            // Use root of C:\ (writeable by SYSTEM/Administrators) -- WS2025 may
             // restrict service writes to C:\Windows\Temp\ and C:\Users\Public\.
             output_path: format!("Windows\\Temp\\__smbexec_{:04X}.tmp", id),
             cleanup: true,
@@ -71,9 +71,9 @@ pub fn escape_cmd_metacharacters(command: &str) -> String {
     escaped
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SMBExec Execution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Execute a command on a remote host using SMBExec.
 /// This creates a temporary Windows service whose binary path is
@@ -154,7 +154,7 @@ async fn poll_output(session: &SmbSession, config: &SmbExecConfig) -> String {
         }
         debug!("SMBExec: output not ready after {delay_ms}ms, retrying");
     }
-    // Final attempt — return whatever is there (may be empty)
+    // Final attempt -- return whatever is there (may be empty)
     read_and_cleanup_output(session, config).await
 }
 
@@ -243,9 +243,9 @@ impl<'a> SmbExecShell<'a> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Executor Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Data structure used by this module.
 pub struct SmbExecutor {
     creds: super::ExecCredentials,

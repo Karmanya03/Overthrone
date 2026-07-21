@@ -1,4 +1,4 @@
-//! PDF report renderer — Produces a styled PDF report using printpdf (0.9).
+//! PDF report renderer -- Produces a styled PDF report using printpdf (0.9).
 //!
 //! The PDF includes a cover page, table of contents, findings with
 //! severity badges, MITRE ATT&CK table, and remediation roadmap.
@@ -24,9 +24,9 @@ const HEADING2_SIZE: f32 = 14.0;
 const BODY_SIZE: f32 = 10.0;
 const SMALL_SIZE: f32 = 8.0;
 
-// ═══════════════════════════════════════════════════════════
-// PDF Context Helper — accumulates Ops for page-based output
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// PDF Context Helper -- accumulates Ops for page-based output
+// ===========================================================
 
 struct PdfContext {
     /// Completed pages ready to be added to the document
@@ -189,9 +189,9 @@ impl PdfContext {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Main Render Entry Point
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Render a PDF report and return the raw bytes
 pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
@@ -199,7 +199,7 @@ pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
 
     let mut doc = PdfDocument::new(&session.title);
 
-    // Load fonts — use system TTF files for Helvetica-like fonts.
+    // Load fonts -- use system TTF files for Helvetica-like fonts.
     // Gracefully fall back through font styles, then all paths combined.
     let font_regular = load_builtin_font_regular()
         .or_else(|| {
@@ -254,10 +254,10 @@ pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
 
     let mut ctx = PdfContext::new(font_id, font_bold_id, font_mono_id);
 
-    // ── Cover Page ──
+    // -- Cover Page --
     render_cover_page(&mut ctx, session);
 
-    // ── Executive Summary ──
+    // -- Executive Summary --
     ctx.new_page("Executive Summary");
     ctx.write_heading1("1. Executive Summary");
     let summary = narrative::executive_summary(session);
@@ -277,29 +277,29 @@ pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
         let count = counts.get(sev).copied().unwrap_or(0);
         if count > 0 {
             let color = severity_color(*sev);
-            ctx.write_colored_line(&format!("  {} — {} finding(s)", sev, count), color);
+            ctx.write_colored_line(&format!("  {} -- {} finding(s)", sev, count), color);
         }
     }
 
-    // ── Findings ──
+    // -- Findings --
     for (i, finding) in session.findings.iter().enumerate() {
         ctx.new_page(&format!("Finding {}", i + 1));
         render_finding_page(&mut ctx, finding, i + 1);
     }
 
-    // ── MITRE ATT&CK ──
+    // -- MITRE ATT&CK --
     ctx.new_page("MITRE ATT&CK");
     ctx.write_heading1("MITRE ATT&CK Mapping");
     let matrix = crate::mapper::build_attack_matrix(&session.findings);
     for (tactic, techniques) in &matrix {
         ctx.write_heading2(tactic);
         for t in techniques {
-            ctx.write_body(&format!("  • {} — {}", t.technique_id, t.technique_name));
+            ctx.write_body(&format!("  * {} -- {}", t.technique_id, t.technique_name));
         }
         ctx.skip_lines(1);
     }
 
-    // ── Remediation ──
+    // -- Remediation --
     ctx.new_page("Remediation");
     ctx.write_heading1("Remediation Roadmap");
     let finding_types: Vec<&str> = session
@@ -325,7 +325,7 @@ pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
         ctx.skip_lines(1);
     }
 
-    // ── ADRecon Inventory Pages ──
+    // -- ADRecon Inventory Pages --
     if let Some(ref state) = session.engagement_state {
         render_pdf_adrecon_inventory(&mut ctx, state);
     }
@@ -338,9 +338,9 @@ pub fn render(session: &EngagementSession) -> anyhow::Result<Vec<u8>> {
         .save(&PdfSaveOptions::default(), &mut warnings))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Font Loading Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Attempt to load a regular sans-serif font from common system paths.
 /// Returns `None` if no font is found (caller should fall back).
@@ -414,9 +414,9 @@ fn load_font_from_paths(paths: &[&str]) -> Option<ParsedFont> {
     None
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Page Renderers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn render_cover_page(ctx: &mut PdfContext, session: &EngagementSession) {
     // Title
@@ -432,7 +432,7 @@ fn render_cover_page(ctx: &mut PdfContext, session: &EngagementSession) {
         ),
         format!("Type: {}", session.engagement_type),
         format!(
-            "Period: {} — {}",
+            "Period: {} -- {}",
             session.started_at.format("%Y-%m-%d"),
             session
                 .finished_at
@@ -452,7 +452,7 @@ fn render_cover_page(ctx: &mut PdfContext, session: &EngagementSession) {
 }
 
 fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
-    ctx.write_heading1(&format!("Finding {} — {}", num, finding.title));
+    ctx.write_heading1(&format!("Finding {} -- {}", num, finding.title));
     ctx.skip_lines(1);
     ctx.write_body(&format!(
         "ID: {} | Severity: {} | CVSS: {:.1}",
@@ -471,7 +471,7 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
     if !finding.affected_assets.is_empty() {
         ctx.write_heading2("Affected Assets");
         for asset in &finding.affected_assets {
-            ctx.write_body(&format!("  • {}", asset));
+            ctx.write_body(&format!("  * {}", asset));
         }
         ctx.skip_lines(1);
     }
@@ -490,10 +490,10 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         for ev in &finding.evidence {
             ctx.write_body(&format!("{} ({:?})", ev.label, ev.content_type));
             let display = if ev.content_type == EvidenceType::Credential {
-                "[REDACTED — see secure appendix]".to_string()
+                "[REDACTED -- see secure appendix]".to_string()
             } else if ev.content.len() > 500 {
                 format!(
-                    "{}…\n(truncated — {} total characters)",
+                    "{}...\n(truncated -- {} total characters)",
                     &ev.content[..500],
                     ev.content.len()
                 )
@@ -512,7 +512,7 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         ctx.write_heading2("MITRE ATT&CK");
         for m in &finding.mitre {
             ctx.write_body(&format!(
-                "  • {} — {} ({})",
+                "  * {} -- {} ({})",
                 m.technique_id, m.technique_name, m.tactic
             ));
         }
@@ -524,7 +524,7 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
         ctx.write_heading2("Recommendations");
         for mit in &finding.mitigations {
             ctx.write_body(&format!(
-                "  • {} [{}] [Effort: {}]",
+                "  * {} [{}] [Effort: {}]",
                 mit.title, mit.priority, mit.effort
             ));
             ctx.write_body_wrapped(&format!("    {}", mit.description));
@@ -536,14 +536,14 @@ fn render_finding_page(ctx: &mut PdfContext, finding: &Finding, num: usize) {
     if !finding.references.is_empty() {
         ctx.write_heading2("References");
         for r in &finding.references {
-            ctx.write_body(&format!("  • {}", r));
+            ctx.write_body(&format!("  * {}", r));
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // ADRecon-Style PDF Inventory Pages
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn render_pdf_adrecon_inventory(ctx: &mut PdfContext, state: &EngagementState) {
     // Section 9: Domain Inventory

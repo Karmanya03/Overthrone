@@ -53,12 +53,12 @@ pub fn randomize_flags(base_flags: u32, stealth_level: StealthLevel) -> u32 {
 /// Inject harmless noise into a PAC buffer.
 ///
 /// This adds a zero-length padding buffer entry at the end of the PAC.
-/// Some EDR solutions flag PACs that are "too clean" — adding padding
+/// Some EDR solutions flag PACs that are "too clean" -- adding padding
 /// makes the PAC look more like a KDC-issued one which often has extra
 /// buffers (like up-to-dateness status).
 ///
 /// The noise buffer has type 17 (up-to-dateness status, per MS-PAC) with
-/// zero length — a valid but meaningless entry.
+/// zero length -- a valid but meaningless entry.
 pub fn maybe_inject_pac_noise(pac: &[u8], stealth_level: StealthLevel) -> Vec<u8> {
     match stealth_level {
         StealthLevel::None => pac.to_vec(),
@@ -104,7 +104,7 @@ fn inject_pac_noise_entry(pac: &[u8]) -> Vec<u8> {
     result.extend_from_slice(&new_num_buffers.to_le_bytes());
     result.extend_from_slice(&pac[4..8]); // version
 
-    // The last buffer in the original will shift — we insert the noise
+    // The last buffer in the original will shift -- we insert the noise
     // buffer as the new last entry. We need to adjust offsets for any
     // buffer that comes after our insert point. Since we insert at the end,
     // no offsets need adjustment.

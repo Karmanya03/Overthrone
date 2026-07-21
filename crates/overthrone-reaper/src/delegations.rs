@@ -1,4 +1,4 @@
-//! Delegation enumeration — unconstrained, constrained, RBCD.
+//! Delegation enumeration -- unconstrained, constrained, RBCD.
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
@@ -99,7 +99,7 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
             .attrs
             .contains_key("msDS-AllowedToActOnBehalfOfOtherIdentity");
 
-        // ── Unconstrained delegation (TRUSTED_FOR_DELEGATION, not DC)
+        // -- Unconstrained delegation (TRUSTED_FOR_DELEGATION, not DC)
         if uac & UAC_TRUSTED_FOR_DELEGATION != 0 {
             results.push(DelegationEntry {
                 principal: principal.clone(),
@@ -110,7 +110,7 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
             });
         }
 
-        // ── Constrained delegation (with or without protocol transition)
+        // -- Constrained delegation (with or without protocol transition)
         if !constrained_targets.is_empty() {
             let dtype = if uac & UAC_TRUSTED_TO_AUTH != 0 {
                 DelegationType::ConstrainedWithProtocolTransition
@@ -126,7 +126,7 @@ pub async fn enumerate_delegations(config: &ReaperConfig) -> Result<Vec<Delegati
             });
         }
 
-        // ── Resource-Based Constrained Delegation
+        // -- Resource-Based Constrained Delegation
         if has_rbcd {
             results.push(DelegationEntry {
                 principal: principal.clone(),

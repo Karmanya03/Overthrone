@@ -99,7 +99,7 @@ impl Default for DcVerifyConfig {
 /// Run all DC verification checks against the target domain controller.
 ///
 /// Returns a `DcVerificationSummary` with the results of each check.
-/// Logs warnings for any suspicious findings but does not abort — the
+/// Logs warnings for any suspicious findings but does not abort -- the
 /// caller decides whether to continue based on `strict` mode.
 pub async fn verify_dc(
     dc_host: &str,
@@ -115,7 +115,7 @@ pub async fn verify_dc(
 
     let timeout_dur = Duration::from_secs(config.check_timeout_secs);
 
-    // ── Check 1: LDAP rootDSE probe ──
+    // -- Check 1: LDAP rootDSE probe --
     info!("DC verification: checking rootDSE on {dc_host}");
     match tokio::time::timeout(
         timeout_dur,
@@ -140,7 +140,7 @@ pub async fn verify_dc(
                 rootdse.dns_host_name, rootdse.dns_domain_name
             );
 
-            // ── Check 2: Domain name match ──
+            // -- Check 2: Domain name match --
             if let Some(ref dns_domain) = rootdse.dns_domain_name {
                 let config_domain_lower = domain.to_lowercase();
                 let reported_domain_lower = dns_domain.to_lowercase();
@@ -170,7 +170,7 @@ pub async fn verify_dc(
                 });
             }
 
-            // ── Check 4: Hostname resolution consistency ──
+            // -- Check 4: Hostname resolution consistency --
             if let Some(ref hostname) = rootdse.dns_host_name {
                 match tokio::net::lookup_host(format!("{hostname}:0")).await {
                     Ok(addrs) => {
@@ -235,7 +235,7 @@ pub async fn verify_dc(
         }
     }
 
-    // ── Check 3: DNS SRV consistency ──
+    // -- Check 3: DNS SRV consistency --
     if !config.skip_dns {
         info!("DC verification: checking DNS SRV records for {domain}");
         match DnsResolver::system() {
@@ -315,7 +315,7 @@ pub async fn verify_dc(
         });
     }
 
-    // ── Check 5: Kerberos port check ──
+    // -- Check 5: Kerberos port check --
     info!("DC verification: checking Kerberos port 88 on {dc_host}");
     match tokio::time::timeout(
         timeout_dur,
@@ -355,7 +355,7 @@ pub async fn verify_dc(
         }
     }
 
-    // ── Compile summary ──
+    // -- Compile summary --
     let failed_count = checks
         .iter()
         .filter(|c| matches!(c.severity, CheckSeverity::Fail))
@@ -368,7 +368,7 @@ pub async fn verify_dc(
 
     let summary = if hostile_suspicion {
         format!(
-            "HOSTILE DC DETECTED: {failed_count}/{total} checks failed, {warn_count} warnings — \
+            "HOSTILE DC DETECTED: {failed_count}/{total} checks failed, {warn_count} warnings -- \
              this DC may be rogue or misconfigured"
         )
     } else if warn_count > 0 {
@@ -400,12 +400,12 @@ impl DcVerificationSummary {
 
     /// Prints a colored summary to stdout for the CLI user
     pub fn print_summary(&self) {
-        println!("\n  {} DC Verification Report", "═══".bold().cyan());
+        println!("\n  {} DC Verification Report", "===".bold().cyan());
         for check in &self.checks {
             let (icon, severity_label) = match check.severity {
-                CheckSeverity::Pass => ("✓".green().bold(), "PASS"),
+                CheckSeverity::Pass => ("[+]".green().bold(), "PASS"),
                 CheckSeverity::Warning => ("!".yellow().bold(), "WARN"),
-                CheckSeverity::Fail => ("✗".red().bold(), "FAIL"),
+                CheckSeverity::Fail => ("[-]".red().bold(), "FAIL"),
             };
             println!("  {} [{}] {}", icon, severity_label.bold(), check.message);
         }
@@ -413,12 +413,12 @@ impl DcVerificationSummary {
             println!(
                 "  {} {}",
                 "!!!".red().bold(),
-                "HOSTILE DC DETECTED — proceed with extreme caution"
+                "HOSTILE DC DETECTED -- proceed with extreme caution"
                     .red()
                     .bold()
             );
         }
-        println!("  {}\n", "═══".bold().cyan());
+        println!("  {}\n", "===".bold().cyan());
     }
 }
 

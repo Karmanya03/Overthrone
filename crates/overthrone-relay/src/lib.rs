@@ -1,4 +1,4 @@
-//! Overthrone Relay — NTLM Relay and Responder Framework
+//! Overthrone Relay -- NTLM Relay and Responder Framework
 //!
 //! Implements LLMNR/NBT-NS poisoning and NTLM relay attacks
 //! for credential capture and relay to other services.
@@ -184,7 +184,7 @@ pub struct RelayControllerConfig {
     /// Force authentication downgrade
     pub downgrade_auth: bool,
     /// If `true`, skip all poisoning/responder components.
-    /// Useful when pre-captured hashes are fed externally — relay only mode.
+    /// Useful when pre-captured hashes are fed externally -- relay only mode.
     pub no_poison: bool,
     /// Enable LDAP signing bypass (CVE-2019-1040).
     /// Strips SIGN/SEAL/ALWAYS_SIGN flags and channel bindings from
@@ -208,7 +208,7 @@ pub struct RelayControllerConfig {
     /// Configuration for standalone HTTP asymmetric relay listener.
     /// When set, starts an HTTP listener that relays captured NTLM tokens
     /// to the configured target protocols (SMB, LDAP, etc.).
-    /// Independent of the responder/poisoner — useful when coerced auth
+    /// Independent of the responder/poisoner -- useful when coerced auth
     /// lands directly on HTTP and needs to pivot to SMB.
     pub http_relay_config: Option<HttpRelayConfig>,
     /// Configuration for TLS-wrapped relay listener.
@@ -231,7 +231,7 @@ pub struct RelayControllerConfig {
     /// When `None`, uses SMB null session fallback.
     /// When `Some`, uses these credentials for authenticated SMB binds.
     pub auto_coerce_credentials: Option<CoerceCreds>,
-    /// Passive analysis mode — log LLMNR/NBT-NS/mDNS queries without poisoning
+    /// Passive analysis mode -- log LLMNR/NBT-NS/mDNS queries without poisoning
     pub analyze_only: bool,
     /// IP address to use in poisoned responses (defaults to interface IP when None)
     pub poison_ip: Option<String>,
@@ -458,7 +458,7 @@ impl RelayController {
         let listener = match &self.config.auto_coerce_listener {
             Some(ip) => ip.clone(),
             None => {
-                warn!("auto_coerce_targets is set but no auto_coerce_listener — skipping coercion");
+                warn!("auto_coerce_targets is set but no auto_coerce_listener -- skipping coercion");
                 return;
             }
         };
@@ -664,7 +664,7 @@ async fn coerce_target_ex(
         }
     }
     // TCP fallback: if all named pipe techniques failed, try TCP-based coercion
-    // via EPM (port 135) resolution — works when SMB port 445 is filtered
+    // via EPM (port 135) resolution -- works when SMB port 445 is filtered
     if !summary.contains("OK") {
         let tcp_protocols: &[(CoerceProtocol, &str)] = &[
             (CoerceProtocol::Rprn, "PrinterBug-TCP"),

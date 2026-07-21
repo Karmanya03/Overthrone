@@ -23,9 +23,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tunnel Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Tunnel type for pivoting
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,9 +69,9 @@ pub enum TunnelState {
     Error,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tunnel Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Tunnel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,9 +106,9 @@ impl Default for TunnelConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tunnel Session
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Active tunnel session
 #[derive(Debug, Clone)]
@@ -184,9 +184,9 @@ impl TunnelSession {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tunnel Manager
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Manages all active tunnels
 pub struct TunnelManager {
@@ -208,12 +208,12 @@ impl TunnelManager {
     /// Create a new TCP tunnel
     pub async fn create_tunnel(&self, config: TunnelConfig) -> Result<String> {
         let id = format!("tunnel_{}", uuid::Uuid::new_v4().simple());
-        let name = format!("{}→{}", config.source_addr, config.dest_addr);
+        let name = format!("{}->{}", config.source_addr, config.dest_addr);
 
         let session = TunnelSession::new(id.clone(), name, &config);
 
         info!(
-            "Creating {} tunnel: {} → {}",
+            "Creating {} tunnel: {} -> {}",
             config.tunnel_type, config.source_addr, config.dest_addr
         );
 
@@ -658,9 +658,9 @@ impl Default for TunnelManager {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Convenience Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Create a SOCKS5 proxy tunnel
 pub async fn create_socks5_proxy(listen_addr: &str) -> Result<String> {

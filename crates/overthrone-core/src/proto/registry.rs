@@ -3,7 +3,7 @@
 //! # Offline Hive Parser
 //!
 //! Parses offline registry hive files (regf format) as saved by `reg save`.
-//! Supports navigating keys, reading values, and extracting class names —
+//! Supports navigating keys, reading values, and extracting class names --
 //! everything needed for SAM/SYSTEM/SECURITY hive credential extraction.
 //!
 //! # Remote WINREG RPC
@@ -19,9 +19,9 @@ use crate::error::{OverthroneError, Result};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const REGF_MAGIC: &[u8; 4] = b"regf";
 #[allow(dead_code)] // Registry hive magic kept for protocol completeness
@@ -44,9 +44,9 @@ pub const REG_BINARY: u32 = 3;
 pub const REG_DWORD: u32 = 4;
 pub const REG_MULTI_SZ: u32 = 7;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parsed registry hive
 pub struct RegistryHive {
@@ -92,9 +92,9 @@ pub struct RegValue {
     pub data: Vec<u8>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Hive Parser
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 impl RegistryHive {
     /// Parse a registry hive from raw bytes (as saved by `reg save`)
@@ -225,9 +225,9 @@ impl RegistryHive {
         Some(utf16le_to_string(bytes))
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // Internal cell parsers
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     fn parse_nk_cell(&self, offset: usize) -> Result<RegKey> {
         // Cell layout: [size:i32][sig:u16][flags:u16][timestamp:u64]...
@@ -388,9 +388,9 @@ impl RegistryHive {
         }
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // Read helpers
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     #[inline]
     fn read_u16(&self, offset: usize) -> u16 {
@@ -418,9 +418,9 @@ impl RegistryHive {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Decode UTF-16LE bytes to String
 fn utf16le_to_string(bytes: &[u8]) -> String {
@@ -433,9 +433,9 @@ fn utf16le_to_string(bytes: &[u8]) -> String {
         .to_string()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Remote WINREG RPC (MS-RRP)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// WINREG interface UUID
 pub const WINREG_UUID: &str = "338cd001-2244-31f1-aaaa-900038001003";
@@ -866,9 +866,9 @@ impl Default for RemoteRegistry {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // WINREG RPC Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse a UUID string to bytes
 fn parse_uuid(uuid_str: &str) -> [u8; 16] {
@@ -911,13 +911,13 @@ fn build_rpc_header(_packet_type: u8, call_id: u32) -> Vec<u8> {
     hdr
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // High-Level Remote Registry Operations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Read a remote registry value via WINREG DCE/RPC over SMB named pipe.
-/// Orchestrates the full WINREG RPC conversation: Bind → OpenHive → OpenKey
-/// (for each path segment) → QueryValue → CloseKey (all handles).
+/// Orchestrates the full WINREG RPC conversation: Bind -> OpenHive -> OpenKey
+/// (for each path segment) -> QueryValue -> CloseKey (all handles).
 /// # Arguments
 /// * `smb_session` - Active SMB session with IPC$ access
 /// * `hive` - Predefined hive (HKLM, HKCU, etc.)
@@ -1040,7 +1040,7 @@ macro_rules! close_all_handles {
 /// Write a remote registry value via WINREG DCE/RPC over SMB named pipe.
 ///
 /// Orchestrates the full WINREG RPC conversation:
-/// Bind → OpenHive → OpenKey (for each path segment) → SetValue → CloseKey (all handles).
+/// Bind -> OpenHive -> OpenKey (for each path segment) -> SetValue -> CloseKey (all handles).
 ///
 /// # Arguments
 /// * `smb_session` - Active SMB session with IPC$ access

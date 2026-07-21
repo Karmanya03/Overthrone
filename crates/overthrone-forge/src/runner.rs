@@ -21,11 +21,11 @@ pub enum ForgeAction {
     SilverTicket { target_spn: String },
     /// `DiamondTicket` variant
     DiamondTicket,
-    /// Enhanced Diamond — preserves original KDC checksum from legitimate TGT
+    /// Enhanced Diamond -- preserves original KDC checksum from legitimate TGT
     EnhancedDiamond,
-    /// Sapphire Ticket — KDC-issued PAC via S4U2Self for KrbtgtFullPacSignature bypass
+    /// Sapphire Ticket -- KDC-issued PAC via S4U2Self for KrbtgtFullPacSignature bypass
     SapphireTicket,
-    /// Bronze Bit (CVE-2020-17049) — S4U2Proxy forwardable flag bypass
+    /// Bronze Bit (CVE-2020-17049) -- S4U2Proxy forwardable flag bypass
     BronzeBit { target_spn: String },
     /// `` variant
     InterRealmTgt { target_domain: String },
@@ -54,7 +54,7 @@ pub enum ForgeAction {
     AsRepToTgt {
         /// Cracked plaintext password from AS-REP roast
         cracked_password: String,
-        /// Optional raw $krb5asrep$ hash — auto-fills username/domain
+        /// Optional raw $krb5asrep$ hash -- auto-fills username/domain
         hash: Option<String>,
         /// Path to save the ticket (.kirbi)
         output_path: Option<String>,
@@ -66,18 +66,18 @@ pub enum ForgeAction {
     AsRepToTgtOffline {
         /// Cracked plaintext password from AS-REP roast
         cracked_password: String,
-        /// Domain SID (S-1-5-21-...) — required for PAC building
+        /// Domain SID (S-1-5-21-...) -- required for PAC building
         domain_sid: String,
         /// User RID (default: 500)
         user_rid: u32,
     },
-    /// PKINIT Authentication — certificate-based TGT acquisition with optional
+    /// PKINIT Authentication -- certificate-based TGT acquisition with optional
     /// session key extraction for ticket forging. When --pkinit-keyed-ticket is
     /// also set, the TGT session key is used as the encryption key for forging
     /// golden/silver tickets instead of requiring krbtgt hash.
     PkinitAuth,
-    /// ADCS ESC1-9 exploit chain — certificate template abuse via Web Enrollment
-    /// or RPC enrollment. Supports Auto mode (ESC1→ESC6→ESC9) and direct exploit
+    /// ADCS ESC1-9 exploit chain -- certificate template abuse via Web Enrollment
+    /// or RPC enrollment. Supports Auto mode (ESC1->ESC6->ESC9) and direct exploit
     /// for specific ESC vulnerabilities.
     AdcsExploit {
         /// CA server URL (e.g., "http://ca.corp.local/certsrv")
@@ -89,9 +89,9 @@ pub enum ForgeAction {
         /// Target UPN to impersonate (for SAN-based attacks)
         target_upn: Option<String>,
     },
-    /// S4U2Self with PKINIT certificate chain — certificate-based S4U2Self
+    /// S4U2Self with PKINIT certificate chain -- certificate-based S4U2Self
     /// delegation for cross-trust lateral movement. Authenticates via PKINIT
-    /// then performs S4U2Self→S4U2Proxy to impersonate users and access services.
+    /// then performs S4U2Self->S4U2Proxy to impersonate users and access services.
     S4u2SelfPkinit {
         /// User to impersonate via S4U2Self
         impersonate_user: String,
@@ -108,26 +108,26 @@ impl std::fmt::Display for ForgeAction {
             Self::DiamondTicket => write!(f, "Diamond Ticket"),
             Self::EnhancedDiamond => write!(f, "Enhanced Diamond Ticket"),
             Self::SapphireTicket => write!(f, "Sapphire Ticket"),
-            Self::BronzeBit { target_spn } => write!(f, "Bronze Bit → {}", target_spn),
+            Self::BronzeBit { target_spn } => write!(f, "Bronze Bit -> {}", target_spn),
             Self::InterRealmTgt { target_domain } => {
-                write!(f, "Inter-Realm TGT → {}", target_domain)
+                write!(f, "Inter-Realm TGT -> {}", target_domain)
             }
             Self::SkeletonKey => write!(f, "Skeleton Key"),
             Self::DsrmBackdoor => write!(f, "DSRM Backdoor"),
             Self::DcSyncUser { target_user } => write!(f, "DCSync ({})", target_user),
             Self::AclBackdoor { target_dn, trustee } => {
-                write!(f, "ACL Backdoor ({} → {})", trustee, target_dn)
+                write!(f, "ACL Backdoor ({} -> {})", trustee, target_dn)
             }
             Self::NoPac { target_dc } => write!(f, "noPac (target DC: {target_dc})"),
             Self::ConvertTicket {
                 input_path,
                 output_format,
             } => {
-                write!(f, "Convert Ticket ({} → {})", input_path, output_format)
+                write!(f, "Convert Ticket ({} -> {})", input_path, output_format)
             }
-            Self::AsRepToTgt { hash: Some(_), .. } => write!(f, "AS-REP hash → TGT"),
-            Self::AsRepToTgt { .. } => write!(f, "AS-REP password → TGT"),
-            Self::AsRepToTgtOffline { .. } => write!(f, "AS-REP → TGT (offline)"),
+            Self::AsRepToTgt { hash: Some(_), .. } => write!(f, "AS-REP hash -> TGT"),
+            Self::AsRepToTgt { .. } => write!(f, "AS-REP password -> TGT"),
+            Self::AsRepToTgtOffline { .. } => write!(f, "AS-REP -> TGT (offline)"),
             Self::PkinitAuth => write!(f, "PKINIT Authentication"),
             Self::AdcsExploit { action, ca_url, .. } => {
                 write!(f, "ADCS {} ({})", action.to_uppercase(), ca_url)
@@ -137,9 +137,9 @@ impl std::fmt::Display for ForgeAction {
                 target_spn,
             } => {
                 if let Some(spn) = target_spn {
-                    write!(f, "S4U2Self+PKINIT → {} → {}", impersonate_user, spn)
+                    write!(f, "S4U2Self+PKINIT -> {} -> {}", impersonate_user, spn)
                 } else {
-                    write!(f, "S4U2Self+PKINIT → {}", impersonate_user)
+                    write!(f, "S4U2Self+PKINIT -> {}", impersonate_user)
                 }
             }
         }
@@ -160,11 +160,11 @@ pub struct ForgeConfig {
     pub nt_hash: Option<String>,
     /// action field
     pub action: ForgeAction,
-    /// krbtgt hash (RC4/AES) — required for Golden/Diamond
+    /// krbtgt hash (RC4/AES) -- required for Golden/Diamond
     pub krbtgt_hash: Option<String>,
-    /// krbtgt AES256 key — preferred for Diamond tickets
+    /// krbtgt AES256 key -- preferred for Diamond tickets
     pub krbtgt_aes256: Option<String>,
-    /// Service account hash — required for Silver tickets
+    /// Service account hash -- required for Silver tickets
     pub service_hash: Option<String>,
     /// Domain SID (S-1-5-21-...)
     pub domain_sid: Option<String>,
@@ -203,7 +203,7 @@ pub struct ForgeConfig {
     /// and other operations that need the full TGT, not just the session key.
     /// Set automatically by the run_forge dispatcher when pkinit_keyed_ticket is true.
     pub pkinit_ticket_data: Option<Vec<u8>>,
-    /// Dry run — validate config and show what would be done, without executing
+    /// Dry run -- validate config and show what would be done, without executing
     pub dry_run: bool,
 }
 
@@ -510,7 +510,7 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
             domain_sid,
             user_rid,
         } => {
-            // Derive NT hash from cracked password, forge TGT locally — no KDC.
+            // Derive NT hash from cracked password, forge TGT locally -- no KDC.
             use overthrone_core::proto::kerberos::forge_tgt;
             use overthrone_core::proto::ntlm::nt_hash;
 
@@ -526,7 +526,7 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                 etype,
             ) {
                 Ok(tgt) => ForgeResult {
-                    action: "AS-REP → TGT (offline)".to_string(),
+                    action: "AS-REP -> TGT (offline)".to_string(),
                     domain: config.domain.clone(),
                     success: true,
                     ticket_data: Some(ForgedTicket {
@@ -554,7 +554,7 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                     ),
                 },
                 Err(e) => ForgeResult {
-                    action: "AS-REP → TGT (offline)".to_string(),
+                    action: "AS-REP -> TGT (offline)".to_string(),
                     domain: config.domain.clone(),
                     success: false,
                     ticket_data: None,
@@ -788,12 +788,12 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                 persistence_result: None,
                 message: if s4u_result.chain_success {
                     format!(
-                        "S4U2Self+PKINIT chain succeeded: {}@{} → {}{}",
+                        "S4U2Self+PKINIT chain succeeded: {}@{} -> {}{}",
                         s4u_result.pkinit_user,
                         config.domain,
                         s4u_result.impersonated_user,
                         if s4u_result.s4u2proxy_success {
-                            format!(" → {}", s4u_result.target_spn.as_deref().unwrap_or(""))
+                            format!(" -> {}", s4u_result.target_spn.as_deref().unwrap_or(""))
                         } else {
                             String::new()
                         }

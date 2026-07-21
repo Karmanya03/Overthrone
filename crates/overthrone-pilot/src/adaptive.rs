@@ -1,4 +1,4 @@
-//! Adaptive engine — Reacts to execution results, re-scores attack
+//! Adaptive engine -- Reacts to execution results, re-scores attack
 //! paths, and decides whether to retry, skip, or pivot to alternatives.
 //!
 //! When a step fails, the adaptive engine:
@@ -14,24 +14,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Failure Classification
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Classified failure reason from a step execution
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailureClass {
-    /// Authentication failed — wrong creds or locked out
+    /// Authentication failed -- wrong creds or locked out
     AuthFailure,
-    /// Network/connectivity issue — host unreachable
+    /// Network/connectivity issue -- host unreachable
     NetworkError,
-    /// Access denied — insufficient privileges
+    /// Access denied -- insufficient privileges
     AccessDenied,
-    /// Target not found — service/object doesn't exist
+    /// Target not found -- service/object doesn't exist
     NotFound,
-    /// Detection — action was likely blocked by security controls
+    /// Detection -- action was likely blocked by security controls
     Detected,
-    /// Timeout — operation took too long
+    /// Timeout -- operation took too long
     Timeout,
     /// Unknown / unclassified error
     Unknown,
@@ -143,9 +143,9 @@ impl std::fmt::Display for FailureClass {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Adaptive Decision
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// What the adaptive engine decided to do after a step outcome
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,9 +183,9 @@ pub enum StepModification {
     AlternateMethod,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Adaptive Engine
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// The adaptive engine evaluates outcomes and adjusts the plan
 pub struct AdaptiveEngine {
@@ -195,7 +195,7 @@ pub struct AdaptiveEngine {
     max_replans: u32,
     /// Current re-plan count
     replan_count: u32,
-    /// Stealth mode — prefer quieter alternatives
+    /// Stealth mode -- prefer quieter alternatives
     stealth: bool,
     /// Actions that have been permanently blacklisted
     blacklisted_actions: Vec<String>,
@@ -265,7 +265,7 @@ impl AdaptiveEngine {
         state: &EngagementState,
         goal: &AttackGoal,
     ) -> AdaptiveDecision {
-        // ── Success path ──
+        // -- Success path --
         if result.success {
             self.reset_failure_streak();
 
@@ -274,7 +274,7 @@ impl AdaptiveEngine {
             if goal_status.is_success() {
                 info!(
                     "  {} Goal achieved after step: {}",
-                    "🎯".green().bold(),
+                    "".green().bold(),
                     step.description
                 );
                 return AdaptiveDecision::Continue;
@@ -284,8 +284,8 @@ impl AdaptiveEngine {
             // to take advantage of new capabilities
             if result.new_credentials > 0 || result.new_admin_hosts > 0 {
                 info!(
-                    "  {} New capabilities: +{} creds, +{} admin hosts → may re-plan",
-                    "🔄".cyan(),
+                    "  {} New capabilities: +{} creds, +{} admin hosts -> may re-plan",
+                    "".cyan(),
                     result.new_credentials,
                     result.new_admin_hosts
                 );
@@ -295,14 +295,14 @@ impl AdaptiveEngine {
             return AdaptiveDecision::Continue;
         }
 
-        // ── Failure path ──
+        // -- Failure path --
         self.consecutive_failures += 1;
         let failure = FailureClass::classify(&result.output);
         let repeat_count = self.record_failure_signature(step, result, &failure);
 
         warn!(
             "  {} Step failed [{}]: {} (attempt {}/{}, repeat #{})",
-            "⚠".yellow(),
+            "[!]".yellow(),
             failure.label().red(),
             step.description,
             step.retries + 1,
@@ -326,9 +326,9 @@ impl AdaptiveEngine {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Per-failure-class handlers
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn handle_auth_failure(
         &mut self,
@@ -341,8 +341,8 @@ impl AdaptiveEngine {
         // If we have alternate credentials, try swapping
         if state.credentials.len() > 1 {
             info!(
-                "  {} Auth failed — trying alternate credentials",
-                "🔄".cyan()
+                "  {} Auth failed -- trying alternate credentials",
+                "".cyan()
             );
             return AdaptiveDecision::Retry {
                 delay_secs: 2,
@@ -350,9 +350,9 @@ impl AdaptiveEngine {
             };
         }
 
-        // No alternatives — skip and maybe re-plan if too many failures
+        // No alternatives -- skip and maybe re-plan if too many failures
         if self.consecutive_failures >= self.failure_threshold {
-            self.trigger_replan("multiple auth failures — need new credentials")
+            self.trigger_replan("multiple auth failures -- need new credentials")
         } else {
             AdaptiveDecision::Skip {
                 reason: "Authentication failed, no alternate creds".to_string(),
@@ -366,8 +366,8 @@ impl AdaptiveEngine {
 
         if step.retries < self.effective_max_retries(step) {
             info!(
-                "  {} Network error — retrying in 5s (transient)",
-                "🔄".cyan()
+                "  {} Network error -- retrying in 5s (transient)",
+                "".cyan()
             );
             AdaptiveDecision::Retry {
                 delay_secs: 5,
@@ -403,22 +403,22 @@ impl AdaptiveEngine {
         // Certain actions can be substituted with less-privileged alternatives
         if let Some(alt) = self.find_lower_priv_alternative(&step.action) {
             info!(
-                "  {} Access denied — substituting lower-priv alternative",
-                "🔄".cyan()
+                "  {} Access denied -- substituting lower-priv alternative",
+                "".cyan()
             );
             return AdaptiveDecision::Substitute { replacement: alt };
         }
 
-        // Otherwise, we need more privileges — re-plan
-        self.trigger_replan("access denied — need privilege escalation")
+        // Otherwise, we need more privileges -- re-plan
+        self.trigger_replan("access denied -- need privilege escalation")
     }
 
     fn handle_not_found(&mut self, step: &PlanStep) -> AdaptiveDecision {
-        // Target doesn't exist — skip, don't retry
+        // Target doesn't exist -- skip, don't retry
         self.remember_failed_action(&step.id);
         self.remember_failed_action(&self.action_identifier(&step.action));
         AdaptiveDecision::Skip {
-            reason: "Target not found — skipping".to_string(),
+            reason: "Target not found -- skipping".to_string(),
         }
     }
 
@@ -427,7 +427,7 @@ impl AdaptiveEngine {
 
         warn!(
             "  {} DETECTION: {} was likely caught by security controls",
-            "🚨".red().bold(),
+            "".red().bold(),
             step.description
         );
 
@@ -441,7 +441,7 @@ impl AdaptiveEngine {
         if self.stealth {
             // In stealth mode, try a quieter alternative
             if let Some(alt) = self.find_stealthier_alternative(&step.action) {
-                info!("  {} Detected — trying stealthier method", "🔇".yellow());
+                info!("  {} Detected -- trying stealthier method", "".yellow());
                 return AdaptiveDecision::Substitute { replacement: alt };
             }
 
@@ -488,9 +488,9 @@ impl AdaptiveEngine {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Re-planning
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn trigger_replan(&mut self, reason: &str) -> AdaptiveDecision {
         self.replan_count += 1;
@@ -498,7 +498,7 @@ impl AdaptiveEngine {
         if self.replan_count > self.max_replans {
             warn!(
                 "  {} Re-plan limit reached ({}/{})",
-                "✗".red(),
+                "[-]".red(),
                 self.replan_count,
                 self.max_replans
             );
@@ -511,8 +511,8 @@ impl AdaptiveEngine {
         }
 
         info!(
-            "  {} Re-planning ({}/{}) — {}",
-            "🔄".blue().bold(),
+            "  {} Re-planning ({}/{}) -- {}",
+            "".blue().bold(),
             self.replan_count,
             self.max_replans,
             reason
@@ -571,7 +571,7 @@ impl AdaptiveEngine {
             && state.credentials.len() > 1
         {
             info!(
-                "  {} Repeated failure on {} — rotating credentials before retry",
+                "  {} Repeated failure on {} -- rotating credentials before retry",
                 "↻".cyan(),
                 action_id
             );
@@ -589,7 +589,7 @@ impl AdaptiveEngine {
         {
             if let Some(alt) = self.find_lower_priv_alternative(&step.action) {
                 info!(
-                    "  {} Repeated failure on {} — pivoting to an alternate technique",
+                    "  {} Repeated failure on {} -- pivoting to an alternate technique",
                     "↻".cyan(),
                     action_id
                 );
@@ -598,7 +598,7 @@ impl AdaptiveEngine {
 
             if let Some(alt) = self.find_stealthier_alternative(&step.action) {
                 info!(
-                    "  {} Repeated failure on {} — trying a quieter alternative",
+                    "  {} Repeated failure on {} -- trying a quieter alternative",
                     "↻".cyan(),
                     action_id
                 );
@@ -638,7 +638,7 @@ impl AdaptiveEngine {
         if should_blacklist_family {
             self.remember_failed_action(&action_id);
             return Some(self.trigger_replan(&format!(
-                "repeated {} failures on {} — pivoting to a different technique",
+                "repeated {} failures on {} -- pivoting to a different technique",
                 failure.label().to_lowercase(),
                 action_id.replace('_', " ")
             )));
@@ -661,9 +661,9 @@ impl AdaptiveEngine {
         action.key().to_string()
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Alternative Finders
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Find a lower-privilege alternative for an action (public wrapper for Q-learner).
     pub fn find_lower_priv_alternative_pub(&self, action: &PlannedAction) -> Option<PlannedAction> {
@@ -693,11 +693,11 @@ impl AdaptiveEngine {
                 target: target.clone(),
                 command: command.clone(),
             }),
-            // NTDS dump requires DA — try SAM as fallback
+            // NTDS dump requires DA -- try SAM as fallback
             PlannedAction::DumpNtds { target } => Some(PlannedAction::DumpSam {
                 target: target.clone(),
             }),
-            // DCSync requires replication rights — try remote NTDS dump
+            // DCSync requires replication rights -- try remote NTDS dump
             PlannedAction::DcsSync { .. } => None,
             PlannedAction::AdcsEsc4 { .. }
             | PlannedAction::AdcsEsc5 { .. }
@@ -718,22 +718,22 @@ impl AdaptiveEngine {
     /// Find a stealthier alternative for an action
     fn find_stealthier_alternative(&self, action: &PlannedAction) -> Option<PlannedAction> {
         match action {
-            // PSExec creates a visible service → use SMBExec (fileless) or WMI
+            // PSExec creates a visible service -> use SMBExec (fileless) or WMI
             PlannedAction::PsExec { target, command } => Some(PlannedAction::WmiExec {
                 target: target.clone(),
                 command: command.clone(),
             }),
-            // SMBExec (service cmd) → WinRM (PowerShell remoting, less logged)
+            // SMBExec (service cmd) -> WinRM (PowerShell remoting, less logged)
             PlannedAction::SmbExec { target, command } => Some(PlannedAction::WinRmExec {
                 target: target.clone(),
                 command: command.clone(),
             }),
-            // WMI detected → try WinRM
+            // WMI detected -> try WinRM
             PlannedAction::WmiExec { target, command } => Some(PlannedAction::WinRmExec {
                 target: target.clone(),
                 command: command.clone(),
             }),
-            // Password spray detected → add jitter via Sleep + retry
+            // Password spray detected -> add jitter via Sleep + retry
             PlannedAction::PasswordSpray { users, password } => {
                 if users.len() > 10 {
                     // Split into smaller batches (return first batch)
@@ -800,9 +800,9 @@ impl AdaptiveEngine {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Plan Adjustment
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Adjust remaining plan steps based on accumulated knowledge.
     /// Called before each step to prune dead paths.
@@ -931,9 +931,9 @@ impl std::fmt::Display for AdaptiveSummary {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Credential Rotation for Retries
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Pick the next credential to try from the engagement state.
 /// Returns (username, secret, is_hash).
@@ -1005,7 +1005,7 @@ mod tests {
         }
     }
 
-    // ── FailureClass classification ──
+    // -- FailureClass classification --
 
     #[test]
     fn smb2_negotiate_too_short_is_classified_as_network_error() {
@@ -1109,7 +1109,7 @@ mod tests {
         assert!(matches!(FailureClass::classify(""), FailureClass::Unknown));
     }
 
-    // ── evaluate() decisions ──
+    // -- evaluate() decisions --
 
     #[test]
     fn evaluate_success_returns_continue() {
@@ -1159,7 +1159,7 @@ mod tests {
         let state = sample_state();
 
         let decision = engine.evaluate(&step, &result, &state, &goal);
-        // Auth failure should not be Continue — either Retry, Skip, or Replan
+        // Auth failure should not be Continue -- either Retry, Skip, or Replan
         assert_ne!(decision, AdaptiveDecision::Continue);
     }
 
@@ -1190,7 +1190,7 @@ mod tests {
         assert!(!matches!(decision, AdaptiveDecision::Retry { .. }));
     }
 
-    // ── maximum retries ──
+    // -- maximum retries --
 
     #[test]
     fn retries_exhausted_after_max_retries_network_errors() {
@@ -1208,7 +1208,7 @@ mod tests {
         assert!(!matches!(decision, AdaptiveDecision::Retry { .. }));
     }
 
-    // ── effective_max_retries ──
+    // -- effective_max_retries --
 
     #[test]
     fn effective_max_retries_uses_step_value_when_nonzero() {
@@ -1235,7 +1235,7 @@ mod tests {
         assert_eq!(engine.effective_max_retries(&step), 7);
     }
 
-    // ── consecutive_failures tracking ──
+    // -- consecutive_failures tracking --
 
     #[test]
     fn consecutive_failures_increments_on_failure() {
@@ -1272,7 +1272,7 @@ mod tests {
         assert_eq!(engine.consecutive_failures(), 0);
     }
 
-    // ── failure signature tracking (avoid over-counting same failure) ──
+    // -- failure signature tracking (avoid over-counting same failure) --
 
     #[test]
     fn same_failure_blacklisted_once() {
@@ -1293,7 +1293,7 @@ mod tests {
         );
     }
 
-    // ── reset_failure_streak ──
+    // -- reset_failure_streak --
 
     #[test]
     fn reset_failure_streak_zeroes_counter() {

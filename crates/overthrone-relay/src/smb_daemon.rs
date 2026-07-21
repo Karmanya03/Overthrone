@@ -594,7 +594,7 @@ impl SmbDaemon {
         (STATUS_SUCCESS, resp)
     }
 
-    /// Handle SMB2 Session Setup (0x0001) — now async for relay forwarding
+    /// Handle SMB2 Session Setup (0x0001) -- now async for relay forwarding
     async fn handle_session_setup(
         data: &[u8],
         session: &mut SmbClientSession,
@@ -730,7 +730,7 @@ impl SmbDaemon {
         }
     }
 
-    /// Handle SMB2 Tree Connect (0x0003) — forward in relay mode
+    /// Handle SMB2 Tree Connect (0x0003) -- forward in relay mode
     async fn handle_tree_connect(data: &[u8], session: &mut SmbClientSession) -> (u32, Vec<u8>) {
         let body = &data[SMB2_HEADER_SIZE..];
         if body.len() < 8 {
@@ -777,7 +777,7 @@ impl SmbDaemon {
         (STATUS_SUCCESS, vec![0x10, 0x00])
     }
 
-    /// Handle SMB2 Create (0x0005) — forward in relay mode
+    /// Handle SMB2 Create (0x0005) -- forward in relay mode
     async fn handle_create(data: &[u8], session: &mut SmbClientSession) -> (u32, Vec<u8>) {
         let body = &data[SMB2_HEADER_SIZE..];
         if body.len() < 64 {
@@ -916,7 +916,7 @@ impl SmbDaemon {
         (STATUS_SUCCESS, resp)
     }
 
-    /// Handle SMB2 Ioctl (0x000B) — forward through relay session in relay mode
+    /// Handle SMB2 Ioctl (0x000B) -- forward through relay session in relay mode
     async fn handle_ioctl(data: &[u8], session: &mut SmbClientSession) -> (u32, Vec<u8>) {
         let body = &data[SMB2_HEADER_SIZE..];
         if body.len() < 56 {
@@ -1699,7 +1699,7 @@ impl SmbDaemon {
             let av_id = u16::from_le_bytes([target_info[i], target_info[i + 1]]);
             let av_len = u16::from_le_bytes([target_info[i + 2], target_info[i + 3]]) as usize;
             if av_id == 3 {
-                // MsvAvChannelBindings — skip this AV_PAIR
+                // MsvAvChannelBindings -- skip this AV_PAIR
                 // Also skip the terminating MsvAvEOL (0, 0) that might be after
                 i += 4 + av_len;
                 continue;
@@ -1746,7 +1746,7 @@ impl SmbDaemon {
     // ===========================================================
 
     /// Attempt to derive the session key from an NTLM Type 3 message.
-    /// Without the NT hash this is impossible — returns None in capture mode.
+    /// Without the NT hash this is impossible -- returns None in capture mode.
     /// In relay mode, the session key is extracted from the target's response instead.
     fn derive_session_key(_ntlmssp: &[u8]) -> Option<Vec<u8>> {
         // Without the user's NT hash, we cannot compute the session key.

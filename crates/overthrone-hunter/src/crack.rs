@@ -1,4 +1,4 @@
-//! Hash Cracking Integration — Wire the cracker to hunter module.
+//! Hash Cracking Integration -- Wire the cracker to hunter module.
 //!
 //! Provides automatic cracking of captured AS-REP and Kerberoast hashes
 //! using the inline cracker from overthrone-core.
@@ -11,9 +11,9 @@ use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Cracked Credentials
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// A successfully cracked credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,9 +64,9 @@ pub struct FailedHash {
     pub candidates_tried: usize,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Hash Parsing Utilities
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Auto-detect hash type from string format
 pub fn detect_hash_type(hash_str: &str) -> Result<HashType> {
@@ -94,9 +94,9 @@ fn hash_type_name(hash: &HashType) -> &'static str {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Cracking Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Crack a single hash string with default config
 pub fn crack_hash(hash_str: &str) -> Result<CrackResult> {
@@ -131,8 +131,8 @@ pub fn crack_asrep_hashes(
         if result.cracked {
             if let Some(password) = &result.password {
                 info!(
-                    "  {} {}:{} — {}",
-                    "✓".green(),
+                    "  {} {}:{} -- {}",
+                    "[+]".green(),
                     account.username.bold(),
                     password.yellow(),
                     "CRACKED".green().bold()
@@ -147,8 +147,8 @@ pub fn crack_asrep_hashes(
             }
         } else {
             warn!(
-                "  {} {} — {} candidates tried",
-                "✗".red(),
+                "  {} {} -- {} candidates tried",
+                "[-]".red(),
                 account.username,
                 result.candidates_tried
             );
@@ -194,8 +194,8 @@ pub fn crack_kerberoast_hashes(
         // Skip AES hashes (not supported by inline cracker yet)
         if service.etype != "RC4" {
             warn!(
-                "  {} {} — Skipping {} (only RC4 supported)",
-                "→".yellow(),
+                "  {} {} -- Skipping {} (only RC4 supported)",
+                "->".yellow(),
                 service.username,
                 service.etype
             );
@@ -208,8 +208,8 @@ pub fn crack_kerberoast_hashes(
         if result.cracked {
             if let Some(password) = &result.password {
                 info!(
-                    "  {} {}:{} — {} [{}]",
-                    "✓".green(),
+                    "  {} {}:{} -- {} [{}]",
+                    "[+]".green(),
                     service.username.bold(),
                     password.yellow(),
                     "CRACKED".green().bold(),
@@ -225,8 +225,8 @@ pub fn crack_kerberoast_hashes(
             }
         } else {
             warn!(
-                "  {} {} — {} candidates tried",
-                "✗".red(),
+                "  {} {} -- {} candidates tried",
+                "[-]".red(),
                 service.username,
                 result.candidates_tried
             );
@@ -277,8 +277,8 @@ pub fn crack_hashes(hash_strings: &[String], config: &CrackerConfig) -> Result<C
                 if result.cracked {
                     if let Some(password) = &result.password {
                         info!(
-                            "  {} {}:{} — {}",
-                            "✓".green(),
+                            "  {} {}:{} -- {}",
+                            "[+]".green(),
                             username.as_deref().unwrap_or("unknown").bold(),
                             password.yellow(),
                             hash_type_name(&hash).green()
@@ -297,8 +297,8 @@ pub fn crack_hashes(hash_strings: &[String], config: &CrackerConfig) -> Result<C
                     }
                 } else {
                     warn!(
-                        "  {} {} — not cracked",
-                        "✗".red(),
+                        "  {} {} -- not cracked",
+                        "[-]".red(),
                         username.as_deref().unwrap_or("unknown")
                     );
                     failed.push(FailedHash {
@@ -309,7 +309,7 @@ pub fn crack_hashes(hash_strings: &[String], config: &CrackerConfig) -> Result<C
                 }
             }
             Err(e) => {
-                warn!("  {} Invalid hash format: {}", "✗".red(), e);
+                warn!("  {} Invalid hash format: {}", "[-]".red(), e);
                 failed.push(FailedHash {
                     username: None,
                     hash_type: "invalid".to_string(),
@@ -329,14 +329,14 @@ pub fn crack_hashes(hash_strings: &[String], config: &CrackerConfig) -> Result<C
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Report Display
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 impl CrackReport {
     /// Pretty-print the crack report
     pub fn print_summary(&self) {
-        println!("\n{}", "═══ CRACK REPORT ═══".bold().cyan());
+        println!("\n{}", "=== CRACK REPORT ===".bold().cyan());
         println!("  Total hashes:  {}", self.total_hashes.to_string().bold());
         println!(
             "  Cracked:       {} ({:.1}%)",
@@ -346,7 +346,7 @@ impl CrackReport {
         println!("  Time:          {}ms", self.time_ms);
 
         if !self.cracked.is_empty() {
-            println!("\n  {} Cracked Credentials:", "✓".green().bold());
+            println!("\n  {} Cracked Credentials:", "[+]".green().bold());
             for cred in &self.cracked {
                 println!(
                     "    {}:{} {}",
@@ -357,7 +357,7 @@ impl CrackReport {
             }
         }
 
-        println!("{}\n", "═══════════════════".cyan());
+        println!("{}\n", "===================".cyan());
     }
 
     /// Export cracked credentials to hashcat format

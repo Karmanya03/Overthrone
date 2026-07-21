@@ -1,4 +1,4 @@
-//! mitm6 — DHCPv6 DNS Poisoning + WPAD Injection + DNS Spoofing
+//! mitm6 -- DHCPv6 DNS Poisoning + WPAD Injection + DNS Spoofing
 //!
 //! Implements full IPv6 attack chain:
 //! 1. **DHCPv6 spoofing**: Replies to DHCPv6 Solicit/Request with attacker's
@@ -102,7 +102,7 @@ impl Default for Mitm6Config {
 // -------------------------------------------------------------
 
 /// DHCPv6-based DNS poisoning engine.
-/// Runs on `tokio` — the listener loop is spawned as a background `tokio::task`,
+/// Runs on `tokio` -- the listener loop is spawned as a background `tokio::task`,
 /// and cancellation is signalled via a `watch` channel. Dropping the `Mitm6`
 /// handle automatically stops the listener.
 pub struct Mitm6 {
@@ -454,7 +454,7 @@ async fn handle_dns_query(
 
     // Determine if we should spoof this query
     let Some(spoof_ip) = should_spoof_domain(&domain, config) else {
-        // Don't spoof — forward or ignore
+        // Don't spoof -- forward or ignore
         debug!("Not spoofing DNS query for {}", domain);
         return Ok(());
     };

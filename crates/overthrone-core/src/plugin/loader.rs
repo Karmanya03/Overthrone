@@ -1,4 +1,4 @@
-//! Plugin loader — handles dynamic loading of native (.dll/.so) and WASM plugins
+//! Plugin loader -- handles dynamic loading of native (.dll/.so) and WASM plugins
 
 use super::{
     NativePluginInfo, PLUGIN_API_VERSION, Plugin, PluginContext, PluginEvent, PluginManifest,
@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 // Native plugin loader (libloading)
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 
 /// A native plugin loaded from a shared library
 pub struct NativePlugin {
@@ -164,7 +164,7 @@ pub fn load_native_plugin(path: &Path) -> Result<Box<dyn Plugin>> {
 
         if fn_free.is_none() {
             log::warn!(
-                "[plugin:loader] {:?} does not export overthrone_plugin_free — \
+                "[plugin:loader] {:?} does not export overthrone_plugin_free -- \
                  falling back to libc free() (allocator mismatch possible)",
                 path
             );
@@ -270,9 +270,9 @@ impl Plugin for NativePlugin {
     }
 }
 
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 // WASM plugin loader (wasmtime integration)
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 
 use wasmtime::*;
 
@@ -377,7 +377,7 @@ fn define_wasm_host_functions(linker: &mut Linker<WasmPluginState>) -> Result<()
         )
         .map_err(|e| OverthroneError::Plugin(format!("Failed to define log function: {}", e)))?;
 
-    // graph_add_node(name_ptr, name_len, type_ptr, type_len) → i64
+    // graph_add_node(name_ptr, name_len, type_ptr, type_len) -> i64
     linker
         .func_wrap(
             "env",
@@ -523,8 +523,8 @@ impl Plugin for WasmPlugin {
                 OverthroneError::Plugin("WASM module missing memory export".to_string())
             })?;
 
-        // ── Allocate guest memory ──────────────────────────────
-        // Try the plugin's exported `allocate(size) → ptr` function first.
+        // -- Allocate guest memory ------------------------------
+        // Try the plugin's exported `allocate(size) -> ptr` function first.
         // Fall back to a fixed offset (1024) if the plugin doesn't export one.
         let _total_bytes = command.len() + args_json.len() + 2; // +2 for safety
 
@@ -546,7 +546,7 @@ impl Plugin for WasmPlugin {
             (cmd_ptr, args_ptr)
         } else {
             log::warn!(
-                "[plugin:wasm] Plugin '{}' does not export allocate() — using fixed offset 1024",
+                "[plugin:wasm] Plugin '{}' does not export allocate() -- using fixed offset 1024",
                 self.manifest.name
             );
             let cmd_off = 1024usize;
@@ -567,7 +567,7 @@ impl Plugin for WasmPlugin {
                 OverthroneError::Plugin(format!("Failed to write args to WASM memory: {}", e))
             })?;
 
-        // Call `plugin_execute(cmd_ptr, cmd_len, args_ptr, args_len) → i32`
+        // Call `plugin_execute(cmd_ptr, cmd_len, args_ptr, args_len) -> i32`
         if let Ok(execute_func) = instance
             .get_typed_func::<(i32, i32, i32, i32), i32>(store.as_context_mut(), "plugin_execute")
         {
@@ -632,14 +632,14 @@ impl Plugin for WasmPlugin {
     }
 }
 
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 // Helpers
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 
 unsafe fn cstr_to_string(ptr: *const std::ffi::c_char) -> Result<String> {
     if ptr.is_null() {
         return Err(OverthroneError::Plugin(
-            "cstr_to_string received null pointer — a native plugin returned a null C string"
+            "cstr_to_string received null pointer -- a native plugin returned a null C string"
                 .to_string(),
         ));
     }

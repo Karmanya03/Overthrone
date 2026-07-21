@@ -11,17 +11,17 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Hex encoding helper (no external crate needed)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types used by executor.rs (dump_sam / dump_lsa / dump_dcc2)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Credential extracted from SAM database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,9 +56,9 @@ pub struct Dcc2Credential {
     pub nt_hash: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Core dump functions called by executor.rs
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse SAM database hive and extract local account NTLM hashes.
 /// Takes raw bytes of the SAM and SYSTEM registry hives (from `reg save`).
@@ -123,11 +123,11 @@ pub fn dump_lsa(security_data: &[u8], system_data: &[u8]) -> Result<Vec<LsaCrede
 
         // Extract credential based on secret type
         let (nt_hash, plaintext) = if name.starts_with("$MACHINE.ACC") {
-            // Machine account — compute NT hash from the raw password bytes
+            // Machine account -- compute NT hash from the raw password bytes
             let nt = compute_nt_hash(&decrypted);
             (Some(hex_encode(&nt)), None)
         } else if name.starts_with("_SC_") {
-            // Service account — plaintext password stored as UTF-16LE
+            // Service account -- plaintext password stored as UTF-16LE
             let plain = decode_utf16le(&decrypted);
             let nt = compute_nt_hash(&decrypted);
             (Some(hex_encode(&nt)), Some(plain))
@@ -135,10 +135,10 @@ pub fn dump_lsa(security_data: &[u8], system_data: &[u8]) -> Result<Vec<LsaCrede
             let plain = decode_utf16le(&decrypted);
             (None, Some(plain))
         } else if name.starts_with("DPAPI") || name.starts_with("NL$KM") {
-            // Key material — store raw hex as the "hash"
+            // Key material -- store raw hex as the "hash"
             (Some(hex_encode(&decrypted)), None)
         } else {
-            // Unknown secret type — store raw hex
+            // Unknown secret type -- store raw hex
             (Some(hex_encode(&decrypted)), None)
         };
 
@@ -181,9 +181,9 @@ pub fn dump_dcc2(security_data: &[u8], system_data: &[u8]) -> Result<Vec<Dcc2Cre
     Ok(credentials)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Registry Hive Parsing Internals
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Validate that the data starts with "regf" magic bytes
 fn validate_hive(data: &[u8], name: &str) -> Result<()> {
@@ -278,7 +278,7 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
     let name_lower = name.to_lowercase();
 
     match list_sig {
-        // lf (leaf) or lh (hash leaf) — each entry is 8 bytes: offset(4) + hash/hint(4)
+        // lf (leaf) or lh (hash leaf) -- each entry is 8 bytes: offset(4) + hash/hint(4)
         b"lf" | b"lh" => {
             for i in 0..num_entries {
                 let entry_offset = subkey_list_offset + 8 + (i * 8);
@@ -295,7 +295,7 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                 }
             }
         }
-        // ri (index root) — each entry is 4 bytes: offset to sub-list
+        // ri (index root) -- each entry is 4 bytes: offset to sub-list
         b"ri" => {
             for i in 0..num_entries {
                 let entry_offset = subkey_list_offset + 8 + (i * 4);
@@ -324,7 +324,7 @@ fn find_subkey(data: &[u8], nk_offset: usize, name: &str) -> Result<usize> {
                 }
             }
         }
-        // li (leaf index) — each entry is 4 bytes: offset
+        // li (leaf index) -- each entry is 4 bytes: offset
         b"li" => {
             for i in 0..num_entries {
                 let entry_offset = subkey_list_offset + 8 + (i * 4);
@@ -429,7 +429,7 @@ fn read_value(data: &[u8], nk_offset: usize, value_name: &str) -> Result<Vec<u8>
             // Data might be inline (if high bit of data_len is set and len <= 4)
             let real_len = vk_data_len & 0x7FFFFFFF;
             if vk_data_len & 0x80000000 != 0 && real_len <= 4 {
-                // Inline data — stored in the offset field itself
+                // Inline data -- stored in the offset field itself
                 let inline_bytes = vk_data_offset_rel.to_le_bytes();
                 return Ok(inline_bytes[..real_len].to_vec());
             }
@@ -529,9 +529,9 @@ fn enumerate_subkeys(data: &[u8], nk_offset: usize) -> Result<Vec<(usize, String
     Ok(results)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Boot Key / SysKey Extraction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Extract boot key (SysKey) from SYSTEM registry hive.
 /// The boot key is derived from the class names of four keys under
@@ -626,9 +626,9 @@ fn hex_str_to_bytes(hex: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SAM Hash Decryption
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Enumerate user accounts from the SAM hive.
 /// Returns vec of (RID, username, V_value_data).
@@ -797,9 +797,9 @@ fn decrypt_sam_hash_aes(
     Ok(result.to_vec())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LSA Secret Extraction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Derive the LSA encryption key from the SECURITY hive using the boot key
 fn derive_lsa_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> {
@@ -898,9 +898,9 @@ fn decrypt_lsa_secret(lsa_key: &[u8], encrypted: &[u8]) -> Result<Vec<u8>> {
     Ok(encrypted.to_vec())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCC2 Cached Credential Extraction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Derive the NL$KM key used to encrypt cached credentials
 fn derive_nlkm_key(security_data: &[u8], boot_key: &[u8; 16]) -> Result<Vec<u8>> {
@@ -946,7 +946,7 @@ fn decrypt_cached_entry(nlkm_key: &[u8], entry: &[u8]) -> Result<(String, Vec<u8
     //   +0x04: effective name length (u16)
     //   +0x06: full name length (u16)
     //   +0x18: IV (16 bytes)
-    //   +0x28: CH (16 bytes) — checksum
+    //   +0x28: CH (16 bytes) -- checksum
     //   +0x48: enc_data starts
     //   +0x60: username (UTF-16LE, after decryption)
 
@@ -1000,9 +1000,9 @@ fn decrypt_cached_entry(nlkm_key: &[u8], entry: &[u8]) -> Result<(String, Vec<u8
     Ok((username, dcc2_hash))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Crypto Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Compute NTLM hash (MD4 of UTF-16LE password)
 fn compute_nt_hash(password_bytes: &[u8]) -> Vec<u8> {
@@ -1026,18 +1026,18 @@ fn decode_utf16le(data: &[u8]) -> String {
         .to_string()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Legacy Types (kept for backward compatibility)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Credential types that can be extracted
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SecretCategory {
-    /// SAM database — local account NTLM hashes
+    /// SAM database -- local account NTLM hashes
     Sam,
-    /// LSA secrets — service account credentials, DPAPI keys
+    /// LSA secrets -- service account credentials, DPAPI keys
     Lsa,
-    /// NTDS.dit — all domain account hashes via DRSUAPI
+    /// NTDS.dit -- all domain account hashes via DRSUAPI
     Ntds,
     /// Domain Cached Credentials v2 (mscash2)
     CachedDomain,
@@ -1122,9 +1122,9 @@ pub struct DumpResult {
     pub errors: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Utility Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Boot key (SysKey) extracted from the SYSTEM registry hive
 #[derive(Debug, Clone)]
@@ -1199,7 +1199,7 @@ pub fn classify_lsa_secret(name: &str) -> &'static str {
     if name.starts_with("_SC_") {
         "Service Account Password"
     } else if name.starts_with("NL$KM") {
-        "NL$KM — Cached Credentials Encryption Key"
+        "NL$KM -- Cached Credentials Encryption Key"
     } else if name.starts_with("DPAPI") {
         "DPAPI Master Key Backup"
     } else if name.starts_with("$MACHINE.ACC") {
@@ -1240,9 +1240,9 @@ pub fn format_dcc2_for_cracking(username: &str, dcc2_hash: &[u8]) -> String {
     format!("$DCC2$10240#{}#{}", username, hex_encode(dcc2_hash))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -1297,7 +1297,7 @@ mod tests {
         );
         assert_eq!(
             classify_lsa_secret("NL$KM"),
-            "NL$KM — Cached Credentials Encryption Key"
+            "NL$KM -- Cached Credentials Encryption Key"
         );
         assert_eq!(classify_lsa_secret("RandomThing"), "Unknown LSA Secret");
     }

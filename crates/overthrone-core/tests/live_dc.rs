@@ -26,9 +26,9 @@ impl DcConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LDAP
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[tokio::test]
 #[ignore = "requires live DC"]
@@ -80,9 +80,9 @@ async fn ldap_full_enumeration() {
     assert!(!data.groups.is_empty(), "No groups found");
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Attack Graph from Live Data
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[tokio::test]
 #[ignore = "requires live DC"]
@@ -193,14 +193,14 @@ async fn graph_high_value_targets_live() {
     let hvt = graph.high_value_targets(10);
     println!("High-value targets:");
     for (name, ntype, inbound) in &hvt {
-        println!("  {} ({:?}) — {} inbound edges", name, ntype, inbound);
+        println!("  {} ({:?}) -- {} inbound edges", name, ntype, inbound);
     }
     assert!(!hvt.is_empty(), "No high-value targets found");
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  BloodHound Export
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[tokio::test]
 #[ignore = "requires live DC"]

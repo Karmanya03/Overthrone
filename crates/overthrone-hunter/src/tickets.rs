@@ -1,4 +1,4 @@
-//! Kerberos ticket operations — request TGT/TGS, import/export kirbi/ccache,
+//! Kerberos ticket operations -- request TGT/TGS, import/export kirbi/ccache,
 //! convert between formats, inspect ticket contents, and manage ticket cache.
 //!
 //! Supports:
@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Ticket Formats
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Supported ticket file formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ impl TicketFormat {
         if data[0] == 0x05 && data[1] == 0x04 {
             return Some(Self::CCache);
         }
-        // kirbi is ASN.1 — starts with 0x76 (APPLICATION 22 = KRB-CRED)
+        // kirbi is ASN.1 -- starts with 0x76 (APPLICATION 22 = KRB-CRED)
         if data[0] == 0x76 {
             return Some(Self::Kirbi);
         }
@@ -73,9 +73,9 @@ impl std::fmt::Display for TicketFormat {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Ticket Request Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// What ticket operation to perform
 #[derive(Debug, Clone)]
@@ -109,9 +109,9 @@ pub enum TicketRequest {
     Inspect { path: PathBuf },
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Ticket Inspection / Metadata
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Readable metadata extracted from a ticket
 #[derive(Debug, Clone, Serialize)]
@@ -177,9 +177,9 @@ fn extract_ticket_info(ticket: &Ticket) -> TicketInfo {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Kirbi (KRB-CRED) Serialization
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Wrap a TicketGrantingData into a KRB-CRED ASN.1 structure (.kirbi)
 pub fn to_kirbi(tgd: &TicketGrantingData) -> Vec<u8> {
@@ -265,9 +265,9 @@ pub fn from_kirbi(data: &[u8]) -> Result<TicketGrantingData> {
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // CCache Serialization
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Convert TicketGrantingData to ccache format (MIT Kerberos v4 format)
 pub fn to_ccache(tgd: &TicketGrantingData) -> Vec<u8> {
@@ -313,7 +313,7 @@ fn write_ccache_keyblock(buf: &mut Vec<u8>, etype: i32, key: &[u8]) {
 
 fn write_ccache_times(buf: &mut Vec<u8>, end_time: Option<&kerberos_asn1::KerberosTime>) {
     let now = Utc::now().timestamp() as u32;
-    // Use the provided end_time by converting KerberosTime (Deref → DateTime<Utc>) to epoch.
+    // Use the provided end_time by converting KerberosTime (Deref -> DateTime<Utc>) to epoch.
     // Fall back to 10 hours (36000 seconds) if no end_time is provided.
     let end = end_time
         .map(|t| t.timestamp() as u32)
@@ -559,9 +559,9 @@ fn read_ccache_keyblock(data: &[u8], pos: &mut usize) -> Result<(i32, Vec<u8>)> 
     Ok((etype, key))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Ticket Operations Trait
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// High-level ticket operations interface
 pub struct TicketOps;
@@ -635,7 +635,7 @@ impl TicketOps {
         let tgd = Self::load(input).await?;
         Self::save(&tgd, output, target_format).await?;
         info!(
-            "Converted {} → {} ({})",
+            "Converted {} -> {} ({})",
             input.display(),
             output.display(),
             target_format
@@ -651,7 +651,7 @@ impl TicketOps {
 
         let info = inspect_ticket_bytes(&data)?;
 
-        println!("\n{}", "═══ TICKET INFO ═══".bold().cyan());
+        println!("\n{}", "=== TICKET INFO ===".bold().cyan());
         println!("  File:      {}", path.display());
         println!(
             "  Format:    {}",
@@ -669,25 +669,25 @@ impl TicketOps {
         if !info.client_principal.is_empty() {
             println!("  Client:    {}", info.client_principal.green());
         }
-        println!("{}\n", "═══════════════════".cyan());
+        println!("{}\n", "===================".cyan());
 
         Ok(info)
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Request Handler (called from runner)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Handle a ticket request dispatched by the runner
 pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Result<()> {
     match request {
         TicketRequest::RequestTgt { output, format } => {
-            info!("{}", "═══ REQUEST TGT ═══".bold().green());
+            info!("{}", "=== REQUEST TGT ===".bold().green());
             let tgt = TicketOps::request_tgt(config).await?;
             info!(
                 "  {} TGT for {}@{}",
-                "✓".green(),
+                "[+]".green(),
                 tgt.client_principal.bold(),
                 tgt.client_realm.cyan()
             );
@@ -702,7 +702,7 @@ pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Res
             output,
             format,
         } => {
-            info!("{}", "═══ REQUEST TGS ═══".bold().green());
+            info!("{}", "=== REQUEST TGS ===".bold().green());
             let tgt = match &config.tgt {
                 Some(t) => t.clone(),
                 None => TicketOps::request_tgt(config).await?,
@@ -710,7 +710,7 @@ pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Res
             let tgs = TicketOps::request_tgs(config, &tgt, spn).await?;
             info!(
                 "  {} TGS for {} as {}",
-                "✓".green(),
+                "[+]".green(),
                 spn.bold(),
                 tgs.client_principal.cyan()
             );
@@ -721,18 +721,18 @@ pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Res
         }
 
         TicketRequest::Import { path } => {
-            info!("{}", "═══ IMPORT TICKET ═══".bold().green());
+            info!("{}", "=== IMPORT TICKET ===".bold().green());
             let tgd = TicketOps::load(path).await?;
             info!(
                 "  {} Imported: {}@{}",
-                "✓".green(),
+                "[+]".green(),
                 tgd.client_principal.bold(),
                 tgd.client_realm.cyan()
             );
         }
 
         TicketRequest::Export { output, format } => {
-            info!("{}", "═══ EXPORT TICKET ═══".bold().green());
+            info!("{}", "=== EXPORT TICKET ===".bold().green());
             let tgt = config
                 .tgt
                 .as_ref()
@@ -745,7 +745,7 @@ pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Res
             output,
             target_format,
         } => {
-            info!("{}", "═══ CONVERT TICKET ═══".bold().green());
+            info!("{}", "=== CONVERT TICKET ===".bold().green());
             TicketOps::convert(input, output, *target_format).await?;
         }
 
@@ -757,9 +757,9 @@ pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Res
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

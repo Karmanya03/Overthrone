@@ -42,7 +42,7 @@ fn pem_to_der(pem_data: &str) -> Result<Vec<u8>> {
     }
     if der.is_empty() {
         return Err(OverthroneError::TicketForge(
-            "Empty or invalid PEM data — expected BEGIN/END markers with base64 content".into(),
+            "Empty or invalid PEM data -- expected BEGIN/END markers with base64 content".into(),
         ));
     }
     Ok(der)

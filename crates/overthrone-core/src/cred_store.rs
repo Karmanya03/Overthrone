@@ -1,4 +1,4 @@
-//! Credential store — thread-safe vault for discovered credentials.
+//! Credential store -- thread-safe vault for discovered credentials.
 //!
 //! All modules that harvest credentials (secretsdump, dcsync, kerberoast,
 //! spray, LAPS, etc.) push entries here. The autopwn runner pulls
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
 
-// ─── Public Entry Types ───────────────────────────────────────────────────────
+// --- Public Entry Types -------------------------------------------------------
 
 /// Privilege tier of a credential (higher = better)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
@@ -38,7 +38,7 @@ pub enum CredPrivilege {
     DcSync = 6,
 }
 
-/// The credential secret — either a plaintext password or an NT hash.
+/// The credential secret -- either a plaintext password or an NT hash.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CredSecret {
     /// `Password` variant
@@ -196,7 +196,7 @@ impl CredEntry {
     }
 }
 
-// ─── CredStore ────────────────────────────────────────────────────────────────
+// --- CredStore ----------------------------------------------------------------
 
 /// Thread-safe credential vault.
 /// Wrap in `Arc<CredStore>` and share across modules.
@@ -220,7 +220,7 @@ impl CredStore {
     /// Returns `true` if the entry was new, `false` if already present.
     pub fn insert(&self, entry: CredEntry) -> bool {
         let mut entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         let key = entry.dedup_key();
@@ -245,7 +245,7 @@ impl CredStore {
     /// Find credentials for a specific user in a domain.
     pub fn get(&self, domain: &str, username: &str) -> Vec<CredEntry> {
         let entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         entries
@@ -260,7 +260,7 @@ impl CredStore {
     /// Get highest-privilege credentials available for any user.
     pub fn best_creds(&self) -> Option<CredEntry> {
         let entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         entries
@@ -273,7 +273,7 @@ impl CredStore {
     /// Get all domain admin / DA-equivalent credentials.
     pub fn da_creds(&self) -> Vec<CredEntry> {
         let entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         entries
@@ -288,7 +288,7 @@ impl CredStore {
         self.entries
             .lock()
             .unwrap_or_else(|e| {
-                warn!("Mutex poisoned in CredStore — recovering data");
+                warn!("Mutex poisoned in CredStore -- recovering data");
                 e.into_inner()
             })
             .clone()
@@ -299,7 +299,7 @@ impl CredStore {
         self.entries
             .lock()
             .unwrap_or_else(|e| {
-                warn!("Mutex poisoned in CredStore — recovering data");
+                warn!("Mutex poisoned in CredStore -- recovering data");
                 e.into_inner()
             })
             .len()
@@ -312,7 +312,7 @@ impl CredStore {
     /// Mark a hash entry as cracked with a plaintext password.
     pub fn mark_cracked(&self, domain: &str, username: &str, plaintext: &str) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         for entry in entries.iter_mut() {
@@ -329,7 +329,7 @@ impl CredStore {
     /// Update privilege level for all entries matching (domain, username).
     pub fn set_privilege(&self, domain: &str, username: &str, priv_level: CredPrivilege) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         for entry in entries.iter_mut() {
@@ -345,7 +345,7 @@ impl CredStore {
     /// Export all entries keyed by "DOMAIN\username" for quick lookup.
     pub fn as_map(&self) -> HashMap<String, CredEntry> {
         let entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         entries
@@ -360,7 +360,7 @@ impl CredStore {
     /// Serialize vault to pretty JSON string.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         let entries = self.entries.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in CredStore — recovering data");
+            warn!("Mutex poisoned in CredStore -- recovering data");
             e.into_inner()
         });
         serde_json::to_string_pretty(entries.as_slice())

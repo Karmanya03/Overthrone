@@ -1,4 +1,4 @@
-//! Top-level orchestrator — dispatches all Kerberos attack actions and
+//! Top-level orchestrator -- dispatches all Kerberos attack actions and
 //! collects results into a unified HuntReport.
 
 use crate::asreproast::{AsRepRoastConfig, AsRepRoastResult};
@@ -25,9 +25,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Global hunt configuration shared across all sub-modules
 #[derive(Debug, Clone)]
@@ -59,7 +59,7 @@ pub struct HuntConfig {
 }
 
 impl HuntConfig {
-    /// Derive base DN from domain: "corp.local" → "DC=corp,DC=local"
+    /// Derive base DN from domain: "corp.local" -> "DC=corp,DC=local"
     pub fn derive_base_dn(&self) -> String {
         if let Some(ref dn) = self.base_dn {
             return dn.clone();
@@ -172,9 +172,9 @@ pub enum HuntAction {
     FullScan,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Report
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of a single CVE-based attack execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,7 +279,7 @@ impl HuntReport {
 
     /// Pretty-print the report summary
     pub fn print_summary(&self) {
-        println!("\n{}", "═══ HUNT REPORT ═══".bold().cyan());
+        println!("\n{}", "=== HUNT REPORT ===".bold().cyan());
         println!("  Domain:  {}", self.domain.bold());
         println!("  DC:      {}", self.dc_ip);
         println!(
@@ -296,9 +296,9 @@ impl HuntReport {
             println!(
                 "  {} AS-REP Roast: {} hashes from {} targets",
                 if r.hashes.is_empty() {
-                    "✗".red()
+                    "[-]".red()
                 } else {
-                    "✓".green()
+                    "[+]".green()
                 },
                 r.hashes.len().to_string().bold(),
                 r.users_checked,
@@ -308,9 +308,9 @@ impl HuntReport {
             println!(
                 "  {} Kerberoast:   {} hashes from {} SPNs",
                 if r.hashes.is_empty() {
-                    "✗".red()
+                    "[-]".red()
                 } else {
-                    "✓".green()
+                    "[+]".green()
                 },
                 r.hashes.len().to_string().bold(),
                 r.spns_checked,
@@ -320,9 +320,9 @@ impl HuntReport {
             println!(
                 "  {} Spray:        {} valid creds, {} lockouts, {} attempts",
                 if r.valid_creds.is_empty() {
-                    "✗".red()
+                    "[-]".red()
                 } else {
-                    "✓".green()
+                    "[+]".green()
                 },
                 r.valid_creds.len().to_string().bold(),
                 r.locked_out.len(),
@@ -333,9 +333,9 @@ impl HuntReport {
             println!(
                 "  {} Constrained:  {} delegatable accounts",
                 if r.delegatable_accounts.is_empty() {
-                    "✗".red()
+                    "[-]".red()
                 } else {
-                    "✓".green()
+                    "[+]".green()
                 },
                 r.delegatable_accounts.len().to_string().bold(),
             );
@@ -344,9 +344,9 @@ impl HuntReport {
             println!(
                 "  {} Unconstrained: {} vulnerable hosts",
                 if r.vulnerable_hosts.is_empty() {
-                    "✗".red()
+                    "[-]".red()
                 } else {
-                    "✓".green()
+                    "[+]".green()
                 },
                 r.vulnerable_hosts.len().to_string().bold(),
             );
@@ -355,9 +355,9 @@ impl HuntReport {
             println!(
                 "  {} RBCD: {}",
                 if r.success {
-                    "✓".green()
+                    "[+]".green()
                 } else {
-                    "✗".red()
+                    "[-]".red()
                 },
                 if r.success {
                     "delegation configured"
@@ -370,9 +370,9 @@ impl HuntReport {
             println!(
                 "  {} Coerce: {}/{} methods succeeded",
                 if r.successful_coercions.is_empty() {
-                    "✗".red()
+                    "[-]".red()
                 } else {
-                    "✓".green()
+                    "[+]".green()
                 },
                 r.successful_coercions.len(),
                 r.methods_attempted,
@@ -382,26 +382,26 @@ impl HuntReport {
         // CVE attack results
         for r in &self.cve_results {
             let icon = if r.success {
-                "✓".green()
+                "[+]".green()
             } else {
-                "✗".red()
+                "[-]".red()
             };
             println!("  {} {} ({}): {}", icon, r.cve_id, r.name, r.summary);
         }
 
         if !self.errors.is_empty() {
-            println!("\n  {} Errors:", "⚠".yellow());
+            println!("\n  {} Errors:", "[!]".yellow());
             for e in &self.errors {
-                println!("    • {}", e.red());
+                println!("    * {}", e.red());
             }
         }
 
         println!(
             "\n  {} Total findings: {}",
-            "→".cyan(),
+            "->".cyan(),
             self.total_findings().to_string().bold()
         );
-        println!("{}\n", "═══════════════════".cyan());
+        println!("{}\n", "===================".cyan());
     }
 
     /// Export report to JSON
@@ -418,9 +418,9 @@ impl HuntReport {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // CVE Attack Dispatcher
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn dispatch_cve_attack(config: &HuntConfig, attack: &CveAttackType) -> CveAttackResult {
     let cve_id = attack.cve_id();
@@ -609,9 +609,9 @@ async fn dispatch_cve_attack(config: &HuntConfig, attack: &CveAttackType) -> Cve
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // CVE-specific runners (establish connections, call modules)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Helper: create an authenticated LDAP session from HuntConfig
 async fn connect_ldap(config: &HuntConfig) -> Result<overthrone_core::proto::ldap::LdapSession> {
@@ -737,9 +737,9 @@ async fn run_cve_exchange_relay(
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Main Dispatcher
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Run one or more hunt actions and produce a unified report.
 pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<HuntReport> {
@@ -825,7 +825,7 @@ pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<Hun
                     info!("CVE attack succeeded: {} ({})", result.name, result.cve_id);
                 } else {
                     warn!(
-                        "CVE attack failed: {} ({}) — {}",
+                        "CVE attack failed: {} ({}) -- {}",
                         result.name, result.cve_id, result.summary
                     );
                 }

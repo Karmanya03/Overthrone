@@ -89,9 +89,9 @@ pub fn build_from_reaper(
     graph
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Conversion Traits
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Trait for converting reaper user types to core `AdUser`
 pub trait ReaperUser {
@@ -113,11 +113,11 @@ pub trait ReaperTrust {
     fn to_ad_trust(&self) -> AdTrust;
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Blanket Implementations for Core Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-// AdUser → AdUser (identity, for direct use with core types)
+// AdUser -> AdUser (identity, for direct use with core types)
 impl ReaperUser for AdUser {
     fn to_ad_user(&self) -> AdUser {
         self.clone()
@@ -142,9 +142,9 @@ impl ReaperTrust for AdTrust {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Convenience: Build from DomainEnumeration directly
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build an `AttackGraph` from a `DomainEnumeration` (core LDAP types)
 pub fn build_from_enumeration(data: &DomainEnumeration) -> AttackGraph {
@@ -160,9 +160,9 @@ pub fn build_from_enumeration(data: &DomainEnumeration) -> AttackGraph {
     graph
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Graph Enrichment
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Add ACL-based edges to an existing graph from reaper ACL findings.
 /// `findings` should be tuples of (source_name, target_name, right_type).

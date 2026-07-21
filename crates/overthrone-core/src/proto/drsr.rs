@@ -1,7 +1,7 @@
 //! MS-DRSR (Directory Replication Service Remote) Response Parser
 //!
 //! Parses DRSGetNCChanges (opnum 3) responses to extract replicated
-//! Active Directory attributes — specifically credential material:
+//! Active Directory attributes -- specifically credential material:
 //! - unicodePwd (NTLM hash)
 //! - supplementalCredentials (Kerberos keys, cleartext passwords)
 //! - sAMAccountName (for mapping hashes to users)
@@ -15,9 +15,9 @@ use crate::error::{OverthroneError, Result};
 use md5::{Digest as Md5Digest, Md5};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
-// Constants — Well-known ATTID values
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Constants -- Well-known ATTID values
+// ===========================================================
 
 /// ATTID for sAMAccountName (1.2.840.113556.1.4.221)
 const ATTID_SAM_ACCOUNT_NAME: u32 = 0x000904D8;
@@ -40,9 +40,9 @@ const ATTID_DN: u32 = 0x00090001;
 const DRS_ENC_TYPE_RC4: u32 = 1;
 const DRS_ENC_TYPE_AES: u32 = 2;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// A replicated AD object with its credential attributes
 #[derive(Debug, Clone)]
@@ -91,14 +91,14 @@ pub struct DcSyncResult {
     pub usnvec_to: [u64; 3],
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Main Parser
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse a DRSGetNCChanges (opnum 3) RPC response and extract credentials.
 /// # Arguments
-/// * `response`    — Raw RPC response bytes (including PDU header)
-/// * `session_key` — DRS session key from DRSBind (used to decrypt attributes)
+/// * `response`    -- Raw RPC response bytes (including PDU header)
+/// * `session_key` -- DRS session key from DRSBind (used to decrypt attributes)
 /// # Returns
 /// Parsed objects with decrypted NT hashes and supplemental credentials.
 pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result<DcSyncResult> {
@@ -147,7 +147,7 @@ pub fn parse_get_nc_changes_reply(response: &[u8], session_key: &[u8]) -> Result
 ///  [76..100] usnvecTo             (24 bytes)
 ///  [100..104] pUpToDateVecDst     (pointer)
 ///  [104..108] ulExtendedRet
-///  [108..112] cNumObjects         ← key count
+///  [108..112] cNumObjects         <- key count
 ///  [112..116] cNumBytes
 ///  [116..120] pObjects            (pointer, non-null when objects present)
 ///  [120..124] fMoreData
@@ -193,7 +193,7 @@ fn parse_reply_v6(stub_data: &[u8], session_key: &[u8], _version: u32) -> Result
         c_num_objects, p_obj_ref, f_more_data
     );
 
-    // If no objects or null pointer — return empty result
+    // If no objects or null pointer -- return empty result
     if c_num_objects == 0 || p_obj_ref == 0 {
         return Ok(DcSyncResult {
             objects: Vec::new(),
@@ -244,7 +244,7 @@ fn scan_for_replentinflist(
         let maybe_attid = read_u32(data, scan_pos);
 
         if is_known_attid(maybe_attid) {
-            // Found a recognisable ATTID — search backwards for the
+            // Found a recognisable ATTID -- search backwards for the
             // ENTINF.AttrBlock boundary (attrCount).
             if let Some(obj_start) = find_object_start(data, scan_pos) {
                 match parse_replicated_object(data, obj_start, session_key) {
@@ -432,7 +432,7 @@ fn process_attribute(
             }
         }
         _ => {
-            // Unknown or uninteresting attribute — skip
+            // Unknown or uninteresting attribute -- skip
         }
     }
 }
@@ -462,9 +462,9 @@ fn normalize_attid(attid: u32) -> u32 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Credential Decryption
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Decrypt a replicated secret (unicodePwd, supplementalCredentials, etc.)
 fn decrypt_replicated_secret(enc_data: &[u8], session_key: &[u8]) -> Result<Vec<u8>> {
@@ -558,9 +558,9 @@ fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Supplemental Credentials Parser
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn parse_supplemental_credentials(data: &[u8]) -> Option<SupplementalCredentials> {
     if data.len() < 24 {
@@ -706,9 +706,9 @@ fn parse_kerberos_keys(data: &[u8], result: &mut SupplementalCredentials) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Utility Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[inline]
 fn read_u64(data: &[u8], offset: usize) -> u64 {
@@ -873,9 +873,9 @@ mod tests {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // DCSync Pagination Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Full DCSync pagination state for incremental replication.
 #[derive(Debug, Clone)]

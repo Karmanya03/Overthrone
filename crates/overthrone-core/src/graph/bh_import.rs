@@ -7,9 +7,9 @@ use tracing::{info, warn};
 use crate::error::{OverthroneError, Result};
 use crate::graph::{AdNode, AttackGraph, EdgeType, NodeType};
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  SharpHound v2 JSON Structures
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -159,9 +159,9 @@ struct BhTrust {
     target_domain_name: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  Intermediate representation
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 struct BhImportGraph {
     nodes: HashMap<String, AdNode>,         // SID -> node
@@ -171,9 +171,9 @@ struct BhImportGraph {
     domain_nodes: Vec<String>,              // SIDs of domain nodes
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  BH Right Name -> EdgeType mapping
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 fn bh_right_to_edge(right: &str) -> Option<EdgeType> {
     match right.to_uppercase().as_str() {
@@ -216,9 +216,9 @@ fn bh_right_to_edge(right: &str) -> Option<EdgeType> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  Property extraction helpers
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 fn get_string(props: &HashMap<String, serde_json::Value>, key: &str) -> Option<String> {
     props.get(key).and_then(|v| v.as_str()).map(String::from)
@@ -255,9 +255,9 @@ fn extract_dn(props: &HashMap<String, serde_json::Value>) -> Option<String> {
     get_string(props, "distinguishedname").or_else(|| get_string(props, "distinguishedname|dn"))
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  File loading
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 fn load_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let content = std::fs::read_to_string(path).map_err(|e| {
@@ -278,9 +278,9 @@ fn load_container<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<Ve
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  Node registration
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 impl BhImportGraph {
     fn new() -> Self {
@@ -337,9 +337,9 @@ impl BhImportGraph {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  Main import function
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 /// Import BloodHound JSON files from a directory into an AttackGraph.
 ///
@@ -741,7 +741,7 @@ pub fn import_bloodhound_dir(dir: &Path) -> Result<AttackGraph> {
         }
     }
 
-    // ── Build the AttackGraph ──
+    // -- Build the AttackGraph --
     let mut graph = AttackGraph::new();
 
     // Add all nodes
@@ -772,9 +772,9 @@ pub fn import_bloodhound_dir(dir: &Path) -> Result<AttackGraph> {
     Ok(graph)
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 
 #[cfg(test)]
 mod tests {

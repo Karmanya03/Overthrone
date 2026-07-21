@@ -1,4 +1,4 @@
-//! Certificate auto-enrollment — CES (WS-Trust) and ICertPassage enrollment.
+//! Certificate auto-enrollment -- CES (WS-Trust) and ICertPassage enrollment.
 //!
 //! Implements two enrollment paths for ESC9/ESC10 attack patterns:
 //!
@@ -19,9 +19,9 @@ use base64::Engine;
 use overthrone_core::error::{OverthroneError, Result};
 use tracing::{debug, info};
 
-// ═══════════════════════════════════════════════════════════
-// EnrolmentWebServiceClient — CES HTTP enrollment
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// EnrolmentWebServiceClient -- CES HTTP enrollment
+// ===========================================================
 
 /// HTTP client for Certificate Enrollment Web Services (CES).
 ///
@@ -218,9 +218,9 @@ fn extract_ces_certificate(resp: &[u8]) -> Result<Vec<u8>> {
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
-// CertAutoEnroll — high-level orchestrator
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// CertAutoEnroll -- high-level orchestrator
+// ===========================================================
 
 /// Which enrollment path to use for automatic certificate enrollment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,7 +2,7 @@
 //!
 //! Supports:
 //! - CONNECT command (TCP tunneling)
-//! - Username/password authentication (RFC 1929) — optional
+//! - Username/password authentication (RFC 1929) -- optional
 //! - No-auth mode for local use
 //! - IPv4, IPv6, and domain name resolution
 //!
@@ -22,9 +22,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SOCKS5 Constants (RFC 1928)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const SOCKS_VERSION: u8 = 0x05;
 
@@ -52,9 +52,9 @@ const REP_HOST_UNREACHABLE: u8 = 0x04;
 const REP_CMD_NOT_SUPPORTED: u8 = 0x07;
 const REP_ATYP_NOT_SUPPORTED: u8 = 0x08;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// SOCKS5 server configuration.
 #[derive(Debug, Clone)]
@@ -89,9 +89,9 @@ pub struct Socks5Auth {
     pub password: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SOCKS5 Server
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Async SOCKS5 proxy server.
 pub struct Socks5Server {
@@ -190,9 +190,9 @@ impl Socks5Server {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Connection Handler
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn handle_client(
     mut client: TcpStream,
@@ -202,7 +202,7 @@ async fn handle_client(
 ) -> Result<()> {
     debug!("SOCKS5: New connection from {}", peer);
 
-    // ── Step 1: Greeting ──
+    // -- Step 1: Greeting --
     let mut buf = [0u8; 258];
     let n = client.read(&mut buf).await.map_err(sock_err)?;
     if n < 2 || buf[0] != SOCKS_VERSION {
@@ -216,7 +216,7 @@ async fn handle_client(
 
     let methods = &buf[2..2 + nmethods];
 
-    // ── Step 2: Authentication ──
+    // -- Step 2: Authentication --
     if let Some(expected_auth) = auth {
         if !methods.contains(&AUTH_USERNAME_PASSWORD) {
             client
@@ -273,7 +273,7 @@ async fn handle_client(
             .map_err(sock_err)?;
     }
 
-    // ── Step 3: Request ──
+    // -- Step 3: Request --
     let n = client.read(&mut buf).await.map_err(sock_err)?;
     if n < 4 || buf[0] != SOCKS_VERSION {
         return Err(OverthroneError::custom("SOCKS5: Invalid request"));
@@ -350,7 +350,7 @@ fn parse_target_address(buf: &[u8], n: usize, atyp: u8) -> Result<(String, u16)>
     }
 }
 
-/// Handle SOCKS5 CONNECT command — connect to a remote host and relay bidirectionally.
+/// Handle SOCKS5 CONNECT command -- connect to a remote host and relay bidirectionally.
 async fn handle_connect(
     mut client: TcpStream,
     peer: SocketAddr,
@@ -398,7 +398,7 @@ async fn handle_connect(
         peer, target_addr, target_port
     );
 
-    // ── Step 5: Bidirectional relay ──
+    // -- Step 5: Bidirectional relay --
     let (mut client_r, mut client_w) = client.into_split();
     let (mut remote_r, mut remote_w) = remote.into_split();
 
@@ -546,7 +546,7 @@ async fn handle_udp_associate(mut client: TcpStream, peer: SocketAddr) -> Result
 
             // Check RSV and FRAG fields (RFC 1928 §7)
             // [RSV:u16=0x0000] [FRAG:u8] [ATYP:u8] [DST.ADDR] [DST.PORT] [DATA]
-            // We don't support fragmentation (FRAG != 0 → drop)
+            // We don't support fragmentation (FRAG != 0 -> drop)
             if buf[2] != 0x00 {
                 debug!("SOCKS5 UDP: dropping fragmented datagram (frag={})", buf[2]);
                 continue;
@@ -596,7 +596,7 @@ async fn handle_udp_associate(mut client: TcpStream, peer: SocketAddr) -> Result
             let dest = SocketAddr::new(dest_addr, dest_port);
 
             // If datagram came from the client, forward the payload to the destination.
-            // Otherwise it's a response from a remote host — wrap and send back to the client.
+            // Otherwise it's a response from a remote host -- wrap and send back to the client.
             if client_addr.is_none() || client_addr == Some(src) {
                 client_addr = Some(src);
                 let _ = sock_relay.send_to(&buf[data_offset..n], dest).await;
@@ -665,9 +665,9 @@ fn sock_err(e: std::io::Error) -> OverthroneError {
     OverthroneError::custom(format!("SOCKS5 I/O: {}", e))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

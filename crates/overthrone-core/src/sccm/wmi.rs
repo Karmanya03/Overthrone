@@ -21,9 +21,9 @@ use {
     serde::Deserialize,
 };
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Collection enumeration
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// An SCCM collection (device or user).
 #[derive(Debug, Clone)]
@@ -72,9 +72,9 @@ impl std::fmt::Display for CollectionType {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Application enumeration
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// An SCCM application / package.
 #[derive(Debug, Clone)]
@@ -93,9 +93,9 @@ pub struct SccmApplication {
     pub deployment_types: Vec<String>,
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // SCCM managed device
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// An SCCM-managed computer.
 #[derive(Debug, Clone)]
@@ -118,9 +118,9 @@ pub struct SccmDevice {
     pub is_active: bool,
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Cross-platform enumerate functions
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Enumerate all SCCM collections from the site server.
 /// On Windows: queries `SMS_Collection` via native WMI.
@@ -140,7 +140,7 @@ pub async fn enumerate_collections(site: &SccmSite) -> Result<Vec<SccmCollection
     {
         let cmd = gen_enum_collections_cmd(site);
         warn!(
-            "[SCCM/wmi] Non-Windows host — run the following on a Windows machine with SCCM access:\n{}",
+            "[SCCM/wmi] Non-Windows host -- run the following on a Windows machine with SCCM access:\n{}",
             cmd
         );
         Err(crate::error::OverthroneError::Custom(
@@ -165,7 +165,7 @@ pub async fn enumerate_applications(site: &SccmSite) -> Result<Vec<SccmApplicati
     {
         let cmd = gen_enum_applications_cmd(site);
         warn!(
-            "[SCCM/wmi] Non-Windows host — run the following on a Windows machine:\n{}",
+            "[SCCM/wmi] Non-Windows host -- run the following on a Windows machine:\n{}",
             cmd
         );
         Err(crate::error::OverthroneError::Custom(
@@ -190,7 +190,7 @@ pub async fn enumerate_devices(site: &SccmSite) -> Result<Vec<SccmDevice>> {
     {
         let cmd = gen_enum_devices_cmd(site);
         warn!(
-            "[SCCM/wmi] Non-Windows host — run the following on a Windows machine:\n{}",
+            "[SCCM/wmi] Non-Windows host -- run the following on a Windows machine:\n{}",
             cmd
         );
         Err(crate::error::OverthroneError::Custom(
@@ -199,9 +199,9 @@ pub async fn enumerate_devices(site: &SccmSite) -> Result<Vec<SccmDevice>> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Windows-native WMI implementations
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 #[cfg(windows)]
 async fn enumerate_collections_native(site: &SccmSite) -> Result<Vec<SccmCollection>> {
@@ -383,9 +383,9 @@ async fn enumerate_devices_native(site: &SccmSite) -> Result<Vec<SccmDevice>> {
     })?
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // PowerShell command generators (non-Windows fallback)
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 pub fn gen_enum_collections_cmd(site: &SccmSite) -> String {
     format!(
         r#"$sc = '{sc}'

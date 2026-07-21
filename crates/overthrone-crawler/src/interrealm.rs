@@ -117,7 +117,7 @@ impl InterRealmForgeConfig {
         let target_sid_str = target_domain_sid.to_string();
         if !source_sid_str.starts_with("S-") || !target_sid_str.starts_with("S-") {
             warn!(
-                "[interrealm] SIDs may be invalid in enterprise_admin_attack — src='{src}', tgt='{tgt}'",
+                "[interrealm] SIDs may be invalid in enterprise_admin_attack -- src='{src}', tgt='{tgt}'",
                 src = source_sid_str,
                 tgt = target_sid_str
             );
@@ -188,7 +188,7 @@ impl CrossForestAttack {
             service_ticket: None,
             sid_filtering: self.sid_filtering.clone(),
             attack_path: format!(
-                "{} → {} via inter-realm TGT with SID history injection (ExtraSIDs)",
+                "{} -> {} via inter-realm TGT with SID history injection (ExtraSIDs)",
                 self.config.source_domain, self.config.target_domain
             ),
         })

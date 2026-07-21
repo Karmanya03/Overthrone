@@ -3,7 +3,7 @@
 //! An OPLOCK allows a client to lock a file on an SMB share.  When a second
 //! client tries to access the same file the server sends an `OPLOCK_BREAK`
 //! notification to the lock holder.  In an offensive context this is used
-//! to **detect** when a coerced authentication (PrinterBug, PetitPotam, …)
+//! to **detect** when a coerced authentication (PrinterBug, PetitPotam, ...)
 //! reaches a file on an attacker-controlled share.
 //!
 //! ## Usage
@@ -11,7 +11,7 @@
 //! 1. Set up an SMB share that the coerced target will access.
 //! 2. Open a file on that share with `OplockLevel::Batch`.
 //! 3. Trigger coercion (PrinterBug / PetitPotam).
-//! 4. Call [`OplockSession::wait_for_break`] — if it returns, the target
+//! 4. Call [`OplockSession::wait_for_break`] -- if it returns, the target
 //!    has accessed the file and authentication has been captured/relayed.
 
 use overthrone_core::proto::smb2::Smb2Connection;
@@ -20,11 +20,11 @@ use tracing::{debug, info};
 /// OPLOCK levels that can be requested when opening a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OplockLevel {
-    /// Level II oplock — shared read cache.
+    /// Level II oplock -- shared read cache.
     Ii,
-    /// Exclusive oplock — exclusive write cache.
+    /// Exclusive oplock -- exclusive write cache.
     Exclusive,
-    /// Batch oplock — full caching, used for coercion detection.
+    /// Batch oplock -- full caching, used for coercion detection.
     Batch,
 }
 
@@ -143,7 +143,7 @@ impl OplockSession {
             .map_err(|e| format!("SMB2 create with oplock failed: {e}"))?;
 
         info!(
-            "OPLOCK: opened '{}' on \\\\{}\\{} — requested 0x{:02X}, granted 0x{:02X}",
+            "OPLOCK: opened '{}' on \\\\{}\\{} -- requested 0x{:02X}, granted 0x{:02X}",
             config.file,
             config.server,
             config.share,
@@ -176,7 +176,7 @@ impl OplockSession {
             .await
             .map_err(|e| format!("OPLOCK break wait failed: {e}"))?;
 
-        info!("OPLOCK: break received — level downgraded to 0x{new_level:02X}");
+        info!("OPLOCK: break received -- level downgraded to 0x{new_level:02X}");
 
         self.conn
             .acknowledge_oplock_break(&self.file_id, new_level)

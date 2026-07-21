@@ -100,7 +100,7 @@ impl Default for TlsRelayConfig {
 // ============================================================
 
 /// Verifier that accepts any client certificate (logging it for audit).
-/// Used when `mtls_client_ca_path` is set — only certificates signed
+/// Used when `mtls_client_ca_path` is set -- only certificates signed
 /// by the configured CA will be accepted (enforced via CA root store
 /// in the builder).
 #[derive(Debug)]
@@ -156,7 +156,7 @@ impl ClientCertVerifier for RelayClientCertVerifier {
 /// Build a `rustls::ServerConfig` for the TLS relay listener.
 ///
 /// When `mtls_client_ca_path` is `Some`, the server requires client certificates
-/// and verifies them against the CA PEM file — enabling mutual TLS (mTLS).
+/// and verifies them against the CA PEM file -- enabling mutual TLS (mTLS).
 ///
 /// When `mtls_client_ca_path` is `None`, no client certificate is requested
 /// (standard server-only TLS).
@@ -426,7 +426,7 @@ async fn handle_tls_client(
     let negotiate_b64 = if let Some(hdr) = auth_header {
         strip_ntlm_prefix(&hdr).to_string()
     } else {
-        // No NTLM token yet — challenge the client
+        // No NTLM token yet -- challenge the client
         let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
         tls_stream
             .write_all(resp.as_bytes())

@@ -1,4 +1,4 @@
-//! Captive Portal — Form-based credential capture via spoofed login pages.
+//! Captive Portal -- Form-based credential capture via spoofed login pages.
 //!
 //! Serves realistic-looking login pages (Generic, Office365, ADFS) to capture
 //! form-submitted credentials. Also handles OS/browser captive portal detection
@@ -199,7 +199,7 @@ impl CaptivePortal {
             .listener
             .as_ref()
             .ok_or_else(|| {
-                "Captive portal listener was not initialized — call bind() before start()"
+                "Captive portal listener was not initialized -- call bind() before start()"
                     .to_string()
             })?
             .try_clone()

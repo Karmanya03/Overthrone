@@ -1,4 +1,4 @@
-//! Report runner — Top-level orchestrator that drives report generation.
+//! Report runner -- Top-level orchestrator that drives report generation.
 //! Takes an engagement session and produces output in the requested format.
 
 use crate::html;
@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Report Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Output format for the report
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,44 +86,44 @@ impl Default for ReportConfig {
 }
 
 impl ReportConfig {
-    /// Builder — set output format
+    /// Builder -- set output format
     pub fn format(mut self, format: ReportFormat) -> Self {
         self.format = format;
         self
     }
 
-    /// Builder — set output directory
+    /// Builder -- set output directory
     pub fn output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.output_dir = dir.into();
         self
     }
 
-    /// Builder — set client name
+    /// Builder -- set client name
     pub fn client(mut self, name: &str) -> Self {
         self.client_name = name.to_string();
         self
     }
 
-    /// Builder — set assessor info
+    /// Builder -- set assessor info
     pub fn assessor(mut self, name: &str, company: &str) -> Self {
         self.assessor_name = name.to_string();
         self.assessor_company = company.to_string();
         self
     }
 
-    /// Builder — set redaction policy
+    /// Builder -- set redaction policy
     pub fn redact(mut self, redact: bool) -> Self {
         self.redact_credentials = redact;
         self
     }
 
-    /// Builder — include raw JSON appendix
+    /// Builder -- include raw JSON appendix
     pub fn with_raw_data(mut self, include: bool) -> Self {
         self.include_raw_data = include;
         self
     }
 
-    /// Builder — include action log appendix
+    /// Builder -- include action log appendix
     pub fn with_action_log(mut self, include: bool) -> Self {
         self.include_action_log = include;
         self
@@ -141,9 +141,9 @@ impl ReportConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Report Output
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Output from report generation
 #[derive(Debug, Clone)]
@@ -162,36 +162,36 @@ pub struct ReportOutput {
 
 impl std::fmt::Display for ReportOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "╔══════════════════════════════════════════╗")?;
-        writeln!(f, "║       OVERTHRONE SCRIBE — REPORT         ║")?;
-        writeln!(f, "╠══════════════════════════════════════════╣")?;
-        writeln!(f, "║  Findings:   {:<27} ║", self.finding_count)?;
-        writeln!(f, "║  Risk:       {:<27} ║", self.overall_risk)?;
+        writeln!(f, "+==========================================+")?;
+        writeln!(f, "|       OVERTHRONE SCRIBE -- REPORT         |")?;
+        writeln!(f, "+==========================================+")?;
+        writeln!(f, "|  Findings:   {:<27} |", self.finding_count)?;
+        writeln!(f, "|  Risk:       {:<27} |", self.overall_risk)?;
         writeln!(
             f,
-            "║  DA:         {:<27} ║",
+            "|  DA:         {:<27} |",
             if self.domain_admin_achieved {
-                "YES ⚠"
+                "YES [!]"
             } else {
                 "No"
             }
         )?;
         writeln!(
             f,
-            "║  Generated:  {:<27} ║",
+            "|  Generated:  {:<27} |",
             self.generated_at.format("%Y-%m-%d %H:%M UTC")
         )?;
-        writeln!(f, "╠══════════════════════════════════════════╣")?;
+        writeln!(f, "+==========================================+")?;
         for path in &self.files {
-            writeln!(f, "║  → {:<37} ║", path.display())?;
+            writeln!(f, "|  -> {:<37} |", path.display())?;
         }
-        writeln!(f, "╚══════════════════════════════════════════╝")
+        writeln!(f, "+==========================================+")
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Main Generator — Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Main Generator -- Public API
+// ===========================================================
 
 /// Generate a report from an AutoPwnResult (primary entrypoint)
 pub async fn generate_report(
@@ -291,9 +291,9 @@ pub async fn generate_from_file(
     generate_from_session(&session, config).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Format-specific generators
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn generate_markdown(
     session: &EngagementSession,
@@ -307,7 +307,7 @@ async fn generate_markdown(
     tokio::fs::write(&path, &content).await?;
     info!(
         "  {} Markdown: {} ({} bytes)",
-        "✓".green(),
+        "[+]".green(),
         path.display(),
         content.len()
     );
@@ -326,7 +326,7 @@ async fn generate_pdf(
     tokio::fs::write(&path, &bytes).await?;
     info!(
         "  {} PDF: {} ({:.1} KB)",
-        "✓".green(),
+        "[+]".green(),
         path.display(),
         bytes.len() as f64 / 1024.0
     );
@@ -355,7 +355,7 @@ async fn generate_json(
     tokio::fs::write(&path, &json_session).await?;
     info!(
         "  {} JSON: {} ({:.1} KB)",
-        "✓".green(),
+        "[+]".green(),
         path.display(),
         json_session.len() as f64 / 1024.0
     );
@@ -371,7 +371,7 @@ async fn generate_xlsx(
         .join(format!("{}.xlsx", config.filename_base));
 
     crate::xlsx::generate_xlsx_report(session, &path)?;
-    info!("  {} XLSX: {}", "✓".green(), path.display());
+    info!("  {} XLSX: {}", "[+]".green(), path.display());
     Ok(path)
 }
 
@@ -387,16 +387,16 @@ async fn generate_html(
     tokio::fs::write(&path, &content).await?;
     info!(
         "  {} HTML: {} ({:.1} KB)",
-        "✓".green(),
+        "[+]".green(),
         path.display(),
         content.len() as f64 / 1024.0
     );
     Ok(path)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Summary Printer
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
     let counts = session.severity_counts();
@@ -424,69 +424,69 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
     println!();
     println!(
         "{}",
-        "╔══════════════════════════════════════════════════╗"
+        "+==================================================+"
             .bold()
             .magenta()
     );
     println!(
         "{}",
-        "║          OVERTHRONE SCRIBE — COMPLETE            ║"
+        "|          OVERTHRONE SCRIBE -- COMPLETE            |"
             .bold()
             .magenta()
     );
     println!(
         "{}",
-        "╠══════════════════════════════════════════════════╣".magenta()
+        "+==================================================+".magenta()
     );
 
     // Findings breakdown
     println!(
         "{}  Findings:  {} total",
-        "║".magenta(),
+        "|".magenta(),
         session.findings.len()
     );
     if critical > 0 {
         println!(
             "{}    {} Critical: {}",
-            "║".magenta(),
-            "●".red().bold(),
+            "|".magenta(),
+            "*".red().bold(),
             critical
         );
     }
     if high > 0 {
-        println!("{}    {} High:     {}", "║".magenta(), "●".red(), high);
+        println!("{}    {} High:     {}", "|".magenta(), "*".red(), high);
     }
     if medium > 0 {
-        println!("{}    {} Medium:   {}", "║".magenta(), "●".yellow(), medium);
+        println!("{}    {} Medium:   {}", "|".magenta(), "*".yellow(), medium);
     }
     if low > 0 {
-        println!("{}    {} Low:      {}", "║".magenta(), "●".green(), low);
+        println!("{}    {} Low:      {}", "|".magenta(), "*".green(), low);
     }
     if info_count > 0 {
         println!(
             "{}    {} Info:     {}",
-            "║".magenta(),
-            "●".blue(),
+            "|".magenta(),
+            "*".blue(),
             info_count
         );
     }
 
     println!(
         "{}",
-        "║                                                  ║".magenta()
+        "|                                                  |".magenta()
     );
 
     // Domain Admin status
     if session.domain_admin_achieved {
         println!(
-            "{}  🎯 Domain Admin: {}",
-            "║".magenta(),
+            "{}   Domain Admin: {}",
+            "|".magenta(),
             "ACHIEVED".red().bold()
         );
     } else {
         println!(
             "{}  Domain Admin: {}",
-            "║".magenta(),
+            "|".magenta(),
             "Not achieved".dimmed()
         );
     }
@@ -494,27 +494,27 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
     // Stats
     println!(
         "{}  Creds compromised:  {}",
-        "║".magenta(),
+        "|".magenta(),
         session.total_credentials_compromised
     );
     println!(
         "{}  Admin hosts:        {}",
-        "║".magenta(),
+        "|".magenta(),
         session.total_admin_hosts
     );
     println!(
         "{}  Overall risk:       {}",
-        "║".magenta(),
+        "|".magenta(),
         format!("{}", session.overall_risk()).bold()
     );
 
     println!(
         "{}",
-        "║                                                  ║".magenta()
+        "|                                                  |".magenta()
     );
 
     // File outputs
-    println!("{}  Output files:", "║".magenta());
+    println!("{}  Output files:", "|".magenta());
     for path in &output.files {
         let ext = path
             .extension()
@@ -523,8 +523,8 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
             .to_uppercase();
         println!(
             "{}    {} [{}] {}",
-            "║".magenta(),
-            "→".cyan(),
+            "|".magenta(),
+            "->".cyan(),
             ext,
             path.display()
         );
@@ -532,18 +532,18 @@ fn print_report_summary(session: &EngagementSession, output: &ReportOutput) {
 
     println!(
         "{}",
-        "╚══════════════════════════════════════════════════╝"
+        "+==================================================+"
             .bold()
             .magenta()
     );
     println!();
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Quick-generate helpers (for CLI integration)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Quick markdown report — minimal config
+/// Quick markdown report -- minimal config
 pub async fn quick_markdown(result: &AutoPwnResult, output_dir: &str) -> anyhow::Result<PathBuf> {
     let domain = result.state.domain.as_deref().unwrap_or("unknown");
 
@@ -582,9 +582,9 @@ pub async fn quick_all(
     generate_report(result, &config).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Session Persistence (save/load for later reporting)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Save an engagement session to disk as JSON for later report generation
 pub async fn save_session(
@@ -598,7 +598,7 @@ pub async fn save_session(
     tokio::fs::write(path, &json).await?;
     info!(
         "  {} Session saved: {} ({:.1} KB)",
-        "✓".green(),
+        "[+]".green(),
         path.display(),
         json.len() as f64 / 1024.0
     );
@@ -611,7 +611,7 @@ pub async fn load_session(path: &std::path::Path) -> anyhow::Result<EngagementSe
     let session: EngagementSession = serde_json::from_slice(&bytes)?;
     info!(
         "  {} Session loaded: '{}' ({} findings)",
-        "✓".green(),
+        "[+]".green(),
         session.title,
         session.findings.len()
     );
@@ -677,16 +677,16 @@ pub fn merge_sessions(
 
     info!(
         "  {} Merged sessions: {} findings total",
-        "✓".green(),
+        "[+]".green(),
         merged.findings.len()
     );
 
     merged
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -759,7 +759,7 @@ mod tests {
     #[test]
     fn test_session_overall_risk() {
         let session = mock_session();
-        // Has a High finding → should be High
+        // Has a High finding -> should be High
         assert!(session.overall_risk() >= Severity::High);
     }
 

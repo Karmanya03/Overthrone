@@ -1,4 +1,4 @@
-//! CVE-2025-60704 — S4U2Self Checksum Validation Bypass.
+//! CVE-2025-60704 -- S4U2Self Checksum Validation Bypass.
 //!
 //! When PA-PAC-OPTIONS is included in a TGS-REQ with certain flag combinations,
 //! some KDC versions skip or reduce validation of the PA-FOR-USER checksum.
@@ -120,7 +120,7 @@ pub async fn exploit_checksum_bypass(
 ) -> Result<ChecksumBypassResult> {
     let mut log = Vec::new();
     log.push(format!(
-        "CVE-2025-60704: S4U2Self checksum bypass — technique: {technique}"
+        "CVE-2025-60704: S4U2Self checksum bypass -- technique: {technique}"
     ));
 
     // Phase 1: Get a TGT

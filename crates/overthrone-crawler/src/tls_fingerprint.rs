@@ -41,7 +41,7 @@ impl Default for TlsFingerprintConfig {
 #[cfg(feature = "tls_fingerprint")]
 impl TlsFingerprintConfig {
     /// Build a [`rustls::ClientConfig`] that accepts all server certificates
-    /// (danger mode — for internal ADCS / SCCM targets with self-signed certs).
+    /// (danger mode -- for internal ADCS / SCCM targets with self-signed certs).
     pub fn build_danger_client_config(&self) -> Result<rustls::ClientConfig, rustls::Error> {
         build_randomized_danger_config(self)
     }
@@ -214,7 +214,7 @@ mod tests {
         let config1 = cfg.build_danger_client_config().unwrap();
         let config2 = cfg.build_danger_client_config().unwrap();
 
-        // Compare full debug outputs — they include cipher suites.
+        // Compare full debug outputs -- they include cipher suites.
         let debug1 = format!("{:?}", config1);
         let debug2 = format!("{:?}", config2);
 

@@ -91,7 +91,7 @@ pub fn build_mssql_chains(source_domain: &str, instances: &[MssqlInstance]) -> V
         return chains;
     }
 
-    // Group instances by service account — same SA often means linked servers
+    // Group instances by service account -- same SA often means linked servers
     let mut by_account: std::collections::HashMap<String, Vec<&MssqlInstance>> =
         std::collections::HashMap::new();
 
@@ -105,7 +105,7 @@ pub fn build_mssql_chains(source_domain: &str, instances: &[MssqlInstance]) -> V
     // For each service account with multiple instances, build potential chains
     for account_instances in by_account.values() {
         if account_instances.len() < 2 {
-            // Single instance — check if it's cross-domain
+            // Single instance -- check if it's cross-domain
             let inst = account_instances[0];
             if let Some(ref host) = inst.hostname {
                 let inst_domain = domain_from_hostname(host);
@@ -138,7 +138,7 @@ pub fn build_mssql_chains(source_domain: &str, instances: &[MssqlInstance]) -> V
             continue;
         }
 
-        // Multiple instances under same service account — potential chain
+        // Multiple instances under same service account -- potential chain
         let mut chain_links = Vec::new();
         let mut crosses_domain = false;
         let mut domains_seen = std::collections::HashSet::new();
@@ -198,7 +198,7 @@ pub fn build_mssql_chains(source_domain: &str, instances: &[MssqlInstance]) -> V
                     account_instances[0].service_account,
                     domains_seen.len(),
                     if crosses_domain {
-                        " — CROSSES TRUST BOUNDARY"
+                        " -- CROSSES TRUST BOUNDARY"
                     } else {
                         ""
                     }

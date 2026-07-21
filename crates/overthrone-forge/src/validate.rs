@@ -169,7 +169,7 @@ pub fn validate_spn_format(spn: &str) -> Result<()> {
         .any(|&s| service.eq_ignore_ascii_case(s))
     {
         debug!(
-            "SPN service class '{}' is not in the common set — may be custom",
+            "SPN service class '{}' is not in the common set -- may be custom",
             service
         );
     }
@@ -251,10 +251,10 @@ pub fn validate_group_rids(rids: &[u32]) -> Result<()> {
         validate_rid(rid)?;
     }
 
-    // Warn if Domain Users (513) is not in the list — tickets without it look suspicious
+    // Warn if Domain Users (513) is not in the list -- tickets without it look suspicious
     if !rids.is_empty() && !rids.contains(&513) {
         debug!(
-            "Group RIDs don't include 513 (Domain Users) — ticket may look suspicious to detections"
+            "Group RIDs don't include 513 (Domain Users) -- ticket may look suspicious to detections"
         );
     }
 
@@ -389,7 +389,7 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
             }
         }
         crate::runner::ForgeAction::ConvertTicket { .. } => {
-            // No validation needed — offline operation
+            // No validation needed -- offline operation
         }
         crate::runner::ForgeAction::AsRepToTgt {
             cracked_password, ..

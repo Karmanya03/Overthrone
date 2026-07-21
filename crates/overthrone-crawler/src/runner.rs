@@ -90,10 +90,10 @@ pub async fn run_crawler(
     config: &CrawlerConfig,
     reaper_data: &ReaperResult,
 ) -> Result<CrawlerResult> {
-    let sep = "═".repeat(72);
+    let sep = "=".repeat(72);
     println!("{}", sep.bright_cyan());
     println!(
-        " {} — {} ({})",
+        " {} -- {} ({})",
         "CRAWLER".bright_cyan().bold(),
         config.domain.as_str().bright_white().bold(),
         config.dc_ip.as_str().dimmed()
@@ -108,14 +108,14 @@ pub async fn run_crawler(
         ) {
             Ok(style) => style.progress_chars("█▓░"),
             Err(e) => {
-                warn!("[runner] Failed to create progress style: {e} — using default");
+                warn!("[runner] Failed to create progress style: {e} -- using default");
                 ProgressStyle::default_bar()
             }
         },
     );
     pb.set_prefix("CRAWLER");
 
-    // ── 1. Build trust graph ──
+    // -- 1. Build trust graph --
     pb.set_message("trust_map...");
     let graph = trust_map::build_trust_graph(&config.domain, &reaper_data.trusts);
     let graph_summary = format!(
@@ -124,85 +124,85 @@ pub async fn run_crawler(
         graph.trusts.len()
     );
     pb.println(format!(
-        " {} {} — {}",
-        "✓".green().bold(),
+        " {} {} -- {}",
+        "[+]".green().bold(),
         "trust_map".bright_white(),
         graph_summary.as_str().bright_green()
     ));
     pb.inc(1);
 
-    // ── 2. Foreign memberships (offline DN-based analysis) ──
+    // -- 2. Foreign memberships (offline DN-based analysis) --
     pb.set_message("foreign...");
     let foreign_memberships =
         foreign::analyze_foreign_memberships(&config.domain, &reaper_data.groups);
     let fm_count = foreign_memberships.len().to_string();
     pb.println(format!(
-        " {} {} — {} found",
-        "✓".green().bold(),
+        " {} {} -- {} found",
+        "[+]".green().bold(),
         "foreign".bright_white(),
         fm_count.as_str().bright_green()
     ));
     pb.inc(1);
 
-    // ── 3. Escalation paths ──
+    // -- 3. Escalation paths --
     pb.set_message("escalation...");
     let escalation_paths =
         escalation::find_escalation_paths(&graph, &foreign_memberships, reaper_data);
     let esc_count = escalation_paths.len().to_string();
     pb.println(format!(
-        " {} {} — {} paths",
-        "✓".green().bold(),
+        " {} {} -- {} paths",
+        "[+]".green().bold(),
         "escalation".bright_white(),
         esc_count.as_str().bright_green()
     ));
     pb.inc(1);
 
-    // ── 4. SID filtering analysis ──
+    // -- 4. SID filtering analysis --
     pb.set_message("sid_filter...");
     let sid_filter_findings = sid_filter::analyze_sid_filtering(&config.domain, &graph);
     let sf_count = sid_filter_findings.len().to_string();
     pb.println(format!(
-        " {} {} — {} findings",
-        "✓".green().bold(),
+        " {} {} -- {} findings",
+        "[+]".green().bold(),
         "sid_filter".bright_white(),
         sf_count.as_str().bright_green()
     ));
     pb.inc(1);
 
-    // ── 5. MSSQL link chains ──
+    // -- 5. MSSQL link chains --
     pb.set_message("mssql_links...");
     let mssql_chains =
         mssql_links::build_mssql_chains(&config.domain, &reaper_data.mssql_instances);
     let ms_count = mssql_chains.len().to_string();
     pb.println(format!(
-        " {} {} — {} chains",
-        "✓".green().bold(),
+        " {} {} -- {} chains",
+        "[+]".green().bold(),
         "mssql_links".bright_white(),
         ms_count.as_str().bright_green()
     ));
     pb.inc(1);
 
-    // ── 6. PAM trusts ──
+    // -- 6. PAM trusts --
     pb.set_message("pam...");
     let pam_findings = pam::analyze_pam_trusts(&config.domain, &graph);
     let pam_count = pam_findings.len().to_string();
     pb.println(format!(
-        " {} {} — {} findings",
-        "✓".green().bold(),
+        " {} {} -- {} findings",
+        "[+]".green().bold(),
         "pam".bright_white(),
         pam_count.as_str().bright_green()
     ));
     pb.inc(1);
 
-    // ── 7. Inter-realm attacks (only with feature) ──
+    // -- 7. Inter-realm attacks (only with feature) --
     #[cfg(feature = "interrealm")]
     let interrealm_attacks = {
         pb.set_message("interrealm...");
         let attacks = crate::interrealm::find_interrealm_attacks(&config.domain, &graph);
         let ir_count = attacks.len().to_string();
         pb.println(format!(
-            " {} {} — {} attacks",
-            "✓".green().bold(),
+            " {} {} -- {} attacks",
+            "[+]".green().bold(),
             "interrealm".bright_white(),
             ir_count.as_str().bright_green()
         ));
@@ -211,7 +211,7 @@ pub async fn run_crawler(
 
     pb.finish_with_message("done!");
 
-    // ── Summary ──
+    // -- Summary --
     let total_findings = foreign_memberships.len()
         + escalation_paths.len()
         + sid_filter_findings.len()
@@ -219,14 +219,14 @@ pub async fn run_crawler(
         + pam_findings.len();
     let total_str = total_findings.to_string();
 
-    println!("\n┌─ Crawler Summary ─────────────────────────────â”");
+    println!("\n+- Crawler Summary ------------------------------");
     println!(
-        "│ Trust graph: {} domains, {} trusts",
+        "| Trust graph: {} domains, {} trusts",
         graph.domains.len().to_string().as_str().bright_green(),
         graph.trusts.len().to_string().as_str().bright_green(),
     );
-    println!("│ Total findings: {}", total_str.as_str().bright_yellow());
-    println!("└───────────────────────────────────────────────┘\n");
+    println!("| Total findings: {}", total_str.as_str().bright_yellow());
+    println!("+-----------------------------------------------+\n");
 
     Ok(CrawlerResult {
         domain: config.domain.clone(),

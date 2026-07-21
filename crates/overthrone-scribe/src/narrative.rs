@@ -1,4 +1,4 @@
-//! Narrative generator — Produces human-readable prose for findings,
+//! Narrative generator -- Produces human-readable prose for findings,
 //! executive summaries, and attack chain descriptions.
 
 use crate::session::{EngagementSession, Finding, Severity};
@@ -161,15 +161,15 @@ pub fn attack_chain_narrative(session: &EngagementSession) -> String {
             parts.push(format!("\n**Phase: {}**\n", current_stage));
         }
 
-        let status = if entry.success { "✓" } else { "✗" };
+        let status = if entry.success { "[+]" } else { "[-]" };
         let detail_short = if entry.detail.len() > 100 {
-            format!("{}…", &entry.detail[..97])
+            format!("{}...", &entry.detail[..97])
         } else {
             entry.detail.clone()
         };
 
         parts.push(format!(
-            "{}. [{}] {} — {} — {}",
+            "{}. [{}] {} -- {} -- {}",
             step_num,
             entry.timestamp.format("%H:%M:%S"),
             status,
@@ -194,17 +194,17 @@ pub fn attack_chain_narrative(session: &EngagementSession) -> String {
 pub fn methodology_description() -> String {
     r#"The assessment followed a structured methodology consisting of the following phases:
 
-1. **Reconnaissance & Enumeration** — LDAP queries were used to enumerate domain users, computers, groups, Group Policy Objects, trust relationships, and service accounts. No exploitation was performed during this phase.
+1. **Reconnaissance & Enumeration** -- LDAP queries were used to enumerate domain users, computers, groups, Group Policy Objects, trust relationships, and service accounts. No exploitation was performed during this phase.
 
-2. **Kerberos Attacks** — Kerberoasting and AS-REP Roasting were used to extract password hashes for offline cracking. Delegation configurations (constrained, unconstrained, RBCD) were identified and evaluated.
+2. **Kerberos Attacks** -- Kerberoasting and AS-REP Roasting were used to extract password hashes for offline cracking. Delegation configurations (constrained, unconstrained, RBCD) were identified and evaluated.
 
-3. **Credential Attacks** — Obtained hashes were cracked using offline techniques. Password spraying was performed where authorized, adhering to lockout thresholds.
+3. **Credential Attacks** -- Obtained hashes were cracked using offline techniques. Password spraying was performed where authorized, adhering to lockout thresholds.
 
-4. **Lateral Movement** — Compromised credentials were used to move laterally through the environment using SMB, WMI, and WinRM. Admin access was verified on discovered hosts.
+4. **Lateral Movement** -- Compromised credentials were used to move laterally through the environment using SMB, WMI, and WinRM. Admin access was verified on discovered hosts.
 
-5. **Privilege Escalation** — Attack paths to Domain Admin were identified and exploited through delegation abuse, credential reuse, and local privilege escalation.
+5. **Privilege Escalation** -- Attack paths to Domain Admin were identified and exploited through delegation abuse, credential reuse, and local privilege escalation.
 
-6. **Credential Dumping** — On compromised hosts, SAM databases, LSA secrets, and (where applicable) NTDS.dit were extracted to identify additional credentials.
+6. **Credential Dumping** -- On compromised hosts, SAM databases, LSA secrets, and (where applicable) NTDS.dit were extracted to identify additional credentials.
 
 All activities were performed using the **Overthrone** framework, a Rust-based Active Directory assessment toolkit."#.to_string()
 }

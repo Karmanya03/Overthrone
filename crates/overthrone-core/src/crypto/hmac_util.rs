@@ -42,7 +42,7 @@ pub fn hmac_sha1(key: &[u8], data: &[u8]) -> [u8; 20] {
 
 /// HMAC-SHA1-96-AES256: truncated 12-byte HMAC used for AES PAC checksums (etype 17/18).
 /// Per RFC 3962 / MS-PAC §2.8, the PAC checksum for AES etypes is
-/// `HMAC-SHA1-96-AES256` (checksum type 16) — the first 12 bytes of HMAC-SHA1.
+/// `HMAC-SHA1-96-AES256` (checksum type 16) -- the first 12 bytes of HMAC-SHA1.
 /// The `key` should be the Kerberos session key (32 bytes for AES-256, 16 for AES-128).
 pub fn hmac_sha1_96_aes(key: &[u8], data: &[u8]) -> [u8; 12] {
     let full = hmac_sha1(key, data);

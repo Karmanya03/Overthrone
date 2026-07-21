@@ -1,4 +1,4 @@
-//! Exchange Relay Target (CVE-2024-21410) — NTLM relay to Microsoft Exchange.
+//! Exchange Relay Target (CVE-2024-21410) -- NTLM relay to Microsoft Exchange.
 //!
 //! Relays captured NTLM authentication to Exchange MAPI-over-HTTP or EWS endpoints.
 //! Pre-CU14 Exchange servers (and many unpatched post-CU14 servers) accept NTLM
@@ -41,7 +41,7 @@ pub struct ExchangeRelayConfig {
     /// Target endpoint type for relay
     pub endpoint_type: ExchangeEndpoint,
     /// Shared TLS configuration (verification mode + optional mTLS identity).
-    /// - `None` (default): `TlsConfig::relay_default()` — AcceptAll mode, no client cert.
+    /// - `None` (default): `TlsConfig::relay_default()` -- AcceptAll mode, no client cert.
     /// - `Some(TlsConfig::verify_server(...))`: validates server certs against native root store.
     pub tls_config: Option<TlsConfig>,
 }
@@ -298,7 +298,7 @@ async fn handle_exchange_relay(
 
         if auth_success {
             info!(
-                "Exchange relay succeeded on {} — authenticated to {}",
+                "Exchange relay succeeded on {} -- authenticated to {}",
                 path, config.target_host
             );
 
@@ -312,7 +312,7 @@ async fn handle_exchange_relay(
 
         if attempt == paths.len() - 1 {
             warn!(
-                "Exchange relay failed on all paths — auth rejected by {}",
+                "Exchange relay failed on all paths -- auth rejected by {}",
                 config.target_host
             );
 

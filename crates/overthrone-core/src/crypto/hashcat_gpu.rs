@@ -1,4 +1,4 @@
-//! Hashcat GPU Subprocess — rockyou + OneRuleToRuleThemAll integration.
+//! Hashcat GPU Subprocess -- rockyou + OneRuleToRuleThemAll integration.
 //!
 //! Spawns `hashcat` as a subprocess with configurable hash type, rules,
 //! wordlist, and device selection. Supports all hash modes relevant to
@@ -286,7 +286,7 @@ pub async fn run_hashcat_gpu(
             if let Some(ref flag) = stop_flag
                 && !flag.load(Ordering::SeqCst)
             {
-                log.push("Stop flag received — killing hashcat".to_string());
+                log.push("Stop flag received -- killing hashcat".to_string());
                 let _ = child.kill();
                 let _ = child.wait();
                 break;
@@ -294,7 +294,7 @@ pub async fn run_hashcat_gpu(
 
             // Check timeout
             if elapsed > timeout {
-                log.push(format!("Timeout reached ({timeout:?}) — killing hashcat"));
+                log.push(format!("Timeout reached ({timeout:?}) -- killing hashcat"));
                 let _ = child.kill();
                 let _ = child.wait();
                 break;

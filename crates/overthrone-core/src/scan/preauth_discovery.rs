@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Complete pre-authentication discovery result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,9 +148,9 @@ pub struct DiscoverySummary {
     pub risk_score: u8,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Unified Discovery
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Run complete pre-authentication discovery against a target.
 /// All checks run in parallel for maximum speed.
@@ -200,9 +200,9 @@ pub async fn run_preauth_discovery(target: &str) -> Result<PreAuthDiscoveryResul
     Ok(result)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Individual Check Runners
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn run_port_triage(target: &str) -> PortTriageResult {
     info!("[preauth-discovery] Running port triage on {target}");
@@ -475,9 +475,9 @@ async fn run_coercion_detection(target: &str, rpc_open: bool) -> CoercionDiscove
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Summary Builder
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn build_summary(
     _ports: &PortTriageResult,

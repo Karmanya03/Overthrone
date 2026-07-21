@@ -1,4 +1,4 @@
-//! overthrone-viewer — Browser screenshot regression tests
+//! overthrone-viewer -- Browser screenshot regression tests
 //!
 //! Uses Playwright to capture screenshots of the viewer UI and compare
 //! them against baseline images for visual regression testing.

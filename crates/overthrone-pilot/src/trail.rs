@@ -243,7 +243,7 @@ fn join_limited<'a>(items: impl Iterator<Item = &'a str>, limit: usize) -> Strin
 mod tests {
     use super::*;
 
-    // ── sanitize_name ──
+    // -- sanitize_name --
 
     #[test]
     fn sanitize_name_keeps_alphanumeric() {
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(sanitize_name("dc01.ad.test"), "dc01_ad_test");
     }
 
-    // ── sanitize_inline ──
+    // -- sanitize_inline --
 
     #[test]
     fn sanitize_inline_removes_newlines() {
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(sanitize_inline(""), "");
     }
 
-    // ── join_limited ──
+    // -- join_limited --
 
     #[test]
     fn join_limited_empty() {
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(join_limited(std::iter::once("only"), 5), "only");
     }
 
-    // ── next_path logic ──
+    // -- next_path logic --
 
     #[test]
     fn next_path_uses_correct_prefix() {
@@ -335,7 +335,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ── state_snapshot formatting ──
+    // -- state_snapshot formatting --
 
     #[test]
     fn state_snapshot_empty_state() {

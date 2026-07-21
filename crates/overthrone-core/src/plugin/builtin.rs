@@ -1,4 +1,4 @@
-//! Built-in plugin example — serves as a template for writing Overthrone plugins
+//! Built-in plugin example -- serves as a template for writing Overthrone plugins
 
 use super::{
     Plugin, PluginArgDef, PluginArgType, PluginCapability, PluginCommand, PluginContext,
@@ -245,7 +245,7 @@ impl SmartSprayPlugin {
             .or_else(|| ctx.dc_ip.clone())
             .ok_or_else(|| {
                 crate::error::OverthroneError::Plugin(
-                    "No DC IP available — set via --dc or context".to_string(),
+                    "No DC IP available -- set via --dc or context".to_string(),
                 )
             })?;
 
@@ -260,7 +260,7 @@ impl SmartSprayPlugin {
                     continue;
                 }
 
-                // Kerberos AS-REQ pre-auth check — if TGT is returned, creds are valid
+                // Kerberos AS-REQ pre-auth check -- if TGT is returned, creds are valid
                 match crate::proto::kerberos::request_tgt(&dc_ip, &domain, user, password, false)
                     .await
                 {
@@ -274,7 +274,7 @@ impl SmartSprayPlugin {
                     Err(e) => {
                         let err_str = e.to_string();
                         if err_str.contains("KRB_ERROR 24") || err_str.contains("PREAUTH_FAILED") {
-                            // Wrong password — expected, increment tracker
+                            // Wrong password -- expected, increment tracker
                         } else if err_str.contains("KRB_ERROR 18")
                             || err_str.contains("CLIENT_REVOKED")
                         {

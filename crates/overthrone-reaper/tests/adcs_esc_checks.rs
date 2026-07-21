@@ -1,13 +1,13 @@
 //! Integration tests for ADCS ESC1-ESC8 certificate template vulnerability checks.
 //!
-//! These tests run entirely offline — no live DC or ADCS required.
+//! These tests run entirely offline -- no live DC or ADCS required.
 //! They validate the full ESC detection pipeline against synthetic templates.
 
 use overthrone_reaper::adcs::CertTemplate;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Well-known OIDs used in tests.
 const OID_CLIENT_AUTH: &str = "1.3.6.1.5.5.7.3.2";
@@ -43,9 +43,9 @@ fn make_template(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC1 — Enrollee Supplies Subject + Client Auth
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC1 -- Enrollee Supplies Subject + Client Auth
+// ===========================================================
 
 #[test]
 fn esc1_classic_vulnerable() {
@@ -96,9 +96,9 @@ fn esc1_blocked_by_server_auth_only() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC2 — Any Purpose / No EKU
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC2 -- Any Purpose / No EKU
+// ===========================================================
 
 #[test]
 fn esc2_any_purpose_eku() {
@@ -111,7 +111,7 @@ fn esc2_any_purpose_eku() {
 fn esc2_empty_eku() {
     let mut t = make_template("NoEKU", false, false, 0, &[], &[]);
     t.analyze();
-    assert!(has_esc(&t, "ESC2"), "Empty EKU = any purpose → ESC2");
+    assert!(has_esc(&t, "ESC2"), "Empty EKU = any purpose -> ESC2");
 }
 
 #[test]
@@ -121,9 +121,9 @@ fn esc2_safe_with_specific_eku() {
     assert!(!has_esc(&t, "ESC2"), "Specific EKU should not trigger ESC2");
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC3 — Certificate Request Agent
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC3 -- Certificate Request Agent
+// ===========================================================
 
 #[test]
 fn esc3_enrollment_agent_eku() {
@@ -177,9 +177,9 @@ fn esc3_safe_with_signature_requirement() {
     assert!(!has_esc(&t, "ESC3"), "RA signatures block ESC3");
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC4 — Overly Permissive Template ACLs
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC4 -- Overly Permissive Template ACLs
+// ===========================================================
 
 #[test]
 fn esc4_authenticated_users_write_property() {
@@ -193,7 +193,7 @@ fn esc4_authenticated_users_write_property() {
         perms,
     );
     t.analyze();
-    assert!(has_esc(&t, "ESC4"), "AU with WP → ESC4");
+    assert!(has_esc(&t, "ESC4"), "AU with WP -> ESC4");
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn esc4_everyone_generic_all() {
     let perms = &["(A;;GA;;;WD)"];
     let mut t = make_template("PublicTemplate", false, false, 0, &[OID_CLIENT_AUTH], perms);
     t.analyze();
-    assert!(has_esc(&t, "ESC4"), "Everyone/GA → ESC4");
+    assert!(has_esc(&t, "ESC4"), "Everyone/GA -> ESC4");
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn esc4_domain_users_write_dacl() {
     let perms = &["(A;;RPWDRC;;;DU)"];
     let mut t = make_template("DU-WriteDacl", false, false, 0, &[OID_CLIENT_AUTH], perms);
     t.analyze();
-    assert!(has_esc(&t, "ESC4"), "DU with WD → ESC4");
+    assert!(has_esc(&t, "ESC4"), "DU with WD -> ESC4");
 }
 
 #[test]
@@ -217,12 +217,12 @@ fn esc4_safe_admin_only() {
     let perms = &["O:SYG:SYD:(A;;GA;;;DA)(A;;RPRC;;;AU)"];
     let mut t = make_template("AdminOnly", false, false, 0, &[OID_CLIENT_AUTH], perms);
     t.analyze();
-    assert!(!has_esc(&t, "ESC4"), "Only DA has write → safe");
+    assert!(!has_esc(&t, "ESC4"), "Only DA has write -> safe");
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC5 — Overly Permissive PKI Object ACLs
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC5 -- Overly Permissive PKI Object ACLs
+// ===========================================================
 
 #[test]
 fn esc5_everyone_generic_all() {
@@ -237,7 +237,7 @@ fn esc5_auth_users_write_owner() {
     let perms = &["(A;;RPWORC;;;AU)"];
     let mut t = make_template("AU-WriteOwner", false, false, 0, &[], perms);
     t.analyze();
-    assert!(has_esc(&t, "ESC5"), "AU with WO → ESC5");
+    assert!(has_esc(&t, "ESC5"), "AU with WO -> ESC5");
 }
 
 #[test]
@@ -245,12 +245,12 @@ fn esc5_safe_read_only() {
     let perms = &["(A;;RPRC;;;AU)"];
     let mut t = make_template("ReadOnly", false, false, 0, &[], perms);
     t.analyze();
-    assert!(!has_esc(&t, "ESC5"), "ReadProp+ReadControl only → safe");
+    assert!(!has_esc(&t, "ESC5"), "ReadProp+ReadControl only -> safe");
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 Indicator
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC6 -- EDITF_ATTRIBUTESUBJECTALTNAME2 Indicator
+// ===========================================================
 
 #[test]
 fn esc6_potential_indicator() {
@@ -265,7 +265,7 @@ fn esc6_potential_indicator() {
     t.analyze();
     assert!(
         has_esc(&t, "ESC6"),
-        "No SAN flag + client auth + no approval → potential ESC6"
+        "No SAN flag + client auth + no approval -> potential ESC6"
     );
 }
 
@@ -276,7 +276,7 @@ fn esc6_not_when_enrollee_supplies_subject() {
     t.analyze();
     assert!(
         !has_esc(&t, "ESC6"),
-        "enrollee_supplies_subject → ESC1 not ESC6"
+        "enrollee_supplies_subject -> ESC1 not ESC6"
     );
 }
 
@@ -287,9 +287,9 @@ fn esc6_blocked_by_approval() {
     assert!(!has_esc(&t, "ESC6"));
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC7 — SubCA / ManageCA Abuse
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC7 -- SubCA / ManageCA Abuse
+// ===========================================================
 
 #[test]
 fn esc7_empty_eku_low_priv_enrollment() {
@@ -298,7 +298,7 @@ fn esc7_empty_eku_low_priv_enrollment() {
     t.analyze();
     assert!(
         has_esc(&t, "ESC7"),
-        "Empty EKU + low-priv enrollment → ESC7"
+        "Empty EKU + low-priv enrollment -> ESC7"
     );
 }
 
@@ -307,12 +307,12 @@ fn esc7_safe_no_low_priv_enrollment() {
     let perms = &["(A;;GA;;;DA)"];
     let mut t = make_template("SubCA-Admin", false, false, 0, &[], perms);
     t.analyze();
-    assert!(!has_esc(&t, "ESC7"), "Only DA can enroll → no ESC7");
+    assert!(!has_esc(&t, "ESC7"), "Only DA can enroll -> no ESC7");
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ESC8 — HTTP Enrollment / NTLM Relay
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  ESC8 -- HTTP Enrollment / NTLM Relay
+// ===========================================================
 
 #[test]
 fn esc8_client_auth_no_approval() {
@@ -332,23 +332,23 @@ fn esc8_blocked_by_approval() {
 fn esc8_blocked_by_no_client_eku() {
     let mut t = make_template("ServerOnly-HTTP", false, false, 0, &[OID_SERVER_AUTH], &[]);
     t.analyze();
-    assert!(!has_esc(&t, "ESC8"), "Server auth only → no ESC8");
+    assert!(!has_esc(&t, "ESC8"), "Server auth only -> no ESC8");
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Combined / Scenario Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn mega_vulnerable_template_flags_many_escs() {
     let perms = &["O:SYG:SYD:(A;;GA;;;AU)"];
     let mut t = make_template(
         "MegaVulnerable",
-        true, // supplies subject → ESC1
+        true, // supplies subject -> ESC1
         false,
         0,
-        &[OID_ANY_PURPOSE], // any purpose → ESC2
-        perms,              // AU:GA → ESC4, ESC5, ESC7
+        &[OID_ANY_PURPOSE], // any purpose -> ESC2
+        perms,              // AU:GA -> ESC4, ESC5, ESC7
     );
     t.analyze();
     let esc_nums: Vec<&str> = t
@@ -411,12 +411,12 @@ fn hardened_template_has_zero_vulns() {
 fn complex_sddl_with_multiple_aces() {
     let perms =
         &["O:SYG:SYD:PAI(A;;RPRC;;;AU)(A;;RPWPCCDCLCSWRCWDWO;;;DU)(A;;GA;;;BA)(A;;GA;;;SY)"];
-    // Domain Users (DU) has WP+CC+DC+WD+WO → dangerous
+    // Domain Users (DU) has WP+CC+DC+WD+WO -> dangerous
     let mut t = make_template("MultiACE", false, false, 0, &[OID_CLIENT_AUTH], perms);
     t.analyze();
     assert!(
         has_esc(&t, "ESC4"),
-        "DU with WP+WD+WO → ESC4: {:?}",
+        "DU with WP+WD+WO -> ESC4: {:?}",
         t.vulnerabilities
     );
 }
@@ -426,7 +426,7 @@ fn builtin_users_sid_triggers_esc4() {
     let perms = &["(A;;RPWP;;;BU)"]; // BU = Builtin\Users
     let mut t = make_template("BU-Writable", false, false, 0, &[OID_CLIENT_AUTH], perms);
     t.analyze();
-    assert!(has_esc(&t, "ESC4"), "Builtin Users (BU) with WP → ESC4");
+    assert!(has_esc(&t, "ESC4"), "Builtin Users (BU) with WP -> ESC4");
 }
 
 #[test]
@@ -437,7 +437,7 @@ fn full_sid_format_authenticated_users() {
     t.analyze();
     assert!(
         has_esc(&t, "ESC4"),
-        "S-1-5-11 (Authenticated Users) with GA → ESC4"
+        "S-1-5-11 (Authenticated Users) with GA -> ESC4"
     );
 }
 
@@ -449,13 +449,13 @@ fn full_sid_domain_users_suffix() {
     t.analyze();
     assert!(
         has_esc(&t, "ESC4"),
-        "Domain Users SID (-513) with GA → ESC4"
+        "Domain Users SID (-513) with GA -> ESC4"
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Helper
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn has_esc(t: &CertTemplate, esc: &str) -> bool {
     t.vulnerabilities

@@ -106,9 +106,9 @@ impl<'a> GraphAnalysisEngine<'a> {
         Self { graph }
     }
 
-    // ═════════════════════════════════════════════════════════
+    // =========================================================
     //  Pre-built Node Queries
-    // ═════════════════════════════════════════════════════════
+    // =========================================================
 
     /// Find all kerberoastable users (those with a `HasSpn` outgoing edge).
     pub fn all_kerberoastable(&self) -> Vec<AnalysisNode> {
@@ -283,9 +283,9 @@ impl<'a> GraphAnalysisEngine<'a> {
             .collect()
     }
 
-    // ═════════════════════════════════════════════════════════
+    // =========================================================
     //  Path Analysis
-    // ═════════════════════════════════════════════════════════
+    // =========================================================
 
     /// Find cheapest attack paths from all reachable sources to a target.
     pub fn cheapest_paths_to_target(&self, target: &str, limit: usize) -> Vec<AttackPath> {
@@ -436,9 +436,9 @@ impl<'a> GraphAnalysisEngine<'a> {
         all_paths
     }
 
-    // ═════════════════════════════════════════════════════════
+    // =========================================================
     //  Comprehensive Analysis
-    // ═════════════════════════════════════════════════════════
+    // =========================================================
 
     /// Run all pre-built queries and produce a comprehensive report.
     pub fn analyze_all(&self, domain: &str) -> AnalysisReport {
@@ -467,7 +467,7 @@ impl<'a> GraphAnalysisEngine<'a> {
             findings.push(AnalysisFinding {
                 title: "Kerberoastable Users".into(),
                 description: format!(
-                    "{} users have Service Principal Names (SPNs) and are kerberoastable — TGS tickets can be requested and cracked offline",
+                    "{} users have Service Principal Names (SPNs) and are kerberoastable -- TGS tickets can be requested and cracked offline",
                     kerberoastable.len()
                 ),
                 severity: FindingSeverity::High,
@@ -480,7 +480,7 @@ impl<'a> GraphAnalysisEngine<'a> {
             findings.push(AnalysisFinding {
                 title: "AS-REP Roastable Users".into(),
                 description: format!(
-                    "{} users have UF_DONT_REQUIRE_PREAUTH set — AS-REP responses can be requested and cracked offline without knowing the password",
+                    "{} users have UF_DONT_REQUIRE_PREAUTH set -- AS-REP responses can be requested and cracked offline without knowing the password",
                     asrep.len()
                 ),
                 severity: FindingSeverity::Critical,
@@ -493,7 +493,7 @@ impl<'a> GraphAnalysisEngine<'a> {
             findings.push(AnalysisFinding {
                 title: "Unconstrained Delegation".into(),
                 description: format!(
-                    "{} computers have unconstrained delegation enabled — any user with admin access to these computers can steal TGTs for any principal",
+                    "{} computers have unconstrained delegation enabled -- any user with admin access to these computers can steal TGTs for any principal",
                     unconstrained.len()
                 ),
                 severity: FindingSeverity::Critical,
@@ -506,7 +506,7 @@ impl<'a> GraphAnalysisEngine<'a> {
             findings.push(AnalysisFinding {
                 title: "Constrained Delegation Targets".into(),
                 description: format!(
-                    "{} principals are targets of constrained delegation — compromised services can impersonate users to the delegated services",
+                    "{} principals are targets of constrained delegation -- compromised services can impersonate users to the delegated services",
                     constrained.len()
                 ),
                 severity: FindingSeverity::High,
@@ -519,7 +519,7 @@ impl<'a> GraphAnalysisEngine<'a> {
             findings.push(AnalysisFinding {
                 title: "Domain Admin Sessions".into(),
                 description: format!(
-                    "{} computers have active Domain Admin sessions — DA token theft risk via LSASS dumping or Kerberos ticket extraction",
+                    "{} computers have active Domain Admin sessions -- DA token theft risk via LSASS dumping or Kerberos ticket extraction",
                     da_sessions.len()
                 ),
                 severity: FindingSeverity::Critical,
@@ -535,7 +535,7 @@ impl<'a> GraphAnalysisEngine<'a> {
             findings.push(AnalysisFinding {
                 title: "Attack Paths to Domain Admin".into(),
                 description: format!(
-                    "{} distinct attack paths to DA found — cheapest cost: {}, average cost: {:.1}",
+                    "{} distinct attack paths to DA found -- cheapest cost: {}, average cost: {:.1}",
                     cheapest_da_paths.len(), min_cost, avg_cost
                 ),
                 severity: FindingSeverity::Critical,

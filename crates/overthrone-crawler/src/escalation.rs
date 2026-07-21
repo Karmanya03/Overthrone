@@ -106,7 +106,7 @@ pub fn find_escalation_paths(
 
     info!("[escalation] Analyzing escalation paths...");
 
-    // ── 1. SID History Injection via unfiltered trusts ──
+    // -- 1. SID History Injection via unfiltered trusts --
     for trust in &trust_graph.trusts {
         if !trust.sid_filtering && trust.direction.allows_outbound() {
             let requires_da = trust.is_within_forest;
@@ -135,7 +135,7 @@ pub fn find_escalation_paths(
         }
     }
 
-    // ── 2. Trust Key Forging (parent-child) ──
+    // -- 2. Trust Key Forging (parent-child) --
     for trust in &trust_graph.trusts {
         if trust.trust_type == TrustKind::ParentChild && trust.direction.allows_outbound() {
             paths.push(EscalationPath {
@@ -158,7 +158,7 @@ pub fn find_escalation_paths(
         }
     }
 
-    // ── 3. Foreign group membership in privileged groups ──
+    // -- 3. Foreign group membership in privileged groups --
     for fm in foreign_memberships {
         if fm.is_privileged_group {
             paths.push(EscalationPath {
@@ -187,7 +187,7 @@ pub fn find_escalation_paths(
         }
     }
 
-    // ── 4. Unconstrained delegation hosts ──
+    // -- 4. Unconstrained delegation hosts --
     for computer in &reaper.computers {
         if computer.unconstrained_delegation && computer.enabled && !computer.is_domain_controller {
             // Any trust that allows inbound auth to us = we can capture their TGTs
@@ -220,7 +220,7 @@ pub fn find_escalation_paths(
         }
     }
 
-    // ── 5. Constrained delegation crossing trust boundaries ──
+    // -- 5. Constrained delegation crossing trust boundaries --
     for deleg in &reaper.delegations {
         if !deleg.enabled {
             continue;
@@ -260,7 +260,7 @@ pub fn find_escalation_paths(
                     total_hops: 1,
                     requires_da: false,
                     description: format!(
-                        "Cross-domain constrained delegation: {} → {} (S4U2Proxy)",
+                        "Cross-domain constrained delegation: {} -> {} (S4U2Proxy)",
                         deleg.principal, target_spn
                     ),
                 });
@@ -268,7 +268,7 @@ pub fn find_escalation_paths(
         }
     }
 
-    // ── 6. MSSQL service accounts crossing domains ──
+    // -- 6. MSSQL service accounts crossing domains --
     for instance in &reaper.mssql_instances {
         if let Some(ref hostname) = instance.hostname
             && !hostname
@@ -302,7 +302,7 @@ pub fn find_escalation_paths(
         }
     }
 
-    // ── 7. Vulnerable ADCS templates ──
+    // -- 7. Vulnerable ADCS templates --
     for template in &reaper.adcs_templates {
         if !template.vulnerabilities.is_empty() && template.enrollee_supplies_subject {
             // ESC1 can be used cross-domain if enrollment is open
@@ -365,7 +365,7 @@ fn spn_hostname(spn: &str) -> String {
         .to_string()
 }
 
-/// Guess domain from an FQDN: "dc01.child.corp.local" → "child.corp.local"
+/// Guess domain from an FQDN: "dc01.child.corp.local" -> "child.corp.local"
 fn domain_from_hostname(hostname: &str) -> Option<String> {
     let parts: Vec<&str> = hostname.splitn(2, '.').collect();
     if parts.len() == 2 {

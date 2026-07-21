@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// ── Sliver operator config ────────────────────────────────────────────
+// -- Sliver operator config --------------------------------------------
 
 /// Sliver operator config file (`.cfg`) structure
 #[derive(Debug, Clone, Deserialize)]
@@ -34,7 +34,7 @@ struct SliverOperatorConfig {
     private_key: String,
 }
 
-// ── JSON response types from Sliver REST API ──────────────────────────
+// -- JSON response types from Sliver REST API --------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -129,7 +129,7 @@ struct SliverJobResp {
     port: u16,
 }
 
-// ── Channel struct ────────────────────────────────────────────────────
+// -- Channel struct ----------------------------------------------------
 
 /// Sliver REST API channel
 pub struct SliverChannel {
@@ -194,7 +194,7 @@ impl SliverChannel {
             .map_err(|e| OverthroneError::C2(format!("HTTP client build error: {e}")))
     }
 
-    // ── helpers ──────────────────────────────────────────────────
+    // -- helpers --------------------------------------------------
 
     /// `GET {base}/api/v1/{path}` with bearer token.
     async fn api_get(&self, path: &str) -> Result<reqwest::Response> {
@@ -302,7 +302,7 @@ enum SessionKind {
     Beacon,
 }
 
-// ── C2Channel implementation ──────────────────────────────────────────
+// -- C2Channel implementation ------------------------------------------
 
 #[async_trait]
 impl C2Channel for SliverChannel {

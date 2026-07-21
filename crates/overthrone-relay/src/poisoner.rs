@@ -137,7 +137,7 @@ pub fn parse_nbns_name(data: &[u8]) -> Option<String> {
     for chunk in encoded.chunks(2) {
         if chunk.len() == 2 {
             // NBT-NS level-1 encoding uses only 'A'..'P' (nibble 0..=0xF + 'A')
-            // Bytes outside this range indicate a malformed/crafted packet —
+            // Bytes outside this range indicate a malformed/crafted packet --
             // return None instead of panicking on the subtraction.
             if chunk[0] < b'A' || chunk[0] > b'P' || chunk[1] < b'A' || chunk[1] > b'P' {
                 return None;
@@ -385,7 +385,7 @@ impl Poisoner {
         self.captured_queries
             .lock()
             .unwrap_or_else(|e| {
-                warn!("Mutex poisoned in Poisoner — recovering data");
+                warn!("Mutex poisoned in Poisoner -- recovering data");
                 e.into_inner()
             })
             .clone()
@@ -776,7 +776,7 @@ impl Poisoner {
                         // Record captured query
                         {
                             let mut cap = captured.lock().unwrap_or_else(|e| {
-                                warn!("Mutex poisoned in Poisoner — recovering data");
+                                warn!("Mutex poisoned in Poisoner -- recovering data");
                                 e.into_inner()
                             });
                             cap.push(CapturedQuery {

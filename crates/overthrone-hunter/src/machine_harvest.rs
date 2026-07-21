@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result Structures
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Machine account harvesting result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,9 +78,9 @@ pub struct HarvestSummary {
     pub total_hashes: usize,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for machine account harvesting
 #[derive(Debug, Clone)]
@@ -112,9 +112,9 @@ impl Default for MachineHarvestConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Harvest machine$ account passwords via kerberoasting and AS-REP roasting
 ///
@@ -130,7 +130,7 @@ pub async fn harvest_machine_accounts(
 ) -> Result<MachineHarvestResult> {
     info!(
         "{}",
-        "═══ MACHINE ACCOUNT HARVESTING ═══".bold().bright_yellow()
+        "=== MACHINE ACCOUNT HARVESTING ===".bold().bright_yellow()
     );
 
     let mut result = MachineHarvestResult {
@@ -201,7 +201,7 @@ pub async fn harvest_machine_accounts(
                 result.kerberoast_results = machine_hashes;
 
                 info!(
-                    "  ✓ Extracted {} machine account hashes",
+                    "  [+] Extracted {} machine account hashes",
                     result.kerberoast_results.len()
                 );
             }
@@ -236,7 +236,7 @@ pub async fn harvest_machine_accounts(
                 result.asrep_results = machine_hashes;
 
                 info!(
-                    "  ✓ Extracted {} AS-REP machine hashes",
+                    "  [+] Extracted {} AS-REP machine hashes",
                     result.asrep_results.len()
                 );
             }
@@ -257,9 +257,9 @@ pub async fn harvest_machine_accounts(
     Ok(result)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Machine Account Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn enumerate_machine_accounts(
     hunt_config: &HuntConfig,

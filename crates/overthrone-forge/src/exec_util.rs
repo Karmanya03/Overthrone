@@ -50,12 +50,12 @@ pub async fn run_remote_command(smb: &SmbSession, command: &str) -> Result<Strin
             .pipe_transact("svcctl", &build_close_handle_request(&scm_handle))
             .await;
         return Err(OverthroneError::custom(
-            "CreateServiceW failed — insufficient privileges?",
+            "CreateServiceW failed -- insufficient privileges?",
         ));
     }
     let svc_handle = create_resp[24..44].to_vec();
 
-    // Step 4: StartServiceW (opnum 19) — may return error 1053 (normal for cmd)
+    // Step 4: StartServiceW (opnum 19) -- may return error 1053 (normal for cmd)
     let start_req = build_start_service_request(&svc_handle);
     let _ = smb.pipe_transact("svcctl", &start_req).await;
 
@@ -93,7 +93,7 @@ pub async fn run_remote_command(smb: &SmbSession, command: &str) -> Result<Strin
     Ok(output)
 }
 
-// ── SVCCTL DCE/RPC Packet Builders ─────────────────────────────
+// -- SVCCTL DCE/RPC Packet Builders -----------------------------
 
 fn build_svcctl_bind() -> Vec<u8> {
     // SVCCTL UUID: 367abb81-9844-35f1-ad32-98f038001003

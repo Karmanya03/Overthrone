@@ -125,7 +125,7 @@ pub fn parse_gpp_xml(xml_content: &str, source_file: &str) -> Vec<GppCredential>
 
         match decrypt_gpp_password(&cpassword) {
             Ok(password) => {
-                info!("Decrypted GPP credential: {} → ***", username);
+                info!("Decrypted GPP credential: {} -> ***", username);
                 creds.push(GppCredential {
                     username,
                     password,
@@ -151,9 +151,9 @@ fn extract_xml_attr(line: &str, attr_name: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

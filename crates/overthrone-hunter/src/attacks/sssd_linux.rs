@@ -1,4 +1,4 @@
-//! CVE-2025-11561 — SSSD Linux Domain-Join Impersonation.
+//! CVE-2025-11561 -- SSSD Linux Domain-Join Impersonation.
 //!
 //! SSSD's D-Bus responder (sssd-ifp) has a vulnerability in cached POSIX
 //! UID/GID to SID resolution. An attacker can write crafted cache entries

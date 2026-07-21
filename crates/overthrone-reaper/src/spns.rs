@@ -1,4 +1,4 @@
-//! SPN enumeration — finds Kerberoastable accounts.
+//! SPN enumeration -- finds Kerberoastable accounts.
 
 use crate::runner::ReaperConfig;
 use overthrone_core::error::Result;
@@ -68,7 +68,7 @@ pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAcco
             .cloned()
             .unwrap_or_default();
 
-        // Skip the krbtgt account — it has an SPN but is not Kerberoastable in the traditional sense
+        // Skip the krbtgt account -- it has an SPN but is not Kerberoastable in the traditional sense
         if sam.to_lowercase() == "krbtgt" {
             continue;
         }
@@ -101,7 +101,7 @@ pub async fn enumerate_spn_accounts(config: &ReaperConfig) -> Result<Vec<SpnAcco
             .cloned();
 
         info!(
-            "[spns]  {} — {} SPN(s){}",
+            "[spns]  {} -- {} SPN(s){}",
             sam,
             spns.len(),
             if admin_count { " [adminCount=1]" } else { "" }

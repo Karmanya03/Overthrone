@@ -24,8 +24,8 @@ pub struct CrawlerResponderConfig {
 impl CrawlerResponderConfig {
     /// Build a config from simple CLI-style parameters.
     ///
-    /// * `poison_ip` — if `Some`, enables LLMNR + NBT-NS poisoning with that response IP.
-    /// * `respond` — if `true`, enables the HTTP/SMB/LDAP responder on default ports.
+    /// * `poison_ip` -- if `Some`, enables LLMNR + NBT-NS poisoning with that response IP.
+    /// * `respond` -- if `true`, enables the HTTP/SMB/LDAP responder on default ports.
     pub fn from_cli(poison_ip: Option<String>, respond: bool) -> Self {
         Self {
             poisoner: poison_ip.map(|ip| PoisonerConfig {

@@ -25,9 +25,9 @@ use tracing::{debug, info, warn};
 pub use auth::MssqlAuth;
 pub use mssql_links::{LinkCrawlResult, LinkCrawler, LinkCrawlerConfig, LinkNode};
 pub use tds::{TdsColumnData, TdsMessage, TdsMessageType, sql_types};
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// MSSQL connection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,9 +179,9 @@ pub struct SqlServerVersion {
     pub server_name: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // MSSQL Client
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// MSSQL database client with TDS protocol support
 pub struct MssqlClient {
@@ -288,9 +288,9 @@ impl MssqlClient {
         Ok(())
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // PreLogin
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Build PreLogin TDS message (MS-TDS 2.2.6.5)
     /// Token format: [type:1][offset:2][length:2] per token, terminated by 0xFF.
@@ -367,9 +367,9 @@ impl MssqlClient {
         Ok(())
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // Login7
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Build Login7 TDS message (MS-TDS 2.2.6.4)
     /// The Login7 message consists of:
@@ -378,7 +378,7 @@ impl MssqlClient {
     ///     Offset/length pairs use character counts (not byte counts) for the length field,
     ///     and byte offsets from the start of the Login7 payload for the offset field.
     fn build_login_message(&mut self) -> Result<Vec<u8>> {
-        // ── Collect field values ──
+        // -- Collect field values --
         let hostname = "OVERTHRONE";
         let username = self.config.username.as_deref().unwrap_or("");
         let password = self.config.password.as_deref().unwrap_or("");
@@ -387,7 +387,7 @@ impl MssqlClient {
         let database = &self.config.database;
         let language = "us_english";
 
-        // ── Encode all strings to UTF-16LE ──
+        // -- Encode all strings to UTF-16LE --
         let hostname_utf16 = str_to_utf16le(hostname);
         let username_utf16 = str_to_utf16le(username);
         let password_utf16 = obfuscate_password(password); // TDS-obfuscated password
@@ -396,10 +396,10 @@ impl MssqlClient {
         let database_utf16 = str_to_utf16le(database);
         let language_utf16 = str_to_utf16le(language);
 
-        // Client ID (MAC address, 6 bytes — we use zeros)
+        // Client ID (MAC address, 6 bytes -- we use zeros)
         let client_id: [u8; 6] = [0x00; 6];
 
-        // ── Calculate the fixed header size ──
+        // -- Calculate the fixed header size --
         // Login7 fixed header layout (per MS-TDS spec):
         //   Bytes 0-3:   Length (u32 LE)
         //   Bytes 4-7:   TDSVersion
@@ -418,7 +418,7 @@ impl MssqlClient {
         // Total fixed header = 36 + 52 + 6 = 94 bytes
         let fixed_header_len: u16 = 94;
 
-        // ── Build variable data section and compute offsets ──
+        // -- Build variable data section and compute offsets --
         let mut var_data = Vec::new();
         let mut var_offset = fixed_header_len;
 
@@ -441,7 +441,7 @@ impl MssqlClient {
         let f_app_name = push_field(&app_name_utf16, app_name.len() as u16);
         // 4: ServerName
         let f_server = push_field(&server_name_utf16, server_name.len() as u16);
-        // 5: Unused (Extension — 0,0)
+        // 5: Unused (Extension -- 0,0)
         let f_unused = (0u16, 0u16);
         // 6: CltIntName (client interface library name)
         let clt_int = "ODBC";
@@ -453,7 +453,7 @@ impl MssqlClient {
         let f_database = push_field(&database_utf16, database.len() as u16);
         // 9-12: ClientID, SSPI, AtchDBFile, ChangePassword are handled separately
 
-        // ── Assemble fixed header ──
+        // -- Assemble fixed header --
         let total_payload_len = fixed_header_len as u32 + var_data.len() as u32;
 
         let mut payload = Vec::with_capacity(total_payload_len as usize);
@@ -483,7 +483,7 @@ impl MssqlClient {
         // Bytes 32-35: ClientLCID
         payload.extend_from_slice(&0x00000409u32.to_le_bytes()); // English (US)
 
-        // ── 13 Offset/Length pairs (each 2+2 = 4 bytes) ──
+        // -- 13 Offset/Length pairs (each 2+2 = 4 bytes) --
         // 0: HostName
         payload.extend_from_slice(&f_hostname.0.to_le_bytes());
         payload.extend_from_slice(&f_hostname.1.to_le_bytes());
@@ -513,7 +513,7 @@ impl MssqlClient {
         payload.extend_from_slice(&f_database.1.to_le_bytes());
         // 9: ClientID (6 bytes inline, not offset/length)
         payload.extend_from_slice(&client_id);
-        // 10: SSPI (offset, length) — not used for SQL auth
+        // 10: SSPI (offset, length) -- not used for SQL auth
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&0u16.to_le_bytes());
         // 11: AtchDBFile (offset, length)
@@ -534,10 +534,10 @@ impl MssqlClient {
             fixed_header_len
         );
 
-        // ── Append variable data ──
+        // -- Append variable data --
         payload.extend_from_slice(&var_data);
 
-        // ── Wrap in TDS packet ──
+        // -- Wrap in TDS packet --
         let mut msg = Vec::new();
         msg.push(0x10); // Type: Login7
         msg.push(0x01); // Status: EOM
@@ -553,9 +553,9 @@ impl MssqlClient {
         Ok(msg)
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // Login Response Parsing
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Parse Login7 response tokens (MS-TDS 2.2.7)
     fn parse_login_response(&mut self, data: &[u8]) -> Result<()> {
@@ -573,7 +573,7 @@ impl MssqlClient {
             pos += 1;
 
             match token {
-                // ── ENVCHANGE (0xE3) ──
+                // -- ENVCHANGE (0xE3) --
                 0xE3 => {
                     if pos + 2 > data.len() {
                         break;
@@ -595,18 +595,18 @@ impl MssqlClient {
                     pos += 2 + len;
                 }
 
-                // ── LOGINACK (0xAD) ──
+                // -- LOGINACK (0xAD) --
                 0xAD => {
                     if pos + 2 > data.len() {
                         break;
                     }
                     let len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
-                    debug!("Received LOGINACK — authentication successful");
+                    debug!("Received LOGINACK -- authentication successful");
                     self.logged_in = true;
                     pos += 2 + len;
                 }
 
-                // ── INFO (0xAB) ──
+                // -- INFO (0xAB) --
                 0xAB => {
                     if pos + 2 > data.len() {
                         break;
@@ -616,7 +616,7 @@ impl MssqlClient {
                     pos += 2 + len;
                 }
 
-                // ── ERROR (0xAA) ──
+                // -- ERROR (0xAA) --
                 0xAA => {
                     if pos + 2 > data.len() {
                         break;
@@ -650,13 +650,13 @@ impl MssqlClient {
                     return Err(OverthroneError::Auth(err_msg));
                 }
 
-                // ── DONE (0xFD) ──
+                // -- DONE (0xFD) --
                 0xFD => {
-                    debug!("DONE token — login sequence complete");
+                    debug!("DONE token -- login sequence complete");
                     break;
                 }
 
-                // ── Unknown token — skip by length ──
+                // -- Unknown token -- skip by length --
                 _ => {
                     if pos + 2 <= data.len() {
                         let len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
@@ -678,9 +678,9 @@ impl MssqlClient {
         Ok(())
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // Send / Receive
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Send a raw TDS message
     async fn send_tds_message(&mut self, data: &[u8]) -> Result<()> {
@@ -782,9 +782,9 @@ impl MssqlClient {
         Ok(result)
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // SQL Batch
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Execute a SQL query and return parsed results
     pub async fn query(&mut self, sql: &str) -> Result<MssqlQueryResult> {
@@ -842,9 +842,9 @@ impl MssqlClient {
         msg
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // Response Parsing
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Parse query response tokens
     fn parse_query_response(&mut self, data: &[u8]) -> Result<MssqlQueryResult> {
@@ -988,7 +988,7 @@ impl MssqlClient {
                 // Padding/end
                 0x00 => break,
 
-                // Unknown — bail
+                // Unknown -- bail
                 _ => {
                     debug!("Unknown response token: 0x{:02X} at pos {}", token, pos - 1);
                     // Try to skip if length-prefixed
@@ -1186,7 +1186,7 @@ impl MssqlClient {
                     }
                 }
 
-                // Unknown type — skip 1 byte and hope for the best
+                // Unknown type -- skip 1 byte and hope for the best
                 _ => {
                     if pos < data.len() {
                         pos += 1;
@@ -1232,7 +1232,7 @@ impl MssqlClient {
             let type_id = self.current_col_types.get(col_idx).copied().unwrap_or(0);
 
             match type_id {
-                // ── Fixed-length types (no length prefix) ──
+                // -- Fixed-length types (no length prefix) --
                 0x30 => {
                     // tinyint: 1 byte
                     if pos < data.len() {
@@ -1330,7 +1330,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── Byte-length nullable types (INTN, BITN, FLTN, MONEYN, DATETIMN) ──
+                // -- Byte-length nullable types (INTN, BITN, FLTN, MONEYN, DATETIMN) --
                 0x26 | 0x68 | 0x6D | 0x6E | 0x6F => {
                     if pos >= data.len() {
                         row.push(None);
@@ -1349,7 +1349,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── DECIMALN / NUMERICN (byte-length: length + sign + value) ──
+                // -- DECIMALN / NUMERICN (byte-length: length + sign + value) --
                 0x6A | 0x6C => {
                     if pos >= data.len() {
                         row.push(None);
@@ -1372,7 +1372,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── GUID (0x24): byte-length-prefix, 16 bytes or 0 (NULL) ──
+                // -- GUID (0x24): byte-length-prefix, 16 bytes or 0 (NULL) --
                 0x24 => {
                     if pos >= data.len() {
                         row.push(None);
@@ -1412,7 +1412,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── NVARCHAR / NCHAR (ushort-length prefix, UTF-16LE) ──
+                // -- NVARCHAR / NCHAR (ushort-length prefix, UTF-16LE) --
                 0xE7 | 0xEF => {
                     if pos + 2 > data.len() {
                         row.push(None);
@@ -1431,7 +1431,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── VARCHAR / CHAR (ushort-length prefix, single-byte encoding) ──
+                // -- VARCHAR / CHAR (ushort-length prefix, single-byte encoding) --
                 0xA7 | 0xAF => {
                     if pos + 2 > data.len() {
                         row.push(None);
@@ -1450,7 +1450,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── VARBINARY / BINARY (ushort-length prefix) ──
+                // -- VARBINARY / BINARY (ushort-length prefix) --
                 0xA5 | 0xAD => {
                     if pos + 2 > data.len() {
                         row.push(None);
@@ -1472,7 +1472,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── DATE (0x28): 1 byte len, 3 bytes data ──
+                // -- DATE (0x28): 1 byte len, 3 bytes data --
                 0x28 => {
                     if pos >= data.len() {
                         row.push(None);
@@ -1494,7 +1494,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── TIME / DATETIME2 / DATETIMEOFFSET: byte-length prefix ──
+                // -- TIME / DATETIME2 / DATETIMEOFFSET: byte-length prefix --
                 0x29..=0x2B => {
                     if pos >= data.len() {
                         row.push(None);
@@ -1516,7 +1516,7 @@ impl MssqlClient {
                     }
                 }
 
-                // ── Fallback: try byte-length prefix ──
+                // -- Fallback: try byte-length prefix --
                 _ => {
                     if pos >= data.len() {
                         row.push(None);
@@ -1640,9 +1640,9 @@ impl MssqlClient {
         Ok((pos, row))
     }
 
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
     // High-level Operations
-    // ───────────────────────────────────────────────────────
+    // -------------------------------------------------------
 
     /// Execute a SQL statement (returns rows affected)
     pub async fn execute(&mut self, sql: &str) -> Result<u64> {
@@ -1788,9 +1788,9 @@ impl Drop for MssqlClient {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helper Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Encode a &str to UTF-16LE bytes
 fn str_to_utf16le(s: &str) -> Vec<u8> {
@@ -1826,13 +1826,13 @@ fn parse_fixed_numeric(data: &[u8], _type_hint: u8) -> String {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // SOCKS5 proxy connect helper
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Connect to a target via a SOCKS5 proxy (RFC 1928).
 /// Performs no-auth handshake followed by a CONNECT request.

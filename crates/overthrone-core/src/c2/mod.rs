@@ -1,9 +1,9 @@
 //! C2 Framework Integration
 //!
 //! Provides a unified interface to interact with external C2 frameworks:
-//! - **Cobalt Strike** — External C2 protocol (TCP listener) + Aggressor Script
-//! - **Sliver** — gRPC operator API
-//! - **Havoc** — Demon agent integration via REST API
+//! - **Cobalt Strike** -- External C2 protocol (TCP listener) + Aggressor Script
+//! - **Sliver** -- gRPC operator API
+//! - **Havoc** -- Demon agent integration via REST API
 //!
 //! Overthrone acts as an **operator-side integration**, meaning it:
 //! 1. Connects to an existing C2 teamserver as an operator
@@ -11,7 +11,7 @@
 //! 3. Receives results and feeds them into the attack graph
 //! 4. Can request implant deployment on newly compromised targets
 //!
-//! Overthrone does NOT replace the C2 — it enhances it with AD-specific automation.
+//! Overthrone does NOT replace the C2 -- it enhances it with AD-specific automation.
 
 pub mod cobalt_strike;
 pub mod havoc;
@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 // C2 Framework abstraction layer
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 
 /// Connection configuration for a C2 teamserver
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,9 +203,9 @@ pub enum DeliveryMethod {
     FrameworkNative,
 }
 
-// ──────────────────────────────────────────────────────────
-// C2 Channel trait — unified interface
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
+// C2 Channel trait -- unified interface
+// ----------------------------------------------------------
 
 /// The core C2 integration trait
 /// Implement this for each C2 framework
@@ -254,7 +254,7 @@ pub trait C2Channel: Send + Sync {
         _args: &str,
     ) -> Result<C2TaskResult>;
 
-    /// Run a BOF (Beacon Object File) — CS-specific but Sliver also supports via COFF loader
+    /// Run a BOF (Beacon Object File) -- CS-specific but Sliver also supports via COFF loader
     async fn execute_bof(
         &self,
         _session_id: &str,
@@ -309,9 +309,9 @@ pub struct C2Listener {
     pub active: bool,
 }
 
-// ──────────────────────────────────────────────────────────
-// C2 Manager — manages connections to multiple C2 frameworks
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
+// C2 Manager -- manages connections to multiple C2 frameworks
+// ----------------------------------------------------------
 /// Data structure used by this module.
 pub struct C2Manager {
     channels: HashMap<String, Box<dyn C2Channel>>,

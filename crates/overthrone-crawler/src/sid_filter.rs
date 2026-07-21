@@ -81,7 +81,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
 
         // Determine the finding based on trust type and SID filtering status
         let finding = match (&trust.trust_type, trust.sid_filtering) {
-            // ── Parent-Child: SID filtering is OFF by design ──
+            // -- Parent-Child: SID filtering is OFF by design --
             (TrustKind::ParentChild, false) => {
                 SidFilterFinding {
                     source_domain: trust.source_domain.clone(),
@@ -94,7 +94,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                     exploitable: trust.direction.allows_outbound(),
                     risk_level: "INFO".into(),
                     attack_description: format!(
-                        "Parent-child trust to {} — SID filtering is disabled by design within \
+                        "Parent-child trust to {} -- SID filtering is disabled by design within \
                          a forest. An attacker with DA in {} can forge tickets with EA SID.",
                         trust.target_domain, trust.source_domain
                     ),
@@ -113,12 +113,12 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                     filter_status: SidFilterStatus::Enabled,
                     exploitable: false,
                     risk_level: "INFO".into(),
-                    attack_description: "SID filtering is enabled on a parent-child trust — unusual configuration.".into(),
+                    attack_description: "SID filtering is enabled on a parent-child trust -- unusual configuration.".into(),
                     remediation: "Verify this is intentional. SID filtering on intra-forest trusts can break functionality.".into(),
                 }
             }
 
-            // ── External/Forest trust WITHOUT SID filtering = CRITICAL ──
+            // -- External/Forest trust WITHOUT SID filtering = CRITICAL --
             (TrustKind::External | TrustKind::Forest, false) => {
                 let can_exploit = trust.direction.allows_outbound();
                 SidFilterFinding {
@@ -136,9 +136,9 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                          from the target domain.",
                         trust_type_str, trust.target_domain,
                         if can_exploit {
-                            "Trust allows outbound authentication — DIRECTLY EXPLOITABLE."
+                            "Trust allows outbound authentication -- DIRECTLY EXPLOITABLE."
                         } else {
-                            "Trust is inbound-only — exploitation requires pivot."
+                            "Trust is inbound-only -- exploitation requires pivot."
                         },
                         trust.source_domain
                     ),
@@ -152,7 +152,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                 }
             }
 
-            // ── External/Forest trust WITH SID filtering = OK ──
+            // -- External/Forest trust WITH SID filtering = OK --
             (TrustKind::External | TrustKind::Forest, true) => {
                 SidFilterFinding {
                     source_domain: trust.source_domain.clone(),
@@ -163,7 +163,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                     exploitable: false,
                     risk_level: "OK".into(),
                     attack_description: format!(
-                        "{} trust to {} has SID filtering enabled — \
+                        "{} trust to {} has SID filtering enabled -- \
                          SID history injection is blocked.",
                         trust_type_str, trust.target_domain
                     ),
@@ -171,7 +171,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                 }
             }
 
-            // ── Other trust types ──
+            // -- Other trust types --
             (_, sid_filtered) => {
                 SidFilterFinding {
                     source_domain: trust.source_domain.clone(),
@@ -186,7 +186,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
                     exploitable: !sid_filtered && trust.direction.allows_outbound(),
                     risk_level: if !sid_filtered { "MEDIUM" } else { "OK" }.into(),
                     attack_description: format!(
-                        "{} trust to {} — SID filtering: {}",
+                        "{} trust to {} -- SID filtering: {}",
                         trust_type_str, trust.target_domain,
                         if sid_filtered { "enabled" } else { "disabled" }
                     ),
@@ -200,7 +200,7 @@ pub fn analyze_sid_filtering(_source_domain: &str, graph: &TrustGraph) -> Vec<Si
         };
 
         debug!(
-            "[sid_filter] {} → {} : {} ({})",
+            "[sid_filter] {} -> {} : {} ({})",
             finding.source_domain, finding.target_domain, finding.risk_level, trust_type_str
         );
 

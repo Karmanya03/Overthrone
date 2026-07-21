@@ -97,7 +97,7 @@ pub enum OverthroneError {
     #[error("Shell error: {0}")]
     Shell(String),
 
-    // ─── NEW: Plugin Errors ───────────────────────────────────
+    // --- NEW: Plugin Errors -----------------------------------
     /// Plugin system error.
     #[error("Plugin error: {0}")]
     Plugin(String),
@@ -113,7 +113,7 @@ pub enum OverthroneError {
     #[error("Plugin loader error: {0}")]
     PluginLoader(String),
 
-    // ─── NEW: C2 Integration Errors ──────────────────────────
+    // --- NEW: C2 Integration Errors --------------------------
     /// C2 framework integration error.
     #[error("C2 error: {0}")]
     C2(String),

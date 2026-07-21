@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Shell connection type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,13 +54,13 @@ pub struct ShellConfig {
 
 /// Backend state held once connected
 enum ShellBackend {
-    /// WinRM — stores credentials; each `execute` call delegates to `WinRmExecutor`
+    /// WinRM -- stores credentials; each `execute` call delegates to `WinRmExecutor`
     Winrm { creds: ExecCredentials },
-    /// SMB — keeps a persistent `SmbSession` for command-per-service execution
+    /// SMB -- keeps a persistent `SmbSession` for command-per-service execution
     Smb {
         session: crate::proto::smb::SmbSession,
     },
-    /// WMI — keeps a persistent `SmbSession` for SCM-fallback execution
+    /// WMI -- keeps a persistent `SmbSession` for SCM-fallback execution
     Wmi {
         session: crate::proto::smb::SmbSession,
     },
@@ -88,9 +88,9 @@ pub struct ShellResult {
     pub execution_time_ms: u64,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Interactive Shell Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 impl InteractiveShell {
     /// Connect to target and establish shell session
@@ -184,9 +184,9 @@ impl InteractiveShell {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Credential helper
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn require_creds(config: &ShellConfig) -> Result<&ExecCredentials> {
         config
@@ -198,9 +198,9 @@ impl InteractiveShell {
             })
     }
 
-    // ═══════════════════════════════════════════════════════
-    // WinRM Implementation — delegates to WinRmExecutor
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
+    // WinRM Implementation -- delegates to WinRmExecutor
+    // =======================================================
 
     async fn connect_winrm(config: &ShellConfig) -> Result<(String, ShellBackend)> {
         debug!("Connecting to WinRM endpoint on {}", config.target);
@@ -292,9 +292,9 @@ impl InteractiveShell {
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
-    // SMB Implementation — persistent SmbSession + smbexec
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
+    // SMB Implementation -- persistent SmbSession + smbexec
+    // =======================================================
 
     async fn connect_smb(config: &ShellConfig) -> Result<(String, ShellBackend)> {
         debug!("Connecting via SMB to {}", config.target);
@@ -311,7 +311,7 @@ impl InteractiveShell {
 
         // Verify admin share access
         if !session.check_share_read("C$").await && !session.check_share_read("ADMIN$").await {
-            warn!("SMB: Connected but no admin share access — commands may fail");
+            warn!("SMB: Connected but no admin share access -- commands may fail");
         }
 
         let session_id = format!("smb-{:08x}", rand::random::<u32>());
@@ -341,9 +341,9 @@ impl InteractiveShell {
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
-    // WMI Implementation — persistent SmbSession + wmiexec
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
+    // WMI Implementation -- persistent SmbSession + wmiexec
+    // =======================================================
 
     async fn connect_wmi(config: &ShellConfig) -> Result<(String, ShellBackend)> {
         debug!("Connecting via WMI to {}", config.target);
@@ -359,7 +359,7 @@ impl InteractiveShell {
         .await?;
 
         if !session.check_share_read("C$").await && !session.check_share_read("ADMIN$").await {
-            warn!("WMI: Connected but no admin share access — commands may fail");
+            warn!("WMI: Connected but no admin share access -- commands may fail");
         }
 
         let session_id = format!("wmi-{:08x}", rand::random::<u32>());
@@ -401,9 +401,9 @@ pub struct ShellSessionInfo {
     pub command_count: u32,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Shell Pool for Multiple Sessions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Manages multiple shell sessions
 pub struct ShellPool {
@@ -465,9 +465,9 @@ impl ShellPool {
 
 use std::collections::HashMap;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -498,7 +498,7 @@ mod tests {
         let mut pool = ShellPool::new(5);
         assert!(pool.sessions.is_empty());
 
-        // Create a shell (no backend — unit-test only)
+        // Create a shell (no backend -- unit-test only)
         let shell = InteractiveShell {
             config: ShellConfig {
                 target: "test".to_string(),

@@ -250,7 +250,7 @@ impl PkinitAuthenticator {
                 check_ocsp_stapled(cert, &ocsp_urls, self.config.revocation_timeout_secs).await
         {
             warn!("PKINIT: OCSP revocation check failed: {e}");
-            // Do not hard-fail on OCSP errors — the KDC may still accept the cert
+            // Do not hard-fail on OCSP errors -- the KDC may still accept the cert
         }
 
         // 2. Parse CRL distribution points
@@ -264,7 +264,7 @@ impl PkinitAuthenticator {
         // If no revocation mechanism found, issue a warning but do not fail
         if ocsp_urls.is_empty() && crl_urls.is_empty() {
             warn!(
-                "PKINIT: no OCSP or CRL endpoints found in certificate — revocation status unknown"
+                "PKINIT: no OCSP or CRL endpoints found in certificate -- revocation status unknown"
             );
         }
 
@@ -329,7 +329,7 @@ impl PkinitAuthenticator {
     /// Build the PA-PK-AS-REQ value containing a CMS SignedData
     /// wrapping the AuthPack, per RFC 4556 §3.2.1.
     fn build_pa_pk_as_req(&self, nonce: u32) -> Result<Vec<u8>> {
-        // ── Step 1: Build PKAuthenticator ──
+        // -- Step 1: Build PKAuthenticator --
         // PKAuthenticator ::= SEQUENCE {
         //   cusec   [0] INTEGER,
         //   ctime   [1] KerberosTime,
@@ -346,7 +346,7 @@ impl PkinitAuthenticator {
                 writer.next().write_tagged(yasna::Tag::context(0), |w| {
                     w.write_i64(cusec);
                 });
-                // ctime [1] GeneralizedTime — encode as raw DER bytes
+                // ctime [1] GeneralizedTime -- encode as raw DER bytes
                 // GeneralizedTime is tag 0x18, value is ASCII "YYYYMMDDHHmmSSZ"
                 writer.next().write_tagged(yasna::Tag::context(1), |w| {
                     let time_bytes = ctime.as_bytes();
@@ -355,14 +355,14 @@ impl PkinitAuthenticator {
                     gt_der.extend_from_slice(time_bytes);
                     w.write_der(&gt_der);
                 });
-                // nonce [2] INTEGER — must match the nonce in KDC-REQ-BODY
+                // nonce [2] INTEGER -- must match the nonce in KDC-REQ-BODY
                 writer.next().write_tagged(yasna::Tag::context(2), |w| {
                     w.write_u32(nonce);
                 });
             });
         });
 
-        // ── Step 2: Build AuthPack ──
+        // -- Step 2: Build AuthPack --
         // AuthPack ::= SEQUENCE {
         //   pkAuthenticator     [0] PKAuthenticator,
         //   clientPublicValue   [1] SubjectPublicKeyInfo OPTIONAL,
@@ -374,7 +374,7 @@ impl PkinitAuthenticator {
                 writer.next().write_tagged(yasna::Tag::context(0), |w| {
                     w.write_der(&pk_authenticator_der);
                 });
-                // supportedCMSTypes [2] EXPLICIT — sha256WithRSAEncryption
+                // supportedCMSTypes [2] EXPLICIT -- sha256WithRSAEncryption
                 writer.next().write_tagged(yasna::Tag::context(2), |w| {
                     w.write_sequence(|writer| {
                         writer.next().write_sequence(|writer| {
@@ -389,10 +389,10 @@ impl PkinitAuthenticator {
             });
         });
 
-        // ── Step 3: Build CMS SignedData (RFC 5652) ──
+        // -- Step 3: Build CMS SignedData (RFC 5652) --
         let signed_data_der = self.build_cms_signed_data(&auth_pack_der)?;
 
-        // ── Step 4: Wrap in ContentInfo ──
+        // -- Step 4: Wrap in ContentInfo --
         // ContentInfo ::= SEQUENCE {
         //   contentType    OBJECT IDENTIFIER (signedData: 1.2.840.113549.1.7.2),
         //   content  [0]  EXPLICIT ANY
@@ -410,13 +410,13 @@ impl PkinitAuthenticator {
             });
         });
 
-        // ── Step 5: Build PA-PK-AS-REQ ──
+        // -- Step 5: Build PA-PK-AS-REQ --
         // PA-PK-AS-REQ ::= SEQUENCE {
         //   signedAuthPack [0] IMPLICIT OCTET STRING
         // }
         let pa_pk_as_req_der = yasna::construct_der(|writer| {
             writer.write_sequence(|writer| {
-                // signedAuthPack [0] IMPLICIT — the ContentInfo DER
+                // signedAuthPack [0] IMPLICIT -- the ContentInfo DER
                 writer
                     .next()
                     .write_tagged_implicit(yasna::Tag::context(0), |w| {
@@ -655,9 +655,9 @@ impl PkinitAuthenticator {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  OCSP / CRL Helper Functions
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// OCSP responder OID: id-ad-ocsp (1.3.6.1.5.5.7.48.1)
 const OID_AD_OCSP: &[u64] = &[1, 3, 6, 1, 5, 5, 7, 48, 1];
@@ -711,8 +711,8 @@ fn parse_crl_distribution_points(cert: &X509Certificate) -> Vec<String> {
 
 /// Check certificate revocation via OCSP (Online Certificate Status Protocol).
 /// Sends an OCSP request to each responder URL and parses the response.
-/// - Network errors → soft-fail (log + accept)
-/// - Confirmed revocation → hard-fail
+/// - Network errors -> soft-fail (log + accept)
+/// - Confirmed revocation -> hard-fail
 async fn check_ocsp_stapled(
     cert: &X509Certificate<'_>,
     urls: &[String],
@@ -749,14 +749,14 @@ async fn check_ocsp_stapled(
                 };
                 match parse_ocsp_response(&body) {
                     Ok(OcspStatus::Good) => {
-                        info!("PKINIT: OCSP {} → good", url);
+                        info!("PKINIT: OCSP {} -> good", url);
                         return Ok(());
                     }
                     Ok(OcspStatus::Revoked) => {
                         return Err(OverthroneError::Auth("Certificate revoked (OCSP)".into()));
                     }
                     Ok(OcspStatus::Unknown) => {
-                        warn!("PKINIT: OCSP {} → unknown status", url);
+                        warn!("PKINIT: OCSP {} -> unknown status", url);
                         continue;
                     }
                     Err(e) => {
@@ -816,7 +816,7 @@ fn build_ocsp_request_der(cert: &X509Certificate) -> Result<Vec<u8>> {
         writer.write_sequence(|writer| {
             // TBSRequest
             writer.next().write_sequence(|writer| {
-                // version [0] EXPLICIT INTEGER DEFAULT 0 — skip (default)
+                // version [0] EXPLICIT INTEGER DEFAULT 0 -- skip (default)
 
                 // requestList SEQUENCE OF Request
                 writer.next().write_sequence(|writer| {
@@ -889,7 +889,7 @@ fn parse_ocsp_response(data: &[u8]) -> Result<OcspStatus> {
         let byte = data[i];
         match byte {
             0x80 | 0x81 | 0x82 | 0xA0 | 0xA1 | 0xA2 if found_cert_id_end => {
-                // Context-specific tags — possible certStatus
+                // Context-specific tags -- possible certStatus
                 return match byte {
                     0x80 | 0xA0 => Ok(OcspStatus::Good),
                     0x81 | 0xA1 => Ok(OcspStatus::Revoked),
@@ -945,7 +945,7 @@ async fn check_crl(cert: &X509Certificate<'_>, urls: &[String], timeout_secs: u6
                     }
                     Ok(false) => {
                         info!(
-                            "PKINIT: CRL {url} — serial {} not revoked",
+                            "PKINIT: CRL {url} -- serial {} not revoked",
                             hex::encode(serial)
                         );
                         return Ok(());

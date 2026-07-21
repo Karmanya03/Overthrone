@@ -1,7 +1,7 @@
-//! Silver Ticket forging — forge a service ticket using a service account's key.
+//! Silver Ticket forging -- forge a service ticket using a service account's key.
 //!
 //! Unlike Golden Tickets, Silver Tickets target a specific SPN and never
-//! touch the KDC — they go directly to the target service.
+//! touch the KDC -- they go directly to the target service.
 
 use chrono::{Duration, Utc};
 use kerberos_asn1::{

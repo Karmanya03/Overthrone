@@ -142,7 +142,7 @@ pub async fn enumerate_mssql(config: &ReaperConfig) -> Result<Vec<MssqlInstance>
             instance.audit_result = None;
 
             info!(
-                "[mssql]  {} → {} (host: {}, port: {:?})",
+                "[mssql]  {} -> {} (host: {}, port: {:?})",
                 account,
                 spn,
                 instance.hostname.as_deref().unwrap_or("?"),

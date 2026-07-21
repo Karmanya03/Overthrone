@@ -11,9 +11,9 @@ use crate::error::{OverthroneError, Result};
 use crate::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Default output share for WMI command output
 const DEFAULT_OUTPUT_SHARE: &str = "C$";
@@ -24,9 +24,9 @@ const OUTPUT_PREFIX: &str = "__wmiexec_";
 /// Default timeout for command completion (seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for WMIExec
 pub struct WmiExecConfig {
@@ -66,9 +66,9 @@ pub struct WmiExecResult {
     pub return_code: Option<u32>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  WMI Process Creation via SCM Fallback
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 // Full DCOM/WMI protocol is extremely complex (OXID resolution,
 // IRemoteSCMActivator, IWbemServices, etc.). We implement a
@@ -152,7 +152,7 @@ pub async fn execute(
 /// 4. IWbemServices::ExecMethod (Win32_Process.Create)
 /// 5. IRemUnknown2::RemRelease cleanup
 async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<()> {
-    // ── Phase 1: Endpoint Mapper Bind ──
+    // -- Phase 1: Endpoint Mapper Bind --
     let epm_bind = build_epm_bind();
     let epm_resp = session
         .pipe_transact("epmapper", &epm_bind)
@@ -173,7 +173,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
     }
     debug!("WMI/DCOM: EPM bind_ack received ({} bytes)", epm_resp.len());
 
-    // ── Phase 1b: EPM ept_map to resolve IRemoteSCMActivator ──
+    // -- Phase 1b: EPM ept_map to resolve IRemoteSCMActivator --
     let ept_map_req = build_ept_map_request();
     let ept_map_resp = session
         .pipe_transact("epmapper", &ept_map_req)
@@ -187,7 +187,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
     // We try the well-known endpoint first, then fall back to parsed endpoint.
     let _dynamic_port = parse_ept_map_port(&ept_map_resp);
 
-    // ── Phase 2: DCOM Activation — bind to IRemoteSCMActivator ──
+    // -- Phase 2: DCOM Activation -- bind to IRemoteSCMActivator --
     // Bind to IRemoteSCMActivator on the DCOM activation pipe
     let scm_bind = build_scm_activator_bind();
     let scm_bind_resp = session
@@ -223,7 +223,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         &login_ipid[..4]
     );
 
-    // ── Phase 3: IWbemLevel1Login::NTLMLogin ──
+    // -- Phase 3: IWbemLevel1Login::NTLMLogin --
     // Bind to the IPID we got from Phase 2 (re-use the same transport)
     let login_req = build_ntlm_login_request(&login_ipid);
     let login_resp = session
@@ -242,7 +242,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         &services_ipid[..4]
     );
 
-    // ── Phase 4: IWbemServices::ExecMethod (Win32_Process.Create) ──
+    // -- Phase 4: IWbemServices::ExecMethod (Win32_Process.Create) --
     let exec_req = build_exec_method_request(&services_ipid, command);
     let exec_resp = session
         .pipe_transact("epmapper", &exec_req)
@@ -261,7 +261,7 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
         info!("WMI/DCOM: Win32_Process.Create succeeded");
     }
 
-    // ── Phase 5: Cleanup — IRemUnknown2::RemRelease ──
+    // -- Phase 5: Cleanup -- IRemUnknown2::RemRelease --
     // Release both OIDs to avoid server resource leaks
     let release_req = build_rem_release(&services_ipid, &[services_oid, login_oid]);
     let _ = session.pipe_transact("epmapper", &release_req).await;
@@ -276,9 +276,9 @@ async fn try_wmi_process_create(session: &SmbSession, command: &str) -> Result<(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCOM Protocol Builders
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// IRemoteSCMActivator UUID: 000001A0-0000-0000-C000-000000000046
 const SCM_ACTIVATOR_UUID: [u8; 16] = [
@@ -328,7 +328,7 @@ fn build_orpc_this() -> Vec<u8> {
     buf.extend_from_slice(&0u32.to_le_bytes());
     // Reserved1
     buf.extend_from_slice(&0u32.to_le_bytes());
-    // CID (causality ID) — 16 bytes
+    // CID (causality ID) -- 16 bytes
     buf.extend_from_slice(&random_causality_id());
     // Extensions pointer (NULL)
     buf.extend_from_slice(&0u32.to_le_bytes());
@@ -416,7 +416,7 @@ fn build_remote_create_instance() -> Vec<u8> {
     // pUnkOuter (NULL)
     stub.extend_from_slice(&0u32.to_le_bytes());
 
-    // pActProperties — DCOM Activation Properties
+    // pActProperties -- DCOM Activation Properties
     // This is a simplified version focused on the minimum required data
     let act_props = build_activation_properties();
     stub.extend(act_props);
@@ -542,9 +542,9 @@ fn build_exec_method_request(services_ipid: &[u8; 16], command: &str) -> Vec<u8>
 
 /// Encode Win32_Process.Create parameters as IWbemClassObject (simplified OBMSDATA).
 /// Win32_Process.Create takes:
-///   - CommandLine (string) — required
-///   - CurrentDirectory (string) — optional
-///   - ProcessStartupInformation (object) — optional
+///   - CommandLine (string) -- required
+///   - CurrentDirectory (string) -- optional
+///   - ProcessStartupInformation (object) -- optional
 ///     Returns OBMSDATA blob with CommandLine set.
 fn build_win32_process_create_params(command: &str) -> Vec<u8> {
     let mut data = Vec::new();
@@ -639,9 +639,9 @@ fn build_rem_release(ipid: &[u8; 16], oids: &[u64]) -> Vec<u8> {
     build_dcom_request(5, ipid, &stub, 6)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCOM Response Parsers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse an OBJREF (marshaled interface pointer) from a DCOM response.
 /// Returns `(IPID [16 bytes], OXID, OID)`.
@@ -665,7 +665,7 @@ fn parse_objref(response: &[u8]) -> std::result::Result<([u8; 16], u64, u64), St
     }
 
     // OBJREF layout after "MEOW":
-    //   4: flags (u32) — 0x01 = OBJREF_STANDARD
+    //   4: flags (u32) -- 0x01 = OBJREF_STANDARD
     //   8: IID (16 bytes)
     //  24: STDOBJREF start
     //      24: flags (u32)
@@ -798,7 +798,7 @@ fn build_ept_map_request() -> Vec<u8> {
     // ept_map input parameters (simplified):
     // - object UUID (16 bytes) = NULL
     pkt.extend_from_slice(&[0x00; 16]);
-    // - tower (endpoint to look up) — contains the interface UUID
+    // - tower (endpoint to look up) -- contains the interface UUID
     let tower_len: u32 = 75; // approximate tower length
     pkt.extend_from_slice(&tower_len.to_le_bytes());
     pkt.extend_from_slice(&tower_len.to_le_bytes()); // max count
@@ -1013,9 +1013,9 @@ impl<'a> WmiExecShell<'a> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Executor Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Data structure used by this module.
 pub struct WmiExecutor {
     creds: super::ExecCredentials,

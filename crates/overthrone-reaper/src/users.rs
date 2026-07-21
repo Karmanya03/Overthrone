@@ -66,7 +66,7 @@ pub struct UserEntry {
     pub service_principal_names: Vec<String>,
     /// Security Identifier
     pub sid: Option<String>,
-    /// msDS-AllowedToDelegateTo — constrained delegation targets for this user.
+    /// msDS-AllowedToDelegateTo -- constrained delegation targets for this user.
     pub allowed_to_delegate_to: Vec<String>,
     /// True when msDS-AllowedToActOnBehalfOfOtherIdentity is present (RBCD configured).
     pub has_rbcd: bool,

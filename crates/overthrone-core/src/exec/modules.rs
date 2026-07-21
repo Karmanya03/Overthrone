@@ -14,9 +14,9 @@ use tracing::{info, warn};
 
 use super::{ExecCredentials, ExecMethod, ExecOutput};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Module Category & Metadata
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// High-level category for grouping modules in CLI and help output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,9 +72,9 @@ pub struct ModuleMetadata {
     pub requires_target: bool,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Enhanced Module Trait
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Trait implemented by built-in or plugin-like modules.
 /// # Example
@@ -144,9 +144,9 @@ pub trait OvtModule: Send + Sync {
     ) -> Result<ExecOutput>;
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Global Module Registry
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 static MODULE_REGISTRY: Lazy<RwLock<HashMap<String, Arc<dyn OvtModule>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
@@ -189,9 +189,9 @@ pub async fn module_count() -> usize {
     MODULE_REGISTRY.read().await.len()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Parallel Execution Support
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of running a module against a single target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,9 +299,9 @@ pub async fn run_module_parallel(
     results
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Parameter Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn get_param_str(params: &Option<Value>, key: &str, default: &str) -> String {
     params
@@ -310,12 +310,12 @@ fn get_param_str(params: &Option<Value>, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // BUILT-IN EXECUTION MODULES
 // These modules depend only on crate-internal executors
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-// ── WinRM Exec Module ────────────────────────────────────
+// -- WinRM Exec Module ------------------------------------
 /// Data structure used by this module.
 pub struct WinRmExecModule;
 
@@ -343,7 +343,7 @@ impl OvtModule for WinRmExecModule {
     }
 }
 
-// ── SMB Exec Module ──────────────────────────────────────
+// -- SMB Exec Module --------------------------------------
 /// Data structure used by this module.
 pub struct SmbExecModule;
 
@@ -384,7 +384,7 @@ impl OvtModule for SmbExecModule {
     }
 }
 
-// ── PsExec Module ────────────────────────────────────────
+// -- PsExec Module ----------------------------------------
 /// Data structure used by this module.
 pub struct PsExecModule;
 
@@ -412,7 +412,7 @@ impl OvtModule for PsExecModule {
     }
 }
 
-// ── WMI Exec Module ──────────────────────────────────────
+// -- WMI Exec Module --------------------------------------
 /// Data structure used by this module.
 pub struct WmiExecModule;
 
@@ -453,7 +453,7 @@ impl OvtModule for WmiExecModule {
     }
 }
 
-// ── AtExec Module ────────────────────────────────────────
+// -- AtExec Module ----------------------------------------
 /// Data structure used by this module.
 pub struct AtExecModule;
 
@@ -481,7 +481,7 @@ impl OvtModule for AtExecModule {
     }
 }
 
-// ── RDP Scanner Module ───────────────────────────────────
+// -- RDP Scanner Module -----------------------------------
 /// Data structure used by this module.
 pub struct RdpModule;
 
@@ -537,9 +537,9 @@ impl OvtModule for RdpModule {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// REGISTRATION — core built-in modules only
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// REGISTRATION -- core built-in modules only
+// ===========================================================
 
 /// Register all built-in modules that depend only on core crate internals.
 /// CME/NetExec-style modules that reference other crates (reaper, hunter, etc.)
@@ -554,14 +554,14 @@ pub async fn register_core_modules() {
     info!("Registered {} core execution modules", module_count().await);
 }
 
-/// Legacy alias for backwards compatibility — registers only core exec modules.
+/// Legacy alias for backwards compatibility -- registers only core exec modules.
 pub async fn register_builtin_modules() {
     register_core_modules().await;
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // TESTS
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

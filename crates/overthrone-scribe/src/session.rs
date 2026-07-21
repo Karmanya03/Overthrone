@@ -1,4 +1,4 @@
-//! Engagement session — Holds all metadata, scope, findings, and raw
+//! Engagement session -- Holds all metadata, scope, findings, and raw
 //! data needed to produce a report. Acts as the single input struct
 //! that the report renderers consume.
 
@@ -12,9 +12,9 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Severity
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Finding severity aligned with CVSS v3.1 qualitative ratings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -72,9 +72,9 @@ impl std::fmt::Display for Severity {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Finding
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// A single security finding
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +85,7 @@ pub struct Finding {
     pub title: String,
     /// Severity
     pub severity: Severity,
-    /// CVSS v3.1 score (0.0–10.0)
+    /// CVSS v3.1 score (0.0--10.0)
     pub cvss_score: f32,
     /// CVSS vector string
     pub cvss_vector: Option<String>,
@@ -229,11 +229,11 @@ pub enum EvidenceType {
     NetworkCapture,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Operator Attribution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Operator attribution metadata — who ran what, when, from where
+/// Operator attribution metadata -- who ran what, when, from where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorMetadata {
     /// Operator's name or handle
@@ -263,9 +263,9 @@ impl Default for OperatorMetadata {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Timeline Entry
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// A single timeline entry grouping findings by date
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,14 +284,14 @@ pub struct TimelineDay {
     pub count: usize,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Engagement Session
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Complete engagement session — the single source of truth for report generation
+/// Complete engagement session -- the single source of truth for report generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngagementSession {
-    // ── Metadata ──
+    // -- Metadata --
     /// Stable unique identifier.
     pub id: String,
     /// title field
@@ -309,27 +309,27 @@ pub struct EngagementSession {
     /// version field
     pub version: String,
 
-    // ── Timeline ──
+    // -- Timeline --
     /// started at field
     pub started_at: DateTime<Utc>,
     /// finished at field
     pub finished_at: Option<DateTime<Utc>>,
 
-    // ── Scope ──
+    // -- Scope --
     /// scope field
     pub scope: EngagementScope,
 
-    // ── Findings ──
+    // -- Findings --
     /// findings field
     pub findings: Vec<Finding>,
 
-    // ── Raw data from pilot ──
+    // -- Raw data from pilot --
     /// engagement state field
     pub engagement_state: Option<EngagementState>,
     /// autopwn result field
     pub autopwn_result: Option<AutoPwnResult>,
 
-    // ── Summary stats ──
+    // -- Summary stats --
     /// Domain FQDN
     pub domain_admin_achieved: bool,
     /// Total count
@@ -341,7 +341,7 @@ pub struct EngagementSession {
     /// Total count
     pub total_admin_hosts: usize,
 
-    // ── Operator Attribution ──
+    // -- Operator Attribution --
     /// Operator metadata for attribution (who/when/from-where)
     #[serde(default)]
     pub operator: Option<OperatorMetadata>,
@@ -407,7 +407,7 @@ impl EngagementSession {
 
         let mut session = Self {
             id: Uuid::new_v4().to_string(),
-            title: format!("Active Directory Assessment — {}", domain),
+            title: format!("Active Directory Assessment -- {}", domain),
             client_name: client_name.to_string(),
             assessor_name: assessor_name.to_string(),
             assessor_company: assessor_company.to_string(),
@@ -546,7 +546,7 @@ impl EngagementSession {
         };
         let domain = state.domain.clone().unwrap_or_default();
 
-        // ── Kerberoastable accounts ──
+        // -- Kerberoastable accounts --
         if !state.kerberoastable.is_empty() {
             self.findings.push(Finding {
                 id: format!("OT-{}-001", self.id.split('-').next().unwrap_or("F")),
@@ -557,7 +557,7 @@ impl EngagementSession {
                 category: FindingCategory::KerberosAbuse,
                 description: format!(
                     "{} user account(s) with Service Principal Names (SPNs) were identified. \
-                     These accounts are vulnerable to Kerberoasting — an attacker with any \
+                     These accounts are vulnerable to Kerberoasting -- an attacker with any \
                      valid domain credential can request TGS tickets and crack them offline \
                      to recover plaintext passwords.",
                     state.kerberoastable.len()
@@ -588,7 +588,7 @@ impl EngagementSession {
             });
         }
 
-        // ── AS-REP Roastable accounts ──
+        // -- AS-REP Roastable accounts --
         if !state.asrep_roastable.is_empty() {
             self.findings.push(Finding {
                 id: format!("OT-{}-002", self.id.split('-').next().unwrap_or("F")),
@@ -625,7 +625,7 @@ impl EngagementSession {
             });
         }
 
-        // ── Compromised credentials ──
+        // -- Compromised credentials --
         if !state.credentials.is_empty() {
             let admin_creds: Vec<_> = state
                 .credentials
@@ -691,7 +691,7 @@ impl EngagementSession {
             });
         }
 
-        // ── Unconstrained delegation ──
+        // -- Unconstrained delegation --
         if !state.unconstrained_delegation.is_empty() {
             self.findings.push(Finding {
                 id: format!("OT-{}-004", self.id.split('-').next().unwrap_or("F")),
@@ -703,7 +703,7 @@ impl EngagementSession {
                 description: format!(
                     "{} non-DC computer(s) have unconstrained delegation enabled. \
                      An attacker who compromises these hosts can capture TGTs from \
-                     any user who authenticates to them — including domain admins \
+                     any user who authenticates to them -- including domain admins \
                      via coercion attacks (e.g., PetitPotam, PrinterBug).",
                     state.unconstrained_delegation.len()
                 ),
@@ -729,7 +729,7 @@ impl EngagementSession {
             });
         }
 
-        // ── Admin access on hosts ──
+        // -- Admin access on hosts --
         if !state.admin_hosts.is_empty() {
             self.findings.push(Finding {
                 id: format!("OT-{}-005", self.id.split('-').next().unwrap_or("F")),
@@ -760,11 +760,11 @@ impl EngagementSession {
             });
         }
 
-        // ── Domain Admin achieved ──
+        // -- Domain Admin achieved --
         if state.has_domain_admin {
             self.findings.push(Finding {
                 id: format!("OT-{}-006", self.id.split('-').next().unwrap_or("F")),
-                title: "Full Domain Compromise — Domain Admin Achieved".to_string(),
+                title: "Full Domain Compromise -- Domain Admin Achieved".to_string(),
                 severity: Severity::Critical,
                 cvss_score: 10.0,
                 cvss_vector: Some("CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H".to_string()),

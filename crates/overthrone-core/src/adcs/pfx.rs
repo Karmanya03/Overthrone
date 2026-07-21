@@ -6,9 +6,9 @@ use crate::error::{OverthroneError, Result};
 use base64::Engine;
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // PKCS#12 / PFX Generation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// PFX (PKCS#12) container for certificate and private key
 pub struct PfxBuilder {

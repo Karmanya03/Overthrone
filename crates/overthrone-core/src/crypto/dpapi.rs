@@ -125,7 +125,7 @@ impl DpapiDecryptor {
     /// Parse and decrypt a DPAPI masterkey file.
     ///
     /// Masterkey files are encrypted with the domain backup key.
-    /// The decryption flow: HMAC-SHA512(backup_key, masterkey_guid) → AES-256-GCM key.
+    /// The decryption flow: HMAC-SHA512(backup_key, masterkey_guid) -> AES-256-GCM key.
     pub fn decrypt_masterkey(&mut self, raw: &[u8]) -> Result<DpapiMasterkey> {
         let parsed = self.parse_masterkey_file(raw)?;
 

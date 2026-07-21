@@ -16,7 +16,7 @@ pub mod atexec;
 pub mod lolbin;
 pub mod modules;
 pub mod psexec;
-pub mod shell; // ← Export shell module
+pub mod shell; // <- Export shell module
 pub mod smbexec;
 pub mod winrm;
 pub mod wmiexec;
@@ -124,9 +124,9 @@ pub trait RemoteExecutor: Send + Sync {
     }
 }
 
-// ──────────────────────────────────────────────────────────
-// C2-backed executor — wraps a C2 session as a RemoteExecutor
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
+// C2-backed executor -- wraps a C2 session as a RemoteExecutor
+// ----------------------------------------------------------
 
 /// Wraps a C2 channel + session ID into a RemoteExecutor
 /// This lets C2 sessions participate in `auto_exec` alongside
@@ -221,13 +221,13 @@ fn base64_encode_ps(script: &str) -> String {
 }
 
 /// Try all available execution methods in order of stealth
-/// Order: C2 (if session exists) → WinRM → AtExec → SmbExec → PSExec → WMI
+/// Order: C2 (if session exists) -> WinRM -> AtExec -> SmbExec -> PSExec -> WMI
 /// If `c2_sessions` is provided, C2 sessions matching the target hostname
 /// are tried first (most OPSEC-safe since traffic goes through existing implant).
 pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> Result<ExecOutput> {
     use tracing::info;
 
-    // Order: WinRM → AtExec → SmbExec → PsExec → WMI (most reliable first)
+    // Order: WinRM -> AtExec -> SmbExec -> PsExec -> WMI (most reliable first)
     #[allow(unused_mut)]
     let mut executors: Vec<Box<dyn RemoteExecutor>> = vec![
         Box::new(winrm::WinRmExecutor::new(creds.clone())),
@@ -235,7 +235,7 @@ pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> 
         Box::new(smbexec::SmbExecutor::new(creds.clone())),
         Box::new(psexec::PsExecutor::new(creds.clone())),
     ];
-    // WmiExec only works on Windows — skip on other platforms
+    // WmiExec only works on Windows -- skip on other platforms
     #[cfg(windows)]
     executors.push(Box::new(wmiexec::WmiExecutor::new(creds.clone())));
 
@@ -261,7 +261,7 @@ pub async fn auto_exec_with_c2(
 ) -> Result<ExecOutput> {
     use tracing::info;
 
-    // Try C2 sessions first (best OPSEC — reuses existing implant)
+    // Try C2 sessions first (best OPSEC -- reuses existing implant)
     for executor in &c2_executors {
         if executor.check_available(target).await {
             info!("exec: Using {} for {target} (via C2)", executor.method());

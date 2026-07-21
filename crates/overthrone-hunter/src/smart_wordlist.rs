@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result Structures
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Generated wordlist result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,9 +40,9 @@ pub struct WordlistStats {
     pub base_words: usize,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for smart wordlist generation
 #[derive(Debug, Clone)]
@@ -74,9 +74,9 @@ impl Default for WordlistConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Generate a smart wordlist based on LDAP enumeration data
 ///
@@ -91,7 +91,7 @@ pub async fn generate_smart_wordlist(
 ) -> Result<SmartWordlistResult, overthrone_core::error::OverthroneError> {
     info!(
         "{}",
-        "═══ SMART WORDLIST GENERATION ═══".bright_cyan().bold()
+        "=== SMART WORDLIST GENERATION ===".bright_cyan().bold()
     );
 
     let mut passwords = HashSet::new();
@@ -231,9 +231,9 @@ pub async fn generate_smart_wordlist(
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Pattern Generators
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn extract_domain_words(domain: &str) -> Vec<String> {
     let mut words = Vec::new();

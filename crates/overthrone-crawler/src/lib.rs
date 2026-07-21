@@ -1,4 +1,4 @@
-//! overthrone-crawler — AD trust traversal & cross-domain escalation engine.
+//! overthrone-crawler -- AD trust traversal & cross-domain escalation engine.
 //!
 //! Analyzes reaper enumeration data to map trust relationships,
 //! detect cross-domain attack paths, SID filtering gaps, foreign

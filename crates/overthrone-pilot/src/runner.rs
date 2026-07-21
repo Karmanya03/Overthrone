@@ -1,9 +1,9 @@
-//! Top-level runner — The main autopwn loop that ties together
+//! Top-level runner -- The main autopwn loop that ties together
 //! goals, planner, executor, and adaptive engine into a cohesive
 //! autonomous attack workflow.
 //!
 //! Flow:
-//!   1. Parse config → set goal
+//!   1. Parse config -> set goal
 //!   2. Planner builds initial attack plan
 //!   3. Loop over plan steps:
 //!      a. Executor runs the step
@@ -30,12 +30,12 @@ use tracing::{info, warn};
 #[cfg(feature = "qlearn")]
 use crate::qlearner::{AdaptiveMode, AdaptiveQLearner, EngagementStateKey, decision_to_action};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Credentials
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Holds domain credentials for the pilot runner.
-/// Private `secret` field is intentional — use `CredentialSnapshot` for serde.
+/// Private `secret` field is intentional -- use `CredentialSnapshot` for serde.
 #[derive(Debug, Clone)]
 pub struct Credentials {
     /// Domain FQDN
@@ -96,7 +96,7 @@ impl Credentials {
 }
 
 /// Serializable credential snapshot used in checkpoints.
-/// Stores all fields plaintext — only write to disk in a secure context.
+/// Stores all fields plaintext -- only write to disk in a secure context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialSnapshot {
     /// Domain FQDN
@@ -109,9 +109,9 @@ pub struct CredentialSnapshot {
     pub is_hash: bool,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Stages (ordered attack phases)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Ordered attack stages
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -143,9 +143,9 @@ impl std::fmt::Display for Stage {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Exec Method
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Remote execution method preference
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,9 +174,9 @@ impl std::fmt::Display for ExecMethod {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // AutoPwn Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Serializable config used by WizardSession checkpointing.
 /// Mirrors AutoPwnConfig but uses CredentialSnapshot for serde.
@@ -217,9 +217,9 @@ pub struct AutoPwnConfig {
     pub target: String,
     /// Maximum stage to reach
     pub max_stage: Stage,
-    /// Stealth mode — prefer low-noise methods
+    /// Stealth mode -- prefer low-noise methods
     pub stealth: bool,
-    /// Dry run — plan only, don't execute
+    /// Dry run -- plan only, don't execute
     pub dry_run: bool,
     /// Preferred execution method
     pub exec_method: ExecMethod,
@@ -383,9 +383,9 @@ impl AutoPwnConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // AutoPwn Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Final result of the autonomous attack run
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,9 +412,9 @@ pub struct AutoPwnResult {
     pub steps_failed: usize,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Main Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Run the autonomous attack chain
 pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
@@ -423,19 +423,19 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
     println!(
         "\n{}",
-        "╔══════════════════════════════════════════════╗"
+        "+==============================================+"
             .bold()
             .red()
     );
     println!(
         "{}",
-        "║          OVERTHRONE — PILOT AUTOPWN          ║"
+        "|          OVERTHRONE -- PILOT AUTOPWN          |"
             .bold()
             .red()
     );
     println!(
         "{}",
-        "╚══════════════════════════════════════════════╝"
+        "+==============================================+"
             .bold()
             .red()
     );
@@ -501,7 +501,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let mut adaptive = AdaptiveEngine::new(config.stealth);
     let mut ctx = config.exec_context();
 
-    // ── OPSEC profile override for stealth mode ──
+    // -- OPSEC profile override for stealth mode --
     // When stealth is enabled, use the strict stealth profile regardless of
     // what was configured. This ensures the noise budget is always tight.
     let effective_opsec = if config.stealth {
@@ -522,13 +522,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         );
     }
 
-    // ── Q-Learning Engine (optional) ──
+    // -- Q-Learning Engine (optional) --
     #[cfg(feature = "qlearn")]
     let mut qlearner: Option<AdaptiveQLearner> = match config.adaptive_mode {
         AdaptiveMode::QLearning | AdaptiveMode::Hybrid => {
             let ql = AdaptiveQLearner::load(config.stealth, config.q_table_path.clone());
             println!(
-                "  {} Q-learner loaded (mode={:?}, states={}, Îµ={:.3})",
+                "  {} Q-learner loaded (mode={:?}, states={}, eps={:.3})",
                 "QL".bold().magenta(),
                 config.adaptive_mode,
                 ql.q_table_size(),
@@ -539,7 +539,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         AdaptiveMode::Heuristic => None,
     };
 
-    // ── LDAP Pre-flight Check ──
+    // -- LDAP Pre-flight Check --
     // Try LDAP bind to verify connectivity before starting the attack chain.
     // If it fails, mark LDAP as unavailable to skip LDAP-dependent steps
     // instead of failing each one identically.
@@ -561,7 +561,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 Ok(mut session) => {
                     println!(
                         "  {} LDAP NTLM bind OK ({})",
-                        "✓".green().bold(),
+                        "[+]".green().bold(),
                         session.bind_type
                     );
                     let _ = session.disconnect().await;
@@ -569,7 +569,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 Err(e) => {
                     println!(
                         "  {} LDAP pre-flight failed (hash mode): {}",
-                        "✗".red().bold(),
+                        "[-]".red().bold(),
                         e
                     );
                     println!(
@@ -593,13 +593,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 Ok(mut session) => {
                     println!(
                         "  {} LDAP bind OK ({})",
-                        "✓".green().bold(),
+                        "[+]".green().bold(),
                         session.bind_type
                     );
                     let _ = session.disconnect().await;
                 }
                 Err(e) => {
-                    println!("  {} LDAP pre-flight failed: {}", "✗".red().bold(), e);
+                    println!("  {} LDAP pre-flight failed: {}", "[-]".red().bold(), e);
                     println!(
                         "  {} LDAP-dependent enumeration steps will be skipped. \
                      Kerberos and SMB operations will still be attempted.",
@@ -611,7 +611,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     }
 
-    // ── Hostile DC Detection ──
+    // -- Hostile DC Detection --
     if config.dc_verify.enabled && !config.dry_run {
         println!("  {} Hostile DC detection check...", "DC".bold().cyan());
         let dc_result =
@@ -623,7 +623,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         if dc_result.is_hostile() && config.dc_verify.strict {
             let reason = format!("Hostile DC detected: {}", dc_result.summary);
             println!(
-                "  {} Hostile DC detected and strict mode enabled — aborting",
+                "  {} Hostile DC detected and strict mode enabled -- aborting",
                 "ABORT".red().bold()
             );
             return AutoPwnResult {
@@ -651,7 +651,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     let mut steps_failed = 0usize;
     let mut successful_steps: Vec<PlanStep> = Vec::new();
 
-    // ── Per-stage tracking ──
+    // -- Per-stage tracking --
     let mut stage_stats: HashMap<Stage, (usize, usize)> = HashMap::new(); // (succeeded, failed)
     let mut current_stage: Option<Stage> = None;
 
@@ -664,7 +664,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     'main: loop {
         adaptive.adjust_plan(&mut plan, &state);
 
-        // ── Concurrent execution: collect parallel-safe steps in the same stage ──
+        // -- Concurrent execution: collect parallel-safe steps in the same stage --
         if config.enable_concurrent {
             let parallel_indices: Vec<usize> = {
                 let first_unexecuted = plan.steps.iter().position(|s| !s.executed);
@@ -750,7 +750,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         let step_idx = match plan.steps.iter().position(|s| !s.executed) {
             Some(idx) => idx,
             None => {
-                println!("\n  {} All planned steps executed", "✓".green().bold());
+                println!("\n  {} All planned steps executed", "[+]".green().bold());
                 break 'main;
             }
         };
@@ -759,14 +759,14 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         if step.stage > config.max_stage {
             println!(
                 "\n  {} Stage {} exceeds max ({}), stopping",
-                "âŠ˜".dimmed(),
+                "[!]".dimmed(),
                 step.stage,
                 config.max_stage
             );
             break 'main;
         }
 
-        // ── OPSEC gate: cost/benefit analysis using OpsecProfile ──
+        // -- OPSEC gate: cost/benefit analysis using OpsecProfile --
         {
             let (step_noise, step_priority, step_desc) = {
                 let s = &plan.steps[step_idx];
@@ -776,18 +776,18 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             let decision = effective_opsec.should_execute(step_noise, step_priority, has_creds);
             match &decision {
                 crate::planner::OpsecDecision::Allow { reason } => {
-                    tracing::debug!("OPSEC: allowing '{}' — {}", step_desc, reason);
+                    tracing::debug!("OPSEC: allowing '{}' -- {}", step_desc, reason);
                 }
                 crate::planner::OpsecDecision::AllowOverride { reason } => {
                     println!(
-                        "  {} OPSEC override: '{}' — {}",
+                        "  {} OPSEC override: '{}' -- {}",
                         "\u{26a0}".yellow().bold(),
                         step_desc,
                         reason
                     );
                 }
                 crate::planner::OpsecDecision::Deny { reason } => {
-                    warn!("  OPSEC: skipping '{}' — {}", step_desc, reason);
+                    warn!("  OPSEC: skipping '{}' -- {}", step_desc, reason);
                     plan.steps[step_idx].executed = true;
                     plan.steps[step_idx].result = Some(crate::planner::StepResult {
                         success: false,
@@ -801,7 +801,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         }
 
-        // ── Stage transition: print banner when entering a new stage ──
+        // -- Stage transition: print banner when entering a new stage --
         if current_stage != Some(step.stage) {
             if current_stage.is_some() {
                 print_kill_chain_pipeline(current_stage, &stage_stats);
@@ -825,22 +825,22 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             current_stage = Some(step.stage);
         }
 
-        // ── Step pre-announcement ──
+        // -- Step pre-announcement --
         println!(
             "\n  {} [{}/{}] [{}] {}  {}{}",
-            "┌─".dimmed(),
+            "+-".dimmed(),
             steps_executed + 1,
             total_planned,
             step.stage.to_string().bold(),
             step.description.bold(),
-            format!("â—{}", step.noise).dimmed(),
+            format!("*--{}", step.noise).dimmed(),
             format!("  prio:{}", step.priority).dimmed(),
         );
 
-        // ── Execute ──
+        // -- Execute --
         let step_stage = step.stage;
         let result = executor::execute_step(step, &ctx, &mut state).await;
-        // `step` borrow is no longer needed — use `step_stage` / direct index below.
+        // `step` borrow is no longer needed -- use `step_stage` / direct index below.
         steps_executed += 1;
 
         plan.steps[step_idx].executed = true;
@@ -855,7 +855,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             stage_stats.entry(step_stage).or_insert((0, 0)).1 += 1;
         }
 
-        // ── Step result display ──
+        // -- Step result display --
         if let Some(writer) = &trail {
             writer.append_step(&plan.steps[step_idx], &result, &state);
         }
@@ -885,8 +885,8 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             };
             println!(
                 "  {} {} {}{}",
-                "└─".dimmed(),
-                "✓".green().bold(),
+                "+-".dimmed(),
+                "[+]".green().bold(),
                 output_display.green(),
                 extras.yellow().bold(),
             );
@@ -894,13 +894,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             let output_display = truncate_output(&result.output, 120);
             println!(
                 "  {} {} {}",
-                "└─".dimmed(),
-                "✗".red().bold(),
+                "+-".dimmed(),
+                "[-]".red().bold(),
                 output_display.red(),
             );
         }
 
-        // ── Encode state for Q-learning (before decision) ──
+        // -- Encode state for Q-learning (before decision) --
         #[cfg(feature = "qlearn")]
         let pre_state_key = qlearner.as_ref().map(|ql| {
             EngagementStateKey::encode(
@@ -912,13 +912,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             )
         });
 
-        // ── Q-state display (before decision) ──
+        // -- Q-state display (before decision) --
         #[cfg(feature = "qlearn")]
         if let (Some(ql), Some(key)) = (&qlearner, &pre_state_key) {
             let state_snapshot = AdaptiveQLearner::format_state_snapshot(key, ql.epsilon());
             println!(
                 "  {}  {} state={{{}}}",
-                "│".dimmed(),
+                "|".dimmed(),
                 "[QL]".magenta().bold(),
                 state_snapshot.dimmed(),
             );
@@ -927,7 +927,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         }
 
-        // ── Decide next action ──
+        // -- Decide next action --
         #[cfg(feature = "qlearn")]
         let decision = if let Some(ref mut ql) = qlearner {
             ql.evaluate(&plan.steps[step_idx], &result, &state, &goal)
@@ -937,15 +937,15 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         #[cfg(not(feature = "qlearn"))]
         let decision = adaptive.evaluate(&plan.steps[step_idx], &result, &state, &goal);
 
-        // ── Q-learner decision display ──
+        // -- Q-learner decision display --
         #[cfg(feature = "qlearn")]
         if let Some(ref ql) = qlearner
             && let Some((action, q_val, exploring)) = ql.last_decision_meta()
         {
             let decision_snapshot = AdaptiveQLearner::format_decision(action, *q_val, *exploring);
             println!(
-                "  {}  {} → {}",
-                "│".dimmed(),
+                "  {}  {} -> {}",
+                "|".dimmed(),
                 "[QL]".magenta().bold(),
                 decision_snapshot.cyan(),
             );
@@ -954,7 +954,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         }
 
-        // ── Record Q-learning outcome + display reward ──
+        // -- Record Q-learning outcome + display reward --
         #[cfg(feature = "qlearn")]
         if let (Some(ql), Some(pre_key)) = (&mut qlearner, &pre_state_key) {
             let goal_achieved = state.evaluate_goal(&goal).is_success();
@@ -974,7 +974,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
             println!(
                 "  {}  {} reward={:+.1}  table={} states",
-                "│".dimmed(),
+                "|".dimmed(),
                 "[QL]".magenta().bold(),
                 reward,
                 ql.q_table_size(),
@@ -984,7 +984,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
         }
 
-        // ── Handle decision ──
+        // -- Handle decision --
         if let Some(writer) = &trail {
             writer.append_decision("Decision", format!("{:?}", decision));
         }
@@ -994,7 +994,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                 let status = state.evaluate_goal(&goal);
                 if status.is_success() {
                     println!(
-                        "\n  ðŸŽ¯ {} {}",
+                        "\n  [!] {} {}",
                         "GOAL ACHIEVED:".green().bold(),
                         goal.describe().bold()
                     );
@@ -1011,8 +1011,8 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     None => "plain retry",
                 };
                 println!(
-                    "  {} → {} in {}s [{}]",
-                    "└─".dimmed(),
+                    "  {} -> {} in {}s [{}]",
+                    "+-".dimmed(),
                     "RETRY".yellow().bold(),
                     delay_secs,
                     mod_desc.cyan(),
@@ -1023,7 +1023,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                             if let Some((u, s, h)) =
                                 crate::adaptive::rotate_credential(&state, &ctx.username)
                             {
-                                println!("     ðŸ”‘ Swapping to: {}", u.bold());
+                                println!("     [+] Swapping to: {}", u.bold());
                                 ctx.override_creds = Some((u, s, h));
                             }
                         }
@@ -1041,7 +1041,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                                 _ => "smbexec",
                             };
                             println!(
-                                "     ðŸ”„ Switching exec method: {} → {}",
+                                "     [*] Switching exec method: {} -> {}",
                                 ctx.preferred_method.bold(),
                                 next.bold()
                             );
@@ -1057,8 +1057,8 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
             AdaptiveDecision::Skip { reason } => {
                 println!(
-                    "  {} → {} {}",
-                    "└─".dimmed(),
+                    "  {} -> {} {}",
+                    "+-".dimmed(),
                     "SKIP:".yellow(),
                     reason.dimmed(),
                 );
@@ -1066,8 +1066,8 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
             AdaptiveDecision::Substitute { replacement } => {
                 println!(
-                    "  {} → {} for: {}",
-                    "└─".dimmed(),
+                    "  {} -> {} for: {}",
+                    "+-".dimmed(),
                     "SUBSTITUTE".cyan().bold(),
                     plan.steps[step_idx].description,
                 );
@@ -1092,13 +1092,13 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
             AdaptiveDecision::Replan { reason } => {
                 println!(
-                    "\n  {} → {} {}",
-                    "└─".dimmed(),
+                    "\n  {} -> {} {}",
+                    "+-".dimmed(),
                     "RE-PLAN:".blue().bold(),
                     reason,
                 );
                 if adaptive.replans_exhausted() {
-                    println!("  {} Re-plan limit exhausted — aborting", "✗".red().bold());
+                    println!("  {} Re-plan limit exhausted -- aborting", "[-]".red().bold());
                     rollback_successful_steps(&successful_steps, &ctx, &mut state).await;
                     successful_steps.clear();
                     break 'main;
@@ -1109,7 +1109,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             }
 
             AdaptiveDecision::Abort { reason } => {
-                println!("\n  {} {} {}", "└─".dimmed(), "ABORT:".red().bold(), reason,);
+                println!("\n  {} {} {}", "+-".dimmed(), "ABORT:".red().bold(), reason,);
                 rollback_successful_steps(&successful_steps, &ctx, &mut state).await;
                 successful_steps.clear();
                 break 'main;
@@ -1118,11 +1118,11 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             AdaptiveDecision::PauseForOperator { message } => {
                 println!(
                     "\n  {} {} {}",
-                    "└─".dimmed(),
+                    "+-".dimmed(),
                     "OPERATOR NEEDED:".yellow().bold(),
                     message,
                 );
-                println!("  {} Auto-continuing (non-interactive mode)", "→".dimmed());
+                println!("  {} Auto-continuing (non-interactive mode)", "->".dimmed());
             }
         }
 
@@ -1136,14 +1136,14 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
     // FINAL REPORT
-    // ═══════════════════════════════════════════════════════════
+    // ===========================================================
 
     let finished_at = Utc::now();
     let duration_secs = wall_start.elapsed().as_secs();
 
-    // ── Q-Learning: end episode & persist ──
+    // -- Q-Learning: end episode & persist --
     #[cfg(feature = "qlearn")]
     if let Some(ref mut ql) = qlearner {
         ql.end_episode();
@@ -1174,28 +1174,28 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
     println!(
         "\n{}",
-        "╔══════════════════════════════════════════════════════════╗"
+        "+==========================================================+"
             .bold()
             .cyan()
     );
     println!(
         "{}",
-        "║              PILOT — FINAL REPORT                       ║"
+        "|              PILOT -- FINAL REPORT                       |"
             .bold()
             .cyan()
     );
     println!(
         "{}",
-        "╚══════════════════════════════════════════════════════════╝"
+        "+==========================================================+"
             .bold()
             .cyan()
     );
 
-    // ─── 1. Kill-chain completion visual ───
+    // --- 1. Kill-chain completion visual ---
     println!("\n  {}", "KILL CHAIN".bold().underline());
     print_kill_chain_pipeline(current_stage, &stage_stats);
 
-    // ─── 2. Per-stage stats table ───
+    // --- 2. Per-stage stats table ---
     println!("\n  {}", "STAGE BREAKDOWN".bold().underline());
     let all_stages = [
         Stage::Enumerate,
@@ -1212,7 +1212,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         "Succeeded".bold(),
         "Failed".bold()
     );
-    println!("  {}", "─".repeat(42));
+    println!("  {}", "-".repeat(42));
     for stage in &all_stages {
         let (succ, fail) = stage_stats.get(stage).copied().unwrap_or((0, 0));
         let total = succ + fail;
@@ -1231,9 +1231,9 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     }
 
-    // ─── 3. Goal status ───
+    // --- 3. Goal status ---
     println!(
-        "\n  Goal:       {} → {}",
+        "\n  Goal:       {} -> {}",
         goal.describe().bold(),
         final_status
     );
@@ -1260,7 +1260,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     );
 
-    // ─── 4. Credential table ───
+    // --- 4. Credential table ---
     if !state.credentials.is_empty() {
         println!("\n  {}", "CREDENTIALS".bold().underline());
         println!(
@@ -1271,20 +1271,20 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             "Admin".bold(),
             "Admin On".bold(),
         );
-        println!("  {}", "─".repeat(76));
+        println!("  {}", "-".repeat(76));
         for cred in state.credentials.values() {
             let secret_preview = match cred.secret_type {
                 crate::goals::SecretType::Password => "***".to_string(),
                 _ => {
                     if cred.secret.len() > 8 {
-                        format!("{}…", &cred.secret[..8])
+                        format!("{}...", &cred.secret[..8])
                     } else {
                         cred.secret.clone()
                     }
                 }
             };
             let admin_on_str = if cred.admin_on.is_empty() {
-                "—".to_string()
+                "--".to_string()
             } else {
                 cred.admin_on.join(", ")
             };
@@ -1303,7 +1303,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     }
 
-    // ─── 5. Admin hosts ───
+    // --- 5. Admin hosts ---
     if !state.admin_hosts.is_empty() {
         println!("\n  {}", "ADMIN HOSTS".bold().underline());
         for (i, host) in state.admin_hosts.iter().enumerate() {
@@ -1311,7 +1311,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         }
     }
 
-    // ─── 6. Loot summary ───
+    // --- 6. Loot summary ---
     if !state.loot.is_empty() {
         println!("\n  {}", "LOOT".bold().underline());
         println!(
@@ -1321,26 +1321,26 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
             "Entries".bold(),
             "Path".bold(),
         );
-        println!("  {}", "─".repeat(64));
+        println!("  {}", "-".repeat(64));
         for item in &state.loot {
             println!(
                 "  {:<16} {:<24} {:>8} {}",
                 item.loot_type,
                 item.source,
                 item.entries,
-                item.path.as_deref().unwrap_or("—"),
+                item.path.as_deref().unwrap_or("--"),
             );
         }
     }
 
-    // ─── 7. Q-learner session stats ───
+    // --- 7. Q-learner session stats ---
     #[cfg(feature = "qlearn")]
     if let Some(ref ql) = qlearner {
         println!("\n  {}", "Q-LEARNER".bold().underline().magenta());
         println!("  {}", ql.session_summary());
     }
 
-    // ─── 8. Adaptive summary ───
+    // --- 8. Adaptive summary ---
     let adaptive_summary = adaptive.summary();
     println!("\n  {}", "ADAPTIVE ENGINE".bold().underline());
     println!("  Re-plans:   {}", adaptive_summary.total_replans);
@@ -1364,7 +1364,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         );
     }
 
-    // ─── 9. Audit trail (last 20) ───
+    // --- 9. Audit trail (last 20) ---
     if !state.action_log.is_empty() {
         println!(
             "\n  {}",
@@ -1377,12 +1377,12 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
         };
         for entry in &state.action_log[start..] {
             let icon = if entry.success {
-                "✓".green()
+                "[+]".green()
             } else {
-                "✗".red()
+                "[-]".red()
             };
             println!(
-                "  {} [{}] [{}] {} → {}",
+                "  {} [{}] [{}] {} -> {}",
                 icon,
                 entry.timestamp.format("%H:%M:%S"),
                 entry.stage,
@@ -1394,7 +1394,7 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
 
     println!(
         "\n{}",
-        "══════════════════════════════════════════════════════════"
+        "=========================================================="
             .bold()
             .cyan()
     );
@@ -1413,19 +1413,19 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Print a rich stage banner with step count and noise level.
 fn print_stage_banner(stage: Stage, step_count: usize, noise: crate::planner::NoiseLevel) {
     let (icon, color_fn): (&str, fn(String) -> colored::ColoredString) = match stage {
-        Stage::Enumerate => ("ðŸ”", |s| s.blue()),
-        Stage::Attack => ("âš”ï¸ ", |s| s.yellow()),
-        Stage::Escalate => ("ðŸ“ˆ", |s| s.red()),
-        Stage::Lateral => ("ðŸ”€", |s| s.magenta()),
-        Stage::Loot => ("ðŸ’°", |s| s.red()),
-        Stage::Cleanup => ("ðŸ§¹", |s| s.green()),
+        Stage::Enumerate => ("[*]", |s| s.blue()),
+        Stage::Attack => ("[!] ", |s| s.yellow()),
+        Stage::Escalate => ("[^]", |s| s.red()),
+        Stage::Lateral => ("[><]", |s| s.magenta()),
+        Stage::Loot => ("[$]", |s| s.red()),
+        Stage::Cleanup => ("[~]", |s| s.green()),
     };
     let inner = format!(
         "  {} STAGE: {}  [{} steps]  ({})",
@@ -1438,12 +1438,12 @@ fn print_stage_banner(stage: Stage, step_count: usize, noise: crate::planner::No
         0
     };
     println!();
-    println!("  {}", color_fn(format!("╔{}╗", "═".repeat(width))).bold());
+    println!("  {}", color_fn(format!("+{}+", "=".repeat(width))).bold());
     println!(
         "  {}",
-        color_fn(format!("║{}{}║", inner, " ".repeat(pad))).bold()
+        color_fn(format!("|{}{}|", inner, " ".repeat(pad))).bold()
     );
-    println!("  {}", color_fn(format!("╚{}╝", "═".repeat(width))).bold());
+    println!("  {}", color_fn(format!("+{}+", "=".repeat(width))).bold());
 }
 
 /// Print live kill-chain pipeline showing stage completion status.
@@ -1461,11 +1461,11 @@ fn print_kill_chain_pipeline(current: Option<Stage>, stats: &HashMap<Stage, (usi
     for (i, stage) in stages.iter().enumerate() {
         let (succ, fail) = stats.get(stage).copied().unwrap_or((0, 0));
         let status_icon = if succ > 0 && fail == 0 {
-            "✓".green().bold()
+            "[+]".green().bold()
         } else if fail > 0 && succ > 0 {
             "~".yellow().bold()
         } else if fail > 0 {
-            "✗".red().bold()
+            "[-]".red().bold()
         } else if current == Some(*stage) {
             ">".cyan().bold()
         } else {
@@ -1484,9 +1484,9 @@ fn print_kill_chain_pipeline(current: Option<Stage>, stats: &HashMap<Stage, (usi
         print!("{}{}", status_icon, label.bold());
         if i < stages.len() - 1 {
             let connector = if succ > 0 {
-                " ─── ".green()
+                " --- ".green()
             } else {
-                " ─── ".dimmed()
+                " --- ".dimmed()
             };
             print!("{}", connector);
         }
@@ -1513,18 +1513,18 @@ async fn rollback_successful_steps(
         let result = executor::compensate_step(step, ctx, state).await;
         let output = truncate_output(&result.output, 100);
         if result.success {
-            println!("  {} {}", "✓".green(), output);
+            println!("  {} {}", "[+]".green(), output);
         } else {
             println!("  {} {}", "!".yellow(), output);
         }
     }
 }
 
-/// Truncate a string for display, appending "…" if it exceeds `max_len`.
+/// Truncate a string for display, appending "..." if it exceeds `max_len`.
 fn truncate_output(s: &str, max_len: usize) -> String {
     let clean = s.replace('\n', " ").replace('\r', "");
     if clean.len() > max_len {
-        format!("{}…", &clean[..max_len - 1])
+        format!("{}...", &clean[..max_len - 1])
     } else {
         clean
     }
@@ -1731,7 +1731,7 @@ pub async fn run_playbook(playbook_id: PlaybookId, config: &AutoPwnConfig) -> Au
 mod tests {
     use super::*;
 
-    // ── Credentials ──
+    // -- Credentials --
 
     #[test]
     fn credentials_password_constructor() {
@@ -1760,7 +1760,7 @@ mod tests {
         assert_eq!(restored.secret(), "secret123");
     }
 
-    // ── Stage ordering ──
+    // -- Stage ordering --
 
     #[test]
     fn stage_order_is_correct() {
@@ -1795,7 +1795,7 @@ mod tests {
         assert_eq!(Stage::Loot as isize + 1, Stage::Cleanup as isize);
     }
 
-    // ── ExecMethod display ──
+    // -- ExecMethod display --
 
     #[test]
     fn exec_method_display() {
@@ -1806,7 +1806,7 @@ mod tests {
         assert_eq!(ExecMethod::WinRm.to_string(), "winrm");
     }
 
-    // ── AutoPwnConfig::goal() ──
+    // -- AutoPwnConfig::goal() --
 
     fn sample_config(target: &str) -> AutoPwnConfig {
         AutoPwnConfig {
@@ -1888,7 +1888,7 @@ mod tests {
         assert!(matches!(config.goal(), AttackGoal::DomainAdmin { .. }));
     }
 
-    // ── AutoPwnConfig::exec_context() ──
+    // -- AutoPwnConfig::exec_context() --
 
     #[test]
     fn exec_context_uses_password_when_not_hash() {
@@ -1932,7 +1932,7 @@ mod tests {
         assert!(ctx.use_ldaps);
     }
 
-    // ── AutoPwnConfig snapshot round-trip ──
+    // -- AutoPwnConfig snapshot round-trip --
 
     #[test]
     fn config_snapshot_round_trip() {
@@ -1963,7 +1963,7 @@ mod tests {
         assert!(restored.stealth);
     }
 
-    // ── truncate_output ──
+    // -- truncate_output --
 
     #[test]
     fn truncate_short_string_unchanged() {
@@ -1974,11 +1974,10 @@ mod tests {
     fn truncate_long_string_cut() {
         let long = "a".repeat(200);
         let result = truncate_output(&long, 50);
-        // 49 ASCII chars + 3-byte '…' = 52 bytes
+        // 49 ASCII chars + 3 ASCII dots = 52 bytes, 52 chars
         assert_eq!(result.len(), 52, "Expected 49 chars + 3-byte ellipsis");
-        assert!(result.ends_with('…'));
-        // Character count should be exactly 50
-        assert_eq!(result.chars().count(), 50);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 52);
     }
 
     #[test]
@@ -1995,7 +1994,7 @@ mod tests {
         assert_eq!(truncate_output(s, 11), "hello world");
     }
 
-    // ── Planner ↔ Runner Integration ──
+    // -- Planner <-> Runner Integration --
 
     #[test]
     fn planner_generates_da_plan_with_parallel_safe_steps() {

@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 
 use super::hmac_util;
 
-/// Raw RC4 encrypt/decrypt (symmetric — same operation for both).
+/// Raw RC4 encrypt/decrypt (symmetric -- same operation for both).
 /// RC4 is a stream cipher, so encryption and decryption are identical.
 /// Uses a pure-Rust implementation to avoid generic key-size constraints
 /// from the `rc4` crate.
@@ -37,9 +37,9 @@ pub fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     output
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Kerberos RC4-HMAC (etype 23)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Encrypt data using Kerberos RC4-HMAC (etype 23).
 /// Per RFC 4757:
@@ -107,7 +107,7 @@ pub fn rc4_hmac_decrypt(key: &[u8], data: &[u8], key_usage: i32) -> Result<Vec<u
     // Verify checksum: K3 = HMAC-MD5(K1, decrypted_confounder_plaintext)
     let k3 = hmac_util::hmac_md5(&k1, &decrypted);
     if !hmac_util::hmac_md5_verify(&k1, &decrypted, checksum) {
-        // Recompute for a better check — compare k3 vs checksum directly
+        // Recompute for a better check -- compare k3 vs checksum directly
         if k3 != <[u8; 16]>::try_from(checksum).unwrap_or([0; 16]) {
             bail!("RC4-HMAC checksum verification failed");
         }
@@ -120,9 +120,9 @@ pub fn rc4_hmac_decrypt(key: &[u8], data: &[u8], key_usage: i32) -> Result<Vec<u
     Ok(decrypted[8..].to_vec())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // SAM Hash Decryption (pre-Vista, RC4-based)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Well-known constants for SAM hash decryption (from MS-SAMR).
 const SAM_LMPASSWORD: &[u8] = b"LMPASSWORD\x00";
@@ -221,9 +221,9 @@ fn str_to_des_key(s: &[u8; 7]) -> [u8; 8] {
     ]
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Pre-Vista LSA Secret Key Derivation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Derive the pre-Vista LSA secret encryption key.
 /// Per Impacket `_decryptSecret`:

@@ -1,11 +1,11 @@
-//! MITRE ATT&CK mapper — Maps engagement findings to MITRE ATT&CK
+//! MITRE ATT&CK mapper -- Maps engagement findings to MITRE ATT&CK
 //! techniques, tactics, and provides CVSS scoring helpers.
 
 use serde::{Deserialize, Serialize};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // MITRE ATT&CK Mapping
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// A single MITRE ATT&CK technique mapping
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,21 +49,21 @@ impl std::fmt::Display for MitreMapping {
         match &self.sub_technique_id {
             Some(sub) => write!(
                 f,
-                "{}/{} — {} ({})",
+                "{}/{} -- {} ({})",
                 self.technique_id, sub, self.technique_name, self.tactic
             ),
             None => write!(
                 f,
-                "{} — {} ({})",
+                "{} -- {} ({})",
                 self.technique_id, self.technique_name, self.tactic
             ),
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Technique Database
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Map an attack type to its MITRE ATT&CK techniques
 pub fn map_technique(attack_type: &str) -> Vec<MitreMapping> {

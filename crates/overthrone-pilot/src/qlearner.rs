@@ -1,4 +1,4 @@
-//! Q-learning adaptive engine — Reinforcement learning layer over the
+//! Q-learning adaptive engine -- Reinforcement learning layer over the
 //! heuristic `AdaptiveEngine` to gradually learn optimal responses to
 //! step outcomes across engagements.
 //!
@@ -8,14 +8,14 @@
 //!
 //! # Architecture
 //!
-//! - `EngagementStateKey` — discretized, hashable snapshot of state
-//! - `AdaptiveAction` — maps to `AdaptiveDecision` variants
-//! - `AdaptiveAgent` — implements `rurel::mdp::Agent`
-//! - `AdaptiveQLearner` — wraps the heuristic engine, adds Q-learning
+//! - `EngagementStateKey` -- discretized, hashable snapshot of state
+//! - `AdaptiveAction` -- maps to `AdaptiveDecision` variants
+//! - `AdaptiveAgent` -- implements `rurel::mdp::Agent`
+//! - `AdaptiveQLearner` -- wraps the heuristic engine, adds Q-learning
 //!
 //! The ε-greedy policy delegates to the heuristic engine with probability ε
 //! (exploration) and selects the highest-Q-value action otherwise (exploitation).
-//! Over time, ε decays from 0.3 → 0.05, shifting toward learned behavior.
+//! Over time, ε decays from 0.3 -> 0.05, shifting toward learned behavior.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,9 +30,9 @@ use crate::adaptive::{
 use crate::goals::{AttackGoal, EngagementState};
 use crate::planner::{AttackPlan, PlanStep, PlannedAction, StepResult};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Q-learning rate (α)
 const ALPHA: f64 = 0.1;
@@ -45,9 +45,9 @@ const EPSILON_MIN: f64 = 0.05;
 /// Epsilon decay per episode (multiplicative)
 const EPSILON_DECAY: f64 = 0.995;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Reward Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Reward when goal is achieved
 pub const REWARD_GOAL_ACHIEVED: f64 = 100.0;
@@ -68,9 +68,9 @@ pub const REWARD_ABORT: f64 = -20.0;
 /// Bonus for obtaining DA-equivalent access (cert, golden ticket, etc.)
 pub const REWARD_DA_EQUIVALENT: f64 = 50.0;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Adaptive Mode
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Selects which adaptive strategy the runner uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -79,14 +79,14 @@ pub enum AdaptiveMode {
     Heuristic,
     /// Pure Q-learning (falls back to heuristic for unknown states)
     QLearning,
-    /// Hybrid — Q-learner with ε-greedy exploration via heuristic fallback
+    /// Hybrid -- Q-learner with ε-greedy exploration via heuristic fallback
     #[default]
     Hybrid,
 }
 
-// ═══════════════════════════════════════════════════════════
-// EngagementStateKey — discretized, hashable state snapshot
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// EngagementStateKey -- discretized, hashable state snapshot
+// ===========================================================
 
 /// Discretized snapshot of the engagement state used as a Q-table key.
 /// Fields are bucketed to keep the state space manageable while preserving
@@ -151,7 +151,7 @@ impl EngagementStateKey {
         let user_count = state.users.len();
 
         let failure_class = if result.success {
-            FailureClass::Unknown // no failure — index 6
+            FailureClass::Unknown // no failure -- index 6
         } else {
             FailureClass::classify(&result.output)
         };
@@ -288,10 +288,10 @@ fn action_family_label(index: u8) -> &'static str {
     }
 }
 
-// ── Bucketing helpers ──
+// -- Bucketing helpers --
 
 fn bucket_count(n: usize, thresholds: &[usize]) -> u8 {
-    // thresholds = [0, 1, 5] → buckets 0, 1, 2, 3
+    // thresholds = [0, 1, 5] -> buckets 0, 1, 2, 3
     let mut bucket = 0u8;
     for &t in thresholds {
         if n > t {
@@ -326,9 +326,9 @@ fn bucket_failures(n: u32) -> u8 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// AdaptiveAction — discrete action space
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// AdaptiveAction -- discrete action space
+// ===========================================================
 
 /// Discrete actions the Q-learner can select.
 /// Each maps back to an `AdaptiveDecision` variant when executed.
@@ -377,9 +377,9 @@ impl AdaptiveAction {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // rurel trait implementations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 impl State for EngagementStateKey {
     type A = AdaptiveAction;
@@ -432,9 +432,9 @@ impl Agent<EngagementStateKey> for AdaptiveAgent {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Q-Table — online learning storage
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Q-Table -- online learning storage
+// ===========================================================
 
 /// Persistent Q-value table for online reinforcement learning.
 /// Internally stores a `HashMap` but serializes as a `Vec` of entries
@@ -444,7 +444,7 @@ struct QTable {
     values: HashMap<EngagementStateKey, HashMap<AdaptiveAction, f64>>,
 }
 
-/// Serialization wrapper — JSON requires string keys.
+/// Serialization wrapper -- JSON requires string keys.
 #[derive(Serialize, Deserialize)]
 struct QTableEntry {
     state: EngagementStateKey,
@@ -539,7 +539,7 @@ impl QTable {
     }
 
     /// Online Q-learning update:
-    ///   Q(s,a) ← Q(s,a) + α·[r + γ·max_a'(Q(s',a')) − Q(s,a)]
+    ///   Q(s,a) <- Q(s,a) + α·[r + γ·max_a'(Q(s',a')) − Q(s,a)]
     fn update(
         &mut self,
         state: &EngagementStateKey,
@@ -554,17 +554,17 @@ impl QTable {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// AdaptiveQLearner — main public struct
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// AdaptiveQLearner -- main public struct
+// ===========================================================
 
 /// Q-learning adaptive engine that wraps the heuristic `AdaptiveEngine`
 /// and gradually learns optimal responses to step outcomes.
 /// In ε-greedy mode:
-/// - With probability ε → delegate to heuristic (exploration)
-/// - With probability 1−ε → pick the highest Q-value action (exploitation)
+/// - With probability ε -> delegate to heuristic (exploration)
+/// - With probability 1−ε -> pick the highest Q-value action (exploitation)
 ///
-/// ε decays from 0.3 → 0.05 over episodes.
+/// ε decays from 0.3 -> 0.05 over episodes.
 pub struct AdaptiveQLearner {
     /// The Q-value table (persisted across engagements)
     q_table: QTable,
@@ -704,9 +704,9 @@ impl AdaptiveQLearner {
 
     /// Evaluate a step result and decide what to do next.
     /// ε-greedy policy:
-    /// - With probability ε → delegate to heuristic engine (exploration)
-    /// - Otherwise → pick the highest Q-value action (exploitation)
-    /// - If Q-table has no data for the state → always fall back to heuristic
+    /// - With probability ε -> delegate to heuristic engine (exploration)
+    /// - Otherwise -> pick the highest Q-value action (exploitation)
+    /// - If Q-table has no data for the state -> always fall back to heuristic
     pub fn evaluate(
         &mut self,
         step: &PlanStep,
@@ -750,7 +750,7 @@ impl AdaptiveQLearner {
         let (best_action, best_q) = match self.q_table.best_action(&state_key) {
             Some(pair) => pair,
             None => {
-                // No Q-values recorded — fall back to heuristic
+                // No Q-values recorded -- fall back to heuristic
                 let decision = self.heuristic_fallback.evaluate(step, result, state, goal);
                 let action = decision_to_action(&decision);
                 self.last_decision_meta = Some((action, 0.0, true));
@@ -759,13 +759,13 @@ impl AdaptiveQLearner {
         };
 
         debug!(
-            "Q-learner: Exploiting — best action {:?} (Q={:.2})",
+            "Q-learner: Exploiting -- best action {:?} (Q={:.2})",
             best_action, best_q
         );
 
         self.last_decision_meta = Some((best_action.clone(), best_q, false));
 
-        // Convert AdaptiveAction → AdaptiveDecision
+        // Convert AdaptiveAction -> AdaptiveDecision
         self.action_to_decision(&best_action, step)
     }
 
@@ -850,7 +850,7 @@ impl AdaptiveQLearner {
         self.q_table
             .update(state_key, action, reward, next_state_key);
         debug!(
-            "Q-learner: Updated Q({:?}, {:?}) — reward={:.1}",
+            "Q-learner: Updated Q({:?}, {:?}) -- reward={:.1}",
             state_key.current_stage, action, reward
         );
     }
@@ -1083,9 +1083,9 @@ impl AdaptiveQLearner {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Decision-to-Action mapping (for recording outcomes)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Convert an `AdaptiveDecision` back to the closest `AdaptiveAction`
 /// (used when recording heuristic decisions into the Q-table).
@@ -1121,9 +1121,9 @@ pub fn decision_to_action(decision: &AdaptiveDecision) -> AdaptiveAction {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -1271,15 +1271,15 @@ mod tests {
         let result_fail = dummy_result_failure();
         let decision_continue = AdaptiveDecision::Continue;
 
-        // Success → positive reward
+        // Success -> positive reward
         let r = AdaptiveQLearner::compute_reward(&result_ok, false, &decision_continue);
         assert!(r > 0.0);
 
-        // Goal achieved → large positive reward
+        // Goal achieved -> large positive reward
         let r = AdaptiveQLearner::compute_reward(&result_ok, true, &decision_continue);
         assert!(r >= 100.0);
 
-        // Failure → negative reward
+        // Failure -> negative reward
         let r = AdaptiveQLearner::compute_reward(&result_fail, false, &decision_continue);
         assert!(r < 0.0);
     }
@@ -1361,7 +1361,7 @@ mod tests {
         assert_eq!(action_family_label(33), "adcs-esc16");
     }
 
-    // ── Integration: Q-learner convergence with repeated positive feedback ──
+    // -- Integration: Q-learner convergence with repeated positive feedback --
 
     #[test]
     fn q_values_converge_after_repeated_positive_reinforcement() {
@@ -1497,7 +1497,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ── Integration: encoding engagement state + plan step ──
+    // -- Integration: encoding engagement state + plan step --
 
     #[test]
     fn state_key_encode_reflects_domain_admin() {

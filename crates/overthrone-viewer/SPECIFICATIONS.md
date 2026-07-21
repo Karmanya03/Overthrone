@@ -1,4 +1,4 @@
-# Overthrone Graph Viewer — Multi-Platform Rendering Engine
+﻿# Overthrone Graph Viewer -- Multi-Platform Rendering Engine
 
 ## Comprehensive Development Specification
 
@@ -15,12 +15,12 @@
 3. [Shared Graph Data Model](#3-shared-graph-data-model)
 4. [TUI Graph Renderer (ratatui/crossterm)](#4-tui-graph-renderer-ratatuicrossterm)
 5. [Three.js WebGL GUI (Migrated from D3.js)](#5-threejs-webgl-gui-migrated-from-d3js)
-6. [D3.js → Three.js Migration Guide](#6-d3js--threejs-migration-guide)
+6. [D3.js -> Three.js Migration Guide](#6-d3js--threejs-migration-guide)
 7. [OVT Command Overlay on Graph Edges/Nodes](#7-ovt-command-overlay-on-graph-edgesnodes)
 8. [Time Metrics & Performance Instrumentation](#8-time-metrics--performance-instrumentation)
 9. [API Server Additions](#9-api-server-additions)
 10. [Performance Budgets & Targets](#10-performance-budgets--targets)
-11. [Appendix A: Edge Type → OVT Command Map](#appendix-a-edge-type--ovt-command-map)
+11. [Appendix A: Edge Type -> OVT Command Map](#appendix-a-edge-type--ovt-command-map)
 12. [Appendix B: Color & Theme Reference](#appendix-b-color--theme-reference)
 
 ---
@@ -33,7 +33,7 @@ This document defines the implementation of **three graph rendering methods** fo
 |--------|--------|--------|----------|
 | **TUI** | ratatui + crossterm | Terminal (256-color+) | Local fast inspection, SSH sessions, low-resource environments |
 | **Three.js GUI** | WebGL via Three.js | Browser (WebGL 2) | Full interactive graph exploration with GPU-accelerated rendering |
-| **D3.js (legacy)** | SVG Canvas | Browser | Existing implementation — to be superseded by Three.js |
+| **D3.js (legacy)** | SVG Canvas | Browser | Existing implementation -- to be superseded by Three.js |
 
 **Core Goals:**
 - Extreme performance at scale: **10,000+ nodes, 100,000+ edges** without browser freeze or TUI lag
@@ -47,36 +47,36 @@ This document defines the implementation of **three graph rendering methods** fo
 ## 2. Architecture Overview
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                    overthrone-viewer crate                      │
-│                                                                │
-│  ┌──────────────┐    ┌──────────────────┐    ┌───────────────┐ │
-│  │ graph_data.rs│───▶│  Shared State    │◀───│  server.rs    │ │
-│  │ (Rust core)  │    │  (Arc<RwLock>)   │    │  (axum HTTP)  │ │
-│  └──────────────┘    └────────┬─────────┘    └───────┬───────┘ │
-│                               │                      │         │
-│                    ┌──────────┴──────────┐           │         │
-│                    │   Render Backend     │           │         │
-│                    │                      │           │         │
-│            ┌───────┴───────┐    ┌─────────┴────────┐ │         │
-│            │  TUI Engine   │    │ Three.js Engine  │ │         │
-│            │  (ratatui)    │    │  (WebAssembly)   │ │         │
-│            └───────────────┘    └──────────────────┘ │         │
-│                                                        │         │
-│  ┌────────────────────────────────────────────────────┴─────┐ │
-│  │  index.html (SPA) — loads Three.js WASM or falls back   │ │
-│  │  D3.js for non-WebGL browsers                            │ │
-│  └──────────────────────────────────────────────────────────┘ │
-│                                                                │
-│  TimeMetrics ──▶ embedded in every API response + UI HUD       │
-└────────────────────────────────────────────────────────────────┘
++----------------------------------------------------------------+
+|                    overthrone-viewer crate                      |
+|                                                                |
+|  +--------------+    +------------------+    +---------------+ |
+|  | graph_data.rs|--->|  Shared State    |<---|  server.rs    | |
+|  | (Rust core)  |    |  (Arc<RwLock>)   |    |  (axum HTTP)  | |
+|  +--------------+    +--------+---------+    +-------+-------+ |
+|                               |                      |         |
+|                    +----------+----------+           |         |
+|                    |   Render Backend     |           |         |
+|                    |                      |           |         |
+|            +-------+-------+    +---------+--------+ |         |
+|            |  TUI Engine   |    | Three.js Engine  | |         |
+|            |  (ratatui)    |    |  (WebAssembly)   | |         |
+|            +---------------+    +------------------+ |         |
+|                                                        |         |
+|  +----------------------------------------------------+-----+ |
+|  |  index.html (SPA) -- loads Three.js WASM or falls back   | |
+|  |  D3.js for non-WebGL browsers                            | |
+|  +----------------------------------------------------------+ |
+|                                                                |
+|  TimeMetrics --> embedded in every API response + UI HUD       |
++----------------------------------------------------------------+
 ```
 
 ### Design Principles
 
 1. **Single source of truth**: `graph_data.rs` remains the canonical graph engine. No duplication.
 2. **Server-driven rendering**: The Rust server computes node positions, clustering, and filtering. Renderers only display.
-3. **Progressive disclosure**: Load stats first → skeleton UI → node/edge data → full detail panels.
+3. **Progressive disclosure**: Load stats first -> skeleton UI -> node/edge data -> full detail panels.
 4. **Performance-first**: Instanced rendering (Three.js), batched DOM updates (TUI cell buffer), lazy edge labels.
 
 ---
@@ -85,7 +85,7 @@ This document defines the implementation of **three graph rendering methods** fo
 
 ### 3.1 Enhanced ViewerGraph (graph_data.rs)
 
-Add timing and command-annotation fields. **Do not modify the wire format** — extend via optional fields.
+Add timing and command-annotation fields. **Do not modify the wire format** -- extend via optional fields.
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,7 +194,7 @@ impl PerfTimer {
 ### 4.1 Performance Strategy
 
 The existing TUI already outperforms D3.js for large graphs because:
-- **Cell-based rendering**: ratatui writes directly to a cell buffer — no DOM, no reflow
+- **Cell-based rendering**: ratatui writes directly to a cell buffer -- no DOM, no reflow
 - **Zero GC pressure**: Rust manages all memory; no garbage collector pauses
 - **Selective redraw**: Only dirty regions re-render via `Frame::render_widget`
 
@@ -298,40 +298,40 @@ fn render_node_batch(
 ### 4.2 TUI Layout System
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  [Stats Bar: Users:500  Computers:200  Groups:80...]    │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │              GRAPH CANVAS                          │  │
-│  │  (scrollable, zoomable via mouse/keyboard)         │  │
-│  │                                                    │  │
-│  │  U───▶G───▶C─────────────────────────D            │  │
-│  │  │     │     │    ██████████████████              │  │
-│  │  ▼     ▼     ▼    ██  Attack Path  ██              │  │
-│  │  [+]   [+]   [+]  ██████████████████              │  │
-│  │                   └───────────────────────────┘    │  │
-│  └───────────────────────────────────────────────────┘  │
-│                                                         │
-│  ┌──────────────┐  ┌────────────────────────────────┐  │
-│  │ Node Detail  │  │ ACL Findings    │ Attack Path  │  │
-│  │ ───────────  │  │ ─────────────   │ ──────────   │  │
-│  │ Name: svc_   │  │ [S1] WriteDacl  │ 1. User ──▶G │  │
-│  │ Type: Comp   │  │ [S1] GenericAll │ 2. Group─▶D │  │
-│  │ Domain: ...  │  │ [S2] AddMember  │              │  │
-│  │ [Sev1] Bad!  │  │                 │              │  │
-│  └──────────────┘  └────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
++---------------------------------------------------------+
+|  [Stats Bar: Users:500  Computers:200  Groups:80...]    |
++---------------------------------------------------------+
+|                                                         |
+|  +---------------------------------------------------+  |
+|  |              GRAPH CANVAS                          |  |
+|  |  (scrollable, zoomable via mouse/keyboard)         |  |
+|  |                                                    |  |
+|  |  U--->G--->C-------------------------D            |  |
+|  |  |     |     |    ██████████████████              |  |
+|  |  ▼     ▼     ▼    ██  Attack Path  ██              |  |
+|  |  [+]   [+]   [+]  ██████████████████              |  |
+|  |                   +---------------------------+    |  |
+|  +---------------------------------------------------+  |
+|                                                         |
+|  +--------------+  +--------------------------------+  |
+|  | Node Detail  |  | ACL Findings    | Attack Path  |  |
+|  | -----------  |  | -------------   | ----------   |  |
+|  | Name: svc_   |  | [S1] WriteDacl  | 1. User -->G |  |
+|  | Type: Comp   |  | [S1] GenericAll | 2. Group->D |  |
+|  | Domain: ...  |  | [S2] AddMember  |              |  |
+|  | [Sev1] Bad!  |  |                 |              |  |
+|  +--------------+  +--------------------------------+  |
++---------------------------------------------------------+
 ```
 
 ### 4.3 TUI Navigation & Interaction
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Cycle focus: Graph → Detail → ACLs → Path |
-| `↑/↓/←/→` | Scroll / pan canvas |
+| `Tab` | Cycle focus: Graph -> Detail -> ACLs -> Path |
+| `^/v/<-/->` | Scroll / pan canvas |
 | `+`/`-` | Zoom in/out |
-| `Enter` | Select node → show detail panel |
+| `Enter` | Select node -> show detail panel |
 | `f` | Fuzzy search node (opens type-ahead) |
 | `p` | Find attack path (source=selected, prompts for target) |
 | `h` | Toggle highlight: show only edges to/from selected |
@@ -524,32 +524,32 @@ fn render_tooltip(
 
 ```
 Scene
-├── AmbientLight (0x222222, 0.5)
-├── DirectionalLight (0xffffff, 0.8, from top-left)
-├── PointLight (0xffffff, 0.3, at camera position for hover glow)
-│
-├── InstancedMesh (nodes) — 1 geometry, N instances
-│   ├── SphereBufferGeometry (radius varies by node type)
-│   ├── MeshPhongMaterial (per-instance color)
-│   └── Custom shader for: selected state, owned/high-value glow
-│
-├── InstancedMesh (edge cylinders/lines)
-│   ├── CylinderGeometry or LineSegments
-│   └── Per-instance: color, opacity, dashed pattern
-│
-├── Sprite[] (labels — only visible at close zoom)
-│   └── CanvasTexture generated from text
-│
-├── Sprite[] (edge labels)
-│
-├── ArrowHelper[] (direction indicators, only for important edges)
-│
-├── OrthographicCamera (top-down by default)
-│   └── Smooth zoom with dolly
-│
-├── OrbitControls (modified: lock Y-axis rotation)
-│
-└── CSS2DObject overlay (HTML tooltips, detail panels)
++-- AmbientLight (0x222222, 0.5)
++-- DirectionalLight (0xffffff, 0.8, from top-left)
++-- PointLight (0xffffff, 0.3, at camera position for hover glow)
+|
++-- InstancedMesh (nodes) -- 1 geometry, N instances
+|   +-- SphereBufferGeometry (radius varies by node type)
+|   +-- MeshPhongMaterial (per-instance color)
+|   +-- Custom shader for: selected state, owned/high-value glow
+|
++-- InstancedMesh (edge cylinders/lines)
+|   +-- CylinderGeometry or LineSegments
+|   +-- Per-instance: color, opacity, dashed pattern
+|
++-- Sprite[] (labels -- only visible at close zoom)
+|   +-- CanvasTexture generated from text
+|
++-- Sprite[] (edge labels)
+|
++-- ArrowHelper[] (direction indicators, only for important edges)
+|
++-- OrthographicCamera (top-down by default)
+|   +-- Smooth zoom with dolly
+|
++-- OrbitControls (modified: lock Y-axis rotation)
+|
++-- CSS2DObject overlay (HTML tooltips, detail panels)
 ```
 
 ### 5.3 Performance-Critical Three.js Patterns
@@ -952,7 +952,7 @@ class GraphCamera {
     }
     
     setupControls() {
-        // Custom orbit controls — X/Y pan + zoom, no rotation (graph is 2D)
+        // Custom orbit controls -- X/Y pan + zoom, no rotation (graph is 2D)
         this.dom.addEventListener('wheel', (e) => {
             e.preventDefault();
             const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08;
@@ -1100,7 +1100,7 @@ async function init() {
 
 ---
 
-## 6. D3.js → Three.js Migration Guide
+## 6. D3.js -> Three.js Migration Guide
 
 ### 6.1 Mapping Table
 
@@ -1112,7 +1112,7 @@ async function init() {
 | `data.join('path')` (links) | `LineSegments` or `MeshLine` | Instanced edges |
 | `d3.forceSimulation()` | Custom shader or JS physics | GPU particle sim or JS Barnes-Hut |
 | `d3.zoom()` | Custom `OrbitControls` (2D locked) | Modified for orthographic, Y-lock |
-| `d3.drag()` | Custom raycast + plane drag | Raycast hit → move on XY plane |
+| `d3.drag()` | Custom raycast + plane drag | Raycast hit -> move on XY plane |
 | `svg.append('text')` | `CSS2DRenderer` or `Sprite` | SDF sprite atlas for perf |
 | `selection.classed()` | Shader uniform flags | Per-instance boolean uniform |
 | `selection.attr('cx')` | `instanceMatrix` | Build matrix from position/scale |
@@ -1124,26 +1124,26 @@ async function init() {
 
 ### 6.2 Feature-for-Feature Migration Checklist
 
-- [ ] **Node circles** → `InstancedMesh(SphereGeometry, ...)` ✅ 
-- [ ] **Node colors by type** → `instanceColor` attribute ✅
-- [ ] **Node size by type/importance** → `instanceMatrix` scale ✅
-- [ ] **High-value/owned rings** → Shader glow effect ✅
-- [ ] **Edge lines** → `LineSegments` with `InstancedBufferGeometry` ✅
-- [ ] **Edge arrows** → Custom shader fragment (triangle at end) ✅
-- [ ] **Edge dash (MemberOf/Contains)** → SDF dash in fragment shader ✅
-- [ ] **Edge labels** → `CSS2DObject` or sprite atlas (visibility culled) ✅
-- [ ] **Node labels** → `CSS2DObject` or sprite atlas (zoom-culled) ✅
-- [ ] **Node badges (degree)** → Sprite overlay ✅
-- [ ] **Force layout** → JS Barnes-Hut simulation (reuse positions from server) ✅
-- [ ] **Hierarchical layout** → Server-computed, read from API ✅
-- [ ] **Zoom/pan** → Custom orthographic camera controller ✅
-- [ ] **Drag** → Plane intersection + raycast hit test ✅
-- [ ] **Highlight connected** → Shader uniform `isDimmed` per instance ✅
-- [ ] **Path highlight** → Update dim/uniform for path nodes ✅
-- [ ] **Tooltip on hover** → CSS2D overlay positioned at projected point ✅
-- [ ] **Search selection** → Flash animation via uniform `time` ✅
-- [ ] **Empty state** → HTML overlay (keep as-is, outside canvas) ✅
-- [ ] **Sidebar, filters, stats** → Keep as HTML/CSS (no change needed) ✅
+- [ ] **Node circles** -> `InstancedMesh(SphereGeometry, ...)` ✅ 
+- [ ] **Node colors by type** -> `instanceColor` attribute ✅
+- [ ] **Node size by type/importance** -> `instanceMatrix` scale ✅
+- [ ] **High-value/owned rings** -> Shader glow effect ✅
+- [ ] **Edge lines** -> `LineSegments` with `InstancedBufferGeometry` ✅
+- [ ] **Edge arrows** -> Custom shader fragment (triangle at end) ✅
+- [ ] **Edge dash (MemberOf/Contains)** -> SDF dash in fragment shader ✅
+- [ ] **Edge labels** -> `CSS2DObject` or sprite atlas (visibility culled) ✅
+- [ ] **Node labels** -> `CSS2DObject` or sprite atlas (zoom-culled) ✅
+- [ ] **Node badges (degree)** -> Sprite overlay ✅
+- [ ] **Force layout** -> JS Barnes-Hut simulation (reuse positions from server) ✅
+- [ ] **Hierarchical layout** -> Server-computed, read from API ✅
+- [ ] **Zoom/pan** -> Custom orthographic camera controller ✅
+- [ ] **Drag** -> Plane intersection + raycast hit test ✅
+- [ ] **Highlight connected** -> Shader uniform `isDimmed` per instance ✅
+- [ ] **Path highlight** -> Update dim/uniform for path nodes ✅
+- [ ] **Tooltip on hover** -> CSS2D overlay positioned at projected point ✅
+- [ ] **Search selection** -> Flash animation via uniform `time` ✅
+- [ ] **Empty state** -> HTML overlay (keep as-is, outside canvas) ✅
+- [ ] **Sidebar, filters, stats** -> Keep as HTML/CSS (no change needed) ✅
 
 ### 6.3 Design Preservation Rules
 
@@ -1171,10 +1171,10 @@ Every **ACE/ACL relationship** displayed on the graph must show the exact `ovt` 
 
 ```
 server.rs: edge_security_guidance() 
-  → returns (severity, guidance)
+  -> returns (severity, guidance)
   
 NEW: ovt_command_for_edge(relationship, source_node, target_node)
-  → returns (command_string, command_description)
+  -> returns (command_string, command_description)
   
 API response includes:
 EdgeResponse {
@@ -1195,7 +1195,7 @@ fn ovt_command_for_edge(
     graph: &ViewerGraph,
 ) -> (String, String) {
     match edge.relationship.as_str() {
-        // ── GenericAll ──────────────────────────────────
+        // -- GenericAll ----------------------------------
         "GenericAll" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1204,7 +1204,7 @@ fn ovt_command_for_edge(
             
             let cmd = format!("ovt powerview acls --sid {}", sid);
             let desc = format!(
-                "Enumerate ACLs on {} — GenericAll means full control: "+
+                "Enumerate ACLs on {} -- GenericAll means full control: "+
                 "password reset, DACL edit, group modification, shadow credentials. "+
                 "Review current state before changing anything.",
                 target_node.display_name
@@ -1212,7 +1212,7 @@ fn ovt_command_for_edge(
             (cmd, desc)
         }
         
-        // ── GenericWrite ────────────────────────────────
+        // -- GenericWrite --------------------------------
         "GenericWrite" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1221,14 +1221,14 @@ fn ovt_command_for_edge(
             
             let cmd = format!("ovt powerview acls --sid {}", sid);
             let desc = format!(
-                "Enumerate ACLs on {} — Write access. Look for targeted Kerberoasting, "+
+                "Enumerate ACLs on {} -- Write access. Look for targeted Kerberoasting, "+
                 "shadow credentials, SPN writes, logon script changes, or certificate mapping.",
                 target_node.display_name
             );
             (cmd, desc)
         }
         
-        // ── WriteDacl ──────────────────────────────────
+        // -- WriteDacl ----------------------------------
         "WriteDacl" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1243,7 +1243,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteOwner / Owns ─────────────────────────
+        // -- WriteOwner / Owns -------------------------
         "WriteOwner" | "Owns" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1258,7 +1258,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── ForceChangePassword ────────────────────────
+        // -- ForceChangePassword ------------------------
         "ForceChangePassword" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1273,7 +1273,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── AddMembers / AddSelf ───────────────────────
+        // -- AddMembers / AddSelf -----------------------
         "AddMembers" | "AddSelf" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1288,7 +1288,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── AllExtendedRights ──────────────────────────
+        // -- AllExtendedRights --------------------------
         "AllExtendedRights" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1297,13 +1297,13 @@ fn ovt_command_for_edge(
             
             (
                 format!("ovt powerview acls --sid {}", sid),
-                format!("Extended rights on {}. On users → password reset; on domains → "+
+                format!("Extended rights on {}. On users -> password reset; on domains -> "+
                        "confirm replication rights before DCSync.",
                        target_node.display_name)
             )
         }
         
-        // ── CreateChild ────────────────────────────────
+        // -- CreateChild --------------------------------
         "CreateChild" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1318,7 +1318,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteSelf ──────────────────────────────────
+        // -- WriteSelf ----------------------------------
         "WriteSelf" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1333,7 +1333,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── LAPS Read Operations ───────────────────────
+        // -- LAPS Read Operations -----------------------
         "ReadLapsPassword" | "ReadLapsPasswordExpiry" | "ReadLapsEncryptedPassword" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1348,7 +1348,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── ReadGmsaPassword ───────────────────────────
+        // -- ReadGmsaPassword ---------------------------
         "ReadGmsaPassword" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1363,7 +1363,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── AllowedToDelegate ──────────────────────────
+        // -- AllowedToDelegate --------------------------
         "AllowedToDelegate" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1378,7 +1378,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── AllowedToAct ───────────────────────────────
+        // -- AllowedToAct -------------------------------
         "AllowedToAct" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1393,7 +1393,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── ADCS ESC Paths ─────────────────────────────
+        // -- ADCS ESC Paths -----------------------------
         "AdcsEsc1" | "AdcsEsc2" | "AdcsEsc3" | "AdcsEsc4" |
         "AdcsEsc5" | "AdcsEsc6" | "AdcsEsc7" | "AdcsEsc8" |
         "AdcsEsc9" | "AdcsEsc10" | "AdcsEsc11" | "AdcsEsc12" |
@@ -1408,7 +1408,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── DcSync / GetChanges / GetChangesAll ─────────
+        // -- DcSync / GetChanges / GetChangesAll ---------
         "DcSync" | "GetChanges" | "GetChangesAll" => {
             (
                 format!("ovt adcs dcsync --target {} --domain {}", target_node.id, source_node.domain.clone().unwrap_or_default()),
@@ -1418,7 +1418,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteSPN / WriteServicePrincipalName ────────
+        // -- WriteSPN / WriteServicePrincipalName --------
         "WriteSPN" | "WriteServicePrincipalName" => {
             (
                 format!("ovt acl write-spn --target {} --spn <SPN>", target_node.id),
@@ -1428,7 +1428,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteKeyCredentialLink ──────────────────────
+        // -- WriteKeyCredentialLink ----------------------
         "WriteKeyCredentialLink" | "WriteMsDsKeyCredentialLink" | "AddKeyCredentialLink" => {
             (
                 format!("ovt acl shadow-creds --target {} --cert <CERT_FILE>", target_node.id),
@@ -1438,7 +1438,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteAltSecurityIdentities ──────────────────
+        // -- WriteAltSecurityIdentities ------------------
         "WriteAltSecurityIdentities" => {
             (
                 format!("ovt adcs alt-sid --target {}", target_node.id),
@@ -1448,7 +1448,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteAccountRestrictions ────────────────────
+        // -- WriteAccountRestrictions --------------------
         "WriteAccountRestrictions" => {
             (
                 format!("ovt acl modify --target {} --restrictions", target_node.id),
@@ -1458,7 +1458,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteLogonScript / WriteProfilePath / WriteScriptPath ─
+        // -- WriteLogonScript / WriteProfilePath / WriteScriptPath -
         "WriteLogonScript" | "WriteProfilePath" | "WriteScriptPath" => {
             (
                 format!("ovt acl write-script --target {}", target_node.id),
@@ -1468,7 +1468,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteDnsHostName ────────────────────────────
+        // -- WriteDnsHostName ----------------------------
         "WriteDnsHostName" => {
             (
                 format!("ovt acl write-dnshost --target {}", target_node.id),
@@ -1478,7 +1478,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteProperty ───────────────────────────────
+        // -- WriteProperty -------------------------------
         "WriteProperty" => {
             (
                 format!("ovt acl write-property --target {}", target_node.id),
@@ -1488,7 +1488,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WritePwdProperties family ──────────────────
+        // -- WritePwdProperties family ------------------
         "WritePwdProperties" | "WriteLockoutThreshold" | "WriteMinPwdLength" |
         "WritePwdHistoryLength" | "WritePwdComplexity" | "WritePwdReversibleEncryption" |
         "WritePwdAge" | "WriteLockoutDuration" | "WriteLockoutObservationWindow" => {
@@ -1500,7 +1500,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── WriteGPLink ─────────────────────────────────
+        // -- WriteGPLink ---------------------------------
         "WriteGPLink" => {
             (
                 format!("ovt gpo link --target {} --gpo <GPO_ID>", target_node.id),
@@ -1510,7 +1510,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── EnrollCertificate / EnrollOnBehalfOf ────────
+        // -- EnrollCertificate / EnrollOnBehalfOf --------
         "EnrollCertificate" | "EnrollOnBehalfOf" => {
             (
                 format!("ovt adcs enroll --template <TEMPLATE> --target {}", target_node.id),
@@ -1520,7 +1520,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── HasSpn / DontReqPreauth ─────────────────────
+        // -- HasSpn / DontReqPreauth ---------------------
         "HasSpn" | "DontReqPreauth" => {
             // These are markers, not directly exploitable via ACL
             let abuser_name = source_node.display_name.clone();
@@ -1532,17 +1532,17 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── AdminTo ─────────────────────────────────────
+        // -- AdminTo -------------------------------------
         "AdminTo" => {
             (
                 format!("ovt exec --target {} --method auto", target_node.id),
                 format!("Local admin on {}. Choose lowest-volume remote-management "+
-                       "primitive (WinRM/PS-Remoting → WMI → PsExec → RDP).",
+                       "primitive (WinRM/PS-Remoting -> WMI -> PsExec -> RDP).",
                        target_node.display_name)
             )
         }
         
-        // ── CanRDP / CanPSRemote / ExecuteDCOM / SQLAdmin ─
+        // -- CanRDP / CanPSRemote / ExecuteDCOM / SQLAdmin -
         "CanRDP" => {
             (
                 format!("ovt exec --target {} --method rdp", target_node.id),
@@ -1575,7 +1575,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── HasSession ──────────────────────────────────
+        // -- HasSession ----------------------------------
         "HasSession" => {
             (
                 format!("ovt exec --target {} --method token", target_node.id),
@@ -1585,7 +1585,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── TrustedBy ───────────────────────────────────
+        // -- TrustedBy -----------------------------------
         "TrustedBy" => {
             (
                 format!("ovt move trust --domain {} --target {}", source_node.domain.clone().unwrap_or_default(), target_node.id),
@@ -1595,7 +1595,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── MemberOf / Contains ─────────────────────────
+        // -- MemberOf / Contains -------------------------
         "MemberOf" => {
             let sid = target_node.properties.get("objectid")
                 .or_else(|| target_node.properties.get("objectsid"))
@@ -1617,7 +1617,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── GpoLink ─────────────────────────────────────
+        // -- GpoLink -------------------------------------
         "GpoLink" => {
             (
                 format!("ovt gpo status --target {}", target_node.id),
@@ -1626,7 +1626,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── HasSIDHistory ───────────────────────────────
+        // -- HasSIDHistory -------------------------------
         "HasSidHistory" => {
             (
                 format!("ovt move sid-history --target {}", target_node.id),
@@ -1636,7 +1636,7 @@ fn ovt_command_for_edge(
             )
         }
         
-        // ── Fallback ────────────────────────────────────
+        // -- Fallback ------------------------------------
         _ => {
             let safe_rel = edge.relationship.replace(|c: char| !c.is_ascii_alphanumeric(), "_");
             (
@@ -1661,7 +1661,7 @@ When user hovers/clicks a node or edge, display the OVT command in the detail pa
 ```html
 <!-- Added to detail panel (index.html) -->
 <div id="ovt-commands" class="detail-section">
-    <div class="detail-section-title">⚡ OVT Commands</div>
+    <div class="detail-section-title">! OVT Commands</div>
     <div class="command-list" id="command-list">
         <!-- Dynamically populated -->
     </div>
@@ -1813,7 +1813,7 @@ fn render_ovt_commands(
     let widget = Paragraph::new(scrolled)
         .block(
             Block::default()
-                .title(" OVT Commands [↑/↓ scroll, Ctrl+C to copy] ")
+                .title(" OVT Commands [^/v scroll, Ctrl+C to copy] ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         )
@@ -1865,23 +1865,23 @@ In addition to edge commands, provide commands for **right-clicking a node**:
 
 ```
 Context Menu (Right-click / Shift+Enter on node):
-├── 🔍 "ovt powerview users --identity <name>"               → Get-DomainUser
-├── 🔍 "ovt powerview computers --filter name=<name>$"        → Get-DomainComputer
-├── 🔍 "ovt powerview groups --identity <name>"               → Get-DomainGroup
-├── 🔍 "ovt powerview gpos --identity <name>"                 → Get-DomainGPO
-├── 🔍 "ovt powerview ous --identity <name>"                  → Get-DomainOU
-├── 🔐 "ovt acl enum --sid <SID>"                               → Enum abusable ACLs
-├── 🔐 "ovt acls writedacl --target <name>"                    → DACL modification
-├── 🔐 "ovt acl force-password --target <name>"                → Force password reset
-├── 🔐 "ovt acl add-member --group <name>"                     → Add to group
-├── 🔐 "ovt acl shadow-creds --target <name>"                  → Shadow credentials
-├── 💀 "ovt exec --target <name> --method <auto|winrm|ps|dcom>"→ Lateral movement
-├── 🕵️ "ovt kerberoast --spn <SPN>"                            → Kerberoast
-├── 🕵️ "ovt asrep --user <name>"                               → AS-REP roast
-├── 🕵️ "ovt laps read --computer <name>"                       → LAPS read
-├── 🕵️ "ovt sid-history --target <name>"                       → SIDHistory enumeration
-├── 📋 "Copy all commands to clipboard"                           → Copy all as script
-└── 📊 "Show in graph" (already shown)
++--  "ovt powerview users --identity <name>"               -> Get-DomainUser
++--  "ovt powerview computers --filter name=<name>$"        -> Get-DomainComputer
++--  "ovt powerview groups --identity <name>"               -> Get-DomainGroup
++--  "ovt powerview gpos --identity <name>"                 -> Get-DomainGPO
++--  "ovt powerview ous --identity <name>"                  -> Get-DomainOU
++--  "ovt acl enum --sid <SID>"                               -> Enum abusable ACLs
++--  "ovt acls writedacl --target <name>"                    -> DACL modification
++--  "ovt acl force-password --target <name>"                -> Force password reset
++--  "ovt acl add-member --group <name>"                     -> Add to group
++--  "ovt acl shadow-creds --target <name>"                  -> Shadow credentials
++--  "ovt exec --target <name> --method <auto|winrm|ps|dcom>"-> Lateral movement
++--  "ovt kerberoast --spn <SPN>"                            -> Kerberoast
++--  "ovt asrep --user <name>"                               -> AS-REP roast
++--  "ovt laps read --computer <name>"                       -> LAPS read
++--  "ovt sid-history --target <name>"                       -> SIDHistory enumeration
++--  "Copy all commands to clipboard"                           -> Copy all as script
++--  "Show in graph" (already shown)
 ```
 
 ---
@@ -1950,7 +1950,7 @@ pub struct NodeDetail {
 ### 8.3 Enhanced API Endpoints with Metrics
 
 ```rust
-/// GET /api/graph — with timing
+/// GET /api/graph -- with timing
 async fn get_graph(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -2049,9 +2049,9 @@ window.addEventListener('keydown', (e) => {
 In the TUI, after any load/operation, show timing in the bottom bar:
 
 ```
-─── Status Bar ────────────────────────────────────────────────────────
- Loaded: 5000 nodes, 45000 edges in 342ms [parse:12ms, build:89ms, index:45ms, layout:196ms]  │
-───────────────────────────────────────────────────────────────────────
+--- Status Bar --------------------------------------------------------
+ Loaded: 5000 nodes, 45000 edges in 342ms [parse:12ms, build:89ms, index:45ms, layout:196ms]  |
+-----------------------------------------------------------------------
 ```
 
 ---
@@ -2061,9 +2061,9 @@ In the TUI, after any load/operation, show timing in the bottom bar:
 ### 9.1 New Endpoints
 
 ```
-GET  /api/graph/:id/timings    → GraphLoadMetrics (load timing breakdown)
-POST /api/commands/lookup      → Given edge type + node context, return ovt command
-GET  /api/edge-types           → All edge types with icons, colors, severity, ovt commands
+GET  /api/graph/:id/timings    -> GraphLoadMetrics (load timing breakdown)
+POST /api/commands/lookup      -> Given edge type + node context, return ovt command
+GET  /api/edge-types           -> All edge types with icons, colors, severity, ovt commands
 ```
 
 ### 9.2 Enhanced `/api/graph` Response
@@ -2186,15 +2186,15 @@ fn edge_response_with_commands(
 
 ---
 
-## Appendix A: Edge Type → OVT Command Map
+## Appendix A: Edge Type -> OVT Command Map
 
 | Edge Type (Relationship) | Severity | OVT Command | Notes |
 |--------------------------|----------|-------------|-------|
 | **GenericAll** | 1 (crit) | `ovt powerview acls --sid <SID>` | Full control. Password reset, DACL edit, group mod, shadow creds. |
 | **GenericWrite** | 2 (high) | `ovt powerview acls --sid <SID>` | Write access. Targeted Kerberoast, shadow creds, SPN writes, logon scripts. |
-| **WriteDacl** | 1 (crit) | `ovt acls writedacl --target <TARGET>` | Add scoped ACE → act → restore original. |
-| **WriteOwner** | 1 (crit) | `ovt acls writedacl --target <TARGET>` | Ownership → DACL → GenericAll. Restore after. |
-| **Owns** | 1 (crit) | `ovt acls writedacl --target <TARGET>` | Already owner → modify DACL → GenericAll. |
+| **WriteDacl** | 1 (crit) | `ovt acls writedacl --target <TARGET>` | Add scoped ACE -> act -> restore original. |
+| **WriteOwner** | 1 (crit) | `ovt acls writedacl --target <TARGET>` | Ownership -> DACL -> GenericAll. Restore after. |
+| **Owns** | 1 (crit) | `ovt acls writedacl --target <TARGET>` | Already owner -> modify DACL -> GenericAll. |
 | **ForceChangePassword** | 2 (high) | `ovt acl force-password --target <TGT> --password <PW>` | Noisy. Prefer maintenance window. |
 | **AddMembers** | 2 (high) | `ovt acl add-member --group <GRP> --member <ACCT>` | Scope tightly. Remove immediately after. |
 | **AddSelf** | 2 (high) | `ovt acl add-self --group <GRP>` | Self-write validated. Add own account. |
@@ -2205,7 +2205,7 @@ fn edge_response_with_commands(
 | **ReadLapsPasswordExpiry** | 2 (high) | `ovt laps read --computer <COMP> --target-dc <DC>` | Read LAPS expiry timestamp. |
 | **ReadGmsaPassword** | 2 (high) | `ovt powerview acls --sid <SID>` | Derive gMSA secret. Map service-identity reach. |
 | **AllowedToDelegate** | 2 (high) | `ovt powerview delegations --target <TGT>` | Constrained delegation. Enumerate allowed services. Test S4U. |
-| **AllowedToAct** | 1 (crit) | `ovt acls add-allowed-to-act --target <TGT>` | RBCD. Controlled machine acct → getST.py → impersonate DA. |
+| **AllowedToAct** | 1 (crit) | `ovt acls add-allowed-to-act --target <TGT>` | RBCD. Controlled machine acct -> getST.py -> impersonate DA. |
 | **WriteAllowedToDelegateTo** | 1 (crit) | `ovt acls writedacl --target <TGT>` | Change msDS-AllowedToDelegateTo. Test S4U path. Record & restore. |
 | **AddAllowedToAct** | 1 (crit) | `ovt acls add-allowed-to-act --target <TGT>` | Add controlled computer to msDS-AllowedToActOnBehalfOfOther. |
 | **HasSidHistory** | 3 (med) | `ovt move sid-history --target <TGT>` | Validate effective SIDHistory membership + cross-domain effects. |
@@ -2222,7 +2222,7 @@ fn edge_response_with_commands(
 | **TrustedBy** | 2 (high) | `ovt move trust --domain <SRC> --target <TGT>` | Cross-domain trust. Confirm direction, SID filtering, transitivity. |
 | **GpoLink** | 2 (high) | `ovt gpo status --target <TGT>` | Review linked OUs, enforcement, security filtering. |
 | **WriteGPLink** | 2 (high) | `ovt gpo link --target <TGT> --gpo <ID>` | Link controlled GPO. Confirm scope & rollback. |
-| **WriteSPN** | 2 (high) | `ovt acl write-spn --target <TGT> --spn <SPN>` | Set temp SPN → Kerberoast → restore. |
+| **WriteSPN** | 2 (high) | `ovt acl write-spn --target <TGT> --spn <SPN>` | Set temp SPN -> Kerberoast -> restore. |
 | **WriteServicePrincipalName** | 2 (high) | `ovt acl write-spn --target <TGT> --spn <SPN>` | Same as WriteSPN. |
 | **WriteKeyCredentialLink** | 1 (crit) | `ovt acl shadow-creds --target <TGT>` | Shadow creds. PKINIT auth. Capture & restore original. |
 | **WriteMsDsKeyCredentialLink** | 1 (crit) | `ovt acl shadow-creds --target <TGT>` | Same as WriteKeyCredentialLink. |
@@ -2240,7 +2240,7 @@ fn edge_response_with_commands(
 | **WriteLockoutObservationWindow** | 3 (med) | `ovt acl modify --target <TGT> --pwd-policy` | Domain-visible. |
 | **EnrollCertificate** | 2 (high) | `ovt adcs enroll --template <TMPL> --target <TGT>` | Review EKUs, supply, approval, agent scope. |
 | **EnrollOnBehalfOf** | 1 (crit) | `ovt adcs enroll --template <TMPL> --target <TGT>` | Validate template constraints & approval. |
-| **AdcsEsc1** – **AdcsEsc16** | 1 (crit) | `ovt adcs esc<N> --ca <CA> --template <TMPL>` | Per-ESC variant guidance (see §7.3). |
+| **AdcsEsc1** -- **AdcsEsc16** | 1 (crit) | `ovt adcs esc<N> --ca <CA> --template <TMPL>` | Per-ESC variant guidance (see §7.3). |
 | **WriteProperty** | 2 (high) | `ovt acl write-property --target <TGT>` | Inspect attribute GUID; abuse varies. |
 | **MemberOf** | 5 | `ovt powerview members --group <GRP> --recurse` | Membership. Check nested for priv esc. |
 | **Contains** | 5 | `ovt powerview container --target <TGT>` | Scoping: GPO inheritance, OU ownership. |

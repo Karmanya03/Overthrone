@@ -146,7 +146,7 @@ pub async fn execute_azure_ad_attack(
             let sso_info = find_seamless_sso_info(ldap).await?;
             if sso_info.is_empty() {
                 log.push(
-                    "  No Seamless SSO SPN found — Seamless SSO may not be deployed".to_string(),
+                    "  No Seamless SSO SPN found -- Seamless SSO may not be deployed".to_string(),
                 );
             } else {
                 let spn = &sso_info[0];
@@ -258,12 +258,12 @@ pub async fn execute_azure_ad_attack(
                         log.push(format!("  App: {} (ID: {})", app.name, app.app_id));
                         if app.has_federated_credentials {
                             log.push(
-                                "    ⚠ Has federated credentials — vulnerable to token theft"
+                                "    [!] Has federated credentials -- vulnerable to token theft"
                                     .to_string(),
                             );
                         }
                         if app.has_password_credentials {
-                            log.push("    ⚠ Has password credentials".to_string());
+                            log.push("    [!] Has password credentials".to_string());
                         }
                     }
                     obtained_creds.extend(
@@ -328,9 +328,9 @@ pub async fn execute_azure_ad_attack(
     })
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Seamless SSO — Full Kerberos → SAML → OAuth chain
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Seamless SSO -- Full Kerberos -> SAML -> OAuth chain
+// ===========================================================
 
 async fn find_seamless_sso_info(ldap: &mut LdapSession) -> Result<Vec<String>> {
     let entries = ldap
@@ -440,9 +440,9 @@ fn extract_saml_from_response(body: &str) -> Option<&str> {
     None
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Golden SAML — ADFS cert → Signed SAML → OAuth
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Golden SAML -- ADFS cert -> Signed SAML -> OAuth
+// ===========================================================
 
 async fn find_adfs_signing_cert(ldap: &mut LdapSession) -> Result<Option<(Vec<u8>, bool)>> {
     let base_dn = build_base_dn_from_ldap_session(ldap);
@@ -696,9 +696,9 @@ async fn forge_golden_saml(
     exchange_saml_for_oauth(&saml_b64, tenant).await
 }
 
-// ═══════════════════════════════════════════════════════════
-//  SAML → OAuth token exchange
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  SAML -> OAuth token exchange
+// ===========================================================
 
 async fn exchange_saml_for_oauth(saml_assertion: &str, tenant: &str) -> Result<Vec<String>> {
     let mut creds = Vec::new();
@@ -758,9 +758,9 @@ async fn exchange_saml_for_oauth(saml_assertion: &str, tenant: &str) -> Result<V
     Ok(creds)
 }
 
-// ═══════════════════════════════════════════════════════════
-//  PRT Theft — Windows TokenBroker cache extraction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  PRT Theft -- Windows TokenBroker cache extraction
+// ===========================================================
 
 async fn steal_prt() -> Result<Vec<String>> {
     #[cfg(target_os = "windows")]
@@ -844,7 +844,7 @@ async fn steal_prt() -> Result<Vec<String>> {
                 }
             }
         } else {
-            warn!("LOCALAPPDATA not set — cannot locate TokenBroker cache");
+            warn!("LOCALAPPDATA not set -- cannot locate TokenBroker cache");
         }
 
         creds
@@ -868,9 +868,9 @@ async fn steal_prt() -> Result<Vec<String>> {
     Ok(creds)
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Managed Identity Token Theft — Azure IMDS
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Managed Identity Token Theft -- Azure IMDS
+// ===========================================================
 
 /// Steal tokens from Azure Managed Identity via the Instance Metadata Service.
 ///
@@ -941,9 +941,9 @@ async fn steal_managed_identity_tokens() -> Result<Vec<String>> {
     Ok(creds)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Entra Connect Sync Credential Extraction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Extract Entra Connect sync credentials from discovered AD Connect servers.
 ///
@@ -1015,9 +1015,9 @@ async fn extract_entra_connect_credentials(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  App Registration / Service Principal Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// An Azure AD / Entra ID application registration with credential metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1089,9 +1089,9 @@ async fn enumerate_app_registrations(ldap: &mut LdapSession) -> Result<Vec<AppRe
     Ok(apps)
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Device Code Authentication — Token Phishing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Device Code Authentication -- Token Phishing
+// ===========================================================
 
 /// Information about a device code authentication request used for phishing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1243,13 +1243,13 @@ async fn poll_device_code_auth(auth: &DeviceCodeAuthInfo) -> Result<Vec<String>>
     }
 
     Err(OverthroneError::custom(
-        "Device code authentication timed out — user did not authenticate in time",
+        "Device code authentication timed out -- user did not authenticate in time",
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn find_ad_connect_servers(ldap: &mut LdapSession) -> Result<Vec<String>> {
     let entries = ldap
@@ -1305,9 +1305,9 @@ fn format_unix_time(epoch: u64) -> String {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

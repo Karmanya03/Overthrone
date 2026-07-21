@@ -1,4 +1,4 @@
-//! NTLM Hash → TGT Request Pipeline
+//! NTLM Hash -> TGT Request Pipeline
 //!
 //! Converts collected NTLM hashes into working Kerberos TGTs by:
 //! 1. Taking NTLM hashes from reaper enumeration (users, computers, gMSA)
@@ -98,7 +98,7 @@ pub async fn run_ntlm_to_tgt(config: &NtlmToTgtConfig) -> Result<NtlmToTgtResult
     let start_time = std::time::Instant::now();
 
     info!(
-        "Starting NTLM→TGT pipeline: {} hashes, {} target SPNs",
+        "Starting NTLM->TGT pipeline: {} hashes, {} target SPNs",
         config.ntlm_hashes.len(),
         config.target_spns.len()
     );
@@ -158,7 +158,7 @@ pub async fn run_ntlm_to_tgt(config: &NtlmToTgtConfig) -> Result<NtlmToTgtResult
 
     // Print summary
     info!(
-        "NTLM→TGT pipeline complete: {}/{} successful ({}ms)",
+        "NTLM->TGT pipeline complete: {}/{} successful ({}ms)",
         result.total_successful, result.total_attempted, result.processing_time_ms
     );
 
@@ -166,7 +166,7 @@ pub async fn run_ntlm_to_tgt(config: &NtlmToTgtConfig) -> Result<NtlmToTgtResult
         info!("Successful TGTs:");
         for tgt in &result.successful_tgts {
             info!(
-                "  ✓ {}@{} (expires: {}, SPNs: {})",
+                "  [+] {}@{} (expires: {}, SPNs: {})",
                 tgt.username,
                 tgt.domain,
                 tgt.ticket_expiry,
@@ -178,7 +178,7 @@ pub async fn run_ntlm_to_tgt(config: &NtlmToTgtConfig) -> Result<NtlmToTgtResult
     if result.total_failed > 0 {
         warn!("Failed conversions:");
         for (username, error) in &result.failed {
-            warn!("  ✗ {}: {}", username, error);
+            warn!("  [-] {}: {}", username, error);
         }
     }
 
@@ -209,7 +209,7 @@ async fn process_single_ntlm(
         }
     };
 
-    info!("  ✓ TGT obtained for {}@{}", username, config.domain);
+    info!("  [+] TGT obtained for {}@{}", username, config.domain);
 
     // Step 2: Extract ticket data (use encrypted ticket cipher bytes)
     let ticket_data = tgt.ticket.enc_part.cipher.clone();
@@ -240,10 +240,10 @@ async fn process_single_ntlm(
                     ticket_expiry: st_expiry,
                 });
 
-                info!("    ✓ Service ticket for {}", spn);
+                info!("    [+] Service ticket for {}", spn);
             }
             Err(e) => {
-                warn!("    ✗ Service ticket for {} failed: {}", spn, e);
+                warn!("    [-] Service ticket for {} failed: {}", spn, e);
             }
         }
     }

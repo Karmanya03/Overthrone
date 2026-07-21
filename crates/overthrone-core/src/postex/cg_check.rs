@@ -13,9 +13,9 @@
 //! 3. **Name/OS heuristic**: Fallback when SMB remote registry is unavailable
 //!
 //! # Routing
-//! - If CG enabled → route to ADCS Shadow Credentials / RBCD instead
-//! - If CG disabled → proceed with LSASS techniques
-//! - If unknown → assume CG disabled (legacy compat)
+//! - If CG enabled -> route to ADCS Shadow Credentials / RBCD instead
+//! - If CG disabled -> proceed with LSASS techniques
+//! - If unknown -> assume CG disabled (legacy compat)
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::ldap::LdapSession;
@@ -26,11 +26,11 @@ use tracing::info;
 /// Credential Guard status for a target system.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CredentialGuardStatus {
-    /// CG is confirmed enabled — LSASS techniques will fail.
+    /// CG is confirmed enabled -- LSASS techniques will fail.
     Enabled,
-    /// CG is confirmed disabled — LSASS techniques are viable.
+    /// CG is confirmed disabled -- LSASS techniques are viable.
     Disabled,
-    /// CG status unknown — proceed with legacy path.
+    /// CG status unknown -- proceed with legacy path.
     Unknown,
 }
 
@@ -110,12 +110,12 @@ pub async fn check_credential_guard_remote(
     let (status, recommendation) = match (lsa_cfg_flags, secret_present) {
         (_, Some(true)) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via IsolatedCredentialsRootSecret; use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA"
+            "CG confirmed via IsolatedCredentialsRootSecret; use LSAISO bypass (ALPC -> process memory -> WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
         (Some(1) | Some(2), _) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via LsaCfgFlags — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA"
+            "CG confirmed via LsaCfgFlags -- use LSAISO bypass (ALPC -> process memory -> WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
         (Some(0), _) => (
@@ -204,14 +204,14 @@ pub fn check_credential_guard_preflight(
     findings.push(format!("Target: {target} (heuristic only)"));
 
     if target.contains("2025") || target.contains("WS2025") || target.contains("win2025") {
-        findings.push("OS hint suggests Windows Server 2025 — CG likely enabled".to_string());
+        findings.push("OS hint suggests Windows Server 2025 -- CG likely enabled".to_string());
         cg_flags = Some(2);
     }
 
     let (status, recommendation) = match cg_flags {
         Some(2) | Some(1) => (
             CredentialGuardStatus::Enabled,
-            "CG likely enabled (WS2025 heuristic) — route to ADCS Shadow Credentials, RBCD, or dMSA"
+            "CG likely enabled (WS2025 heuristic) -- route to ADCS Shadow Credentials, RBCD, or dMSA"
                 .to_string(),
         ),
         _ => (
@@ -266,7 +266,7 @@ pub fn choose_cred_extraction(cg: &CgPreflightResult) -> ExtractionDecision {
     match cg.status {
         CredentialGuardStatus::Enabled => ExtractionDecision::new(
             "lsaiso_bypass",
-            "CG confirmed — use LSAISO bypass (ALPC → process memory → WDigest fallback)".into(),
+            "CG confirmed -- use LSAISO bypass (ALPC -> process memory -> WDigest fallback)".into(),
             vec![
                 "alpc",
                 "process_memory",
@@ -277,28 +277,28 @@ pub fn choose_cred_extraction(cg: &CgPreflightResult) -> ExtractionDecision {
         ),
         CredentialGuardStatus::Unknown => ExtractionDecision::new(
             "shadow_credentials",
-            "CG status unknown — prefer non-LSASS techniques (Shadow Credentials, RBCD)".into(),
+            "CG status unknown -- prefer non-LSASS techniques (Shadow Credentials, RBCD)".into(),
             vec!["shadow_credentials", "rbcd", "lsaiso_bypass", "lsass_dump"],
         ),
         CredentialGuardStatus::Disabled => ExtractionDecision::new(
             "lsass_dump",
-            "CG not detected — proceed with LSASS memory dumping".into(),
+            "CG not detected -- proceed with LSASS memory dumping".into(),
             vec!["lsass_dump", "wdigest"],
         ),
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  WMI-based Credential Guard Detection
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 /// Check Credential Guard / VBS status via WMI on a remote machine.
 ///
 /// Uses the `Win32_DeviceGuard` WMI class to query:
-/// - `DeviceGuardEnabled` — whether VBS is enabled
-/// - `SecurityServicesRunning` — which CG services are running
-/// - `DeviceGuardLocalSystemAuthorityCredentialGuard` — CG-specific
-/// - `VirtualizationBasedSecurityStatus` — VBS status
+/// - `DeviceGuardEnabled` -- whether VBS is enabled
+/// - `SecurityServicesRunning` -- which CG services are running
+/// - `DeviceGuardLocalSystemAuthorityCredentialGuard` -- CG-specific
+/// - `VirtualizationBasedSecurityStatus` -- VBS status
 ///
 /// Requires admin credentials and WMI access to the target.
 #[cfg(target_os = "windows")]
@@ -368,11 +368,11 @@ pub fn check_credential_guard_via_wmi(
     let (status, recommendation) = match (lsa_cfg_flags, isolated_secret_present) {
         (Some(1) | Some(2), _) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via WMI (VBS running) — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
+            "CG confirmed via WMI (VBS running) -- use LSAISO bypass (ALPC -> process memory -> WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
         ),
         (_, Some(true)) => (
             CredentialGuardStatus::Enabled,
-            "CG confirmed via WMI (CredentialGuard field) — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
+            "CG confirmed via WMI (CredentialGuard field) -- use LSAISO bypass (ALPC -> process memory -> WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string(),
         ),
         (Some(0), _) => (
             CredentialGuardStatus::Disabled,
@@ -380,7 +380,7 @@ pub fn check_credential_guard_via_wmi(
         ),
         _ => (
             CredentialGuardStatus::Unknown,
-            "CG status via WMI inconclusive — further investigation needed".to_string(),
+            "CG status via WMI inconclusive -- further investigation needed".to_string(),
         ),
     };
 
@@ -407,9 +407,9 @@ pub fn check_credential_guard_via_wmi(
     ))
 }
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  Domain-level CG Assessment via LDAP
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 /// Assess Credential Guard deployment across the domain via LDAP.
 ///
@@ -473,7 +473,7 @@ pub async fn assess_domain_credential_guard(
         if os_ver.starts_with("10.0.26") {
             ws2025_dcs += 1;
             findings.push(format!(
-                "{dc_name}: WS2025 (build {os_ver}) — CG likely enabled by default"
+                "{dc_name}: WS2025 (build {os_ver}) -- CG likely enabled by default"
             ));
         } else if os_ver.starts_with("10.0.2") {
             let build_num: u32 = os_ver
@@ -483,7 +483,7 @@ pub async fn assess_domain_credential_guard(
                 .unwrap_or(0);
             if build_num >= 20348 {
                 findings.push(format!(
-                    "{dc_name}: WS2022+ (build {os_ver}) — CG may be deployed via GPO"
+                    "{dc_name}: WS2022+ (build {os_ver}) -- CG may be deployed via GPO"
                 ));
             }
         } else {
@@ -510,7 +510,7 @@ pub async fn assess_domain_credential_guard(
                 for name in names {
                     gpo_cg_policies.push(name.clone());
                     findings.push(format!(
-                        "GPO found: {name} — likely deploys CredentialGuard"
+                        "GPO found: {name} -- likely deploys CredentialGuard"
                     ));
                 }
             }
@@ -586,17 +586,17 @@ pub struct DomainCgAssessment {
     pub findings: Vec<String>,
 }
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  Multi-signal CG Check (combined remote + WMI + domain + heuristic)
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 /// Multi-signal Credential Guard check combining all available methods.
 ///
 /// Collects evidence from:
-/// 1. Remote registry (SMB) — if session provided
-/// 2. WMI — if credentials provided
-/// 3. LDAP domain assessment — if session provided
-/// 4. Name/OS heuristic — always available
+/// 1. Remote registry (SMB) -- if session provided
+/// 2. WMI -- if credentials provided
+/// 3. LDAP domain assessment -- if session provided
+/// 4. Name/OS heuristic -- always available
 ///
 /// Returns a consolidated result with confidence scoring.
 pub async fn comprehensive_cg_check(
@@ -718,13 +718,13 @@ pub async fn comprehensive_cg_check(
 
     let recommendation = match final_status {
         CredentialGuardStatus::Enabled => {
-            "CG confirmed — use LSAISO bypass (ALPC → process memory → WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string()
+            "CG confirmed -- use LSAISO bypass (ALPC -> process memory -> WDigest fallback), or route to ADCS Shadow Credentials, RBCD, or dMSA".to_string()
         }
         CredentialGuardStatus::Disabled => {
-            "CG not detected — proceed with LSASS techniques".to_string()
+            "CG not detected -- proceed with LSASS techniques".to_string()
         }
         CredentialGuardStatus::Unknown => {
-            "CG status unclear — prefer non-LSASS techniques as precaution".to_string()
+            "CG status unclear -- prefer non-LSASS techniques as precaution".to_string()
         }
     };
 
@@ -828,7 +828,7 @@ mod tests {
             isolated_credential_secret_present: None,
             device_guard_queried: false,
             security_services_running: None,
-            recommendation: "Unknown — using legacy".to_string(),
+            recommendation: "Unknown -- using legacy".to_string(),
             findings: vec![],
         };
         let decision = choose_cred_extraction(&cg);

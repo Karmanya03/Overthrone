@@ -1,11 +1,11 @@
-//! ESC3 — Enrollment Agent Certificate Template Abuse
+//! ESC3 -- Enrollment Agent Certificate Template Abuse
 //!
 //! ESC3 exploits enrollment agent templates to request certificates on behalf of other users.
 //! This is a two-step attack:
 //! 1. Request an enrollment agent certificate
 //! 2. Use the agent certificate to request a certificate for another user
 //!
-//! Reference: SpecterOps "Certified Pre-Owned" — ESC3
+//! Reference: SpecterOps "Certified Pre-Owned" -- ESC3
 
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_client_auth_csr, create_esc1_csr};

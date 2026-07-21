@@ -60,7 +60,7 @@ pub struct PamFinding {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PamFindingType {
-    /// PAM trust detected — informational
+    /// PAM trust detected -- informational
     PamTrustDetected,
     /// PAM trust exists but no filtering (exploitable)
     PamTrustNoFiltering,
@@ -93,7 +93,7 @@ pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFin
     let mut pam_trusts_found = false;
 
     for trust in &graph.trusts {
-        // ── Explicit PAM trusts ──
+        // -- Explicit PAM trusts --
         if trust.is_pam_trust {
             pam_trusts_found = true;
 
@@ -110,18 +110,18 @@ pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFin
                 shadow_principals: Vec::new(), // populated when LDAP is wired
                 risk_level: risk.into(),
                 description: format!(
-                    "PAM trust detected: {} → {}. {}Shadow principals in the bastion forest \
+                    "PAM trust detected: {} -> {}. {}Shadow principals in the bastion forest \
                      can obtain temporary (or permanent) privileged group memberships in the \
                      production forest. {}",
                     trust.source_domain,
                     trust.target_domain,
                     if !trust.sid_filtering {
-                        "SID filtering is DISABLED — shadow principals can inject arbitrary SIDs. "
+                        "SID filtering is DISABLED -- shadow principals can inject arbitrary SIDs. "
                     } else {
                         ""
                     },
                     if trust.tgt_delegation {
-                        "TGT delegation is enabled — bastion accounts can request TGTs for production resources."
+                        "TGT delegation is enabled -- bastion accounts can request TGTs for production resources."
                     } else {
                         "TGT delegation is disabled."
                     }
@@ -136,7 +136,7 @@ pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFin
                         trust.source_domain, trust.target_domain
                     )
                 } else {
-                    "1. Regularly audit shadow principal TTLs — ensure none are permanent\n\
+                    "1. Regularly audit shadow principal TTLs -- ensure none are permanent\n\
                      2. Monitor shadow principal creation events (Event ID 4929)\n\
                      3. Restrict who can create/modify shadow principals via ACLs\n\
                      4. Consider implementing just-in-time access workflows".into()
@@ -144,7 +144,7 @@ pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFin
             });
         }
 
-        // ── Forest trusts that could be converted to PAM (risk assessment) ──
+        // -- Forest trusts that could be converted to PAM (risk assessment) --
         if trust.trust_type == TrustKind::Forest
             && trust.direction.allows_outbound()
             && !trust.is_pam_trust
@@ -157,7 +157,7 @@ pub fn analyze_pam_trusts(source_domain: &str, graph: &TrustGraph) -> Vec<PamFin
                 shadow_principals: Vec::new(),
                 risk_level: "INFO".into(),
                 description: format!(
-                    "Forest trust {} → {} could potentially be reconfigured as a PAM trust. \
+                    "Forest trust {} -> {} could potentially be reconfigured as a PAM trust. \
                      If an attacker gains forest admin, they could establish a PAM trust \
                      to create persistent shadow principal access.",
                     trust.source_domain, trust.target_domain

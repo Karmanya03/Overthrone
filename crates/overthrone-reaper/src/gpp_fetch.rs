@@ -135,7 +135,7 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
                         }
                     }
                     Err(_) => {
-                        // File doesn't exist in this GPO — completely normal, skip silently
+                        // File doesn't exist in this GPO -- completely normal, skip silently
                         continue;
                     }
                 }
@@ -158,7 +158,7 @@ pub async fn enumerate_gpp_passwords(config: &ReaperConfig) -> Result<GppScanRes
         );
         for cred in &result.credentials {
             info!(
-                "[gpp]  → {}:{} (changed: {}, source: {})",
+                "[gpp]  -> {}:{} (changed: {}, source: {})",
                 cred.username,
                 mask_password(&cred.password),
                 cred.changed,
@@ -217,9 +217,9 @@ fn mask_password(password: &str) -> String {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

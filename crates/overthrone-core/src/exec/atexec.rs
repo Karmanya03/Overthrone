@@ -11,9 +11,9 @@ use crate::error::{OverthroneError, Result};
 use crate::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCE/RPC Constants for ATSVC (Task Scheduler)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const ATSVC_PIPE: &str = "atsvc";
 
@@ -49,9 +49,9 @@ const TASK_TRIGGER_ON_DEMAND: u16 = 7;
 #[allow(dead_code)] // Kept for protocol completeness
 const TASK_ACTION_EXEC: u16 = 0;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for AtExec
 pub struct AtExecConfig {
@@ -97,9 +97,9 @@ pub struct AtExecResult {
     pub job_id: Option<u32>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DCE/RPC Packet Builders
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build a DCE/RPC bind request for ATSVC
 fn build_bind_packet() -> Vec<u8> {
@@ -229,7 +229,7 @@ fn build_job_add_stub(server: &str, command: &str, output_path: &str) -> Vec<u8>
     stub.extend_from_slice(&0x10u8.to_le_bytes()); // Flags
 
     // NDR alignment: pad to 4-byte boundary before LPWSTR Command pointer
-    // AT_INFO offsets: JobTime(4)+DaysOfMonth(4)+DaysOfWeek(1)+Flags(1) = 10 bytes → pad to 12
+    // AT_INFO offsets: JobTime(4)+DaysOfMonth(4)+DaysOfWeek(1)+Flags(1) = 10 bytes -> pad to 12
     stub.extend_from_slice(&[0u8, 0u8]); // 2 bytes NDR alignment padding
 
     // Command (the actual command to run)
@@ -295,9 +295,9 @@ fn extract_job_id(response: &[u8]) -> Result<u32> {
     Ok(job_id)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  AtExec Execution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Execute a command on a remote host using Scheduled Tasks.
 /// Creates an "at" job (scheduled task), waits for execution,
@@ -320,7 +320,7 @@ pub async fn execute(
     debug!("AtExec: Command: {}", command);
 
     let server = format!("\\\\{}", session.target);
-    let output_unc = format!("C:\\{}", &config.output_path);
+    let output_unc = format!("C:\\{}", config.output_path);
 
     // Step 1: Bind to ATSVC
     info!("AtExec: Binding to atsvc pipe");
@@ -463,9 +463,9 @@ impl<'a> AtExecShell<'a> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  RemoteExecutor Trait Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 use crate::exec::{ExecCredentials, ExecMethod, ExecOutput, RemoteExecutor};
 

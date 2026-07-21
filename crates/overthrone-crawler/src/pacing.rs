@@ -107,7 +107,7 @@ impl OpsecPacer {
         Self { config, semaphore }
     }
 
-    /// Acquire pacing permission — waits for concurrency slot and applies delay.
+    /// Acquire pacing permission -- waits for concurrency slot and applies delay.
     /// Returns a token that releases the slot when dropped.
     pub async fn acquire(&self) -> PacingToken<'_> {
         let permit = match &self.semaphore {
@@ -115,7 +115,7 @@ impl OpsecPacer {
                 Ok(p) => Some(p),
                 Err(_) => {
                     tracing::warn!(
-                        "OpsecPacer semaphore closed — continuing without concurrency limit"
+                        "OpsecPacer semaphore closed -- continuing without concurrency limit"
                     );
                     None
                 }
@@ -139,7 +139,7 @@ impl OpsecPacer {
                 Ok(p) => Some(p),
                 Err(_) => {
                     tracing::warn!(
-                        "OpsecPacer semaphore closed — continuing without concurrency limit"
+                        "OpsecPacer semaphore closed -- continuing without concurrency limit"
                     );
                     None
                 }
@@ -157,9 +157,9 @@ impl OpsecPacer {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // DNS Resolver Rotation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Round-robin DNS resolver rotator.
 /// Distributes queries across multiple resolvers to avoid
@@ -225,9 +225,9 @@ impl Default for DnsRotator {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // HTTP User-Agent Rotation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Pool of User-Agent strings for HTTP request rotation.
 /// Randomly selects a UA per request to avoid fingerprinting.
@@ -294,9 +294,9 @@ impl Default for UserAgentPool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // TCP Source Port Rotation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Round-robin TCP source port rotator.
 ///
@@ -305,7 +305,7 @@ impl Default for UserAgentPool {
 /// usage patterns. Useful during stealth enumeration where each
 /// connection should appear to come from a different ephemeral port.
 ///
-/// The default range (49152–65535) mirrors the IANA dynamic port range,
+/// The default range (49152--65535) mirrors the IANA dynamic port range,
 /// providing ~16K ports before cycling. This is large enough that
 /// TIME_WAIT collisions are rare in practice.
 #[derive(Debug, Clone)]
@@ -333,7 +333,7 @@ impl PortRotator {
         })
     }
 
-    /// Create a rotator over the IANA ephemeral port range (49152–65535).
+    /// Create a rotator over the IANA ephemeral port range (49152--65535).
     pub fn default_ephemeral() -> Self {
         // Unwrap is safe: 49152 <= 65535
         Self::new(49152, 65535).expect("invalid default ephemeral range")
@@ -392,7 +392,7 @@ pub async fn connect_with_source_port(
         std::net::SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
     };
 
-    // MSG: Do NOT set SO_REUSEADDR on Windows — it has different semantics
+    // MSG: Do NOT set SO_REUSEADDR on Windows -- it has different semantics
     // (allows multiple sockets to bind the same port, which we don't want).
     // On Unix, we also skip it to avoid masking port conflicts.
     #[cfg(not(windows))]
@@ -545,7 +545,7 @@ mod tests {
         assert!(pool.pick().contains("Mozilla"));
     }
 
-    // ── PortRotator tests ──────────────────────────────────
+    // -- PortRotator tests ----------------------------------
 
     #[test]
     fn test_port_rotator_default_ephemeral() {

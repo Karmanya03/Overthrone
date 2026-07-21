@@ -47,7 +47,7 @@ pub async fn bind_tcp_listener_async(
 /// Bind a synchronous `std::net::TcpListener` to the given IP and port.
 ///
 /// Handles IPv6 address bracketing automatically via [`format_addr`].
-/// Does **not** set non-blocking mode — callers should do that if needed.
+/// Does **not** set non-blocking mode -- callers should do that if needed.
 /// Returns a descriptive error string on failure.
 ///
 /// # Example
@@ -183,7 +183,7 @@ pub fn socks5_connect_sync(
 }
 
 /// Calculate NTLMv2 response for a given challenge.
-/// This is used for offline cracking validation — NOT for relay
+/// This is used for offline cracking validation -- NOT for relay
 /// (relay forwards the victim's response directly).
 pub fn calculate_ntlmv2_response(
     username: &str,
@@ -288,7 +288,7 @@ pub fn extract_domain_from_target_info(target_info: &[u8]) -> Option<String> {
         }
 
         if av_id == 0x0002 {
-            // MsvAvNbDomainName — UTF-16LE
+            // MsvAvNbDomainName -- UTF-16LE
             let domain_chars: Vec<u16> = target_info[pos..pos + av_len]
                 .chunks_exact(2)
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
@@ -465,7 +465,7 @@ mod tests {
     fn test_socks5_connect_ipv6_target_socket() {
         // Verify that IPv6 SocketAddrs can be passed to socks5_connect
         // by testing the direct path's SocketAddr parse.
-        // Actual connect not tested — this validates the type system.
+        // Actual connect not tested -- this validates the type system.
         let v6_target: SocketAddr = "[::1]:445".parse().unwrap();
         assert_eq!(v6_target, SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 445)));
 

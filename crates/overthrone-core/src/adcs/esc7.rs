@@ -1,11 +1,11 @@
-//! ESC7 (Vulnerable Certificate Authority Access Control) — native exploit
+//! ESC7 (Vulnerable Certificate Authority Access Control) -- native exploit
 //!
 //! When an attacker has **ManageCA** rights on a CA, they can:
 //! 1. Grant themselves **ManageCertificates** (add-officer)
 //! 2. Enable the **SubCA** template
 //! 3. Request a certificate as any user (via SubCA template)
 //! 4. Issue the pending request (ManageCertificates right)
-//! 5. Retrieve the issued certificate → domain takeover
+//! 5. Retrieve the issued certificate -> domain takeover
 //!
 //! This module implements the full attack chain natively using:
 //! - WINREG RPC (MS-RRP over SMB `\\pipe\\winreg`) for CA configuration
@@ -120,7 +120,7 @@ impl Esc7Target {
         };
 
         if response.is_issued() {
-            // Lucky — the CA auto-issued it
+            // Lucky -- the CA auto-issued it
             let cert_data = response
                 .certificate
                 .ok_or_else(|| OverthroneError::Adcs("No certificate in response".to_string()))?;
@@ -292,9 +292,9 @@ impl Esc7Target {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// ICertAdmin2 via WINREG — Issue pending certificate request
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// ICertAdmin2 via WINREG -- Issue pending certificate request
+// ===========================================================
 
 /// Issue a pending certificate request via the CA's internal registry state.
 /// This simulates what `certipy ca -issue-request` does by modifying the
@@ -389,9 +389,9 @@ async fn issue_pending_request_rpc(smb: &SmbSession, ca_name: &str, request_id: 
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // WINREG NDR helpers (re-exported from esc5 for internal use)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn winreg_bind_pdu() -> Vec<u8> {
     let uuid: [u8; 16] = [
@@ -535,9 +535,9 @@ fn extract_serial(cert_der: &[u8]) -> Result<String> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

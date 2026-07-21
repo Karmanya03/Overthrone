@@ -1,12 +1,12 @@
-//! Pure-Rust SMB2/3 client — replaces pavao (C/libsmbclient) for cross-platform support.
+//! Pure-Rust SMB2/3 client -- replaces pavao (C/libsmbclient) for cross-platform support.
 //!
 //! Implements the minimum viable subset of MS-SMB2 needed by Overthrone:
-//!   • Negotiate (SMB 2.1 / 3.0.2)
-//!   • Session Setup with NTLMSSP (NTLMv2)
-//!   • Tree Connect / Disconnect
-//!   • Create, Read, Write, Close (files & named pipes)
-//!   • IOCTL (FSCTL_PIPE_TRANSCEIVE for DCE/RPC)
-//!   • Query Directory (for list_directory)
+//!   * Negotiate (SMB 2.1 / 3.0.2)
+//!   * Session Setup with NTLMSSP (NTLMv2)
+//!   * Tree Connect / Disconnect
+//!   * Create, Read, Write, Close (files & named pipes)
+//!   * IOCTL (FSCTL_PIPE_TRANSCEIVE for DCE/RPC)
+//!   * Query Directory (for list_directory)
 //!
 //! References:
 //!   MS-SMB2: <https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/>
@@ -30,9 +30,9 @@ use tracing::{debug, trace, warn};
 
 type HmacMd5 = Hmac<Md5>;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const SMB2_MAGIC: &[u8; 4] = b"\xfeSMB";
 const SMB2_HEADER_SIZE: usize = 64;
@@ -333,9 +333,9 @@ const SMB3_ENCRYPTION_KEY_LABEL_C2S: &[u8] = b"SMBC2SCipherKey";
 const SMB3_ENCRYPTION_KEY_LABEL_S2C: &[u8] = b"SMBS2CCipherKey";
 const SMB3_ENCRYPTION_KEY_CONTEXT: &[u8] = b"SmbCipher";
 
-// ═══════════════════════════════════════════════════════════
-//  SMB2 Connection — TCP Transport
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  SMB2 Connection -- TCP Transport
+// ===========================================================
 
 /// A low-level SMB2 connection over TCP.
 pub struct Smb2Connection {
@@ -343,15 +343,15 @@ pub struct Smb2Connection {
     message_id: AtomicU64,
     session_id: Mutex<u64>,
     tree_id: Mutex<u32>,
-    /// NTLMSSP session base key (16 bytes) — needed for DCSync and signing
+    /// NTLMSSP session base key (16 bytes) -- needed for DCSync and signing
     session_key: Mutex<Option<Vec<u8>>>,
     /// Whether the server requires packet signing
     sign_required: std::sync::atomic::AtomicBool,
     /// Whether the server requires SMB3 encryption
     encryption_required: std::sync::atomic::AtomicBool,
-    /// Derived SMB3 encryption key (server→client direction)
+    /// Derived SMB3 encryption key (server->client direction)
     decryption_key: Mutex<Option<Vec<u8>>>,
-    /// Derived SMB3 encryption key (client→server direction)
+    /// Derived SMB3 encryption key (client->server direction)
     encryption_key: Mutex<Option<Vec<u8>>>,
     /// Negotiated SMB dialect (e.g. 0x0210 = SMB 2.1, 0x0300 = SMB 3.0, 0x0302 = SMB 3.0.2)
     dialect: AtomicU16,
@@ -372,7 +372,7 @@ pub struct Smb2Connection {
 }
 
 impl Smb2Connection {
-    // ───────────────── Connection ─────────────────
+    // ----------------- Connection -----------------
 
     /// Open a raw TCP connection to the target's SMB port (445).
     pub async fn connect(target: &str, port: u16) -> Result<Self> {
@@ -410,7 +410,7 @@ impl Smb2Connection {
         })
     }
 
-    // ───────────────── Transport ─────────────────
+    // ----------------- Transport -----------------
 
     /// Send an SMB2 message (prepends NetBIOS session header).
     /// Automatically wraps with SMB3 Transform_Header if encryption is enabled.
@@ -516,12 +516,12 @@ impl Smb2Connection {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
             if !Self::verify_packet(&buf, key, dialect, true, preauth.as_deref()) {
-                // WS2025 signing quirk — once a single packet fails verification,
+                // WS2025 signing quirk -- once a single packet fails verification,
                 // disable all further verification to prevent session corruption.
                 // The signing key derivation for SMB 3.1.1 on WS2025 does not match
                 // our SP800-108 KDF output, so intermittent failures are expected.
                 warn!(
-                    "SMB2: Packet signature verification failed — disabling further \
+                    "SMB2: Packet signature verification failed -- disabling further \
                        verification for this session (WS2025 signing quirk)."
                 );
                 self.signing_known_broken
@@ -537,7 +537,7 @@ impl Smb2Connection {
         self.message_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    // ───────────────── SMB2 Header Builder ─────────────────
+    // ----------------- SMB2 Header Builder -----------------
 
     /// Build an SMB2 header (64 bytes).
     async fn build_header(&self, command: u16, credit_charge: u16) -> Vec<u8> {
@@ -759,9 +759,9 @@ impl Smb2Connection {
         self.send(pkt).await
     }
 
-    // ───────────────── Negotiate ─────────────────
+    // ----------------- Negotiate -----------------
 
-    /// SMB2 Negotiate — establishes dialect.
+    /// SMB2 Negotiate -- establishes dialect.
     ///
     /// Strategy (matching Impacket's compatibility-first approach):
     /// 1. Offer dialects 2.0.2 through 3.0.2 (no 3.1.1 pre-auth integrity).
@@ -770,7 +770,7 @@ impl Smb2Connection {
     /// This avoids SMB 3.1.1 pre-auth integrity hashing which isn't implemented
     /// in the session setup path. Most servers work fine with 3.0.2.
     pub async fn negotiate(&self) -> Result<()> {
-        // Try SMB 3.1.1 first — needed for IOCTL on WS2025, and signing key derivation
+        // Try SMB 3.1.1 first -- needed for IOCTL on WS2025, and signing key derivation
         // now correctly uses PreauthIntegrityHashValue as context.
         let result_311 = self.negotiate_dialects(true).await;
         if result_311.is_ok() {
@@ -925,7 +925,7 @@ impl Smb2Connection {
             )));
         }
 
-        // Check NTSTATUS before anything else — server may return error PDU
+        // Check NTSTATUS before anything else -- server may return error PDU
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
             let status_name = ntstatus_to_name(status);
@@ -974,14 +974,14 @@ impl Smb2Connection {
         let max_write = u32::from_le_bytes([body[36], body[37], body[38], body[39]]);
         debug!("SMB2: MaxTransact={max_transact}, MaxRead={max_read}, MaxWrite={max_write}");
 
-        // Store negotiated sizes — used when building IOCTL MaxOutputResponse
+        // Store negotiated sizes -- used when building IOCTL MaxOutputResponse
         self.max_transact_size
             .store(max_transact, Ordering::Relaxed);
 
         Ok(())
     }
 
-    // ───────────────── Session Setup (NTLMSSP) ─────────────────
+    // ----------------- Session Setup (NTLMSSP) -----------------
 
     /// Authenticate via NTLMSSP (NTLMv2) inside SPNEGO.
     /// Returns the 16-byte session base key on success.
@@ -993,7 +993,7 @@ impl Smb2Connection {
     ) -> Result<Vec<u8>> {
         debug!("SMB2: Session setup for {domain}\\{username}");
 
-        // ── Step 1: Send NTLMSSP Negotiate (Type 1) ──
+        // -- Step 1: Send NTLMSSP Negotiate (Type 1) --
         let type1 = build_ntlmssp_negotiate();
         let spnego_init = wrap_spnego_init(&type1);
 
@@ -1064,7 +1064,7 @@ impl Smb2Connection {
         *self.session_id.lock().await = session_id;
         debug!("SMB2: Got session ID 0x{session_id:016X}");
 
-        // ── Step 2: Parse NTLMSSP Challenge (Type 2) from SPNEGO response ──
+        // -- Step 2: Parse NTLMSSP Challenge (Type 2) from SPNEGO response --
         let resp_body = &resp[SMB2_HEADER_SIZE..];
         let sec_buf_offset =
             u16::from_le_bytes([resp_body[4], resp_body[5]]) as usize - SMB2_HEADER_SIZE;
@@ -1095,7 +1095,7 @@ impl Smb2Connection {
             ti_last4
         );
 
-        // ── Step 3: Build NTLMSSP Authenticate (Type 3) ──
+        // -- Step 3: Build NTLMSSP Authenticate (Type 3) --
         let (mut type3, session_key, session_base_key) =
             build_ntlmssp_authenticate(domain, username, password, &challenge)?;
 
@@ -1148,11 +1148,11 @@ impl Smb2Connection {
 
         debug!("SMB2: Authenticated as {domain}\\{username}");
 
-        // Store session key — the server signs its response with a signing key derived from this.
+        // Store session key -- the server signs its response with a signing key derived from this.
         // Per MS-SMB2 §3.2.4.1.2: the session key for signing key derivation is the
         // NTLM ExportedSessionKey (untransformed). The PreauthIntegrityHashValue is used
         // as the KDF context (label = "SMBSigningKey\x00"), NOT XOR'd with the session key.
-        // Impacket confirms this behavior — no SessionKey XOR on WS2025.
+        // Impacket confirms this behavior -- no SessionKey XOR on WS2025.
         *self.session_key.lock().await = Some(session_key.clone());
 
         // Verify the server's response signature now that the key is stored.
@@ -1171,8 +1171,8 @@ impl Smb2Connection {
             let expected = derive_signing_key(&session_key, dialect, preauth_hash.as_deref());
             let expected_cmac = aes_cmac_16(&expected, &verify_buf);
             if &expected_cmac[..] != claimed_sig {
-                warn!("SMB2 Session Setup sig mismatch — trying all diagnostic KDF variants");
-                // ── Comprehensive diagnostic: try ALL KDF variants ──
+                warn!("SMB2 Session Setup sig mismatch -- trying all diagnostic KDF variants");
+                // -- Comprehensive diagnostic: try ALL KDF variants --
                 let ph = preauth_hash.as_deref();
                 let mut found = "none";
                 // A: primary _sep already tried above
@@ -1327,7 +1327,7 @@ impl Smb2Connection {
             )));
         }
 
-        // ── Step 1: Negotiate Type 1 ──
+        // -- Step 1: Negotiate Type 1 --
         let type1 = build_ntlmssp_negotiate();
         let spnego_init = wrap_spnego_init(&type1);
 
@@ -1378,7 +1378,7 @@ impl Smb2Connection {
         ]);
         *self.session_id.lock().await = session_id;
 
-        // ── Step 2: Parse challenge ──
+        // -- Step 2: Parse challenge --
         let resp_body = &resp[SMB2_HEADER_SIZE..];
         let sec_buf_offset =
             u16::from_le_bytes([resp_body[4], resp_body[5]]) as usize - SMB2_HEADER_SIZE;
@@ -1403,7 +1403,7 @@ impl Smb2Connection {
             &challenge.target_info[..challenge.target_info.len().min(256)]
         );
 
-        // ── Step 3: Build Type 3 with raw NT hash (no password needed) ──
+        // -- Step 3: Build Type 3 with raw NT hash (no password needed) --
         let (mut type3, session_key, session_base_key) =
             build_ntlmssp_authenticate_hash(domain, username, &nt_hash, &challenge)?;
 
@@ -1492,7 +1492,7 @@ impl Smb2Connection {
                     aes_cmac_16(&sk, &verify_buf) == claimed_sig
                 };
                 let mut found = "none";
-                // ── Separator-style KDF (our original) ──
+                // -- Separator-style KDF (our original) --
                 // A: KDF bare labels with separator
                 if try_method_sep(b"SMBSigningKey", b"SmbSign") {
                     found = "A";
@@ -1533,7 +1533,7 @@ impl Smb2Connection {
                 else if try_method_sbk_sep(b"SMBSigningKey", b"SmbSign\x00") {
                     found = "J";
                 }
-                // ── SMB2AESCMAC label (SMB 3.0.x) ──
+                // -- SMB2AESCMAC label (SMB 3.0.x) --
                 // a: sep with SMB2AESCMAC null-terminated
                 else if try_method_sep(b"SMB2AESCMAC\x00", b"SmbSign\x00") {
                     found = "a";
@@ -1550,7 +1550,7 @@ impl Smb2Connection {
                 else if try_method_sbk_sep(b"SMB2AESCMAC", b"SmbSign") {
                     found = "d";
                 }
-                // ── Impacket-style KDF (no separator, null-terminated labels) ──
+                // -- Impacket-style KDF (no separator, null-terminated labels) --
                 // K: imp-style with exported key
                 else if try_method_imp(b"SMBSigningKey\x00", b"SmbSign\x00") {
                     found = "K";
@@ -1583,7 +1583,7 @@ impl Smb2Connection {
                 else if try_method_sbk_imp(b"SMBSigningKey", b"SmbSign\x00") {
                     found = "R";
                 }
-                // ── Legacy / fallback ──
+                // -- Legacy / fallback --
                 // S: HMAC-SHA256(session_key, packet)
                 // T: HMAC-SHA256(session_base_key, packet)
                 let hmac_s = {
@@ -1601,11 +1601,11 @@ impl Smb2Connection {
                 } else if &hmac_t[..16] == claimed_sig {
                     found = "T";
                 }
-                // U: raw AES-CMAC(session_key, packet) — no KDF
+                // U: raw AES-CMAC(session_key, packet) -- no KDF
                 else if &aes_cmac_16(&session_key, &verify_buf)[..] == claimed_sig {
                     found = "U";
                 }
-                // V: raw AES-CMAC(session_base_key, packet) — no KDF
+                // V: raw AES-CMAC(session_base_key, packet) -- no KDF
                 else if &aes_cmac_16(&session_base_key, &verify_buf)[..] == claimed_sig {
                     found = "V";
                 }
@@ -1678,7 +1678,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        // Kerberos session key is known upfront — store before sending
+        // Kerberos session key is known upfront -- store before sending
         let key = session_key.to_vec();
         *self.session_key.lock().await = Some(key.clone());
 
@@ -1738,7 +1738,7 @@ impl Smb2Connection {
         Ok(key)
     }
 
-    // ───────────────── Tree Connect ─────────────────
+    // ----------------- Tree Connect -----------------
 
     /// Connect to a share (e.g. `\\target\IPC$`).
     pub async fn tree_connect(&self, share_path: &str) -> Result<u32> {
@@ -1795,7 +1795,7 @@ impl Smb2Connection {
         Ok(())
     }
 
-    // ───────────────── Create (Open) ─────────────────
+    // ----------------- Create (Open) -----------------
 
     /// Open a file or named pipe. Returns (file_id_persistent, file_id_volatile).
     pub async fn create(
@@ -2033,7 +2033,7 @@ impl Smb2Connection {
         .await
     }
 
-    // ───────────────── Close ─────────────────
+    // ----------------- Close -----------------
 
     /// Close a file or pipe handle.
     pub async fn close(&self, file_id: &[u8; 32]) -> Result<()> {
@@ -2055,7 +2055,7 @@ impl Smb2Connection {
         Ok(())
     }
 
-    // ───────────────── Read ─────────────────
+    // ----------------- Read -----------------
 
     /// Read data from an open file/pipe. Returns bytes read.
     pub async fn read(&self, file_id: &[u8; 32], offset: u64, length: u32) -> Result<Vec<u8>> {
@@ -2142,7 +2142,7 @@ impl Smb2Connection {
         Ok(result)
     }
 
-    // ───────────────── Write ─────────────────
+    // ----------------- Write -----------------
 
     /// Write data to an open file/pipe.
     pub async fn write(&self, file_id: &[u8; 32], offset: u64, data: &[u8]) -> Result<u32> {
@@ -2209,9 +2209,9 @@ impl Smb2Connection {
         Ok(())
     }
 
-    // ───────────────── IOCTL (Named Pipe Transact) ─────────────────
+    // ----------------- IOCTL (Named Pipe Transact) -----------------
 
-    /// FSCTL_PIPE_TRANSCEIVE — send DCE/RPC request, receive response.
+    /// FSCTL_PIPE_TRANSCEIVE -- send DCE/RPC request, receive response.
     /// This is the critical operation for WMI, SAMR, DRSUAPI, etc.
     /// Build and send an IOCTL packet, returning the raw response bytes.
     /// Used internally by `ioctl_pipe_transceive` and for retry loops.
@@ -2264,7 +2264,7 @@ impl Smb2Connection {
     pub async fn ioctl_pipe_transceive(&self, file_id: &[u8; 32], input: &[u8]) -> Result<Vec<u8>> {
         let max_out = self.max_transact_size.load(Ordering::Relaxed).min(65_536);
         debug!(
-            "SMB2: IOCTL Request — session_key={}, sign_required={}, dialect=0x{:04X}, max_out={max_out}, input_count={}",
+            "SMB2: IOCTL Request -- session_key={}, sign_required={}, dialect=0x{:04X}, max_out={max_out}, input_count={}",
             self.session_key.lock().await.is_some(),
             self.sign_required.load(Ordering::Relaxed),
             self.dialect.load(Ordering::Relaxed),
@@ -2289,7 +2289,7 @@ impl Smb2Connection {
                 continue;
             }
             if status == STATUS_BUFFER_OVERFLOW && max_out > 0 {
-                // Buffer too small — retry with larger buffer if possible
+                // Buffer too small -- retry with larger buffer if possible
                 let new_max = max_out.min(self.max_transact_size.load(Ordering::Relaxed));
                 debug!("SMB2: IOCTL STATUS_BUFFER_OVERFLOW, retrying with max_out={new_max}");
                 return self
@@ -2353,7 +2353,7 @@ impl Smb2Connection {
         Ok(rb[out_offset..out_offset + out_count].to_vec())
     }
 
-    // ───────────────── Query Directory ─────────────────
+    // ----------------- Query Directory -----------------
 
     /// List directory entries. Returns `(name, is_directory, size)` tuples.
     pub async fn query_directory(&self, dir_id: &[u8; 32]) -> Result<Vec<(String, bool, u64)>> {
@@ -2373,7 +2373,7 @@ impl Smb2Connection {
             body.extend_from_slice(&0u32.to_le_bytes());
             // FileId (16 bytes)
             body.extend_from_slice(&dir_id[..16]);
-            // Search pattern "*" — offset and length
+            // Search pattern "*" -- offset and length
             let pattern: Vec<u8> = "*".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
             let pattern_offset = (SMB2_HEADER_SIZE + 32) as u16;
             body.extend_from_slice(&pattern_offset.to_le_bytes());
@@ -2419,7 +2419,7 @@ impl Smb2Connection {
         Ok(all_entries)
     }
 
-    // ───────────────── Delete ─────────────────
+    // ----------------- Delete -----------------
 
     /// Delete a file by opening with DELETE disposition and closing.
     pub async fn delete_file(&self, path: &str) -> Result<()> {
@@ -2455,7 +2455,7 @@ impl Smb2Connection {
         Ok(())
     }
 
-    // ───────────────── OPLOCK Break ─────────────────
+    // ----------------- OPLOCK Break -----------------
 
     /// Wait for an OPLOCK break notification from the server.
     ///
@@ -2611,9 +2611,9 @@ impl Smb2Connection {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  NTLMSSP Implementation (NTLMv2)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parsed NTLMSSP Type 2 (Challenge) message.
 pub struct NtlmChallenge {
@@ -2727,7 +2727,7 @@ pub fn build_ntlmssp_authenticate_hash(
     nt_hash: &[u8],
     challenge: &NtlmChallenge,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    // ── NTLMv2 computation ──
+    // -- NTLMv2 computation --
     // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + domain)
     // MS-NLMP: only UPPER(user), server_name (domain) stays as provided
     let user_domain: Vec<u8> = username
@@ -2854,7 +2854,7 @@ pub fn build_ntlmssp_authenticate_hash(
     msg.extend_from_slice(&0u16.to_le_bytes()); // Reserved (3 bytes used + padding)
     msg.push(0); // Reserved (3rd byte)
     msg.push(15); // NTLMRevisionCurrent (NTLMSSP_REVISION_W2K3)
-    // MIC (16 bytes of zeros — the caller should compute and fill this if needed)
+    // MIC (16 bytes of zeros -- the caller should compute and fill this if needed)
     msg.extend_from_slice(&[0u8; 16]);
 
     // Payload
@@ -2987,9 +2987,9 @@ fn filetime_now() -> [u8; 8] {
     ft.to_le_bytes()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SPNEGO Wrappers (minimal ASN.1)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Wrap an NTLMSSP token in a SPNEGO NegTokenInit.
 pub fn wrap_spnego_init(ntlmssp: &[u8]) -> Vec<u8> {
@@ -3040,9 +3040,9 @@ pub fn extract_ntlmssp_from_spnego(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  ASN.1 DER Helpers (minimal, no external dependency)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn asn1_length(len: usize) -> Vec<u8> {
     if len < 0x80 {
@@ -3103,9 +3103,9 @@ pub fn compute_ntlmv2_mic(
     hmac_md5(exported_session_key, &mic_input)
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Crypto Helpers — KDF + AES-CMAC
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Crypto Helpers -- KDF + AES-CMAC
+// ===========================================================
 
 /// NIST SP800-108 Counter Mode KDF using HMAC-SHA256.
 /// Derives a 16-byte key from `key_in`, `label`, and `context`.
@@ -3172,7 +3172,7 @@ fn smb3_encrypt_aes128_gcm(
     rand::rng().fill(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // Encrypt with GCM — tag is appended to ciphertext
+    // Encrypt with GCM -- tag is appended to ciphertext
     let ciphertext = key
         .encrypt(nonce, plaintext)
         .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM encrypt failed: {e}")))?;
@@ -3239,7 +3239,7 @@ fn is_smb3_encrypted(data: &[u8]) -> bool {
     data.len() >= 4 && &data[0..4] == SMB3_TRANSFORM_MAGIC
 }
 
-/// Compute AES-GMAC signature: GMAC(key, nonce, aad) → 16-byte tag.
+/// Compute AES-GMAC signature: GMAC(key, nonce, aad) -> 16-byte tag.
 /// Used by SMB 3.x when the cipher is AES-128-GCM (cipher_id=0x0002).
 /// Uses the aes-gcm crate's AeadInPlace API with empty plaintext.
 #[cfg(test)]
@@ -3269,7 +3269,7 @@ fn aes_gmac_16(key: &[u8], aad: &[u8]) -> [u8; 16] {
 
 /// AES-128-CMAC over `data` using `key` (should be 16 bytes).  Returns 16-byte tag.
 fn aes_cmac_16(key: &[u8], data: &[u8]) -> [u8; 16] {
-    // Ensure exactly 16 bytes — zero-pad or truncate if necessary.
+    // Ensure exactly 16 bytes -- zero-pad or truncate if necessary.
     // In practice the session-derived key is always 16 bytes; the fallback
     // path is a safety net only.
     let mut key16 = [0u8; 16];
@@ -3285,9 +3285,9 @@ fn aes_cmac_16(key: &[u8], data: &[u8]) -> [u8; 16] {
     out
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let mut mac =

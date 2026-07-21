@@ -24,9 +24,9 @@ type Aes256CbcDec = cbc::Decryptor<Aes256>;
 
 const AES_BLOCK_SIZE: usize = 16;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Kerberos Key Derivation (RFC 3962)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Derive an AES-256 key from a password and salt per RFC 3962.
 /// `key = PBKDF2-HMAC-SHA1(password, salt, 4096, 32)` for etype 18.
@@ -46,9 +46,9 @@ pub fn derive_key_aes128(password: &str, salt: &str) -> [u8; 16] {
     key
 }
 
-// ═══════════════════════════════════════════════════════════
-// AES-CTS (CipherText Stealing) — RFC 3962
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// AES-CTS (CipherText Stealing) -- RFC 3962
+// ===========================================================
 
 /// Encrypt with AES-256-CTS (CipherText Stealing).
 /// For data shorter than one block, standard CBC is used.
@@ -190,7 +190,7 @@ where
         return cbc_decrypt(key, &iv, &data);
     }
 
-    // ── Non-block-aligned CTS decryption ──
+    // -- Non-block-aligned CTS decryption --
     //
     // Input layout: [C_1..C_{n-2}] [C_n (16 bytes)] [C_{n-1} partial (remainder bytes)]
     //
@@ -203,7 +203,7 @@ where
     //
     // Step 3: P_n = I[0..r] XOR C_{n-1}[0..r]
     //
-    // Step 4: CBC decrypt [C_1..C_{n-2}, C_{n-1}] → P_1..P_{n-1}
+    // Step 4: CBC decrypt [C_1..C_{n-2}, C_{n-1}] -> P_1..P_{n-1}
     //
     // Step 5: Result = P_1..P_{n-1} || P_n
 
@@ -241,9 +241,9 @@ where
     Ok(result)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Standard AES-CBC (for SAM/LSA decryption)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Decrypt with AES-128-CBC (Vista+ SAM hash decryption).
 /// Input must be a multiple of 16 bytes. IV is provided separately.
@@ -302,9 +302,9 @@ pub fn aes256_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec
     Ok(enc.encrypt_padded_vec_mut::<NoPadding>(plaintext))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Vista+ SAM Hash Decryption (AES-based)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Decrypt a Vista+ SAM hash (AES-128-CBC + DES two-block).
 /// Algorithm:
@@ -336,9 +336,9 @@ pub fn decrypt_sam_hash_aes(
     super::rc4_util::des_decrypt_hash(rid, &decrypted[..16])
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Vista+ LSA Secret Decryption (AES-256-CBC)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Decrypt a Vista+ LSA secret using AES-256-CBC.
 /// The encrypted blob has the IV prepended (first 16 bytes), then AES-256-CBC
@@ -376,7 +376,7 @@ fn decrypt_lsa_blocks(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
             let dec = aes256_cbc_decrypt(key, iv, chunk)?;
             result.extend_from_slice(&dec);
         } else {
-            // Last partial block — pad and decrypt
+            // Last partial block -- pad and decrypt
             let mut padded = [0u8; 16];
             padded[..chunk.len()].copy_from_slice(chunk);
             let dec = aes256_cbc_decrypt(key, iv, &padded)?;

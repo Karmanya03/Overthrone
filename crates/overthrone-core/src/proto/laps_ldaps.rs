@@ -1,4 +1,4 @@
-//! WS2025 LAPS LDAPS Fallback — Confidential Attribute Decryption Retry.
+//! WS2025 LAPS LDAPS Fallback -- Confidential Attribute Decryption Retry.
 //!
 //! Windows Server 2025 introduced confidential attribute encryption as a
 //! security default. Attributes like `ms-Mcs-AdmPwd` (LAPS v1) and
@@ -9,7 +9,7 @@
 //! 1. Detects WS2025 DCs via operatingSystem build number
 //! 2. Tries LAPS read over the existing session
 //! 3. If empty and WS2025 detected, creates a new LDAPS session via `connect`
-//!    (port 636 with use_tls=true) and retries — the TLS-encrypted channel
+//!    (port 636 with use_tls=true) and retries -- the TLS-encrypted channel
 //!    allows the confidential attribute to be decrypted by the DC.
 
 use crate::error::Result;
@@ -45,13 +45,13 @@ pub async fn read_laps_passwords_ws2025(
     // Phase 3: Check if DC is WS2025 (confidential attrs encrypted)
     let is_ws2025 = is_ws2025_dc(session).await;
     if !is_ws2025 {
-        info!("LAPS: no results, DC is not WS2025 — not retrying");
+        info!("LAPS: no results, DC is not WS2025 -- not retrying");
         return Ok(results);
     }
 
     // Phase 4: Retry over LDAPS (TLS port 636)
     info!(
-        "LAPS: WS2025 DC detected — retrying over LDAPS on {dc_host}:{}",
+        "LAPS: WS2025 DC detected -- retrying over LDAPS on {dc_host}:{}",
         LDAPS_PORT
     );
 

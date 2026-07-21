@@ -1,4 +1,4 @@
-//! TLS relay support — RelayStream, RelayIo, build_relay_tls_config, mTLS identity,
+//! TLS relay support -- RelayStream, RelayIo, build_relay_tls_config, mTLS identity,
 //! TLS verification modes, and the shared TlsConfig builder.
 
 use rustls::client::danger::ServerCertVerifier;
@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 pub use tokio_rustls::client::TlsStream;
 
 // ===========================================================
-// TlsVerificationMode — controls server certificate verification
+// TlsVerificationMode -- controls server certificate verification
 // ===========================================================
 
 /// How to verify TLS server certificates for outbound connections.
@@ -37,7 +37,7 @@ impl std::fmt::Display for TlsVerificationMode {
 }
 
 // ===========================================================
-// TlsConfig — shared configuration for TLS connections
+// TlsConfig -- shared configuration for TLS connections
 // ===========================================================
 
 /// Shared TLS configuration bundling verification mode and optional mTLS identity.
@@ -75,7 +75,7 @@ impl TlsConfig {
 }
 
 // ===========================================================
-// AcceptAllVerifier — accepts any server certificate
+// AcceptAllVerifier -- accepts any server certificate
 // ===========================================================
 
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl ServerCertVerifier for AcceptAllVerifier {
 }
 
 // ===========================================================
-// RelayIo — unified trait for TCP and TLS relay streams
+// RelayIo -- unified trait for TCP and TLS relay streams
 // ===========================================================
 
 /// Unified IO trait for relay streams (TCP or TLS-wrapped).
@@ -148,7 +148,7 @@ impl RelayIo for TlsStream<TcpStream> {
 }
 
 // ===========================================================
-// RelayStream — newtype wrapper (no bound on struct itself)
+// RelayStream -- newtype wrapper (no bound on struct itself)
 // ===========================================================
 
 pub struct RelayStream<S> {

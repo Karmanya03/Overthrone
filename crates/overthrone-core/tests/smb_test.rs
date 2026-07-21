@@ -1,13 +1,13 @@
 //! Unit tests for the SMB protocol data structures.
 //!
-//! All tests are offline — only struct construction and field access are tested.
+//! All tests are offline -- only struct construction and field access are tested.
 //! No live SMB connections are made.
 
 use overthrone_core::proto::smb::{AdminCheckResult, RemoteFileInfo, ShareAccessResult};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  RemoteFileInfo
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_remote_file_info_file_construction() {
@@ -60,9 +60,9 @@ fn test_remote_file_info_empty_name() {
     assert!(info.path.is_empty());
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  ShareAccessResult
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_share_access_readable_only() {
@@ -127,9 +127,9 @@ fn test_share_access_ipc_share() {
     assert!(!result.is_admin_share);
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  AdminCheckResult
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_admin_check_result_is_admin_with_shares() {

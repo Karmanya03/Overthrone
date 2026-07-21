@@ -117,7 +117,7 @@ impl OverthroneConfig {
         format!("ldaps://{}:636", self.target)
     }
 
-    /// Get the domain's base DN (e.g., "corp.local" → "DC=corp,DC=local")
+    /// Get the domain's base DN (e.g., "corp.local" -> "DC=corp,DC=local")
     pub fn base_dn(&self) -> String {
         self.domain
             .split('.')

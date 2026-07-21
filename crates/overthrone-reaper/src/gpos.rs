@@ -91,7 +91,7 @@ pub async fn enumerate_gpos(config: &ReaperConfig) -> Result<Vec<GpoEntry>> {
             .cloned();
 
         info!(
-            "[gpos]  {} → {}",
+            "[gpos]  {} -> {}",
             display_name,
             gpc_path.as_deref().unwrap_or("(no SYSVOL path)")
         );

@@ -10,9 +10,9 @@ use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LapsEntry {
@@ -39,11 +39,11 @@ pub struct LapsEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LapsSource {
-    /// LAPS v1 — `ms-Mcs-AdmPwd` plaintext string
+    /// LAPS v1 -- `ms-Mcs-AdmPwd` plaintext string
     V1,
-    /// LAPS v2 — `msLAPS-Password` JSON blob (unencrypted)
+    /// LAPS v2 -- `msLAPS-Password` JSON blob (unencrypted)
     V2Plaintext,
-    /// LAPS v2 — `msLAPS-EncryptedPassword` CNG-DPAPI blob
+    /// LAPS v2 -- `msLAPS-EncryptedPassword` CNG-DPAPI blob
     V2Encrypted,
     /// LAPS attributes detected but password not readable with current creds
     Detected,
@@ -90,9 +90,9 @@ pub struct LapsV2EncryptedHeader {
     pub payload_size: usize,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LDAP Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub fn laps_filter() -> String {
     // Match computers that have any LAPS attribute populated.
@@ -109,9 +109,9 @@ const LAPS_ATTRS: &[&str] = &[
     "msLAPS-PasswordExpirationTime",
 ];
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Core Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
     info!(
@@ -127,7 +127,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
     let entries = match conn.custom_search(&filter, &attr_refs).await {
         Ok(e) => e,
         Err(e) => {
-            // LAPS attributes may not exist in schema — fall back to all computers
+            // LAPS attributes may not exist in schema -- fall back to all computers
             warn!(
                 "[laps] Primary LAPS query failed ({}), trying all computers",
                 e
@@ -159,7 +159,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
     let mut results = Vec::new();
 
     for entry in &entries {
-        // ── Extract raw attribute values ──────────────────────
+        // -- Extract raw attribute values ----------------------
 
         let v1_pwd = entry
             .attrs
@@ -194,7 +194,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
             .cloned()
             .unwrap_or_else(|| entry.dn.clone());
 
-        // ── Parse expiration timestamps ──────────────────────
+        // -- Parse expiration timestamps ----------------------
 
         let expiration_raw = entry
             .attrs
@@ -205,7 +205,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
 
         let expiration = expiration_raw.as_deref().and_then(filetime_to_string);
 
-        // ── Determine source + extract password ──────────────
+        // -- Determine source + extract password --------------
 
         let (password, managed_account, encrypted_blob, source) = if let Some(ref v1) = v1_pwd {
             // LAPS v1: plaintext string directly
@@ -221,7 +221,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
                 ),
                 Err(e) => {
                     warn!(
-                        "[laps]  {} → msLAPS-Password JSON parse failed: {}",
+                        "[laps]  {} -> msLAPS-Password JSON parse failed: {}",
                         computer_name, e
                     );
                     // Fall back to storing the raw string as-is
@@ -243,7 +243,7 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
                 && let Some(header) = parse_laps_v2_encrypted_header(bytes)
             {
                 debug!(
-                    "[laps]  {} → v2 encrypted blob: {} bytes, flags={:#x}, ts={}",
+                    "[laps]  {} -> v2 encrypted blob: {} bytes, flags={:#x}, ts={}",
                     computer_name,
                     header.payload_size,
                     header.flags,
@@ -256,33 +256,33 @@ pub async fn enumerate_laps(config: &ReaperConfig) -> Result<Vec<LapsEntry>> {
             (None, None, None, LapsSource::Detected)
         };
 
-        // ── Log result ───────────────────────────────────────
+        // -- Log result ---------------------------------------
 
         match &source {
             LapsSource::V1 => {
                 info!(
-                    "[laps]  {} → v1 password readable ({} chars)",
+                    "[laps]  {} -> v1 password readable ({} chars)",
                     computer_name,
                     password.as_ref().map(|p| p.len()).unwrap_or(0)
                 );
             }
             LapsSource::V2Plaintext => {
                 info!(
-                    "[laps]  {} → v2 plaintext password readable (account: {})",
+                    "[laps]  {} -> v2 plaintext password readable (account: {})",
                     computer_name,
                     managed_account.as_deref().unwrap_or("?")
                 );
             }
             LapsSource::V2Encrypted => {
                 info!(
-                    "[laps]  {} → v2 ENCRYPTED blob stored ({} bytes) — needs DPAPI key to decrypt",
+                    "[laps]  {} -> v2 ENCRYPTED blob stored ({} bytes) -- needs DPAPI key to decrypt",
                     computer_name,
                     encrypted_blob.as_ref().map(|b| b.len()).unwrap_or(0)
                 );
             }
             LapsSource::Detected => {
                 info!(
-                    "[laps]  {} → LAPS deployed (password not readable with current creds)",
+                    "[laps]  {} -> LAPS deployed (password not readable with current creds)",
                     computer_name
                 );
             }
@@ -351,9 +351,9 @@ fn is_ws2025_os_hint(os: Option<&str>, version: Option<&str>) -> bool {
         })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LAPS v2 JSON Parsing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse the `msLAPS-Password` JSON blob.
 /// Format: `{"n":"Administrator","t":"2024-01-15T12:00:00Z","p":"P@ssw0rd!"}`
@@ -362,9 +362,9 @@ fn parse_laps_v2_json(json_str: &str) -> Result<LapsV2Json> {
         .map_err(|e| OverthroneError::Custom(format!("LAPS v2 JSON parse error: {e}")))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LAPS v2 Encrypted Blob Handling
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Convert the LDAP string representation of `msLAPS-EncryptedPassword` to raw bytes.
 /// LDAP may return this as a base64 string or as a hex-encoded octet string,
@@ -456,9 +456,9 @@ pub fn decrypt_laps_v2_blob(blob: &[u8], dpapi_backup_key: &[u8]) -> Result<Laps
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Timestamp Utilities
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Convert a Windows FILETIME string to a human-readable UTC timestamp.
 /// Windows FILETIME = 100-nanosecond intervals since 1601-01-01 00:00:00 UTC.
@@ -516,9 +516,9 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Legacy Compatibility
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse a LAPS entry from a raw attribute map (kept for compatibility with older callers).
 pub fn parse_laps_entry(attrs: &std::collections::HashMap<String, Vec<String>>) -> LapsEntry {
@@ -582,13 +582,13 @@ pub fn parse_laps_entry(attrs: &std::collections::HashMap<String, Vec<String>>) 
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LAPS Password Analysis
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Risk level for a LAPS password finding.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

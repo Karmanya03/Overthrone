@@ -18,9 +18,9 @@ use overthrone_relay::{CapturedCredential, NtlmResponse, RelayTarget};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result Structures
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Extracted hash from NTLM relay
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,9 +80,9 @@ pub struct ExtractionStats {
     pub processing_time_ms: u64,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for relay hash extraction
 #[derive(Debug, Clone)]
@@ -117,9 +117,9 @@ pub enum HashFormat {
     John,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Extract crackable hashes from NTLM relay captures
 ///
@@ -189,7 +189,7 @@ pub fn extract_relay_hashes(
     result.stats.processing_time_ms = start_time.elapsed().as_millis() as u64;
 
     // Print summary
-    info!("═══ RELAY HASH EXTRACTION SUMMARY ═══");
+    info!("=== RELAY HASH EXTRACTION SUMMARY ===");
     info!("  Total credentials: {}", result.total_processed);
     info!(
         "  Successful extractions: {}",
@@ -207,7 +207,7 @@ pub fn extract_relay_hashes(
     // Cracking advice
     if result.stats.ntlmv1_count > 0 {
         info!("");
-        info!("═══ NETNTLMv1 CRACKING ADVICE ═══");
+        info!("=== NETNTLMv1 CRACKING ADVICE ===");
         info!("  NetNTLMv1 uses DES-based encryption (56-bit keys)");
         info!("  Much faster to crack than NetNTLMv2");
         info!("  Command: hashcat -m 5500 ntlmv1_hashes.txt wordlist.txt");
@@ -216,7 +216,7 @@ pub fn extract_relay_hashes(
 
     if result.stats.ntlmv2_count > 0 {
         info!("");
-        info!("═══ NETNTLMv2 CRACKING ADVICE ═══");
+        info!("=== NETNTLMv2 CRACKING ADVICE ===");
         info!("  NetNTLMv2 uses HMAC-MD5 (more secure)");
         info!("  Command: hashcat -m 5600 ntlmv2_hashes.txt wordlist.txt");
         info!("  Use smart wordlists for better success rates");
@@ -281,9 +281,9 @@ pub fn ntlm_response_to_hash(
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Hash Extraction Logic
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn extract_hash_from_credential(
     cred: &CapturedCredential,
@@ -420,9 +420,9 @@ fn format_netntlmv2_hash(
     )
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // File Output
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Write extracted hashes to file in hashcat/john format
 pub fn write_hashes_to_file(
@@ -457,9 +457,9 @@ pub fn write_hashes_to_file(
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Post-Exploitation Path (Documentation)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Documentation of what would be needed for full credential extraction
 /// from a relayed session (NOT implemented - requires post-exploitation)

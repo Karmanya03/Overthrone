@@ -82,7 +82,7 @@ impl UnauthDiscovery {
             }
         }
 
-        // 2. LDAP Null Session check (anonymous bind — may fail on Windows 2025)
+        // 2. LDAP Null Session check (anonymous bind -- may fail on Windows 2025)
         if let Ok(mut ldap) = LdapSession::connect_anonymous(&self.target, "", false).await {
             result.ldap_null_session = true;
             info!("[discovery] LDAP Null Session OK on {}", self.target);

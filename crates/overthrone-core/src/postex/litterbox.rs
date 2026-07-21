@@ -2,7 +2,7 @@
 //!
 //! Sensitive strings (API names, DLL names, known IOC strings) are XOR-encrypted
 //! at compile time using `const fn`. The plaintext NEVER appears in the compiled
-//! binary's `.rdata` section — only ciphertext + a single-byte XOR key.
+//! binary's `.rdata` section -- only ciphertext + a single-byte XOR key.
 //!
 //! # Usage
 //! ```ignore
@@ -30,9 +30,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 ///   Release/Acquire ordering on the `done` flag.
 unsafe impl<const N: usize> Sync for XorString<N> {}
 
-// ── XOR key ─────────────────────────────────────────────────────────
+// -- XOR key ---------------------------------------------------------
 // A single arbitrary byte. Changed periodically to defeat hash-based YARA.
-// This is NOT secret — it only needs to be unpredictable enough to break
+// This is NOT secret -- it only needs to be unpredictable enough to break
 // the plaintext string signatures in the binary's .rdata.
 const XOR_KEY: u8 = 0x9C;
 
@@ -75,7 +75,7 @@ impl<const N: usize> XorString<N> {
             let cipher = &self.ciphertext as *const u8;
             let mut i = 0;
             while i < N {
-                // Safety: no data race — `done` flag serialises access.
+                // Safety: no data race -- `done` flag serialises access.
                 // `ciphertext` is immutable, `decrypted` is only written
                 // once before `done` is set to true.
                 let b = unsafe { *cipher.add(i) } ^ XOR_KEY;

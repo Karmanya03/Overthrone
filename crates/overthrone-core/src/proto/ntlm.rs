@@ -3,7 +3,7 @@
 //! Implements NT hash (MD4), NTLMv2 hash (HMAC-MD5), NTLMv2 challenge-response,
 //! and Pass-the-Hash support for Active Directory authentication.
 //!
-//! Reference: [MS-NLMP] — Microsoft NT LAN Manager Authentication Protocol
+//! Reference: [MS-NLMP] -- Microsoft NT LAN Manager Authentication Protocol
 
 use crate::error::{OverthroneError, Result};
 use digest::Digest;
@@ -13,13 +13,13 @@ use md5::Md5;
 
 type HmacMd5 = Hmac<Md5>;
 
-// ═══════════════════════════════════════════════════════════
-// NT Hash — MD4(UTF-16LE(password))
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// NT Hash -- MD4(UTF-16LE(password))
+// ===========================================================
 
 /// Compute the NT hash of a password: MD4(UTF-16LE(password))
 /// This is the primary credential hash stored in the SAM database
-/// and Active Directory. It is "password equivalent" — knowing this
+/// and Active Directory. It is "password equivalent" -- knowing this
 /// hash is sufficient to authenticate without the plaintext password.
 pub fn nt_hash(password: &str) -> Vec<u8> {
     let utf16le: Vec<u8> = password
@@ -36,9 +36,9 @@ pub fn nt_hash_hex(password: &str) -> String {
     hex::encode(nt_hash(password))
 }
 
-// ═══════════════════════════════════════════════════════════
-// NTLMv2 Hash — HMAC-MD5(NT_HASH, UPPER(user) + UPPER(domain))
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// NTLMv2 Hash -- HMAC-MD5(NT_HASH, UPPER(user) + UPPER(domain))
+// ===========================================================
 
 /// Compute the NTLMv2 hash (also called the "NTLMv2 OWF").
 /// Formula: HMAC-MD5(NT_HASH, UTF-16LE(UPPER(username) + UPPER(domain)))
@@ -62,9 +62,9 @@ pub fn ntlmv2_hash_from_password(password: &str, username: &str, domain: &str) -
     ntlmv2_hash(&nt, username, domain)
 }
 
-// ═══════════════════════════════════════════════════════════
-// NTLMv2 Response — for challenge-response authentication
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// NTLMv2 Response -- for challenge-response authentication
+// ===========================================================
 
 /// Compute the NTLMv2 response for a given server challenge.
 /// Formula: HMAC-MD5(NTLMv2_HASH, server_challenge + client_blob)
@@ -133,9 +133,9 @@ pub fn windows_filetime_now() -> u64 {
     (unix_nanos / 100) + EPOCH_DIFF
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // NTLMv2 Session Key
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Compute the NTLMv2 session base key.
 /// Formula: HMAC-MD5(NTLMv2_HASH, NTProofStr)
@@ -148,9 +148,9 @@ pub fn ntlmv2_session_base_key(ntlmv2_hash: &[u8], nt_proof_str: &[u8]) -> Vec<u
     mac.finalize().into_bytes().to_vec()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LMv2 Response (companion to NTLMv2)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Compute the LMv2 response.
 /// Formula: HMAC-MD5(NTLMv2_HASH, server_challenge + client_challenge)
@@ -172,15 +172,15 @@ pub fn lmv2_response(
     response
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Hash Parsing & Utilities
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse an NTLM hash string in `LMHASH:NTHASH` or bare `NTHASH` format.
 /// Returns the 16-byte NT hash. Accepts secretsdump/hashdump output format.
 pub fn parse_ntlm_hash(hash_str: &str) -> Result<Vec<u8>> {
     let nt_part = if hash_str.contains(':') {
-        // Format: LMHASH:NTHASH — take the NT part
+        // Format: LMHASH:NTHASH -- take the NT part
         hash_str
             .split(':')
             .nth(1)
@@ -251,9 +251,9 @@ pub fn is_empty_lm_hash(hash: &[u8]) -> bool {
     hash == empty_lm.as_slice()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // NTLM Message Building (for authentication)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// NTLM signature bytes
 const NTLM_SIGNATURE: &[u8; 8] = b"NTLMSSP\x00";
@@ -585,7 +585,7 @@ pub fn strip_mic_from_type3(data: &[u8]) -> Vec<u8> {
             break;
         }
         if av_id == 6 && av_len >= 4 {
-            // MsvAvFlags — clear MIC-present bit
+            // MsvAvFlags -- clear MIC-present bit
             let abs_off = nt_resp_off + av_pairs_start + i + 4;
             if abs_off < result.len() {
                 result[abs_off] &= !0x01;
@@ -622,8 +622,8 @@ pub fn strip_mic_from_type3(data: &[u8]) -> Vec<u8> {
 /// - Stub data (variable)
 /// - Auth Verifier (variable, if auth_length > 0):
 ///   - pad_length (1 byte)
-///   - auth_type (1 byte) — 0x0A = NTLMSSP, 0x0E = Kerberos
-///   - auth_level (1 byte) — 0x05 = RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
+///   - auth_type (1 byte) -- 0x0A = NTLMSSP, 0x0E = Kerberos
+///   - auth_level (1 byte) -- 0x05 = RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
 ///   - auth_reserved (1 byte)
 ///   - auth_context_id (4 bytes)
 ///   - signature (variable, typically 16 bytes for NTLMSSP MIC)
@@ -713,15 +713,15 @@ pub fn strip_dce_rpc_signature(data: &[u8]) -> Vec<u8> {
     result
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── NT Hash ──────────────────────────────────────────
+    // -- NT Hash ------------------------------------------
 
     #[test]
     fn test_nt_hash_known_value() {
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_nt_hash_empty() {
-        // Known NT hash for empty string — universal "blank password" indicator
+        // Known NT hash for empty string -- universal "blank password" indicator
         let hash = nt_hash_hex("");
         assert_eq!(hash, "31d6cfe0d16ae931b73c59d7e0c089c0");
     }
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(hash.len(), 16);
     }
 
-    // ── NTLMv2 Hash ─────────────────────────────────────
+    // -- NTLMv2 Hash -------------------------------------
 
     #[test]
     fn test_ntlmv2_hash_deterministic() {
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
-    // ── NTLMv2 Response ─────────────────────────────────
+    // -- NTLMv2 Response ---------------------------------
 
     #[test]
     fn test_ntlmv2_response_format() {
@@ -807,7 +807,7 @@ mod tests {
         assert_eq!(resp.len(), 24);
     }
 
-    // ── Session Key ─────────────────────────────────────
+    // -- Session Key -------------------------------------
 
     #[test]
     fn test_session_base_key_length() {
@@ -818,7 +818,7 @@ mod tests {
         assert_eq!(key.len(), 16);
     }
 
-    // ── Client Blob ─────────────────────────────────────
+    // -- Client Blob -------------------------------------
 
     #[test]
     fn test_client_blob_structure() {
@@ -838,7 +838,7 @@ mod tests {
         assert_eq!(&blob[16..24], &[0xFF; 8]);
     }
 
-    // ── Filetime ────────────────────────────────────────
+    // -- Filetime ----------------------------------------
 
     #[test]
     fn test_windows_filetime_reasonable() {
@@ -848,7 +848,7 @@ mod tests {
         assert!(ft > 132_224_352_000_000_000);
     }
 
-    // ── Hash Parsing ────────────────────────────────────
+    // -- Hash Parsing ------------------------------------
 
     #[test]
     fn test_parse_ntlm_hash_full() {
@@ -876,7 +876,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── Secretsdump Parsing ─────────────────────────────
+    // -- Secretsdump Parsing -----------------------------
 
     #[test]
     fn test_parse_secretsdump_line() {
@@ -892,7 +892,7 @@ mod tests {
         assert!(parse_secretsdump_line("garbage").is_err());
     }
 
-    // ── Empty Hash Checks ───────────────────────────────
+    // -- Empty Hash Checks -------------------------------
 
     #[test]
     fn test_is_empty_nt_hash() {
@@ -908,7 +908,7 @@ mod tests {
         assert!(!is_empty_lm_hash(&[0u8; 16]));
     }
 
-    // ── strip_mic_from_type3 ──────────────────────────
+    // -- strip_mic_from_type3 --------------------------
 
     // Constants for NTLM signing flags (duplicated here for test scope)
     const TEST_NEG_SIGN: u32 = 0x0000_0010;

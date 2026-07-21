@@ -1,10 +1,10 @@
-//! ESC2 — Any Purpose EKU Certificate Template Abuse
+//! ESC2 -- Any Purpose EKU Certificate Template Abuse
 //!
 //! ESC2 exploits certificate templates that have "Any Purpose" EKU or no EKU restrictions.
 //! Unlike ESC1, ESC2 doesn't require SAN abuse, but the certificate can still be used
 //! for client authentication and other purposes.
 //!
-//! Reference: SpecterOps "Certified Pre-Owned" — ESC2
+//! Reference: SpecterOps "Certified Pre-Owned" -- ESC2
 
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_client_auth_csr};

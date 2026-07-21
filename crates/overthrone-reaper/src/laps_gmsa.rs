@@ -214,19 +214,19 @@ pub fn format_entry(entry: &CredentialEntry) -> String {
             let _pw = entry.password.as_deref().unwrap_or("<unknown>");
             let exp = entry.expiration.as_deref().unwrap_or("<no expiry>");
             format!(
-                "[{}] {} / {} — expires {}",
+                "[{}] {} / {} -- expires {}",
                 entry.source, entry.target, acct, exp
             )
         }
         CredentialSource::LapsV2Encrypted => {
             format!(
-                "[LAPS v2 encrypted] {} — needs DPAPI backup key to decrypt",
+                "[LAPS v2 encrypted] {} -- needs DPAPI backup key to decrypt",
                 entry.target
             )
         }
         CredentialSource::Gmsa => {
             format!(
-                "[gMSA] {} — password blob available, needs KRB_GROUP_KEY decryption",
+                "[gMSA] {} -- password blob available, needs KRB_GROUP_KEY decryption",
                 entry.target
             )
         }
@@ -268,7 +268,7 @@ mod tests {
         }
     }
 
-    // ─── Result Construction Tests ───────────────────────────────
+    // --- Result Construction Tests -------------------------------
 
     #[test]
     fn test_empty_result() {
@@ -347,7 +347,7 @@ mod tests {
         }
     }
 
-    // ─── Stats Calculation Tests ─────────────────────────────────
+    // --- Stats Calculation Tests ---------------------------------
 
     #[test]
     fn test_stats_calculation() {
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(stats.gmsa_with_blob, 1);
     }
 
-    // ─── Format Entry Tests ──────────────────────────────────────
+    // --- Format Entry Tests --------------------------------------
 
     #[test]
     fn test_format_v1_entry() {
@@ -443,7 +443,7 @@ mod tests {
         assert!(formatted.contains("KRB_GROUP_KEY"));
     }
 
-    // ─── Display Tests ───────────────────────────────────────────
+    // --- Display Tests -------------------------------------------
 
     #[test]
     fn test_credential_source_display() {
@@ -465,7 +465,7 @@ mod tests {
         assert_ne!(CredentialSource::LapsV1, CredentialSource::Gmsa);
     }
 
-    // ─── Serialization Tests ─────────────────────────────────────
+    // --- Serialization Tests -------------------------------------
 
     #[test]
     fn test_result_serialization_roundtrip() {
@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(deserialized.stats.laps_total, 1);
     }
 
-    // ─── Edge Cases ──────────────────────────────────────────────
+    // --- Edge Cases ----------------------------------------------
 
     #[test]
     fn test_entry_with_no_password_is_not_actionable_priority_high() {

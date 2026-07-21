@@ -21,7 +21,7 @@
 //! - ESC9: No Security Extension (CT_FLAG_NO_SECURITY_EXTENSION + UPN poisoning)
 //! - ESC10: Weak Certificate Mapping (StrongCertificateBindingEnforcement / CertificateMappingMethods)
 //! - ESC11: Relaying NTLM to ICPR (IForceCertificateRequirements disabled)
-//! - ESC12: Shell access to CA server — CA private key exfiltration
+//! - ESC12: Shell access to CA server -- CA private key exfiltration
 //! - ESC13: Issuance Policy OID linked to privileged group (msDS-OIDToGroupLink)
 //! - ESC14: Certificate mapping / altSecurityIdentities guidance trail
 //! - ESC15: Schema V1 template with enrollee-supplied subject (CVE-2024-49019)
@@ -97,9 +97,9 @@ pub use pfx::{
 };
 pub use web_enrollment::{CaInfo, CertificateResponse, ResponseStatus, WebEnrollmentClient};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Certificate template configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,9 +364,9 @@ pub struct CaPermissionVulnerability {
     pub security_descriptor: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // ADCS Client (High-Level Interface)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// ADCS client for certificate operations
 pub struct AdcsClient {
@@ -403,9 +403,9 @@ impl AdcsClient {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // ESC1: SAN Abuse Attack
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Execute ESC1 attack - request certificate with arbitrary SAN
     /// This allows impersonation of any user when the template:
@@ -463,9 +463,9 @@ impl AdcsClient {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // ESC2: Any Template Attack
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Execute ESC2 attack - use template with any purpose EKU
     /// Similar to ESC1 but without SAN abuse - can still get useful certs.
@@ -508,9 +508,9 @@ impl AdcsClient {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // ESC3: Enrollment Agent Attack
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Execute ESC3 attack - Enrollment Agent abuse
     /// Step 1: Request enrollment agent certificate
@@ -592,9 +592,9 @@ impl AdcsClient {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 Attack
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Execute ESC6 attack - abuse EDITF_ATTRIBUTESUBJECTALTNAME2 flag
     /// When this flag is set on the CA, any template can have SAN specified
@@ -640,9 +640,9 @@ impl AdcsClient {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Standard Certificate Request
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Request a certificate using a specific template
     pub async fn request_certificate(
@@ -728,9 +728,9 @@ impl AdcsClient {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Enumeration
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Enumerate certificate templates via LDAP and Web Enrollment
     pub async fn enumerate_templates(&mut self) -> Result<Vec<TemplateConfig>> {
@@ -777,9 +777,9 @@ impl AdcsClient {
             .collect()
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // CA Checks
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Check if Web Enrollment is available
     pub async fn check_web_enrollment(&self) -> Result<bool> {
@@ -806,9 +806,9 @@ impl AdcsClient {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helper Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Compute SHA-1 thumbprint of certificate
 fn compute_thumbprint(cert_der: &[u8]) -> String {
@@ -833,9 +833,9 @@ fn extract_serial(cert_der: &[u8]) -> Result<String> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// SCCM Client — HTTP-based SCCM/MECM enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// SCCM Client -- HTTP-based SCCM/MECM enumeration
+// ===========================================================
 
 /// SCCM/MECM client for configuration management abuse.
 /// Enumerates site configuration via the SMS Provider WMI web service
@@ -872,7 +872,7 @@ impl SccmClient {
             ..Default::default()
         };
 
-        // ── Try AdminService REST API ──────────────────────
+        // -- Try AdminService REST API ----------------------
         let admin_base = format!("https://{}/AdminService/wmi", server);
 
         // 1. Site info (SMS_Site)
@@ -947,7 +947,7 @@ impl SccmClient {
         config.vulnerable_settings = self.check_vulnerable_settings(&admin_base).await;
 
         info!(
-            "SCCM: Enumeration complete — {} collections, {} apps, {} systems, {} vulns",
+            "SCCM: Enumeration complete -- {} collections, {} apps, {} systems, {} vulns",
             config.collections.len(),
             config.applications.len(),
             config.site_systems.len(),
@@ -1020,14 +1020,14 @@ impl SccmClient {
     async fn check_vulnerable_settings(&self, admin_base: &str) -> Vec<String> {
         let mut vulns = Vec::new();
 
-        // Check Network Access Account (NAA) — credentials stored in policy
+        // Check Network Access Account (NAA) -- credentials stored in policy
         if let Ok(json) = self
             .query_admin_service(admin_base, "SMS_SCI_Reserved")
             .await
             && let Some(values) = json.get("value").and_then(|v| v.as_array())
             && !values.is_empty()
         {
-            vulns.push("Network Access Account (NAA) configured — credentials may be recoverable from policy".to_string());
+            vulns.push("Network Access Account (NAA) configured -- credentials may be recoverable from policy".to_string());
         }
 
         // Check PXE-enabled distribution points
@@ -1044,7 +1044,7 @@ impl SccmClient {
                     .unwrap_or("unknown");
                 if pxe {
                     vulns.push(format!(
-                        "PXE-enabled DP: {} — possible PXE boot attack vector",
+                        "PXE-enabled DP: {} -- possible PXE boot attack vector",
                         name
                     ));
                 }
@@ -1059,7 +1059,7 @@ impl SccmClient {
             && !values.is_empty()
         {
             vulns.push(format!(
-                "{} Task Sequence(s) found — may contain embedded credentials",
+                "{} Task Sequence(s) found -- may contain embedded credentials",
                 values.len()
             ));
         }
@@ -1091,9 +1091,9 @@ pub struct SccmConfig {
     pub site_systems: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

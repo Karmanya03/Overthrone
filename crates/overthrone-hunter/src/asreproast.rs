@@ -1,10 +1,10 @@
-//! AS-REP Roasting — Enumerate accounts with DONT_REQUIRE_PREAUTH and
+//! AS-REP Roasting -- Enumerate accounts with DONT_REQUIRE_PREAUTH and
 //! extract crackable hashes (hashcat mode 18200).
 //!
 //! Flow:
 //! 1. LDAP query for userAccountControl with DONT_REQ_PREAUTH (0x400000)
 //! 2. Send AS-REQ without pre-auth for each target
-//! 3. Extract encrypted part from AS-REP → hashcat/john format
+//! 3. Extract encrypted part from AS-REP -> hashcat/john format
 
 use crate::runner::HuntConfig;
 use colored::Colorize;
@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // UserAccountControl flag for DONT_REQUIRE_PREAUTH
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// UAC bit: account does not require Kerberos pre-authentication
 #[allow(dead_code)] // Protocol reference UAC flag
@@ -27,9 +27,9 @@ const UAC_DONT_REQ_PREAUTH: u32 = 0x00400000;
 #[allow(dead_code)] // Protocol reference UAC flag
 const UAC_ACCOUNT_DISABLE: u32 = 0x00000002;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone)]
 pub struct AsRepRoastConfig {
@@ -62,9 +62,9 @@ impl Default for AsRepRoastConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsRepRoastResult {
@@ -96,9 +96,9 @@ pub struct RoastedAccount {
     pub admin_count: bool,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LDAP Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Discovered AS-REP roastable account from LDAP
 #[derive(Debug, Clone)]
@@ -150,9 +150,9 @@ async fn enumerate_asrep_users(config: &HuntConfig) -> Result<Vec<EnumeratedUser
     Ok(users)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Core Roasting Logic
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Attempt to AS-REP roast a single user
 async fn roast_single(
@@ -174,13 +174,13 @@ async fn roast_single(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Main entry point: enumerate + roast AS-REP vulnerable accounts
 pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoastResult> {
-    info!("{}", "═══ AS-REP ROAST ═══".bold().magenta());
+    info!("{}", "=== AS-REP ROAST ===".bold().magenta());
 
     // Step 1: Get target list (from config or LDAP enum)
     let targets: Vec<(String, Option<String>, Option<String>, bool)> = if ac.target_users.is_empty()
@@ -251,8 +251,8 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
                     String::new()
                 };
                 info!(
-                    " {} {} — {}{}",
-                    "✓".green(),
+                    " {} {} -- {}{}",
+                    "[+]".green(),
                     username.bold(),
                     "hash obtained".green(),
                     marker
@@ -261,10 +261,10 @@ pub async fn run(config: &HuntConfig, ac: &AsRepRoastConfig) -> Result<AsRepRoas
             }
             Err((user, reason)) => {
                 if reason == "preauth_required" {
-                    debug!(" {} {} — preauth required", "✗".dimmed(), user);
+                    debug!(" {} {} -- preauth required", "[-]".dimmed(), user);
                     preauth_required.push(user);
                 } else {
-                    warn!(" {} {} — {}", "✗".red(), user, reason);
+                    warn!(" {} {} -- {}", "[-]".red(), user, reason);
                     errors.push((user, reason));
                 }
             }

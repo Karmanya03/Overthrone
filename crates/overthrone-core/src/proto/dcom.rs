@@ -389,7 +389,7 @@ pub async fn dcom_activate(
     let tcp_port = parse_ept_map_port(&ept_map_resp);
 
     let (ipid, oxid, oid) = if tcp_port > 0 {
-        // TCP transport needed — connect to dynamic port
+        // TCP transport needed -- connect to dynamic port
         let tcp_addr = format!("{}:{}", smb.target, tcp_port);
         debug!("[DCOM] Connecting to TCP: {tcp_addr}");
         let mut tcp_stream = tokio::net::TcpStream::connect(&tcp_addr)
@@ -454,7 +454,7 @@ pub async fn dcom_activate(
         );
         (ipid, oxid, oid)
     } else {
-        // Pipe transport — activation goes through \pipe\epmapper
+        // Pipe transport -- activation goes through \pipe\epmapper
         let create_req = build_remote_create_instance(clsid, iid, 3);
         let create_resp = smb
             .pipe_transact("epmapper", &create_req)

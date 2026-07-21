@@ -21,9 +21,9 @@ use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result Structures
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// NTLMv1 downgrade roast result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,9 +55,9 @@ pub struct NtlmV1Hash {
     pub hashcat_hash: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for NTLMv1 downgrade roasting
 #[derive(Debug, Clone)]
@@ -86,9 +86,9 @@ impl Default for NtlmV1RoastConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Run AS-REP roasting with NTLMv1 downgrade detection
 ///
@@ -104,7 +104,7 @@ pub async fn run_ntlmv1_roast(
 ) -> Result<NtlmV1RoastResult> {
     info!(
         "{}",
-        "═══ NTLMv1 DOWNGRADE AS-REP ROAST ═══".bright_cyan().bold()
+        "=== NTLMv1 DOWNGRADE AS-REP ROAST ===".bright_cyan().bold()
     );
 
     let start_time = std::time::Instant::now();
@@ -147,7 +147,7 @@ pub async fn run_ntlmv1_roast(
         .collect();
 
     if no_preauth_users.is_empty() {
-        info!("  {} No users with DONT_REQUIRE_PREAUTH found", "ℹ".blue());
+        info!("  {} No users with DONT_REQUIRE_PREAUTH found", "[i]".blue());
         result.total_time_ms = start_time.elapsed().as_millis() as u64;
         return Ok(result);
     }
@@ -187,13 +187,13 @@ pub async fn run_ntlmv1_roast(
     if downgrade_possible {
         info!(
             "  {} NTLMv1 downgrade IS possible in this domain!",
-            "⚠".yellow().bold()
+            "[!]".yellow().bold()
         );
         info!("  LM hashes will be extracted (much easier to crack than NTLMv2)");
     } else {
         info!(
             "  {} NTLMv1 downgrade not supported - domain requires NTLMv2",
-            "ℹ".blue()
+            "[i]".blue()
         );
     }
 
@@ -212,7 +212,7 @@ pub async fn run_ntlmv1_roast(
                 Ok(ntlmv1_hash) => {
                     info!(
                         "  {} NTLMv1 hash extracted for {} (LM + NTLM)",
-                        "✓".green().bold(),
+                        "[+]".green().bold(),
                         username.bold().cyan()
                     );
                     result.ntlmv1_hashes.push(ntlmv1_hash);
@@ -220,7 +220,7 @@ pub async fn run_ntlmv1_roast(
                 Err(e) => {
                     warn!(
                         "  {} NTLMv1 extraction failed for {}: {}",
-                        "✗".red(),
+                        "[-]".red(),
                         username,
                         e
                     );
@@ -247,7 +247,7 @@ pub async fn run_ntlmv1_roast(
     let elapsed = start_time.elapsed().as_millis() as u64;
     result.total_time_ms = elapsed;
 
-    info!("{}", "═══ NTLMv1 ROAST SUMMARY ═══".bold().cyan());
+    info!("{}", "=== NTLMv1 ROAST SUMMARY ===".bold().cyan());
     info!("  Total no-preauth users: {}", result.asrep_users.len());
     info!(
         "  NTLMv1 hashes (LM+NTLM): {}",
@@ -268,7 +268,7 @@ pub async fn run_ntlmv1_roast(
 
     // Step 7: Crack advice
     if !result.ntlmv1_hashes.is_empty() {
-        info!("{}", "═══ CRACKING ADVICE ═══".bold().yellow());
+        info!("{}", "=== CRACKING ADVICE ===".bold().yellow());
         info!("  NTLMv1 LM hashes use DES encryption (56-bit keys)");
         info!("  Much faster to crack than NTLMv2 (HMAC-MD5)");
         info!("  Recommended: hashcat -m 3000 ntlmv1_hashes.txt wordlist.txt");
@@ -278,9 +278,9 @@ pub async fn run_ntlmv1_roast(
     Ok(result)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // NTLMv1 Downgrade Detection
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Test if NTLMv1 downgrade is possible by checking domain configuration
 ///
@@ -329,9 +329,9 @@ async fn test_ntlmv1_downgrade(hunt_config: &HuntConfig, _test_user: &str) -> Re
     Ok(false)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // NTLMv1 Hash Extraction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Extract NTLMv1 hash (LM + NTLM) from a user
 ///
@@ -408,9 +408,9 @@ async fn request_asrep_ntlm_hash(hunt_config: &HuntConfig, username: &str) -> Re
     Ok(AsrepData { etype, enc_part })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // File Output
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn write_hashes_to_file(result: &NtlmV1RoastResult, output_file: &str) -> Result<()> {
     use std::fs::File;

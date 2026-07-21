@@ -1,4 +1,4 @@
-//! Malleable C2 Profiles — traffic blending & evasion profiles.
+//! Malleable C2 Profiles -- traffic blending & evasion profiles.
 //!
 //! Provides pre-built and custom C2 communication profiles that shape
 //! beacon traffic to blend with legitimate HTTP/HTTPS/DNS traffic.
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Malleable C2 profile — shapes traffic to blend with legitimate services.
+/// Malleable C2 profile -- shapes traffic to blend with legitimate services.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct C2Profile {
     /// Profile name (for display/selection)
@@ -25,7 +25,7 @@ pub struct C2Profile {
     pub description: String,
     /// Beacon sleep time range (min, max) with jitter
     pub sleep_range: (Duration, Duration),
-    /// Jitter percentage (0-100) — how much to vary sleep
+    /// Jitter percentage (0-100) -- how much to vary sleep
     pub jitter_percent: u8,
     /// User-Agent string to use
     pub user_agent: String,
@@ -85,7 +85,7 @@ pub enum DataMasking {
 
 impl C2Profile {
     /// Create a profile that mimics Amazon CloudFront CDN traffic.
-    /// High OPSEC — blends with AWS edge traffic.
+    /// High OPSEC -- blends with AWS edge traffic.
     pub fn mimic_aws_cloudfront() -> Self {
         let mut headers = HashMap::new();
         headers.insert(
@@ -150,7 +150,7 @@ impl C2Profile {
 
         Self {
             name: "Microsoft 365".into(),
-            description: "Mimics Microsoft 365 / Exchange Online API traffic — blends with legitimate M365 clients".into(),
+            description: "Mimics Microsoft 365 / Exchange Online API traffic -- blends with legitimate M365 clients".into(),
             sleep_range: (Duration::from_secs(60), Duration::from_secs(300)),
             jitter_percent: 40,
             user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0".into(),
@@ -234,7 +234,7 @@ impl C2Profile {
         Self {
             name: "Azure Blob".into(),
             description:
-                "Mimics Azure Blob Storage API traffic — common in enterprise cloud environments"
+                "Mimics Azure Blob Storage API traffic -- common in enterprise cloud environments"
                     .into(),
             sleep_range: (Duration::from_secs(60), Duration::from_secs(360)),
             jitter_percent: 50,
@@ -258,13 +258,13 @@ impl C2Profile {
         }
     }
 
-    /// DNS-only profile — for environments with strict egress filtering.
+    /// DNS-only profile -- for environments with strict egress filtering.
     /// Uses DNS TXT queries for callbacks with configurable sleep.
     pub fn mimic_dns_tunnel() -> Self {
         Self {
             name: "DNS Tunnel".into(),
             description:
-                "DNS-based C2 with TXT query callbacks — bypasses HTTP/HTTPS egress filters".into(),
+                "DNS-based C2 with TXT query callbacks -- bypasses HTTP/HTTPS egress filters".into(),
             sleep_range: (Duration::from_secs(10), Duration::from_secs(60)),
             jitter_percent: 25,
             user_agent: String::new(),
@@ -280,8 +280,8 @@ impl C2Profile {
         }
     }
 
-    /// Minimal profile — no masking, standard headers, fast sleep.
-    /// Lowest OPSEC — use for initial access or short-lived operations.
+    /// Minimal profile -- no masking, standard headers, fast sleep.
+    /// Lowest OPSEC -- use for initial access or short-lived operations.
     pub fn minimal() -> Self {
         let mut headers = HashMap::new();
         headers.insert("Accept".into(), "*/*".into());
@@ -289,7 +289,7 @@ impl C2Profile {
 
         Self {
             name: "Minimal".into(),
-            description: "Minimal HTTP profile — fast, low overhead, low OPSEC".into(),
+            description: "Minimal HTTP profile -- fast, low overhead, low OPSEC".into(),
             sleep_range: (Duration::from_secs(5), Duration::from_secs(30)),
             jitter_percent: 10,
             user_agent:

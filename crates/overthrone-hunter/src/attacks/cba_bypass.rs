@@ -1,4 +1,4 @@
-//! CVE-2025-26647 — Certificate-Based Authentication (CBA) NTAuth Bypass.
+//! CVE-2025-26647 -- Certificate-Based Authentication (CBA) NTAuth Bypass.
 //!
 //! During Smart Card logon / CBA, Windows validates that the CA is in AD's
 //! NTAuthCertificates store. CVE-2025-26647 allows certificates chaining to
@@ -53,7 +53,7 @@ pub async fn assess_cba_bypass(ldap: &mut LdapSession) -> Result<CbaBypassResult
         .filter(|ca| !nt_cas.contains(ca))
         .collect();
     log.push(format!(
-        "  {} CA(s) NOT in NTAuth — bypass candidates",
+        "  {} CA(s) NOT in NTAuth -- bypass candidates",
         non_nt.len()
     ));
 
@@ -202,7 +202,7 @@ async fn request_certificate_adcs(
     _dc_ip: &str,
     _ca: &Option<String>,
 ) -> Option<(bool, bool, Option<String>)> {
-    // ADCS web enrollment (HTTP) — requires ICSL endpoint
+    // ADCS web enrollment (HTTP) -- requires ICSL endpoint
     // Request: POST /certsrv/certfnsh.asp with certificate request + target UPN
     // Simplified: returns None to indicate manual steps needed
     None
@@ -216,7 +216,7 @@ async fn pkin_auth(_dc_ip: &str, _domain: &str) -> Result<()> {
     // For now: return a dummy error to indicate manual steps
     Err(overthrone_core::error::OverthroneError::Protocol {
         protocol: "PKINIT".into(),
-        reason: "Certificate-based PKINIT requires x509 cert + private key — use --cert-path / --key-path".into(),
+        reason: "Certificate-based PKINIT requires x509 cert + private key -- use --cert-path / --key-path".into(),
     })
 }
 

@@ -1,9 +1,9 @@
 //! Plugin system for Overthrone
 //!
 //! Supports three plugin types:
-//! 1. **Native** — dynamically loaded .dll/.so shared libraries (fastest, full access)
-//! 2. **WASM** — sandboxed WebAssembly modules (safe for untrusted plugins)
-//! 3. **Script** — Lua/Rhai scripts for quick automation (planned)
+//! 1. **Native** -- dynamically loaded .dll/.so shared libraries (fastest, full access)
+//! 2. **WASM** -- sandboxed WebAssembly modules (safe for untrusted plugins)
+//! 3. **Script** -- Lua/Rhai scripts for quick automation (planned)
 //!
 //! Plugins can:
 //! - Add new attack modules (custom Kerberos attacks, LDAP queries, etc.)
@@ -23,11 +23,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 // Plugin manifest (metadata)
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 
-/// Plugin metadata — loaded from plugin.toml or declared in code
+/// Plugin metadata -- loaded from plugin.toml or declared in code
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     /// Unique plugin identifier (e.g. "com.example.custom-kerberoast")
@@ -124,11 +124,11 @@ pub enum PluginArgType {
     Sid,
 }
 
-// ──────────────────────────────────────────────────────────
-// Plugin trait — the core interface every plugin must implement
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
+// Plugin trait -- the core interface every plugin must implement
+// ----------------------------------------------------------
 
-/// Context passed to plugins — provides controlled access to Overthrone internals
+/// Context passed to plugins -- provides controlled access to Overthrone internals
 pub struct PluginContext {
     /// Read-only snapshot of current config
     pub domain: String,
@@ -155,7 +155,7 @@ impl PluginContext {
         log::error!("[plugin:{}] {}", self.log_prefix, msg);
     }
     pub fn log_attack(&self, msg: &str) {
-        log::info!("[plugin:{}] ⚡ {}", self.log_prefix, msg);
+        log::info!("[plugin:{}] ! {}", self.log_prefix, msg);
     }
 
     /// Store a value in persistent plugin state
@@ -254,7 +254,7 @@ pub enum ArtifactType {
     Custom(String),
 }
 
-/// The main plugin trait — all plugins must implement this
+/// The main plugin trait -- all plugins must implement this
 #[async_trait]
 pub trait Plugin: Send + Sync {
     /// Return the plugin's manifest (metadata)
@@ -272,7 +272,7 @@ pub trait Plugin: Send + Sync {
         ctx: &PluginContext,
     ) -> Result<PluginResult>;
 
-    /// Handle an event (optional — only if EventHandler capability)
+    /// Handle an event (optional -- only if EventHandler capability)
     async fn on_event(&self, event: &PluginEvent, ctx: &PluginContext) -> Result<()> {
         let _ = (event, ctx);
         Ok(())
@@ -283,7 +283,7 @@ pub trait Plugin: Send + Sync {
         Ok(())
     }
 
-    /// Health check — is the plugin still functional?
+    /// Health check -- is the plugin still functional?
     fn is_healthy(&self) -> bool {
         true
     }
@@ -296,15 +296,15 @@ pub trait PluginExecutor: Plugin {
     fn as_executor(&self) -> Option<Box<dyn RemoteExecutor>>;
 }
 
-// ──────────────────────────────────────────────────────────
-// Plugin Registry — manages all loaded plugins
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
+// Plugin Registry -- manages all loaded plugins
+// ----------------------------------------------------------
 
 /// Central plugin registry
 pub struct PluginRegistry {
     /// All loaded plugins, keyed by manifest ID
     plugins: HashMap<String, Box<dyn Plugin>>,
-    /// Command → plugin ID mapping (for routing CLI commands)
+    /// Command -> plugin ID mapping (for routing CLI commands)
     command_map: HashMap<String, String>,
     /// Plugin load order (for deterministic shutdown)
     load_order: Vec<String>,
@@ -586,16 +586,16 @@ impl PluginRegistry {
 }
 
 fn is_version_compatible(min_version: &str) -> bool {
-    // Simple semver check — compare against crate version
+    // Simple semver check -- compare against crate version
     let current = env!("CARGO_PKG_VERSION");
     // For now, accept all. Proper semver comparison would use the `semver` crate.
     let _ = (current, min_version);
     true
 }
 
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 // Native plugin FFI interface
-// ──────────────────────────────────────────────────────────
+// ----------------------------------------------------------
 
 /// FFI-safe plugin info returned by native plugins
 /// Native .dll/.so plugins must export these C functions:
@@ -620,7 +620,7 @@ pub struct NativePluginInfo {
     pub api_version: u32,
 }
 
-/// Current plugin API version — plugins compiled against a different
+/// Current plugin API version -- plugins compiled against a different
 /// major version won't load
 pub const PLUGIN_API_VERSION: u32 = 1;
 

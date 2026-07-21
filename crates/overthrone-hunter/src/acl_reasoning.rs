@@ -21,9 +21,9 @@ use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result Structures
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// ACL reasoning result for a roast target
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,9 +133,9 @@ pub struct ReasoningSummary {
     pub top_targets: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // High-Value Indicators
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Keywords that indicate high-value accounts
 const HIGH_VALUE_KEYWORDS: &[&str] = &[
@@ -155,9 +155,9 @@ const HIGH_VALUE_KEYWORDS: &[&str] = &[
     "sccm",
 ];
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public API
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Analyze ACLs and attack paths for kerberoast/AS-REP targets
 ///
@@ -174,7 +174,7 @@ pub async fn analyze_roast_targets(
     target_accounts: &[String],
     spn_map: &std::collections::HashMap<String, Vec<String>>,
 ) -> Result<AclReasoningResult> {
-    info!("{}", "═══ ACL REASONING ANALYSIS ═══".bold().bright_cyan());
+    info!("{}", "=== ACL REASONING ANALYSIS ===".bold().bright_cyan());
     info!(
         "Analyzing {} targets for attack value...",
         target_accounts.len()
@@ -226,9 +226,9 @@ pub async fn analyze_roast_targets(
     Ok(AclReasoningResult { targets, summary })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Single Target Analysis
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn analyze_single_target(account_name: &str, spns: Vec<String>, domain: &str) -> TargetAnalysis {
     let mut reasons = Vec::new();
@@ -273,9 +273,9 @@ fn analyze_single_target(account_name: &str, spns: Vec<String>, domain: &str) ->
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Analysis Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn analyze_account_name(
     account_name: &str,
@@ -340,7 +340,7 @@ fn analyze_spns(
                 impact: "SQL service accounts often have db_owner or sysadmin rights".to_string(),
             });
             attack_paths.push(AttackPath {
-                path: format!("SQL SPN → {} → Database access", spn),
+                path: format!("SQL SPN -> {} -> Database access", spn),
                 edges: vec!["Kerberoast".to_string(), "SQL Access".to_string()],
                 target: "SQL Server".to_string(),
                 difficulty: 3,
@@ -375,7 +375,7 @@ fn analyze_spns(
                     .to_string(),
             });
             attack_paths.push(AttackPath {
-                path: format!("Exchange SPN → {} → Email access", spn),
+                path: format!("Exchange SPN -> {} -> Email access", spn),
                 edges: vec!["Kerberoast".to_string(), "Exchange Access".to_string()],
                 target: "Exchange Server".to_string(),
                 difficulty: 4,
@@ -384,9 +384,9 @@ fn analyze_spns(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Risk Calculation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn calculate_risk_level(
     reasons: &[AttackReason],

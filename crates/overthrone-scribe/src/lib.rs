@@ -1,18 +1,18 @@
-//! overthrone-scribe — Pentest report generation engine.
+//! overthrone-scribe -- Pentest report generation engine.
 //!
 //! Consumes engagement data from overthrone-pilot (and other crates)
 //! and produces professional penetration testing reports in multiple
 //! formats: Markdown, PDF, and JSON.
 //!
 //! Features:
-//! - `session`     — Engagement session metadata, scope, and configuration
-//! - `mapper`      — Map findings to MITRE ATT&CK techniques + CVSS scoring
-//! - `mitigations` — Remediation recommendations per finding type
-//! - `narrative`    — Human-readable narrative generation for findings
-//! - `markdown`    — Markdown report renderer
-//! - `html`        — HTML report renderer (standalone, embedded CSS)
-//! - `pdf`         — PDF report renderer (via printpdf)
-//! - `runner`      — Top-level report generation orchestrator
+//! - `session`     -- Engagement session metadata, scope, and configuration
+//! - `mapper`      -- Map findings to MITRE ATT&CK techniques + CVSS scoring
+//! - `mitigations` -- Remediation recommendations per finding type
+//! - `narrative`    -- Human-readable narrative generation for findings
+//! - `markdown`    -- Markdown report renderer
+//! - `html`        -- HTML report renderer (standalone, embedded CSS)
+//! - `pdf`         -- PDF report renderer (via printpdf)
+//! - `runner`      -- Top-level report generation orchestrator
 
 pub mod html;
 pub mod mapper;

@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Default LDAP port (plaintext)
 pub const LDAP_PORT: u16 = 389;
@@ -123,9 +123,9 @@ const ACL_ATTRS: &[&str] = &[
     "objectClass",
 ];
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Type of LDAP bind that was used to authenticate
 #[derive(Debug, Clone, PartialEq)]
@@ -160,9 +160,9 @@ pub struct LdapSession {
     pub bind_type: BindType,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Raw LDAP / NTLM-SASL Backend (pass-the-hash support)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Minimal raw LDAP client backed by a `tokio::net::TcpStream`.
 /// Supports NTLM SASL bind (pass-the-hash) and basic `SearchRequest`
@@ -201,14 +201,14 @@ impl RawLdapConn {
         use crate::proto::ntlm;
         use crate::proto::smb2;
 
-        // ── Step 1: Send SPNEGO NegTokenInit wrapping NTLMSSP NEGOTIATE ──
+        // -- Step 1: Send SPNEGO NegTokenInit wrapping NTLMSSP NEGOTIATE --
         let negotiate = ntlm::build_negotiate_message(domain);
         let spnego_init = smb2::wrap_spnego_init(&negotiate);
         let id1 = self.next_msg_id();
         let req1 = build_bind_sasl(&mut [], id1, "GSS-SPNEGO", &spnego_init);
         raw_ldap_send(&mut self.stream, &req1).await?;
 
-        // ── Step 2: Receive SPNEGO NegTokenResp wrapping NTLMSSP CHALLENGE ──
+        // -- Step 2: Receive SPNEGO NegTokenResp wrapping NTLMSSP CHALLENGE --
         let resp1 = raw_ldap_recv(&mut self.stream).await?;
         let sasl_creds = parse_bind_response_sasl(&resp1).map_err(|e| OverthroneError::Ldap {
             target: "raw".to_string(),
@@ -227,7 +227,7 @@ impl RawLdapConn {
                 reason: format!("NTLM challenge parse failed: {e}"),
             })?;
 
-        // ── Step 3: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE ──
+        // -- Step 3: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE --
         let authenticate = ntlm::build_authenticate_message(
             domain,
             username,
@@ -241,7 +241,7 @@ impl RawLdapConn {
         let req2 = build_bind_sasl(&mut [], id2, "GSS-SPNEGO", &spnego_resp);
         raw_ldap_send(&mut self.stream, &req2).await?;
 
-        // ── Step 4: Receive final BindResponse ──
+        // -- Step 4: Receive final BindResponse --
         let resp2 = raw_ldap_recv(&mut self.stream).await?;
         let rc = parse_bind_response_rc(&resp2);
         if rc != 0 {
@@ -255,7 +255,7 @@ impl RawLdapConn {
         Ok(())
     }
 
-    /// Basic LDAP search (no paging — returns up to server's sizeLimit results).
+    /// Basic LDAP search (no paging -- returns up to server's sizeLimit results).
     pub(crate) async fn search(
         &mut self,
         base: &str,
@@ -282,7 +282,7 @@ impl RawLdapConn {
                         break;
                     }
                     if rc == 10 {
-                        // Referral — return what we have, caller decides whether to chase
+                        // Referral -- return what we have, caller decides whether to chase
                         break;
                     }
                     return Err(OverthroneError::Ldap {
@@ -295,7 +295,7 @@ impl RawLdapConn {
                 }
                 LdapMsgKind::SearchReferral(uris) => {
                     warn!("LDAP referral received: {:?}", uris);
-                    // Return what we have — caller decides whether to chase
+                    // Return what we have -- caller decides whether to chase
                     break;
                 }
                 LdapMsgKind::Other => {
@@ -319,7 +319,7 @@ impl RawLdapConn {
     }
 }
 
-// ──────────────── BER helpers ────────────────
+// ---------------- BER helpers ----------------
 
 fn ber_len_bytes(length: usize) -> Vec<u8> {
     if length < 128 {
@@ -378,7 +378,7 @@ fn ber_sequence(data: &[u8]) -> Vec<u8> {
     ber_tlv(0x30, data)
 }
 
-// ──────────────── LDAP message builders ────────────────
+// ---------------- LDAP message builders ----------------
 
 /// Build an LDAP BindRequest with SASL mechanism and credentials.
 fn build_bind_sasl(_scratch: &mut [u8], msg_id: u32, mechanism: &str, creds: &[u8]) -> Vec<u8> {
@@ -426,7 +426,7 @@ fn build_search_request(msg_id: u32, base: &str, filter: &str, attrs: &[&str]) -
     ber_sequence(&msg)
 }
 
-// ──────────────── LDAP filter encoder ────────────────
+// ---------------- LDAP filter encoder ----------------
 
 fn encode_ldap_filter(s: &str) -> Vec<u8> {
     let s = s.trim();
@@ -535,11 +535,11 @@ fn encode_extensible_filter(attr_part: &str, value: &str) -> Vec<u8> {
         data.extend_from_slice(&ber_tlv(0x82, attr.as_bytes())); // [2] type
     }
     data.extend_from_slice(&ber_tlv(0x83, value.as_bytes())); // [3] matchValue
-    // [4] dnAttributes default FALSE — omit
+    // [4] dnAttributes default FALSE -- omit
     ber_tlv(0xA9, &data) // [APPLICATION 9] ExtensibleMatch
 }
 
-// ──────────────── Raw TCP send/recv ────────────────
+// ---------------- Raw TCP send/recv ----------------
 
 async fn raw_ldap_send(stream: &mut tokio::net::TcpStream, msg: &[u8]) -> crate::error::Result<()> {
     use tokio::io::AsyncWriteExt;
@@ -623,7 +623,7 @@ async fn raw_ldap_recv(stream: &mut tokio::net::TcpStream) -> crate::error::Resu
     Ok(msg)
 }
 
-// ──────────────── LDAP response parsers ────────────────
+// ---------------- LDAP response parsers ----------------
 
 #[derive(Debug, PartialEq)]
 enum LdapMsgKind {
@@ -658,7 +658,7 @@ fn classify_ldap_message(msg: &[u8]) -> LdapMsgKind {
                 }
             }
             0x73 => {
-                // SearchResultReference [APPLICATION 19] — SEQUENCE OF URI
+                // SearchResultReference [APPLICATION 19] -- SEQUENCE OF URI
                 let mut uris = Vec::new();
                 let mut oi = 0usize;
                 while let Some((_, uri_data)) = ber_read_tlv(&op_data, &mut oi) {
@@ -729,7 +729,7 @@ fn parse_search_result_entry(msg: &[u8]) -> Option<ldap3::SearchEntry> {
             match String::from_utf8(val_data.clone()) {
                 Ok(s) => str_vals.push(s),
                 Err(_) => {
-                    // Binary value — store in bin_attrs and a hex string in attrs
+                    // Binary value -- store in bin_attrs and a hex string in attrs
                     str_vals.push(hex::encode(&val_data));
                     bin_vals.push(val_data);
                 }
@@ -1037,9 +1037,9 @@ pub struct DomainEnumeration {
     pub acl_entries: Vec<DaclInfo>,
 }
 
-// ─────────────────────────────────────────────────────
+// -----------------------------------------------------
 //  ACL / DACL Types
-// ─────────────────────────────────────────────────────
+// -----------------------------------------------------
 
 /// ACE type from an Active Directory DACL
 #[derive(Debug, Clone, PartialEq)]
@@ -1226,9 +1226,9 @@ pub mod trust_flags {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Connection & Authentication
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// RootDSE information obtained without any bind (pre-auth discovery).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1355,7 +1355,7 @@ pub async fn probe_rootdse_raw(dc_ip: &str, use_tls: bool) -> Result<RootDseInfo
             if let Some((op_tag, op_data)) = ber_read_tlv(&seq_data, &mut inner) {
                 match op_tag {
                     0x64 => {
-                        // SearchResultEntry — parse attributes
+                        // SearchResultEntry -- parse attributes
                         let mut entry_off = 0usize;
                         let _ = ber_read_tlv(&op_data, &mut entry_off); // DN
                         if let Some((_, attrs_data)) = ber_read_tlv(&op_data, &mut entry_off) {
@@ -1363,7 +1363,7 @@ pub async fn probe_rootdse_raw(dc_ip: &str, use_tls: bool) -> Result<RootDseInfo
                         }
                     }
                     0x65 => {
-                        // SearchResultDone — check resultCode
+                        // SearchResultDone -- check resultCode
                         let mut oi = 0usize;
                         if let Some((0x0A, rc_data)) = ber_read_tlv(&op_data, &mut oi) {
                             let rc = rc_data.first().copied().unwrap_or(80);
@@ -1865,9 +1865,9 @@ impl LdapSession {
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Raw Modify Helpers (RBCD support)
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Replace an attribute value on a DN (raw LDAP modify-replace).
     /// Used by RBCD to write msDS-AllowedToActOnBehalfOfOtherIdentity.
@@ -1877,7 +1877,7 @@ impl LdapSession {
         use std::collections::HashSet;
         debug!("LDAP modify-replace: dn={dn}, attr={attr}");
 
-        // Send raw bytes — using Mod<Vec<u8>> so the LDAP encode path
+        // Send raw bytes -- using Mod<Vec<u8>> so the LDAP encode path
         // does not UTF-8 transform the value (binary attribute safe).
         let mut values: HashSet<Vec<u8>> = HashSet::new();
         values.insert(value.to_vec());
@@ -2287,9 +2287,9 @@ impl LdapSession {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Raw Search Helper
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Perform an LDAP search with automatic paging (RFC 2696).
     /// Uses the Simple Paged Results Control to iterate through all results
@@ -2302,14 +2302,14 @@ impl LdapSession {
     ) -> Result<Vec<SearchEntry>> {
         debug!("LDAP search: base={base}, filter={filter}");
 
-        // ── Raw NTLM backend ──
+        // -- Raw NTLM backend --
         if let Some(raw) = self.raw.as_mut() {
             let entries = raw.search(base, filter, attrs).await?;
             debug!("Raw LDAP search returned {} entries", entries.len());
             return Ok(entries);
         }
 
-        // ── ldap3 backend (password auth) ──
+        // -- ldap3 backend (password auth) --
         let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
             target: self.dc_ip.clone(),
             reason: "No LDAP session available".to_string(),
@@ -2339,12 +2339,12 @@ impl LdapSession {
                     } = ldap_err
                     {
                         if ldap_res.rc == 10 {
-                            // Referral — return what we have
+                            // Referral -- return what we have
                             warn!("LDAP referral (rc=10), returning partial results");
                             break;
                         }
                         if ldap_res.rc == 4 {
-                            // sizeLimitExceeded — partial results OK
+                            // sizeLimitExceeded -- partial results OK
                             warn!("LDAP size limit exceeded, returning partial results");
                             break;
                         }
@@ -2384,9 +2384,9 @@ impl LdapSession {
         Ok(all_entries)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  User Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Enumerate all user accounts in the domain
     pub async fn enumerate_users(&mut self) -> Result<Vec<AdUser>> {
@@ -2414,7 +2414,7 @@ impl LdapSession {
 
         info!("Found {} AS-REP Roastable users", users.len());
         for u in &users {
-            info!("  → {}", u.sam_account_name);
+            info!("  -> {}", u.sam_account_name);
         }
         Ok(users)
     }
@@ -2432,7 +2432,7 @@ impl LdapSession {
         info!("Found {} Kerberoastable users", users.len());
         for u in &users {
             info!(
-                "  → {} (SPNs: {:?})",
+                "  -> {} (SPNs: {:?})",
                 u.sam_account_name, u.service_principal_names
             );
         }
@@ -2466,16 +2466,16 @@ impl LdapSession {
         info!("Found {} users with constrained delegation", users.len());
         for u in &users {
             info!(
-                "  → {} delegates to: {:?}",
+                "  -> {} delegates to: {:?}",
                 u.sam_account_name, u.allowed_to_delegate_to
             );
         }
         Ok(users)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Computer Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Enumerate all computer accounts in the domain
     pub async fn enumerate_computers(&mut self) -> Result<Vec<AdComputer>> {
@@ -2507,7 +2507,7 @@ impl LdapSession {
         );
         for c in &computers {
             info!(
-                "  → {} ({})",
+                "  -> {} ({})",
                 c.sam_account_name,
                 c.dns_hostname.as_deref().unwrap_or("?")
             );
@@ -2528,16 +2528,16 @@ impl LdapSession {
         info!("Found {} constrained delegation computers", computers.len());
         for c in &computers {
             info!(
-                "  → {} delegates to: {:?}",
+                "  -> {} delegates to: {:?}",
                 c.sam_account_name, c.allowed_to_delegate_to
             );
         }
         Ok(computers)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Group Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Enumerate all groups in the domain
     pub async fn enumerate_groups(&mut self) -> Result<Vec<AdGroup>> {
@@ -2615,7 +2615,7 @@ impl LdapSession {
             let admins = self.get_group_members_recursive(dn).await?;
             info!("Domain Admins: {} members", admins.len());
             for a in &admins {
-                info!("  → {a}");
+                info!("  -> {a}");
             }
             Ok(admins)
         } else {
@@ -2624,13 +2624,13 @@ impl LdapSession {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Transitive Membership
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Return every account that is transitively a member of Domain Admins.
     /// Uses the LDAP_MATCHING_RULE_IN_CHAIN OID (1.2.840.113556.1.4.1941)
-    /// which Active Directory resolves server-side — no recursive client
+    /// which Active Directory resolves server-side -- no recursive client
     /// enumeration required.  Returns `sAMAccountName` strings.
     pub async fn find_transitive_domain_admins(&mut self) -> Result<Vec<String>> {
         info!("Finding transitive Domain Admins (MATCHING_RULE_IN_CHAIN)...");
@@ -2652,7 +2652,7 @@ impl LdapSession {
         // Step 2: use LDAP_MATCHING_RULE_IN_CHAIN for transitive membership
         // The filter `(memberOf:1.2.840.113556.1.4.1941:=<DN>)` returns
         // every object that directly or transitively has that value as a
-        // member of its memberOf chain — i.e., all accounts in the group
+        // member of its memberOf chain -- i.e., all accounts in the group
         // tree regardless of nesting depth.
         let chain_filter = format!("(memberOf:1.2.840.113556.1.4.1941:={})", da_dn);
         let entries = self
@@ -2679,14 +2679,14 @@ impl LdapSession {
             da_dn
         );
         for m in &members {
-            info!("  → {m}");
+            info!("  -> {m}");
         }
         Ok(members)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Trust Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Enumerate domain trusts with detailed attribute parsing
     pub async fn enumerate_trusts(&mut self) -> Result<Vec<AdTrust>> {
@@ -2704,7 +2704,7 @@ impl LdapSession {
         for t in &trusts {
             let attr_flags = trust_flags::describe(t.trust_attributes);
             info!(
-                "  → {} ({}, {}, attrs=[{}])",
+                "  -> {} ({}, {}, attrs=[{}])",
                 t.trust_partner,
                 t.trust_direction,
                 t.trust_type,
@@ -2714,11 +2714,11 @@ impl LdapSession {
         Ok(trusts)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  SPN Map Builder
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
-    /// Build a map of SPN → account(s) for all users and computers with SPNs.
+    /// Build a map of SPN -> account(s) for all users and computers with SPNs.
     /// Returns `HashMap<String, Vec<String>>` where key is the SPN
     /// (e.g., "MSSQLSvc/db01.corp.local:1433") and value is the list
     /// of accounts that have that SPN registered.
@@ -2769,9 +2769,9 @@ impl LdapSession {
         Ok(spn_map)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  GPO Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Enumerate all Group Policy Objects in the domain.
     /// Returns GPO display names, CNs (GUIDs), SYSVOL paths, and flags.
@@ -2792,7 +2792,7 @@ impl LdapSession {
             let when_changed = get_first_attr(entry, "whenChanged");
             let flags = get_attr_u32(entry, "flags");
 
-            info!("  → {} [{}] → {}", display_name, cn, gpc_path);
+            info!("  -> {} [{}] -> {}", display_name, cn, gpc_path);
 
             gpos.push(GpoInfo {
                 display_name,
@@ -2808,9 +2808,9 @@ impl LdapSession {
         Ok(gpos)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  ACL / DACL Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Enumerate DACLs for high-value objects (users, groups, computers, OUs).
     /// Uses the SD_FLAGS control to request only DACL + Owner from the
@@ -2929,14 +2929,14 @@ impl LdapSession {
         Ok(abusable)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Security Descriptor Helpers (for ACL persistence)
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Read the binary `nTSecurityDescriptor` for an object identified by its full DN.
     /// Uses a base-scoped search with the SD_FLAGS critical control (DACL + Owner) so
     /// that the returned bytes include the DACL and can be modified and written back.
-    /// Only works with ldap3 (password / Kerberos) sessions — raw NTLM sessions cannot
+    /// Only works with ldap3 (password / Kerberos) sessions -- raw NTLM sessions cannot
     /// send the SD_FLAGS control.
     pub async fn read_ntsd(&mut self, dn: &str) -> Result<Vec<u8>> {
         let sd_ctrl = build_sd_flags_control(SD_FLAGS_DACL_OWNER);
@@ -3034,9 +3034,9 @@ impl LdapSession {
         })
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  ACL Exploit Wrappers (GenericAll / WriteDACL / ForceChangePassword)
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Force-change a user's password using the `User-Force-Change-Password`
     /// extended right (does not require knowing the current password).
@@ -3178,9 +3178,9 @@ impl LdapSession {
         Ok(())
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Custom Queries
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Execute a raw LDAP search with a custom filter and attributes
     pub async fn custom_search(
@@ -3202,14 +3202,14 @@ impl LdapSession {
         self.search_entries(base_dn, filter, attrs).await
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  Full Domain Enumeration
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Perform comprehensive domain enumeration in one shot.
     /// Calls all enumeration functions and returns a consolidated report.
     pub async fn full_enumeration(&mut self) -> Result<DomainEnumeration> {
-        info!("═══ Starting full domain enumeration ═══");
+        info!("=== Starting full domain enumeration ===");
 
         let users = self.enumerate_users().await?;
         let computers = self.enumerate_computers().await?;
@@ -3247,7 +3247,7 @@ impl LdapSession {
             acl_entries,
         };
 
-        info!("═══ Domain enumeration complete ═══");
+        info!("=== Domain enumeration complete ===");
         info!("  Users:                  {}", result.users.len());
         info!("  Computers:              {}", result.computers.len());
         info!("  Groups:                 {}", result.groups.len());
@@ -3274,9 +3274,9 @@ impl LdapSession {
         Ok(result)
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     //  LAPS Password Reading
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     /// Read LAPS (Local Administrator Password Solution) passwords from AD.
     /// Queries computer objects for:
@@ -3353,9 +3353,9 @@ pub struct LapsResult {
     pub laps_v2_password: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Parsing Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Convert "corp.local" to "DC=corp,DC=local"
 fn domain_to_base_dn(domain: &str) -> String {
@@ -3483,9 +3483,9 @@ fn ldap_rc_to_string(rc: u32) -> &'static str {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Paged Results Control (RFC 2696) — BER encoding/decoding
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Paged Results Control (RFC 2696) -- BER encoding/decoding
+// ===========================================================
 
 /// Build a BER-encoded Simple Paged Results Control for LDAP requests.
 /// The control value is a BER `SEQUENCE { INTEGER size, OCTET STRING cookie }`.
@@ -3584,17 +3584,17 @@ fn ber_write_length(buf: &mut Vec<u8>, len: usize) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  NT Security Descriptor Parsing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parse a binary NT Security Descriptor (SECURITY_DESCRIPTOR_RELATIVE format).
 /// Returns `(owner_sid, Vec<AceEntry>)` containing the DACL entries.
 fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<AceEntry>), String> {
     // SECURITY_DESCRIPTOR_RELATIVE layout:
-    //   0: Revision (u8) — must be 1
+    //   0: Revision (u8) -- must be 1
     //   1: Sbz1 (u8)
-    //   2-3: Control (u16 LE) — SE_DACL_PRESENT = 0x0004
+    //   2-3: Control (u16 LE) -- SE_DACL_PRESENT = 0x0004
     //   4-7: OffsetOwner (u32 LE)
     //   8-11: OffsetGroup (u32 LE)
     //  12-15: OffsetSacl (u32 LE)
@@ -3767,7 +3767,7 @@ fn format_guid(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    // ── BER primitives ──
+    // -- BER primitives --
 
     #[test]
     fn test_ber_len_bytes_short() {
@@ -3848,7 +3848,7 @@ mod tests {
         assert_eq!(ber_sequence(&[0x01, 0x02]), vec![0x30, 0x02, 0x01, 0x02]);
     }
 
-    // ── BER writers ──
+    // -- BER writers --
 
     #[test]
     fn test_ber_write_length() {
@@ -3887,7 +3887,7 @@ mod tests {
         ber_write_integer(&mut buf, 128);
         assert_eq!(buf, vec![0x02, 0x02, 0x00, 0x80]);
         buf.clear();
-        // 65535 = 0xFFFF → high bit set → leading zero byte added
+        // 65535 = 0xFFFF -> high bit set -> leading zero byte added
         ber_write_integer(&mut buf, 65535);
         assert_eq!(buf, vec![0x02, 0x03, 0x00, 0xFF, 0xFF]);
         buf.clear();
@@ -3905,7 +3905,7 @@ mod tests {
         assert_eq!(buf, vec![0x04, 0x03, b'a', b'b', b'c']);
     }
 
-    // ── BER reader ──
+    // -- BER reader --
 
     #[test]
     fn test_ber_read_tlv_integer() {
@@ -3954,7 +3954,7 @@ mod tests {
         assert_eq!(ber_read_tlv(&[0x04, 0x05, b'h'], &mut off), None);
     }
 
-    // ── domain_to_base_dn ──
+    // -- domain_to_base_dn --
 
     #[test]
     fn test_domain_to_base_dn_single() {
@@ -3973,11 +3973,11 @@ mod tests {
 
     #[test]
     fn test_domain_to_base_dn_empty() {
-        // split(".") on empty string yields [""] → DC=
+        // split(".") on empty string yields [""] -> DC=
         assert_eq!(domain_to_base_dn(""), "DC=");
     }
 
-    // ── ldap_rc_to_string ──
+    // -- ldap_rc_to_string --
 
     #[test]
     fn test_ldap_rc_to_string_success() {
@@ -3998,7 +3998,7 @@ mod tests {
         assert_eq!(ldap_rc_to_string(999), "Unknown error");
     }
 
-    // ── LDAP filter encoder ──
+    // -- LDAP filter encoder --
 
     #[test]
     fn test_encode_ldap_filter_present() {
@@ -4085,7 +4085,7 @@ mod tests {
         assert!(result.contains(&0x83));
     }
 
-    // ── LDAP message builders ──
+    // -- LDAP message builders --
 
     #[test]
     fn test_build_bind_sasl_structure() {
@@ -4114,14 +4114,14 @@ mod tests {
         assert!(result.contains(&0x63));
     }
 
-    // ── LDAP response classification ──
+    // -- LDAP response classification --
 
     #[test]
     fn test_classify_ldap_message_too_short() {
         assert_eq!(classify_ldap_message(&[0x00]), LdapMsgKind::Other);
     }
 
-    // ── parse_bind_response_rc ──
+    // -- parse_bind_response_rc --
 
     #[test]
     fn test_parse_bind_response_rc_success() {
@@ -4166,7 +4166,7 @@ mod tests {
         assert_eq!(parse_bind_response_rc(&[0x00, 0x01, 0x02]), 80);
     }
 
-    // ── parse_bind_response_sasl ──
+    // -- parse_bind_response_sasl --
 
     #[test]
     fn test_parse_bind_response_sasl_success() {
@@ -4213,7 +4213,7 @@ mod tests {
         assert!(parse_bind_response_sasl(&[]).is_err());
     }
 
-    // ── SID parsing ──
+    // -- SID parsing --
 
     #[test]
     fn test_parse_sid_standard() {
@@ -4244,7 +4244,7 @@ mod tests {
         assert_eq!(parse_sid(&[]), "S-1-0-0");
     }
 
-    // ── GUID formatting ──
+    // -- GUID formatting --
 
     #[test]
     fn test_format_guid_known() {
@@ -4271,7 +4271,7 @@ mod tests {
         assert_eq!(format_guid(&[]), "00000000-0000-0000-0000-000000000000");
     }
 
-    // ── AceEntry methods ──
+    // -- AceEntry methods --
 
     #[test]
     fn test_ace_is_generic_all() {
@@ -4383,7 +4383,7 @@ mod tests {
         assert!(!ace.is_write_prop());
     }
 
-    // ── Enum from_raw ──
+    // -- Enum from_raw --
 
     #[test]
     fn test_trust_direction_from_raw() {
@@ -4412,7 +4412,7 @@ mod tests {
         assert_eq!(AceType::from_raw(0xFF), AceType::Unknown(0xFF));
     }
 
-    // ── TrustFlags ──
+    // -- TrustFlags --
 
     #[test]
     fn test_trust_flags_describe_none() {
@@ -4443,7 +4443,7 @@ mod tests {
         assert!(all.contains(&"PIM"));
     }
 
-    // ── UAC constants ──
+    // -- UAC constants --
 
     #[test]
     fn test_uac_constants() {
@@ -4457,7 +4457,7 @@ mod tests {
         assert_eq!(UAC_SERVER_TRUST, 0x2000);
     }
 
-    // ── Control builders ──
+    // -- Control builders --
 
     #[test]
     fn test_build_paged_results_control_structure() {
@@ -4475,7 +4475,7 @@ mod tests {
         assert!(ctrl.val.is_some());
     }
 
-    // ── parse_search_result_entry ──
+    // -- parse_search_result_entry --
 
     #[test]
     fn test_parse_search_result_entry_basic() {
@@ -4525,7 +4525,7 @@ mod tests {
         assert!(parse_search_result_entry(&[]).is_none());
     }
 
-    // ── Security Descriptor parsing ──
+    // -- Security Descriptor parsing --
 
     /// Build a raw SID byte array: revision + subCount + authority(6 big-endian) + subs(LE)
     fn make_sid_bytes(revision: u8, authority: u64, sub_authorities: &[u32]) -> Vec<u8> {

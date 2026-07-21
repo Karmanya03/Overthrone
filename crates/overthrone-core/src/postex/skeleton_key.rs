@@ -1,4 +1,4 @@
-//! Skeleton Key — Native LSASS Patching
+//! Skeleton Key -- Native LSASS Patching
 //!
 //! Implements the actual `msv1_0!MsvpPasswordValidate` hook via a native
 //! compiled DLL that is reflectively injected into LSASS.
@@ -56,9 +56,9 @@ use windows::{
     },
 };
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Default skeleton key password (mimikatz default: "mimikatz")
 ///
@@ -81,9 +81,9 @@ const MSV1_0_DLL: &str = "msv1_0.dll";
 #[allow(dead_code)]
 const MSVP_PASSWORD_VALIDATE: &str = "MsvpPasswordValidate";
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Skeleton Key Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for skeleton key deployment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -426,9 +426,9 @@ fn parse_reg_query_dword(stdout: &str, value_name: &str) -> Option<u32> {
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Skeleton Key Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of a skeleton key deployment attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -449,9 +449,9 @@ pub struct SkeletonKeyResult {
     pub cleanup_commands: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Skeleton Key Exploiter
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Skeleton key exploiter for LSASS authentication bypass.
 pub struct SkeletonKeyExploiter {
@@ -799,7 +799,7 @@ impl SkeletonKeyExploiter {
     /// Generate PowerShell reflection deployment script.
     fn generate_powershell_reflection_script(&self) -> String {
         format!(
-            r#"# Skeleton Key — PowerShell Reflection
+            r#"# Skeleton Key -- PowerShell Reflection
 # Target: {dc}
 # Master Password: {master}
 
@@ -824,7 +824,7 @@ Write-Host "[+] Skeleton key deployed via PowerShell reflection"
     fn generate_service_binary_commands(&self) -> Vec<String> {
         vec![
             format!(
-                "# Skeleton Key — Service Binary Replacement\n# Target: {}",
+                "# Skeleton Key -- Service Binary Replacement\n# Target: {}",
                 self.config.target_dc
             ),
             format!(
@@ -850,7 +850,7 @@ Write-Host "[+] Skeleton key deployed via PowerShell reflection"
     fn generate_scheduled_task_commands(&self) -> Vec<String> {
         vec![
             format!(
-                "# Skeleton Key — Scheduled Task Deployment\n# Target: {}",
+                "# Skeleton Key -- Scheduled Task Deployment\n# Target: {}",
                 self.config.target_dc
             ),
             format!(
@@ -876,7 +876,7 @@ Write-Host "[+] Skeleton key deployed via PowerShell reflection"
     fn generate_wmi_event_commands(&self) -> Vec<String> {
         vec![
             format!(
-                "# Skeleton Key — WMI Event Consumer\n# Target: {}",
+                "# Skeleton Key -- WMI Event Consumer\n# Target: {}",
                 self.config.target_dc
             ),
             format!(
@@ -904,7 +904,7 @@ Write-Host "[+] Skeleton key deployed via PowerShell reflection"
         let mut commands = Vec::new();
 
         commands.push(format!(
-            "# Skeleton Key Cleanup — Target: {}",
+            "# Skeleton Key Cleanup -- Target: {}",
             self.config.target_dc
         ));
 
@@ -980,9 +980,9 @@ Write-Host "[+] Skeleton key deployed via PowerShell reflection"
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Windows-Specific Injection Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(windows)]
 /// Find the LSASS process ID.
@@ -1125,9 +1125,9 @@ fn inject_dll_into_process(_pid: u32, _dll_bytes: &[u8]) -> Result<()> {
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

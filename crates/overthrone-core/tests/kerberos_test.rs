@@ -9,9 +9,9 @@ use overthrone_core::proto::kerberos::{
     normalize_realm, normalize_username,
 };
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  normalize_username
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_normalize_username_plain_unchanged() {
@@ -20,13 +20,13 @@ fn test_normalize_username_plain_unchanged() {
 
 #[test]
 fn test_normalize_username_strips_downlevel_domain_prefix() {
-    // "CORP\alice" → "alice"
+    // "CORP\alice" -> "alice"
     assert_eq!(normalize_username("CORP\\alice"), "alice");
 }
 
 #[test]
 fn test_normalize_username_strips_upn_domain_suffix() {
-    // "alice@corp.local" → "alice"
+    // "alice@corp.local" -> "alice"
     assert_eq!(normalize_username("alice@corp.local"), "alice");
 }
 
@@ -39,9 +39,9 @@ fn test_normalize_username_prefers_downlevel_over_upn() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  normalize_realm
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_normalize_realm_uppercases_lowercase() {
@@ -58,9 +58,9 @@ fn test_normalize_realm_mixed_case() {
     assert_eq!(normalize_realm("Corp.Local"), "CORP.LOCAL");
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Encryption-type constants (RFC 4120 / MS-KILE)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_etype_rc4_hmac_is_23() {
@@ -83,9 +83,9 @@ fn test_etype_aes256_is_18() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  EncType::to_etype_id / from_etype_id
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_enctype_to_etype_id_rc4() {
@@ -141,9 +141,9 @@ fn test_enctype_to_from_roundtrip() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  krb_error_to_string
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_krb_err_string_is_non_empty() {

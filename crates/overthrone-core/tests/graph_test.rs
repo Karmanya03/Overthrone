@@ -7,9 +7,9 @@
 use overthrone_core::graph::{AdNode, AttackGraph, EdgeType, NodeType};
 use std::collections::HashMap;
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Test helpers
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 fn user_node(name: &str, domain: &str) -> AdNode {
     AdNode {
@@ -55,9 +55,9 @@ fn domain_node(name: &str) -> AdNode {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Graph construction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_new_graph_starts_empty() {
@@ -90,9 +90,9 @@ fn test_add_duplicate_node_is_idempotent() {
     assert_eq!(g.node_count(), 1, "Duplicate nodes must collapse to one");
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  add_edge_by_name
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_add_edge_between_existing_nodes_succeeds() {
@@ -139,9 +139,9 @@ fn test_add_edge_where_target_missing_returns_false() {
     assert!(!added);
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  find_node
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_find_node_by_full_key_uppercase() {
@@ -174,9 +174,9 @@ fn test_find_node_prefix_fuzzy_match() {
     assert!(idx.is_some(), "Prefix match should find 'alice@corp.local'");
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  shortest_path
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_shortest_path_single_hop() {
@@ -241,7 +241,7 @@ fn test_shortest_path_prefers_lower_cost_route() {
     g.add_node(user_node("alice", "corp.local"));
     g.add_node(group_node("Domain Admins", "corp.local"));
     g.add_node(computer_node("DC01", "corp.local"));
-    // Direct path: alice → DC01 (cost 1)
+    // Direct path: alice -> DC01 (cost 1)
     g.add_edge_by_name(
         "alice",
         "corp.local",
@@ -249,7 +249,7 @@ fn test_shortest_path_prefers_lower_cost_route() {
         "corp.local",
         EdgeType::AdminTo,
     );
-    // Indirect path: alice → Domain Admins (MemberOf, cost 0) → DC01 (AdminTo, cost 1)
+    // Indirect path: alice -> Domain Admins (MemberOf, cost 0) -> DC01 (AdminTo, cost 1)
     g.add_edge_by_name(
         "alice",
         "corp.local",
@@ -310,9 +310,9 @@ fn test_shortest_path_target_not_found_returns_err() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  paths_to_da
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_paths_to_da_returns_empty_when_no_da_group() {
@@ -323,7 +323,7 @@ fn test_paths_to_da_returns_empty_when_no_da_group() {
     let paths = g.paths_to_da("ALICE@CORP.LOCAL", "corp.local");
     assert!(
         paths.is_empty(),
-        "No 'Domain Admins' node → must return empty Vec"
+        "No 'Domain Admins' node -> must return empty Vec"
     );
 }
 
@@ -347,9 +347,9 @@ fn test_paths_to_da_finds_path_when_direct_edge_exists() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  GraphStats
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_stats_counts_node_types_correctly() {
@@ -385,9 +385,9 @@ fn test_stats_counts_edges() {
     assert_eq!(stats.total_edges, 1);
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  EdgeType semantics
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_edge_type_memberof_cost_is_zero() {
@@ -422,9 +422,9 @@ fn test_trusted_by_cost_is_4() {
     assert_eq!(EdgeType::TrustedBy.default_cost(), 4);
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  high_value_targets
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_high_value_targets_empty_graph() {

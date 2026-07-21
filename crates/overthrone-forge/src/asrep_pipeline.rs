@@ -1,4 +1,4 @@
-//! AS-REP hash → usable Kerberos ticket pipeline.
+//! AS-REP hash -> usable Kerberos ticket pipeline.
 //!
 //! Takes a raw `$krb5asrep$` hash (from AS-REP roasting), parses it,
 //! and with the cracked password requests a real TGT from the KDC
@@ -6,8 +6,8 @@
 //!
 //! ## Flow
 //!
-//! 1. Parse `$krb5asrep$etype$user\@domain:checksum$edata` → username, domain, etype
-//! 2. Call `request_tgt()` with the cracked password → `TicketGrantingData`
+//! 1. Parse `$krb5asrep$etype$user\@domain:checksum$edata` -> username, domain, etype
+//! 2. Call `request_tgt()` with the cracked password -> `TicketGrantingData`
 //! 3. Build KRB-CRED (`.kirbi`) and CCACHE (`.ccache`) wrappers
 //! 4. Write to disk if `output_path` is set
 
@@ -120,7 +120,7 @@ pub fn save_ticket(
     Ok((kirbi_path, ccache_path))
 }
 
-/// Run the full AS-REP pipeline: hash → TGT → disk.
+/// Run the full AS-REP pipeline: hash -> TGT -> disk.
 pub async fn run_pipeline(
     config: &ForgeConfig,
     cracked_password: &str,
@@ -136,7 +136,7 @@ pub async fn run_pipeline(
         Ok(tgt) => tgt,
         Err(e) => {
             return ForgeResult {
-                action: "AS-REP → TGT".to_string(),
+                action: "AS-REP -> TGT".to_string(),
                 domain: domain.clone(),
                 success: false,
                 ticket_data: None,
@@ -150,7 +150,7 @@ pub async fn run_pipeline(
         Ok(paths) => paths,
         Err(e) => {
             return ForgeResult {
-                action: "AS-REP → TGT".to_string(),
+                action: "AS-REP -> TGT".to_string(),
                 domain: domain.clone(),
                 success: false,
                 ticket_data: None,
@@ -163,7 +163,7 @@ pub async fn run_pipeline(
     let ticket_size = tgt.ticket.enc_part.cipher.len();
 
     ForgeResult {
-        action: "AS-REP → TGT".to_string(),
+        action: "AS-REP -> TGT".to_string(),
         domain: domain.clone(),
         success: true,
         ticket_data: Some(ForgedTicket {
@@ -183,7 +183,7 @@ pub async fn run_pipeline(
         }),
         persistence_result: None,
         message: format!(
-            "AS-REP password → TGT for {}@{} ({} bytes)",
+            "AS-REP password -> TGT for {}@{} ({} bytes)",
             username, domain, ticket_size
         ),
     }

@@ -1,4 +1,4 @@
-//! CVE-2025-21299 — Kerberos PAC Bypass.
+//! CVE-2025-21299 -- Kerberos PAC Bypass.
 //!
 //! # References
 //! - CVE-2025-21299: CVSS 9.0, January 2025 Patch Tuesday
@@ -162,7 +162,7 @@ async fn modify_and_resign(
         ticket_b64: Some(b64),
         kdc_error: None,
         summary: format!(
-            "Forged TGS {} → {} with DA PAC",
+            "Forged TGS {} -> {} with DA PAC",
             config.target_user, config.target_spn
         ),
         log: log.clone(),
@@ -207,7 +207,7 @@ async fn direct_forge(config: &KrbBypassConfig, log: &mut Vec<String>) -> Result
         ticket_b64: Some(b64),
         kdc_error: None,
         summary: format!(
-            "Silver ticket {} → {}",
+            "Silver ticket {} -> {}",
             config.target_user, config.target_spn
         ),
         log: log.clone(),
@@ -310,7 +310,7 @@ async fn do_tgs_req_with_authdata(
                     target_spn: config.target_spn.clone(),
                     ticket_b64: Some(b64),
                     kdc_error: None,
-                    summary: format!("{label} — KDC issued TGS"),
+                    summary: format!("{label} -- KDC issued TGS"),
                     log: log.clone(),
                 }
             }
@@ -379,7 +379,7 @@ async fn zero_signature(
 }
 
 fn replay_pac(config: &KrbBypassConfig, log: &mut Vec<String>) -> KrbBypassResult {
-    log.push("ReplayPAC needs DA ticket capture — try ModifyAndResign".to_string());
+    log.push("ReplayPAC needs DA ticket capture -- try ModifyAndResign".to_string());
     KrbBypassResult {
         technique: PacHandling::ReplayPac,
         success: false,

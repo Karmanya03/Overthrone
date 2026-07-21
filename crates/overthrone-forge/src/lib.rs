@@ -1,4 +1,4 @@
-//! overthrone-forge — Kerberos ticket forging & persistence engine.
+//! overthrone-forge -- Kerberos ticket forging & persistence engine.
 //!
 //! Forges Golden Tickets (krbtgt), Silver Tickets (service keys),
 //! Diamond Tickets (legitimate TGT modification), inter-realm TGTs,

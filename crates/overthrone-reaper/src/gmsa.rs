@@ -187,7 +187,7 @@ pub async fn enumerate_gmsa(config: &ReaperConfig) -> Result<Vec<GmsaEntry>> {
 
         if let Some(ref header) = password_header {
             debug!(
-                "[gmsa]  {} → gMSA blob: version={}, flags={:#x}, total={} bytes",
+                "[gmsa]  {} -> gMSA blob: version={}, flags={:#x}, total={} bytes",
                 sam_account_name, header.version, header.flags, header.blob_size
             );
         }

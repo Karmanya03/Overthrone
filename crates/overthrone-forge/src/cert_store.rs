@@ -2,7 +2,7 @@
 //!
 //! Implements direct RPC-based certificate enrollment by calling the CA's
 //! ICertRequestD interface over the `\PIPE\cert` SMB named pipe (MS-ICPR).
-//! Bypasses HTTP CES/CEP endpoints entirely — useful when Web Enrollment is
+//! Bypasses HTTP CES/CEP endpoints entirely -- useful when Web Enrollment is
 //! disabled or restricted but the RPC endpoint is accessible.
 //!
 //! References:
@@ -95,7 +95,7 @@ pub async fn request_cert_via_rpc(
     //   [in] handle_t hRpcCert (20-byte context handle)
     //   [in] wchar_t* pwszAuthority
     //   [in] DWORD dwFlags
-    //   [in] DWORD dwRequestIdOffset (unused — pass 0)
+    //   [in] DWORD dwRequestIdOffset (unused -- pass 0)
     //   [in] CERTTRANSBLOB ctbRequest (size + data)
     //   [in] wchar_t* pwszAttributes
     //   [out] DWORD* pdwRequestId
@@ -106,19 +106,19 @@ pub async fn request_cert_via_rpc(
     // Build the NDR stub manually:
     let mut stub = Vec::new();
 
-    // Context handle (20 bytes of zeros for first call — server returns real handle)
+    // Context handle (20 bytes of zeros for first call -- server returns real handle)
     stub.extend_from_slice(&[0u8; 20]);
 
-    // pwszAuthority — conformant string (CA name)
+    // pwszAuthority -- conformant string (CA name)
     stub.extend_from_slice(&ndr_conformant_string(ca_name));
 
-    // dwFlags — use 0 (no flags)
+    // dwFlags -- use 0 (no flags)
     stub.extend_from_slice(&0u32.to_le_bytes());
 
-    // dwRequestIdOffset — 0
+    // dwRequestIdOffset -- 0
     stub.extend_from_slice(&0u32.to_le_bytes());
 
-    // ctbRequest — CERTTRANSBLOB { cbCount, pbData }
+    // ctbRequest -- CERTTRANSBLOB { cbCount, pbData }
     let count = csr_der.len() as u32;
     stub.extend_from_slice(&count.to_le_bytes()); // cbCount
     // pbData pointer (non-null, referent follows)
@@ -127,16 +127,16 @@ pub async fn request_cert_via_rpc(
     while stub.len() % 8 != 0 {
         stub.push(0);
     }
-    // The data — NDR conformant array
+    // The data -- NDR conformant array
     stub.extend_from_slice(&count.to_le_bytes()); // max count
     stub.extend_from_slice(&0u32.to_le_bytes()); // offset
     stub.extend_from_slice(&count.to_le_bytes()); // actual count
     stub.extend_from_slice(csr_der);
 
-    // pwszAttributes — conformant string (can be empty)
+    // pwszAttributes -- conformant string (can be empty)
     stub.extend_from_slice(&ndr_conformant_string(""));
 
-    // Output arguments are referenced via unique pointers — provide space
+    // Output arguments are referenced via unique pointers -- provide space
     // (these will be filled by the server)
     stub.extend_from_slice(&0x00020004u32.to_le_bytes()); // pdwRequestId ptr
     stub.extend_from_slice(&0u32.to_le_bytes()); // requestId placeholder
@@ -191,7 +191,7 @@ pub async fn request_cert_via_rpc_with_creds(
 ///
 /// Uses EPM to resolve the ICertRequestD interface UUID to a TCP endpoint,
 /// then connects directly and submits the PKCS#10 CSR over DCE/RPC.
-/// This is the native Windows AD CS enrollment protocol — no HTTP CES/CEP needed.
+/// This is the native Windows AD CS enrollment protocol -- no HTTP CES/CEP needed.
 ///
 /// **Note on authentication:** The current implementation sends an unauthenticated
 /// RPC bind request. For production AD CS, the CA typically requires authenticated
@@ -323,7 +323,7 @@ pub async fn request_cert_via_tcp_rpc_auth(
             reason: format!("TCP connect failed: {e}"),
         })?;
 
-    // ── Step 1: Bind with NTLMSSP Type 1 (Negotiate) ──
+    // -- Step 1: Bind with NTLMSSP Type 1 (Negotiate) --
     let ntlmssp_type1 = build_ntlmssp_negotiate();
     let bind_req = build_rpc_bind_auth(
         &ICERTREQUEST_D_UUID,
@@ -342,24 +342,24 @@ pub async fn request_cert_via_tcp_rpc_auth(
         });
     }
 
-    // ── Step 2: Extract NTLMSSP Type 2 (Challenge) from bind_ack auth verifier ──
+    // -- Step 2: Extract NTLMSSP Type 2 (Challenge) from bind_ack auth verifier --
     let challenge_bytes = extract_auth_body(&bind_resp).ok_or_else(|| {
         OverthroneError::Ntlm("Bind_ack missing NTLMSSP challenge in auth verifier".to_string())
     })?;
 
     let challenge = parse_ntlmssp_challenge(challenge_bytes)?;
 
-    // ── Step 3: Build NTLMSSP Type 3 (Authenticate) ──
+    // -- Step 3: Build NTLMSSP Type 3 (Authenticate) --
     let (type3, _session_key, _session_base_key) =
         build_ntlmssp_authenticate_hash(cred.domain, cred.username, cred.nt_hash, &challenge)?;
 
-    // ── Step 4: Send AUTH3 PDU with Type 3 ──
+    // -- Step 4: Send AUTH3 PDU with Type 3 --
     let auth3 = build_auth3_pdu(&type3, 2);
     btf_write_frame(&mut stream, &auth3).await?;
 
     // No response expected for AUTH3 (RFC accepted silently).
 
-    // ── Step 5: Build and send the certificate enrollment request ──
+    // -- Step 5: Build and send the certificate enrollment request --
     let mut stub = Vec::new();
     stub.extend_from_slice(&[0u8; 20]);
     stub.extend_from_slice(&ndr_conformant_string(ca_name));
@@ -389,7 +389,7 @@ pub async fn request_cert_via_tcp_rpc_auth(
     let req = build_rpc_request_auth(
         OPNUM_REQUEST_CERTIFICATE,
         &stub,
-        None, // CONNECT level auth — no verifier needed on request PDU
+        None, // CONNECT level auth -- no verifier needed on request PDU
         0,
     );
     btf_write_frame(&mut stream, &req).await?;
@@ -409,7 +409,7 @@ pub fn parse_icertrequest_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8
     let stub_start = 24usize; // Skip RPC header (24 bytes for request response)
 
     // Parse output arguments in order:
-    // 1. Return value (HRESULT) — DWORD at stub_start
+    // 1. Return value (HRESULT) -- DWORD at stub_start
     if stub_start + 4 > resp.len() {
         return Err(OverthroneError::CertificateRequest(
             "Response too short for status".to_string(),
@@ -422,7 +422,7 @@ pub fn parse_icertrequest_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8
         resp[stub_start + 3],
     ]);
 
-    // Check HRESULT — S_OK (0) means success
+    // Check HRESULT -- S_OK (0) means success
     // Common ADCS HRESULTs: CRYPT_E_REVOKED (0x80092010), CERTSRV_E_BAD_REQUESTSUBJECT (0x80094001)
     if hresult != 0 && hresult != 1 && hresult & 0x80000000 != 0 {
         return Err(OverthroneError::CertificateRequest(format!(
@@ -476,11 +476,11 @@ pub fn parse_icertrequest_response(resp: &[u8], _ca_name: &str) -> Result<Vec<u8
             ));
         }
         _ => {
-            // 3 = ISSUED, or unknown — try to parse cert chain
+            // 3 = ISSUED, or unknown -- try to parse cert chain
         }
     }
 
-    // 4. pctbCertChain — find CERTTRANSBLOB in the response
+    // 4. pctbCertChain -- find CERTTRANSBLOB in the response
     // After the returned arguments, scan for NDR conformant array patterns
     // that look like certificate data (DER typically starts with 0x30 0x82)
     for i in (stub_start + 24..resp.len().saturating_sub(8)).step_by(4) {

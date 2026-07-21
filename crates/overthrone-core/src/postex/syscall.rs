@@ -1,5 +1,5 @@
 #![allow(clippy::missing_safety_doc)]
-//! Raw Syscall Infrastructure — EDR bypass via direct `syscall` instruction.
+//! Raw Syscall Infrastructure -- EDR bypass via direct `syscall` instruction.
 //!
 //! This module provides the lowest-level primitive for EDR evasion: executing
 //! NT syscalls via the `syscall` instruction directly, bypassing any userland
@@ -9,7 +9,7 @@
 //!
 //! 1. **Syscall Numbers** are resolved at runtime from ntdll's export table
 //!    (see `opsec::resolve_syscall_numbers` / `edr_bypass::resolve_clean_syscall_numbers`).
-//! 2. **Raw execution (1–4 args)** uses `core::arch::asm!` to emit
+//! 2. **Raw execution (1--4 args)** uses `core::arch::asm!` to emit
 //!    `mov r10, rcx; mov eax, SSN; syscall; ret`.
 //! 3. **5+ args** uses a runtime stub generator: the stub bytes are written into
 //!    executable memory (allocated via kernel32!VirtualAlloc, which is not usually
@@ -28,11 +28,11 @@
 //!
 //! | Register | Role |
 //! |----------|------|
-//! | RCX → R10 | First argument (saved to R10, since SYSCALL clobbers RCX→RIP) |
+//! | RCX -> R10 | First argument (saved to R10, since SYSCALL clobbers RCX->RIP) |
 //! | RDX | Second argument |
 //! | R8  | Third argument |
 //! | R9  | Fourth argument |
-//! | Stack | Fifth+ arguments (RSP+0, RSP+8, …) |
+//! | Stack | Fifth+ arguments (RSP+0, RSP+8, ...) |
 //! | EAX | Syscall number |
 //! | RAX | Return value (0 = success, negative = NTSTATUS error) |
 //! | RCX | Clobbered (becomes RIP after syscall) |
@@ -42,7 +42,7 @@ use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// ─── SyscallNumbers: resolved syscall numbers ──────────────────────
+// --- SyscallNumbers: resolved syscall numbers ----------------------
 
 /// Resolved syscall numbers for commonly used NT API functions.
 ///
@@ -138,7 +138,7 @@ impl SyscallNumbers {
         }
     }
 
-    /// Populate from a name→number map.
+    /// Populate from a name->number map.
     pub fn from_map(map: &HashMap<String, u32>) -> Self {
         Self {
             nt_allocate_virtual_memory: map.get("NtAllocateVirtualMemory").copied().unwrap_or(0x18),
@@ -180,7 +180,7 @@ impl SyscallNumbers {
     }
 }
 
-// ─── SyscallStatus ─────────────────────────────────────────────────
+// --- SyscallStatus -------------------------------------------------
 
 /// The status returned by a raw syscall (NTSTATUS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,7 +213,7 @@ impl SyscallStatus {
     }
 }
 
-// ─── Inline asm raw syscalls (1–4 args) ───────────────────────────────
+// --- Inline asm raw syscalls (1--4 args) -------------------------------
 
 /// Execute a raw syscall with 0 arguments.
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -336,7 +336,7 @@ pub unsafe fn syscall_4(
     SyscallStatus(result)
 }
 
-// ─── Non-Windows stubs ─────────────────────────────────────────────
+// --- Non-Windows stubs ---------------------------------------------
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
 pub unsafe fn syscall_0(_syscall_number: u32) -> SyscallStatus {
@@ -378,7 +378,7 @@ pub unsafe fn syscall_4(
     SyscallStatus(-1)
 }
 
-// ─── Runtime syscall stub generator (for 5+ args) ──────────────────
+// --- Runtime syscall stub generator (for 5+ args) ------------------
 
 /// A dynamically generated syscall stub stored in executable memory.
 ///
@@ -566,15 +566,15 @@ impl Drop for DynamicSyscallStub {
     }
 }
 
-// ─── Nt* wrapper functions ─────────────────────────────────────────
+// --- Nt* wrapper functions -----------------------------------------
 
-/// Wrapper: NtClose — close a handle.
+/// Wrapper: NtClose -- close a handle.
 #[cfg(target_os = "windows")]
 pub unsafe fn nt_close(syscall_num: u32, handle: isize) -> SyscallStatus {
     unsafe { syscall_1(syscall_num, handle as *const std::ffi::c_void) }
 }
 
-/// Wrapper: NtProtectVirtualMemory — change page protection.
+/// Wrapper: NtProtectVirtualMemory -- change page protection.
 /// (5 args: Handle, BaseAddress, RegionSize, NewProtect, OldProtect)
 #[cfg(target_os = "windows")]
 pub unsafe fn nt_protect_virtual_memory(
@@ -703,7 +703,7 @@ pub unsafe fn nt_read_virtual_memory(
     }
 }
 
-/// Wrapper: NtOpenKey — open a registry key.
+/// Wrapper: NtOpenKey -- open a registry key.
 #[cfg(target_os = "windows")]
 pub unsafe fn nt_open_key(
     syscall_num: u32,
@@ -722,7 +722,7 @@ pub unsafe fn nt_open_key(
     }
 }
 
-/// Wrapper: NtQueryValueKey — query a registry value.
+/// Wrapper: NtQueryValueKey -- query a registry value.
 #[cfg(target_os = "windows")]
 pub unsafe fn nt_query_value_key(
     syscall_num: u32,
@@ -770,7 +770,7 @@ pub unsafe fn nt_query_system_information(
     }
 }
 
-/// Wrapper: NtDelayExecution — sleep a thread.
+/// Wrapper: NtDelayExecution -- sleep a thread.
 #[cfg(target_os = "windows")]
 pub unsafe fn nt_delay_execution(
     syscall_num: u32,
@@ -786,7 +786,7 @@ pub unsafe fn nt_delay_execution(
     }
 }
 
-/// Wrapper: NtQueryVirtualMemory — query memory region information.
+/// Wrapper: NtQueryVirtualMemory -- query memory region information.
 /// (6 args: ProcessHandle, BaseAddress, MemoryInformationClass,
 ///  MemoryInformation, MemoryInformationLength, ReturnLength)
 #[cfg(target_os = "windows")]
@@ -814,7 +814,7 @@ pub unsafe fn nt_query_virtual_memory(
     }
 }
 
-// ─── Safe-ish convenience wrappers (resolve + execute) ─────────────
+// --- Safe-ish convenience wrappers (resolve + execute) -------------
 
 /// Resolve syscall numbers and allocate a dynamic stub for the given syscall name.
 /// Returns `(syscall_number, DynamicSyscallStub)`.
@@ -849,7 +849,7 @@ pub fn prepare_syscall_stub(_name: &str) -> Option<(u32, DynamicSyscallStub)> {
     None
 }
 
-// ─── NTSTATUS message table ────────────────────────────────────────
+// --- NTSTATUS message table ----------------------------------------
 
 fn ntstatus_to_message(code: u32) -> &'static str {
     match code {
@@ -888,7 +888,7 @@ fn ntstatus_to_message(code: u32) -> &'static str {
     }
 }
 
-// ─── Tests ─────────────────────────────────────────────────────────
+// --- Tests ---------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

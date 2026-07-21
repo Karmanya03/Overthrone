@@ -1,12 +1,12 @@
-//! Kerberos Username Enumeration — Zero-knowledge user discovery via AS-REQ probes.
+//! Kerberos Username Enumeration -- Zero-knowledge user discovery via AS-REQ probes.
 //!
 //! Sends AS-REQ without pre-authentication data for each candidate username.
 //! The KDC error code reveals whether the account exists:
-//! - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  → user does NOT exist
-//! - `KDC_ERR_PREAUTH_REQUIRED` (25)    → user EXISTS
-//! - Full AS-REP                        → user EXISTS + no pre-auth (hash auto-captured)
+//! - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  -> user does NOT exist
+//! - `KDC_ERR_PREAUTH_REQUIRED` (25)    -> user EXISTS
+//! - Full AS-REP                        -> user EXISTS + no pre-auth (hash auto-captured)
 //!
-//! This is the #1 technique for zero-knowledge AD engagements — no credentials required.
+//! This is the #1 technique for zero-knowledge AD engagements -- no credentials required.
 
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -18,9 +18,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 const EMBEDDED_USERLIST: &str = r#"# Common AD usernames and service accounts
 administrator
@@ -218,9 +218,9 @@ async fn load_usernames(userlist_path: &Path) -> Result<(Vec<String>, String)> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserEnumResult {
@@ -246,12 +246,12 @@ pub struct AsRepCapture {
     pub hash_string: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Run Kerberos username enumeration against the target DC.
-/// No credentials required — uses only AS-REQ error code analysis.
+/// No credentials required -- uses only AS-REQ error code analysis.
 ///
 /// Supports checkpoint/resume: when `uc.resume` is true, loads existing checkpoint
 /// and skips already-processed users. Processes in chunks for periodic checkpointing.
@@ -262,7 +262,7 @@ pub async fn run(
     uc: &UserEnumConfig,
     _jitter_ms: u64,
 ) -> Result<UserEnumResult> {
-    info!("{}", "═══ KERBEROS USER ENUMERATION ═══".bold().magenta());
+    info!("{}", "=== KERBEROS USER ENUMERATION ===".bold().magenta());
 
     // Load username wordlist (fallback to embedded list if default is missing)
     let (usernames, source) = load_usernames(&uc.userlist).await?;
@@ -285,7 +285,7 @@ pub async fn run(
         source
     );
 
-    // ── Checkpoint setup ──────────────────────────────────────────
+    // -- Checkpoint setup ------------------------------------------
     let ckpt_path = uc.checkpoint_path.clone().unwrap_or_else(|| {
         overthrone_core::checkpoint::checkpoint_path(None, "user-enum", domain, dc_ip)
     });
@@ -299,7 +299,7 @@ pub async fn run(
     let to_process: Vec<&str> = if resume {
         let pending = ckpt.pending(&usernames);
         if pending.is_empty() {
-            info!("All users already processed in prior session — reusing results.");
+            info!("All users already processed in prior session -- reusing results.");
         } else {
             info!(
                 "{} users remain, skipping {} already processed",
@@ -312,7 +312,7 @@ pub async fn run(
         usernames.iter().map(|s| s.as_str()).collect()
     };
 
-    // ── Progress bar ───────────────────────────────────────────────
+    // -- Progress bar -----------------------------------------------
     let pb = ProgressBar::new(usernames.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -325,7 +325,7 @@ pub async fn run(
     );
     pb.set_position(ckpt.processed_count() as u64);
 
-    // ── Process in chunks ──────────────────────────────────────────
+    // -- Process in chunks ------------------------------------------
     const CHUNK_SIZE: usize = 50;
     let mut valid_users: Vec<String> = Vec::new();
     let mut no_preauth_users: Vec<AsRepCapture> = Vec::new();
@@ -363,8 +363,8 @@ pub async fn run(
                     ckpt.record(username, "valid", None);
                     if uc.live_output {
                         println!(
-                            "  {} {} — {}",
-                            "✓".green(),
+                            "  {} {} -- {}",
+                            "[+]".green(),
                             username.bold().green(),
                             "VALID".green()
                         );
@@ -380,8 +380,8 @@ pub async fn run(
                     ckpt.record(username, "no_preauth", Some(hash_str.clone()));
                     if uc.live_output {
                         println!(
-                            "  {} {} — {} (hash captured)",
-                            "★".bright_yellow(),
+                            "  {} {} -- {} (hash captured)",
+                            "*".bright_yellow(),
                             username.bold().bright_yellow(),
                             "VALID + NO PREAUTH".bright_yellow()
                         );
@@ -392,8 +392,8 @@ pub async fn run(
                     ckpt.record(username, "disabled", None);
                     if uc.live_output {
                         println!(
-                            "  {} {} — {}",
-                            "⚠".yellow(),
+                            "  {} {} -- {}",
+                            "[!]".yellow(),
                             username.bold().yellow(),
                             "DISABLED".yellow()
                         );
@@ -419,7 +419,7 @@ pub async fn run(
     pb.finish_with_message("done");
     ckpt.save();
 
-    // ── Save results ───────────────────────────────────────────────
+    // -- Save results -----------------------------------------------
     let loot_dir = PathBuf::from("./loot");
     let _ = tokio::fs::create_dir_all(&loot_dir).await;
 
@@ -459,33 +459,33 @@ pub async fn run(
         debug!("Checkpoint file removed after successful completion");
     }
 
-    // ── Summary ────────────────────────────────────────────────────
-    println!("\n{}", "═══ USER ENUMERATION RESULTS ═══".bold().cyan());
+    // -- Summary ----------------------------------------------------
+    println!("\n{}", "=== USER ENUMERATION RESULTS ===".bold().cyan());
     println!(
         "  {} Valid users:       {}",
-        "✓".green(),
+        "[+]".green(),
         valid_users.len().to_string().bold().green()
     );
     if !no_preauth_users.is_empty() {
         println!(
             "  {} No pre-auth (hash): {}",
-            "★".bright_yellow(),
+            "*".bright_yellow(),
             no_preauth_users.len().to_string().bold().bright_yellow()
         );
     }
     if !disabled_users.is_empty() {
         println!(
             "  {} Disabled accounts:  {}",
-            "⚠".yellow(),
+            "[!]".yellow(),
             disabled_users.len().to_string().bold()
         );
     }
-    println!("  {} Not found:         {}", "✗".dimmed(), not_found);
-    println!("  {} Total tested:      {}", "→".cyan(), usernames.len());
+    println!("  {} Not found:         {}", "[-]".dimmed(), not_found);
+    println!("  {} Total tested:      {}", "->".cyan(), usernames.len());
     if !errors.is_empty() {
-        println!("  {} Errors:            {}", "⚠".red(), errors.len());
+        println!("  {} Errors:            {}", "[!]".red(), errors.len());
     }
-    println!("{}\n", "════════════════════════════════".cyan());
+    println!("{}\n", "================================".cyan());
 
     Ok(UserEnumResult {
         valid_users,

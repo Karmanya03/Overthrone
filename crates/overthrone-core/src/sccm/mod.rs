@@ -403,7 +403,7 @@ impl SccmScanner {
                                 );
 
                                 info!(
-                                    "🔑 Decrypted Network Access Account: {}\\{}",
+                                    " Decrypted Network Access Account: {}\\{}",
                                     self.config.domain, username
                                 );
                                 naas.push(NaaCredential {

@@ -40,7 +40,7 @@ impl ReaperConfig {
     }
     /// Function
     pub fn base_dn_from_domain(domain: &str) -> String {
-        // Handle both FQDN (corp.local → DC=corp,DC=local) and NetBIOS-style names.
+        // Handle both FQDN (corp.local -> DC=corp,DC=local) and NetBIOS-style names.
         // If the domain contains no dot it is treated as a single DC component.
         if domain.contains('.') {
             domain
@@ -49,7 +49,7 @@ impl ReaperConfig {
                 .collect::<Vec<_>>()
                 .join(",")
         } else {
-            // NetBIOS name (e.g. CORP) — use as a single DC component
+            // NetBIOS name (e.g. CORP) -- use as a single DC component
             format!("DC={domain}")
         }
     }
@@ -146,7 +146,7 @@ const MODULES: &[&str] = &[
 
 pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     let active: Vec<&&str> = MODULES.iter().filter(|m| config.should_run(m)).collect();
-    let separator = "═══════════════════════════════════════════════";
+    let separator = "===============================================";
 
     println!("\n{}", separator.bright_red());
     println!(
@@ -163,7 +163,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
             "{prefix:.red.bold} [{bar:40.red/dark_gray}] {pos}/{len} {msg}",
         )
         .map_err(|e| OverthroneError::Custom(format!("Progress bar template error: {e}")))?
-        .progress_chars("━╸─"),
+        .progress_chars("=+-"),
     );
     pb.set_prefix("REAPER");
 
@@ -199,17 +199,17 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                         result.$field = data;
                         let count_str = count.to_string();
                         pb.println(format!(
-                            "  {} {} → {} found",
-                            "✓".green().bold(),
+                            "  {} {} -> {} found",
+                            "[+]".green().bold(),
                             $name.bright_white(),
                             count_str.as_str().bright_green()
                         ));
-                        info!("[reaper] {} → {count} entries", $name);
+                        info!("[reaper] {} -> {count} entries", $name);
                     }
                     Err(OverthroneError::NotImplemented { .. }) => {
                         pb.println(format!(
-                            "  {} {} → {}",
-                            "○".dimmed(),
+                            "  {} {} -> {}",
+                            "o".dimmed(),
                             $name.dimmed(),
                             "stub (not yet wired)".dimmed()
                         ));
@@ -217,8 +217,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                     Err(e) => {
                         let err_str = format!("{e}");
                         pb.println(format!(
-                            "  {} {} → {}",
-                            "✗".red().bold(),
+                            "  {} {} -> {}",
+                            "[-]".red().bold(),
                             $name.bright_white(),
                             err_str.as_str().red()
                         ));
@@ -277,18 +277,18 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
                 result.policy = Some(data);
                 let count_str = count.to_string();
                 pb.println(format!(
-                    "  {} {} → {} found",
-                    "✓".green().bold(),
+                    "  {} {} -> {} found",
+                    "[+]".green().bold(),
                     "policy".bright_white(),
                     count_str.as_str().bright_green()
                 ));
-                info!("[reaper] policy → {count} entries");
+                info!("[reaper] policy -> {count} entries");
             }
             Err(e) => {
                 let err_str = format!("{e}");
                 pb.println(format!(
-                    "  {} {} → {}",
-                    "✗".red().bold(),
+                    "  {} {} -> {}",
+                    "[-]".red().bold(),
                     "policy".bright_white(),
                     err_str.as_str().red()
                 ));
@@ -313,8 +313,8 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
         if let Ok(data) = powerview::run_powerview(config).await {
             result.powerview_results = Some(data);
             pb.println(format!(
-                "  {} {} → detailed AD info",
-                "✓".green().bold(),
+                "  {} {} -> detailed AD info",
+                "[+]".green().bold(),
                 "powerview"
             ));
         }
@@ -332,7 +332,7 @@ pub async fn run_reaper(config: &ReaperConfig) -> Result<ReaperResult> {
     let d = result.delegations.len().to_string();
     let a = result.acl_findings.len().to_string();
 
-    println!("\n{}", "─── Summary ───".bright_red());
+    println!("\n{}", "--- Summary ---".bright_red());
     println!(
         "  Users: {}  Groups: {}  Computers: {}",
         u.as_str().bright_green(),
@@ -380,8 +380,8 @@ mod tests {
     #[test]
     fn test_ldap_connect_dispatches_on_nt_hash() {
         // ldap_connect branches on nt_hash:
-        //   Some(hash) → LdapSession::connect_with_hash(..., use_ssl)
-        //   None       → LdapSession::connect(..., use_ssl)
+        //   Some(hash) -> LdapSession::connect_with_hash(..., use_ssl)
+        //   None       -> LdapSession::connect(..., use_ssl)
         // Both paths receive `use_ldaps` as the `use_ssl` argument.
         // We verify both config shapes are constructible and the flag is set.
 

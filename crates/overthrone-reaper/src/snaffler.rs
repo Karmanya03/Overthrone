@@ -100,7 +100,7 @@ impl Snaffler {
     pub fn with_config(config: ReaperConfig, snaffler_config: SnafflerConfig) -> Self {
         let patterns = vec![
             // ==========================================================
-            // CRITICAL (Severity 1) — Passwords, private keys, secrets
+            // CRITICAL (Severity 1) -- Passwords, private keys, secrets
             // ==========================================================
             SnafflePattern {
                 extension: Some("pfx".to_string()),
@@ -211,7 +211,7 @@ impl Snaffler {
                 severity: 1,
             },
             // ==========================================================
-            // HIGH (Severity 2) — Configs, scripts, deployment files
+            // HIGH (Severity 2) -- Configs, scripts, deployment files
             // ==========================================================
             SnafflePattern {
                 extension: Some("xml".to_string()),
@@ -334,7 +334,7 @@ impl Snaffler {
                 severity: 2,
             },
             // ==========================================================
-            // MEDIUM (Severity 3) — Data, backups, logs, configs
+            // MEDIUM (Severity 3) -- Data, backups, logs, configs
             // ==========================================================
             SnafflePattern {
                 extension: Some("bak".to_string()),

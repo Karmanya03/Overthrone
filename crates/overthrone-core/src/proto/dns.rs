@@ -14,9 +14,9 @@ use hickory_resolver::proto::rr::RData;
 use std::net::IpAddr;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Well-known AD SRV service prefixes
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// SRV prefix for LDAP domain controllers
 pub const SRV_LDAP_DC: &str = "_ldap._tcp.dc._msdcs";
@@ -44,9 +44,9 @@ pub struct SrvRecord {
     pub ips: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
-//  DnsResolver — cached resolver with optional custom DNS
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  DnsResolver -- cached resolver with optional custom DNS
+// ===========================================================
 
 /// DNS resolver that caches the underlying hickory-resolver instance and
 /// optionally targets one or more custom nameservers with rotation support.
@@ -157,9 +157,9 @@ impl DnsResolver {
         Ok(())
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     //  SRV queries
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Generic SRV lookup. Returns a list of [`SrvRecord`] with resolved IPs.
     pub async fn lookup_srv(&self, query_name: &str) -> Result<Vec<SrvRecord>> {
@@ -261,9 +261,9 @@ impl DnsResolver {
         Ok(map)
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     //  A / AAAA / PTR
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Resolve a hostname to IP addresses (A + AAAA records).
     pub async fn resolve_hostname(&self, hostname: &str) -> Result<Vec<String>> {
@@ -277,11 +277,11 @@ impl DnsResolver {
                 })?;
 
         let ips: Vec<String> = response.iter().map(|a: IpAddr| a.to_string()).collect();
-        debug!("Resolved {hostname} → {ips:?}");
+        debug!("Resolved {hostname} -> {ips:?}");
         Ok(ips)
     }
 
-    /// Reverse DNS lookup: IP → hostname (PTR record).
+    /// Reverse DNS lookup: IP -> hostname (PTR record).
     pub async fn reverse_lookup(&self, ip: &str) -> Result<String> {
         let addr: IpAddr = ip.parse().map_err(|_| OverthroneError::Dns {
             target: ip.to_string(),
@@ -309,13 +309,13 @@ impl DnsResolver {
                 reason: "No PTR record found".to_string(),
             })?;
 
-        debug!("Reverse lookup: {ip} → {hostname}");
+        debug!("Reverse lookup: {ip} -> {hostname}");
         Ok(hostname)
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     //  Zone transfer (AXFR)
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Attempt a DNS zone transfer (AXFR) against the configured nameserver.
     /// Most production DNS servers refuse AXFR to unauthorized clients, so a
@@ -365,7 +365,7 @@ impl DnsResolver {
             match self.resolver.lookup_ip(&fqdn).await {
                 Ok(resp) => {
                     for ip in resp.iter() {
-                        let entry = format!("{fqdn} → {ip}");
+                        let entry = format!("{fqdn} -> {ip}");
                         debug!("Zone enum hit: {entry}");
                         records.push(entry);
                     }
@@ -387,9 +387,9 @@ impl DnsResolver {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Free-function wrappers (backward compat)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build a resolver using default system config (legacy helper).
 #[allow(dead_code)] // Legacy helper kept for backward compat
@@ -417,7 +417,7 @@ pub async fn resolve_hostname(hostname: &str) -> Result<Vec<String>> {
     resolver.resolve_hostname(hostname).await
 }
 
-/// Reverse DNS lookup: IP → hostname.
+/// Reverse DNS lookup: IP -> hostname.
 pub async fn reverse_lookup(ip: &str) -> Result<String> {
     let resolver = DnsResolver::system()?;
     resolver.reverse_lookup(ip).await

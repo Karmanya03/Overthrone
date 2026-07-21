@@ -1,4 +1,4 @@
-//! ESC8 — NTLM Relay to ADCS Web Enrollment
+//! ESC8 -- NTLM Relay to ADCS Web Enrollment
 //!
 //! When ADCS Web Enrollment is exposed over HTTP (not HTTPS-only)
 //! and doesn't enforce EPA (Extended Protection for Authentication),
@@ -12,14 +12,14 @@
 //!
 //! The actual relay listener lives in overthrone-hunter's relay module.
 //!
-//! Reference: SpecterOps "Certified Pre-Owned" — ESC8
+//! Reference: SpecterOps "Certified Pre-Owned" -- ESC8
 
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // ESC8 Relay Target
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Target configuration for ESC8 NTLM relay attack
 #[derive(Debug, Clone)]
@@ -64,9 +64,9 @@ impl Esc8RelayTarget {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // ESC8 Attack Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for an ESC8 relay attack
 pub struct Esc8AttackConfig {
@@ -257,9 +257,9 @@ impl Esc8AttackConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of endpoint reachability check
 #[derive(Debug, Clone)]
@@ -283,7 +283,7 @@ impl std::fmt::Display for EndpointCheckResult {
             writeln!(f, "    Status: {}", self.status_code)?;
             writeln!(f, "    NTLM: enabled, EPA: not enforced")?;
         } else {
-            writeln!(f, "[✓] {} — Not vulnerable to ESC8", self.url)?;
+            writeln!(f, "[[+]] {} -- Not vulnerable to ESC8", self.url)?;
             writeln!(
                 f,
                 "    Status: {}, NTLM: {}, EPA: {}",
@@ -294,9 +294,9 @@ impl std::fmt::Display for EndpointCheckResult {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

@@ -562,9 +562,9 @@ async fn export_bloodhound_v4(result: &ReaperResult, base: &Path) -> Result<()> 
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // BloodHound Edge-Type Coverage Validation
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Known BloodHound v4 edge types (ACE rights).
 /// This is the canonical list from the BloodHound Community Edition

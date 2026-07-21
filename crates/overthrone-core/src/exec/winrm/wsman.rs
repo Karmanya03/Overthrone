@@ -26,7 +26,7 @@ pub struct WinRmExecutor {
     pub(super) use_ssl: bool,
     pub(super) port: u16,
     /// Accept self-signed / untrusted certificates.  Only set by callers that
-    /// explicitly pass `--insecure` — never enabled by default.
+    /// explicitly pass `--insecure` -- never enabled by default.
     pub(super) insecure_ssl: bool,
 }
 

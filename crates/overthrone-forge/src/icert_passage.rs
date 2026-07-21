@@ -1,4 +1,4 @@
-//! ICertPassage RPC client — direct CA enrollment over `\PIPE\cert`.
+//! ICertPassage RPC client -- direct CA enrollment over `\PIPE\cert`.
 //!
 //! Implements the MS-ICPR `ICertPassage` interface (UUID `91ae6020-9e3c-11cf-8d7c-00aa00c091be`)
 //! for submitting PKCS#10 certificate requests and collecting responses.
@@ -79,19 +79,19 @@ impl<'a> RequestClient<'a> {
         // NDR stub:
         let mut stub = Vec::new();
 
-        // Context handle (20 bytes — zeros for first call)
+        // Context handle (20 bytes -- zeros for first call)
         stub.extend_from_slice(&[0u8; 20]);
 
-        // pwszAuthority — CA name as conformant string
+        // pwszAuthority -- CA name as conformant string
         stub.extend_from_slice(&ndr_conformant_string(ca_name));
 
-        // dwFlags — 0
+        // dwFlags -- 0
         stub.extend_from_slice(&0u32.to_le_bytes());
 
-        // dwRequestIdOffset — 0
+        // dwRequestIdOffset -- 0
         stub.extend_from_slice(&0u32.to_le_bytes());
 
-        // pctbRequestIn — CERTTRANSBLOB containing the CSR
+        // pctbRequestIn -- CERTTRANSBLOB containing the CSR
         let count = csr_der.len() as u32;
         stub.extend_from_slice(&count.to_le_bytes());
         stub.extend_from_slice(&0x00020004u32.to_le_bytes());
@@ -103,10 +103,10 @@ impl<'a> RequestClient<'a> {
         stub.extend_from_slice(&count.to_le_bytes());
         stub.extend_from_slice(csr_der);
 
-        // pwszAttributes — empty conformant string
+        // pwszAttributes -- empty conformant string
         stub.extend_from_slice(&ndr_conformant_string(""));
 
-        // pwszRequestSubject — subject conformant string
+        // pwszRequestSubject -- subject conformant string
         stub.extend_from_slice(&ndr_conformant_string(subject));
 
         // Output argument placeholders

@@ -1,8 +1,8 @@
-//! Attack planner — Build ordered attack plans from the current
+//! Attack planner -- Build ordered attack plans from the current
 //! engagement state toward a goal using a scoring/priority system.
 //!
 //! The planner evaluates what's known, what's been tried, and what
-//! attack paths remain viable — then produces an ordered plan.
+//! attack paths remain viable -- then produces an ordered plan.
 
 use crate::goals::{AttackGoal, EngagementState};
 use crate::playbook::PlaybookId;
@@ -11,9 +11,9 @@ use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Plan Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// An ordered sequence of attack steps to reach the goal
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ mod tests {
         EngagementState::new()
     }
 
-    // ── Basic plan generation ──
+    // -- Basic plan generation --
 
     #[test]
     fn user_enum_uses_embedded_fallback_when_no_userlist_is_provided() {
@@ -196,7 +196,7 @@ mod tests {
         }
     }
 
-    // ── Goal descriptions ──
+    // -- Goal descriptions --
 
     #[test]
     fn goal_describe_returns_readable_string() {
@@ -291,7 +291,7 @@ pub enum CompensationAction {
 /// Specific action the executor should perform
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlannedAction {
-    // ── Recon ──
+    // -- Recon --
     /// `EnumerateUsers` variant
     EnumerateUsers,
     /// `EnumerateComputers` variant
@@ -335,7 +335,7 @@ pub enum PlannedAction {
     /// `StealthDelegationProbe` variant
     StealthDelegationProbe,
 
-    // ── Kerberos Attacks ──
+    // -- Kerberos Attacks --
     /// `` variant
     AsRepRoast {
         /// users field
@@ -368,7 +368,7 @@ pub enum PlannedAction {
         target: String,
     },
 
-    // ── Credential Attacks ──
+    // -- Credential Attacks --
     /// `` variant
     PasswordSpray {
         /// users field
@@ -382,7 +382,7 @@ pub enum PlannedAction {
         hashes: Vec<String>,
     },
 
-    // ── Lateral Movement ──
+    // -- Lateral Movement --
     /// `` variant
     ExecCommand {
         /// Target domain FQDN
@@ -421,7 +421,7 @@ pub enum PlannedAction {
         command: String,
     },
 
-    // ── Credential Dumping ──
+    // -- Credential Dumping --
     /// `` variant
     DumpSam {
         /// Target domain FQDN
@@ -448,7 +448,7 @@ pub enum PlannedAction {
         target_user: Option<String>,
     },
 
-    // ── Coercion ──
+    // -- Coercion --
     /// `` variant
     Coerce {
         /// Target domain FQDN
@@ -457,7 +457,7 @@ pub enum PlannedAction {
         listener: String,
     },
 
-    // ── ADCS ──
+    // -- ADCS --
     /// `AdcsEnumerate` variant
     AdcsEnumerate,
     /// `` variant
@@ -592,7 +592,7 @@ pub enum PlannedAction {
         target_upn: String,
     },
 
-    // ── Persistence ──
+    // -- Persistence --
     /// `` variant
     ForgeGoldenTicket {
         /// Hash value
@@ -613,14 +613,14 @@ pub enum PlannedAction {
         master_password: String,
     },
 
-    // ── Playbook ──
+    // -- Playbook --
     /// `` variant
     RunPlaybook {
         /// Stable unique identifier.
         playbook_id: PlaybookId,
     },
 
-    // ── Utility ──
+    // -- Utility --
     /// `` variant
     Sleep {
         /// seconds field
@@ -1009,7 +1009,7 @@ pub enum NoiseLevel {
     Medium,
     /// Password spraying, mass scanning, obvious attack patterns
     High,
-    /// NTDS dump, DC replication, golden ticket — very loud
+    /// NTDS dump, DC replication, golden ticket -- very loud
     Critical,
 }
 
@@ -1025,9 +1025,9 @@ impl std::fmt::Display for NoiseLevel {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // OPSEC-Aware Cost/Benefit Profile
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// OPSEC profile for cost/benefit analysis of noisy operations.
 /// Determines whether a noisy step is worth the risk based on
@@ -1150,9 +1150,9 @@ impl OpsecDecision {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Multi-DC Targeting
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for targeting multiple domain controllers.
 /// Allows the planner to distribute operations across DCs
@@ -1230,11 +1230,11 @@ impl MultiDcConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Planner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// The attack planner — builds plans from state + goal
+/// The attack planner -- builds plans from state + goal
 pub struct Planner {
     stealth: bool,
     max_noise: NoiseLevel,
@@ -1329,7 +1329,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 1: Recon (always needed if state is empty) ──
+        // -- Phase 1: Recon (always needed if state is empty) --
         if state.users.is_empty() {
             if ldap_available {
                 if failed("enumerate_users") {
@@ -1353,7 +1353,7 @@ impl Planner {
                     });
                 }
             } else {
-                // LDAP unavailable — use Kerberos user enumeration as primary recon
+                // LDAP unavailable -- use Kerberos user enumeration as primary recon
                 if !failed("user_enum") {
                     steps.push(PlanStep {
                         id: next_id(),
@@ -1438,7 +1438,7 @@ impl Planner {
             });
         }
 
-        // ── Phase 1b: Extended Recon (trusts, GPOs, shares) ──
+        // -- Phase 1b: Extended Recon (trusts, GPOs, shares) --
         // These give the planner and Q-learner richer state for decision-making.
 
         if ldap_available && state.password_policy.is_none() && !failed("enumerate_password_policy")
@@ -1566,7 +1566,7 @@ impl Planner {
             return self.finalize_plan(goal, steps);
         }
 
-        // ── Phase 2: Kerberos Attacks (low noise, high reward) ──
+        // -- Phase 2: Kerberos Attacks (low noise, high reward) --
         let recon_dep = steps.first().map(|s| s.id.clone()).unwrap_or_default();
 
         if !failed("kerberoast")
@@ -1576,7 +1576,7 @@ impl Planner {
             let kerb_id = next_id();
             steps.push(PlanStep {
                 id: kerb_id.clone(),
-                description: "Kerberoast — extract TGS hashes for offline cracking".to_string(),
+                description: "Kerberoast -- extract TGS hashes for offline cracking".to_string(),
                 stage: Stage::Attack,
                 action: PlannedAction::Kerberoast { spns: vec![] },
                 priority: 90,
@@ -1602,7 +1602,7 @@ impl Planner {
         {
             steps.push(PlanStep {
                 id: next_id(),
-                description: "AS-REP Roast — extract hashes for no-preauth accounts".to_string(),
+                description: "AS-REP Roast -- extract hashes for no-preauth accounts".to_string(),
                 stage: Stage::Attack,
                 action: PlannedAction::AsRepRoast { users: vec![] },
                 priority: 88,
@@ -1622,7 +1622,7 @@ impl Planner {
             });
         }
 
-        // ── Phase 2.1: Inline Hash Cracking (if we have captured roast hashes) ──
+        // -- Phase 2.1: Inline Hash Cracking (if we have captured roast hashes) --
         if !state.roast_hashes.is_empty() && !failed("crack_hashes") {
             let hashes: Vec<String> = state.roast_hashes.clone();
             steps.push(PlanStep {
@@ -1646,7 +1646,7 @@ impl Planner {
             });
         }
 
-        // ── Phase 2.2: Password Spray (if we have a user list but few creds) ──
+        // -- Phase 2.2: Password Spray (if we have a user list but few creds) --
         if !state.users.is_empty()
             && state.credentials.len() <= 1
             && !failed("password_spray")
@@ -1686,12 +1686,12 @@ impl Planner {
             }
         }
 
-        // ── Phase 2.5: ADCS Certificate Abuse ──
+        // -- Phase 2.5: ADCS Certificate Abuse --
         if ldap_available && !failed("adcs_enum") {
             let adcs_enum_id = next_id();
             steps.push(PlanStep {
                 id: adcs_enum_id.clone(),
-                description: "ADCS — enumerate certificate templates & CAs".to_string(),
+                description: "ADCS -- enumerate certificate templates & CAs".to_string(),
                 stage: Stage::Attack,
                 action: PlannedAction::AdcsEnumerate,
                 priority: 87,
@@ -1710,11 +1710,11 @@ impl Planner {
                 parallel_safe: false,
             });
 
-            // ESC1 — enrollee supplies SAN (most common ADCS vuln)
+            // ESC1 -- enrollee supplies SAN (most common ADCS vuln)
             if !failed("adcs_esc1") {
                 steps.push(PlanStep {
                     id: next_id(),
-                    description: "ADCS ESC1 — request cert with arbitrary SAN for impersonation"
+                    description: "ADCS ESC1 -- request cert with arbitrary SAN for impersonation"
                         .to_string(),
                     stage: Stage::Attack,
                     action: PlannedAction::AdcsEsc1 {
@@ -1735,11 +1735,11 @@ impl Planner {
                 });
             }
 
-            // ESC4 — writable template → make it ESC1-vulnerable
+            // ESC4 -- writable template -> make it ESC1-vulnerable
             if !failed("adcs_esc4") {
                 steps.push(PlanStep {
                     id: next_id(),
-                    description: "ADCS ESC4 — modify writable template then exploit as ESC1"
+                    description: "ADCS ESC4 -- modify writable template then exploit as ESC1"
                         .to_string(),
                     stage: Stage::Attack,
                     action: PlannedAction::AdcsEsc4 {
@@ -1758,12 +1758,12 @@ impl Planner {
                 });
             }
 
-            // ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 on CA
+            // ESC6 -- EDITF_ATTRIBUTESUBJECTALTNAME2 on CA
             if !failed("adcs_esc6") {
                 steps.push(PlanStep {
                     id: next_id(),
                     description:
-                        "ADCS ESC6 — abuse EDITF_ATTRIBUTESUBJECTALTNAME2 for SAN injection"
+                        "ADCS ESC6 -- abuse EDITF_ATTRIBUTESUBJECTALTNAME2 for SAN injection"
                             .to_string(),
                     stage: Stage::Attack,
                     action: PlannedAction::AdcsEsc6 {
@@ -1944,7 +1944,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 3: Delegation Abuse ──
+        // -- Phase 3: Delegation Abuse --
         if !failed("constrained_delegation") {
             for delegation in &state.constrained_delegation {
                 let target_spn = delegation.targets.first().cloned().unwrap_or_default();
@@ -2006,7 +2006,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 4: Admin Access Check ──
+        // -- Phase 4: Admin Access Check --
         if !state.computers.is_empty() && state.admin_hosts.is_empty() {
             let targets: Vec<String> = state
                 .computers
@@ -2033,7 +2033,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 4.5: RBCD Attack (if we have a controlled computer & write access) ──
+        // -- Phase 4.5: RBCD Attack (if we have a controlled computer & write access) --
         if !state.rbcd_targets.is_empty() && !failed("rbcd") {
             for target in &state.rbcd_targets {
                 // Use the first discovered computer we control (or our own machine account)
@@ -2046,7 +2046,7 @@ impl Planner {
                 if !controlled.is_empty() {
                     steps.push(PlanStep {
                         id: next_id(),
-                        description: format!("RBCD: {} → {}", controlled, target),
+                        description: format!("RBCD: {} -> {}", controlled, target),
                         stage: Stage::Attack,
                         action: PlannedAction::RbcdAttack {
                             controlled: controlled.clone(),
@@ -2067,7 +2067,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 5: Lateral Movement (if we have admin creds) ──
+        // -- Phase 5: Lateral Movement (if we have admin creds) --
         if state.has_any_admin() && !state.admin_hosts.is_empty() {
             // Try to reach a DC
             if let Some(dc) = state.computers.iter().find(|c| c.is_dc) {
@@ -2100,7 +2100,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 6: Credential Dumping (escalation path) ──
+        // -- Phase 6: Credential Dumping (escalation path) --
         if goal.requires_da() && !state.has_domain_admin {
             // If we have admin on any host, try dumping SAM/LSA for more creds
             for host in &state.admin_hosts {
@@ -2147,7 +2147,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 6.5: Credential Reuse — re-check admin with new creds ──
+        // -- Phase 6.5: Credential Reuse -- re-check admin with new creds --
         // If we obtained credentials from dumps/cracking, try them against
         // all known computers to expand access before going for DCSync.
         if !state.credentials.is_empty() && !state.has_domain_admin {
@@ -2161,7 +2161,7 @@ impl Planner {
                 steps.push(PlanStep {
                     id: next_id(),
                     description: format!(
-                        "Credential reuse — re-check {} hosts with dumped creds",
+                        "Credential reuse -- re-check {} hosts with dumped creds",
                         unchecked.len()
                     ),
                     stage: Stage::Lateral,
@@ -2180,7 +2180,7 @@ impl Planner {
             }
         }
 
-        // ── Phase 7: DCSync / NTDS Dump (final goal) ──
+        // -- Phase 7: DCSync / NTDS Dump (final goal) --
         if state.has_domain_admin
             && matches!(
                 goal,
@@ -2195,7 +2195,7 @@ impl Planner {
 
             steps.push(PlanStep {
                 id: next_id(),
-                description: "DCSync — replicate credentials".to_string(),
+                description: "DCSync -- replicate credentials".to_string(),
                 stage: Stage::Loot,
                 action: PlannedAction::DcsSync { target_user: None },
                 priority: 60,
@@ -2211,7 +2211,7 @@ impl Planner {
             });
         }
 
-        // ── Phase 8: Coercion (if other paths blocked) ──
+        // -- Phase 8: Coercion (if other paths blocked) --
         if !state.has_domain_admin
             && !state.unconstrained_delegation.is_empty()
             && !failed("coerce")
@@ -2292,7 +2292,7 @@ impl Planner {
 
     /// Pretty-print the plan
     fn print_plan(&self, plan: &AttackPlan) {
-        println!("\n{}", "═══ ATTACK PLAN ═══".bold().blue());
+        println!("\n{}", "=== ATTACK PLAN ===".bold().blue());
         println!("  Goal:  {}", plan.goal.bold());
         println!("  Steps: {}", plan.steps.len());
         println!("  Noise: {}", plan.estimated_noise);
@@ -2316,6 +2316,6 @@ impl Planner {
                 step.priority
             );
         }
-        println!("{}\n", "═══════════════════".blue());
+        println!("{}\n", "===================".blue());
     }
 }

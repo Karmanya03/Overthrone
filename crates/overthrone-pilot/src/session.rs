@@ -1,4 +1,4 @@
-//! Session persistence — save and restore EngagementState to/from disk.
+//! Session persistence -- save and restore EngagementState to/from disk.
 //!
 //! Saves engagement state as JSON to `~/.overthrone/sessions/<name>.json`
 //! allowing interrupted runs to be resumed without re-doing recon/attack steps.
@@ -69,7 +69,7 @@ pub fn load_session(path: &Path) -> Result<EngagementState, String> {
 }
 
 /// Build a session file path for a given engagement name.
-/// E.g. `session_path("corp.local")` → `~/.overthrone/sessions/corp.local.json`
+/// E.g. `session_path("corp.local")` -> `~/.overthrone/sessions/corp.local.json`
 pub fn session_path(name: &str) -> PathBuf {
     // Sanitize name to avoid path traversal
     let safe_name: String = name
@@ -175,7 +175,7 @@ mod tests {
         // Path traversal attempt: / replaced with _
         let path = session_path("../evil");
         let filename = path.file_name().unwrap().to_string_lossy();
-        // Slash replaced with underscore — no new path components introduced
+        // Slash replaced with underscore -- no new path components introduced
         assert_eq!(filename, ".._evil.json");
         // The joined path should not go up directories
         let parent = path.parent().unwrap();

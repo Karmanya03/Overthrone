@@ -58,7 +58,7 @@ pub fn generate_xlsx_report(session: &EngagementSession, output_path: &Path) -> 
     let mut workbook = Workbook::new();
     let hdr = header_format();
 
-    // ── Sheet 1: Summary ──
+    // -- Sheet 1: Summary --
     {
         let ws = workbook.add_worksheet();
         ws.set_name("Summary")?;
@@ -76,7 +76,7 @@ pub fn generate_xlsx_report(session: &EngagementSession, output_path: &Path) -> 
         }
     }
 
-    // ── Sheet 2: Findings ──
+    // -- Sheet 2: Findings --
     {
         let ws = workbook.add_worksheet();
         ws.set_name("Findings")?;
@@ -129,7 +129,7 @@ pub fn generate_xlsx_report(session: &EngagementSession, output_path: &Path) -> 
         }
     }
 
-    // ── Sheets 3-8 (require engagement_state) ──
+    // -- Sheets 3-8 (require engagement_state) --
     if let Some(ref state) = session.engagement_state {
         let domain = state.domain.as_deref().unwrap_or("");
 
@@ -495,7 +495,7 @@ pub fn generate_xlsx_report(session: &EngagementSession, output_path: &Path) -> 
         }
     }
 
-    // ── Sheet 9: Remediation ──
+    // -- Sheet 9: Remediation --
     {
         let ws = workbook.add_worksheet();
         ws.set_name("Remediation")?;
@@ -541,7 +541,7 @@ pub fn generate_xlsx_report(session: &EngagementSession, output_path: &Path) -> 
         }
     }
 
-    // ── Sheet 10: MITRE ATT&CK ──
+    // -- Sheet 10: MITRE ATT&CK --
     {
         let ws = workbook.add_worksheet();
         ws.set_name("MITRE ATT&CK")?;

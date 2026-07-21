@@ -16,9 +16,9 @@ use tracing::{debug, info};
 // Re-use SMB2's NTLMSSP Type3 builder which includes the MIC field
 use crate::proto::smb2::{build_ntlmssp_authenticate_hash, compute_ntlmv2_mic};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Web Enrollment Client
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Web Enrollment client for ADCS certificate requests
 pub struct WebEnrollmentClient {
@@ -125,14 +125,14 @@ impl WebEnrollmentClient {
         format!("{}://{}/certsrv", scheme, hostname)
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // NTLM HTTP Authentication for Windows Integrated Auth
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Perform NTLM HTTP authentication and return an Authorization header value.
     /// This implements the NTLM over HTTP handshake:
-    /// 1. Type 1 (Negotiate) → 401 + Type 2 (Challenge)
-    /// 2. Compute Type 3 (Authenticate) → return Authorization header
+    /// 1. Type 1 (Negotiate) -> 401 + Type 2 (Challenge)
+    /// 2. Compute Type 3 (Authenticate) -> return Authorization header
     ///
     /// Returns None if no credentials are configured.
     #[allow(dead_code)]
@@ -150,7 +150,7 @@ impl WebEnrollmentClient {
             None => return Ok(None),
         };
 
-        // Use GET for the Type1→Type2 exchange because IIS returns 411 Length Required
+        // Use GET for the Type1->Type2 exchange because IIS returns 411 Length Required
         // for POST requests without body + Content-Type. GET requests work fine for
         // extracting the NTLM challenge without needing form data.
         let url = format!("{}/default.asp", self.base_url());
@@ -176,7 +176,7 @@ impl WebEnrollmentClient {
 
         let status = resp.status();
         if !status.is_server_error() && status != StatusCode::UNAUTHORIZED {
-            // Server accepted without NTLM — no auth needed
+            // Server accepted without NTLM -- no auth needed
             return Ok(None);
         }
 
@@ -228,9 +228,9 @@ impl WebEnrollmentClient {
             .map_err(|e| OverthroneError::Adcs(format!("Invalid NTLM Type3 header: {e}")))
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Certificate Request Submission
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Submit a certificate request (CSR) to the CA
     /// This is the main entry point for requesting certificates via Web Enrollment.
@@ -317,7 +317,7 @@ impl WebEnrollmentClient {
 
         // If 401 Unauthorized, extract NTLM Type2 challenge and retry with Type3
         if status == StatusCode::UNAUTHORIZED && self.domain.is_some() {
-            debug!("Got 401 Unauthorized — completing NTLM auth handshake");
+            debug!("Got 401 Unauthorized -- completing NTLM auth handshake");
 
             let type2_b64 = www_auth
                 .strip_prefix("NTLM ")
@@ -550,9 +550,9 @@ impl WebEnrollmentClient {
             .map_err(|e| OverthroneError::Decryption(format!("Certificate decode failed: {}", e)))
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // Response Parsing
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Parse the Web Enrollment response
     fn parse_response(&self, body: &str, status: StatusCode) -> Result<CertificateResponse> {
@@ -738,9 +738,9 @@ impl WebEnrollmentClient {
         format!("Unknown error. Body: {}", excerpt)
     }
 
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
     // CA Configuration Checks
-    // ─────────────────────────────────────────────────────────
+    // ---------------------------------------------------------
 
     /// Check if Web Enrollment is available
     pub async fn check_availability(&self) -> Result<bool> {
@@ -869,9 +869,9 @@ impl WebEnrollmentClient {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Response Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Status of a certificate request
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -942,9 +942,9 @@ pub struct CaInfo {
     pub available_templates: Vec<String>,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,4 @@
-//! Mitigation recommendations — Maps finding types to specific,
+//! Mitigation recommendations -- Maps finding types to specific,
 //! actionable remediation steps with priority and effort estimates.
 
 use serde::{Deserialize, Serialize};
@@ -33,10 +33,10 @@ pub enum MitigationPriority {
 impl std::fmt::Display for MitigationPriority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Immediate => write!(f, "Immediate (0–48 hours)"),
-            Self::ShortTerm => write!(f, "Short-Term (1–2 weeks)"),
-            Self::MediumTerm => write!(f, "Medium-Term (1–3 months)"),
-            Self::LongTerm => write!(f, "Long-Term (3–12 months)"),
+            Self::Immediate => write!(f, "Immediate (0--48 hours)"),
+            Self::ShortTerm => write!(f, "Short-Term (1--2 weeks)"),
+            Self::MediumTerm => write!(f, "Medium-Term (1--3 months)"),
+            Self::LongTerm => write!(f, "Long-Term (3--12 months)"),
         }
     }
 }
@@ -93,9 +93,9 @@ impl std::fmt::Display for MitigationCategory {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Mitigation Database
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Get mitigations for a specific finding type
 pub fn get_mitigations(finding_type: &str) -> Vec<Mitigation> {
@@ -315,19 +315,19 @@ mod tests {
     fn test_mitigation_priority_display() {
         assert_eq!(
             MitigationPriority::Immediate.to_string(),
-            "Immediate (0–48 hours)"
+            "Immediate (0--48 hours)"
         );
         assert_eq!(
             MitigationPriority::ShortTerm.to_string(),
-            "Short-Term (1–2 weeks)"
+            "Short-Term (1--2 weeks)"
         );
         assert_eq!(
             MitigationPriority::MediumTerm.to_string(),
-            "Medium-Term (1–3 months)"
+            "Medium-Term (1--3 months)"
         );
         assert_eq!(
             MitigationPriority::LongTerm.to_string(),
-            "Long-Term (3–12 months)"
+            "Long-Term (3--12 months)"
         );
     }
 

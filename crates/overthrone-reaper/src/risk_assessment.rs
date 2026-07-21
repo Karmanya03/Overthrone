@@ -130,7 +130,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
     let mut low = 0;
     let mut info = 0;
 
-    // ── Password Policy ──
+    // -- Password Policy --
     if let Some(ref policy) = result.policy
         && let Some(ref dp) = policy.domain_policy
     {
@@ -189,7 +189,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         }
     }
 
-    // ── Kerberos Pre-Auth (AS-REP roastable) ──
+    // -- Kerberos Pre-Auth (AS-REP roastable) --
     let asrep_users: Vec<&UserEntry> = result
         .users
         .iter()
@@ -209,7 +209,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── Kerberoasting (SPN accounts) ──
+    // -- Kerberoasting (SPN accounts) --
     let kerberoastable = result.spn_accounts.len();
     if kerberoastable > 0 {
         let severity = if kerberoastable > 50 {
@@ -238,7 +238,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── Kerberos Delegation ──
+    // -- Kerberos Delegation --
     let unconstrained: Vec<&DelegationEntry> = result
         .delegations
         .iter()
@@ -285,7 +285,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── ADCS Vulnerabilities ──
+    // -- ADCS Vulnerabilities --
     let vuln_templates: Vec<&CertTemplate> = result
         .adcs_templates
         .iter()
@@ -322,7 +322,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── ACL Abuse ──
+    // -- ACL Abuse --
     let dangerous_acls: Vec<&AclFinding> = result
         .acl_findings
         .iter()
@@ -355,7 +355,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── Trust Relationships ──
+    // -- Trust Relationships --
     let external_trusts: Vec<&TrustEntry> = result
         .trusts
         .iter()
@@ -408,7 +408,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── LAPS Deployment ──
+    // -- LAPS Deployment --
     let laps_count = result.laps_entries.len();
     let computer_count = result.computers.len();
     if computer_count > 0 {
@@ -456,7 +456,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         }
     }
 
-    // ── Domain Functional Level ──
+    // -- Domain Functional Level --
     if let Some(level) = result.functional_level {
         if level < 6 {
             high += 1;
@@ -483,7 +483,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         }
     }
 
-    // ── Snaffler Exposure ──
+    // -- Snaffler Exposure --
     if !result.snaffle_findings.is_empty() {
         let high_value: Vec<&SnaffleFinding> = result
             .snaffle_findings
@@ -514,7 +514,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── Compute category scores ──
+    // -- Compute category scores --
     let categories = RiskCategory::all();
     let mut cat_scores: Vec<CategoryScore> = Vec::with_capacity(categories.len());
     for cat in &categories {
@@ -541,7 +541,7 @@ pub fn assess_reaper_result(result: &ReaperResult) -> RiskAssessmentResult {
         });
     }
 
-    // ── Compute overall score ──
+    // -- Compute overall score --
     let total_impact: f32 = findings
         .iter()
         .map(|f| {

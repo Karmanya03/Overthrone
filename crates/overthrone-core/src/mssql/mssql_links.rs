@@ -2,7 +2,7 @@
 //!
 //! Recursively discovers and enumerates SQL Server linked server chains.
 //! Supports multi-hop OPENQUERY nesting for deep lateral movement through
-//! linked server topologies — a core AD attack path.
+//! linked server topologies -- a core AD attack path.
 //!
 //! # Attack Context
 //! SQL Server linked servers often have overly permissive delegation
@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Maximum depth for recursive linked server crawling
 const DEFAULT_MAX_DEPTH: usize = 5;
@@ -103,9 +103,9 @@ impl LinkCrawlResult {
     /// Print a human-readable tree of the crawl
     pub fn format_tree(&self) -> String {
         let mut output = String::new();
-        output.push_str("╔══════════════════════════════════════════\n");
-        output.push_str("║  MSSQL Linked Server Topology\n");
-        output.push_str("╚══════════════════════════════════════════\n\n");
+        output.push_str("+==========================================\n");
+        output.push_str("|  MSSQL Linked Server Topology\n");
+        output.push_str("+==========================================\n\n");
 
         // Find root nodes (depth 0)
         let mut roots: Vec<&LinkNode> = self.nodes.values().filter(|n| n.depth == 0).collect();
@@ -116,18 +116,18 @@ impl LinkCrawlResult {
         }
 
         if !self.sysadmin_nodes.is_empty() {
-            output.push_str("\n🔑 Sysadmin access on:\n");
+            output.push_str("\n Sysadmin access on:\n");
             for name in &self.sysadmin_nodes {
                 if let Some(node) = self.nodes.get(name) {
-                    output.push_str(&format!("   → {} (as {})\n", name, node.login_context));
+                    output.push_str(&format!("   -> {} (as {})\n", name, node.login_context));
                 }
             }
         }
 
         if !self.failed_nodes.is_empty() {
-            output.push_str("\n⚠ Failed nodes:\n");
+            output.push_str("\n[!] Failed nodes:\n");
             for (name, reason) in &self.failed_nodes {
-                output.push_str(&format!("   ✗ {} — {}\n", name, reason));
+                output.push_str(&format!("   [-] {} -- {}\n", name, reason));
             }
         }
 
@@ -145,12 +145,12 @@ impl LinkCrawlResult {
         let connector = if node.depth == 0 {
             ""
         } else if is_last {
-            "└── "
+            "\\-- "
         } else {
-            "├── "
+            "+-- "
         };
 
-        let sysadmin_marker = if node.is_sysadmin { " 🔑" } else { "" };
+        let sysadmin_marker = if node.is_sysadmin { " " } else { "" };
 
         output.push_str(&format!(
             "{}{}{} [{}]{}\n",
@@ -162,7 +162,7 @@ impl LinkCrawlResult {
         } else if is_last {
             format!("{}    ", prefix)
         } else {
-            format!("{}│   ", prefix)
+            format!("{}|   ", prefix)
         };
 
         let children: Vec<&LinkNode> = node
@@ -178,9 +178,9 @@ impl LinkCrawlResult {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Linked Server Crawler
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Configuration for the linked server crawler
 #[derive(Debug, Clone)]
@@ -272,14 +272,14 @@ impl<'a> LinkCrawler<'a> {
         while let Some((link_name, chain, depth)) = queue.pop_front() {
             if depth > self.config.max_depth {
                 debug!(
-                    "Skipping {} — max depth {} reached",
+                    "Skipping {} -- max depth {} reached",
                     link_name, self.config.max_depth
                 );
                 continue;
             }
 
             if self.visited.contains(&link_name) {
-                debug!("Skipping {} — already visited", link_name);
+                debug!("Skipping {} -- already visited", link_name);
                 continue;
             }
 
@@ -512,9 +512,9 @@ impl<'a> LinkCrawler<'a> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Convenience Functions
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Perform a full linked server crawl with default settings
 pub async fn crawl_linked_servers(client: &mut MssqlClient) -> Result<LinkCrawlResult> {
@@ -579,9 +579,9 @@ pub async fn enable_xp_cmdshell_on_link(client: &mut MssqlClient, link_name: &st
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -672,6 +672,6 @@ mod tests {
         let tree = result.format_tree();
         assert!(tree.contains("ROOT-SQL"));
         assert!(tree.contains("CHILD-SQL"));
-        assert!(tree.contains("🔑"));
+        assert!(tree.contains(""));
     }
 }

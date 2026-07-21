@@ -342,7 +342,7 @@ pub struct Responder {
     running: Arc<AtomicBool>,
     captured: Arc<std::sync::Mutex<Vec<CapturedCredential>>>,
     threads: Vec<thread::JoinHandle<()>>,
-    /// Optional relay bridge — when set, the HTTP responder relays
+    /// Optional relay bridge -- when set, the HTTP responder relays
     /// NTLM tokens through the async relay engine instead of capturing them.
     relay: Option<RelayBridge>,
     /// Maps client IP -> (relay_id, target_challenge) for session continuity
@@ -500,7 +500,7 @@ impl Responder {
         self.captured
             .lock()
             .unwrap_or_else(|e| {
-                warn!("Mutex poisoned in Responder — recovering data");
+                warn!("Mutex poisoned in Responder -- recovering data");
                 e.into_inner()
             })
             .clone()
@@ -612,7 +612,7 @@ impl Responder {
                                 pending_relays
                                     .lock()
                                     .unwrap_or_else(|e| {
-                                        warn!("Mutex poisoned in Responder — recovering data");
+                                        warn!("Mutex poisoned in Responder -- recovering data");
                                         e.into_inner()
                                     })
                                     .insert(
@@ -665,7 +665,7 @@ impl Responder {
                         let pending = pending_relays
                             .lock()
                             .unwrap_or_else(|e| {
-                                warn!("Mutex poisoned in Responder — recovering data");
+                                warn!("Mutex poisoned in Responder -- recovering data");
                                 e.into_inner()
                             })
                             .remove(&client_ip);
@@ -706,7 +706,7 @@ impl Responder {
                                                 .lock()
                                                 .unwrap_or_else(|e| {
                                                     warn!(
-                                                        "Mutex poisoned in Responder — recovering data"
+                                                        "Mutex poisoned in Responder -- recovering data"
                                                     );
                                                     e.into_inner()
                                                 })
@@ -728,7 +728,7 @@ impl Responder {
                             }
                             None => {
                                 warn!(
-                                    "No pending relay for {} — sending initial challenge",
+                                    "No pending relay for {} -- sending initial challenge",
                                     client_ip
                                 );
                                 // Fall back to capture mode challenge
@@ -767,7 +767,7 @@ impl Responder {
                             captured
                                 .lock()
                                 .unwrap_or_else(|e| {
-                                    warn!("Mutex poisoned in Responder — recovering data");
+                                    warn!("Mutex poisoned in Responder -- recovering data");
                                     e.into_inner()
                                 })
                                 .push(cred);
@@ -784,7 +784,7 @@ impl Responder {
             }
         }
 
-        // No NTLM auth header — request authentication
+        // No NTLM auth header -- request authentication
         let response = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: NTLM\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         stream.write_all(response.as_bytes()).ok();
 
@@ -911,7 +911,7 @@ impl Responder {
             captured
                 .lock()
                 .unwrap_or_else(|e| {
-                    warn!("Mutex poisoned in Responder — recovering data");
+                    warn!("Mutex poisoned in Responder -- recovering data");
                     e.into_inner()
                 })
                 .push(cred);
@@ -1101,7 +1101,7 @@ impl Responder {
                 captured
                     .lock()
                     .unwrap_or_else(|e| {
-                        warn!("Mutex poisoned in Responder — recovering data");
+                        warn!("Mutex poisoned in Responder -- recovering data");
                         e.into_inner()
                     })
                     .push(cred);
@@ -1231,7 +1231,7 @@ impl Responder {
                     timestamp: chrono::Utc::now(),
                 };
                 let mut cap = captured.lock().unwrap_or_else(|e| {
-                    warn!("Mutex poisoned in Responder — recovering data");
+                    warn!("Mutex poisoned in Responder -- recovering data");
                     e.into_inner()
                 });
                 cap.push(cred);
@@ -1481,7 +1481,7 @@ fn build_spnego_challenge(ntlm_challenge: &[u8]) -> Vec<u8> {
     encode_length(&mut seq, neg_state.len());
     seq.extend_from_slice(&neg_state);
 
-    // supportedMech [1] — NTLMSSP OID: 1.3.6.1.4.1.311.2.2.10
+    // supportedMech [1] -- NTLMSSP OID: 1.3.6.1.4.1.311.2.2.10
     let ntlm_oid = [
         0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0A,
     ];
@@ -1489,7 +1489,7 @@ fn build_spnego_challenge(ntlm_challenge: &[u8]) -> Vec<u8> {
     encode_length(&mut seq, ntlm_oid.len());
     seq.extend_from_slice(&ntlm_oid);
 
-    // responseToken [2] — OCTET STRING of NTLM challenge
+    // responseToken [2] -- OCTET STRING of NTLM challenge
     let mut resp = Vec::new();
     resp.push(0x04);
     encode_length(&mut resp, ntlm_challenge.len());

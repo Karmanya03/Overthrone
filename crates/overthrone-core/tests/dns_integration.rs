@@ -3,9 +3,9 @@
 //! These tests validate offline functionality (struct creation, constants,
 //! fallback behaviour). Tests that require a real network are #[ignore]d.
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DnsResolver Struct & Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 use overthrone_core::error::Result as OvtResult;
 use overthrone_core::proto::dns::{
@@ -89,9 +89,9 @@ fn srv_record_struct_fields() {
     assert_eq!(rec.ips, vec!["10.0.0.1".to_string()]);
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Backward-compatible free functions (require async runtime)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[tokio::test]
 async fn resolve_hostname_returns_error_for_bogus() {
@@ -112,9 +112,9 @@ async fn lookup_srv_returns_error_for_bogus_domain() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Live Tests (require network / AD environment)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[tokio::test]
 #[ignore = "requires live AD domain environment"]

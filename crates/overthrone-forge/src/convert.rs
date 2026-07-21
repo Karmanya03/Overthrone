@@ -1,4 +1,4 @@
-//! Ticket format conversion — `.kirbi` ↔ `.ccache` ↔ Rubeus-style base64.
+//! Ticket format conversion -- `.kirbi` <-> `.ccache` <-> Rubeus-style base64.
 //!
 //! ## Formats
 //!
@@ -49,7 +49,7 @@ pub fn detect_format(data: &[u8]) -> Result<TicketFormat> {
                     || b == b'\r'
             })
         {
-            // Try to decode as base64 — if it yields valid ASN.1, it's base64
+            // Try to decode as base64 -- if it yields valid ASN.1, it's base64
             let clean = text
                 .trim()
                 .trim_start_matches('{')
@@ -79,7 +79,7 @@ pub fn parse_format(fmt: &str) -> Result<TicketFormat> {
 /// Supported ticket serialisation formats.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TicketFormat {
-    /// KRB-CRED DER (`.kirbi`) — default for Overthrone / Mimikatz
+    /// KRB-CRED DER (`.kirbi`) -- default for Overthrone / Mimikatz
     Kirbi,
     /// MIT Credential Cache (`.ccache`)
     Ccache,
@@ -93,7 +93,7 @@ pub fn convert_format(input: &[u8], from: TicketFormat, to: TicketFormat) -> Res
         return Ok(input.to_vec());
     }
 
-    info!("Converting ticket: {from:?} → {to:?}");
+    info!("Converting ticket: {from:?} -> {to:?}");
 
     // Decode from source format
     let raw = match from {
@@ -192,7 +192,7 @@ pub fn kirbi_to_ccache(kirbi: &[u8]) -> Result<Vec<u8>> {
 
     let ci = cred_info.as_ref();
 
-    // Build CCACHE header (version 0x0504 — little-endian)
+    // Build CCACHE header (version 0x0504 -- little-endian)
     let mut ccache = Vec::new();
     ccache.extend_from_slice(b"\x05\x04"); // file format magic
     ccache.extend_from_slice(&[0x00, 0x01]); // version 1
@@ -209,7 +209,7 @@ pub fn kirbi_to_ccache(kirbi: &[u8]) -> Result<Vec<u8>> {
         .unwrap_or(&default_name);
     encode_ccache_principal(&mut ccache, client_realm, client_name);
 
-    // Encode principal (server) — the ticket's sname
+    // Encode principal (server) -- the ticket's sname
     let server_realm = &ticket.realm;
     let server_name = &ticket.sname.name_string;
     encode_ccache_principal(&mut ccache, server_realm, server_name);
@@ -221,7 +221,7 @@ pub fn kirbi_to_ccache(kirbi: &[u8]) -> Result<Vec<u8>> {
     ccache.extend_from_slice(&(keyvalue.len() as u16).to_le_bytes()); // key length
     ccache.extend_from_slice(&keyvalue);
 
-    // Times — using timestamps from cred info or defaults
+    // Times -- using timestamps from cred info or defaults
     let now_ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -282,13 +282,13 @@ pub fn ccache_to_kirbi(ccache: &[u8]) -> Result<Vec<u8>> {
         ));
     }
 
-    // Minimal parse — we need to extract ticket bytes and reconstruct KRB-CRED
+    // Minimal parse -- we need to extract ticket bytes and reconstruct KRB-CRED
     // For now, parse and rebuild using the ASN.1 types
     let header_len = u16::from_le_bytes([ccache[4], ccache[5]]) as usize;
     let pos = 6 + header_len;
 
     // Skip client and server principals (we re-derive from the ticket itself)
-    // This is a simplified reader — extract the ticket data and wrap in KRB-CRED
+    // This is a simplified reader -- extract the ticket data and wrap in KRB-CRED
     let ticket_start = find_ticket_in_ccache(ccache, pos)?;
     let ticket_len = u32::from_le_bytes([
         ccache[ticket_start - 12],
@@ -379,7 +379,7 @@ fn find_ticket_in_ccache(ccache: &[u8], start: usize) -> Result<usize> {
     }
     pos += 1 + 4;
 
-    // Now at ticket data length field — return the position of the data
+    // Now at ticket data length field -- return the position of the data
     if pos + 4 > ccache.len() {
         return Err(OverthroneError::TicketForge(
             "CCACHE: truncated at ticket len".into(),

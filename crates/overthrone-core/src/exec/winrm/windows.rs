@@ -14,9 +14,9 @@ use windows::Win32::System::RemoteManagement::*;
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent, WaitForSingleObject};
 use windows::core::PCWSTR;
 
-// ── Constants ───────────────────────────────────────────────────
+// -- Constants ---------------------------------------------------
 
-/// Negotiate (SPNEGO) auth — works for NTLM and Kerberos
+/// Negotiate (SPNEGO) auth -- works for NTLM and Kerberos
 const AUTH_NEGOTIATE: u32 = 2;
 
 /// WS-Man shell URI for cmd.exe
@@ -29,7 +29,7 @@ const CMD_STATE_DONE: &str =
 /// Per-operation timeout in milliseconds
 const OP_TIMEOUT_MS: u32 = 60_000;
 
-// ── Helpers ─────────────────────────────────────────────────────
+// -- Helpers -----------------------------------------------------
 
 /// Create a null-terminated UTF-16 wide string.
 fn to_wide(s: &str) -> Vec<u16> {
@@ -43,13 +43,13 @@ fn exec_err(target: &str, reason: &str) -> OverthroneError {
     }
 }
 
-// ── Callback Context ────────────────────────────────────────────
+// -- Callback Context --------------------------------------------
 
 /// Shared state between the WSMan callback and the calling thread.
 /// The calling thread:
 ///   1. Resets the event + error fields
 ///   2. Calls a WSMan async function (passing `&async_op`)
-///   3. `WaitForSingleObject(event, …)` blocks until the callback fires
+///   3. `WaitForSingleObject(event, ...)` blocks until the callback fires
 ///   4. Reads the results written by the callback
 ///      The WSMan runtime invokes `wsman_callback` on its own thread, writes
 ///      results into this struct, then signals the event.
@@ -112,7 +112,7 @@ unsafe extern "system" fn wsman_callback(
     }
     let ctx = unsafe { &mut *(context as *mut WsCallbackCtx) };
 
-    // ── Capture error ───────────────────────────────────────
+    // -- Capture error ---------------------------------------
     if !error.is_null() {
         let e = unsafe { &*error };
         ctx.error_code = e.code;
@@ -121,7 +121,7 @@ unsafe extern "system" fn wsman_callback(
         }
     }
 
-    // ── Capture handles (CreateShell / RunShellCommand) ─────
+    // -- Capture handles (CreateShell / RunShellCommand) -----
     if shell.0 != 0 {
         ctx.shell = shell;
     }
@@ -129,7 +129,7 @@ unsafe extern "system" fn wsman_callback(
         ctx.command = command;
     }
 
-    // ── Capture receive data (ReceiveShellOutput) ───────────
+    // -- Capture receive data (ReceiveShellOutput) -----------
     if !data.is_null() {
         let resp = unsafe { &*data };
         let recv = unsafe { &resp.receiveData };
@@ -165,13 +165,13 @@ unsafe extern "system" fn wsman_callback(
         }
     }
 
-    // ── Signal caller ───────────────────────────────────────
+    // -- Signal caller ---------------------------------------
     unsafe {
         let _ = SetEvent(ctx.event);
     }
 }
 
-// ── Executor ────────────────────────────────────────────────────
+// -- Executor ----------------------------------------------------
 /// Data structure used by this module.
 pub struct WinRmExecutor {
     creds: ExecCredentials,
@@ -211,7 +211,7 @@ impl RemoteExecutor for WinRmExecutor {
     }
 }
 
-// ── Core sync implementation ────────────────────────────────────
+// -- Core sync implementation ------------------------------------
 
 /// Wait for event or return timeout error.
 unsafe fn wait_or_err(event: HANDLE, target: &str, op: &str) -> Result<()> {
@@ -229,12 +229,12 @@ unsafe fn wait_or_err(event: HANDLE, target: &str, op: &str) -> Result<()> {
 
 /// Execute a command on `target` via the Win32 WSMan API.
 /// # Safety
-/// Calls Win32 FFI – valid parameters and correct handle lifetimes are ensured
+/// Calls Win32 FFI -- valid parameters and correct handle lifetimes are ensured
 /// by the implementation.
 unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> Result<ExecOutput> {
     info!("[winrm/native] Executing on {target}: {command}");
 
-    // ── Synchronization event (manual-reset, initially non-signaled) ──
+    // -- Synchronization event (manual-reset, initially non-signaled) --
     let event = unsafe { CreateEventW(None, true, false, None) }
         .map_err(|e| exec_err(target, &format!("CreateEventW: {e}")))?;
 
@@ -256,14 +256,14 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
         ),
     };
 
-    // ── 1  WSManInitialize ──────────────────────────────────────
+    // -- 1  WSManInitialize --------------------------------------
     let mut api = WSMAN_API_HANDLE::default();
     let rc = unsafe { WSManInitialize(0, &mut api) };
     if rc != 0 {
         return Err(exec_err(target, &format!("WSManInitialize: {rc:#010x}")));
     }
 
-    // ── 2  WSManCreateSession (with Negotiate auth) ─────────────
+    // -- 2  WSManCreateSession (with Negotiate auth) -------------
     let url = format!("http://{}:5985/wsman", target);
     let url_w = to_wide(&url);
     let qualified_user = if creds.domain.is_empty() {
@@ -302,7 +302,7 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
     }
     debug!("[winrm/native] Session created");
 
-    // ── 3  WSManCreateShell ─────────────────────────────────────
+    // -- 3  WSManCreateShell -------------------------------------
     let uri_w = to_wide(SHELL_URI);
     ctx.reset_op();
 
@@ -333,7 +333,7 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
     let shell = ctx.shell;
     debug!("[winrm/native] Shell created");
 
-    // ── 4  WSManRunShellCommand ─────────────────────────────────
+    // -- 4  WSManRunShellCommand ---------------------------------
     let cmd_w = to_wide(command);
     ctx.reset_op();
 
@@ -356,7 +356,7 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
     let cmd_h = ctx.command;
     debug!("[winrm/native] Command started");
 
-    // ── 5  WSManReceiveShellOutput loop ─────────────────────────
+    // -- 5  WSManReceiveShellOutput loop -------------------------
     let stdout_id_w = to_wide("stdout");
     let stderr_id_w = to_wide("stderr");
     let stream_ids = [PCWSTR(stdout_id_w.as_ptr()), PCWSTR(stderr_id_w.as_ptr())];
@@ -373,7 +373,7 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
         }
 
         if unsafe { wait_or_err(event, target, "ReceiveShellOutput") }.is_err() {
-            warn!("[winrm/native] ReceiveShellOutput timed out — breaking");
+            warn!("[winrm/native] ReceiveShellOutput timed out -- breaking");
             break;
         }
         if ctx.has_error() {
@@ -394,7 +394,7 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
     let stderr = String::from_utf8_lossy(&ctx.stderr_buf).to_string();
     let exit_code = ctx.exit_code as i32;
 
-    // ── 6  Cleanup ──────────────────────────────────────────────
+    // -- 6  Cleanup ----------------------------------------------
     // CloseCommand
     ctx.reset_op();
     unsafe {
@@ -435,7 +435,7 @@ unsafe fn execute_wsm(target: &str, command: &str, creds: &ExecCredentials) -> R
     })
 }
 
-// ── Cleanup helpers ─────────────────────────────────────────────
+// -- Cleanup helpers ---------------------------------------------
 
 /// Cleanup: session + API only (no shell yet).
 unsafe fn cleanup_api(api: WSMAN_API_HANDLE, session: WSMAN_SESSION_HANDLE) {

@@ -1,10 +1,10 @@
 //! MS-RPC null session enumeration via SMB IPC$ named pipes.
 //!
 //! Performs unauthenticated RPC enumeration through:
-//! - LSARPC (Local Security Authority Remote Protocol) — domain info, policy, SID translation
-//! - SRVSVC (Server Service) — share enumeration, session enumeration
-//! - EPMAPPER (Endpoint Mapper) — RPC endpoint discovery
-//! - SAMR (Security Account Manager Remote) — user/group enumeration (see rid.rs)
+//! - LSARPC (Local Security Authority Remote Protocol) -- domain info, policy, SID translation
+//! - SRVSVC (Server Service) -- share enumeration, session enumeration
+//! - EPMAPPER (Endpoint Mapper) -- RPC endpoint discovery
+//! - SAMR (Security Account Manager Remote) -- user/group enumeration (see rid.rs)
 //!
 //! These techniques work when the target allows null session access to IPC$.
 
@@ -15,9 +15,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Results from MS-RPC null session enumeration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,9 +88,9 @@ pub struct EpEndpoint {
     pub endpoint: String,
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  RPC Bind Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Build an unauthenticated DCE/RPC bind request for a given interface UUID.
 /// Delegates to [`build_rpc_bind_auth`] with no auth body.
@@ -164,7 +164,7 @@ pub fn build_rpc_bind_auth(
 /// in the bind_ack auth verifier.
 ///
 /// The AUTH3 PDU (type 17) has only a 16-byte common header followed by the
-/// authentication verifier — no alloc_hint, context_id, or opnum fields.
+/// authentication verifier -- no alloc_hint, context_id, or opnum fields.
 pub fn build_auth3_pdu(auth_body: &[u8], auth_level: u8) -> Vec<u8> {
     let auth_hdr_len: u16 = 8;
     let auth_total = auth_hdr_len + auth_body.len() as u16;
@@ -176,7 +176,7 @@ pub fn build_auth3_pdu(auth_body: &[u8], auth_level: u8) -> Vec<u8> {
     pdu.extend_from_slice(&auth_total.to_le_bytes()); // auth_length
     pdu.extend_from_slice(&1u32.to_le_bytes()); // call_id
 
-    // Auth verifier aligned to 8-byte boundary — byte 16 is already 8-byte aligned
+    // Auth verifier aligned to 8-byte boundary -- byte 16 is already 8-byte aligned
     pdu.push(0x0A); // auth_type = NTLMSSP
     pdu.push(auth_level);
     pdu.push(0x00); // auth_pad_length
@@ -297,9 +297,9 @@ fn build_close_handle(handle: &[u8]) -> Vec<u8> {
     build_rpc_request(0, handle)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  NDR Encoding Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub fn ndr_conformant_string(s: &str) -> Vec<u8> {
     let utf16: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
@@ -317,9 +317,9 @@ pub fn ndr_conformant_string(s: &str) -> Vec<u8> {
     out
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Interface UUIDs
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// LSARPC: 12345778-1234-abcd-ef00-0123456789ab
 const LSARPC_UUID: [u8; 16] = [
@@ -336,9 +336,9 @@ const EPMAPPER_UUID: [u8; 16] = [
     0x08, 0x83, 0xaf, 0xe1, 0x1f, 0x5d, 0xc9, 0x11, 0x91, 0xa4, 0x08, 0x00, 0x2b, 0x14, 0xa0, 0xfa,
 ];
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LSARPC Operations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// LsarOpenPolicy2 (opnum 44)
 fn build_lsa_open_policy2(system_name: &str) -> Vec<u8> {
@@ -377,11 +377,11 @@ fn build_lsa_close(handle: &[u8]) -> Vec<u8> {
     build_close_handle(handle)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SRVSVC Operations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// NetrShareEnum (opnum 15) — enumerate shares
+/// NetrShareEnum (opnum 15) -- enumerate shares
 fn build_srvsvc_share_enum(server: &str, level: u32) -> Vec<u8> {
     let mut stub = Vec::new();
     // Server UNC name
@@ -402,11 +402,11 @@ fn build_srvsvc_share_enum(server: &str, level: u32) -> Vec<u8> {
     build_rpc_request(15, &stub)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  EPMAPPER Operations
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
-/// EpmMap (opnum 2) — enumerate endpoints
+/// EpmMap (opnum 2) -- enumerate endpoints
 fn build_epm_map(max_entries: u32) -> Vec<u8> {
     let mut stub = Vec::new();
     // Map command (lookup)
@@ -435,9 +435,9 @@ fn build_epm_map(max_entries: u32) -> Vec<u8> {
     build_rpc_request(2, &stub)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Response Parsers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn parse_lsa_domain_info(resp: &[u8]) -> Option<LsaDomainInfo> {
     if resp.len() < 60 {
@@ -463,7 +463,7 @@ fn parse_lsa_domain_info(resp: &[u8]) -> Option<LsaDomainInfo> {
     }
 
     // Try to extract domain name from the response
-    // This is a simplified parser — full NDR parsing is complex
+    // This is a simplified parser -- full NDR parsing is complex
     let mut info = LsaDomainInfo {
         name: String::new(),
         dns_domain: None,
@@ -733,9 +733,9 @@ fn parse_epm_endpoints(resp: &[u8]) -> Vec<EpEndpoint> {
     endpoints
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Main Entry Point
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Perform MS-RPC null session enumeration against a target.
 /// Attempts to connect via SMB null session and enumerate via LSARPC, SRVSVC, and EPMAPPER.
@@ -758,7 +758,7 @@ pub async fn rpc_null_session_enumeration(target: &str) -> Result<RpcNullSession
             .map_err(|e| OverthroneError::Smb(format!("SMB null session failed: {e}")))?,
     };
 
-    // 1. LSARPC — domain information
+    // 1. LSARPC -- domain information
     match enumerate_lsa(&smb).await {
         Ok(info) => {
             result.lsa_domain_info = Some(info);
@@ -769,7 +769,7 @@ pub async fn rpc_null_session_enumeration(target: &str) -> Result<RpcNullSession
         }
     }
 
-    // 2. SRVSVC — share enumeration
+    // 2. SRVSVC -- share enumeration
     match enumerate_srvsvc(&smb).await {
         Ok(shares) => {
             result.srvsvc_shares = shares;
@@ -783,7 +783,7 @@ pub async fn rpc_null_session_enumeration(target: &str) -> Result<RpcNullSession
         }
     }
 
-    // 3. EPMAPPER — endpoint discovery
+    // 3. EPMAPPER -- endpoint discovery
     match enumerate_epmapper(&smb).await {
         Ok(endpoints) => {
             result.epmapper_endpoints = endpoints;
@@ -873,9 +873,9 @@ async fn enumerate_epmapper(smb: &SmbSession) -> Result<Vec<EpEndpoint>> {
     Ok(endpoints)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  TCP-based EPM resolution
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Write a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
 pub async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
@@ -1055,9 +1055,9 @@ pub async fn resolve_uuid_via_epm_tcp(
     Ok((host, port))
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Probe the RPC Endpoint Mapper on the target host.
 /// Connects to port 135, performs a DCE/RPC bind to EPMAPPER_UUID,
@@ -1082,13 +1082,13 @@ pub async fn probe_epm(target: &str) -> Result<String> {
     {
         Ok(Ok(resp)) => {
             if is_bind_accepted(&resp) {
-                Ok("EPM v3.0 — bind accepted".to_string())
+                Ok("EPM v3.0 -- bind accepted".to_string())
             } else {
-                Ok("EPM — bind rejected".to_string())
+                Ok("EPM -- bind rejected".to_string())
             }
         }
         Ok(Err(e)) => Ok(format!("EPM response error: {e}")),
-        Err(_) => Ok("EPM — bind timeout (no response)".to_string()),
+        Err(_) => Ok("EPM -- bind timeout (no response)".to_string()),
     }
 }
 

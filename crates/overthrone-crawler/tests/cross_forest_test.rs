@@ -9,9 +9,9 @@ use overthrone_crawler::{
     find_cross_forest_opportunities,
 };
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Test helpers
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Build a minimal outbound TrustEdge with configurable sid_filtering flag.
 fn outbound_forest_trust(source: &str, target: &str, sid_filtering: bool) -> TrustEdge {
@@ -68,9 +68,9 @@ fn privileged_foreign_membership(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Empty inputs → empty output
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Empty inputs -> empty output
+// ===========================================================
 
 #[test]
 fn test_empty_trust_graph_no_opportunities() {
@@ -82,7 +82,7 @@ fn test_empty_trust_graph_no_opportunities() {
 #[test]
 fn test_empty_memberships_and_no_interesting_trusts() {
     let mut graph = TrustGraph::new();
-    // Inbound trust only — cannot leverage outbound
+    // Inbound trust only -- cannot leverage outbound
     graph.trusts.push(TrustEdge {
         source_domain: "target.local".to_string(),
         target_domain: "source.local".to_string(),
@@ -103,9 +103,9 @@ fn test_empty_memberships_and_no_interesting_trusts() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  SID filtering disabled → SidHistoryGoldenTicket
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  SID filtering disabled -> SidHistoryGoldenTicket
+// ===========================================================
 
 #[test]
 fn test_no_sid_filtering_produces_sid_history_opportunity() {
@@ -136,7 +136,7 @@ fn test_forest_trust_no_sid_filter_severity_is_high() {
         .find(|o| o.technique == CrossForestTechnique::SidHistoryGoldenTicket)
         .expect("Must have a SidHistoryGoldenTicket opportunity");
 
-    // External (non-within-forest) trust → High severity
+    // External (non-within-forest) trust -> High severity
     assert!(
         sid_hist.severity == Severity::High || sid_hist.severity == Severity::Critical,
         "Severity must be at least High for cross-forest SID history attack, got {:?}",
@@ -161,9 +161,9 @@ fn test_sid_filtering_enabled_no_sid_history_opportunity() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  TGT delegation with SID filtering → TgtDelegationAbuse
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  TGT delegation with SID filtering -> TgtDelegationAbuse
+// ===========================================================
 
 #[test]
 fn test_tgt_delegation_with_sid_filtering_produces_delegation_opportunity() {
@@ -175,7 +175,7 @@ fn test_tgt_delegation_with_sid_filtering_produces_delegation_opportunity() {
         trust_type: TrustKind::Forest,
         transitive: true,
         sid_filtering: true,  // SID filtering ON
-        tgt_delegation: true, // TGT delegation ON → S4U2Proxy path
+        tgt_delegation: true, // TGT delegation ON -> S4U2Proxy path
         is_within_forest: false,
         uses_aes: true,
         uses_rc4: false,
@@ -192,9 +192,9 @@ fn test_tgt_delegation_with_sid_filtering_produces_delegation_opportunity() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Foreign privileged membership
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_privileged_foreign_membership_detected() {
@@ -240,9 +240,9 @@ fn test_non_privileged_membership_produces_no_opportunity() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  External trust with no SID filtering
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_external_trust_no_sid_filtering_produces_external_trust_opportunity() {
@@ -263,9 +263,9 @@ fn test_external_trust_no_sid_filtering_produces_external_trust_opportunity() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Severity ordering
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_results_sorted_by_severity_descending() {
@@ -283,7 +283,7 @@ fn test_results_sorted_by_severity_descending() {
     for w in opps.windows(2) {
         assert!(
             w[0].severity >= w[1].severity,
-            "Opportunities must be sorted Critical→High→Medium→Low; found {:?} before {:?}",
+            "Opportunities must be sorted Critical->High->Medium->Low; found {:?} before {:?}",
             w[0].severity,
             w[1].severity
         );
@@ -307,9 +307,9 @@ fn test_critical_before_high() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  build_trust_key_guidance
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_trust_key_guidance_dcsync_contains_target_dollar() {

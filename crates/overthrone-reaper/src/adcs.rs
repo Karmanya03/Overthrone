@@ -6,9 +6,9 @@ use overthrone_core::error::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Well-known OIDs
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Client Authentication EKU
 const OID_CLIENT_AUTH: &str = "1.3.6.1.5.5.7.3.2";
@@ -24,11 +24,11 @@ const OID_ANY_PURPOSE: &str = "2.5.29.37.0";
 /// a more reliable check is verifying the absence of restrictive EKUs combined with
 /// Basic Constraints isCA=TRUE.  Note: 1.3.6.1.5.5.7.3.9 is OCSP Signing (wrong).
 /// Note: 1.3.6.1.4.1.311.20.2.1 is Certificate Request Agent (also wrong for SubCA).
-const OID_SUBCA: &str = "2.5.29.37.0"; // anyExtendedKeyUsage — SubCA templates allow any EKU
+const OID_SUBCA: &str = "2.5.29.37.0"; // anyExtendedKeyUsage -- SubCA templates allow any EKU
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Well-known SIDs (low-privilege)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Authenticated Users
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
@@ -39,9 +39,9 @@ const SID_DOMAIN_USERS_SUFFIX: &str = "-513";
 /// Builtin\Users
 const SID_BUILTIN_USERS: &str = "S-1-5-32-545";
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SDDL rights abbreviations used in ACEs
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Dangerous SDDL rights that allow template modification
 const DANGEROUS_SDDL_RIGHTS: &[&str] = &[
@@ -53,18 +53,18 @@ const DANGEROUS_SDDL_RIGHTS: &[&str] = &[
     "DC", // Delete Child
 ];
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Flag constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// msPKI-Certificate-Name-Flag: bit 0 = ENROLLEE_SUPPLIES_SUBJECT
 const CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT: u32 = 0x00000001;
 /// msPKI-Enrollment-Flag: bit 1 = PEND_ALL_REQUESTS (manager approval)
 const CT_FLAG_PEND_ALL_REQUESTS: u32 = 0x00000002;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  CertTemplate
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 /// Structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertTemplate {
@@ -93,7 +93,7 @@ pub struct CertTemplate {
 }
 
 impl CertTemplate {
-    // ──────────────────────────────────── ESC1 ─────────────────
+    // ------------------------------------ ESC1 -----------------
     /// ESC1: Enrollee supplies subject + client-auth EKU + no approval/sigs.
     pub fn check_esc1(&self) -> bool {
         self.enrollee_supplies_subject
@@ -102,7 +102,7 @@ impl CertTemplate {
             && self.has_authentication_eku()
     }
 
-    // ──────────────────────────────────── ESC2 ─────────────────
+    // ------------------------------------ ESC2 -----------------
     /// ESC2: Any Purpose EKU or empty EKU with no restrictions.
     pub fn check_esc2(&self) -> bool {
         !self.requires_manager_approval
@@ -113,7 +113,7 @@ impl CertTemplate {
                     .contains(&OID_ANY_PURPOSE.to_string()))
     }
 
-    // ──────────────────────────────────── ESC3 ─────────────────
+    // ------------------------------------ ESC3 -----------------
     /// ESC3: Template grants Certificate Request Agent (enrollment agent) EKU
     /// with no approval and no authorized signature requirement. An attacker
     /// can request an enrollment agent certificate, then use it to request
@@ -126,7 +126,7 @@ impl CertTemplate {
                 .contains(&OID_CERT_REQUEST_AGENT.to_string())
     }
 
-    // ──────────────────────────────────── ESC4 ─────────────────
+    // ------------------------------------ ESC4 -----------------
     /// ESC4: Overly-permissive ACLs on the template itself. A low-privilege
     /// principal (Authenticated Users, Everyone, Domain Users, Builtin\Users)
     /// has WriteDacl/WriteOwner/WriteProperty/GenericAll on the template
@@ -142,7 +142,7 @@ impl CertTemplate {
         false
     }
 
-    // ──────────────────────────────────── ESC5 ─────────────────
+    // ------------------------------------ ESC5 -----------------
     /// ESC5: Vulnerable PKI object ACLs (CA server, RootCA container,
     /// NTAuthCertificates, Enrollment Services). At the template level we
     /// flag templates where low-privilege principals have WriteProperty or
@@ -164,10 +164,10 @@ impl CertTemplate {
         false
     }
 
-    // ──────────────────────────────────── ESC6 ─────────────────
+    // ------------------------------------ ESC6 -----------------
     /// ESC6: Template-level indicator for EDITF_ATTRIBUTESUBJECTALTNAME2.
     /// At the template level: the template does NOT let the enrollee supply
-    /// the subject, but it has a client-auth EKU and no approval — meaning
+    /// the subject, but it has a client-auth EKU and no approval -- meaning
     /// that if the CA has the EDITF flag, any user can inject a SAN via
     /// request attributes.
     /// Confirmed exploitation requires checking the CA config separately.
@@ -178,7 +178,7 @@ impl CertTemplate {
             && self.has_authentication_eku()
     }
 
-    // ──────────────────────────────────── ESC7 ─────────────────
+    // ------------------------------------ ESC7 -----------------
     /// ESC7: Template associated with ManageCA-level enrollment. If a low-
     /// privilege user can manage the CA (ManageCA right on the CA object),
     /// they can enable SubCA templates and issue certificates.
@@ -202,7 +202,7 @@ impl CertTemplate {
         is_subca_template && low_priv_enroll
     }
 
-    // ──────────────────────────────────── ESC8 ─────────────────
+    // ------------------------------------ ESC8 -----------------
     /// ESC8: HTTP-based enrollment (AD CS Web Enrollment / CES). Templates
     /// that allow enrollment with client-auth EKU and no manager approval
     /// are exploitable via NTLM relay to the web enrollment endpoint.
@@ -214,13 +214,13 @@ impl CertTemplate {
             && self.has_authentication_eku()
     }
 
-    // ──────────────────────────────────── ESC9 ─────────────────
+    // ------------------------------------ ESC9 -----------------
     /// ESC9: msPKI-Enrollment-Flag has NO_REVOCATION_CHECK + CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT.
     pub fn check_esc9(&self) -> bool {
         self.enrollee_supplies_subject && !self.requires_manager_approval
     }
 
-    // ──────────────────────────────────── ESC10 ────────────────
+    // ------------------------------------ ESC10 ----------------
     /// ESC10: Weak certificate mapping. Flagged if template allows client auth
     /// and enrollee supplies subject (similar to ESC1), as it can be used
     /// to exploit weak UPN mapping on DCs.
@@ -228,14 +228,14 @@ impl CertTemplate {
         self.enrollee_supplies_subject && self.has_authentication_eku()
     }
 
-    // ──────────────────────────────────── ESC11 ────────────────
+    // ------------------------------------ ESC11 ----------------
     /// ESC11: Relaying NTLM to ICPR (RPC enrollment). Similar to ESC8,
     /// flagged for any template that allows client auth without approval.
     pub fn check_esc11(&self) -> bool {
         !self.requires_manager_approval && self.has_authentication_eku()
     }
 
-    // ──────────────────────────────────── ESC12 ────────────────
+    // ------------------------------------ ESC12 ----------------
     /// ESC12: CA shell access. Not a template vulnerability per se, but
     /// we flag templates that allow for CA backup or management if compromised.
     pub fn check_esc12(&self) -> bool {
@@ -243,7 +243,7 @@ impl CertTemplate {
         self.check_esc7()
     }
 
-    // ──────────────────────────────────── ESC13 ────────────────
+    // ------------------------------------ ESC13 ----------------
     /// ESC13: Certificate template with OID mapping that allows for privilege escalation.
     pub fn check_esc13(&self) -> bool {
         // Heuristic: templates with non-standard OIDs that map to privileged groups
@@ -252,7 +252,7 @@ impl CertTemplate {
             .any(|eku| eku.starts_with("1.3.6.1.4.1.311.21.8"))
     }
 
-    // ─────────────────── helpers ───────────────────────────────
+    // ------------------- helpers -------------------------------
 
     /// Does this template have an EKU that grants authentication?
     fn has_authentication_eku(&self) -> bool {
@@ -322,9 +322,9 @@ impl CertTemplate {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Lightweight SDDL / ACE parsing
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Parsed Access Control Entry from an SDDL string.
 #[derive(Debug, Clone)]
@@ -350,7 +350,7 @@ impl SddlAce {
 /// Parse SDDL ACE entries from the raw nTSecurityDescriptor strings.
 /// nTSecurityDescriptor may be returned as:
 /// 1. SDDL string: `O:SYG:SYD:(A;;RPWPCCDCLCSWRCWDWO;;;AU)(A;;GA;;;BA)...`
-/// 2. Base64-encoded binary SD (not parsed here — we'd need full SD binary decoder)
+/// 2. Base64-encoded binary SD (not parsed here -- we'd need full SD binary decoder)
 /// 3. Raw hex bytes
 ///
 /// We handle case (1) for template-level ESC4/5/7 checks.
@@ -414,7 +414,7 @@ fn parse_rights_string(s: &str) -> Vec<String> {
             rights.push(format!("{}{}", chars[i], chars[i + 1]));
             i += 2;
         } else {
-            // Odd trailing character — include it
+            // Odd trailing character -- include it
             rights.push(chars[i].to_string());
             i += 1;
         }
@@ -448,9 +448,9 @@ fn is_low_privilege_sid(sid: &str) -> bool {
     false
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  DN / filter helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub fn adcs_base_dn(domain_base_dn: &str) -> String {
     format!(
@@ -481,9 +481,9 @@ pub fn adcs_attributes() -> Vec<String> {
     .collect()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Enumeration
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> {
     info!(
@@ -614,7 +614,7 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
         template.analyze();
 
         if !template.vulnerabilities.is_empty() {
-            info!("[adcs]  {} → {:?}", name, template.vulnerabilities);
+            info!("[adcs]  {} -> {:?}", name, template.vulnerabilities);
         } else {
             debug!("[adcs]  {} (no obvious vulnerabilities)", name);
         }
@@ -636,9 +636,9 @@ pub async fn enumerate_adcs(config: &ReaperConfig) -> Result<Vec<CertTemplate>> 
     Ok(results)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
@@ -735,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_esc6_not_when_subject_supplied() {
-        // enrollee_supplies_subject=true → ESC1, not ESC6
+        // enrollee_supplies_subject=true -> ESC1, not ESC6
         let t = make_template("ESC1not6", true, false, 0, &[OID_CLIENT_AUTH], &[]);
         assert!(!t.check_esc6());
     }

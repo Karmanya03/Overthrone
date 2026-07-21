@@ -53,7 +53,7 @@ fn sanitize_ad_string(input: &str) -> String {
     let mut chars = input.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
-            // ANSI escape — consume until we hit a letter terminator
+            // ANSI escape -- consume until we hit a letter terminator
             // CSI: ESC[ ... letter
             // OSC: ESC] ... ST (ESC\) or BEL
             // Other: ESC ... letter
@@ -89,7 +89,7 @@ fn sanitize_ad_string(input: &str) -> String {
                     }
                 }
                 Some(_) => {
-                    // Single-char escape or unrecognized — discard
+                    // Single-char escape or unrecognized -- discard
                 }
                 None => break,
             }
@@ -1850,67 +1850,67 @@ fn edge_security_guidance(relationship: &str) -> (u8, &'static str) {
         ),
         "adcsesc1" => (
             1,
-            "ESC1 — Enrollee supplies SAN. Request a certificate for a target user via this template and use it for authentication (PKINIT).",
+            "ESC1 -- Enrollee supplies SAN. Request a certificate for a target user via this template and use it for authentication (PKINIT).",
         ),
         "adcsesc2" => (
             1,
-            "ESC2 — Any purpose template. Template can be used for any purpose, including client authentication or as an enrollment agent.",
+            "ESC2 -- Any purpose template. Template can be used for any purpose, including client authentication or as an enrollment agent.",
         ),
         "adcsesc3" => (
             1,
-            "ESC3 — Enrollment agent abuse. Enroll for an agent certificate, then use it to request a certificate on behalf of a target user.",
+            "ESC3 -- Enrollment agent abuse. Enroll for an agent certificate, then use it to request a certificate on behalf of a target user.",
         ),
         "adcsesc4" => (
             1,
-            "ESC4 — Vulnerable template ACLs. Modify the template to enable SAN abuse (ESC1), enroll, then restore the original ACLs.",
+            "ESC4 -- Vulnerable template ACLs. Modify the template to enable SAN abuse (ESC1), enroll, then restore the original ACLs.",
         ),
         "adcsesc5" => (
             1,
-            "ESC5 — Vulnerable CA object ACLs. CA configuration can be modified to enable other ESC paths; check security descriptor on the CA.",
+            "ESC5 -- Vulnerable CA object ACLs. CA configuration can be modified to enable other ESC paths; check security descriptor on the CA.",
         ),
         "adcsesc6" => (
             1,
-            "ESC6 — EDITF_ATTRIBUTESUBJECTALTNAME2 enabled. CA global flag allows SANs in all requests; request any template with a target SAN.",
+            "ESC6 -- EDITF_ATTRIBUTESUBJECTALTNAME2 enabled. CA global flag allows SANs in all requests; request any template with a target SAN.",
         ),
         "adcsesc7" => (
             1,
-            "ESC7 — Vulnerable CA permissions. Control over ManageCA/ManageCertificates allows adding officers or enabling SAN abuse flags.",
+            "ESC7 -- Vulnerable CA permissions. Control over ManageCA/ManageCertificates allows adding officers or enabling SAN abuse flags.",
         ),
         "adcsesc8" => (
             1,
-            "ESC8 — ADCS Web Enrollment relay. Relay an authenticated NTLM session to the web enrollment endpoint to obtain a certificate.",
+            "ESC8 -- ADCS Web Enrollment relay. Relay an authenticated NTLM session to the web enrollment endpoint to obtain a certificate.",
         ),
         "adcsesc9" => (
             1,
-            "ESC9 — No Security Extension (UPN poisoning). Victim with CT_FLAG_NO_SECURITY_EXTENSION template can be impersonated via UPN poisoning.",
+            "ESC9 -- No Security Extension (UPN poisoning). Victim with CT_FLAG_NO_SECURITY_EXTENSION template can be impersonated via UPN poisoning.",
         ),
         "adcsesc10" => (
             1,
-            "ESC10 — Weak certificate mapping. Impersonation via accounts with weak mapping settings or registry-based enforcement disabled.",
+            "ESC10 -- Weak certificate mapping. Impersonation via accounts with weak mapping settings or registry-based enforcement disabled.",
         ),
         "adcsesc11" => (
             1,
-            "ESC11 — NTLM relay to RPC. Relay NTLM to the ICertPassage RPC interface to obtain a certificate.",
+            "ESC11 -- NTLM relay to RPC. Relay NTLM to the ICertPassage RPC interface to obtain a certificate.",
         ),
         "adcsesc12" => (
             1,
-            "ESC12 — Policy Server relay. Relay to the Certificate Enrollment Policy (CEP) service.",
+            "ESC12 -- Policy Server relay. Relay to the Certificate Enrollment Policy (CEP) service.",
         ),
         "adcsesc13" => (
             1,
-            "ESC13 — OID-to-Group Link. Template issuance policy is linked to a privileged group, granting its membership upon authentication.",
+            "ESC13 -- OID-to-Group Link. Template issuance policy is linked to a privileged group, granting its membership upon authentication.",
         ),
         "adcsesc14" => (
             1,
-            "ESC14 — altSecurityIdentities mapping. Add an RFC822/UPN mapping for a victim account, obtain a certificate, and restore mapping.",
+            "ESC14 -- altSecurityIdentities mapping. Add an RFC822/UPN mapping for a victim account, obtain a certificate, and restore mapping.",
         ),
         "adcsesc15" => (
             1,
-            "ESC15 — Schema V1 EKU abuse. Exploit implicit SAN allowance in old templates for impersonation via PKINIT.",
+            "ESC15 -- Schema V1 EKU abuse. Exploit implicit SAN allowance in old templates for impersonation via PKINIT.",
         ),
         "adcsesc16" => (
             1,
-            "ESC16 — NO_SECURITY_EXTENSION abuse. Poison UPN and request certificate via a template with security extensions disabled.",
+            "ESC16 -- NO_SECURITY_EXTENSION abuse. Poison UPN and request certificate via a template with security extensions disabled.",
         ),
         "writeproperty" => (
             2,
@@ -2529,7 +2529,7 @@ fn path_response(graph: &ViewerGraph, path: PathResult) -> PathResponse {
 //  Route Handlers
 // ============================================================
 
-/// GET / — Serve the embedded SPA
+/// GET / -- Serve the embedded SPA
 async fn index() -> impl IntoResponse {
     (
         [
@@ -2558,7 +2558,7 @@ async fn three_graph_js() -> impl IntoResponse {
     )
 }
 
-/// GET /api/graphs — List available graphs
+/// GET /api/graphs -- List available graphs
 async fn three_min_js() -> impl IntoResponse {
     (
         [
@@ -2596,7 +2596,7 @@ async fn list_graphs(State(state): State<Arc<AppState>>) -> Json<Vec<GraphInfo>>
     Json(graphs)
 }
 
-/// GET /api/graph — Full graph data for D3 rendering
+/// GET /api/graph -- Full graph data for D3 rendering
 async fn get_graph(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -2669,7 +2669,7 @@ async fn get_graph(
     }))
 }
 
-/// GET /api/node/:id — Detail view for a single node
+/// GET /api/node/:id -- Detail view for a single node
 async fn get_node_detail(
     State(state): State<Arc<AppState>>,
     AxumPath(nid): AxumPath<String>,
@@ -2678,7 +2678,7 @@ async fn get_node_detail(
     node_detail_response(&state, query.graph.as_deref(), &nid).await
 }
 
-/// GET /api/node-detail?id=... â€” Detail view using a query parameter.
+/// GET /api/node-detail?id=... -- Detail view using a query parameter.
 ///
 /// AD object identifiers can contain characters that are awkward in path
 /// segments after browser/server URL decoding. Keep the path endpoint for
@@ -2763,7 +2763,7 @@ async fn node_detail_response(
     Ok(Json(detail))
 }
 
-/// GET /api/search?q=... — Search nodes by name
+/// GET /api/search?q=... -- Search nodes by name
 async fn search_nodes(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
@@ -3038,7 +3038,7 @@ async fn edge_types() -> Json<Vec<EdgeTypeInfo>> {
     )
 }
 
-/// POST /api/path — Find shortest attack path between two nodes
+/// POST /api/path -- Find shortest attack path between two nodes
 async fn find_path(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -3087,7 +3087,7 @@ async fn find_path(
     }))
 }
 
-/// GET /api/stats — Quick stats summary
+/// GET /api/stats -- Quick stats summary
 async fn get_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<GraphQuery>,
@@ -3101,7 +3101,7 @@ async fn get_stats(
     )))
 }
 
-/// GET /api/graph/:id/timings — Graph load timing breakdown
+/// GET /api/graph/:id/timings -- Graph load timing breakdown
 async fn get_graph_timings(
     State(state): State<Arc<AppState>>,
     AxumPath(graph_id): AxumPath<String>,
@@ -3342,7 +3342,7 @@ fn store_zip_upload(
     })
 }
 
-/// POST /api/upload — Upload a graph JSON file or ZIP archive of JSON files.
+/// POST /api/upload -- Upload a graph JSON file or ZIP archive of JSON files.
 async fn upload_graph(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3427,7 +3427,7 @@ fn json_load_error(status: StatusCode) -> (StatusCode, Json<ApiError>) {
 }
 
 // ============================================================
-//  WebSocket — live notifications
+//  WebSocket -- live notifications
 // ============================================================
 
 /// WebSocket upgrade handler.  Clients connect here to receive push
@@ -3485,14 +3485,14 @@ fn notify_graph_updated(state: &AppState, graph_id: &str, label: &str) {
 //  Middleware
 // ============================================================
 
-/// Basic auth middleware — checks the `Authorization: Basic` header against
+/// Basic auth middleware -- checks the `Authorization: Basic` header against
 /// the configured credentials in `AppState`.
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<impl IntoResponse, StatusCode> {
-    // No-auth mode (localhost) — pass through all requests
+    // No-auth mode (localhost) -- pass through all requests
     if state.config.username.is_none() || state.config.password.is_none() {
         return Ok(next.run(req).await);
     }
@@ -3528,7 +3528,7 @@ async fn auth_middleware(
     Err(StatusCode::UNAUTHORIZED)
 }
 
-/// Rate limiting middleware — checks per-IP request counts against the
+/// Rate limiting middleware -- checks per-IP request counts against the
 /// configured window and maximum. Also applies per-user rate limits when
 /// a bearer token is present.
 async fn rate_limit_middleware(
@@ -3557,14 +3557,14 @@ async fn rate_limit_middleware(
     Ok(next.run(req).await)
 }
 
-/// CSRF middleware — requires `X-CSRF-Token` header on POST/PUT/DELETE.
+/// CSRF middleware -- requires `X-CSRF-Token` header on POST/PUT/DELETE.
 /// In no-auth localhost mode, CSRF is also bypassed.
 async fn csrf_middleware(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Result<impl IntoResponse, StatusCode> {
-    // No-auth mode — skip CSRF checks (bound to localhost only)
+    // No-auth mode -- skip CSRF checks (bound to localhost only)
     if state.config.username.is_none() || state.config.password.is_none() {
         return Ok(next.run(req).await);
     }
@@ -3731,7 +3731,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
         .route("/api/stats", get(get_stats))
         .route("/api/upload", post(upload_graph))
         .route("/ws", get(ws_handler))
-        // auth middleware (pass-through when no credentials configured — localhost mode)
+        // auth middleware (pass-through when no credentials configured -- localhost mode)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -3837,7 +3837,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
             println!("  CSRF:   {}", csrf);
         }
     } else {
-        println!("  (no auth — bound to localhost only)");
+        println!("  (no auth -- bound to localhost only)");
     }
     println!("  Press Ctrl+C to stop.\n");
 
@@ -3851,7 +3851,7 @@ pub async fn launch_with_config(sources: &[String], port: u16, config: ViewerCon
 mod tests {
     use super::*;
 
-    // ── RateLimiter unit tests ──────────────────────────────────
+    // -- RateLimiter unit tests ----------------------------------
 
     #[tokio::test]
     async fn test_rate_limiter_rejects_over_limit() {
@@ -3872,7 +3872,7 @@ mod tests {
         assert!(limiter.check(ip_b).await); // different IP allowed
     }
 
-    // ── ViewerConfig unit tests ─────────────────────────────────
+    // -- ViewerConfig unit tests ---------------------------------
 
     const TEST_VIEWER_USER: &str = "admin";
     const TEST_VIEWER_PASS: &str = "secret";
@@ -3901,7 +3901,7 @@ mod tests {
         assert_eq!(config.password.as_deref(), Some(TEST_VIEWER_PASS));
     }
 
-    // ── Basic auth header parsing tests ──────────────────────────
+    // -- Basic auth header parsing tests --------------------------
 
     /// Parse and validate a `Basic` authorization header.
     /// Returns `true` if the header matches the expected credentials.
@@ -4120,7 +4120,7 @@ mod tests {
         assert_eq!(info.stats.as_ref().unwrap().total_edges, 1);
     }
 
-    // ── Phase 3 security primitive tests ────────────────────────
+    // -- Phase 3 security primitive tests ------------------------
 
     fn basic_auth_value(value: &str) -> String {
         format!(
@@ -4129,7 +4129,7 @@ mod tests {
         )
     }
 
-    // ── TlsConfig tests ─────────────────────────────────────────
+    // -- TlsConfig tests -----------------------------------------
 
     #[test]
     fn test_tls_config_construction() {
@@ -4178,7 +4178,7 @@ mod tests {
         assert!(cfg.csrf_token.is_some());
     }
 
-    // ── random_string tests ─────────────────────────────────────
+    // -- random_string tests -------------------------------------
 
     #[test]
     fn test_random_string_length() {
@@ -4211,7 +4211,7 @@ mod tests {
         }
     }
 
-    // ── CorsLayer restriction tests ─────────────────────────────
+    // -- CorsLayer restriction tests -----------------------------
 
     #[test]
     fn test_loopback_cors_returns_layer() {
@@ -4219,7 +4219,7 @@ mod tests {
         let _layer: CorsLayer = loopback_cors();
     }
 
-    // ── Auth parsing coverage tests ─────────────────────────────
+    // -- Auth parsing coverage tests -----------------------------
 
     #[test]
     fn test_basic_auth_with_empty_user_and_pass() {
@@ -4247,7 +4247,7 @@ mod tests {
         assert_eq!(parts[1], pw);
     }
 
-    // ── Config default behavior tests ───────────────────────────
+    // -- Config default behavior tests ---------------------------
 
     #[test]
     fn test_viewer_config_default_random_credentials_differ_between_calls() {
@@ -4258,7 +4258,7 @@ mod tests {
         assert_ne!(a.csrf_token, b.csrf_token);
     }
 
-    // ── WebSocket message tests ──────────────────────────────────
+    // -- WebSocket message tests ----------------------------------
 
     #[test]
     fn test_ws_message_list_updated_serialization() {

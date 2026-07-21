@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// ── Response types ────────────────────────────────────────────────────
+// -- Response types ----------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -44,7 +44,7 @@ struct HavocServerInfoResp {
     demons_count: Option<u32>,
 }
 
-// ── Channel ───────────────────────────────────────────────────────────
+// -- Channel -----------------------------------------------------------
 /// Data structure used by this module.
 pub struct HavocChannel {
     /// Shared HTTP client (reuses connections)
@@ -118,7 +118,7 @@ impl HavocChannel {
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(OverthroneError::C2(
-                "Havoc API authentication failed — check token/password".into(),
+                "Havoc API authentication failed -- check token/password".into(),
             ));
         }
         if status.is_client_error() || status.is_server_error() {
@@ -209,7 +209,7 @@ impl HavocChannel {
     }
 }
 
-// ── C2Channel implementation ──────────────────────────────────────────
+// -- C2Channel implementation ------------------------------------------
 
 #[async_trait]
 impl C2Channel for HavocChannel {

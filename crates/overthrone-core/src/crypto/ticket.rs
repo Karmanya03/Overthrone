@@ -1,4 +1,4 @@
-//! Ticket forging: Golden, Silver, Diamond — shared crypto helpers.
+//! Ticket forging: Golden, Silver, Diamond -- shared crypto helpers.
 //!
 //! Provides centralised routines for:
 //! - PAC checksum computation (HMAC-MD5 for RC4, HMAC-SHA1-96 for AES)
@@ -12,9 +12,9 @@ use super::aes_cts;
 use super::hmac_util;
 use super::rc4_util;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Kerberos Constants
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Kerberos etype 23: RC4-HMAC-MD5
 pub const ETYPE_RC4_HMAC: i32 = 23;
@@ -30,16 +30,16 @@ pub const CHECKSUM_HMAC_SHA1_96_AES128: i32 = 15;
 /// PAC checksum type for HMAC-SHA1-96-AES-256
 pub const CHECKSUM_HMAC_SHA1_96_AES256: i32 = 16;
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // PAC Checksum
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Compute a PAC checksum for the given etype.
-/// Returns `(checksum_type_le32 || checksum_bytes)` — the format used in
+/// Returns `(checksum_type_le32 || checksum_bytes)` -- the format used in
 /// `PAC_SIGNATURE_DATA`.
-/// - etype 23 (RC4-HMAC): `HMAC-MD5(key, data)` → 16-byte checksum, type -138.
-/// - etype 17 (AES-128):  `HMAC-SHA1-96(key, data)` → 12-byte checksum, type 15.
-/// - etype 18 (AES-256):  `HMAC-SHA1-96(key, data)` → 12-byte checksum, type 16.
+/// - etype 23 (RC4-HMAC): `HMAC-MD5(key, data)` -> 16-byte checksum, type -138.
+/// - etype 17 (AES-128):  `HMAC-SHA1-96(key, data)` -> 12-byte checksum, type 15.
+/// - etype 18 (AES-256):  `HMAC-SHA1-96(key, data)` -> 12-byte checksum, type 16.
 pub fn compute_pac_checksum(etype: i32, key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let mut result = Vec::new();
 
@@ -85,9 +85,9 @@ pub fn checksum_type_for_etype(etype: i32) -> Result<i32> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Ticket Part Encryption / Decryption
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Encrypt a Kerberos ticket part (EncTicketPart, EncTGSRepPart, etc.)
 /// using the appropriate cipher for the given etype.
@@ -123,14 +123,14 @@ pub fn decrypt_ticket_part(
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Key Utilities
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Detect the etype from key length.
-/// - 16 bytes → etype 23 (RC4-HMAC / NTLM hash)
-/// - 32 bytes → etype 18 (AES-256)
-/// - Other → error
+/// - 16 bytes -> etype 23 (RC4-HMAC / NTLM hash)
+/// - 32 bytes -> etype 18 (AES-256)
+/// - Other -> error
 pub fn detect_etype_from_key(key: &[u8]) -> Result<i32> {
     match key.len() {
         16 => Ok(ETYPE_RC4_HMAC),
@@ -173,9 +173,9 @@ pub fn etype_name(etype: i32) -> &'static str {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Kirbi (`.kirbi`) File Encoding
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Encode raw KRB-CRED bytes into Base64 `.kirbi` format.
 /// A `.kirbi` file is the Base64 encoding of the ASN.1 DER-encoded KRB-CRED
@@ -193,7 +193,7 @@ pub fn decode_kirbi(kirbi_b64: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("Invalid kirbi base64: {e}"))
 }
 
-/// Write a `.kirbi` file (raw KRB-CRED DER → Base64 → file).
+/// Write a `.kirbi` file (raw KRB-CRED DER -> Base64 -> file).
 pub fn write_kirbi_file(path: &std::path::Path, krb_cred_der: &[u8]) -> Result<()> {
     let kirbi = build_kirbi(krb_cred_der);
     std::fs::write(path, kirbi)?;
@@ -223,7 +223,7 @@ pub fn build_ccache(
 
     // File format version (0x0504 = version 4)
     ccache.extend_from_slice(&[0x05, 0x04]);
-    // Header length (0 — no tags)
+    // Header length (0 -- no tags)
     ccache.extend_from_slice(&0u16.to_be_bytes());
 
     // Default principal

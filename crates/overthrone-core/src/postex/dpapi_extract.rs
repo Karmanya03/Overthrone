@@ -21,7 +21,7 @@
 //! let config = DpapiExtractConfig { backup_key, .. };
 //! let result = extract_dpapi_credentials(&config)?;
 //! for cred in &result.decrypted_credentials {
-//!     println!("{} → {}", cred.target, cred.password);
+//!     println!("{} -> {}", cred.target, cred.password);
 //! }
 //! ```
 
@@ -226,7 +226,7 @@ pub fn extract_dpapi_credentials(_config: &DpapiExtractConfig) -> Result<DpapiEx
     ))
 }
 
-// ─── Directory Discovery ─────────────────────────────────────────
+// --- Directory Discovery -----------------------------------------
 
 /// Discover all user Protect directories under the users base path.
 fn discover_protect_dirs(users_base: Option<&Path>) -> Vec<PathBuf> {
@@ -285,7 +285,7 @@ fn discover_credential_dirs(users_base: Option<&Path>) -> Vec<PathBuf> {
     dirs
 }
 
-// ─── Masterkey Processing ────────────────────────────────────────
+// --- Masterkey Processing ----------------------------------------
 
 /// Result of processing a single Protect directory.
 struct ProcessedMasterkeys {
@@ -405,7 +405,7 @@ fn guess_guid_from_path(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-// ─── Credential Processing ───────────────────────────────────────
+// --- Credential Processing ---------------------------------------
 
 /// Result of processing a single Credentials directory.
 struct ProcessedCredentials {
@@ -574,7 +574,7 @@ fn parse_utf16le_null_terminated(data: &[u8]) -> Result<String> {
     Ok(String::from_utf16_lossy(&u16_chars))
 }
 
-// ─── LSASS Dump Scanning ──────────────────────────────────────────
+// --- LSASS Dump Scanning ------------------------------------------
 
 /// Scan an LSASS dump file for DPAPI masterkey material.
 ///
@@ -642,7 +642,7 @@ fn scan_lsass_dump_for_masterkeys(
             continue;
         }
 
-        // Found a potential masterkey — add to cache
+        // Found a potential masterkey -- add to cache
         let key_material = dump_data[offset + 16..offset + 48].to_vec();
         decryptor.cache_masterkey(guid, key_material);
         found += 1;
@@ -658,7 +658,7 @@ fn scan_lsass_dump_for_masterkeys(
 mod tests {
     use super::*;
 
-    // ─── UTF-16 Parsing Tests ────────────────────────────────────
+    // --- UTF-16 Parsing Tests ------------------------------------
 
     #[test]
     fn test_parse_utf16le_simple() {
@@ -689,10 +689,10 @@ mod tests {
         let input = [0xD8, 0x00, 0x00, 0x00]; // lone surrogate
         let result = parse_utf16le_null_terminated(&input);
         assert!(result.is_ok());
-        // Should not panic — uses from_utf16_lossy
+        // Should not panic -- uses from_utf16_lossy
     }
 
-    // ─── Masterkey File Processing Tests ──────────────────────────
+    // --- Masterkey File Processing Tests --------------------------
 
     #[test]
     fn test_guess_guid_from_path_with_hyphens() {
@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(guid, "deadbeef1234");
     }
 
-    // ─── LSASS Dump Scanning Tests ────────────────────────────────
+    // --- LSASS Dump Scanning Tests --------------------------------
 
     #[test]
     fn test_scan_lsass_dump_too_small() {
@@ -788,7 +788,7 @@ mod tests {
 
         let mut data = Vec::with_capacity(100);
         data.extend_from_slice(&2u32.to_le_bytes()); // version
-        data.extend_from_slice(&[0u8; 16]); // zero GUID — should be skipped
+        data.extend_from_slice(&[0u8; 16]); // zero GUID -- should be skipped
         data.extend_from_slice(&[0x42u8; 32]); // key
 
         let _ = std::fs::write(&dump_path, &data);
@@ -800,7 +800,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ─── Credential File Parsing Tests ────────────────────────────
+    // --- Credential File Parsing Tests ----------------------------
 
     #[test]
     fn test_decrypt_credential_file_internal_too_short() {
@@ -855,7 +855,7 @@ mod tests {
         }
     }
 
-    // ─── Discover Protect Dirs Tests ──────────────────────────────
+    // --- Discover Protect Dirs Tests ------------------------------
 
     #[test]
     fn test_discover_protect_dirs_nonexistent_base() {
@@ -896,7 +896,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ─── Credential File Decryption Integration Tests ──────────────
+    // --- Credential File Decryption Integration Tests --------------
 
     #[test]
     fn test_credential_file_version_detection() {
@@ -933,7 +933,7 @@ mod tests {
         let mut decryptor = DpapiDecryptor::new(&[0u8; 32]);
         let result = process_protect_dir(&dir, &mut decryptor, &config);
 
-        // Should not error — Preferred/CREDHIST files are skipped
+        // Should not error -- Preferred/CREDHIST files are skipped
         assert!(result.is_ok());
         assert_eq!(result.unwrap().files_found, 0);
 
@@ -959,7 +959,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ─── Windows-Gated Tests ──────────────────────────────────────
+    // --- Windows-Gated Tests --------------------------------------
 
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]

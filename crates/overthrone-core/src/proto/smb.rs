@@ -24,7 +24,7 @@ use std::str::FromStr;
 pub const SMB_PORT: u16 = 445;
 pub const ADMIN_SHARES: &[&str] = &["C$", "ADMIN$", "IPC$"];
 #[cfg(windows)]
-const READ_BUF_SIZE: usize = 1_048_576; // 1 MiB — large enough for DCSync/Kerberos responses
+const READ_BUF_SIZE: usize = 1_048_576; // 1 MiB -- large enough for DCSync/Kerberos responses
 
 // Public Types (available on all platforms)
 /// Data structure used by this module.
@@ -47,8 +47,10 @@ pub struct SmbSession {
     /// NTLM or Kerberos session key for cryptographic operations
     session_key: Option<Vec<u8>>,
     /// Stored password for reconnection (set during password-based connect)
+    #[allow(dead_code)]
     reconnect_password: Option<String>,
     /// Stored NT hash for reconnection (set during PtH connect)
+    #[allow(dead_code)]
     reconnect_nt_hash: Option<String>,
 }
 
@@ -581,7 +583,7 @@ impl SmbSession {
             "SMB: Reading \\\\{}\\{}\\{}",
             self.target, share, remote_path
         );
-        // PTH path via SMB2 client — use a FRESH connection to avoid session
+        // PTH path via SMB2 client -- use a FRESH connection to avoid session
         // corruption from IOCTL operations on WS2025 SMB 3.1.1.
         if let Some(inner) = self.inner.as_ref() {
             self.reconnect_inner().await?;
@@ -736,7 +738,7 @@ impl SmbSession {
             info!("SMB: Directory created/verified (PTH): {}", remote_path);
             return Ok(());
         }
-        // Standard path — skip directory creation; the smb crate doesn't expose
+        // Standard path -- skip directory creation; the smb crate doesn't expose
         // a direct create_dir API. Users should ensure parent dirs exist.
         info!(
             "SMB: Directory creation skipped (no PTH client): {}",
@@ -875,7 +877,7 @@ impl SmbSession {
     /// (each with `PFC_LAST_FRAG` bit 1 of pfc_flags clear except the last).
     /// This method reads all fragments and returns a synthetic single-PDU buffer:
     /// the 24-byte header of the first fragment followed by all stub payloads
-    /// concatenated — ready for `drsr::parse_get_nc_changes_reply`.
+    /// concatenated -- ready for `drsr::parse_get_nc_changes_reply`.
     pub async fn pipe_transact_multifrag(
         &self,
         pipe_name: &str,
@@ -975,7 +977,7 @@ impl SmbSession {
             first[RPC_HDR.min(first.len())..first_frag_len.min(first.len())].to_vec();
 
         debug!(
-            "SMB: Multi-fragment RPC on '{}' — fragment 1: {} bytes (stub: {})",
+            "SMB: Multi-fragment RPC on '{}' -- fragment 1: {} bytes (stub: {})",
             pipe_name,
             first.len(),
             all_stubs.len()
@@ -1078,7 +1080,7 @@ impl SmbSession {
     /// ## Windows
     /// Injects the ticket into the current logon session's credential cache
     /// via `LsaCallAuthenticationPackage(KERB_SUBMIT_TKT_REQUEST)`, then
-    /// opens the SMB share through the normal SSPI path — Windows
+    /// opens the SMB share through the normal SSPI path -- Windows
     /// automatically picks up the cached TGS during SMB session setup.
     /// ## Non-Windows
     /// Builds a raw SPNEGO `NegTokenInit` wrapping the AP-REQ from the
@@ -1093,7 +1095,7 @@ impl SmbSession {
         ticket.validate_for_ap_req()?;
         info!("SMB: Connecting to \\\\{target} with Kerberos ticket for {username}");
 
-        // ── Step 1: Inject ticket into the Windows Kerberos cache ──
+        // -- Step 1: Inject ticket into the Windows Kerberos cache --
         #[cfg(windows)]
         {
             if let Err(e) = Self::inject_ticket_windows(&ticket) {
@@ -1101,7 +1103,7 @@ impl SmbSession {
             }
         }
 
-        // ── Step 2: Connect via SMB crate ──
+        // -- Step 2: Connect via SMB crate --
         // On Windows the crate calls InitializeSecurityContext(Negotiate),
         // which will pick up the injected TGS automatically.
         let client = Client::new(ClientConfig::default());
@@ -1109,7 +1111,7 @@ impl SmbSession {
         let unc = UncPath::from_str(&ipc_path)
             .map_err(|e| OverthroneError::Smb(format!("Invalid UNC path '{ipc_path}': {e}")))?;
 
-        // Attempt 1: Use empty password — SSPI will use the cached Kerberos
+        // Attempt 1: Use empty password -- SSPI will use the cached Kerberos
         // ticket. If that fails, fall back to session-key-as-hash.
         let qualified_user = format!("{}\\{}", domain, username);
         let connect_result = client
@@ -1165,7 +1167,7 @@ impl SmbSession {
             LsaLookupAuthenticationPackage,
         };
 
-        // LsaConnectUntrusted → handle
+        // LsaConnectUntrusted -> handle
         let mut lsa_handle = windows::Win32::Foundation::HANDLE::default();
         let status = unsafe { LsaConnectUntrusted(&mut lsa_handle) };
         if status.0 != 0 {
@@ -1216,7 +1218,7 @@ impl SmbSession {
         // buf[4..12] already zero
         // Flags
         // buf[12..16] already zero
-        // Key: KeyType = 23 (RC4), Length, Offset (simplified — real type depends on enc)
+        // Key: KeyType = 23 (RC4), Length, Offset (simplified -- real type depends on enc)
         buf[16..20].copy_from_slice(&23u32.to_le_bytes()); // KeyType
         buf[20..24].copy_from_slice(&(ticket.session_key.len() as u32).to_le_bytes());
         buf[24..28].copy_from_slice(&key_offset.to_le_bytes());
@@ -1364,7 +1366,7 @@ impl SmbSession {
         // type byte [2] == 12 means BIND_ACK
         if bind_resp.len() < 4 || bind_resp[2] != 12 {
             return Err(OverthroneError::Smb(
-                "SRVSVC bind rejected — cannot enumerate shares".to_string(),
+                "SRVSVC bind rejected -- cannot enumerate shares".to_string(),
             ));
         }
 
@@ -1386,7 +1388,7 @@ impl SmbSession {
             Ok(s) => s,
             Err(e) => {
                 warn!(
-                    "SMB: list_shares on {} failed: {e} — falling back to known shares",
+                    "SMB: list_shares on {} failed: {e} -- falling back to known shares",
                     self.target
                 );
                 ADMIN_SHARES.iter().map(|s| s.to_string()).collect()
@@ -1499,7 +1501,7 @@ pub fn build_samr_close_handle(handle: &[u8]) -> Vec<u8> {
 }
 
 /// Build SAMR LookupIdsInDomain request (opnum 18).
-/// Converts RIDs to names — the core of RID cycling.
+/// Converts RIDs to names -- the core of RID cycling.
 pub fn build_samr_lookup_ids(domain_handle: &[u8], rids: &[u32]) -> Vec<u8> {
     let mut stub = Vec::new();
     stub.extend_from_slice(domain_handle);
@@ -1958,7 +1960,7 @@ impl SmbSession {
 
     /// Create a directory on the remote share.
     /// If the directory already exists, succeeds silently.
-    /// Only the final path component is created — parent directories must exist.
+    /// Only the final path component is created -- parent directories must exist.
     pub async fn create_dir(&self, share: &str, remote_path: &str) -> Result<()> {
         info!(
             "SMB: Creating directory \\\\{}\\{}\\{}",
@@ -2096,7 +2098,7 @@ impl SmbSession {
         let is_last = (pfc_flags & 0x02) != 0;
 
         if first.len() < 6 || ptype != 2 || is_last {
-            // Single-fragment or non-response PDU — close and return as-is
+            // Single-fragment or non-response PDU -- close and return as-is
             conn.close(&fid).await?;
             return Ok(first);
         }
@@ -2108,7 +2110,7 @@ impl SmbSession {
             first[RPC_HDR.min(first.len())..first_frag_len.min(first.len())].to_vec();
 
         debug!(
-            "SMB2: Multi-fragment RPC on '{}' — frag 1: {} bytes (stub: {})",
+            "SMB2: Multi-fragment RPC on '{}' -- frag 1: {} bytes (stub: {})",
             pipe_name,
             first.len(),
             all_stubs.len()
@@ -2317,7 +2319,7 @@ impl SmbSession {
         let bind_resp = self.pipe_transact("srvsvc", &bind).await?;
         if bind_resp.len() < 4 || bind_resp[2] != 12 {
             return Err(OverthroneError::Smb(
-                "SRVSVC bind rejected — cannot enumerate shares".to_string(),
+                "SRVSVC bind rejected -- cannot enumerate shares".to_string(),
             ));
         }
 
@@ -2339,7 +2341,7 @@ impl SmbSession {
             Ok(s) => s,
             Err(e) => {
                 warn!(
-                    "SMB: list_shares on {} failed: {e} — falling back to known shares",
+                    "SMB: list_shares on {} failed: {e} -- falling back to known shares",
                     self.target
                 );
                 ADMIN_SHARES.iter().map(|s| s.to_string()).collect()
@@ -2407,7 +2409,7 @@ pub async fn check_admin_targets(
     results
 }
 
-// ─── SRVSVC helpers (used by list_shares on both Windows and non-Windows) ──────
+// --- SRVSVC helpers (used by list_shares on both Windows and non-Windows) ------
 
 /// DCE/RPC BIND for SRVSVC (UUID 4b324fc8-1670-01d3-1278-5a47bf6ee188 v3.0).
 fn build_srvsvc_bind() -> Vec<u8> {
@@ -2516,7 +2518,7 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
     let rc = u32::from_le_bytes([s[16], s[17], s[18], s[19]]);
     if rc != 0 {
         debug!("SRVSVC NetShareEnumAll: NET_API_STATUS = 0x{:08x}", rc);
-        // carry on — partial results may still be valid
+        // carry on -- partial results may still be valid
     }
 
     // Deferred SHARE_INFO_1_CONTAINER at s[20]
@@ -2535,7 +2537,7 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
         return Vec::new();
     }
     // We only care about name_ptr and remark_ptr (to know which deferred strings
-    // to read) — skip share type.
+    // to read) -- skip share type.
     let mut ptrs: Vec<(u32, u32)> = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let off = ARR_OFF + i * 12;
@@ -2601,7 +2603,7 @@ fn read_ndr_wide_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
 mod tests {
     use super::*;
 
-    // ── Constants ──
+    // -- Constants --
 
     #[test]
     fn test_smb_port() {
@@ -2616,7 +2618,7 @@ mod tests {
         assert_eq!(ADMIN_SHARES.len(), 3);
     }
 
-    // ── KerberosTicket ──
+    // -- KerberosTicket --
 
     #[test]
     fn test_kerberos_ticket_new() {
@@ -2677,7 +2679,7 @@ mod tests {
         assert_eq!(ticket.data, vec![0x76, 0x01, 0x02]);
         assert!(ticket.validate_for_ap_req().is_ok());
     }
-    // ── ndr_conformant_string / read_ndr_wide_string (roundtrip) ──
+    // -- ndr_conformant_string / read_ndr_wide_string (roundtrip) --
 
     #[test]
     fn test_ndr_conformant_string_empty() {
@@ -2731,7 +2733,7 @@ mod tests {
         assert_eq!(read_ndr_wide_string(&buf, 0), None);
     }
 
-    // ── build_rpc_request ──
+    // -- build_rpc_request --
 
     #[test]
     fn test_build_rpc_request_structure() {
@@ -2774,7 +2776,7 @@ mod tests {
         assert_eq!(flen, 24 + 100);
     }
 
-    // ── SAMR helpers ──
+    // -- SAMR helpers --
 
     #[test]
     fn test_build_samr_bind_structure() {
@@ -2899,7 +2901,7 @@ mod tests {
         assert_eq!(&req[24..], &handle);
     }
 
-    // ── SRVSVC helpers ──
+    // -- SRVSVC helpers --
 
     #[test]
     fn test_build_srvsvc_bind_structure() {
@@ -2939,7 +2941,7 @@ mod tests {
         );
     }
 
-    // ── parse_srvsvc_share_names ──
+    // -- parse_srvsvc_share_names --
 
     #[test]
     fn test_parse_srvsvc_share_names_empty_response() {

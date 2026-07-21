@@ -1,16 +1,16 @@
-//! Predefined attack playbooks — curated sequences for common AD attack paths.
+//! Predefined attack playbooks -- curated sequences for common AD attack paths.
 //!
 //! Each playbook is a named template that generates plan steps.
-//! Think of them as "recipes" — the planner can invoke a playbook
+//! Think of them as "recipes" -- the planner can invoke a playbook
 //! when it detects the right conditions.
 
 use crate::planner::{NoiseLevel, PlanStep, PlannedAction};
 use crate::runner::Stage;
 use serde::{Deserialize, Serialize};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Playbook Identifiers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlaybookId {
@@ -18,19 +18,19 @@ pub enum PlaybookId {
     FullRecon,
     /// Kerberoast + AS-REP roast + crack
     RoastAndCrack,
-    /// Constrained delegation → S4U → impersonate admin
+    /// Constrained delegation -> S4U -> impersonate admin
     DelegationAbuse,
-    /// RBCD → S4U → service ticket as admin
+    /// RBCD -> S4U -> service ticket as admin
     RbcdChain,
-    /// Coerce DC → relay → compromise DC
+    /// Coerce DC -> relay -> compromise DC
     CoerceAndRelay,
-    /// PSExec/SMBExec to target → dump creds → pivot
+    /// PSExec/SMBExec to target -> dump creds -> pivot
     LateralPivot,
     /// DCSync once DA is achieved
     DcSyncDump,
     /// Golden ticket persistence
     GoldenTicketPersist,
-    /// Full automated chain: recon → roast → lateral → DA → loot
+    /// Full automated chain: recon -> roast -> lateral -> DA -> loot
     FullAutoPwn,
 }
 
@@ -50,9 +50,9 @@ impl std::fmt::Display for PlaybookId {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 // Playbook Definition
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// A playbook is a named, described collection of plan steps
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,17 +107,17 @@ impl Playbook {
             ),
             (
                 PlaybookId::RbcdChain,
-                "RBCD write → S4U → impersonate",
+                "RBCD write -> S4U -> impersonate",
                 NoiseLevel::Medium,
             ),
             (
                 PlaybookId::CoerceAndRelay,
-                "Auth coercion → NTLM relay",
+                "Auth coercion -> NTLM relay",
                 NoiseLevel::Medium,
             ),
             (
                 PlaybookId::LateralPivot,
-                "Exec on host → dump creds → move",
+                "Exec on host -> dump creds -> move",
                 NoiseLevel::High,
             ),
             (
@@ -132,15 +132,15 @@ impl Playbook {
             ),
             (
                 PlaybookId::FullAutoPwn,
-                "Full chain: recon → escalate → DA → loot",
+                "Full chain: recon -> escalate -> DA -> loot",
                 NoiseLevel::Critical,
             ),
         ]
     }
 
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
     // Playbook Builders
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     fn make_step(
         id: &str,
@@ -281,7 +281,7 @@ impl Playbook {
             ),
             Self::make_step(
                 "deleg_2",
-                "S4U2Self → S4U2Proxy impersonation chain",
+                "S4U2Self -> S4U2Proxy impersonation chain",
                 Stage::Attack,
                 PlannedAction::ConstrainedDelegation {
                     account: String::new(),
@@ -468,7 +468,7 @@ impl Playbook {
     fn dcsync_dump() -> Self {
         let steps = vec![Self::make_step(
             "dc_1",
-            "DCSync — replicate all domain credentials",
+            "DCSync -- replicate all domain credentials",
             Stage::Loot,
             PlannedAction::DcsSync { target_user: None },
             100,
@@ -550,7 +550,7 @@ impl Playbook {
         Self {
             id: PlaybookId::FullAutoPwn,
             name: "Full AutoPwn".to_string(),
-            description: "Automated full chain: recon → roast → delegate → lateral → DA → loot"
+            description: "Automated full chain: recon -> roast -> delegate -> lateral -> DA -> loot"
                 .to_string(),
             noise_level: NoiseLevel::Critical,
             steps,

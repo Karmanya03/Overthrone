@@ -4,7 +4,7 @@
 //! Identifiers (RIDs) via MS-SAMR over the IPC$ named pipe.
 //!
 //! Works with:
-//! - Null sessions (no credentials) — SAMR via SMB IPC$
+//! - Null sessions (no credentials) -- SAMR via SMB IPC$
 //! - Low-privilege authenticated sessions
 //!
 //! Primary method: MS-SAMR RPC over SMB named pipe (works unauthenticated).
@@ -18,9 +18,9 @@ use crate::proto::smb::SmbSession;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Types
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 /// Type of account discovered via RID cycling
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,13 +89,13 @@ impl Default for RidCycleConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Core Function — SAMR Primary, LDAP Fallback
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
+//  Core Function -- SAMR Primary, LDAP Fallback
+// ===========================================================
 
 pub async fn rid_cycle(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     info!(
-        "RID cycling {} → RID range {}-{} (batch size: {})",
+        "RID cycling {} -> RID range {}-{} (batch size: {})",
         config.target, config.start_rid, config.end_rid, config.batch_size
     );
 
@@ -116,9 +116,9 @@ pub async fn rid_cycle(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     rid_cycle_ldap(config).await
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SAMR-based RID Cycling (Primary Method)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     info!("[SAMR] Connecting to {} for RID cycling", config.target);
@@ -236,9 +236,9 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     Ok(results)
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  LDAP-based RID Cycling (Fallback)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 async fn rid_cycle_ldap(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     info!("[LDAP] RID cycling via LDAP SID lookup");
@@ -384,9 +384,9 @@ async fn connect_for_rid(config: &RidCycleConfig) -> Result<LdapSession> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SAMR Response Helpers
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn is_rpc_bind_accepted(resp: &[u8]) -> bool {
     resp.len() > 30 && resp[28] == 0 && resp[29] == 0
@@ -478,9 +478,9 @@ fn sid_to_string(data: &[u8]) -> String {
     sid
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  SID Helpers (for LDAP fallback)
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 fn sid_string_to_bytes(sid_str: &str) -> Vec<u8> {
     let parts: Vec<&str> = sid_str.split('-').collect();
@@ -540,9 +540,9 @@ fn ldap_filter_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("\\{:02x}", b)).collect()
 }
 
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 //  Tests
-// ═══════════════════════════════════════════════════════════
+// ===========================================================
 
 #[cfg(test)]
 mod tests {
