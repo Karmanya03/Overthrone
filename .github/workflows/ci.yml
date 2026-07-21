@@ -71,3 +71,75 @@ jobs:
           max_attempts: 3
           command: cargo fetch --locked
       - run: cargo build --release --workspace --locked
+
+  release:
+    name: Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          git fetch --tags --force
+          if git tag -l "${{ steps.version.outputs.tag }}" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binaries
+        if: steps.tag_check.outputs.exists == 'false'
+        run: cargo build --release --workspace --locked
+
+      - name: Stage binaries
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          mkdir -p staging
+          cp "target/release/overthrone" "staging/overthrone-linux-x86_64"
+          cp "target/release/ovt" "staging/ovt-linux-x86_64"
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Overthrone ${{ steps.version.outputs.version }}
+          body: |
+            ## Overthrone ${{ steps.version.outputs.version }}
+
+            ### Installation
+            Download the binary for your platform from the assets below.
+
+            ### Quick install (Linux/macOS)
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            ```
+
+            ### Quick install (Windows PowerShell)
+            ```powershell
+            irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex
+            ```
+
+            ### Build from source
+            ```bash
+            cargo install overthrone --tag ${{ steps.version.outputs.tag }}
+            ```
+          files: staging/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'rc') || contains(steps.version.outputs.version, '-') }}

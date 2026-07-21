@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.3.2)"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,6 +43,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -85,18 +93,26 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        id: notes
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Generate release notes
-        id: notes
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: List artifacts
         shell: bash
@@ -105,7 +121,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.notes.outputs.tag }}
           name: Overthrone ${{ steps.notes.outputs.version }}
           body: |
             ## Overthrone ${{ steps.notes.outputs.version }}
@@ -125,9 +141,9 @@ jobs:
 
             ### Build from source
             ```bash
-            cargo install overthrone --tag ${{ github.ref_name }}
+            cargo install overthrone --tag ${{ steps.notes.outputs.tag }}
             ```
           files: |
             artifacts/**/*
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
+          prerelease: ${{ contains(steps.notes.outputs.version, 'beta') || contains(steps.notes.outputs.version, 'alpha') || contains(steps.notes.outputs.version, 'rc') || contains(steps.notes.outputs.version, '-') }}
