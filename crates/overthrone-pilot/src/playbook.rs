@@ -550,8 +550,9 @@ impl Playbook {
         Self {
             id: PlaybookId::FullAutoPwn,
             name: "Full AutoPwn".to_string(),
-            description: "Automated full chain: recon -> roast -> delegate -> lateral -> DA -> loot"
-                .to_string(),
+            description:
+                "Automated full chain: recon -> roast -> delegate -> lateral -> DA -> loot"
+                    .to_string(),
             noise_level: NoiseLevel::Critical,
             steps,
             tags: vec!["autopwn".to_string(), "full_chain".to_string()],

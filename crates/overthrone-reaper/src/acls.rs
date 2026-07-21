@@ -214,7 +214,9 @@ impl DangerousRight {
             | Self::AddKeyCredentialLink => {
                 "Shadow Credentials (Whisker/PyWhisker) -> PKINIT -> TGT without password"
             }
-            Self::WriteAltSecurityIdentities => "Map external cert identity -> SAML / PKINIT bypass",
+            Self::WriteAltSecurityIdentities => {
+                "Map external cert identity -> SAML / PKINIT bypass"
+            }
             Self::WriteUserParameters => "RDP desktop shadowing or COM object hijack",
             Self::WritePwdProperties
             | Self::WritePwdComplexity
@@ -231,7 +233,9 @@ impl DangerousRight {
             Self::WriteUserCertificate => {
                 "Write userCertificate -> ADCS ESC abuse / certificate-based auth"
             }
-            Self::EnrollCertificate => "Enroll in certificate template -> ADCS privilege escalation",
+            Self::EnrollCertificate => {
+                "Enroll in certificate template -> ADCS privilege escalation"
+            }
             Self::Enroll => "Certificate enrollment right -> request cert as target user",
             Self::ManageCA => "CA management -> issue/revoke certs, modify CA settings",
             Self::ManageCertificates => {

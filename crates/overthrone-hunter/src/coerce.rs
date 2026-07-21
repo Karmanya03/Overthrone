@@ -459,7 +459,12 @@ async fn try_coerce(
                     error: Some(format!("Pipe error (likely success): {err_str}")),
                 }
             } else {
-                warn!("  {} {} -- request failed: {}", "[-]".red(), method, err_str);
+                warn!(
+                    "  {} {} -- request failed: {}",
+                    "[-]".red(),
+                    method,
+                    err_str
+                );
                 CoercionAttempt {
                     method: method.to_string(),
                     pipe: pipe.to_string(),

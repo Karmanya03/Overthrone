@@ -220,7 +220,12 @@ async fn execute_s4u_chain(
             }
         }
         Err(e) => {
-            warn!("  {} S4U2Proxy failed for {}: {}", "[-]".red(), target_spn, e);
+            warn!(
+                "  {} S4U2Proxy failed for {}: {}",
+                "[-]".red(),
+                target_spn,
+                e
+            );
             S4UChainResult {
                 source_account: tgt.client_principal.clone(),
                 impersonated_user: impersonate_user.to_string(),

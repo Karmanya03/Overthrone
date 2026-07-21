@@ -556,7 +556,9 @@ async fn compensate_rbcd(
             None => {
                 return StepResult {
                     success: false,
-                    output: format!("RBCD compensation -- could not resolve SID for '{controlled}'"),
+                    output: format!(
+                        "RBCD compensation -- could not resolve SID for '{controlled}'"
+                    ),
                     new_credentials: 0,
                     new_admin_hosts: 0,
                 };
@@ -3545,7 +3547,8 @@ async fn exec_remote(
                         );
                     }
                     Err(_) => {
-                        output = "(output not captured -- command may still be running)".to_string();
+                        output =
+                            "(output not captured -- command may still be running)".to_string();
                     }
                 }
             }

@@ -1098,7 +1098,10 @@ pub async fn run(config: AutoPwnConfig) -> AutoPwnResult {
                     reason,
                 );
                 if adaptive.replans_exhausted() {
-                    println!("  {} Re-plan limit exhausted -- aborting", "[-]".red().bold());
+                    println!(
+                        "  {} Re-plan limit exhausted -- aborting",
+                        "[-]".red().bold()
+                    );
                     rollback_successful_steps(&successful_steps, &ctx, &mut state).await;
                     successful_steps.clear();
                     break 'main;

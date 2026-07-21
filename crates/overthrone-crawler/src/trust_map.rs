@@ -360,7 +360,9 @@ pub fn build_trust_graph(source_domain: &str, trust_entries: &[TrustEntry]) -> T
     );
 
     if trust_entries.is_empty() {
-        debug!("[trust_map] No trust entries provided -- graph will contain only the source domain");
+        debug!(
+            "[trust_map] No trust entries provided -- graph will contain only the source domain"
+        );
     }
 
     if source_domain.is_empty() {

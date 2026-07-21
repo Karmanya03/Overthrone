@@ -147,7 +147,10 @@ pub async fn run_ntlmv1_roast(
         .collect();
 
     if no_preauth_users.is_empty() {
-        info!("  {} No users with DONT_REQUIRE_PREAUTH found", "[i]".blue());
+        info!(
+            "  {} No users with DONT_REQUIRE_PREAUTH found",
+            "[i]".blue()
+        );
         result.total_time_ms = start_time.elapsed().as_millis() as u64;
         return Ok(result);
     }

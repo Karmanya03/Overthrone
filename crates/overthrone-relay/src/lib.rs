@@ -458,7 +458,9 @@ impl RelayController {
         let listener = match &self.config.auto_coerce_listener {
             Some(ip) => ip.clone(),
             None => {
-                warn!("auto_coerce_targets is set but no auto_coerce_listener -- skipping coercion");
+                warn!(
+                    "auto_coerce_targets is set but no auto_coerce_listener -- skipping coercion"
+                );
                 return;
             }
         };
