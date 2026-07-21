@@ -1055,7 +1055,7 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             println!(
                 " {} krbtgt hash: {}...",
                 ">".bright_black(),
-                &krbtgt_hash[..8.min(krbtgt_hash.len())].cyan()
+                krbtgt_hash[..8.min(krbtgt_hash.len())].cyan()
             );
 
             let krbtgt_key = match hex::decode(krbtgt_hash) {
@@ -1115,7 +1115,7 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
             println!(
                 " {} Service hash: {}...",
                 ">".bright_black(),
-                &service_hash[..8.min(service_hash.len())].cyan()
+                service_hash[..8.min(service_hash.len())].cyan()
             );
 
             let s_key = match hex::decode(service_hash) {
