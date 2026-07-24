@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.3.3-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.4.0-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -295,47 +295,51 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 These are real numbers from `cargo test --workspace --lib`. No rounding up.
 
 ```
-overthrone-core     ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  761 tests. EDR evasion (ntdll unhooking, ETW abolition, sleep
-                                                    masking, syscall resurrection), Credential Guard multi-signal
-                                                    detection (3-tier: ALPC/process-memory/WDigest), DPAPI extraction,
-                                                    file carver, Azure AD ops (8 total), SMB OPLOCK. Still hungry.
+overthrone-core     ████████████████████░  99%  856 tests. EDR evasion (ntdll unhooking, ETW abolition, sleep
+                                                     masking, syscall resurrection), Credential Guard multi-signal
+                                                     detection (3-tier: ALPC/process-memory/WDigest), DPAPI extraction,
+                                                     file carver, Azure AD ops (8 total), SMB OPLOCK. Still hungry.
 
-overthrone-reaper   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  202 tests. Snaffler audit done (SnafflerConfig, CSV export, 23
-                                                    tests). LAPS/gMSA enumeration purpose-built (276 lines, 12 tests).
-                                                    NTLM→TGT pipeline, GPP full, BH edge coverage, NTLMv1 detection.
+overthrone-reaper   ████████████████████░  99%  243 tests. Snaffler audit done (SnafflerConfig, CSV export, 23
+                                                     tests). LAPS/gMSA enumeration purpose-built (276 lines, 12 tests).
+                                                     NTLM->TGT pipeline, GPP full, BH edge coverage, NTLMv1 detection.
 
-overthrone-hunter   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  76 tests. All 8 modules complete. Auto-crack, delegation chains,
-                                                    ACL reasoning, machine harvesting, smart wordlists, NTLMv1 downgrade,
-                                                    relay hash extraction. The overachiever.
+overthrone-hunter   █████████████████████  100%  76 tests. All 8 modules complete. Auto-crack, delegation chains,
+                                                     ACL reasoning, machine harvesting, smart wordlists, NTLMv1 downgrade,
+                                                     relay hash extraction. The overachiever.
 
-overthrone-crawler  ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  121 tests. ALL gaps closed: TCP source-port rotation (PortRotator,
-                                                    12 tests), JA3/JA4 TLS fingerprint randomization (9 tests), SMB
-                                                    OPLOCK hijacking (3 tests), Responder integration (9 tests). 
+overthrone-crawler  █████████████████████  100%  121 tests. ALL gaps closed: TCP source-port rotation (PortRotator,
+                                                     12 tests), JA3/JA4 TLS fingerprint randomization (9 tests), SMB
+                                                     OPLOCK hijacking (3 tests), Responder integration (9 tests). 
 
-overthrone-forge    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  103 tests. ADCS dispatcher (1,147 lines, ESC1-9 orchestration, 9
-                                                    tests). PKINIT-keyed golden/silver/diamond/interrealm/skeleton.
-                                                    S4U2Self with PKINIT chain. AS-REP→TGT pipeline. MS-WCCE DCOM (30
-                                                    tests). 17 ForgeAction variants.
+overthrone-forge    ████████████████████░  99%  107 tests. ADCS dispatcher (1,147 lines, ESC1-9 orchestration, 9
+                                                     tests). PKINIT-keyed golden/silver/diamond/interrealm/skeleton.
+                                                     S4U2Self with PKINIT chain. AS-REP->TGT pipeline. MS-WCCE DCOM (30
+                                                     tests). 17 ForgeAction variants.
 
-overthrone-pilot    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  105 tests. Session management CLI (ovt session, 7 actions, 12
-                                                    tests). WizardSession::new_with_state() for resume. Hostile-DC
-                                                    detection (dc_verify.rs, 5 checks). Q-learner with policy/lockout
-                                                    awareness.
+overthrone-pilot    ████████████████████░  99%  110 tests. Session management CLI (ovt session, 7 actions, 12
+                                                     tests). WizardSession::new_with_state() for resume. Hostile-DC
+                                                     detection (dc_verify.rs, 5 checks). Q-learner with policy/lockout
+                                                     awareness.
 
-overthrone-relay    ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  100%  165 tests. HTTP→SMB asymmetric relay (13 tests). IPv6 transport
-                                                    (16 tests). mTLS/TLS verification mode (22 tests). Channel binding
-                                                    validation. Auto-trigger coercion with Creds passthrough +
-                                                    ShadowCoerce. Exchange relay (CVE-2024-21410, EPA bypass).
-                                                    DCE/RPC signature stripping. Born complete. Still complete.
+overthrone-relay    █████████████████████  100%  225 tests. HTTP->SMB asymmetric relay (13 tests). IPv6 transport
+                                                     (16 tests). mTLS/TLS verification mode (22 tests). Channel binding
+                                                     validation. Auto-trigger coercion with Creds passthrough +
+                                                     ShadowCoerce. Exchange relay (CVE-2024-21410, EPA bypass).
+                                                     DCE/RPC signature stripping. Born complete. Still complete.
 
-overthrone-scribe   ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~99%  54 tests. HTML report format, timeline view, evidence hashing,
-                                                    operator attribution, findings-population path. PDF, Markdown, JSON
-                                                    all wired to CLI.
+overthrone-scribe   ████████████████████░  99%  73 tests. HTML report format, timeline view, evidence hashing,
+                                                     operator attribution, findings-population path. PDF, Markdown, JSON
+                                                     all wired to CLI.
 
-overthrone-cli      ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦  ~98%  6,333+ lines. Config file loading (TOML, XDG-style, 39 tests).
-                                                    Profile system (9 subcommands, 31 tests). Interactive shell REPL
-                                                    (3,263 lines, rustyline). TUI with 6 modules. Session subcommand
-                                                    (7 actions). --help doesn't lie anymore.
+overthrone-cli      ████████████████████░  98%  6,333+ lines. Config file loading (TOML, XDG-style, 39 tests).
+                                                     Profile system (9 subcommands, 31 tests). Interactive shell REPL
+                                                     (3,263 lines, rustyline). TUI with 6 modules. Session subcommand
+                                                     (7 actions). --help doesn't lie anymore.
+
+overthrone-viewer   ████████████████████░  99%  34 tests. Browser-based graph GUI with Three.js GPU acceleration.
+                                                     Node search, path finder, detail panels. mTLS, auth, CSRF,
+                                                     rate limiting. Non-loopback TLS enforcement.
 ```
 
 ## What's Still Cooking (The Backlog)

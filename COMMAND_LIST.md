@@ -9,49 +9,65 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 
 ## Table of Contents
 
+### 🔧 Global & Auth
 - [Global Flags](#global-flags)
+- [Auth & Credential Options](#auth--credential-options)
+
+### 🔍 Phase 1: Recon & Enumeration
 - [Core Enumeration (`ovt enum`)](#core-enumeration-ovt-enum)
 - [Scan (`ovt scan`)](#scan-ovt-scan)
-- [Snaffler (`ovt snaffler`)](#snaffler-ovt-snaffler)
+- [Reaper Assessment (`ovt reaper`)](#reaper-assessment-ovt-reaper)
 - [PowerView (`ovt powerview`)](#powerview-ovt-powerview)
+- [Snaffler (`ovt snaffler`)](#snaffler-ovt-snaffler)
 - [GUID Resolver (`ovt guid`)](#guid-resolver-ovt-guid)
-- [Credential Dumping (`ovt dump`)](#credential-dumping-ovt-dump)
-- [Kerberos Operations (`ovt kerberos`)](#kerberos-operations-ovt-kerberos)
-- [Password Spray (`ovt spray`)](#password-spray-ovt-spray)
-- [ADCS Exploitation (`ovt adcs`)](#adcs-exploitation-ovt-adcs)
-- [GPO Abuse (`ovt gpo`)](#gpo-abuse-ovt-gpo)
-- [Relay & Coercion (`ovt ntlm`)](#relay--coercion-ovt-ntlm)
-- [Shadow Credentials (`ovt shadow`)](#shadow-credentials-ovt-shadow)
-- [LAPS (`ovt laps`)](#laps-ovt-laps)
-- [RID Cycling (`ovt rid`)](#rid-cycling-ovt-rid)
 - [BloodHound Integration (`ovt bloodhound`)](#bloodhound-integration-ovt-bloodhound)
 - [Attack Graph Engine (`ovt graph`)](#attack-graph-engine-ovt-graph)
-- [Reaper Assessment (`ovt reaper`)](#reaper-assessment-ovt-reaper)
-- [Forge Ticket Forging (`ovt forge`)](#forge-ticket-forging-ovt-forge)
-- [Move Lateral Movement (`ovt move`)](#move-lateral-movement-ovt-move)
-- [SMB Operations (`ovt smb`)](#smb-operations-ovt-smb)
+
+### 🔑 Phase 2: Credential Access
+- [Kerberos Operations (`ovt kerberos`)](#kerberos-operations-ovt-kerberos)
+- [Password Spray (`ovt spray`)](#password-spray-ovt-spray)
+- [Credential Dumping (`ovt dump`)](#credential-dumping-ovt-dump)
+- [Offline Secrets (`ovt secrets`)](#offline-secrets-ovt-secrets)
+- [Crack Hash Cracking (`ovt crack`)](#crack-hash-cracking-ovt-crack)
+- [GPP Decryption (`ovt gpp`)](#gpp-decryption-ovt-gpp)
+- [LAPS (`ovt laps`)](#laps-ovt-laps)
+- [RID Cycling (`ovt rid`)](#rid-cycling-ovt-rid)
+
+### 🚀 Phase 3: Lateral Movement
 - [Remote Execution (`ovt exec`)](#remote-execution-ovt-exec)
 - [Interactive Remote Shell (`ovt shell`)](#interactive-remote-shell-ovt-shell)
+- [SMB Operations (`ovt smb`)](#smb-operations-ovt-smb)
+- [Move Lateral Movement (`ovt move`)](#move-lateral-movement-ovt-move)
 - [MSSQL Operations (`ovt mssql`)](#mssql-operations-ovt-mssql)
-- [ACL/DACL Abuse (`ovt acl`)](#acldacl-abuse-ovt-acl)
 - [SCCM Abuse (`ovt sccm`)](#sccm-abuse-ovt-sccm)
-- [Crack Hash Cracking (`ovt crack`)](#crack-hash-cracking-ovt-crack)
-- [Offline Secrets (`ovt secrets`)](#offline-secrets-ovt-secrets)
-- [GPP Decryption (`ovt gpp`)](#gpp-decryption-ovt-gpp)
+
+### 👑 Phase 4: Privilege Escalation & Persistence
+- [ADCS Exploitation (`ovt adcs`)](#adcs-exploitation-ovt-adcs)
+- [Forge Ticket Forging (`ovt forge`)](#forge-ticket-forging-ovt-forge)
+- [Shadow Credentials (`ovt shadow`)](#shadow-credentials-ovt-shadow)
+- [ACL/DACL Abuse (`ovt acl`)](#acldacl-abuse-ovt-acl)
+- [GPO Abuse (`ovt gpo`)](#gpo-abuse-ovt-gpo)
+
+### 🔄 Phase 5: Relay & Coercion
+- [Relay & Coercion (`ovt ntlm`)](#relay--coercion-ovt-ntlm)
+
+### 📊 Phase 6: Analysis & Visualization
+- [TUI Viewer (`ovt tui`)](#tui-viewer-ovt-tui)
+- [Viewer Server (`ovt viewer`)](#viewer-server-ovt-viewer)
+
+### ⚙️ Phase 7: Infrastructure & Management
 - [Session Management (`ovt session`)](#session-management-ovt-session)
 - [Configuration (`ovt config`)](#configuration-ovt-config)
 - [Interactive Shell REPL (`ovt shell`)](#interactive-shell-repl-ovt-shell)
-- [TUI Viewer (`ovt tui`)](#tui-viewer-ovt-tui)
-- [Wizard Auto-Pwn (`ovt wizard`)](#wizard-auto-pwn-ovt-wizard)
-- [C2 Integration (`ovt c2`)](#c2-integration-ovt-c2)
-- [Azure Operations (`ovt azure`)](#azure-operations-ovt-azure)
-- [Viewer Server (`ovt viewer`)](#viewer-server-ovt-viewer)
 - [Built-in Module System (`ovt module`)](#built-in-module-system-ovt-module)
 - [Plugin System (`ovt plugin`)](#plugin-system-ovt-plugin)
 - [Engagement Reporting (`ovt report`)](#engagement-reporting-ovt-report)
 - [Environment Diagnostics (`ovt doctor`)](#environment-diagnostics-ovt-doctor)
 - [Shell Tab Completion (`ovt completions`)](#shell-tab-completion-ovt-completions)
-- [Auth & Credential Options](#auth--credential-options)
+- [C2 Integration (`ovt c2`)](#c2-integration-ovt-c2)
+- [Azure Operations (`ovt azure`)](#azure-operations-ovt-azure)
+
+### 📖 Reference
 - [Common Workflows](#common-workflows)
 - [CVE Exploit Quick Reference](#cve-exploit-quick-reference)
 - [Quick Reference Card](#quick-reference-card)

