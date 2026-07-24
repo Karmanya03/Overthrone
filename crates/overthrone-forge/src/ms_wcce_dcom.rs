@@ -14,9 +14,17 @@
 //! - ICertRequestD: d99e6e74-fc88-11d0-b498-00a0c90312f3
 //! - ICertAdmin2: 34df9e82-0e8b-11d3-8abd-00c04f7971e2
 
+use overthrone_core::crypto::ntlm_hash;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::dcom;
+use overthrone_core::proto::epm::{
+    build_auth3_pdu, build_rpc_bind_auth, build_rpc_request, extract_auth_body,
+};
+use overthrone_core::proto::ldap::LdapSession;
 use overthrone_core::proto::smb::SmbSession;
+use overthrone_core::proto::smb2::{
+    build_ntlmssp_authenticate_hash, build_ntlmssp_negotiate, parse_ntlmssp_challenge,
+};
 use tracing::{debug, info, warn};
 
 // ===========================================================
@@ -52,7 +60,6 @@ const OPNUM_REQUEST_CERTIFICATE: u16 = 1;
 const OPNUM_GET_CERTIFICATE: u16 = 2;
 
 /// ICertAdmin2 opnums -- from MS-ICDH (Certificate Services Backup/Admin)
-#[cfg_attr(not(test), allow(dead_code))]
 const OPNUM_GET_CA_PROPERTY: u16 = 18;
 #[cfg_attr(not(test), allow(dead_code))]
 const OPNUM_SET_CA_PROPERTY: u16 = 19;
@@ -239,86 +246,725 @@ async fn get_ca_name_internal(smb: &SmbSession, ipid: &[u8; 16]) -> Result<Strin
     Ok(ca_name)
 }
 
-/// Get a CA property via ICertAdmin2::GetCAProperty.
+/// Get a CA property via ICertAdmin2::GetCAProperty (opnum 18).
 ///
-/// The GetCAProperty call has different semantics depending on whether
-/// we use the [MS-ICDH] raw RPC or the DCOM interface. For the DCOM
-/// interface, we need to build the ORPC request with proper parameters.
+/// ICertAdmin2::GetCAProperty signature (DCOM):
+///   HRESULT GetCAProperty(
+///     [in]  BSTR     strConfig,     // "hostname\CA-Name"
+///     [in]  LONG     propId,        // CR_PROP_* constant
+///     [in]  LONG     propIndex,     // 0 for single-valued properties
+///     [in]  LONG     propType,      // 0xFFFF (autodetect) or PROPTYPE_*
+///     [out] VARIANT* pvarPropertyValue
+///   );
+///
+/// Returns the raw bytes from the VARIANT (converted from BSTR/SAFEARRAY to Vec<u8>).
 async fn get_ca_property_internal(
-    _smb: &SmbSession,
-    _ipid: &[u8; 16],
-    _ca_name: &str,
-    _prop_id: u32,
+    smb: &SmbSession,
+    ipid: &[u8; 16],
+    ca_name: &str,
+    prop_id: u32,
 ) -> Result<Vec<u8>> {
-    // ICertAdmin2::GetCAProperty over DCOM takes:
-    //   [in] BSTR strConfig (CA config string "hostname\CA-Name")
-    //   [in] LONG propId
-    //   [in] LONG propIndex
-    //   [in] LONG propType
-    //   [out] VARIANT* pvarPropertyValue
-    //
-    // We use the raw RPC approach instead (opnum 18) which returns
-    // a CRYPT_DATA_BLOB directly.
+    // Build CA config string: "hostname\CA-Name"
+    // If ca_name is empty, just use the hostname with trailing backslash
+    let config_str = if ca_name.is_empty() {
+        format!("{}\\", smb.target)
+    } else {
+        format!("{}\\{}", smb.target, ca_name)
+    };
 
-    warn!(
-        "[DCOM/ICertAdmin2] GetCAProperty over raw DCOM not fully implemented -- using server config query instead"
+    // Build the NDR stub for GetCAProperty
+    let mut stub = Vec::new();
+    stub.extend(dcom::build_orpc_this());
+
+    // [in] BSTR strConfig
+    dcom::write_bstr(&mut stub, &config_str);
+
+    // [in] LONG propId
+    stub.extend_from_slice(&prop_id.to_le_bytes());
+
+    // [in] LONG propIndex = 0
+    stub.extend_from_slice(&0u32.to_le_bytes());
+
+    // [in] LONG propType = PROPTYPE_BINARY (3) for raw bytes, or -1 for autodetect
+    // Using autodetect (0xFFFF as LONG = -1)
+    stub.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+
+    // [out] VARIANT* pvarPropertyValue -- non-null conformant pointer
+    stub.extend_from_slice(&0x0002_0004u32.to_le_bytes());
+
+    // Padding to 8 bytes
+    while stub.len() % 8 != 0 {
+        stub.push(0);
+    }
+
+    // Send DCOM call
+    let resp = dcom::dcom_call(smb, ICPR_NAMED_PIPE, ipid, OPNUM_GET_CA_PROPERTY, &stub, 2).await?;
+
+    // Parse the response
+    parse_variant_response(&resp)
+}
+
+/// Parse a DCOM VARIANT from an ICertAdmin2::GetCAProperty response.
+///
+/// Response layout:
+///   [0-23]  RPC header (24 bytes)
+///   [24-35] ORPC_THAT (12 bytes: flags + extPtr + hresult)
+///   [36-39] Return HRESULT (4 bytes)
+///   [40-43] [out] VARIANT* pointer (4 bytes, should be 0x00020004)
+///   [44+]   VARIANT inline
+///
+/// VARIANT layout (NDR, 24 bytes on wire for fixed part):
+///   [0-1]   vt (VARTYPE u16)
+///   [2-3]   wReserved1 (u16)
+///   [4-5]   wReserved2 (u16)
+///   [6-7]   wReserved3 (u16)
+///   [8-15]  Union: pointer to BSTR/SAFEARRAY (with NDR conformant pointer marker)
+/// After the 16-byte VARIANT fixed part, the referent data follows inline:
+///   For VT_BSTR: maxCount(4) + offset(4) + actualCount(4) + utf16 data
+///   For VT_ARRAY|VT_UI1: cDims(2) + fFeatures(2) + cbElements(4) + cLocks(4) + pvData pointer(4) + rgsabound + array data
+fn parse_variant_response(resp: &[u8]) -> Result<Vec<u8>> {
+    // Minimum: RPC header (24) + ORPC_THAT (12) + HRESULT (4) + VARPTR (4) = 44
+    if resp.len() < 48 {
+        return Err(OverthroneError::Adcs(format!(
+            "GetCAProperty response too short: {} bytes (expected >= 48)",
+            resp.len()
+        )));
+    }
+
+    // Skip RPC response header (24 bytes) + ORPC_THAT (12 bytes) + HRESULT (4 bytes) + VARPTR (4 bytes)
+    let variant_offset: usize = 44;
+
+    // Read vt (VARTYPE) at offset 0 of the VARIANT structure
+    let vt = u16::from_le_bytes([resp[variant_offset], resp[variant_offset + 1]]);
+
+    debug!(
+        "[DCOM/ICertAdmin2] GetCAProperty response: vt=0x{vt:04x}, total_len={}",
+        resp.len()
     );
 
-    // For DCOM ICertAdmin2, we'd need the full ORPC call with NDR encoding.
-    // The raw opnum 18 binding on \pipe\cert is for the MS-ICDH interface,
-    // not the DCOM interface. Return empty for now.
-    Err(OverthroneError::Adcs(
-        "GetCAProperty DCOM not fully implemented -- use raw RPC path".to_string(),
-    ))
+    // The VARIANT union data starts at offset 8 from the variant base
+    // For reference types (BSTR, SAFEARRAY), the union contains a pointer to the referent
+    let union_offset = variant_offset + 8;
+
+    match vt {
+        0x0000 => {
+            // VT_EMPTY
+            Err(OverthroneError::Adcs(
+                "GetCAProperty returned VT_EMPTY -- property not found or CA unavailable".to_string(),
+            ))
+        }
+        0x0008 => {
+            // VT_BSTR
+            // Union contains a BSTR* pointer (4 bytes = 0x00020004 for non-null)
+            // BSTR referent follows: maxCount(4) + offset(4) + actualCount(4) + utf16
+            if union_offset + 4 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty BSTR response truncated".to_string(),
+                ));
+            }
+            let bstr_ptr = u32::from_le_bytes([
+                resp[union_offset],
+                resp[union_offset + 1],
+                resp[union_offset + 2],
+                resp[union_offset + 3],
+            ]);
+            if bstr_ptr != 0x0002_0004 {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty BSTR: unexpected pointer marker: 0x{bstr_ptr:08x}"
+                )));
+            }
+            let bstr_body = union_offset + 4;
+            if bstr_body + 12 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty BSTR body too short".to_string(),
+                ));
+            }
+            let _max_count = u32::from_le_bytes([
+                resp[bstr_body],
+                resp[bstr_body + 1],
+                resp[bstr_body + 2],
+                resp[bstr_body + 3],
+            ]);
+            let _offset = u32::from_le_bytes([
+                resp[bstr_body + 4],
+                resp[bstr_body + 5],
+                resp[bstr_body + 6],
+                resp[bstr_body + 7],
+            ]);
+            let actual_count = u32::from_le_bytes([
+                resp[bstr_body + 8],
+                resp[bstr_body + 9],
+                resp[bstr_body + 10],
+                resp[bstr_body + 11],
+            ]);
+            let str_data_start = bstr_body + 12;
+            let str_byte_len = (actual_count as usize).saturating_mul(2); // UTF-16 chars * 2 bytes
+            if str_data_start + str_byte_len > resp.len() {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty BSTR data truncated: needed {} bytes, have {}",
+                    str_byte_len,
+                    resp.len().saturating_sub(str_data_start)
+                )));
+            }
+            let utf16_bytes = &resp[str_data_start..str_data_start + str_byte_len];
+            // Convert UTF-16 to Vec<u8> (raw bytes for the caller)
+            // For CA name, we return the raw UTF-16 bytes which get_ca_name_internal converts
+            Ok(utf16_bytes.to_vec())
+        }
+        0x0011 | 0x1011 => {
+            // VT_ARRAY | VT_UI1 (0x1011) or VT_VECTOR | VT_UI1 (0x1011)
+            // Union contains a SAFEARRAY* pointer
+            if union_offset + 4 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty SAFEARRAY response truncated".to_string(),
+                ));
+            }
+            let sa_ptr = u32::from_le_bytes([
+                resp[union_offset],
+                resp[union_offset + 1],
+                resp[union_offset + 2],
+                resp[union_offset + 3],
+            ]);
+            if sa_ptr != 0x0002_0004 {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty SAFEARRAY: unexpected pointer marker: 0x{sa_ptr:08x}"
+                )));
+            }
+            let sa_body = union_offset + 4;
+            if sa_body + 16 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty SAFEARRAY header too short".to_string(),
+                ));
+            }
+            let _c_dims = u16::from_le_bytes([resp[sa_body], resp[sa_body + 1]]);
+            let _f_features = u16::from_le_bytes([resp[sa_body + 2], resp[sa_body + 3]]);
+            let _cb_elements = u32::from_le_bytes([
+                resp[sa_body + 4],
+                resp[sa_body + 5],
+                resp[sa_body + 6],
+                resp[sa_body + 7],
+            ]);
+            let _c_locks = u32::from_le_bytes([
+                resp[sa_body + 8],
+                resp[sa_body + 9],
+                resp[sa_body + 10],
+                resp[sa_body + 11],
+            ]);
+            // pvData pointer (4 bytes = 0x00020004 or actual pointer)
+            let _pv_data_ptr = u32::from_le_bytes([
+                resp[sa_body + 12],
+                resp[sa_body + 13],
+                resp[sa_body + 14],
+                resp[sa_body + 15],
+            ]);
+            // After the SAFEARRAY struct, rgsabound follows:
+            //   cElements (4 bytes) + lLbound (4 bytes) per dimension
+            let rgsabound_start = sa_body + 16;
+            let element_count = if rgsabound_start + 4 <= resp.len() {
+                u32::from_le_bytes([
+                    resp[rgsabound_start],
+                    resp[rgsabound_start + 1],
+                    resp[rgsabound_start + 2],
+                    resp[rgsabound_start + 3],
+                ]) as usize
+            } else {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty SAFEARRAY rgsabound truncated".to_string(),
+                ));
+            };
+            // Array data follows rgsabound (after cElements + lLbound = 8 bytes)
+            let array_data_start = rgsabound_start + 8;
+            if array_data_start + element_count > resp.len() {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty SAFEARRAY data truncated: expected {element_count} bytes, have {}",
+                    resp.len().saturating_sub(array_data_start)
+                )));
+            }
+            Ok(resp[array_data_start..array_data_start + element_count].to_vec())
+        }
+        0x0013 => {
+            // VT_UI4 -- 4-byte unsigned int
+            if union_offset + 8 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty VT_UI4 response truncated".to_string(),
+                ));
+            }
+            let val = u32::from_le_bytes([
+                resp[union_offset],
+                resp[union_offset + 1],
+                resp[union_offset + 2],
+                resp[union_offset + 3],
+            ]);
+            Ok(val.to_le_bytes().to_vec())
+        }
+        _ => {
+            // Unknown variant type -- try scanning for DER certificate in response
+            warn!(
+                "[DCOM/ICertAdmin2] Unknown VARIANT type 0x{vt:04x} -- scanning for DER data"
+            );
+            // Search for ASN.1 DER certificate (starts with 0x30)
+            for i in (variant_offset..resp.len().saturating_sub(8)).step_by(4) {
+                if resp[i] == 0x30 && (resp[i + 1] & 0x80) != 0 {
+                    let num_len_bytes = resp[i + 1] as usize & 0x7f;
+                    let mut der_len = 0usize;
+                    for j in 0..num_len_bytes.min(4) {
+                        if i + 2 + j < resp.len() {
+                            der_len = (der_len << 8) | resp[i + 2 + j] as usize;
+                        }
+                    }
+                    let total_size = der_len + 2 + num_len_bytes.min(4);
+                    if i + total_size <= resp.len() {
+                        let cert_der = resp[i..i + total_size].to_vec();
+                        info!(
+                            "[DCOM/ICertAdmin2] CA certificate found via DER scan ({} bytes)",
+                            cert_der.len()
+                        );
+                        return Ok(cert_der);
+                    }
+                }
+            }
+            Err(OverthroneError::Adcs(format!(
+                "GetCAProperty unsupported VARIANT type 0x{vt:04x}",
+            )))
+        }
+    }
 }
 
 /// Internal CA backup helper.
 ///
-/// Uses the ICertAdmin2 RPC interface on \pipe\cert (opnum 21)
-/// to retrieve the CA certificate chain.
+/// Retrieves the CA signing certificate via ICertAdmin2::GetCAProperty
+/// (opnum 18) with CR_PROP_CASIGCERT (26).
+/// This is the same path as get_ca_certificate() but callable
+/// from within backup_ca_via_dcom() without an extra DCOM activation.
 async fn backup_ca_internal(smb: &SmbSession, ipid: &[u8; 16], ca_name: &str) -> Result<Vec<u8>> {
     info!("[DCOM/ICertAdmin2] Performing CA backup for {ca_name}");
 
-    let mut stub = Vec::new();
-    stub.extend(dcom::build_orpc_this());
+    // Retrieve CA signing certificate via GetCAProperty(CR_PROP_CASIGCERT = 26)
+    let ca_cert = get_ca_property_internal(smb, ipid, ca_name, 26).await?;
 
-    // strConfig -- CA config as BSTR "hostname\CA-Name"
-    dcom::write_bstr(&mut stub, ca_name);
+    info!(
+        "[DCOM/ICertAdmin2] CA certificate retrieved via GetCAProperty ({} bytes)",
+        ca_cert.len()
+    );
 
-    // BackupCA takes additional parameters depending on version.
-    // For simplicity, we request the certificate chain.
-    // The backup process on the server generates a backup file set;
-    // for certificate extraction we use GetCAProperty instead.
-
-    // For now, try to get the CA signing certificate via the simpler path
-    drop(stub);
-
-    // Fall through to the CA cert retrieval
-    get_ca_certificate_internal(smb, ipid, ca_name).await
+    Ok(ca_cert)
 }
 
-/// Retrieve the CA signing certificate via direct property query on \pipe\cert.
-///
-/// Uses the MS-ICDH raw RPC interface (same UUID as ICertRequestD
-/// but with different opnums for admin operations).
-async fn get_ca_certificate_internal(
-    _smb: &SmbSession,
-    _ipid: &[u8; 16],
-    _ca_name: &str,
-) -> Result<Vec<u8>> {
-    // The CA certificate can be obtained via the MS-ICDH interface
-    // on \pipe\cert using opnum 18 (GetCAProperty) with propId = 26
-    // (CR_PROP_CASIGCERT).
-    //
-    // For DCOM, this is ICertAdmin2::GetCAProperty which uses
-    // VARIANT output, not the raw CRYPT_DATA_BLOB.
-    //
-    // The implementation requires the full NDR stub encoding of
-    // the GetCAProperty parameters for the DCOM interface.
+// ===========================================================
+//  TCP RPC Path (bypasses DCOM activation)
+// ===========================================================
 
-    Err(OverthroneError::Adcs(
-        "CA certificate backup via DCOM requires full ICertAdmin2 ORPC stub encoding -- use cert_store::request_cert_via_rpc for RPC-based enrollment".to_string(),
-    ))
+/// ICertAdmin2 interface UUID (little-endian byte order)
+/// UUID: 34df9e82-0e8b-11d3-8abd-00c04f7971e2
+const ICERTADMIN2_UUID_LE: [u8; 16] = [
+    0x82, 0x9e, 0xdf, 0x34, 0x8b, 0x0e, 0xd3, 0x11, 0x8a, 0xbd, 0x00, 0xc0, 0x4f, 0x79, 0x71, 0xe2,
+];
+
+/// Get the CA certificate via direct RPC on \pipe\cert (bypasses DCOM activation).
+///
+/// Opens an SMB session, binds directly to the ICertAdmin2 interface on the CA's
+/// \pipe\cert named pipe, and calls GetCAProperty(CR_PROP_CASIGCERT = 26).
+///
+/// This bypasses DCOM activation entirely, making it suitable for Windows Server
+/// 2025+ where anonymous DCOM activation via the SCM activator may be denied.
+///
+/// # Arguments
+/// * `ca_host` - CA server hostname or IP address
+/// * `domain` - NTLM domain name
+/// * `username` - Username for SMB authentication
+/// * `password` - Password for SMB authentication
+///
+/// # Returns
+/// Raw DER-encoded CA certificate bytes
+pub async fn get_ca_certificate_via_tcp_rpc(
+    ca_host: &str,
+    domain: &str,
+    username: &str,
+    password: &str,
+) -> Result<Vec<u8>> {
+    info!(
+        "[ICertAdmin2/SMB+RPC] Getting CA certificate from {} via direct RPC on \\pipe\\cert",
+        ca_host
+    );
+
+    // 1. Connect via SMB
+    let smb = SmbSession::connect(ca_host, domain, username, password).await.map_err(|e| {
+        OverthroneError::Rpc {
+            target: ca_host.to_string(),
+            reason: format!("SMB connect failed: {e}"),
+        }
+    })?;
+
+    // Compute NT hash from password
+    let nt_hash_bytes = ntlm_hash(password);
+    let nt_hash_slice = nt_hash_bytes.as_ref();
+
+    // 2. Bind with NTLMSSP Type 1 (Negotiate)
+    info!("[ICertAdmin2/SMB+RPC] Binding with NTLM auth on \\pipe\\cert");
+    let ntlmssp_type1 = build_ntlmssp_negotiate();
+    let bind_req = build_rpc_bind_auth(
+        &ICERTADMIN2_UUID_LE,
+        0,
+        0,
+        Some(&ntlmssp_type1),
+        2, // RPC_C_AUTHN_LEVEL_CONNECT
+    );
+    let bind_resp = smb
+        .pipe_transact(ICPR_NAMED_PIPE, &bind_req)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: format!("{}:cert", smb.target),
+            reason: format!("ICertAdmin2 NTLM bind failed: {e}"),
+        })?;
+
+    if !overthrone_core::proto::epm::is_bind_accepted(&bind_resp) {
+        return Err(OverthroneError::Rpc {
+            target: format!("{}:cert", smb.target),
+            reason: "ICertAdmin2 NTLM bind rejected".to_string(),
+        });
+    }
+
+    // Extract NTLMSSP Type 2 (Challenge) from bind_ack auth verifier
+    let challenge_bytes = extract_auth_body(&bind_resp).ok_or_else(|| {
+        OverthroneError::Ntlm(
+            "ICertAdmin2 bind_ack missing NTLMSSP challenge in auth verifier".to_string(),
+        )
+    })?;
+    let challenge = parse_ntlmssp_challenge(challenge_bytes)?;
+
+    // Build NTLMSSP Type 3 (Authenticate) and send AUTH3 PDU
+    let (type3, _session_key, _session_base_key) =
+        build_ntlmssp_authenticate_hash(domain, username, nt_hash_slice, &challenge)?;
+    let auth3 = build_auth3_pdu(&type3, 2);
+    let _auth_resp = smb
+        .pipe_transact(ICPR_NAMED_PIPE, &auth3)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: format!("{}:cert", smb.target),
+            reason: format!("ICertAdmin2 AUTH3 failed: {e}"),
+        })?;
+
+    info!("[ICertAdmin2/SMB+RPC] NTLM auth complete");
+
+    // 3. Call GetCAProperty with CR_PROP_CASIGCERT = 26
+    let config_str = format!("{}\\", ca_host);
+
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&[0u8; 20]); // context handle
+    dcom::write_bstr(&mut stub, &config_str); // BSTR strConfig
+    stub.extend_from_slice(&26u32.to_le_bytes()); // CR_PROP_CASIGCERT
+    stub.extend_from_slice(&0u32.to_le_bytes()); // propIndex
+    stub.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // propType = autodetect
+    stub.extend_from_slice(&0x0002_0004u32.to_le_bytes()); // [out] VARIANT*
+    while stub.len() % 8 != 0 {
+        stub.push(0);
+    }
+
+    let req = build_rpc_request(OPNUM_GET_CA_PROPERTY, &stub);
+    let resp = smb
+        .pipe_transact(ICPR_NAMED_PIPE, &req)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: format!("{}:cert", smb.target),
+            reason: format!("GetCAProperty failed: {e}"),
+        })?;
+
+    // 4. Parse response -- direct RPC format:
+    //    RPC header (24 bytes) + context handle (20 bytes) + HRESULT (4 bytes) + VARIANT inline
+    parse_variant_response_rpc(&resp)
+}
+
+/// Parse a direct RPC response from ICertAdmin2::GetCAProperty.
+///
+/// Direct RPC response format (no DCOM wrapping):
+///   RPC header (24 bytes)
+///   Context handle (20 bytes) - [in,out]
+///   HRESULT (4 bytes)
+///   [out] VARIANT inline
+///
+/// The VARIANT has the same NDR encoding as in DCOM.
+fn parse_variant_response_rpc(resp: &[u8]) -> Result<Vec<u8>> {
+    // Minimum: RPC header (24) + context handle (20) + HRESULT (4) + VARPTR (4) + vt(2) = 54
+    if resp.len() < 54 {
+        return Err(OverthroneError::Adcs(format!(
+            "GetCAProperty RPC response too short: {} bytes (expected >= 54)",
+            resp.len()
+        )));
+    }
+
+    // The VARIANT starts after RPC header (24) + context handle (20) + HRESULT (4) = 48
+    let variant_offset: usize = 48;
+
+    // Read vt (VARTYPE) at offset 0 of the VARIANT structure
+    let vt = u16::from_le_bytes([resp[variant_offset], resp[variant_offset + 1]]);
+
+    debug!(
+        "[ICertAdmin2/RPC] GetCAProperty response: vt=0x{vt:04x}, total_len={}",
+        resp.len()
+    );
+
+    // The VARIANT union data starts at offset 8 from the variant base
+    let union_offset = variant_offset + 8;
+
+    match vt {
+        0x0000 => {
+            Err(OverthroneError::Adcs(
+                "GetCAProperty returned VT_EMPTY -- property not found or CA unavailable".to_string(),
+            ))
+        }
+        0x0008 => {
+            // VT_BSTR
+            if union_offset + 4 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty BSTR response truncated".to_string(),
+                ));
+            }
+            let bstr_ptr = u32::from_le_bytes([
+                resp[union_offset],
+                resp[union_offset + 1],
+                resp[union_offset + 2],
+                resp[union_offset + 3],
+            ]);
+            if bstr_ptr != 0x0002_0004 {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty BSTR: unexpected pointer marker: 0x{bstr_ptr:08x}"
+                )));
+            }
+            let bstr_body = union_offset + 4;
+            if bstr_body + 12 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty BSTR body too short".to_string(),
+                ));
+            }
+            let _max_count = u32::from_le_bytes([
+                resp[bstr_body], resp[bstr_body + 1], resp[bstr_body + 2], resp[bstr_body + 3],
+            ]);
+            let _offset = u32::from_le_bytes([
+                resp[bstr_body + 4], resp[bstr_body + 5], resp[bstr_body + 6], resp[bstr_body + 7],
+            ]);
+            let actual_count = u32::from_le_bytes([
+                resp[bstr_body + 8], resp[bstr_body + 9], resp[bstr_body + 10], resp[bstr_body + 11],
+            ]);
+            let str_data_start = bstr_body + 12;
+            let str_byte_len = (actual_count as usize).saturating_mul(2);
+            if str_data_start + str_byte_len > resp.len() {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty BSTR data truncated: needed {} bytes, have {}",
+                    str_byte_len,
+                    resp.len().saturating_sub(str_data_start)
+                )));
+            }
+            let utf16_bytes = &resp[str_data_start..str_data_start + str_byte_len];
+            Ok(utf16_bytes.to_vec())
+        }
+        0x0011 | 0x1011 => {
+            // VT_ARRAY | VT_UI1
+            if union_offset + 4 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty SAFEARRAY response truncated".to_string(),
+                ));
+            }
+            let sa_ptr = u32::from_le_bytes([
+                resp[union_offset],
+                resp[union_offset + 1],
+                resp[union_offset + 2],
+                resp[union_offset + 3],
+            ]);
+            if sa_ptr != 0x0002_0004 {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty SAFEARRAY: unexpected pointer marker: 0x{sa_ptr:08x}"
+                )));
+            }
+            let sa_body = union_offset + 4;
+            if sa_body + 16 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty SAFEARRAY header too short".to_string(),
+                ));
+            }
+            let _c_dims = u16::from_le_bytes([resp[sa_body], resp[sa_body + 1]]);
+            let _f_features = u16::from_le_bytes([resp[sa_body + 2], resp[sa_body + 3]]);
+            let _cb_elements = u32::from_le_bytes([
+                resp[sa_body + 4], resp[sa_body + 5], resp[sa_body + 6], resp[sa_body + 7],
+            ]);
+            let _c_locks = u32::from_le_bytes([
+                resp[sa_body + 8], resp[sa_body + 9], resp[sa_body + 10], resp[sa_body + 11],
+            ]);
+            let _pv_data_ptr = u32::from_le_bytes([
+                resp[sa_body + 12], resp[sa_body + 13], resp[sa_body + 14], resp[sa_body + 15],
+            ]);
+            let rgsabound_start = sa_body + 16;
+            let element_count = if rgsabound_start + 4 <= resp.len() {
+                u32::from_le_bytes([
+                    resp[rgsabound_start],
+                    resp[rgsabound_start + 1],
+                    resp[rgsabound_start + 2],
+                    resp[rgsabound_start + 3],
+                ]) as usize
+            } else {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty SAFEARRAY rgsabound truncated".to_string(),
+                ));
+            };
+            let array_data_start = rgsabound_start + 8;
+            if array_data_start + element_count > resp.len() {
+                return Err(OverthroneError::Adcs(format!(
+                    "GetCAProperty SAFEARRAY data truncated: expected {element_count} bytes, have {}",
+                    resp.len().saturating_sub(array_data_start)
+                )));
+            }
+            Ok(resp[array_data_start..array_data_start + element_count].to_vec())
+        }
+        0x0013 => {
+            // VT_UI4
+            if union_offset + 8 > resp.len() {
+                return Err(OverthroneError::Adcs(
+                    "GetCAProperty VT_UI4 response truncated".to_string(),
+                ));
+            }
+            let val = u32::from_le_bytes([
+                resp[union_offset],
+                resp[union_offset + 1],
+                resp[union_offset + 2],
+                resp[union_offset + 3],
+            ]);
+            Ok(val.to_le_bytes().to_vec())
+        }
+        _ => {
+            warn!(
+                "[ICertAdmin2/RPC] Unknown VARIANT type 0x{vt:04x} -- scanning for DER data"
+            );
+            for i in (variant_offset..resp.len().saturating_sub(8)).step_by(4) {
+                if resp[i] == 0x30 && (resp[i + 1] & 0x80) != 0 {
+                    let num_len_bytes = resp[i + 1] as usize & 0x7f;
+                    let mut der_len = 0usize;
+                    for j in 0..num_len_bytes.min(4) {
+                        if i + 2 + j < resp.len() {
+                            der_len = (der_len << 8) | resp[i + 2 + j] as usize;
+                        }
+                    }
+                    let total_size = der_len + 2 + num_len_bytes.min(4);
+                    if i + total_size <= resp.len() {
+                        let cert_der = resp[i..i + total_size].to_vec();
+                        info!(
+                            "[ICertAdmin2/RPC] CA certificate found via DER scan ({} bytes)",
+                            cert_der.len()
+                        );
+                        return Ok(cert_der);
+                    }
+                }
+            }
+            Err(OverthroneError::Adcs(format!(
+                "GetCAProperty unsupported VARIANT type 0x{vt:04x}",
+            )))
+        }
+    }
+}
+
+/// Get the CA certificate via LDAP from Active Directory.
+///
+/// The CA certificate is published in the `cACertificate` attribute of
+/// the CA object in the Configuration Naming Context. This avoids any
+/// DCOM or RPC calls to the CA server itself.
+///
+/// # Arguments
+/// * `dc_host` - Domain controller hostname or IP address
+/// * `domain` - NTLM domain name
+/// * `username` - Username for LDAP authentication
+/// * `password` - Password for LDAP authentication
+///
+/// # Returns
+/// Raw DER-encoded CA certificate bytes
+pub async fn get_ca_certificate_via_ldap(
+    dc_host: &str,
+    domain: &str,
+    username: &str,
+    password: &str,
+) -> Result<Vec<u8>> {
+    info!(
+        "[CA/LDAP] Getting CA certificate from {dc_host} via LDAP (Configuration NC)"
+    );
+
+    // Connect to LDAP (without TLS -- works with self-signed certs)
+    let mut ldap = LdapSession::connect(dc_host, domain, username, password, false)
+        .await
+        .map_err(|e| OverthroneError::Adcs(format!("LDAP connect failed: {e}")))?;
+
+    // Query the Configuration NC for the CA object
+    let config_nc = format!("CN=Configuration,{}", ldap.base_dn);
+    let filter = "(objectClass=certificationAuthority)".to_string();
+
+    let entries = ldap
+        .custom_search_with_base(&config_nc, &filter, &["cACertificate", "cn"])
+        .await
+        .map_err(|e| OverthroneError::Adcs(format!("LDAP CA search failed: {e}")))?;
+
+    if entries.is_empty() {
+        return Err(OverthroneError::Adcs(
+            "No certificationAuthority objects found in Configuration NC".to_string(),
+        ));
+    }
+
+    // Use the first CA's certificate
+    let entry = &entries[0];
+    let ca_name = entry
+        .attrs
+        .get("cn")
+        .and_then(|v| v.first())
+        .map(|s| s.as_str())
+        .unwrap_or("UnknownCA");
+
+    // Try attrs first (string-based), then bin_attrs (binary).
+    // ldap3 stores binary attributes in bin_attrs when the raw bytes
+    // are not valid UTF-8.
+    let cert_der = entry
+        .attrs
+        .get("cACertificate")
+        .and_then(|v| v.first())
+        .map(|s| s.as_bytes().to_vec())
+        .or_else(|| {
+            entry
+                .bin_attrs
+                .get("cacertificate")
+                .or_else(|| entry.bin_attrs.get("cACertificate"))
+                .and_then(|v| v.first())
+                .cloned()
+        })
+        .ok_or_else(|| {
+            OverthroneError::Adcs(format!(
+                "CA '{ca_name}' has no cACertificate attribute"
+            ))
+        })?;
+
+    info!(
+        "[CA/LDAP] CA certificate for '{ca_name}' obtained via LDAP ({} bytes)",
+        cert_der.len()
+    );
+    Ok(cert_der)
+}
+
+/// Backup CA certificate via TCP-based authenticated RPC.
+///
+/// Same flow as `get_ca_certificate_via_tcp_rpc()` but wraps the result
+/// as a backup operation for reporting purposes.
+pub async fn backup_ca_via_tcp_rpc(
+    ca_host: &str,
+    domain: &str,
+    username: &str,
+    password: &str,
+) -> Result<Vec<u8>> {
+    info!(
+        "[ICertAdmin2/TCP] Backing up CA certificate from {} via TCP RPC",
+        ca_host
+    );
+
+    let ca_cert = get_ca_certificate_via_tcp_rpc(ca_host, domain, username, password).await?;
+
+    info!(
+        "[ICertAdmin2/TCP] CA certificate backed up ({} bytes)",
+        ca_cert.len()
+    );
+
+    Ok(ca_cert)
 }
 
 // ===========================================================

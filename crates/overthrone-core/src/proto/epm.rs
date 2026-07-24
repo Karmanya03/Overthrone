@@ -275,8 +275,35 @@ pub fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 }
 
 /// Check if RPC bind was accepted.
+///
+/// Parses the BindAck PDU (type 12) to find the presentation context result.
+/// The result is located after the variable-length sec_addr:
+///   24-25: sec_addr_length (2 bytes)
+///   26+:   sec_addr data (variable, padded to 4-byte alignment)
+///   then:  n_cont_elem (1 byte) + reserved (1 byte) + result (2 bytes)
+///
+/// Returns true if result == 0 (accept).
 pub fn is_bind_accepted(resp: &[u8]) -> bool {
-    resp.len() > 30 && resp[28] == 0 && resp[29] == 0
+    // Need at least header (24) + sec_addr_len(2) + sec_addr(0) + align + n_cont(2) + result(2)
+    if resp.len() < 30 {
+        return false;
+    }
+    // Must be a BindAck (type 12)
+    if resp[2] != 12 {
+        return false;
+    }
+    // Read sec_addr_length at offset 24
+    let sec_addr_len = u16::from_le_bytes([resp[24], resp[25]]) as usize;
+    // Skip: 24-byte header + 2-byte sec_addr_length + sec_addr_len + padding to 4
+    let mut off = 26 + sec_addr_len;
+    off = (off + 3) & !3; // align to 4 bytes
+    // Need at least 4 more bytes: n_cont_elem(1) + reserved(1) + result(2)
+    if off + 4 > resp.len() {
+        return false;
+    }
+    // result is at offset + 2 (skip n_cont_elem and reserved)
+    let result = u16::from_le_bytes([resp[off + 2], resp[off + 3]]);
+    result == 0
 }
 
 /// Extract RPC handle from response (20-byte handle at offset 28).
@@ -1052,6 +1079,211 @@ pub async fn resolve_uuid_via_epm_tcp(
     let host = parse_ept_map_addr(&map_resp).unwrap_or_else(|| target.to_string());
 
     debug!("EPM TCP: {target} interface resolved to {host}:{port}");
+    Ok((host, port))
+}
+
+/// Resolve an RPC interface UUID to a TCP endpoint via authenticated EPM (port 135).
+///
+/// Uses NTLMSSP-authenticated DCE/RPC bind to the Endpoint Mapper, then sends
+/// ept_map (opnum 3) to resolve the given interface UUID to a TCP host:port.
+/// This is needed for Windows Server 2025 which rejects unauthenticated EPM binds.
+///
+/// The auth_body format uses u16 for num_ctx_items (matching DCE/RPC spec),
+/// not the u8+padding format that older Windows accepts but WS2025 rejects.
+pub async fn resolve_uuid_via_epm_tcp_auth(
+    target: &str,
+    interface_uuid: &[u8; 16],
+    domain: &str,
+    username: &str,
+    nt_hash: &[u8],
+) -> Result<(String, u16)> {
+    use crate::proto::ntlm::{
+        build_authenticate_message, build_negotiate_message, parse_challenge_message,
+    };
+
+    let addr = format!("{target}:135");
+    debug!("EPM TCP auth: Connecting to {addr}");
+
+    let mut stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("EPM TCP connect to {addr} failed: {e}")))?;
+
+    // Build NTLMSSP Type 1 (Negotiate)
+    let type1 = build_negotiate_message(domain);
+
+    // Build RPC bind with NTLMSSP auth verifier
+    // Use u16 format for num_ctx_items (spec-compliant)
+    let auth_level: u8 = 6; // RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
+    let auth_hdr_len: u16 = 8; // auth_type(1)+level(1)+pad(1)+reserved(1)+ctx_id(4)
+    let auth_total = auth_hdr_len + type1.len() as u16;
+
+    // Common header: 16 bytes + bind body: 12 + 2 + 2 + 2 + 20 + 20 = 68
+    // With auth verifier: 68 + auth_total
+    let base_len: u16 = 68; // 16+2+2+4+2+2+2+20+20 = 70 minus the 2 bytes saved from u16 num_ctx_items
+    let frag_len = base_len + auth_total;
+
+    let mut bind_pdu = Vec::with_capacity(frag_len as usize);
+    bind_pdu.extend_from_slice(&[5, 0]); // RPC version 5.0
+    bind_pdu.push(11); // Packet type = Bind
+    bind_pdu.push(3); // Flags = first + last fragment
+    bind_pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // Data representation (little-endian)
+    bind_pdu.extend_from_slice(&frag_len.to_le_bytes());
+    bind_pdu.extend_from_slice(&auth_total.to_le_bytes());
+    bind_pdu.extend_from_slice(&1u32.to_le_bytes()); // call_id
+    bind_pdu.extend_from_slice(&4096u16.to_le_bytes()); // max_xmit
+    bind_pdu.extend_from_slice(&4096u16.to_le_bytes()); // max_recv
+    bind_pdu.extend_from_slice(&0u32.to_le_bytes()); // assoc_group
+    // num_ctx_items: u16 (per DCE/RPC spec), NOT u8+padding
+    bind_pdu.extend_from_slice(&1u16.to_le_bytes());
+    // Context element 0
+    bind_pdu.extend_from_slice(&0u16.to_le_bytes()); // context_id
+    bind_pdu.push(1); // num_trans_syn (u8)
+    bind_pdu.push(0); // reserved padding
+    // Abstract syntax (EPMAPPER UUID v3.0)
+    bind_pdu.extend_from_slice(&EPMAPPER_UUID);
+    bind_pdu.extend_from_slice(&3u16.to_le_bytes()); // version major
+    bind_pdu.extend_from_slice(&0u16.to_le_bytes()); // version minor
+    // Transfer syntax (NDR)
+    bind_pdu.extend_from_slice(&[
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
+        0x60,
+    ]);
+    bind_pdu.extend_from_slice(&2u32.to_le_bytes()); // NDR version
+    // Auth verifier
+    bind_pdu.push(0x0A); // auth_type = NTLMSSP
+    bind_pdu.push(auth_level);
+    bind_pdu.push(0x00); // auth_pad_length
+    bind_pdu.push(0x00); // auth_reserved
+    bind_pdu.extend_from_slice(&0u32.to_le_bytes()); // auth_context_id
+    bind_pdu.extend_from_slice(&type1);
+
+    debug!("EPM TCP auth: Sending bind with NTLM Type 1 ({}+{} byte auth)", base_len, type1.len());
+    btf_write_frame(&mut stream, &bind_pdu).await?;
+
+    // Receive bind_ack with NTLM Type 2 challenge in auth verifier
+    let bind_resp = btf_read_frame(&mut stream).await?;
+    if !is_bind_accepted(&bind_resp) {
+        let resp_len = bind_resp.len();
+        return Err(OverthroneError::custom(format!(
+            "EPM TCP auth bind rejected by {target}: response {resp_len} bytes"
+        )));
+    }
+
+    // Extract auth verifier body from bind_ack (NTLM Type 2 Challenge)
+    // Auth verifier starts at offset: frag_len - auth_length
+    let resp_frag_len = u16::from_le_bytes([bind_resp[8], bind_resp[9]]) as usize;
+    let resp_auth_len = u16::from_le_bytes([bind_resp[10], bind_resp[11]]) as usize;
+
+    if resp_auth_len < auth_hdr_len as usize {
+        return Err(OverthroneError::custom(format!(
+            "EPM TCP auth: bind_ack auth_length={resp_auth_len} too small (need >=8)"
+        )));
+    }
+    let auth_body_offset = resp_frag_len - resp_auth_len + 8; // skip 8-byte auth header
+    if auth_body_offset + (resp_auth_len - 8) > bind_resp.len() {
+        return Err(OverthroneError::custom(format!(
+            "EPM TCP auth: auth body offset {auth_body_offset} exceeds response len {}",
+            bind_resp.len()
+        )));
+    }
+    let type2_data = &bind_resp[auth_body_offset..auth_body_offset + (resp_auth_len - 8)];
+    debug!("EPM TCP auth: NTLM Type 2 challenge received ({} bytes)", type2_data.len());
+
+    // Parse Type 2 challenge
+    let challenge_msg = parse_challenge_message(type2_data)
+        .map_err(|e| OverthroneError::custom(format!("EPM TCP auth: failed to parse Type 2: {e}")))?;
+
+    let server_challenge = challenge_msg.challenge;
+    let target_info: Option<Vec<u8>> = challenge_msg.target_info;
+
+    // Build Type 3 (Authenticate)
+    let type3 = build_authenticate_message(
+        domain,
+        username,
+        nt_hash,
+        &server_challenge,
+        target_info.as_deref(),
+        None, // No password needed when using nt_hash
+    );
+    debug!("EPM TCP auth: Built NTLM Type 3 ({}) bytes", type3.len());
+
+    // Send AUTH3 PDU with Type 3
+    let auth3_pdu = build_auth3_pdu(&type3, auth_level);
+    btf_write_frame(&mut stream, &auth3_pdu).await?;
+
+    // Now authenticated -- send ept_map for the target interface
+    let map_req = build_ept_map_request_uuid(interface_uuid);
+    btf_write_frame(&mut stream, &map_req).await?;
+
+    let map_resp = btf_read_frame(&mut stream).await?;
+    let port = parse_ept_map_tcp_port(&map_resp);
+
+    if port == 0 {
+        return Err(OverthroneError::custom(format!(
+            "EPM TCP auth on {target}: no TCP endpoint found for interface {interface_uuid:02x?}"
+        )));
+    }
+
+    let host = parse_ept_map_addr(&map_resp).unwrap_or_else(|| target.to_string());
+    debug!("EPM TCP auth: {target} interface resolved to {host}:{port}");
+    Ok((host, port))
+}
+
+/// Resolve an RPC interface UUID via the EPMAPPER named pipe (`\PIPE\epmapper`).
+///
+/// Uses the SMB named pipe transport to bind to the Endpoint Mapper, then sends
+/// ept_map (opnum 3) to resolve the given interface UUID to a TCP host:port.
+/// This is the fallback when TCP EPM (port 135) is blocked/filtered.
+///
+/// Returns the resolved (host, port) or an error.
+pub async fn resolve_uuid_via_epm_pipe(
+    smb: &crate::proto::smb::SmbSession,
+    interface_uuid: &[u8; 16],
+) -> Result<(String, u16)> {
+    // Open epmapper pipe persistently (need multiple exchanges: bind + ept_map)
+    let fid = smb
+        .open_pipe_persistent("epmapper")
+        .await
+        .map_err(|e| OverthroneError::custom(format!("epmapper pipe open failed: {e}")))?;
+
+    // Build EPMAPPER bind PDU (standard format, no auth needed since SMB handles it)
+    let bind_pdu = build_rpc_bind(&EPMAPPER_UUID, 3, 0);
+
+    let bind_resp = smb
+        .ioctl_pipe_persistent(&fid, &bind_pdu)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("epmapper bind IOCTL failed: {e}")))?;
+
+    // Check for BindAck (type 12) and handle optional auth verifier
+    if bind_resp.len() < 16 || bind_resp[2] != 12 {
+        let resp_type = if bind_resp.len() > 2 { bind_resp[2] } else { 0 };
+        let _ = smb.close_pipe_persistent(&fid).await;
+        return Err(OverthroneError::custom(format!(
+            "epmapper pipe bind rejected: response type={resp_type}, expected BindAck(12)"
+        )));
+    }
+
+    // Build and send ept_map request for the target interface
+    let map_req = build_ept_map_request_uuid(interface_uuid);
+    let map_resp = smb
+        .ioctl_pipe_persistent(&fid, &map_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("epmapper ept_map IOCTL failed: {e}")))?;
+
+    // Close the pipe and disconnect tree so subsequent pipe_transact calls work
+    let _ = smb.close_pipe_persistent(&fid).await;
+    let _ = smb.tree_disconnect().await;
+
+    // Parse the response for TCP endpoint
+    let port = parse_ept_map_tcp_port(&map_resp);
+    if port == 0 {
+        return Err(OverthroneError::custom(format!(
+            "epmapper pipe: no TCP endpoint for {interface_uuid:02x?}"
+        )));
+    }
+
+    let host = parse_ept_map_addr(&map_resp).unwrap_or_else(|| "127.0.0.1".to_string());
+    debug!("EPM pipe: interface resolved to {host}:{port}");
     Ok((host, port))
 }
 

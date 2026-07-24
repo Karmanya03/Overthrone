@@ -96,7 +96,17 @@ fn build_rpc_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 }
 
 fn is_bind_accepted(resp: &[u8]) -> bool {
-    resp.len() > 30 && resp[28] == 0 && resp[29] == 0
+    if resp.len() < 30 || resp[2] != 12 {
+        return false;
+    }
+    let sec_addr_len = u16::from_le_bytes([resp[24], resp[25]]) as usize;
+    let mut off = 26 + sec_addr_len;
+    off = (off + 3) & !3;
+    if off + 4 > resp.len() {
+        return false;
+    }
+    let result = u16::from_le_bytes([resp[off + 2], resp[off + 3]]);
+    result == 0
 }
 
 // ===========================================================
@@ -742,7 +752,17 @@ fn build_tcp_request(opnum: u16, stub_data: &[u8]) -> Vec<u8> {
 }
 
 fn is_bind_accepted_tcp(resp: &[u8]) -> bool {
-    resp.len() > 30 && resp[28] == 0 && resp[29] == 0
+    if resp.len() < 30 || resp[2] != 12 {
+        return false;
+    }
+    let sec_addr_len = u16::from_le_bytes([resp[24], resp[25]]) as usize;
+    let mut off = 26 + sec_addr_len;
+    off = (off + 3) & !3;
+    if off + 4 > resp.len() {
+        return false;
+    }
+    let result = u16::from_le_bytes([resp[off + 2], resp[off + 3]]);
+    result == 0
 }
 
 /// Write a BTF-framed RPC PDU over TCP.
@@ -1035,17 +1055,18 @@ mod tests {
 
     #[test]
     fn test_is_bind_accepted_tcp_accepts_valid() {
+        // BindAck with sec_addr_len=0, result at offset 30-31 = [0,0] => accepted
         let mut resp = vec![0u8; 32];
-        resp[28] = 0;
-        resp[29] = 0;
+        resp[2] = 12; // type = BindAck
         assert!(is_bind_accepted_tcp(&resp));
     }
 
     #[test]
     fn test_is_bind_accepted_tcp_rejects_reject() {
+        // BindAck with sec_addr_len=0, result at offset 30 = 2 => rejected
         let mut resp = vec![0u8; 32];
-        resp[28] = 0x02;
-        resp[29] = 0x00;
+        resp[2] = 12; // type = BindAck
+        resp[30] = 0x02; // result = provider rejection
         assert!(!is_bind_accepted_tcp(&resp));
     }
 }

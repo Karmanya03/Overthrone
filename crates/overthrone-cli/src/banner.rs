@@ -145,7 +145,6 @@ pub fn print_da_achieved(username: &str, host: &str) {
 }
 
 /// Print stage completion summary
-#[allow(dead_code)]
 pub fn print_stage_summary(stage: &str, succeeded: usize, failed: usize) {
     let status = if failed == 0 {
         "[+]".green()

@@ -142,4 +142,5 @@ jobs:
             ```
           files: staging/*
           draft: false
+          update_release: true
           prerelease: ${{ contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'rc') || contains(steps.version.outputs.version, '-') }}

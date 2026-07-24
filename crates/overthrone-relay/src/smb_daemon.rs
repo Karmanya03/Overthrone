@@ -1921,3 +1921,130 @@ impl SmbDaemon {
         resp
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn smb_daemon_config_defaults() {
+        let cfg = SmbDaemonConfig::default();
+        assert_eq!(cfg.listen_ip, "::");
+        assert_eq!(cfg.listen_port, 445);
+        assert!(cfg.challenge.is_none());
+        assert!(matches!(cfg.mode, SmbDaemonMode::Capture));
+        assert_eq!(cfg.domain_name, "LAN");
+        assert!(cfg.socks5_proxy.is_none());
+    }
+
+    #[test]
+    fn build_ntlm_challenge_has_correct_signature_and_type() {
+        let challenge = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        let msg = SmbDaemon::build_ntlm_challenge(challenge, "WORKGROUP");
+        assert!(msg.starts_with(b"NTLMSSP\0"));
+        assert_eq!(u32::from_le_bytes([msg[8], msg[9], msg[10], msg[11]]), 2);
+        assert_eq!(&msg[24..32], &challenge[..]);
+    }
+
+    #[test]
+    fn wrap_spnego_init_contains_ntlm_token() {
+        let ntlm = b"NTLMSSP\x00\x02";
+        let spnego = SmbDaemon::wrap_spnego_init(ntlm);
+        assert!(spnego.windows(ntlm.len()).any(|w| w == ntlm));
+    }
+
+    #[test]
+    fn wrap_spnego_response_contains_token() {
+        let token = b"\x4e\x54\x4c\x4d";
+        let spnego = SmbDaemon::wrap_spnego_response(token);
+        assert!(spnego.windows(token.len()).any(|w| w == token));
+    }
+
+    #[test]
+    fn build_response_header_has_netbios_prefix_and_smb_signature() {
+        let body = vec![0xAB, 0xCD];
+        let pkt = SmbDaemon::build_response_header(SMB2_SESSION_SETUP, STATUS_SUCCESS, 1, 2, 3, &body);
+        assert_eq!(pkt[0], 0x00);
+        let nb_len = u32::from_be_bytes([0, pkt[1], pkt[2], pkt[3]]) as usize;
+        assert_eq!(nb_len, SMB2_HEADER_SIZE + body.len());
+        assert_eq!(&pkt[4..8], SMB2_PROTOCOL);
+        assert_eq!(u16::from_le_bytes([pkt[8], pkt[9]]), 64);
+        assert_eq!(u32::from_le_bytes([pkt[12], pkt[13], pkt[14], pkt[15]]), STATUS_SUCCESS);
+        assert_eq!(u16::from_le_bytes([pkt[16], pkt[17]]), SMB2_SESSION_SETUP);
+    }
+
+    #[test]
+    fn capture_ntlm_credentials_parses_type3_message() {
+        let server_challenge = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let domain = "SEVENKINGDOMS";
+        let username = "vagrant";
+        let lm_resp = vec![0xAA; 24];
+        let nt_resp = vec![0xBB; 24];
+
+        let domain_utf16: Vec<u8> = domain.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let username_utf16: Vec<u8> = username.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let workstation_utf16: Vec<u8> = "WORKSTATION".encode_utf16().flat_map(u16::to_le_bytes).collect();
+
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"NTLMSSP\0");
+        msg.extend_from_slice(&3u32.to_le_bytes());
+
+        let lm_offset = 64;
+        msg.extend_from_slice(&(lm_resp.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(lm_resp.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(lm_offset as u32).to_le_bytes());
+
+        let nt_offset = lm_offset + lm_resp.len();
+        msg.extend_from_slice(&(nt_resp.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(nt_resp.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(nt_offset as u32).to_le_bytes());
+
+        let domain_offset = nt_offset + nt_resp.len();
+        msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(domain_offset as u32).to_le_bytes());
+
+        let user_offset = domain_offset + domain_utf16.len();
+        msg.extend_from_slice(&(username_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(username_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(user_offset as u32).to_le_bytes());
+
+        let ws_offset = user_offset + username_utf16.len();
+        msg.extend_from_slice(&(workstation_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(workstation_utf16.len() as u16).to_le_bytes());
+        msg.extend_from_slice(&(ws_offset as u32).to_le_bytes());
+
+        msg.extend_from_slice(&[0u8; 8]); // session key placeholder
+        msg.extend_from_slice(&0x88205u32.to_le_bytes()); // flags
+
+        msg.extend_from_slice(&lm_resp);
+        msg.extend_from_slice(&nt_resp);
+        msg.extend_from_slice(&domain_utf16);
+        msg.extend_from_slice(&username_utf16);
+        msg.extend_from_slice(&workstation_utf16);
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        SmbDaemon::capture_ntlm_credentials(&msg, server_challenge, &captured, "192.168.57.99");
+
+        let guard = captured.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard[0].username, username);
+        assert_eq!(guard[0].domain, domain);
+        assert_eq!(guard[0].lm_response, hex::encode(&lm_resp));
+        assert_eq!(guard[0].nt_response, hex::encode(&nt_resp));
+        assert_eq!(guard[0].challenge, hex::encode(server_challenge));
+        assert_eq!(guard[0].protocol, "SMB2");
+        assert_eq!(guard[0].client_ip, "192.168.57.99");
+    }
+
+    #[test]
+    fn filetime_now_is_monotonic_and_reasonable() {
+        let a = SmbDaemon::filetime_now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let b = SmbDaemon::filetime_now();
+        assert!(b > a);
+        // Windows FILETIME for 2020+ is well above 0x01D4F0B0EBC00000
+        assert!(a > 0x01D4_F0B0_EBC0_0000);
+    }
+}

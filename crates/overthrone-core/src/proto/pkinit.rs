@@ -2,6 +2,7 @@
 
 use crate::error::{OverthroneError, Result};
 use base64::Engine;
+use kerberos_asn1::{AsReq, Asn1Object};
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rsa::rand_core::OsRng;
@@ -9,7 +10,7 @@ use rsa::signature::{RandomizedSigner, SignatureEncoding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use x509_parser::oid_registry::OID_PKIX_AUTHORITY_INFO_ACCESS;
 use x509_parser::oid_registry::OID_X509_EXT_CRL_DISTRIBUTION_POINTS;
 use x509_parser::prelude::*;
@@ -60,9 +61,9 @@ impl CertificateGenerator {
     /// * `Err(OverthroneError)` - If generation fails
     pub fn generate_certificate(subject_cn: &str, key_size: u32) -> Result<(Vec<u8>, Vec<u8>)> {
         // Validate key size
-        if ![2048, 3072, 4096].contains(&key_size) {
+        if ![1024, 2048, 3072, 4096].contains(&key_size) {
             return Err(OverthroneError::Encryption(format!(
-                "Invalid RSA key size: {}. Must be 2048, 3072, or 4096",
+                "Invalid RSA key size: {}. Must be 1024, 2048, 3072, or 4096",
                 key_size
             )));
         }
@@ -181,6 +182,12 @@ impl PkinitAuthenticator {
         let as_req = self.build_pkinit_as_req()?;
 
         // Send AS-REQ to KDC and receive AS-REP
+        debug!("PKINIT: AS-REQ length {} bytes", as_req.len());
+        if let Ok((_, parsed)) = AsReq::parse(&as_req) {
+            debug!("PKINIT: AS-REQ parses OK, padata entries: {:?}", parsed.padata.as_ref().map(|v| v.len()));
+        } else {
+            debug!("PKINIT: AS-REQ failed to parse with our own parser");
+        }
         let as_rep = self.send_as_req(&as_req).await?;
 
         // Parse and decrypt AS-REP
@@ -275,7 +282,7 @@ impl PkinitAuthenticator {
     fn build_pkinit_as_req(&self) -> Result<Vec<u8>> {
         use chrono::{Duration, Utc};
         use kerberos_asn1::{
-            AsReq, Asn1Object, KdcReqBody, KerberosFlags, KerberosTime, PaData, PrincipalName,
+            Asn1Object, KdcReqBody, KerberosFlags, KerberosTime, PaData, PrincipalName,
         };
 
         // Build the request body
@@ -294,7 +301,9 @@ impl PkinitAuthenticator {
         };
 
         let req_body = KdcReqBody {
-            kdc_options: KerberosFlags { flags: 0x40000000 }, // forwardable
+            kdc_options: KerberosFlags {
+                flags: 0x40000000 | 0x00800000 | 0x00010000, // forwardable | renewable | canonicalize
+            },
             cname: Some(cname),
             realm: self.config.realm.clone(),
             sname: Some(sname),
@@ -316,10 +325,20 @@ impl PkinitAuthenticator {
             padata_value: pa_pk_as_req_der,
         };
 
+        // Request no PAC to keep the AS-REP small and avoid KRB_ERR_RESPONSE_TOO_BIG.
+        let pa_pac_request = PaData {
+            padata_type: 128, // PA-PAC-REQUEST
+            padata_value: yasna::construct_der(|writer| {
+                writer.write_sequence(|writer| {
+                    writer.next().write_bool(false);
+                });
+            }),
+        };
+
         let as_req = AsReq {
             pvno: 5,
             msg_type: 10,
-            padata: Some(vec![pa_pk_as_req]),
+            padata: Some(vec![pa_pk_as_req, pa_pac_request]),
             req_body,
         };
 
@@ -511,12 +530,16 @@ impl PkinitAuthenticator {
                 });
 
                 // certificates [0] IMPLICIT SET OF Certificate
-                writer
-                    .next()
-                    .write_tagged_implicit(yasna::Tag::context(0), |w| {
-                        // Include the client certificate (raw DER)
-                        w.write_der(&self.config.certificate);
-                    });
+                // Omitted for shadow credentials: the KDC resolves the public key
+                // from msDS-KeyCredentialLink, so including the full self-signed cert
+                // only bloats the request and can trigger response-size limits.
+                // writer
+                //     .next()
+                //     .write_tagged_implicit(yasna::Tag::context(0), |w| {
+                //         w.write_set(|writer| {
+                //             writer.next().write_der(&self.config.certificate);
+                //         });
+                //     });
 
                 // signerInfos: SET OF SignerInfo
                 writer.next().write_set(|writer| {
@@ -584,37 +607,62 @@ impl PkinitAuthenticator {
         Ok(signature.to_bytes().to_vec())
     }
 
-    /// Send AS-REQ to KDC
+    /// Send AS-REQ to KDC over TCP (4-byte BE length prefix).
     async fn send_as_req(&self, as_req: &[u8]) -> Result<Vec<u8>> {
+        use std::net::SocketAddr;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpStream;
 
-        // Connect to KDC on port 88
-        let kdc_addr = format!("{}:88", self.config.kdc_host);
-        let mut stream = TcpStream::connect(&kdc_addr).await?;
+        let addr: SocketAddr = format!("{}:88", self.config.kdc_host)
+            .parse()
+            .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
 
-        // Send AS-REQ (prepend 4-byte length in big-endian)
-        let len = (as_req.len() as u32).to_be_bytes();
-        stream.write_all(&len).await?;
+        let mut stream = tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(addr))
+            .await
+            .map_err(|_| OverthroneError::Kerberos(format!("KDC unreachable: {addr}")))?
+            .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
+
+        debug!("PKINIT: connected to KDC at {addr}");
+
+        let len_bytes = (as_req.len() as u32).to_be_bytes();
+        stream.write_all(&len_bytes).await?;
         stream.write_all(as_req).await?;
+        stream.flush().await?;
 
-        // Read response length
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf).await?;
         let response_len = u32::from_be_bytes(len_buf) as usize;
+        if response_len > 16 * 1024 * 1024 {
+            return Err(OverthroneError::Kerberos(format!(
+                "KDC response too large: {response_len} bytes"
+            )));
+        }
 
-        // Read response
         let mut response = vec![0u8; response_len];
         stream.read_exact(&mut response).await?;
-
         Ok(response)
     }
 
     /// Parse and decrypt AS-REP
     fn parse_as_rep(&self, as_rep: &[u8]) -> Result<PkinitResult> {
-        use kerberos_asn1::{AsRep, Asn1Object, EncAsRepPart};
+        use crate::proto::kerberos::krb_error_to_string;
+        use kerberos_asn1::{AsRep, Asn1Object, EncAsRepPart, KrbError};
         use rsa::pkcs1v15::Pkcs1v15Encrypt;
         use rsa::pkcs8::DecodePrivateKey;
+
+        // Try to interpret the response as a KRB-ERROR first; if the KDC rejected the
+        // request, parsing it as an AS-REP will fail and we want the real error code.
+        if let Ok((_, err)) = KrbError::parse(as_rep) {
+            let code = err.error_code;
+            let e_data_hex = err.e_data.as_ref().map(hex::encode).unwrap_or_default();
+            debug!("PKINIT: KRB-ERROR response ({} bytes): code={}, msg='{}', e_data={}", as_rep.len(), code, krb_error_to_string(code), e_data_hex);
+            return Err(OverthroneError::Kerberos(format!(
+                "KDC returned KRB-ERROR {}: {} (e_data: {})",
+                code,
+                krb_error_to_string(code),
+                e_data_hex
+            )));
+        }
 
         // Parse AS-REP structure
         let (_, as_rep_parsed) = AsRep::parse(as_rep)

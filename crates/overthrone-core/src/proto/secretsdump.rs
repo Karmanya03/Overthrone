@@ -104,6 +104,40 @@ pub fn dump_sam(sam_data: &[u8], system_data: &[u8]) -> Result<Vec<SamCredential
     Ok(credentials)
 }
 
+/// Parse SAM credentials from pre-extracted VALUE data (WINREG RPC path).
+/// Takes a pre-extracted boot key and vector of (rid, username, v_data) tuples,
+/// avoiding the need for full hive binaries from `reg save`.
+/// Used by the WINREG RPC-based remote SAM dump path.
+pub fn dump_sam_from_vdata(
+    boot_key: &[u8; 16],
+    entries: &[(u32, String, Vec<u8>)],
+) -> Result<Vec<SamCredential>> {
+    let mut credentials = Vec::new();
+    for (rid, username, v_data) in entries {
+        let (lm_bytes, nt_bytes) = decrypt_sam_hash(boot_key, *rid, v_data)?;
+
+        let lm_hash = if lm_bytes.iter().all(|&b| b == 0) || lm_bytes.is_empty() {
+            None
+        } else {
+            Some(hex_encode(&lm_bytes))
+        };
+
+        let nt_hash = if nt_bytes.iter().all(|&b| b == 0) || nt_bytes.is_empty() {
+            None
+        } else {
+            Some(hex_encode(&nt_bytes))
+        };
+
+        credentials.push(SamCredential {
+            username: username.clone(),
+            rid: Some(*rid),
+            lm_hash,
+            nt_hash,
+        });
+    }
+    Ok(credentials)
+}
+
 /// Parse SECURITY hive and extract LSA secrets.
 /// Takes raw bytes of the SECURITY and SYSTEM registry hives.
 /// Returns service account passwords, machine account credentials, DPAPI keys, etc.
@@ -1393,6 +1427,35 @@ mod tests {
             plaintext: Some("Password123".to_string()),
         };
         assert_eq!(cred.plaintext.as_ref().map(|p| p.len()).unwrap(), 11);
+    }
+
+    #[test]
+    fn test_dump_sam_from_vdata_empty() {
+        let boot_key = [0u8; 16];
+        let result = dump_sam_from_vdata(&boot_key, &[]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_dump_sam_from_vdata_requires_boot_key() {
+        let boot_key = [0u8; 16];
+        // A minimal V data buffer (must be >= 0xB0 = 176 bytes)
+        let v_data = vec![0u8; 200];
+        let entries = vec![(500u32, "test".to_string(), v_data)];
+        let result = dump_sam_from_vdata(&boot_key, &entries);
+        // Should succeed (decrypt may produce zero hashes for all-zero data, but doesn't error)
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_dump_sam_from_vdata_short_vdata() {
+        let boot_key = [0u8; 16];
+        let v_data = vec![0u8; 50]; // Too short (< 0xB0)
+        let entries = vec![(500u32, "test".to_string(), v_data)];
+        let result = dump_sam_from_vdata(&boot_key, &entries);
+        // Should fail (V value too short)
+        assert!(result.is_err());
     }
 
     #[test]

@@ -2320,35 +2320,264 @@ impl InteractiveSession {
 
     async fn cmd_smb(&mut self, args: &[&str]) -> Result<()> {
         if args.is_empty() {
-            println!("{} Usage: smb <action>", "Error:".red());
-            println!(" Actions: shares, admin, spider, get, put, ls, cat");
+            println!("{} Usage: smb <action> [args]", "Error:".red());
+            println!(" Actions: shares, admin, spider, get <remote>, put <local> <remote>,");
+            println!("          ls <path>, rm <path>, mkdir <path>, shell");
             return Ok(());
         }
 
-        match args[0].to_lowercase().as_str() {
-            "shares" => {
-                println!("{} Enumerating SMB shares...", ">".bright_black());
-                tokio::time::sleep(Duration::from_millis(400)).await;
-                println!("{} Found 3 shares", "[+]".green());
-                println!(" C$ - Administrative share");
-                println!(" ADMIN$ - Administrative share");
-                println!(" IPC$ - Inter-process communication");
-            }
-            "admin" => {
-                println!("{} Checking admin access...", ">".bright_black());
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                println!("{} Admin access confirmed", "[+]".green());
-            }
-            "spider" => {
-                println!("{} Spidering SMB shares...", ">".bright_black());
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                println!("{} Found 15 files", "[+]".green());
-                println!(" Documents/passwords.txt");
-                println!(" Desktop/notes.txt");
-                println!(" Downloads/secret.key");
+        // Build SMB session from context if possible
+        let target = self.initial_target.as_deref();
+        let smb = match (&self.credentials, target) {
+            (Some((domain, username, secret)), Some(tgt)) => {
+                let use_hash = secret
+                    .as_deref()
+                    .is_some_and(|s| s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()));
+                if use_hash {
+                    match overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                        tgt,
+                        domain,
+                        username,
+                        secret.as_deref().unwrap_or(""),
+                    )
+                    .await
+                    {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            println!("{} SMB connect failed: {}", "[-]".red(), e);
+                            None
+                        }
+                    }
+                } else {
+                    match overthrone_core::proto::smb::SmbSession::connect(
+                        tgt,
+                        domain,
+                        username,
+                        secret.as_deref().unwrap_or(""),
+                    )
+                    .await
+                    {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            println!("{} SMB connect failed: {}", "[-]".red(), e);
+                            None
+                        }
+                    }
+                }
             }
             _ => {
-                println!("{} Unknown SMB action '{}'", "Error:".red(), args[0]);
+                println!(
+                    "{} No target/creds. Use 'connect -t HOST -d DOMAIN -u USER -p PASS' first.",
+                    "[-]".red()
+                );
+                None
+            }
+        };
+
+        let action = args[0].to_lowercase();
+        let rest = &args[1..];
+
+        if action == "shell" {
+            println!(
+                "{} Use 'ovt smb shell --target <host>' for full interactive mode",
+                ">".bright_black()
+            );
+            return Ok(());
+        }
+
+        let session = match smb {
+            Some(ref s) => s,
+            None => return Ok(()),
+        };
+
+        match action.as_str() {
+            "shares" => match session.list_shares().await {
+                Ok(shares) => {
+                    println!();
+                    let tgt = target.unwrap_or("?");
+                    for share in &shares {
+                        let read = if session.check_share_read(share).await {
+                            "[R]".green().to_string()
+                        } else {
+                            "   ".dimmed().to_string()
+                        };
+                        println!("  \\\\{}\\{}  {}", tgt.cyan(), share, read);
+                    }
+                }
+                Err(e) => println!("{} List shares failed: {}", "[-]".red(), e),
+            },
+            "admin" => {
+                let result = session.check_admin_access().await;
+                if result.has_admin {
+                    println!("{} Admin access confirmed", "[+]".green());
+                } else {
+                    println!("{} No admin access", "[-]".red());
+                }
+            }
+            "spider" => {
+                let exts: Vec<String> = if rest.is_empty() {
+                    vec![
+                        ".txt".to_string(),
+                        ".docx".to_string(),
+                        ".xlsx".to_string(),
+                        ".pdf".to_string(),
+                        ".cfg".to_string(),
+                        ".ps1".to_string(),
+                        ".xml".to_string(),
+                        ".ini".to_string(),
+                    ]
+                } else {
+                    rest[0]
+                        .split(',')
+                        .map(|e| e.trim().to_lowercase())
+                        .collect()
+                };
+                let tgt = target.unwrap_or("?");
+                let candidate_shares = &[
+                    "C$", "ADMIN$", "Users", "Shares", "Public", "Data", "Backups",
+                ];
+                for &share in candidate_shares {
+                    if !session.check_share_read(share).await {
+                        continue;
+                    }
+                    println!(
+                        " {} \\\\{}\\{}",
+                        ">".bright_black(),
+                        tgt.cyan(),
+                        share.yellow()
+                    );
+                    let mut queue: Vec<String> = vec![String::new()];
+                    while let Some(dir) = queue.pop() {
+                        let entries = match session.list_directory(share, &dir).await {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+                        for entry in &entries {
+                            if entry.is_directory {
+                                if queue.len() < 1000 {
+                                    queue.push(entry.path.clone());
+                                }
+                            } else {
+                                let name_lower = entry.name.to_lowercase();
+                                if exts.iter().any(|ext| name_lower.ends_with(ext)) {
+                                    println!(
+                                        "  {} {} ({} bytes)",
+                                        "     ".bright_black(),
+                                        entry.name,
+                                        entry.size
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "ls" => {
+                let path = if rest.is_empty() { "" } else { rest[0] };
+                let (share, rpath) = match path.split_once(&['/', '\\'][..]) {
+                    Some((sh, p)) => (sh, p),
+                    None => ("C$", path),
+                };
+                match session.list_directory(share, rpath).await {
+                    Ok(entries) => {
+                        for e in &entries {
+                            if e.is_directory {
+                                println!("  {}  {}/", "[DIR]".cyan().bold(), e.name.cyan());
+                            } else {
+                                println!(
+                                    "  {}  {} ({} bytes)",
+                                    "     ".bright_black(),
+                                    e.name,
+                                    e.size
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => println!("{} List failed: {}", "[-]".red(), e),
+                }
+            }
+            "get" => {
+                if rest.is_empty() {
+                    println!("{} Usage: smb get <remote_path>", "Error:".red());
+                    return Ok(());
+                }
+                let remote = rest[0];
+                let (share, fpath) = match remote.split_once(&['/', '\\'][..]) {
+                    Some((sh, p)) => (sh, p),
+                    None => ("C$", remote),
+                };
+                match session.read_file(share, fpath).await {
+                    Ok(data) => {
+                        let local_name = std::path::Path::new(fpath)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        match std::fs::write(&local_name, &data) {
+                            Ok(_) => println!(
+                                "{} Downloaded {} bytes to {}",
+                                "[+]".green(),
+                                data.len(),
+                                local_name
+                            ),
+                            Err(e) => println!("{} Write failed: {}", "[-]".red(), e),
+                        }
+                    }
+                    Err(e) => println!("{} Get failed: {}", "[-]".red(), e),
+                }
+            }
+            "put" => {
+                if rest.len() < 2 {
+                    println!("{} Usage: smb put <local> <remote>", "Error:".red());
+                    return Ok(());
+                }
+                let data = match std::fs::read(rest[0]) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        println!("{} Cannot read {}: {}", "[-]".red(), rest[0], e);
+                        return Ok(());
+                    }
+                };
+                let (share, fpath) = match rest[1].split_once(&['/', '\\'][..]) {
+                    Some((sh, p)) => (sh, p),
+                    None => ("C$", rest[1]),
+                };
+                match session.write_file(share, fpath, &data).await {
+                    Ok(_) => println!("{} Uploaded {} bytes", "[+]".green(), data.len()),
+                    Err(e) => println!("{} Put failed: {}", "[-]".red(), e),
+                }
+            }
+            "rm" => {
+                if rest.is_empty() {
+                    println!("{} Usage: smb rm <remote_path>", "Error:".red());
+                    return Ok(());
+                }
+                let (share, fpath) = match rest[0].split_once(&['/', '\\'][..]) {
+                    Some((sh, p)) => (sh, p),
+                    None => ("C$", rest[0]),
+                };
+                match session.delete_file(share, fpath).await {
+                    Ok(_) => println!("{} Deleted {}", "[+]".green(), rest[0]),
+                    Err(e) => println!("{} Delete failed: {}", "[-]".red(), e),
+                }
+            }
+            "mkdir" => {
+                if rest.is_empty() {
+                    println!("{} Usage: smb mkdir <remote_path>", "Error:".red());
+                    return Ok(());
+                }
+                let (share, dpath) = match rest[0].split_once(&['/', '\\'][..]) {
+                    Some((sh, p)) => (sh, p),
+                    None => ("C$", rest[0]),
+                };
+                match session.create_dir(share, dpath).await {
+                    Ok(_) => println!("{} Created directory {}", "[+]".green(), rest[0]),
+                    Err(e) => println!("{} Mkdir failed: {}", "[-]".red(), e),
+                }
+            }
+            _ => {
+                println!("{} Unknown SMB action '{}'", "Error:".red(), action);
+                println!(" Actions: shares, admin, spider, get, put, ls, rm, mkdir, shell");
             }
         }
         Ok(())
@@ -3227,11 +3456,19 @@ pub async fn start_interactive_shell() -> Result<()> {
 }
 
 /// Start the interactive shell with a pre-configured target
-pub async fn start_interactive_shell_with_target(
+/// Start an interactive shell with pre-configured target and optional credentials.
+/// When credentials are provided, the shell auto-connects on startup.
+pub async fn start_interactive_shell_with_creds(
     target: &str,
     shell_type: &CliShellType,
+    domain: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
 ) -> Result<()> {
     let mut session = InteractiveSession::with_target(target, shell_type);
+    if let (Some(d), Some(u)) = (domain, username) {
+        session = session.with_credentials(d, u, password);
+    }
     session.start().await
 }
 

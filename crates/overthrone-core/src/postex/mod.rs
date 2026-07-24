@@ -35,7 +35,7 @@ pub use cred_dump::{
 pub use cves::{
     RbcdResult, SamAccountNameSpoofResult, ShadowCredentialsResult, cleanup_rbcd,
     cleanup_samname_spoof, cleanup_shadow_credentials, exploit_rbcd, exploit_samname_spoof,
-    exploit_shadow_credentials,
+    exploit_shadow_credentials, try_exploit_shadow_credentials,
 };
 pub use dpapi_extract::{
     DecryptedCredential, DecryptedMasterkeyInfo, DpapiExtractConfig, DpapiExtractResult,

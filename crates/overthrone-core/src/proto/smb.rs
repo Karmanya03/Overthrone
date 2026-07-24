@@ -872,6 +872,18 @@ impl SmbSession {
         conn.close(fid).await
     }
 
+    /// Disconnect the current SMB2 tree connection (IPC$ or other share).
+    /// Needed when switching between persistent-pipe and pipe_transact usage
+    /// to avoid tree_connect conflicts.
+    pub async fn tree_disconnect(&self) -> Result<()> {
+        let conn = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| OverthroneError::Smb("SMB2 client not initialized".to_string()))?;
+        let conn = conn.lock().await;
+        conn.tree_disconnect().await
+    }
+
     /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.
     /// The DC may return a DRSGetNCChanges reply in multiple RPC PDU fragments
     /// (each with `PFC_LAST_FRAG` bit 1 of pfc_flags clear except the last).
@@ -2069,6 +2081,15 @@ impl SmbSession {
     pub async fn close_pipe_persistent(&self, fid: &[u8; 32]) -> Result<()> {
         let conn = self.inner.lock().await;
         conn.close(fid).await
+    }
+
+    /// Disconnect the current SMB2 tree connection (IPC$ or other share).
+    /// Needed when switching between persistent-pipe and pipe_transact usage
+    /// to avoid tree_connect conflicts (some servers reject a second tree_connect
+    /// to IPC$ from the same session).
+    pub async fn tree_disconnect(&self) -> Result<()> {
+        let conn = self.inner.lock().await;
+        conn.tree_disconnect().await
     }
 
     /// Like `pipe_transact`, but reassembles multi-fragment DCE/RPC responses.

@@ -27,6 +27,9 @@ impl<T> ExchangeIo for T where T: AsyncRead + AsyncWrite + Unpin {}
 #[derive(Debug, Clone)]
 pub struct ExchangeRelayConfig {
     pub listen_ip: String,
+    /// TCP port to listen on (default 80). Use a high port (e.g. 8080) when
+    /// running without elevated privileges.
+    pub listen_port: u16,
     pub target_host: String,
     pub target_port: u16,
     pub use_tls: bool,
@@ -98,6 +101,7 @@ impl Default for ExchangeRelayConfig {
     fn default() -> Self {
         Self {
             listen_ip: "::".into(),
+            listen_port: 80,
             target_host: "exchange.corp.local".into(),
             target_port: 443,
             use_tls: true,
@@ -135,7 +139,7 @@ impl ExchangeRelay {
         }
         self.running.store(true, Ordering::SeqCst);
 
-        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, 80);
+        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Network(format!("Bind failed: {e}")))?;

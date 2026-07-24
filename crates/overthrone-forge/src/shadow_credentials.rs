@@ -242,23 +242,25 @@ pub fn parse_key_credentials(values: &[String]) -> Vec<KeyCredential> {
     credentials
 }
 
-/// Parse a single key credential from LDAP value
+/// Parse a single key credential from an LDAP `DN-Binary` value.
+/// The format is `B:<char_count>:<hex_blob>:<dn>`. The binary blob is the
+/// `KEYCREDENTIALLINK_BLOB` (custom TLV format, not DER).
 fn parse_single_key_credential(value: &str) -> Option<KeyCredential> {
-    // Format: B:8:01000000<key_id>:<key_credential>
-    if !value.starts_with("B:8:01000000") {
-        return None;
-    }
-
     let parts: Vec<&str> = value.split(':').collect();
-    if parts.len() < 4 {
+    if parts.len() < 4 || parts[0] != "B" {
         return None;
     }
 
-    let key_id_hex = parts[2].trim_start_matches("01000000");
-    let key_id = format_guid_from_hex(key_id_hex)?;
-
-    let cred_hex = parts[3];
+    let cred_hex = parts[2];
     let raw_value = hex::decode(cred_hex).ok()?;
+    if raw_value.len() < 4 {
+        return None;
+    }
+
+    // Parse the version (first 4 bytes, LE) and then TLV entries.
+    // Extract KeyID (tag 0x01) if present. For Version2 the value is the
+    // base64-encoded SHA256 of the key material.
+    let key_id = extract_key_id_from_blob(&raw_value).unwrap_or_else(|| "unknown".to_string());
 
     Some(KeyCredential {
         dn: String::new(),
@@ -269,7 +271,27 @@ fn parse_single_key_credential(value: &str) -> Option<KeyCredential> {
     })
 }
 
+/// Walk the KEYCREDENTIALLINK_BLOB TLV entries and return the KeyID value.
+fn extract_key_id_from_blob(blob: &[u8]) -> Option<String> {
+    let mut offset = 4usize; // skip version
+    while offset + 3 <= blob.len() {
+        let len = u16::from_le_bytes([blob[offset], blob[offset + 1]]) as usize;
+        let tag = blob[offset + 2];
+        let value_start = offset + 3;
+        if value_start + len > blob.len() {
+            break;
+        }
+        let value = &blob[value_start..value_start + len];
+        if tag == 0x01 {
+            return String::from_utf8(value.to_vec()).ok();
+        }
+        offset = value_start + len;
+    }
+    None
+}
+
 /// Format GUID from hex string
+#[expect(dead_code)]
 fn format_guid_from_hex(hex: &str) -> Option<String> {
     if hex.len() != 32 {
         return None;

@@ -64,7 +64,7 @@ jobs:
         with:
           timeout_minutes: 10
           max_attempts: 3
-          command: cargo fetch --locked --target ${{ matrix.target }}
+          command: cargo fetch --locked
 
       - name: Build release
         run: cargo build --release --workspace --locked --target ${{ matrix.target }}
@@ -146,4 +146,5 @@ jobs:
           files: |
             artifacts/**/*
           draft: false
+          update_release: true
           prerelease: ${{ contains(steps.notes.outputs.version, 'beta') || contains(steps.notes.outputs.version, 'alpha') || contains(steps.notes.outputs.version, 'rc') || contains(steps.notes.outputs.version, '-') }}

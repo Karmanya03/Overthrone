@@ -5,6 +5,7 @@ pub mod dcom;
 pub mod dns;
 pub mod drsr;
 pub mod epm;
+pub mod even;
 pub mod gpo_write;
 pub mod kerberos;
 pub mod laps_ldaps;
@@ -24,6 +25,7 @@ pub use coerce::{
     trigger_printer_bug_ex,
 };
 pub use epm::rpc_null_session_enumeration;
+pub use even::{create_smbexec_output_file, even_backup_log, even_create_file};
 pub use kerberos::{
     Checksum, FastArmorParams, RequestTgtOptions, build_encrypted_authenticator_with_authdata,
     build_fast_armor, build_pac_authdata_raw, build_s4u2self_checksum, forge_service_ticket,

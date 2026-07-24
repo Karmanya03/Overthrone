@@ -29,6 +29,9 @@ const BUF: usize = 16_384;
 pub struct AdcsRelayConfig {
     /// IP address (or 0.0.0.0) on which to listen for victim connections.
     pub listen_ip: String,
+    /// TCP port to listen on (default 80). Use a high port (e.g. 8080) when
+    /// running without elevated privileges.
+    pub listen_port: u16,
     /// ADCS target host, e.g. "192.168.1.100" or "ca01.corp.local".
     pub target_host: String,
     /// Certificate template name to request, e.g. "User" or "Machine".
@@ -57,13 +60,13 @@ impl AdcsRelay {
         }
     }
 
-    /// Bind to `<listen_ip>:80` and spawn an async accept loop.
+    /// Bind to `<listen_ip>:<listen_port>` and spawn an async accept loop.
     pub async fn start(&mut self) -> Result<()> {
         if self.running.load(Ordering::SeqCst) {
             return Err(RelayError::Config("ADCS Relay already running".into()).into());
         }
 
-        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, 80);
+        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e)))?;

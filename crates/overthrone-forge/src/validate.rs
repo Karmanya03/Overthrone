@@ -391,6 +391,9 @@ pub fn validate_forge_config(config: &crate::runner::ForgeConfig) -> Result<()> 
         crate::runner::ForgeAction::ConvertTicket { .. } => {
             // No validation needed -- offline operation
         }
+        crate::runner::ForgeAction::RotateTicket { .. } => {
+            // No validation needed -- offline operation
+        }
         crate::runner::ForgeAction::AsRepToTgt {
             cracked_password, ..
         } => {

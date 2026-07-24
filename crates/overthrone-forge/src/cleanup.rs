@@ -590,6 +590,12 @@ pub fn assess_detection_risk(action: &ForgeAction) -> DetectionAssessment {
                 ],
             }
         },
+        ForgeAction::RotateTicket { .. } => DetectionAssessment {
+            overall_risk: RiskLevel::VeryLow,
+            description: "Ticket rotation is offline, no network traffic generated".into(),
+            indicators: vec![],
+            mitigations: vec![],
+        },
         ForgeAction::S4u2SelfPkinit { target_spn, .. } => DetectionAssessment {
             overall_risk: if target_spn.is_some() {
                 RiskLevel::High // S4U2Self+Proxy chain is more detectable

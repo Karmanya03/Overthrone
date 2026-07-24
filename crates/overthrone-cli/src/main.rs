@@ -185,6 +185,13 @@ enum OutputFormat {
     Csv,
 }
 
+#[derive(Clone, PartialEq, clap::ValueEnum)]
+enum SmbDaemonOutputFormat {
+    Summary,
+    Hashcat,
+    John,
+}
+
 impl std::str::FromStr for OutputFormat {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -1139,6 +1146,20 @@ enum AdcsAction {
         #[arg(long)]
         exploit: bool,
     },
+    /// Get CA certificate via DCOM over SMB named pipe
+    #[command(name = "get-ca-cert")]
+    GetCaCert {
+        /// Output file path for the CA certificate (DER format)
+        #[arg(short, long, default_value = "ca_cert.der")]
+        output: String,
+    },
+    /// Backup CA certificate via DCOM over SMB named pipe
+    #[command(name = "backup-ca")]
+    BackupCa {
+        /// Output file path for the backed-up CA certificate (DER format)
+        #[arg(short, long, default_value = "ca_backup.der")]
+        output: String,
+    },
 }
 
 // ----------------------------------------------------------
@@ -1793,6 +1814,39 @@ enum SmbAction {
         #[arg(short = 'r', long, required = true)]
         remote: String,
     },
+    /// List directory contents on an SMB share
+    Ls {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Remote path -- e.g. C$/Users or share/relative/path
+        #[arg(long, required = true)]
+        path: String,
+    },
+    /// Delete a file on an SMB share
+    Rm {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Remote file path -- e.g. C$/Windows/Temp/file.txt
+        #[arg(long, required = true)]
+        path: String,
+    },
+    /// Create a directory on an SMB share
+    Mkdir {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Remote directory path -- e.g. C$/Windows/Temp/newdir
+        #[arg(long, required = true)]
+        path: String,
+    },
+    /// Interactive SMB shell (like smbclient)
+    Shell {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+    },
 }
 
 // ----------------------------------------------------------
@@ -1805,6 +1859,8 @@ enum DumpSource {
     Lsa,
     /// DRSUAPI DCSync (replaces VSS-based NTDS dump)
     Ntds,
+    /// NTDS.dit via VSS+SMB @GMT shadow copy read (bypasses WS2025 file-write sandbox)
+    NtdsVss,
     Dcc2,
     /// DRSUAPI DCSync (alias for ntds)
     Dcsync,
@@ -2058,13 +2114,23 @@ enum NtlmAction {
         socks5_proxy: Option<String>,
     },
     /// Standalone SMB daemon for credential capture
+    #[command(alias = "smbd")]
     SmbDaemon {
         /// Network interface to listen on
-        #[arg(short, long, default_value = "eth0")]
+        #[arg(short, long, default_value = "0.0.0.0")]
         interface: String,
         /// Listener port
         #[arg(long, default_value = "445")]
         port: u16,
+        /// Custom NTLM challenge as 16-character hex string
+        #[arg(long, value_parser = parse_hex_challenge)]
+        challenge: Option<[u8; 8]>,
+        /// Output format for captured credentials
+        #[arg(long = "hash-format", value_enum, default_value = "summary")]
+        hash_format: SmbDaemonOutputFormat,
+        /// Write captured hashes to file (appended)
+        #[arg(short, long)]
+        output_file: Option<String>,
     },
     /// TLS-wrapped NTLM relay with optional mTLS client certificate verification
     TlsRelay {
@@ -2302,6 +2368,21 @@ enum ForgeAction {
         /// Output format: kirbi, ccache, base64
         #[arg(short, long, required = true)]
         format: String,
+    },
+    /// Re-encrypt a ticket under a different krbtgt key (ticket rotation)
+    RotateTicket {
+        /// Input .kirbi file
+        #[arg(short, long, required = true)]
+        input: String,
+        /// Old krbtgt key (hex, 16 bytes RC4 or 32 bytes AES256)
+        #[arg(long, required = true)]
+        old_key: String,
+        /// New krbtgt key (hex, 16 bytes RC4 or 32 bytes AES256)
+        #[arg(long, required = true)]
+        new_key: String,
+        /// Output .kirbi file
+        #[arg(short, long, default_value = "rotated.kirbi")]
+        output: String,
     },
     /// Convert a cracked AS-REP roast password into a usable TGT.
     /// If --hash is provided, the username and domain are auto-extracted from the hash.
@@ -2870,7 +2951,7 @@ async fn async_main() -> i32 {
         Commands::Shell {
             ref target,
             ref shell_type,
-        } => commands_impl::cmd_shell(target, shell_type).await,
+        } => commands_impl::cmd_shell(&cli, target, shell_type).await,
         Commands::Sccm { ref action } => commands_impl::cmd_sccm(&cli, action).await,
         Commands::Scan {
             ref targets,
@@ -3747,7 +3828,14 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
             banner::print_module_banner("Shadow Credentials -- PKINIT Auth");
             println!(" {} Target DN: {}", ">".bright_black(), target_dn.cyan());
 
-            match cves::exploit_shadow_credentials(&mut ldap, &dc_ip, &domain, &target_dn).await {
+            // Derive a Kerberos username from the DN (first CN= component).
+            let target_user = target_dn
+                .split(',')
+                .find(|p| p.trim_start_matches(' ').starts_with("CN="))
+                .map(|p| p.trim_start_matches(' ').trim_start_matches("CN=").to_string())
+                .unwrap_or_else(|| target_dn.to_string());
+
+            match cves::try_exploit_shadow_credentials(&mut ldap, &dc_ip, &domain, &target_dn, &target_user).await {
                 Ok(result) => {
                     banner::print_success(&format!("TGT obtained for {target_dn}"));
                     println!(
@@ -3931,6 +4019,21 @@ fn load_tls_config(
     }
 }
 
+/// Parse a 16-character hex string into an 8-byte NTLM challenge.
+fn parse_hex_challenge(s: &str) -> Result<[u8; 8], String> {
+    let s = s.trim();
+    if s.len() != 16 {
+        return Err(format!(
+            "challenge must be 16 hex characters, got {} characters",
+            s.len()
+        ));
+    }
+    let bytes = hex::decode(s).map_err(|e| format!("invalid hex challenge: {e}"))?;
+    bytes
+        .try_into()
+        .map_err(|_| "challenge did not decode to 8 bytes".to_string())
+}
+
 /// Parse relay target strings in `protocol://host:port` or `host:port` format.
 /// Supports protocols: smb, http, https, ldap, ldaps, mssql, msmq, exchange.
 fn parse_relay_targets(targets: &[String]) -> Vec<overthrone_relay::RelayTarget> {
@@ -4061,7 +4164,14 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 Ok(_) => match controller.start().await {
                     Ok(_) => {
                         banner::print_success("NTLM capture started");
-                        0
+                        banner::print_info("Press Ctrl+C to stop");
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                banner::print_info("Shutting down NTLM capture...");
+                                let _ = controller.stop().await;
+                                0
+                            }
+                        }
                     }
                     Err(e) => {
                         banner::print_fail(&format!("Capture failed: {}", e));
@@ -4600,7 +4710,13 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 }
             }
         }
-        NtlmAction::SmbDaemon { interface, port } => {
+        NtlmAction::SmbDaemon {
+            interface,
+            port,
+            challenge,
+            hash_format,
+            output_file,
+        } => {
             banner::print_module_banner("SMB DAEMON");
             println!(
                 "{} Starting SMB2 daemon on {}:{}",
@@ -4614,7 +4730,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             let config = SmbDaemonConfig {
                 listen_ip: interface.clone(),
                 listen_port: port,
-                challenge: None,
+                challenge,
                 mode: SmbDaemonMode::Capture,
                 domain_name: "LAN".to_string(),
                 socks5_proxy: None,
@@ -4637,13 +4753,45 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                         "".bright_black(),
                         captured.len()
                     );
+
+                    let mut file_lines = Vec::new();
                     for cred in &captured {
-                        println!(
-                            " {}\\{} - {}",
-                            cred.domain.cyan(),
-                            cred.username.green(),
-                            cred.client_ip
-                        );
+                        match hash_format {
+                            SmbDaemonOutputFormat::Summary => {
+                                println!(
+                                    " {}\\{} - {}",
+                                    cred.domain.cyan(),
+                                    cred.username.green(),
+                                    cred.client_ip
+                                );
+                            }
+                            SmbDaemonOutputFormat::Hashcat => {
+                                let line = cred.to_hashcat_format();
+                                println!(" {}", line);
+                                file_lines.push(line);
+                            }
+                            SmbDaemonOutputFormat::John => {
+                                let line = cred.to_john_format();
+                                println!(" {}", line);
+                                file_lines.push(line);
+                            }
+                        }
+                    }
+
+                    if let Some(path) = output_file
+                        && !file_lines.is_empty()
+                    {
+                        let contents = file_lines.join("\n") + "\n";
+                        if let Err(e) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                            .and_then(|mut f| std::io::Write::write_all(&mut f, contents.as_bytes()))
+                        {
+                            banner::print_fail(&format!("Failed to write output file: {e}"));
+                        } else {
+                            banner::print_success(&format!("Wrote {} hash(es) to {path}", file_lines.len()));
+                        }
                     }
                     0
                 }
@@ -4752,6 +4900,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
 
             let config = ExchangeRelayConfig {
                 listen_ip: "0.0.0.0".into(),
+                listen_port: 80,
                 target_host: target.clone(),
                 target_port: port,
                 use_tls: !no_tls,
@@ -6934,6 +7083,367 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             }
+        }
+        SmbAction::Ls { target, path } => {
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            let (share, remote_path) = match path.split_once('/') {
+                Some((s, p)) => (s, p),
+                None => ("C$", path.as_str()),
+            };
+            match smb.list_directory(share, remote_path).await {
+                Ok(entries) => {
+                    println!(
+                        " {} Listing \\\\{}\\{}\\{} ({})\n",
+                        ">".bright_black(),
+                        target.cyan(),
+                        share.yellow(),
+                        remote_path,
+                        format!("{} entries", entries.len()).dimmed()
+                    );
+                    let mut dirs = 0u32;
+                    let mut files = 0u32;
+                    for e in &entries {
+                        if e.is_directory {
+                            println!(" {}  {}/", "[DIR]".cyan().bold(), e.name.cyan());
+                            dirs += 1;
+                        } else {
+                            println!(" {}  {} ({} bytes)", "     ".bright_black(), e.name, e.size);
+                            files += 1;
+                        }
+                    }
+                    banner::print_success(&format!("{} directories, {} files", dirs, files));
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("List failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        SmbAction::Rm { target, path } => {
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            let (share, remote_path) = match path.split_once('/') {
+                Some((s, p)) => (s, p),
+                None => ("C$", path.as_str()),
+            };
+            match smb.delete_file(share, remote_path).await {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "Deleted \\\\{}\\{}\\{}",
+                        target, share, remote_path
+                    ));
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Delete failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        SmbAction::Mkdir { target, path } => {
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            let (share, remote_path) = match path.split_once('/') {
+                Some((s, p)) => (s, p),
+                None => ("C$", path.as_str()),
+            };
+            match smb.create_dir(share, remote_path).await {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "Created directory \\\\{}\\{}\\{}",
+                        target, share, remote_path
+                    ));
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Create dir failed: {}", e));
+                    return 1;
+                }
+            }
+        }
+        SmbAction::Shell { target } => {
+            let smb = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            banner::print_success(&format!("Interactive SMB shell on {}", target));
+            banner::print_info(
+                "Commands: ls <path>, cd <dir>, get <rem>, put <loc> <rem>, rm <path>, mkdir <path>, shares, pwd, exit",
+            );
+            let mut cwd = String::new();
+            let mut current_share = String::from("C$");
+            loop {
+                let prompt = format!(
+                    "smb: \\\\{}\\{}> ",
+                    target.cyan(),
+                    format!("{}\\{}", current_share, cwd).yellow()
+                );
+                let mut input = String::new();
+                print!("{}", prompt);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                match std::io::stdin().read_line(&mut input) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let input = input.trim();
+                if input.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                let cmd = parts[0].to_lowercase();
+                let args = &parts[1..];
+                match cmd.as_str() {
+                    "exit" | "quit" => {
+                        banner::print_info("Exiting SMB shell");
+                        break;
+                    }
+                    "shares" => match smb.list_shares().await {
+                        Ok(shares) => {
+                            println!();
+                            for s in shares {
+                                println!("  \\\\{}\\{}", target, s);
+                            }
+                        }
+                        Err(e) => println!("{} List shares failed: {}", "[-]".red(), e),
+                    },
+                    "pwd" => {
+                        println!("  \\\\{}\\{}\\{}", target, current_share, cwd);
+                    }
+                    "ls" => {
+                        let list_path: String = if args.is_empty() {
+                            cwd.clone()
+                        } else {
+                            args.join("\\")
+                        };
+                        let (share, rpath) = if list_path.contains('$') || list_path.contains('/') {
+                            match list_path.split_once(&['/', '\\'][..]) {
+                                Some((s, p)) => (s.to_string(), p.to_string()),
+                                None => (current_share.clone(), list_path.clone()),
+                            }
+                        } else if !list_path.is_empty() {
+                            (current_share.clone(), list_path.clone())
+                        } else {
+                            (current_share.clone(), cwd.clone())
+                        };
+                        match smb.list_directory(&share, &rpath).await {
+                            Ok(entries) => {
+                                for e in &entries {
+                                    if e.is_directory {
+                                        println!("  {}  {}/", "[DIR]".cyan().bold(), e.name.cyan());
+                                    } else {
+                                        println!(
+                                            "  {}  {} ({} bytes)",
+                                            "     ".bright_black(),
+                                            e.name,
+                                            e.size
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => println!("{} List failed: {}", "[-]".red(), e),
+                        }
+                    }
+                    "cd" => {
+                        if args.is_empty() {
+                            cwd.clear();
+                        } else {
+                            let new_dir = args.join("\\");
+                            // Check if it contains a share separator
+                            if new_dir.contains('$')
+                                || new_dir.contains('/')
+                                || new_dir.contains('\\')
+                            {
+                                let sep = if new_dir.contains('/') { '/' } else { '\\' };
+                                let (share, path) = match new_dir.split_once(sep) {
+                                    Some((s, p)) => (s.to_string(), p.to_string()),
+                                    None => (new_dir.clone(), String::new()),
+                                };
+                                // Verify directory exists
+                                match smb.list_directory(&share, &path).await {
+                                    Ok(_) => {
+                                        current_share = share;
+                                        cwd = path;
+                                    }
+                                    Err(e) => println!("{} cd failed: {}", "[-]".red(), e),
+                                }
+                            } else {
+                                // Relative path in current share
+                                let test_path = if cwd.is_empty() {
+                                    new_dir.clone()
+                                } else {
+                                    format!("{}\\{}", cwd, new_dir)
+                                };
+                                match smb.list_directory(&current_share, &test_path).await {
+                                    Ok(_) => {
+                                        cwd = test_path;
+                                    }
+                                    Err(e) => println!("{} cd failed: {}", "[-]".red(), e),
+                                }
+                            }
+                        }
+                    }
+                    "get" => {
+                        if args.is_empty() {
+                            println!("{} Usage: get <remote_path>", "Error:".red());
+                            continue;
+                        }
+                        let remote_file = args[0];
+                        let (share, file_path) = match remote_file.split_once(&['/', '\\'][..]) {
+                            Some((s, p)) => (s, p),
+                            None => (current_share.as_str(), remote_file),
+                        };
+                        let full_path = if cwd.is_empty() {
+                            file_path.to_string()
+                        } else {
+                            format!("{}\\{}", cwd, file_path)
+                        };
+                        match smb.read_file(share, &full_path).await {
+                            Ok(data) => {
+                                let local_name = std::path::Path::new(file_path)
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy();
+                                match std::fs::write(&*local_name, &data) {
+                                    Ok(_) => println!(
+                                        "{} Downloaded {} bytes to {}",
+                                        "[+]".green(),
+                                        data.len(),
+                                        local_name
+                                    ),
+                                    Err(e) => println!("{} Write failed: {}", "[-]".red(), e),
+                                }
+                            }
+                            Err(e) => println!("{} Get failed: {}", "[-]".red(), e),
+                        }
+                    }
+                    "put" => {
+                        if args.len() < 2 {
+                            println!("{} Usage: put <local> <remote>", "Error:".red());
+                            continue;
+                        }
+                        let local_file = args[0];
+                        let remote_file = args[1];
+                        let data = match std::fs::read(local_file) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                println!("{} Cannot read {}: {}", "[-]".red(), local_file, e);
+                                continue;
+                            }
+                        };
+                        let (share, file_path) = match remote_file.split_once(&['/', '\\'][..]) {
+                            Some((s, p)) => (s, p),
+                            None => (current_share.as_str(), remote_file),
+                        };
+                        let full_path = if cwd.is_empty() {
+                            file_path.to_string()
+                        } else {
+                            format!("{}\\{}", cwd, file_path)
+                        };
+                        match smb.write_file(share, &full_path, &data).await {
+                            Ok(_) => println!(
+                                "{} Uploaded {} bytes to \\\\{}\\{}\\{}",
+                                "[+]".green(),
+                                data.len(),
+                                target,
+                                share,
+                                full_path
+                            ),
+                            Err(e) => println!("{} Put failed: {}", "[-]".red(), e),
+                        }
+                    }
+                    "rm" => {
+                        if args.is_empty() {
+                            println!("{} Usage: rm <remote_path>", "Error:".red());
+                            continue;
+                        }
+                        let remote_file = args[0];
+                        let (share, file_path) = match remote_file.split_once(&['/', '\\'][..]) {
+                            Some((s, p)) => (s, p),
+                            None => (current_share.as_str(), remote_file),
+                        };
+                        let full_path = if cwd.is_empty() {
+                            file_path.to_string()
+                        } else {
+                            format!("{}\\{}", cwd, file_path)
+                        };
+                        match smb.delete_file(share, &full_path).await {
+                            Ok(_) => println!(
+                                "{} Deleted \\\\{}\\{}\\{}",
+                                "[+]".green(),
+                                target,
+                                share,
+                                full_path
+                            ),
+                            Err(e) => println!("{} Delete failed: {}", "[-]".red(), e),
+                        }
+                    }
+                    "mkdir" => {
+                        if args.is_empty() {
+                            println!("{} Usage: mkdir <remote_path>", "Error:".red());
+                            continue;
+                        }
+                        let dir_path = args[0];
+                        let (share, dpath) = match dir_path.split_once(&['/', '\\'][..]) {
+                            Some((s, p)) => (s, p),
+                            None => (current_share.as_str(), dir_path),
+                        };
+                        let full_path = if cwd.is_empty() {
+                            dpath.to_string()
+                        } else {
+                            format!("{}\\{}", cwd, dpath)
+                        };
+                        match smb.create_dir(share, &full_path).await {
+                            Ok(_) => println!(
+                                "{} Created \\\\{}\\{}\\{}",
+                                "[+]".green(),
+                                target,
+                                share,
+                                full_path
+                            ),
+                            Err(e) => println!("{} Mkdir failed: {}", "[-]".red(), e),
+                        }
+                    }
+                    "help" => {
+                        println!(" Commands:");
+                        println!("  ls [path]        List directory contents");
+                        println!("  cd <dir>         Change directory");
+                        println!("  pwd              Print working directory (UNC)");
+                        println!("  get <remote>     Download file");
+                        println!("  put <local> <remote>  Upload file");
+                        println!("  rm <path>        Delete file");
+                        println!("  mkdir <path>     Create directory");
+                        println!("  shares           List available shares");
+                        println!("  exit/quit        Exit SMB shell");
+                        println!("  help             Show this help");
+                    }
+                    _ => {
+                        println!(
+                            "{} Unknown command: {}. Type 'help' for commands.",
+                            "Error:".red(),
+                            cmd
+                        );
+                    }
+                }
+            }
+            return 0;
         }
         SmbAction::Put {
             target,

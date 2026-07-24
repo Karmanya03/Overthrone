@@ -328,8 +328,21 @@ pub fn find_pattern(data: &[u8], pattern: &[u8]) -> Option<usize> {
 }
 
 /// Check if a DCE/RPC bind response was accepted.
-pub fn is_bind_accepted(response: &[u8]) -> bool {
-    response.len() > 29 && response[28] == 0 && response[29] == 0
+///
+/// Parses the BindAck PDU to find the presentation context result after
+/// the variable-length sec_addr. See epm::is_bind_accepted for details.
+pub fn is_bind_accepted(resp: &[u8]) -> bool {
+    if resp.len() < 30 || resp[2] != 12 {
+        return false;
+    }
+    let sec_addr_len = u16::from_le_bytes([resp[24], resp[25]]) as usize;
+    let mut off = 26 + sec_addr_len;
+    off = (off + 3) & !3;
+    if off + 4 > resp.len() {
+        return false;
+    }
+    let result = u16::from_le_bytes([resp[off + 2], resp[off + 3]]);
+    result == 0
 }
 
 /// Perform DCOM activation over SMB named pipe.
@@ -649,9 +662,9 @@ mod tests {
 
     #[test]
     fn test_is_bind_accepted() {
-        let mut resp = vec![0u8; 30];
-        resp[28] = 0;
-        resp[29] = 0;
+        let mut resp = vec![0u8; 32];
+        resp[2] = 12; // type = BindAck
+        // sec_addr_len at 24-25 = [0,0], off = 28, result at 30-31 = [0,0] => accepted
         assert!(is_bind_accepted(&resp));
     }
 

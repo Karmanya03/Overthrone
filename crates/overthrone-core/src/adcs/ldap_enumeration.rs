@@ -476,7 +476,15 @@ impl LdapAdcsEnumerator {
             .attrs
             .get("cACertificate")
             .and_then(|v| v.first())
-            .map(|s| s.as_bytes().to_vec());
+            .map(|s| s.as_bytes().to_vec())
+            .or_else(|| {
+                entry
+                    .bin_attrs
+                    .get("cacertificate")
+                    .or_else(|| entry.bin_attrs.get("cACertificate"))
+                    .and_then(|v| v.first())
+                    .cloned()
+            });
 
         let certificate_templates = entry
             .attrs

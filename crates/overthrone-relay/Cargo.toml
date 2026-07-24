@@ -11,7 +11,7 @@ name = "overthrone_relay"
 path = "src/lib.rs"
 
 [dependencies]
-overthrone-core = { version = "0.3.2", path = "../overthrone-core" }
+overthrone-core = { version = "0.4.0", path = "../overthrone-core" }
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
