@@ -308,13 +308,16 @@ pub async fn verify_dc(
                         }
 
                         // -- Check 9: Cross-DC consistency (if multiple DCs found) --
-                        if config.check_cross_dc && dcs.len() > 1
-                            && checks.iter().any(|c| c.kind == DcCheckKind::LdapRootDse
-                                && matches!(c.severity, CheckSeverity::Pass))
+                        if config.check_cross_dc
+                            && dcs.len() > 1
+                            && checks.iter().any(|c| {
+                                c.kind == DcCheckKind::LdapRootDse
+                                    && matches!(c.severity, CheckSeverity::Pass)
+                            })
                         {
-                            let cross_result = check_cross_dc_consistency(
-                                &dcs, dc_host, domain, &timeout_dur,
-                            ).await;
+                            let cross_result =
+                                check_cross_dc_consistency(&dcs, dc_host, domain, &timeout_dur)
+                                    .await;
                             if let Some(result) = cross_result {
                                 if matches!(result.severity, CheckSeverity::Fail) {
                                     hostile_suspicion = true;
@@ -360,7 +363,16 @@ pub async fn verify_dc(
 
     // -- Check 5: Kerberos port check --
     info!("DC verification: checking Kerberos port 88 on {dc_host}");
-    check_port(dc_host, 88, DcCheckKind::KerberosPort, "Kerberos", &timeout_dur, &mut checks, &mut hostile_suspicion).await;
+    check_port(
+        dc_host,
+        88,
+        DcCheckKind::KerberosPort,
+        "Kerberos",
+        &timeout_dur,
+        &mut checks,
+        &mut hostile_suspicion,
+    )
+    .await;
 
     // -- Check 6: NTLM challenge via SMB port 445 --
     if config.check_ntlm {
@@ -377,7 +389,16 @@ pub async fn verify_dc(
     // -- Check 7: EPM port 135 --
     if config.check_epm {
         info!("DC verification: checking EPM port 135 on {dc_host}");
-        check_port(dc_host, 135, DcCheckKind::EpmPort, "RPC Endpoint Mapper", &timeout_dur, &mut checks, &mut hostile_suspicion).await;
+        check_port(
+            dc_host,
+            135,
+            DcCheckKind::EpmPort,
+            "RPC Endpoint Mapper",
+            &timeout_dur,
+            &mut checks,
+            &mut hostile_suspicion,
+        )
+        .await;
     } else {
         checks.push(DcCheckResult {
             kind: DcCheckKind::EpmPort,
@@ -389,7 +410,16 @@ pub async fn verify_dc(
     // -- Check 8: LDAP port 389 --
     if config.check_ldap_port {
         info!("DC verification: checking LDAP port 389 on {dc_host}");
-        check_port(dc_host, 389, DcCheckKind::LdapPort, "LDAP", &timeout_dur, &mut checks, &mut hostile_suspicion).await;
+        check_port(
+            dc_host,
+            389,
+            DcCheckKind::LdapPort,
+            "LDAP",
+            &timeout_dur,
+            &mut checks,
+            &mut hostile_suspicion,
+        )
+        .await;
     } else {
         checks.push(DcCheckResult {
             kind: DcCheckKind::LdapPort,
@@ -446,7 +476,12 @@ async fn check_port(
     checks: &mut Vec<DcCheckResult>,
     hostile_suspicion: &mut bool,
 ) {
-    match tokio::time::timeout(*timeout_dur, tokio::net::TcpStream::connect(format!("{host}:{port}"))).await {
+    match tokio::time::timeout(
+        *timeout_dur,
+        tokio::net::TcpStream::connect(format!("{host}:{port}")),
+    )
+    .await
+    {
         Ok(Ok(_)) => {
             checks.push(DcCheckResult {
                 kind,
@@ -465,7 +500,10 @@ async fn check_port(
             *hostile_suspicion = true;
         }
         Err(_) => {
-            let msg = format!("{service_name} port {port} timed out after {}s", timeout_dur.as_secs());
+            let msg = format!(
+                "{service_name} port {port} timed out after {}s",
+                timeout_dur.as_secs()
+            );
             warn!("{}", msg);
             checks.push(DcCheckResult {
                 kind,
@@ -502,7 +540,10 @@ async fn check_ntlm_challenge(
             });
         }
         Err(_) => {
-            let msg = format!("SMB NTLM challenge check timed out after {}s", timeout_dur.as_secs());
+            let msg = format!(
+                "SMB NTLM challenge check timed out after {}s",
+                timeout_dur.as_secs()
+            );
             warn!("{}", msg);
             checks.push(DcCheckResult {
                 kind: DcCheckKind::NtlmChallenge,
@@ -524,46 +565,53 @@ async fn check_ntlm_challenge_inner(host: &str) -> Result<String, String> {
     // SMBv2 negotiate request (simplified, minimal)
     // NetBIOS session request first
     let netbios_session = vec![0x00u8; 4]; // NetBIOS session request with 0 length
-    stream.write_all(&netbios_session).await
+    stream
+        .write_all(&netbios_session)
+        .await
         .map_err(|e| format!("NetBIOS session send failed: {e}"))?;
 
     // Read NetBIOS session response (4 bytes)
     let mut netbios_resp = [0u8; 4];
-    stream.read_exact(&mut netbios_resp).await
+    stream
+        .read_exact(&mut netbios_resp)
+        .await
         .map_err(|e| format!("NetBIOS session response failed: {e}"))?;
 
     if netbios_resp[0] != 0x00 {
-        return Err(format!("NetBIOS session rejected: type={}", netbios_resp[0]));
+        return Err(format!(
+            "NetBIOS session rejected: type={}",
+            netbios_resp[0]
+        ));
     }
 
     // SMB2 negotiate request
     // Protocol: SMBv2, Dialect revision: 0x0202 (SMB 2.0.2)
     let mut smb_nego = Vec::new();
-    smb_nego.extend_from_slice(b"\xfeSMB");            // Protocol ID
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // StructureSize
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // CreditCharge
-    smb_nego.extend_from_slice(&0u32.to_le_bytes());   // Status
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // Command: Negotiate (0x0000)
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // Credits requested
-    smb_nego.extend_from_slice(&0u32.to_le_bytes());   // Flags
-    smb_nego.extend_from_slice(&0u32.to_le_bytes());   // NextCommand
-    smb_nego.extend_from_slice(&0u64.to_le_bytes());   // MessageId
-    smb_nego.push(0u8);                                // Reserved
-    smb_nego.push(0u8);                                // Reserved
-    smb_nego.push(0u8);                                // Reserved
-    smb_nego.push(0u8);                                // Reserved
-    smb_nego.extend_from_slice(&0u32.to_le_bytes());   // TreeId (0)
-    smb_nego.extend_from_slice(&0u64.to_le_bytes());   // SessionId
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // StructureSize (36)
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // DialectCount
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // SecurityMode
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // Reserved
-    smb_nego.extend_from_slice(&0u32.to_le_bytes());   // Capabilities
-    let client_guid = [0u8; 16];                       // ClientGuid (16 bytes, zero is fine for probe)
+    smb_nego.extend_from_slice(b"\xfeSMB"); // Protocol ID
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // StructureSize
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+    smb_nego.extend_from_slice(&0u32.to_le_bytes()); // Status
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // Command: Negotiate (0x0000)
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // Credits requested
+    smb_nego.extend_from_slice(&0u32.to_le_bytes()); // Flags
+    smb_nego.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+    smb_nego.extend_from_slice(&0u64.to_le_bytes()); // MessageId
+    smb_nego.push(0u8); // Reserved
+    smb_nego.push(0u8); // Reserved
+    smb_nego.push(0u8); // Reserved
+    smb_nego.push(0u8); // Reserved
+    smb_nego.extend_from_slice(&0u32.to_le_bytes()); // TreeId (0)
+    smb_nego.extend_from_slice(&0u64.to_le_bytes()); // SessionId
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // StructureSize (36)
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // DialectCount
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // SecurityMode
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // Reserved
+    smb_nego.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
+    let client_guid = [0u8; 16]; // ClientGuid (16 bytes, zero is fine for probe)
     smb_nego.extend_from_slice(&client_guid);
-    smb_nego.extend_from_slice(&0u32.to_le_bytes());   // NegotiateContextOffset
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // NegotiateContextCount
-    smb_nego.extend_from_slice(&0u16.to_le_bytes());   // Reserved2
+    smb_nego.extend_from_slice(&0u32.to_le_bytes()); // NegotiateContextOffset
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // NegotiateContextCount
+    smb_nego.extend_from_slice(&0u16.to_le_bytes()); // Reserved2
     // Dialects: SMB 2.0.2, 2.1, 3.0, 3.0.2, 3.1.1
     let dialects = [0x0202u16, 0x0210, 0x0300, 0x0302, 0x0311];
     for d in &dialects {
@@ -576,12 +624,16 @@ async fn check_ntlm_challenge_inner(host: &str) -> Result<String, String> {
     pdu.push(0x00); // NetBIOS session message type
     pdu.extend_from_slice(&smb_nego);
 
-    stream.write_all(&pdu).await
+    stream
+        .write_all(&pdu)
+        .await
         .map_err(|e| format!("SMB negotiate send failed: {e}"))?;
 
     // Read SMB negotiate response
     let mut nb_header = [0u8; 4];
-    stream.read_exact(&mut nb_header).await
+    stream
+        .read_exact(&mut nb_header)
+        .await
         .map_err(|e| format!("SMB negotiate read header failed: {e}"))?;
 
     let resp_len = u32::from_be_bytes(nb_header) as usize;
@@ -590,7 +642,9 @@ async fn check_ntlm_challenge_inner(host: &str) -> Result<String, String> {
     }
 
     let mut resp = vec![0u8; resp_len];
-    stream.read_exact(&mut resp).await
+    stream
+        .read_exact(&mut resp)
+        .await
         .map_err(|e| format!("SMB negotiate read body failed: {e}"))?;
 
     // Check for SMB protocol ID
@@ -629,7 +683,10 @@ async fn check_ntlm_challenge_inner(host: &str) -> Result<String, String> {
 
     // Parse the negotiate response
     if resp.len() < 64 {
-        return Err(format!("SMB negotiate response too short: {} bytes", resp.len()));
+        return Err(format!(
+            "SMB negotiate response too short: {} bytes",
+            resp.len()
+        ));
     }
 
     // Look for NTLMSSP signature in the response
@@ -656,7 +713,8 @@ async fn check_cross_dc_consistency(
     let primary_domain_lower = domain.to_lowercase();
 
     // Try up to 2 other DCs
-    let other_dcs: Vec<&str> = dcs.iter()
+    let other_dcs: Vec<&str> = dcs
+        .iter()
         .filter(|(hostname, _)| {
             let h = hostname.to_lowercase();
             h != primary_dc_lower
@@ -684,14 +742,21 @@ async fn check_cross_dc_consistency(
         match tokio::time::timeout(
             *timeout_dur,
             overthrone_core::proto::ldap::probe_rootdse_raw(other_dc, false),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(rootdse)) => {
                 let other_domain = rootdse.dns_domain_name.as_deref().unwrap_or("unknown");
                 domains_seen.push(format!("{other_dc}:{other_domain}"));
-                if rootdse.dns_domain_name.as_deref().map(|d| d.to_lowercase()) == Some(primary_domain_lower.clone()) {
+                if rootdse.dns_domain_name.as_deref().map(|d| d.to_lowercase())
+                    == Some(primary_domain_lower.clone())
+                {
                     matched += 1;
                 } else {
-                    warn!("Cross-DC domain mismatch: {} reports domain '{other_domain}' (expected '{domain}')", other_dc);
+                    warn!(
+                        "Cross-DC domain mismatch: {} reports domain '{other_domain}' (expected '{domain}')",
+                        other_dc
+                    );
                     failed += 1;
                 }
             }
@@ -731,11 +796,7 @@ async fn check_cross_dc_consistency(
 
 /// Extract an IP string from a DNS SRV entry (hostname or first IP)
 fn ip_from_dc_entry<'a>(hostname: &'a str, ips: &'a [String]) -> &'a str {
-    if !ips.is_empty() {
-        &ips[0]
-    } else {
-        hostname
-    }
+    if !ips.is_empty() { &ips[0] } else { hostname }
 }
 
 impl DcVerificationSummary {
@@ -746,14 +807,16 @@ impl DcVerificationSummary {
 
     /// Returns the number of failed checks
     pub fn failed_count(&self) -> usize {
-        self.checks.iter()
+        self.checks
+            .iter()
             .filter(|c| matches!(c.severity, CheckSeverity::Fail))
             .count()
     }
 
     /// Returns the number of warning checks
     pub fn warn_count(&self) -> usize {
-        self.checks.iter()
+        self.checks
+            .iter()
             .filter(|c| matches!(c.severity, CheckSeverity::Warning))
             .count()
     }
@@ -979,9 +1042,14 @@ mod tests {
         // This tests the inner function returns Err on a non-existent host
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(check_ntlm_challenge_inner("198.51.100.1"));
-        assert!(result.is_err(), "NTLM challenge should fail on unreachable host");
+        assert!(
+            result.is_err(),
+            "NTLM challenge should fail on unreachable host"
+        );
         let err = result.unwrap_err();
-        assert!(err.contains("SMB connect failed") || err.contains("timed out"),
-            "Error should mention connection failure: {err}");
+        assert!(
+            err.contains("SMB connect failed") || err.contains("timed out"),
+            "Error should mention connection failure: {err}"
+        );
     }
 }

@@ -993,7 +993,11 @@ async fn cmd_forge_rotate_ticket(
             return 1;
         }
     };
-    let output_path = if output.is_empty() { "rotated.kirbi" } else { output };
+    let output_path = if output.is_empty() {
+        "rotated.kirbi"
+    } else {
+        output
+    };
     if let Err(e) = tokio::fs::write(output_path, &rotated.kirbi).await {
         banner::print_fail(&format!("Cannot write {output_path}: {e}"));
         return 1;
@@ -5181,7 +5185,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             }
         }
         AdcsAction::GetCaCert { output } => {
-            println!(" {} Retrieving CA certificate via LDAP...", ">".bright_black());
+            println!(
+                " {} Retrieving CA certificate via LDAP...",
+                ">".bright_black()
+            );
 
             let creds = match crate::require_creds(cli) {
                 Ok(c) => c,
@@ -5194,7 +5201,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             let password = creds.password().unwrap_or("");
             match overthrone_forge::ms_wcce_dcom::get_ca_certificate_via_ldap(
-                &dc, &creds.domain, &creds.username, password,
+                &dc,
+                &creds.domain,
+                &creds.username,
+                password,
             )
             .await
             {
@@ -5203,7 +5213,11 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write CA certificate: {}", e));
                         return 1;
                     }
-                    println!(" {} CA certificate obtained ({} bytes)", "[+]".green(), cert_der.len());
+                    println!(
+                        " {} CA certificate obtained ({} bytes)",
+                        "[+]".green(),
+                        cert_der.len()
+                    );
                     println!(" Saved to: {}", output.cyan());
                 }
                 Err(e) => {
@@ -5213,8 +5227,14 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             }
         }
         AdcsAction::BackupCa { output } => {
-            println!(" {} Retrieving CA certificate via LDAP (backup)...", ">".bright_black());
-            println!(" {} Note: backup-ca retrieves the CA certificate. The private key requires local CA access.", " [!]".yellow());
+            println!(
+                " {} Retrieving CA certificate via LDAP (backup)...",
+                ">".bright_black()
+            );
+            println!(
+                " {} Note: backup-ca retrieves the CA certificate. The private key requires local CA access.",
+                " [!]".yellow()
+            );
 
             let creds = match crate::require_creds(cli) {
                 Ok(c) => c,
@@ -5227,7 +5247,10 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
 
             let password = creds.password().unwrap_or("");
             match overthrone_forge::ms_wcce_dcom::get_ca_certificate_via_ldap(
-                &dc, &creds.domain, &creds.username, password,
+                &dc,
+                &creds.domain,
+                &creds.username,
+                password,
             )
             .await
             {
@@ -5236,7 +5259,11 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                         banner::print_fail(&format!("Failed to write CA backup: {}", e));
                         return 1;
                     }
-                    println!(" {} CA certificate backed up ({} bytes)", "[+]".green(), cert_der.len());
+                    println!(
+                        " {} CA certificate backed up ({} bytes)",
+                        "[+]".green(),
+                        cert_der.len()
+                    );
                     println!(" Saved to: {}", output.cyan());
                 }
                 Err(e) => {
@@ -5274,11 +5301,7 @@ pub async fn cmd_shell(cli: &Cli, target: &str, shell_type: &ShellType) -> i32 {
 
     // Use the new interactive shell implementation with target and optional credentials
     match crate::interactive_shell::start_interactive_shell_with_creds(
-        target,
-        shell_type,
-        domain,
-        username,
-        password,
+        target, shell_type, domain, username, password,
     )
     .await
     {

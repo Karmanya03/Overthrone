@@ -1157,7 +1157,11 @@ pub async fn resolve_uuid_via_epm_tcp_auth(
     bind_pdu.extend_from_slice(&0u32.to_le_bytes()); // auth_context_id
     bind_pdu.extend_from_slice(&type1);
 
-    debug!("EPM TCP auth: Sending bind with NTLM Type 1 ({}+{} byte auth)", base_len, type1.len());
+    debug!(
+        "EPM TCP auth: Sending bind with NTLM Type 1 ({}+{} byte auth)",
+        base_len,
+        type1.len()
+    );
     btf_write_frame(&mut stream, &bind_pdu).await?;
 
     // Receive bind_ack with NTLM Type 2 challenge in auth verifier
@@ -1187,11 +1191,15 @@ pub async fn resolve_uuid_via_epm_tcp_auth(
         )));
     }
     let type2_data = &bind_resp[auth_body_offset..auth_body_offset + (resp_auth_len - 8)];
-    debug!("EPM TCP auth: NTLM Type 2 challenge received ({} bytes)", type2_data.len());
+    debug!(
+        "EPM TCP auth: NTLM Type 2 challenge received ({} bytes)",
+        type2_data.len()
+    );
 
     // Parse Type 2 challenge
-    let challenge_msg = parse_challenge_message(type2_data)
-        .map_err(|e| OverthroneError::custom(format!("EPM TCP auth: failed to parse Type 2: {e}")))?;
+    let challenge_msg = parse_challenge_message(type2_data).map_err(|e| {
+        OverthroneError::custom(format!("EPM TCP auth: failed to parse Type 2: {e}"))
+    })?;
 
     let server_challenge = challenge_msg.challenge;
     let target_info: Option<Vec<u8>> = challenge_msg.target_info;

@@ -7,8 +7,8 @@ use overthrone_core::proto::kerberos::TicketGrantingData;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, rotate,
-    sapphire, silver, skeleton,
+    acl_backdoor, bronze_bit, convert, dcsync_user, diamond, dsrm, golden, nopac, rotate, sapphire,
+    silver, skeleton,
 };
 
 /// What kind of ticket/persistence to forge

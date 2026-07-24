@@ -139,7 +139,8 @@ impl ExchangeRelay {
         }
         self.running.store(true, Ordering::SeqCst);
 
-        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
+        let listen_addr =
+            crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Network(format!("Bind failed: {e}")))?;

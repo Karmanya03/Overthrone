@@ -4,9 +4,9 @@ use crate::proto::pkinit::{CertificateGenerator, PkinitAuthenticator, PkinitConf
 use base64::Engine;
 use chrono::Utc;
 use kerberos_asn1::Asn1Object;
+use rsa::RsaPublicKey;
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::traits::PublicKeyParts;
-use rsa::RsaPublicKey;
 use sha2::{Digest, Sha256};
 use tracing::info;
 use x509_parser::prelude::*;
@@ -91,7 +91,10 @@ pub async fn try_exploit_shadow_credentials(
         Ok(result) => Ok(result),
         Err(e) => {
             let err_str = e.to_string();
-            if err_str.contains("21") || err_str.contains("insufficient") || err_str.contains("Insufficient") {
+            if err_str.contains("21")
+                || err_str.contains("insufficient")
+                || err_str.contains("Insufficient")
+            {
                 Err(OverthroneError::Custom(format!(
                     "Shadow Credentials denied -- insufficient access rights.\n\
                      Your user needs ONE of these on the target object:\n\

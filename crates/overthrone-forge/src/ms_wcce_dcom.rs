@@ -350,7 +350,8 @@ fn parse_variant_response(resp: &[u8]) -> Result<Vec<u8>> {
         0x0000 => {
             // VT_EMPTY
             Err(OverthroneError::Adcs(
-                "GetCAProperty returned VT_EMPTY -- property not found or CA unavailable".to_string(),
+                "GetCAProperty returned VT_EMPTY -- property not found or CA unavailable"
+                    .to_string(),
             ))
         }
         0x0008 => {
@@ -499,9 +500,7 @@ fn parse_variant_response(resp: &[u8]) -> Result<Vec<u8>> {
         }
         _ => {
             // Unknown variant type -- try scanning for DER certificate in response
-            warn!(
-                "[DCOM/ICertAdmin2] Unknown VARIANT type 0x{vt:04x} -- scanning for DER data"
-            );
+            warn!("[DCOM/ICertAdmin2] Unknown VARIANT type 0x{vt:04x} -- scanning for DER data");
             // Search for ASN.1 DER certificate (starts with 0x30)
             for i in (variant_offset..resp.len().saturating_sub(8)).step_by(4) {
                 if resp[i] == 0x30 && (resp[i + 1] & 0x80) != 0 {
@@ -588,12 +587,12 @@ pub async fn get_ca_certificate_via_tcp_rpc(
     );
 
     // 1. Connect via SMB
-    let smb = SmbSession::connect(ca_host, domain, username, password).await.map_err(|e| {
-        OverthroneError::Rpc {
+    let smb = SmbSession::connect(ca_host, domain, username, password)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
             target: ca_host.to_string(),
             reason: format!("SMB connect failed: {e}"),
-        }
-    })?;
+        })?;
 
     // Compute NT hash from password
     let nt_hash_bytes = ntlm_hash(password);
@@ -707,11 +706,9 @@ fn parse_variant_response_rpc(resp: &[u8]) -> Result<Vec<u8>> {
     let union_offset = variant_offset + 8;
 
     match vt {
-        0x0000 => {
-            Err(OverthroneError::Adcs(
-                "GetCAProperty returned VT_EMPTY -- property not found or CA unavailable".to_string(),
-            ))
-        }
+        0x0000 => Err(OverthroneError::Adcs(
+            "GetCAProperty returned VT_EMPTY -- property not found or CA unavailable".to_string(),
+        )),
         0x0008 => {
             // VT_BSTR
             if union_offset + 4 > resp.len() {
@@ -737,13 +734,22 @@ fn parse_variant_response_rpc(resp: &[u8]) -> Result<Vec<u8>> {
                 ));
             }
             let _max_count = u32::from_le_bytes([
-                resp[bstr_body], resp[bstr_body + 1], resp[bstr_body + 2], resp[bstr_body + 3],
+                resp[bstr_body],
+                resp[bstr_body + 1],
+                resp[bstr_body + 2],
+                resp[bstr_body + 3],
             ]);
             let _offset = u32::from_le_bytes([
-                resp[bstr_body + 4], resp[bstr_body + 5], resp[bstr_body + 6], resp[bstr_body + 7],
+                resp[bstr_body + 4],
+                resp[bstr_body + 5],
+                resp[bstr_body + 6],
+                resp[bstr_body + 7],
             ]);
             let actual_count = u32::from_le_bytes([
-                resp[bstr_body + 8], resp[bstr_body + 9], resp[bstr_body + 10], resp[bstr_body + 11],
+                resp[bstr_body + 8],
+                resp[bstr_body + 9],
+                resp[bstr_body + 10],
+                resp[bstr_body + 11],
             ]);
             let str_data_start = bstr_body + 12;
             let str_byte_len = (actual_count as usize).saturating_mul(2);
@@ -784,13 +790,22 @@ fn parse_variant_response_rpc(resp: &[u8]) -> Result<Vec<u8>> {
             let _c_dims = u16::from_le_bytes([resp[sa_body], resp[sa_body + 1]]);
             let _f_features = u16::from_le_bytes([resp[sa_body + 2], resp[sa_body + 3]]);
             let _cb_elements = u32::from_le_bytes([
-                resp[sa_body + 4], resp[sa_body + 5], resp[sa_body + 6], resp[sa_body + 7],
+                resp[sa_body + 4],
+                resp[sa_body + 5],
+                resp[sa_body + 6],
+                resp[sa_body + 7],
             ]);
             let _c_locks = u32::from_le_bytes([
-                resp[sa_body + 8], resp[sa_body + 9], resp[sa_body + 10], resp[sa_body + 11],
+                resp[sa_body + 8],
+                resp[sa_body + 9],
+                resp[sa_body + 10],
+                resp[sa_body + 11],
             ]);
             let _pv_data_ptr = u32::from_le_bytes([
-                resp[sa_body + 12], resp[sa_body + 13], resp[sa_body + 14], resp[sa_body + 15],
+                resp[sa_body + 12],
+                resp[sa_body + 13],
+                resp[sa_body + 14],
+                resp[sa_body + 15],
             ]);
             let rgsabound_start = sa_body + 16;
             let element_count = if rgsabound_start + 4 <= resp.len() {
@@ -830,9 +845,7 @@ fn parse_variant_response_rpc(resp: &[u8]) -> Result<Vec<u8>> {
             Ok(val.to_le_bytes().to_vec())
         }
         _ => {
-            warn!(
-                "[ICertAdmin2/RPC] Unknown VARIANT type 0x{vt:04x} -- scanning for DER data"
-            );
+            warn!("[ICertAdmin2/RPC] Unknown VARIANT type 0x{vt:04x} -- scanning for DER data");
             for i in (variant_offset..resp.len().saturating_sub(8)).step_by(4) {
                 if resp[i] == 0x30 && (resp[i + 1] & 0x80) != 0 {
                     let num_len_bytes = resp[i + 1] as usize & 0x7f;
@@ -880,9 +893,7 @@ pub async fn get_ca_certificate_via_ldap(
     username: &str,
     password: &str,
 ) -> Result<Vec<u8>> {
-    info!(
-        "[CA/LDAP] Getting CA certificate from {dc_host} via LDAP (Configuration NC)"
-    );
+    info!("[CA/LDAP] Getting CA certificate from {dc_host} via LDAP (Configuration NC)");
 
     // Connect to LDAP (without TLS -- works with self-signed certs)
     let mut ldap = LdapSession::connect(dc_host, domain, username, password, false)
@@ -930,9 +941,7 @@ pub async fn get_ca_certificate_via_ldap(
                 .cloned()
         })
         .ok_or_else(|| {
-            OverthroneError::Adcs(format!(
-                "CA '{ca_name}' has no cACertificate attribute"
-            ))
+            OverthroneError::Adcs(format!("CA '{ca_name}' has no cACertificate attribute"))
         })?;
 
     info!(

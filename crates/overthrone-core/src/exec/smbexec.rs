@@ -119,7 +119,8 @@ pub async fn execute(
     // The EventLog service (running as SYSTEM) creates the file; then the
     // sandboxed cmd.exe can open the existing file for write.
     let mut even_succeeded = false;
-    if let Err(e) = crate::proto::even::create_smbexec_output_file(session, &config.output_path).await
+    if let Err(e) =
+        crate::proto::even::create_smbexec_output_file(session, &config.output_path).await
     {
         debug!("SMBExec: MS-EVEN pre-create failed (non-critical): {e}");
     } else {

@@ -184,7 +184,10 @@ impl PkinitAuthenticator {
         // Send AS-REQ to KDC and receive AS-REP
         debug!("PKINIT: AS-REQ length {} bytes", as_req.len());
         if let Ok((_, parsed)) = AsReq::parse(&as_req) {
-            debug!("PKINIT: AS-REQ parses OK, padata entries: {:?}", parsed.padata.as_ref().map(|v| v.len()));
+            debug!(
+                "PKINIT: AS-REQ parses OK, padata entries: {:?}",
+                parsed.padata.as_ref().map(|v| v.len())
+            );
         } else {
             debug!("PKINIT: AS-REQ failed to parse with our own parser");
         }
@@ -617,10 +620,13 @@ impl PkinitAuthenticator {
             .parse()
             .map_err(|e| OverthroneError::Kerberos(format!("Invalid KDC address: {e}")))?;
 
-        let mut stream = tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(addr))
-            .await
-            .map_err(|_| OverthroneError::Kerberos(format!("KDC unreachable: {addr}")))?
-            .map_err(|e| OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}")))?;
+        let mut stream =
+            tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(addr))
+                .await
+                .map_err(|_| OverthroneError::Kerberos(format!("KDC unreachable: {addr}")))?
+                .map_err(|e| {
+                    OverthroneError::Kerberos(format!("Cannot reach KDC at {addr}: {e}"))
+                })?;
 
         debug!("PKINIT: connected to KDC at {addr}");
 
@@ -655,7 +661,13 @@ impl PkinitAuthenticator {
         if let Ok((_, err)) = KrbError::parse(as_rep) {
             let code = err.error_code;
             let e_data_hex = err.e_data.as_ref().map(hex::encode).unwrap_or_default();
-            debug!("PKINIT: KRB-ERROR response ({} bytes): code={}, msg='{}', e_data={}", as_rep.len(), code, krb_error_to_string(code), e_data_hex);
+            debug!(
+                "PKINIT: KRB-ERROR response ({} bytes): code={}, msg='{}', e_data={}",
+                as_rep.len(),
+                code,
+                krb_error_to_string(code),
+                e_data_hex
+            );
             return Err(OverthroneError::Kerberos(format!(
                 "KDC returned KRB-ERROR {}: {} (e_data: {})",
                 code,

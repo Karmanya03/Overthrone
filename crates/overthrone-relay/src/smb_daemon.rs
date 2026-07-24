@@ -1964,13 +1964,17 @@ mod tests {
     #[test]
     fn build_response_header_has_netbios_prefix_and_smb_signature() {
         let body = vec![0xAB, 0xCD];
-        let pkt = SmbDaemon::build_response_header(SMB2_SESSION_SETUP, STATUS_SUCCESS, 1, 2, 3, &body);
+        let pkt =
+            SmbDaemon::build_response_header(SMB2_SESSION_SETUP, STATUS_SUCCESS, 1, 2, 3, &body);
         assert_eq!(pkt[0], 0x00);
         let nb_len = u32::from_be_bytes([0, pkt[1], pkt[2], pkt[3]]) as usize;
         assert_eq!(nb_len, SMB2_HEADER_SIZE + body.len());
         assert_eq!(&pkt[4..8], SMB2_PROTOCOL);
         assert_eq!(u16::from_le_bytes([pkt[8], pkt[9]]), 64);
-        assert_eq!(u32::from_le_bytes([pkt[12], pkt[13], pkt[14], pkt[15]]), STATUS_SUCCESS);
+        assert_eq!(
+            u32::from_le_bytes([pkt[12], pkt[13], pkt[14], pkt[15]]),
+            STATUS_SUCCESS
+        );
         assert_eq!(u16::from_le_bytes([pkt[16], pkt[17]]), SMB2_SESSION_SETUP);
     }
 
@@ -1984,7 +1988,10 @@ mod tests {
 
         let domain_utf16: Vec<u8> = domain.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let username_utf16: Vec<u8> = username.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let workstation_utf16: Vec<u8> = "WORKSTATION".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let workstation_utf16: Vec<u8> = "WORKSTATION"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
 
         let mut msg = Vec::new();
         msg.extend_from_slice(b"NTLMSSP\0");

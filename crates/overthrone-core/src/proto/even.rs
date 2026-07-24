@@ -60,23 +60,29 @@ pub async fn even_create_file(smb: &SmbSession, path: &str) -> Result<()> {
 
     // Step 1: RPC Bind to MS-EVEN interface
     let bind_pdu = build_rpc_bind(&EVEN_UUID, EVEN_VERSION.0, EVEN_VERSION.1);
-    let bind_resp = smb
-        .pipe_transact(pipe_name, &bind_pdu)
-        .await
-        .map_err(|e| {
-            OverthroneError::Rpc {
+    let bind_resp =
+        smb.pipe_transact(pipe_name, &bind_pdu)
+            .await
+            .map_err(|e| OverthroneError::Rpc {
                 target: smb.target.clone(),
                 reason: format!("MS-EVEN RPC bind failed: {e}"),
-            }
-        })?;
+            })?;
 
     // Debug: dump bind response for diagnosis
     debug!(
         "MS-EVEN[create]: resp len={}, type={}, b[28]={}, b[29]={}",
         bind_resp.len(),
         if bind_resp.len() > 2 { bind_resp[2] } else { 0 },
-        if bind_resp.len() > 28 { bind_resp[28] } else { 0 },
-        if bind_resp.len() > 29 { bind_resp[29] } else { 0 },
+        if bind_resp.len() > 28 {
+            bind_resp[28]
+        } else {
+            0
+        },
+        if bind_resp.len() > 29 {
+            bind_resp[29]
+        } else {
+            0
+        },
     );
     if bind_resp.len() > 24 {
         debug!(
@@ -104,11 +110,9 @@ pub async fn even_create_file(smb: &SmbSession, path: &str) -> Result<()> {
     let clear_resp = smb
         .pipe_transact(pipe_name, &clear_pdu)
         .await
-        .map_err(|e| {
-            OverthroneError::Rpc {
-                target: smb.target.clone(),
-                reason: format!("MS-EVEN ElfrClearLogFileW failed: {e}"),
-            }
+        .map_err(|e| OverthroneError::Rpc {
+            target: smb.target.clone(),
+            reason: format!("MS-EVEN ElfrClearLogFileW failed: {e}"),
         })?;
 
     // Check for RPC fault response
@@ -149,23 +153,29 @@ pub async fn even_backup_log(smb: &SmbSession, log_name: &str, path: &str) -> Re
 
     // Step 1: RPC Bind to MS-EVEN
     let bind_pdu = build_rpc_bind(&EVEN_UUID, EVEN_VERSION.0, EVEN_VERSION.1);
-    let bind_resp = smb
-        .pipe_transact(pipe_name, &bind_pdu)
-        .await
-        .map_err(|e| {
-            OverthroneError::Rpc {
+    let bind_resp =
+        smb.pipe_transact(pipe_name, &bind_pdu)
+            .await
+            .map_err(|e| OverthroneError::Rpc {
                 target: smb.target.clone(),
                 reason: format!("MS-EVEN RPC bind failed: {e}"),
-            }
-        })?;
+            })?;
 
     // Debug: dump bind response for diagnosis
     debug!(
         "MS-EVEN[backup]: resp len={}, type={}, b[28]={}, b[29]={}",
         bind_resp.len(),
         if bind_resp.len() > 2 { bind_resp[2] } else { 0 },
-        if bind_resp.len() > 28 { bind_resp[28] } else { 0 },
-        if bind_resp.len() > 29 { bind_resp[29] } else { 0 },
+        if bind_resp.len() > 28 {
+            bind_resp[28]
+        } else {
+            0
+        },
+        if bind_resp.len() > 29 {
+            bind_resp[29]
+        } else {
+            0
+        },
     );
     if bind_resp.len() > 24 {
         debug!(
@@ -195,11 +205,9 @@ pub async fn even_backup_log(smb: &SmbSession, log_name: &str, path: &str) -> Re
     let backup_resp = smb
         .pipe_transact(pipe_name, &backup_pdu)
         .await
-        .map_err(|e| {
-            OverthroneError::Rpc {
-                target: smb.target.clone(),
-                reason: format!("MS-EVEN ElfrBackupEventLogW failed: {e}"),
-            }
+        .map_err(|e| OverthroneError::Rpc {
+            target: smb.target.clone(),
+            reason: format!("MS-EVEN ElfrBackupEventLogW failed: {e}"),
         })?;
 
     // Check for fault
@@ -231,10 +239,7 @@ pub async fn even_backup_log(smb: &SmbSession, log_name: &str, path: &str) -> Re
 /// service sandbox restrictions).
 ///
 /// Returns the output path in the format expected by SMBExec.
-pub async fn create_smbexec_output_file(
-    smb: &SmbSession,
-    output_path: &str,
-) -> Result<()> {
+pub async fn create_smbexec_output_file(smb: &SmbSession, output_path: &str) -> Result<()> {
     // The path should be relative to C:\ for SMBExec compatibility.
     // MS-EVEN needs a full path, so prepend C:\.
     let full_path = if output_path.starts_with("C:\\") || output_path.starts_with("C:/") {
@@ -333,9 +338,7 @@ mod tests {
     #[test]
     fn test_create_smbexec_output_path_resolution() {
         // Full path passed through
-        let result = format!("C:\\{p}",
-            p = "Windows\\Temp\\smbexec_1234.tmp"
-        );
+        let result = format!("C:\\{p}", p = "Windows\\Temp\\smbexec_1234.tmp");
         assert_eq!(result, "C:\\Windows\\Temp\\smbexec_1234.tmp");
     }
 

@@ -1426,7 +1426,10 @@ pub async fn enumerate_remote_registry_subkeys(
                         .await;
                     call_id += 1;
                 }
-                return Err(OverthroneError::custom(format!("OpenKey '{}' failed: {e}", part)));
+                return Err(OverthroneError::custom(format!(
+                    "OpenKey '{}' failed: {e}",
+                    part
+                )));
             }
         };
         if open_resp.len() < 48 {
@@ -1466,8 +1469,7 @@ pub async fn enumerate_remote_registry_subkeys(
         if enum_resp.len() < 4 {
             break;
         }
-        let status =
-            u32::from_le_bytes(enum_resp[enum_resp.len() - 4..].try_into().unwrap());
+        let status = u32::from_le_bytes(enum_resp[enum_resp.len() - 4..].try_into().unwrap());
         if status != 0 {
             // ERROR_NO_MORE_ITEMS = 0x103, or other
             break;
@@ -1619,15 +1621,18 @@ pub async fn extract_boot_key_remote(
     let mut scrambled = Vec::with_capacity(16);
     for name in &["JD", "Skew1", "GBG", "Data"] {
         let subkey_path = format!("{}\\{}", cs_name, name);
-        let class_name =
-            read_remote_registry_class_name(smb_session, PredefinedHive::LocalMachine, &subkey_path)
-                .await
-                .map_err(|e| {
-                    OverthroneError::custom(format!(
-                        "Failed to read class name for {}: {}",
-                        subkey_path, e
-                    ))
-                })?;
+        let class_name = read_remote_registry_class_name(
+            smb_session,
+            PredefinedHive::LocalMachine,
+            &subkey_path,
+        )
+        .await
+        .map_err(|e| {
+            OverthroneError::custom(format!(
+                "Failed to read class name for {}: {}",
+                subkey_path, e
+            ))
+        })?;
 
         if class_name.is_empty() {
             warn!("Boot key subkey '{}' has empty class name", subkey_path);
@@ -1635,8 +1640,9 @@ pub async fn extract_boot_key_remote(
         }
 
         // Class name is a hex string like "1c2a3b4d" — decode to bytes
-        let bytes = hex_decode(&class_name)
-            .map_err(|e| OverthroneError::custom(format!("Bad boot key hex '{}': {}", class_name, e)))?;
+        let bytes = hex_decode(&class_name).map_err(|e| {
+            OverthroneError::custom(format!("Bad boot key hex '{}': {}", class_name, e))
+        })?;
         scrambled.extend_from_slice(&bytes);
     }
 
@@ -1659,10 +1665,7 @@ pub async fn extract_boot_key_remote(
         }
     }
 
-    info!(
-        "RemoteRegistry: Extracted boot key: {:02x?}",
-        &boot_key[..]
-    );
+    info!("RemoteRegistry: Extracted boot key: {:02x?}", &boot_key[..]);
     Ok(boot_key)
 }
 

@@ -53,7 +53,11 @@ fn parse_key(key_hex: &str) -> Result<(Vec<u8>, i32)> {
 ///
 /// # Returns
 /// `RotatedTicket` containing the new .kirbi bytes and metadata.
-pub fn rotate_ticket_encryption(kirbi: &[u8], old_key_hex: &str, new_key_hex: &str) -> Result<RotatedTicket> {
+pub fn rotate_ticket_encryption(
+    kirbi: &[u8],
+    old_key_hex: &str,
+    new_key_hex: &str,
+) -> Result<RotatedTicket> {
     let (old_key, old_etype) = parse_key(old_key_hex)?;
     let (new_key, new_etype) = parse_key(new_key_hex)?;
 

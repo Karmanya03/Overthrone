@@ -3832,10 +3832,22 @@ async fn cmd_exploit(cli: &Cli, action: ExploitAction) -> i32 {
             let target_user = target_dn
                 .split(',')
                 .find(|p| p.trim_start_matches(' ').starts_with("CN="))
-                .map(|p| p.trim_start_matches(' ').trim_start_matches("CN=").to_string())
+                .map(|p| {
+                    p.trim_start_matches(' ')
+                        .trim_start_matches("CN=")
+                        .to_string()
+                })
                 .unwrap_or_else(|| target_dn.to_string());
 
-            match cves::try_exploit_shadow_credentials(&mut ldap, &dc_ip, &domain, &target_dn, &target_user).await {
+            match cves::try_exploit_shadow_credentials(
+                &mut ldap,
+                &dc_ip,
+                &domain,
+                &target_dn,
+                &target_user,
+            )
+            .await
+            {
                 Ok(result) => {
                     banner::print_success(&format!("TGT obtained for {target_dn}"));
                     println!(
@@ -4786,11 +4798,16 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                             .create(true)
                             .append(true)
                             .open(&path)
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, contents.as_bytes()))
+                            .and_then(|mut f| {
+                                std::io::Write::write_all(&mut f, contents.as_bytes())
+                            })
                         {
                             banner::print_fail(&format!("Failed to write output file: {e}"));
                         } else {
-                            banner::print_success(&format!("Wrote {} hash(es) to {path}", file_lines.len()));
+                            banner::print_success(&format!(
+                                "Wrote {} hash(es) to {path}",
+                                file_lines.len()
+                            ));
                         }
                     }
                     0

@@ -38,13 +38,36 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Fallback minimal wordlist if decompression fails
 const FALLBACK_WORDLIST: &[&str] = &[
-    "password", "Password1", "Password123", "P@ssw0rd", "P@ssword123",
-    "admin", "Admin123", "administrator", "Administrator1",
-    "letmein", "welcome", "Welcome1", "Welcome123",
-    "qwerty", "qwerty123", "abc123",
-    "123456", "1234567", "12345678", "123456789", "1234567890",
-    "Password1!", "Spring2024", "Summer2024", "Fall2024", "Winter2024",
-    "changeme", "ChangeMe1", "secret", "Secret123",
+    "password",
+    "Password1",
+    "Password123",
+    "P@ssw0rd",
+    "P@ssword123",
+    "admin",
+    "Admin123",
+    "administrator",
+    "Administrator1",
+    "letmein",
+    "welcome",
+    "Welcome1",
+    "Welcome123",
+    "qwerty",
+    "qwerty123",
+    "abc123",
+    "123456",
+    "1234567",
+    "12345678",
+    "123456789",
+    "1234567890",
+    "Password1!",
+    "Spring2024",
+    "Summer2024",
+    "Fall2024",
+    "Winter2024",
+    "changeme",
+    "ChangeMe1",
+    "secret",
+    "Secret123",
 ];
 
 /// Decompress and return the embedded wordlist
@@ -224,8 +247,9 @@ struct FileWordlistReader {
 
 impl FileWordlistReader {
     fn open(path: &str) -> Result<Self> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| OverthroneError::custom(format!("Cannot open wordlist '{}': {}", path, e)))?;
+        let file = std::fs::File::open(path).map_err(|e| {
+            OverthroneError::custom(format!("Cannot open wordlist '{}': {}", path, e))
+        })?;
         Ok(Self {
             reader: std::io::BufReader::new(file),
             buf: String::with_capacity(128),
@@ -732,9 +756,10 @@ impl HashType {
 
         let mut cipher = Vec::new();
         if !checksum_hex.is_empty() {
-            cipher.extend(hex::decode(checksum_hex).map_err(|e| {
-                OverthroneError::custom(format!("Invalid checksum hex: {}", e))
-            })?);
+            cipher
+                .extend(hex::decode(checksum_hex).map_err(|e| {
+                    OverthroneError::custom(format!("Invalid checksum hex: {}", e))
+                })?);
         }
         cipher.extend(
             hex::decode(edata2_hex)
@@ -787,9 +812,10 @@ impl HashType {
 
         let mut cipher = Vec::new();
         if !checksum_hex.is_empty() {
-            cipher.extend(hex::decode(checksum_hex).map_err(|e| {
-                OverthroneError::custom(format!("Invalid checksum hex: {}", e))
-            })?);
+            cipher
+                .extend(hex::decode(checksum_hex).map_err(|e| {
+                    OverthroneError::custom(format!("Invalid checksum hex: {}", e))
+                })?);
         }
         cipher.extend(
             hex::decode(edata2_hex)
@@ -955,20 +981,18 @@ fn verify_batch(
     found: &AtomicBool,
     counter: &AtomicUsize,
 ) -> Option<String> {
-    candidates
-        .par_iter()
-        .find_map_any(|candidate| {
-            if found.load(Ordering::Relaxed) {
-                return None;
-            }
-            counter.fetch_add(1, Ordering::Relaxed);
-            if verify_candidate(hash, candidate) {
-                found.store(true, Ordering::Relaxed);
-                Some(candidate.clone())
-            } else {
-                None
-            }
-        })
+    candidates.par_iter().find_map_any(|candidate| {
+        if found.load(Ordering::Relaxed) {
+            return None;
+        }
+        counter.fetch_add(1, Ordering::Relaxed);
+        if verify_candidate(hash, candidate) {
+            found.store(true, Ordering::Relaxed);
+            Some(candidate.clone())
+        } else {
+            None
+        }
+    })
 }
 
 /// Run a streaming candidate generator with batch parallel verification.
@@ -1131,11 +1155,7 @@ impl CrackerConfig {
                 "?u?l?l?l?l?l?l?l?d?d".into(),
                 "?u?l?l?l?l?l?d?d?d?d".into(),
             ],
-            hybrid_masks: vec![
-                "?d?d?d?d".into(),
-                "?d?d?d?d?s".into(),
-                "?s?d?d".into(),
-            ],
+            hybrid_masks: vec!["?d?d?d?d".into(), "?d?d?d?d?s".into(), "?s?d?d".into()],
             smart_wordlist: Vec::new(),
             use_smart_wordlist: false,
         }
@@ -1291,7 +1311,10 @@ impl HashCracker {
                         } else {
                             ks.min(50_000_000)
                         };
-                        info!("  Mask '{}' -- keyspace {} (limit {})", mask_str, ks, remaining);
+                        info!(
+                            "  Mask '{}' -- keyspace {} (limit {})",
+                            mask_str, ks, remaining
+                        );
 
                         let mut mask_iter = mask.iter_limited(remaining);
                         if let Some(pwd) = crack_streaming(
@@ -1398,7 +1421,10 @@ impl HashCracker {
                 match FileWordlistReader::open(path) {
                     Ok(reader) => Box::new(reader),
                     Err(_) => {
-                        warn!("Cannot open custom wordlist '{}', falling back to embedded", path);
+                        warn!(
+                            "Cannot open custom wordlist '{}', falling back to embedded",
+                            path
+                        );
                         Box::new(get_embedded_wordlist().into_iter())
                     }
                 }
@@ -1415,7 +1441,10 @@ impl HashCracker {
     }
 
     /// Build Phase 3 hybrid generator: wordlist + suffixes (streaming)
-    fn build_hybrid_generator(&self, suffixes: Vec<String>) -> Box<dyn Iterator<Item = String> + Send> {
+    fn build_hybrid_generator(
+        &self,
+        suffixes: Vec<String>,
+    ) -> Box<dyn Iterator<Item = String> + Send> {
         let word_iter: Box<dyn Iterator<Item = String> + Send> =
             if self.config.use_smart_wordlist && !self.config.smart_wordlist.is_empty() {
                 Box::new(self.config.smart_wordlist.clone().into_iter())
@@ -1423,7 +1452,10 @@ impl HashCracker {
                 match FileWordlistReader::open(path) {
                     Ok(reader) => Box::new(reader),
                     Err(_) => {
-                        warn!("Cannot open custom wordlist '{}', falling back to embedded", path);
+                        warn!(
+                            "Cannot open custom wordlist '{}', falling back to embedded",
+                            path
+                        );
                         Box::new(get_embedded_wordlist().into_iter())
                     }
                 }
@@ -1480,7 +1512,11 @@ fn crack_streaming_limited<Gen: Iterator<Item = String>>(
         if now.duration_since(last_report).as_secs_f64() > 2.0 {
             let count = counter.load(Ordering::Relaxed);
             let elapsed = start.elapsed().as_secs_f64();
-            let speed = if elapsed > 0.0 { count as f64 / elapsed } else { 0.0 };
+            let speed = if elapsed > 0.0 {
+                count as f64 / elapsed
+            } else {
+                0.0
+            };
             info!(
                 "[{}] Speed: {:.0} H/s, {} candidates, {:.1}s",
                 phase_name, speed, count, elapsed
@@ -1502,22 +1538,20 @@ pub fn verify_candidate(hash: &HashType, password: &str) -> bool {
             username,
             domain,
             ..
-        } => {
-            match *etype {
-                23 => {
-                    let nt_hash = password_to_nt_hash(password);
-                    if cipher.len() < 24 {
-                        return false;
-                    }
-                    rc4_hmac_decrypt(&nt_hash, cipher, 3).is_ok()
+        } => match *etype {
+            23 => {
+                let nt_hash = password_to_nt_hash(password);
+                if cipher.len() < 24 {
+                    return false;
                 }
-                17 | 18 => {
-                    let salt = kerberos_aes_salt(domain, username);
-                    verify_aes_candidate(password, &salt, *etype, cipher)
-                }
-                _ => false,
+                rc4_hmac_decrypt(&nt_hash, cipher, 3).is_ok()
             }
-        }
+            17 | 18 => {
+                let salt = kerberos_aes_salt(domain, username);
+                verify_aes_candidate(password, &salt, *etype, cipher)
+            }
+            _ => false,
+        },
 
         HashType::Kerberoast {
             cipher,
@@ -1525,32 +1559,30 @@ pub fn verify_candidate(hash: &HashType, password: &str) -> bool {
             domain,
             spn,
             ..
-        } => {
-            match *etype {
-                23 => {
-                    let nt_hash = password_to_nt_hash(password);
-                    if cipher.len() < 24 {
-                        return false;
-                    }
-                    rc4_hmac_decrypt(&nt_hash, cipher, 8).is_ok()
+        } => match *etype {
+            23 => {
+                let nt_hash = password_to_nt_hash(password);
+                if cipher.len() < 24 {
+                    return false;
                 }
-                17 | 18 => {
-                    let service_name = spn.split('/').next().unwrap_or(spn);
-                    let salts = [
-                        kerberos_aes_salt(domain, service_name),
-                        kerberos_aes_salt(domain, spn),
-                        format!("{}{}", domain.to_uppercase(), spn),
-                    ];
-                    for salt in &salts {
-                        if verify_aes_candidate(password, salt, *etype, cipher) {
-                            return true;
-                        }
-                    }
-                    false
-                }
-                _ => false,
+                rc4_hmac_decrypt(&nt_hash, cipher, 8).is_ok()
             }
-        }
+            17 | 18 => {
+                let service_name = spn.split('/').next().unwrap_or(spn);
+                let salts = [
+                    kerberos_aes_salt(domain, service_name),
+                    kerberos_aes_salt(domain, spn),
+                    format!("{}{}", domain.to_uppercase(), spn),
+                ];
+                for salt in &salts {
+                    if verify_aes_candidate(password, salt, *etype, cipher) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        },
 
         HashType::Ntlm { hash } => {
             let nt_hash = password_to_nt_hash(password);
