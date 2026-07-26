@@ -1865,6 +1865,13 @@ impl LdapSession {
         Ok(())
     }
 
+    /// Return the underlying `ldap3::Ldap` connection, if available.
+    /// Used by advanced operations such as DirSync and FORCE_UPDATE that need
+    /// direct control over controls and paging.
+    pub fn raw_ldap(&mut self) -> Option<&mut ldap3::Ldap> {
+        self.ldap.as_mut()
+    }
+
     // =======================================================
     // Raw Modify Helpers (RBCD support)
     // =======================================================
@@ -3335,6 +3342,22 @@ impl LdapSession {
 
         info!("LAPS: {} computers with readable passwords", results.len());
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+impl LdapSession {
+    /// Build an unbound LDAP session for unit tests that need a `LdapSession`
+    /// value but do not perform actual network I/O.
+    pub fn test_unbound(dc_ip: &str, domain: &str, base_dn: &str) -> Self {
+        Self {
+            ldap: None,
+            raw: None,
+            base_dn: base_dn.to_string(),
+            domain: domain.to_string(),
+            dc_ip: dc_ip.to_string(),
+            bind_type: BindType::Authenticated,
+        }
     }
 }
 

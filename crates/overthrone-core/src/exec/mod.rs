@@ -8,11 +8,13 @@
 //! - AtExec (Scheduled Tasks via ATSVC)
 //! - Plugin (via loaded plugin modules)
 //! - C2 (via connected C2 framework sessions)
+//! - DCOMexec (MMC20.Application / ShellWindows / ShellBrowserWindow)
 //!
 //! Each method implements the `RemoteExecutor` trait for a unified interface.
 //! All methods are cross-platform (Linux/macOS/Windows).
 
 pub mod atexec;
+pub mod dcomexec;
 pub mod lolbin;
 pub mod modules;
 pub mod psexec;
@@ -207,6 +209,11 @@ pub use lolbin::{
     certutil_decode_exec, certutil_url_download, cscript_exec, execute_lolbin, mshta_inline_js,
     mshta_remote_hta, msiexec_remote_msi, powershell_amsi_bypass, powershell_download_cradle,
     regsvr32_sct, rundll32_js_exec, rundll32_sct, wmic_xsl_exec,
+};
+
+// Re-export DCOMexec types
+pub use dcomexec::{
+    DcomExecConfig, DcomExecError, DcomExecMethod, DcomExecResult, dcom_exec, dcom_exec_mmc20,
 };
 
 /// Base64-encode a PowerShell script for -EncodedCommand

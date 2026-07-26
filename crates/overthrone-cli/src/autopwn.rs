@@ -18,6 +18,8 @@ pub enum ExecMethod {
     WmiExec,
     #[value(name = "win-rm", alias = "winrm")]
     WinRm,
+    #[value(name = "dcom", alias = "dcomexec")]
+    Dcom,
     Auto,
 }
 
@@ -28,6 +30,7 @@ impl std::fmt::Display for ExecMethod {
             Self::SmbExec => write!(f, "smbexec"),
             Self::WmiExec => write!(f, "wmiexec"),
             Self::WinRm => write!(f, "winrm"),
+            Self::Dcom => write!(f, "dcom"),
             Self::Auto => write!(f, "auto"),
         }
     }
@@ -111,6 +114,7 @@ pub async fn run(
         ExecMethod::SmbExec => overthrone_pilot::runner::ExecMethod::SmbExec,
         ExecMethod::WmiExec => overthrone_pilot::runner::ExecMethod::WmiExec,
         ExecMethod::WinRm => overthrone_pilot::runner::ExecMethod::WinRm,
+        ExecMethod::Dcom => overthrone_pilot::runner::ExecMethod::Dcom,
     };
 
     let pilot_stage = match args.max_stage {

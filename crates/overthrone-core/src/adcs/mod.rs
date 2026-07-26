@@ -27,6 +27,7 @@
 //! - ESC15: Schema V1 template with enrollee-supplied subject (CVE-2024-49019)
 //! - ESC16: CA security extension disabled (szOID_NTDS_CA_SECURITY_EXT removed)
 pub mod auto_exploit;
+pub mod certifried;
 pub mod csr;
 pub mod esc1;
 pub mod esc10;
@@ -55,6 +56,10 @@ use tracing::{info, warn};
 
 // Re-export key types
 pub use auto_exploit::{AdcsAutoConfig, AdcsAutoScanner, AdcsScanReport};
+pub use certifried::{
+    CertifriedConfig, CertifriedError, CertifriedResult, cleanup_certifried,
+    create_computer_account, exploit_certifried,
+};
 pub use csr::{
     CertificateSigningRequest, CsrSubject, ExtendedKeyUsage, RsaKeyPair, SanEntry, SubjectAltName,
     create_client_auth_csr, create_esc1_csr,

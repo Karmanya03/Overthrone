@@ -160,6 +160,8 @@ pub enum ExecMethod {
     WmiExec,
     /// `WinRm` variant
     WinRm,
+    /// `Dcom` variant
+    Dcom,
 }
 
 impl std::fmt::Display for ExecMethod {
@@ -169,6 +171,7 @@ impl std::fmt::Display for ExecMethod {
             Self::PsExec => write!(f, "psexec"),
             Self::SmbExec => write!(f, "smbexec"),
             Self::WmiExec => write!(f, "wmiexec"),
+            Self::Dcom => write!(f, "dcom"),
             Self::WinRm => write!(f, "winrm"),
         }
     }

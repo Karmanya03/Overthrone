@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use auth::{AuthMethod, Credentials};
 use autopwn::ExecMethod;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell as ClapShell, generate as clap_generate};
 use colored::Colorize;
 #[cfg(feature = "reaper")]
@@ -52,7 +52,7 @@ fn install_rustls_provider() -> Result<(), String> {
     long_about = "Overthrone -- AD enumeration, attack path analysis, and exploitation framework.\n\
  Written in Rust for speed and stealth."
 )]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     command: Box<Commands>,
 
@@ -252,6 +252,59 @@ enum ModuleAction {
         #[arg(short = 'c', long, default_value = "10")]
         concurrency: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DcomExecMethod {
+    #[value(name = "mmc20-application", alias = "mmc20")]
+    Mmc20Application,
+    #[value(name = "shell-windows", alias = "shellwindows")]
+    ShellWindows,
+    #[value(name = "shell-browser-window", alias = "shellbrowser")]
+    ShellBrowserWindow,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum LocalCredDumperArg {
+    #[value(name = "safety-katz", alias = "safekatz", alias = "sk")]
+    SafetyKatz,
+    #[value(name = "nano-dump", alias = "nanodump", alias = "nd")]
+    NanoDump,
+    #[value(name = "handle-katz", alias = "handlekatz", alias = "hk")]
+    HandleKatz,
+    #[value(name = "dumpert", alias = "dp")]
+    Dumpert,
+    #[value(name = "lazagne", alias = "lz")]
+    LaZagne,
+}
+
+impl From<LocalCredDumperArg> for overthrone_core::postex::LocalCredDumper {
+    fn from(arg: LocalCredDumperArg) -> Self {
+        match arg {
+            LocalCredDumperArg::SafetyKatz => Self::SafetyKatz,
+            LocalCredDumperArg::NanoDump => Self::NanoDump,
+            LocalCredDumperArg::HandleKatz => Self::HandleKatz,
+            LocalCredDumperArg::Dumpert => Self::Dumpert,
+            LocalCredDumperArg::LaZagne => Self::LaZagne,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SherlockOutputFormatArg {
+    Text,
+    Json,
+    Csv,
+}
+
+impl From<SherlockOutputFormatArg> for overthrone_core::postex::SherlockOutputFormat {
+    fn from(arg: SherlockOutputFormatArg) -> Self {
+        match arg {
+            SherlockOutputFormatArg::Text => Self::Text,
+            SherlockOutputFormatArg::Json => Self::Json,
+            SherlockOutputFormatArg::Csv => Self::Csv,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -691,6 +744,215 @@ enum Commands {
     Exploit {
         #[command(subcommand)]
         action: ExploitAction,
+    },
+
+    /// Windows Vault / Credential Manager extraction (mimikatz vault::list + vault::cred)
+    #[command(alias = "credman")]
+    Vault {
+        /// Path to exported DPAPI backup key file (for credential decryption)
+        #[arg(long)]
+        backup_key_file: Option<String>,
+        /// Dump all discovered vault entries
+        #[arg(long, default_value_t = false)]
+        all: bool,
+    },
+
+    /// Browser credential extraction -- Chrome, Edge, Brave, Firefox, Opera
+    #[command(alias = "browser-creds", alias = "browsers")]
+    Browser {
+        /// Browsers to target (comma-separated: chrome, edge, brave, firefox, opera)
+        #[arg(long, value_delimiter = ',')]
+        browsers: Vec<String>,
+        /// Path to DPAPI backup key for Chrome/Edge AES key decryption
+        #[arg(long)]
+        backup_key_file: Option<String>,
+        /// Custom Chrome/Edge profile directory
+        #[arg(long)]
+        profile_dir: Option<String>,
+        /// Dump all found credentials
+        #[arg(long, default_value_t = false)]
+        all: bool,
+    },
+
+    /// Wi-Fi profile credential extraction (netsh wlan show profiles equivalent)
+    #[command(alias = "wlan")]
+    Wifi {
+        /// Path to DPAPI backup key for keyMaterial decryption
+        #[arg(long)]
+        backup_key_file: Option<String>,
+        /// Custom WLAN profiles directory
+        #[arg(long)]
+        profiles_dir: Option<String>,
+        /// Dump all found credentials with decrypted keys
+        #[arg(long, default_value_t = false)]
+        all: bool,
+    },
+
+    /// dMSA/gMSA abuse -- BadSuccessor (CVE-2025-53779) and Golden dMSA/KDS key extraction
+    Dmsa {
+        #[command(subcommand)]
+        action: DmsaAction,
+    },
+
+    /// Certighost -- CA chase fallback (CVE-2026-54121): enroll via CES/NDES proxy
+    Certighost {
+        /// CA server FQDN or hostname
+        #[arg(short, long, required = true)]
+        ca_server: String,
+        /// CES/NDES enrollment URL (e.g. https://ca.domain.local/CES/)
+        #[arg(short, long)]
+        ces_url: Option<String>,
+        /// Certificate template to request
+        #[arg(long, default_value = "User")]
+        template: String,
+        /// Certificate subject (CN=...)
+        #[arg(long)]
+        subject: Option<String>,
+        /// Subject Alternative Name
+        #[arg(long)]
+        san: Option<String>,
+        /// Dry run (validate config without enrolling)
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
+
+    /// DirSync -- OBJECT_SECURITY stealthy LDAP DirSync enumeration
+    #[command(alias = "ds")]
+    Dirsync {
+        /// Base DN for search (default: domain root)
+        #[arg(long)]
+        base_dn: Option<String>,
+        /// Include security descriptors (default: true)
+        #[arg(long, default_value_t = true)]
+        include_sd: bool,
+        /// Page size
+        #[arg(long, default_value = "5000")]
+        page_size: u32,
+        /// Full sync (paginate through all results)
+        #[arg(long, default_value_t = false)]
+        full: bool,
+    },
+
+    /// Certifried (CVE-2022-26923) -- ADCS privilege escalation via dNSHostName spoofing
+    Certifried {
+        /// CA server URL for Web Enrollment
+        #[arg(short, long, required = true)]
+        ca_url: String,
+        /// Target DC FQDN to impersonate
+        #[arg(short, long, required = true)]
+        target_dc_fqdn: String,
+        /// Computer account name to create (auto-generated if omitted)
+        #[arg(long)]
+        computer_name: Option<String>,
+        /// Computer account password (auto-generated if omitted)
+        #[arg(long)]
+        computer_password: Option<String>,
+        /// Certificate template to request (default: Machine)
+        #[arg(long, default_value = "Machine")]
+        template: String,
+        /// Restore original dNSHostName after exploitation
+        #[arg(long, default_value_t = true)]
+        cleanup: bool,
+    },
+
+    /// DCOMexec -- lateral movement via DCOM (MMC20.Application, ShellWindows, etc.)
+    Dcomexec {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Command to execute
+        #[arg(short, long, required = true)]
+        command: String,
+        /// Command arguments
+        #[arg(long, default_value = "")]
+        arguments: String,
+        /// DCOM method to use
+        #[arg(long, value_enum, default_value = "mmc20-application")]
+        method: DcomExecMethod,
+        /// Timeout in milliseconds
+        #[arg(long, default_value = "30000")]
+        timeout: u64,
+    },
+
+    /// DCShadow -- register a rogue domain controller and push malicious replication changes
+    #[command(alias = "dc-shadow")]
+    Dcshadow {
+        /// Target DC hostname or IP
+        #[arg(short, long, required = true)]
+        target_dc: String,
+        /// Domain FQDN
+        #[arg(short, long, required = true)]
+        domain: String,
+        /// Rogue computer account name (without trailing $)
+        #[arg(long, default_value = "ROGUE-DC01")]
+        computer_name: String,
+        /// Password for the rogue computer account
+        #[arg(long)]
+        computer_password: Option<String>,
+        /// AD site name for the rogue DC
+        #[arg(long, default_value = "Default-First-Site-Name")]
+        site_name: String,
+        /// Listener IP for the rogue DC
+        #[arg(long, default_value = "127.0.0.1")]
+        listener_ip: String,
+        /// Listener port for the rogue DC
+        #[arg(long, default_value = "389")]
+        listener_port: u16,
+        /// Dry run: validate config and preflight without executing
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Skip cleanup of the rogue DC objects
+        #[arg(long, default_value_t = false)]
+        no_cleanup: bool,
+        /// JSON object(s) to push via DRSAddEntry (e.g. [{"dn":"...","class":"user","attrs":{}}])
+        #[arg(long)]
+        objects: Option<String>,
+    },
+
+    /// Local credential dumpers -- SafetyKatz, NanoDump, HandleKatz, Dumpert, LaZagne
+    #[command(alias = "localcreds")]
+    LocalCreds {
+        /// Dumper to use
+        #[arg(value_enum, default_value = "safety-katz")]
+        dumper: LocalCredDumperArg,
+        /// Output file path for the dump (memory-only if omitted)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Run all dumpers and aggregate results
+        #[arg(long, default_value_t = false)]
+        all: bool,
+        /// Custom LSASS PID
+        #[arg(long)]
+        pid: Option<u32>,
+        /// Suppress ETW before dumping
+        #[arg(long, default_value_t = true)]
+        suppress_etw: bool,
+        /// Patch AMSI before dumping
+        #[arg(long, default_value_t = true)]
+        patch_amsi: bool,
+        /// Maximum dump size in MiB
+        #[arg(long, default_value = "128")]
+        max_size_mb: usize,
+    },
+
+    /// Sherlock -- Windows vulnerability enumeration (missing KBs, exploit recommendations)
+    #[command(alias = "vuln-check", alias = "missing-kbs")]
+    Sherlock {
+        /// OS version to check (e.g. "Windows 10") -- auto-detected on Windows if omitted
+        #[arg(long)]
+        os_version: Option<String>,
+        /// OS build number (e.g. 19045)
+        #[arg(long)]
+        build_number: Option<u32>,
+        /// Comma-separated list of installed KBs
+        #[arg(long, value_delimiter = ',')]
+        installed_kbs: Vec<String>,
+        /// Comma-separated CVEs to check (default: built-in database)
+        #[arg(long, value_delimiter = ',')]
+        cves: Vec<String>,
+        /// Output format (text, json, csv)
+        #[arg(long, value_enum, default_value = "text")]
+        format: SherlockOutputFormatArg,
     },
 
     /// Generate shell tab-completion scripts
@@ -1559,6 +1821,9 @@ enum EnumTarget {
     Gpos,
     Laps,
     Policy,
+    Adcs,
+    Dns,
+    Audit,
     All,
 }
 
@@ -1704,6 +1969,85 @@ enum KerberosAction {
     },
     /// Request a TGT (requires credentials or NT hash)
     GetTgt,
+    /// AS-Requested Service Ticket -- request ST via AS-REQ (bypasses Event 4769)
+    AsReqSt {
+        /// Service Principal Name
+        #[arg(short, long, required = true)]
+        spn: String,
+    },
+    /// BreakFAST -- FAST armoring bypass using machine account TGT as armor ticket
+    BreakFast {
+        /// Target DC hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Machine account name (e.g. DC01$)
+        #[arg(long)]
+        machine_name: Option<String>,
+        /// Machine account NT hash (hex)
+        #[arg(long)]
+        machine_hash: Option<String>,
+    },
+    /// Rubeus-style asktgt -- request a TGT (alias for get-tgt)
+    #[command(alias = "ask-tgt")]
+    Asktgt,
+    /// Rubeus-style asktgs -- request a TGS service ticket (alias for get-tgs)
+    #[command(alias = "ask-tgs")]
+    Asktgs {
+        /// Service Principal Name
+        #[arg(short, long, required = true)]
+        spn: String,
+    },
+    /// Rubeus-style brute -- AS-REQ brute-force a single user
+    Brute {
+        /// Path to password wordlist
+        #[arg(short, long, required = true)]
+        wordlist: String,
+        /// Stop after first valid credential
+        #[arg(long, default_value_t = true)]
+        stop_on_success: bool,
+        /// Also report AS-REP roastable users
+        #[arg(long, default_value_t = false)]
+        asrep_only: bool,
+        /// Delay between attempts (milliseconds)
+        #[arg(long, default_value = "0")]
+        delay: u64,
+        /// Random jitter (milliseconds)
+        #[arg(long, default_value = "0")]
+        jitter: u64,
+    },
+    /// targetedKerberoast -- temporarily add an SPN and roast it
+    TargetedKerberoast {
+        /// Target user sAMAccountName or DN
+        #[arg(short, long, required = true)]
+        target_user: String,
+        /// Fake SPN to add (auto-generated if omitted)
+        #[arg(long)]
+        fake_spn: Option<String>,
+        /// Remove the fake SPN after roasting
+        #[arg(long, default_value_t = true)]
+        cleanup: bool,
+        /// Downgrade to RC4 for offline cracking
+        #[arg(long, default_value_t = false)]
+        downgrade_rc4: bool,
+    },
+    /// Rubeus-style kpasswd -- change or reset a Kerberos password
+    Kpasswd {
+        /// User to change password for (defaults to authenticated user)
+        #[arg(short, long)]
+        target_user: Option<String>,
+        /// New password
+        #[arg(short, long, required = true)]
+        new_password: String,
+        /// Reset another user's password (requires privileges)
+        #[arg(long, default_value_t = false)]
+        reset: bool,
+    },
+    /// Rubeus-style describe -- parse and describe a KIRBI/ccache ticket file
+    Describe {
+        /// Path to the ticket file
+        #[arg(required = true)]
+        file: String,
+    },
 }
 
 // ----------------------------------------------------------
@@ -1747,6 +2091,50 @@ enum ShadowCredAction {
         /// Skip confirmation prompt
         #[arg(long)]
         force: bool,
+    },
+}
+
+// ----------------------------------------------------------
+// dMSA/gMSA sub-commands
+// ----------------------------------------------------------
+
+#[derive(Subcommand, Clone)]
+enum DmsaAction {
+    /// BadSuccessor (CVE-2025-53779) -- dMSA delegation privilege escalation
+    BadSuccessor {
+        /// Target DC hostname or IP for LDAP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Domain FQDN (e.g. corp.local)
+        #[arg(short, long, required = true)]
+        domain: String,
+        /// sAMAccountName for the rogue dMSA
+        #[arg(long, default_value = "RogueDmsa")]
+        dmsa_name: String,
+        /// Password for the rogue dMSA
+        #[arg(long, default_value = "RogueDmsa123!")]
+        dmsa_password: String,
+        /// Target user DN for msDS-ManagedAccountPrecededByLink
+        #[arg(long)]
+        target_user_dn: Option<String>,
+    },
+    /// Golden dMSA/KDS -- extract KDS root key and derive gMSA/dMSA passwords
+    Golden {
+        /// Path to KDS root key file (binary dump of KDS root key from registry)
+        #[arg(short, long)]
+        kds_key_file: Option<String>,
+        /// Domain FQDN for MSA enumeration via LDAP
+        #[arg(short, long)]
+        domain: Option<String>,
+        /// DC hostname for LDAP connection
+        #[arg(short = 'D', long)]
+        target_dc: Option<String>,
+        /// List only -- enumerate MSAs without deriving passwords
+        #[arg(long, default_value_t = false)]
+        list_only: bool,
+        /// Output file for derived passwords (CSV)
+        #[arg(short, long)]
+        output: Option<String>,
     },
 }
 
@@ -3049,6 +3437,179 @@ async fn async_main() -> i32 {
         // --- CVE exploit handler -----------------------------
         Commands::Exploit { ref action } => cmd_exploit(&cli, action.clone()).await,
 
+        // --- Windows Vault extraction (mimikatz vault::list + vault::cred) ---
+        Commands::Vault {
+            ref backup_key_file,
+            all,
+        } => commands_impl::cmd_vault(&cli, backup_key_file.as_deref(), all).await,
+
+        // --- Browser credential extraction ---
+        Commands::Browser {
+            ref browsers,
+            ref backup_key_file,
+            ref profile_dir,
+            all,
+        } => {
+            commands_impl::cmd_browser(
+                &cli,
+                browsers,
+                backup_key_file.as_deref(),
+                profile_dir.as_deref(),
+                all,
+            )
+            .await
+        }
+
+        // --- Wi-Fi credential extraction ---
+        Commands::Wifi {
+            ref backup_key_file,
+            ref profiles_dir,
+            all,
+        } => {
+            commands_impl::cmd_wifi(
+                &cli,
+                backup_key_file.as_deref(),
+                profiles_dir.as_deref(),
+                all,
+            )
+            .await
+        }
+
+        // --- dMSA/gMSA abuse (BadSuccessor + Golden dMSA) ---
+        Commands::Dmsa { ref action } => commands_impl::cmd_dmsa(&cli, action).await,
+
+        // --- Certighost CA chase fallback (CVE-2026-54121) ---
+        Commands::Certighost {
+            ref ca_server,
+            ref ces_url,
+            ref template,
+            ref subject,
+            ref san,
+            dry_run,
+        } => {
+            commands_impl::cmd_certighost(
+                &cli,
+                ca_server,
+                ces_url.as_deref(),
+                template,
+                subject.as_deref(),
+                san.as_deref(),
+                dry_run,
+            )
+            .await
+        }
+
+        // --- DirSync OBJECT_SECURITY stealth enumeration ---
+        Commands::Dirsync {
+            ref base_dn,
+            include_sd,
+            page_size,
+            full,
+        } => {
+            commands_impl::cmd_dirsync(&cli, base_dn.as_deref(), include_sd, page_size, full).await
+        }
+
+        // --- Certifried (CVE-2022-26923) ADCS privilege escalation ---
+        Commands::Certifried {
+            ref ca_url,
+            ref target_dc_fqdn,
+            ref computer_name,
+            ref computer_password,
+            ref template,
+            cleanup,
+        } => {
+            commands_impl::cmd_certifried(
+                &cli,
+                ca_url,
+                target_dc_fqdn,
+                computer_name.as_deref(),
+                computer_password.as_deref(),
+                template,
+                cleanup,
+            )
+            .await
+        }
+
+        // --- DCOMexec lateral movement ---
+        Commands::Dcomexec {
+            ref target,
+            ref command,
+            ref arguments,
+            method,
+            timeout,
+        } => commands_impl::cmd_dcomexec(&cli, target, command, arguments, method, timeout).await,
+
+        // --- DCShadow rogue DC push ---
+        Commands::Dcshadow {
+            ref target_dc,
+            ref domain,
+            ref computer_name,
+            ref computer_password,
+            ref site_name,
+            ref listener_ip,
+            listener_port,
+            dry_run,
+            no_cleanup,
+            ref objects,
+        } => {
+            commands_impl::cmd_dcshadow(
+                &cli,
+                target_dc,
+                domain,
+                computer_name,
+                computer_password.as_deref(),
+                site_name,
+                listener_ip,
+                listener_port,
+                dry_run,
+                no_cleanup,
+                objects.as_deref(),
+            )
+            .await
+        }
+
+        // --- Local credential dumpers ---
+        Commands::LocalCreds {
+            dumper,
+            ref output,
+            all,
+            pid,
+            suppress_etw,
+            patch_amsi,
+            max_size_mb,
+        } => {
+            commands_impl::cmd_local_creds(
+                &cli,
+                dumper,
+                output.as_deref(),
+                all,
+                pid,
+                suppress_etw,
+                patch_amsi,
+                max_size_mb,
+            )
+            .await
+        }
+
+        // --- Sherlock vulnerability enumeration ---
+        Commands::Sherlock {
+            ref os_version,
+            ref build_number,
+            ref installed_kbs,
+            ref cves,
+            format,
+        } => {
+            commands_impl::cmd_sherlock(
+                &cli,
+                os_version.as_deref(),
+                *build_number,
+                installed_kbs,
+                cves,
+                format.into(),
+            )
+            .await
+        }
+
         // --- Shell completion generation ---------------------
         Commands::Completions {
             shell,
@@ -3188,7 +3749,7 @@ fn make_plugin_context(cli: &Cli) -> PluginContext {
 // Helpers
 // ----------------------------------------------------------
 
-fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
+pub fn require_creds(cli: &Cli) -> std::result::Result<Credentials, i32> {
     let creds = resolve_credentials_from_cli(cli).map_err(|e| {
         banner::print_fail(&format!("Auth error: {}", e));
         1
@@ -3244,7 +3805,7 @@ fn require_dc_only_creds(cli: &Cli) -> std::result::Result<String, i32> {
     }
 }
 
-fn require_dc(cli: &Cli) -> std::result::Result<String, i32> {
+pub fn require_dc(cli: &Cli) -> std::result::Result<String, i32> {
     cli.dc_host.clone().ok_or_else(|| {
         banner::print_fail("--dc-host is required");
         1
@@ -5488,6 +6049,14 @@ async fn cmd_enum(
         EnumTarget::Policy => {
             println!("{}", "Enumerating password/domain policy...".bright_black())
         }
+        EnumTarget::Adcs => println!(
+            "{}",
+            "Enumerating ADCS templates and configuration...".bright_black()
+        ),
+        EnumTarget::Dns => println!("{}", "Enumerating AD-Integrated DNS zone...".bright_black()),
+        EnumTarget::Audit => {
+            return cmd_enum_audit(cli).await;
+        }
         EnumTarget::All => println!("{}", "Enumerating all objects...".bright_black()),
     }
 
@@ -6115,10 +6684,92 @@ fn enum_target_modules(target: &EnumTarget) -> Vec<String> {
         EnumTarget::Gpos => &["gpos"],
         EnumTarget::Laps => &["laps"],
         EnumTarget::Policy => &["policy"],
+        EnumTarget::Adcs => &["adcs"],
+        EnumTarget::Dns => &["dns"],
+        EnumTarget::Audit => &[],
         EnumTarget::All => &[],
     };
 
     modules.iter().map(|module| (*module).to_string()).collect()
+}
+
+/// Audit enumeration coverage and recommend missing techniques.
+async fn cmd_enum_audit(cli: &Cli) -> i32 {
+    banner::print_module_banner("ENUM AUDIT");
+
+    let dc = match require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    let checks: Vec<(&str, &str)> = vec![
+        ("Users", "Enumerate domain users (PowerView / LDAP)"),
+        ("Computers", "Enumerate domain computers and OS versions"),
+        ("Groups", "Enumerate domain groups and memberships"),
+        ("Trusts", "Enumerate domain/forest trusts"),
+        ("SPNs", "Enumerate Kerberos SPNs for Kerberoasting"),
+        ("AS-REP", "Enumerate accounts without pre-authentication"),
+        (
+            "Delegations",
+            "Enumerate constrained/unconstrained/RBCD delegation",
+        ),
+        ("GPOs", "Enumerate Group Policy Objects and links"),
+        ("LAPS", "Enumerate LAPS-readable machines"),
+        ("ADCS", "Enumerate certificate templates and CA config"),
+        (
+            "DNS",
+            "Enumerate AD-Integrated DNS zone for wildcard/poisoning",
+        ),
+        ("ACLs", "Enumerate dangerous ACLs and attack paths"),
+        ("Sessions", "Enumerate active sessions and logged-on users"),
+        ("BloodHound", "Import SharpHound JSON for graph analysis"),
+        (
+            "LDAP signing",
+            "Check if LDAP signing/channel binding is enforced",
+        ),
+        (
+            "Pre-auth",
+            "Run anonymous/null-session pre-authentication discovery",
+        ),
+    ];
+
+    if commands_impl::wants_json(cli) {
+        return commands_impl::emit_json(
+            cli,
+            serde_json::json!({
+                "status": "success",
+                "target": dc,
+                "coverage_checklist": checks.iter().map(|(n, d)| serde_json::json!({
+                    "name": n,
+                    "description": d,
+                })).collect::<Vec<_>>(),
+            }),
+        );
+    }
+
+    println!(" {} DC: {}", ">".bright_black(), dc.cyan());
+    println!(
+        "\n{} Latest enumeration coverage checklist:",
+        "[*]".bright_blue()
+    );
+    for (name, desc) in &checks {
+        println!(
+            "   {} {} -- {}",
+            "+".bright_green(),
+            name.bright_cyan(),
+            desc.bright_black()
+        );
+    }
+    println!("\n{} CLI quick-reference:", "[*]".bright_blue());
+    println!("   ovt enum users");
+    println!("   ovt enum adcs");
+    println!("   ovt enum dns");
+    println!("   ovt pv all");
+    println!("   ovt scan --targets <dc> --ad-only");
+    println!("   ovt bh import -f <SharpHound.zip>");
+
+    banner::print_success("Enumeration audit complete");
+    0
 }
 
 // cmd_kerberos
@@ -6757,6 +7408,99 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     return 1;
                 }
             }
+        }
+        KerberosAction::AsReqSt { spn } => {
+            let creds = match require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let (secret, use_hash) = match creds.secret_and_hash_flag() {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            match crate::commands_impl::cmd_as_req_st(cli, &dc, &spn, &creds, use_hash, &secret)
+                .await
+            {
+                Ok(()) => return 0,
+                Err(e) => {
+                    banner::print_fail(&format!("AS-Requested ST failed: {e}"));
+                    return 1;
+                }
+            }
+        }
+        KerberosAction::BreakFast {
+            ref target,
+            ref machine_name,
+            ref machine_hash,
+        } => {
+            return commands_impl::cmd_breakfast(
+                cli,
+                &dc,
+                target,
+                machine_name.as_deref(),
+                machine_hash.as_deref(),
+            )
+            .await;
+        }
+        KerberosAction::Asktgt => {
+            return commands_impl::cmd_asktgt(cli, &dc).await;
+        }
+        KerberosAction::Asktgs { spn } => {
+            return commands_impl::cmd_asktgs(cli, &dc, &spn).await;
+        }
+        KerberosAction::Brute {
+            ref wordlist,
+            stop_on_success,
+            asrep_only,
+            delay,
+            jitter,
+        } => {
+            return commands_impl::cmd_kerberos_brute(
+                cli,
+                &dc,
+                wordlist,
+                stop_on_success,
+                asrep_only,
+                delay,
+                jitter,
+            )
+            .await;
+        }
+        KerberosAction::TargetedKerberoast {
+            ref target_user,
+            ref fake_spn,
+            cleanup,
+            downgrade_rc4,
+        } => {
+            return commands_impl::cmd_targeted_kerberoast(
+                cli,
+                &dc,
+                target_user,
+                fake_spn.as_deref(),
+                cleanup,
+                downgrade_rc4,
+            )
+            .await;
+        }
+        KerberosAction::Kpasswd {
+            ref target_user,
+            ref new_password,
+            reset,
+        } => {
+            return commands_impl::cmd_kpasswd(
+                cli,
+                &dc,
+                target_user.as_deref(),
+                new_password,
+                reset,
+            )
+            .await;
+        }
+        KerberosAction::Describe { ref file } => {
+            return commands_impl::cmd_describe_ticket(cli, file).await;
         }
         KerberosAction::UserEnum { .. } => {
             // Handled above before credential check (zero-knowledge, no creds needed)
@@ -7512,6 +8256,20 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
         Ok(c) => c,
         Err(e) => return e,
     };
+
+    // DCOMexec does not require an SMB channel; dispatch directly.
+    if matches!(method, ExecMethod::Dcom) {
+        return commands_impl::cmd_dcomexec(
+            cli,
+            target,
+            command,
+            "",
+            DcomExecMethod::Mmc20Application,
+            30000,
+        )
+        .await;
+    }
+
     let (secret, use_hash) = match creds.secret_and_hash_flag() {
         Ok(s) => s,
         Err(e) => {
@@ -7593,6 +8351,10 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
                         .map(|r| (r.success, r.output.unwrap_or_default()))
                 }
             }
+        }
+        ExecMethod::Dcom => {
+            // Handled before SMB connection; this arm is unreachable but required for exhaustiveness.
+            unreachable!("DCOM execution should have been dispatched before SMB connection")
         }
     };
 

@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.4.0-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.4.1-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -42,7 +42,7 @@
   <img src="https://img.shields.io/badge/hashcat-not_needed-ff4444?style=flat-square" alt="no hashcat" />
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
   <img src="https://img.shields.io/badge/config-XDG_TOML_PROFILES-00cc66?style=flat-square" alt="config" />
-  <img src="https://img.shields.io/badge/tests-1%2C800%2B-00cc66?style=flat-square" alt="tests" />
+  <img src="https://img.shields.io/badge/tests-2%2C074-00cc66?style=flat-square" alt="tests" />
 </p>
 
 ***
@@ -609,36 +609,40 @@ Comprehensive catalog of every technique in Overthrone, live-tested against GOAD
 | 129 | DSRM Backdoor | `ovt forge dsrm-backdoor` | ✅ | Dry-run validated |
 | 130 | ACL Backdoor | `ovt forge acl-backdoor` | ✅ | Dry-run validated |
 | 131 | Shadow Credentials | `ovt shadow-cred add` | ❌ | LDAP modify rejected (rc=21) |
+| 132 | **DCShadow** | `ovt dcshadow` | ✅ Module | Rogue DC push via MS-DRSR, preflight checks, cleanup |
+| 133 | **Local Cred Dumpers** | `ovt local-creds <dumper>` | ✅ Module | SafetyKatz/NanoDump/HandleKatz/Dumpert/LaZagne, ETW/AMSI bypass |
+| 134 | **Sherlock vuln enum** | `ovt sherlock` | ✅ Module | KB discovery, CVE db, risk scoring, exploit recommendations |
+| 135 | **Enum audit checklist** | `ovt enum audit` | ✅ Module | Full enum coverage in one command |
 
 ### C2 Framework Integration
 
 | # | Technique | OVT Command | Live Test | Notes |
 |---|-----------|-------------|:---------:|-------|
-| 130 | Sliver C2 Integration | `ovt c2 sliver` | ✅ Module | mTLS, full C2Channel trait, CLI wired |
-| 131 | Havoc C2 Integration | `ovt c2 havoc` | ✅ Module | REST auth, Demon agent mgmt, CLI wired |
-| 132 | Cobalt Strike C2 Integration | `ovt c2 cobalt-strike` | ✅ Module | Aggressor-style REST API, CLI wired |
+| 136 | Sliver C2 Integration | `ovt c2 sliver` | ✅ Module | mTLS, full C2Channel trait, CLI wired |
+| 137 | Havoc C2 Integration | `ovt c2 havoc` | ✅ Module | REST auth, Demon agent mgmt, CLI wired |
+| 138 | Cobalt Strike C2 Integration | `ovt c2 cobalt-strike` | ✅ Module | Aggressor-style REST API, CLI wired |
 
 ### Viewer & Reporting
 
 | # | Technique | OVT Command | Live Test | Notes |
 |---|-----------|-------------|:---------:|-------|
-| 133 | Graph TUI Viewer | `ovt graph view` | ✅ Init | Rust-native interactive vis, `--input`/`--file` accepted |
-| 134 | Graph Tree Viewer | `ovt graph tree` | ✅ Init | BloodHound-style hierarchy, `--input` accepted |
-| 135 | Graph GUI (Browser) | `ovt graph gui` | ✅ Init | Three.js WebGL, local HTTP server initialized |
-| 136 | Report Generation | `ovt report` | ⏳ | Needs existing engagement.json |
-| 137 | Windows Exploitation Reference | included in PoC report | ✅ | 12 subsections, 100+ CVEs |
+| 139 | Graph TUI Viewer | `ovt graph view` | ✅ Init | Rust-native interactive vis, `--input`/`--file` accepted |
+| 140 | Graph Tree Viewer | `ovt graph tree` | ✅ Init | BloodHound-style hierarchy, `--input` accepted |
+| 141 | Graph GUI (Browser) | `ovt graph gui` | ✅ Init | Three.js WebGL, local HTTP server initialized |
+| 142 | Report Generation | `ovt report` | ⏳ | Needs existing engagement.json |
+| 143 | Windows Exploitation Reference | included in PoC report | ✅ | 12 subsections, 100+ CVEs |
 
 ### Summary
 
 | Status | Count | Notes |
 |--------|:-----:|-------|
-| ✅ Success | 90 | Live-tested and working against GOAD-Light DC |
-| ✅ Module Init | 39 | EPM pipe resolution, authenticated EPM TCP, VSS @GMT added |
+| ✅ Success | 93 | Live-tested and working against GOAD-Light DC |
+| ✅ Module Init | 41 | EPM pipe resolution, authenticated EPM TCP, VSS @GMT added |
 | ⚠️ Partial/Blocked | 8 | DCSync (DRSUAPI unavailable), ESC1, noPac, Bronze Bit, ESC1 live, GPO write, ADCS request, Shadow Creds |
 | ❌ Fail | 1 | SAM dump |
 | ⏳ Prereq Blocked | 3 | Golden/Silver ticket (need krbtgt hash), Report gen (need engagement) |
-| — Untested | 0 | All 140 techniques now have a verified status |
-| **Total** | **140** | All coded, 129 verified (90 live + 39 module init), 8 partial, 4 blocked/fail |
+| — Untested | 0 | All 144 techniques now have a verified status |
+| **Total** | **144** | All coded, 134 verified (93 live + 41 module init), 8 partial, 4 blocked/fail |
 
 ## Does It Actually Work?
 
@@ -674,13 +678,13 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~210,000 lines of Rust across 10 crates (~230,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **1,800+ library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~210,000 lines of Rust across 10 crates (~230,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **2,074 library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
 29 top-level commands plus deep subcommands across recon, Kerberos, lateral movement, persistence, and reporting. Every command works as both `overthrone <cmd>` and `ovt <cmd>`.
 
-> **[Full Command Reference ?](COMMAND-LIST.md)** - detailed usage, flags, and examples for every command.
+> **[Full Command Reference ?](COMMAND_LIST.md)** - detailed usage, flags, and examples for every command.
 
 **Quick taste:**
 
@@ -724,6 +728,13 @@ ovt azure seamless-sso -H DC -d DOMAIN -u USER -p PASS              # Seamless S
 ovt forge golden --domain-sid S-1-5-... --krbtgt-hash <hash>        # Forge golden ticket
 ovt forge adcs --ca-server CA01.corp.local --domain corp.local      # ADCS ESC1-9 auto-exploit
 ovt forge s4u2self-pkinit -d DOMAIN --cert cert.pfx                 # S4U2Self with PKINIT
+ovt dcshadow --target-dc DC01 --domain corp.local                   # DCShadow rogue DC push
+ovt dcshadow --target-dc DC01 --domain corp.local --objects '[...]' # Push custom attribute changes
+ovt local-creds safety-katz                                          # Dump LSASS with SafetyKatz
+ovt local-creds all --all                                            # Run all dumpers, aggregate results
+ovt sherlock                                                         # Windows vuln enumeration (KB check)
+ovt sherlock --format json --cves CVE-2025-21333                    # Target specific CVEs in JSON
+ovt enum audit                                                       # Full enum coverage checklist
 ovt completions bash                                                 # Shell tab completion
 ```
 
@@ -1342,7 +1353,7 @@ ovt report --format pdf --output executive-summary.pdf
 
 ### Command Reference
 
-See **[COMMAND-LIST.md](COMMAND-LIST.md)** for the complete reference with flags, examples, and cheat sheets.
+See **[COMMAND_LIST.md](COMMAND_LIST.md)** for the complete reference with flags, examples, and cheat sheets.
 
 ## Examples
 
@@ -1551,7 +1562,7 @@ MIT - use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 <p align="center">
   <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>10 crates. ~210,000 lines of Rust. 1,800+ tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
+  <sub>10 crates. ~210,000 lines of Rust. 2,074 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>

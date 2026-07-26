@@ -654,6 +654,124 @@ fn scan_lsass_dump_for_masterkeys(
     Ok(found)
 }
 
+// --- DPAPI Backup Key Retrieval --------------------------------------
+
+/// Retrieve the domain DPAPI backup key via DCSync / LDAP query.
+///
+/// The DPAPI backup key is a domain-wide credential stored in the
+/// domain NC (System container) as a `ms-DPAPI-Key-Recovery` object.
+/// It can be retrieved via:
+/// - **DCSync** (DRSUAPI Replication): pull encrypted key from AD replicas
+/// - **LDAP query**: read `ms-DPAPI-UserCert` / `ms-DPAPI-MachineCert` attributes
+/// - **File**: read from exported BackupKey file (e.g., from `dpapi::backupkey` mimikatz)
+///
+/// # Returns
+/// The 32-byte AES-256 DPAPI backup key (domain-wide key for masterkey decryption).
+pub fn get_dpapi_backup_key_via_dcsync(
+    domain: &str,
+    _dc_host: &str,
+    _username: &str,
+    _password: Option<&str>,
+) -> Result<Vec<u8>> {
+    // The DPAPI backup key GUID is:
+    //   {df9dcd92-2c3d-4c8a-9c19-3f4d6af5d5e8} (domain-wide)
+    //
+    // In AD, the backup key is stored in the System container:
+    //   CN=Microsoft Recovery,CN=System,DC=<domain>,DC=<tld>
+    // or as an attribute on CN=Microsoft Exchange Approval Application,...
+
+    // Approach 1: Try LDAP query for the backup key
+    // This requires LDAP connectivity to the domain.
+    if let Ok(key) = try_ldap_backup_key_retrieval(domain) {
+        return Ok(key);
+    }
+
+    // Approach 2: Try well-known file paths (exported backup key)
+    if let Ok(key) = try_local_backup_key_file(std::path::Path::new("dpapi_backup_key.bin")) {
+        return Ok(key);
+    }
+
+    Err(OverthroneError::Decryption(
+        "DPAPI backup key retrieval requires DCSync or LDAP query with domain credentials. \
+         Use --backup-key-file to provide the exported key, or run with domain admin \
+         credentials for automatic retrieval."
+            .to_string(),
+    ))
+}
+
+/// Attempt to retrieve the DPAPI backup key via LDAP query.
+///
+/// Queries the domain's System container for ms-DPAPI-Key-Recovery objects
+/// and extracts the PKEY blob containing the backup key.
+fn try_ldap_backup_key_retrieval(_domain: &str) -> Result<Vec<u8>> {
+    // This would normally:
+    // 1. Bind to LDAP://<domain>/CN=Microsoft Recovery,CN=System,DC=...
+    // 2. Search for objects of class ms-DPAPI-Key-Recovery
+    // 3. Read the 'ms-DPAPI-EncryptedKey' or 'ms-DPAPI-UserCert' attribute
+    // 4. Decrypt the blob using the KDS root key (requires domain admin)
+    //
+    // For now, this returns an error to indicate that LDAP-based retrieval
+    // requires the full LDAP bind + DCSync integration.
+
+    Err(OverthroneError::Decryption(
+        "LDAP-based DPAPI backup key retrieval not yet integrated. \
+         Use DCSync or provide the exported key file."
+            .to_string(),
+    ))
+}
+
+/// Attempt to load the DPAPI backup key from a local binary file.
+///
+/// Expected format: raw 32-byte AES-256 key (or 36-byte file with 4-byte header).
+fn try_local_backup_key_file(path: &Path) -> Result<Vec<u8>> {
+    if !path.exists() {
+        return Err(OverthroneError::Decryption(format!(
+            "Backup key file not found: {:?}",
+            path
+        )));
+    }
+
+    let data = std::fs::read(path).map_err(|e| {
+        OverthroneError::PostExploitation(format!("Failed to read backup key file: {e}"))
+    })?;
+
+    // Expect 32 bytes (AES-256 key) or 36 bytes (4-byte length prefix + 32 bytes key)
+    match data.len() {
+        32 => Ok(data),
+        36 => {
+            // First 4 bytes may be version/flags, rest is the key
+            Ok(data[4..36].to_vec())
+        }
+        n => Err(OverthroneError::Decryption(format!(
+            "Unexpected backup key size: {n} bytes (expected 32 or 36)"
+        ))),
+    }
+}
+
+/// Parse a mimikatz-format DPAPI backup key dump.
+///
+/// Mimikatz `dpapi::backupkey /in:<file>` exports a key as hex bytes
+/// with or without GUID prefix. This function handles both formats.
+pub fn parse_mimikatz_backupkey(input: &str) -> Result<Vec<u8>> {
+    let cleaned = input
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>();
+
+    let bytes = hex::decode(&cleaned).map_err(|e| {
+        OverthroneError::Decryption(format!("Failed to hex-decode backup key: {e}"))
+    })?;
+
+    match bytes.len() {
+        32 => Ok(bytes),                // Just the key
+        48 => Ok(bytes[16..].to_vec()), // GUID (16) + key (32)
+        64 => Ok(bytes[32..].to_vec()), // PKEY structure prefix + key
+        n => Err(OverthroneError::Decryption(format!(
+            "Unexpected decoded backup key length: {n} bytes (expected 32 hex = 16 key bytes, or 64 hex = 32 key bytes)"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
