@@ -234,14 +234,33 @@ fn generate_random_suffix() -> String {
 }
 
 /// Generate a random password (16 chars, mixed case + digits + special chars).
+/// Guarantees at least one uppercase, one lowercase, one digit, and one special char.
 fn generate_random_password() -> String {
-    let charset: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%";
-    (0..16)
-        .map(|_| {
-            let idx = (rand::random::<u32>() % charset.len() as u32) as usize;
-            charset[idx] as char
-        })
-        .collect()
+    let upper: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let lower: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
+    let digits: &[u8] = b"0123456789";
+    let special: &[u8] = b"!@#$%";
+    let full: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%";
+
+    let pick = |cs: &[u8]| {
+        let idx = (rand::random::<u32>() % cs.len() as u32) as usize;
+        cs[idx] as char
+    };
+
+    // Start with one guaranteed char from each class.
+    let mut chars: Vec<char> = vec![pick(upper), pick(lower), pick(digits), pick(special)];
+    // Fill the remaining 12 slots from the full charset.
+    for _ in 0..12 {
+        chars.push(pick(full));
+    }
+    // Shuffle so the guaranteed chars aren't always at the front.
+    let mut i = chars.len();
+    while i > 1 {
+        i -= 1;
+        let j = (rand::random::<u32>() % (i + 1) as u32) as usize;
+        chars.swap(i, j);
+    }
+    chars.into_iter().collect()
 }
 
 // ---------------------------------------------------------------
