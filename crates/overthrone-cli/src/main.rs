@@ -1703,8 +1703,8 @@ enum AclAction {
         #[arg(short, long, required = true)]
         target: String,
         /// New password to set
-        #[arg(short, long, required = true)]
-        password: String,
+        #[arg(short = 'n', long = "new-password", required = true)]
+        new_password: String,
     },
     /// Add a user to a group (requires WriteProperty/member or GenericAll)
     AddMember {
@@ -5597,7 +5597,7 @@ async fn cmd_acl(cli: &Cli, action: AclAction) -> i32 {
         cli.domain.as_deref().unwrap_or(""),
         &creds.username,
         creds.password().unwrap_or(""),
-        false,
+        true,
     )
     .await
     {
@@ -5609,13 +5609,25 @@ async fn cmd_acl(cli: &Cli, action: AclAction) -> i32 {
     };
 
     let result = match action {
-        AclAction::ForcePassword { target, password } => {
+        AclAction::ForcePassword {
+            target,
+            new_password,
+        } => {
             println!(
                 "{} Force-changing password for {} ...",
                 "[*]".bright_black(),
                 target.cyan()
             );
-            ldap.force_change_password(&target, &password).await
+            let user_dn = match ldap.resolve_sam_to_dn(&target).await {
+                Ok(dn) => dn,
+                Err(e) => {
+                    let msg = format!("Failed to resolve DN for '{}': {}", target, e);
+                    banner::print_fail(&msg);
+                    return 1;
+                }
+            };
+            println!("{} Resolved DN: {}", "[*]".bright_black(), user_dn.cyan());
+            ldap.force_change_password(&user_dn, &new_password).await
         }
         AclAction::AddMember { group, member } => {
             println!(

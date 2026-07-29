@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn test_rpc_fault_detection() {
         // Build a minimal RPC fault PDU with status=0x00000008 at offset 24.
-        let mut fault = vec![0u8; 28];
+        let mut fault = [0u8; 28];
         fault[2] = 3; // type = Fault
         fault[24] = 0x08; // status low byte
         assert_eq!(fault[2], 3);

@@ -729,6 +729,6 @@ mod tests {
     fn test_build_dcom_ntlmssp_negotiate() {
         let msg = build_dcom_ntlmssp_negotiate();
         assert!(msg.starts_with(b"NTLMSSP\x00"));
-        assert_eq!(msg.len() >= 32, true);
+        assert!(msg.len() >= 32);
     }
 }

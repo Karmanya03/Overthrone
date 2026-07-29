@@ -840,7 +840,7 @@ mod tests {
         let dir = std::env::temp_dir().join("dpapi_test_empty_dump");
         let _ = std::fs::create_dir_all(&dir);
         let dump_path = dir.join("empty.dmp");
-        let _ = std::fs::write(&dump_path, &[0u8; 10]);
+        let _ = std::fs::write(&dump_path, [0u8; 10]);
 
         let mut decryptor = DpapiDecryptor::new(&[0u8; 32]);
         let result = scan_lsass_dump_for_masterkeys(&dump_path, &mut decryptor);

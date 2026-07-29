@@ -370,9 +370,9 @@ mod tests {
 
     #[test]
     fn test_armor_key_etype_mapping() {
-        let aes256_key = vec![0u8; 32];
+        let aes256_key = [0u8; 32];
         assert_eq!(aes256_key.len(), 32);
-        let rc4_key = vec![0u8; 16];
+        let rc4_key = [0u8; 16];
         assert_eq!(rc4_key.len(), 16);
     }
 

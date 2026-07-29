@@ -1217,12 +1217,12 @@ mod tests {
         // Valid response with disposition = 3 and a DER certificate
         let mut resp = vec![0u8; 100];
         // RPC header (24 bytes) -- ensure no DER marker (0x30) in header
-        for i in 0..24 {
-            resp[i] = 0xFF;
+        for b in resp.iter_mut().take(24) {
+            *b = 0xFF;
         }
         // ORPC_THAT at offset 24 (flags + ext_ptr + hresult = 12 bytes)
-        for i in 24..36 {
-            resp[i] = 0xAA;
+        for b in resp.iter_mut().skip(24).take(12) {
+            *b = 0xAA;
         }
         // Stub starts at offset 36:
         //   requestId at 36

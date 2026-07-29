@@ -427,7 +427,7 @@ mod tests {
         }];
         let result = generate_msa_passwords(&kds, &msas);
         assert_eq!(result.passwords_generated, 0);
-        assert!(result.errors.len() >= 1);
+        assert!(!result.errors.is_empty());
     }
 
     #[test]

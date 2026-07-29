@@ -1,4 +1,4 @@
-# Overthrone v0.4.1 — Complete Command Reference
+# Overthrone v0.4.2 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2025) — `sevenkingdoms.local` (192.168.57.10)

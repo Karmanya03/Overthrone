@@ -77,15 +77,15 @@ struct SnafflePattern {
 #[cfg(test)]
 fn file_matches_pattern(name: &str, extension: Option<&str>, name_contains: Option<&str>) -> bool {
     let lower = name.to_lowercase();
-    if let Some(ext) = extension {
-        if lower.ends_with(ext) {
-            return true;
-        }
+    if let Some(ext) = extension
+        && lower.ends_with(ext)
+    {
+        return true;
     }
-    if let Some(nc) = name_contains {
-        if lower.contains(nc) {
-            return true;
-        }
+    if let Some(nc) = name_contains
+        && lower.contains(nc)
+    {
+        return true;
     }
     false
 }

@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_sorting_priorities_readable_first() {
-        let mut entries = vec![
+        let mut entries = [
             CredentialEntry {
                 target: "ENC".to_string(),
                 source: CredentialSource::LapsV2Encrypted,
@@ -351,13 +351,13 @@ mod tests {
 
     #[test]
     fn test_stats_calculation() {
-        let laps = vec![
+        let laps = [
             make_laps_entry("PC1", LapsSource::V1, Some("pw1")),
             make_laps_entry("PC2", LapsSource::V2Plaintext, Some("pw2")),
             make_laps_entry("PC3", LapsSource::V2Encrypted, None),
             make_laps_entry("PC4", LapsSource::Detected, None),
         ];
-        let gmsa = vec![
+        let gmsa = [
             make_gmsa_entry("svc_gmsa1", true),
             make_gmsa_entry("svc_gmsa2", false),
         ];

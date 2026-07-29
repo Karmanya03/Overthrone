@@ -708,89 +708,95 @@ mod tests {
         session.total_credentials_compromised = 3;
         session.total_admin_hosts = 2;
 
-        let mut state = overthrone_pilot::goals::EngagementState::default();
-        state.domain = Some("test.local".to_string());
-        state.users = vec![
-            overthrone_pilot::goals::DiscoveredUser {
-                sam_account_name: "jdoe".into(),
-                distinguished_name: "CN=John Doe,CN=Users,DC=test,DC=local".into(),
-                admin_count: false,
-                has_spn: false,
-                dont_req_preauth: false,
-                enabled: true,
-                description: Some("Regular user".into()),
-                user_principal_name: Some("jdoe@test.local".into()),
-                ..Default::default()
+        let state = overthrone_pilot::goals::EngagementState {
+            domain: Some("test.local".to_string()),
+            users: vec![
+                overthrone_pilot::goals::DiscoveredUser {
+                    sam_account_name: "jdoe".into(),
+                    distinguished_name: "CN=John Doe,CN=Users,DC=test,DC=local".into(),
+                    admin_count: false,
+                    has_spn: false,
+                    dont_req_preauth: false,
+                    enabled: true,
+                    description: Some("Regular user".into()),
+                    user_principal_name: Some("jdoe@test.local".into()),
+                    ..Default::default()
+                },
+                overthrone_pilot::goals::DiscoveredUser {
+                    sam_account_name: "svc_sql".into(),
+                    distinguished_name: "CN=svc_sql,CN=Users,DC=test,DC=local".into(),
+                    admin_count: true,
+                    has_spn: true,
+                    dont_req_preauth: false,
+                    enabled: true,
+                    description: Some("SQL service account".into()),
+                    user_principal_name: Some("svc_sql@test.local".into()),
+                    ..Default::default()
+                },
+                overthrone_pilot::goals::DiscoveredUser {
+                    sam_account_name: "asrep_user".into(),
+                    distinguished_name: "CN=asrep_user,CN=Users,DC=test,DC=local".into(),
+                    admin_count: false,
+                    has_spn: false,
+                    dont_req_preauth: true,
+                    enabled: true,
+                    description: None,
+                    user_principal_name: None,
+                    ..Default::default()
+                },
+            ],
+            computers: vec![
+                overthrone_pilot::goals::DiscoveredComputer {
+                    sam_account_name: "DC01$".into(),
+                    dns_hostname: Some("dc01.test.local".into()),
+                    operating_system: Some("Windows Server 2022".into()),
+                    unconstrained_delegation: false,
+                    is_dc: true,
+                },
+                overthrone_pilot::goals::DiscoveredComputer {
+                    sam_account_name: "SRV01$".into(),
+                    dns_hostname: Some("srv01.test.local".into()),
+                    operating_system: Some("Windows Server 2019".into()),
+                    unconstrained_delegation: true,
+                    is_dc: false,
+                },
+            ],
+            groups: {
+                let mut g = std::collections::HashMap::new();
+                g.insert("Domain Admins".into(), vec!["jdoe".into()]);
+                g.insert("Domain Users".into(), vec!["jdoe".into(), "svc_sql".into()]);
+                g
             },
-            overthrone_pilot::goals::DiscoveredUser {
-                sam_account_name: "svc_sql".into(),
-                distinguished_name: "CN=svc_sql,CN=Users,DC=test,DC=local".into(),
-                admin_count: true,
-                has_spn: true,
-                dont_req_preauth: false,
-                enabled: true,
-                description: Some("SQL service account".into()),
-                user_principal_name: Some("svc_sql@test.local".into()),
-                ..Default::default()
+            trusts: vec!["TEST.LOCAL\\child.test.local".into()],
+            kerberoastable: vec!["svc_sql".into()],
+            asrep_roastable: vec!["asrep_user".into()],
+            spn_map: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    "svc_sql".into(),
+                    vec!["MSSQLSvc/sql.test.local:1433".into()],
+                );
+                m
             },
-            overthrone_pilot::goals::DiscoveredUser {
-                sam_account_name: "asrep_user".into(),
-                distinguished_name: "CN=asrep_user,CN=Users,DC=test,DC=local".into(),
-                admin_count: false,
-                has_spn: false,
-                dont_req_preauth: true,
-                enabled: true,
-                description: None,
-                user_principal_name: None,
-                ..Default::default()
-            },
-        ];
-        state.computers = vec![
-            overthrone_pilot::goals::DiscoveredComputer {
-                sam_account_name: "DC01$".into(),
-                dns_hostname: Some("dc01.test.local".into()),
-                operating_system: Some("Windows Server 2022".into()),
-                unconstrained_delegation: false,
-                is_dc: true,
-            },
-            overthrone_pilot::goals::DiscoveredComputer {
-                sam_account_name: "SRV01$".into(),
-                dns_hostname: Some("srv01.test.local".into()),
-                operating_system: Some("Windows Server 2019".into()),
-                unconstrained_delegation: true,
-                is_dc: false,
-            },
-        ];
-        let mut groups = std::collections::HashMap::new();
-        groups.insert("Domain Admins".into(), vec!["jdoe".into()]);
-        groups.insert("Domain Users".into(), vec!["jdoe".into(), "svc_sql".into()]);
-        state.groups = groups;
-        state.trusts = vec!["TEST.LOCAL\\child.test.local".into()];
-        state.kerberoastable = vec!["svc_sql".into()];
-        state.asrep_roastable = vec!["asrep_user".into()];
-        let mut spn_map = std::collections::HashMap::new();
-        spn_map.insert(
-            "svc_sql".into(),
-            vec!["MSSQLSvc/sql.test.local:1433".into()],
-        );
-        state.spn_map = spn_map;
-        state.unconstrained_delegation = vec!["SRV01$".into()];
-        state.constrained_delegation = vec![overthrone_pilot::goals::DelegationInfo {
-            account: "SRV02$".into(),
-            delegation_type: "Constrained".into(),
-            targets: vec!["cifs/dc01.test.local".into()],
-            protocol_transition: false,
-        }];
-        state.rbcd_targets = vec!["SRV03$".into()];
-        state.laps = vec![overthrone_pilot::goals::LapsInfo {
-            computer_name: "DC01$".into(),
-            dns_name: Some("dc01.test.local".into()),
-            username: "DC01$".into(),
-            password: Some("TempPass123".into()),
-            expiration: Some("2025-12-31".into()),
-            source: "test.local".into(),
-            readable: true,
-        }];
+            unconstrained_delegation: vec!["SRV01$".into()],
+            constrained_delegation: vec![overthrone_pilot::goals::DelegationInfo {
+                account: "SRV02$".into(),
+                delegation_type: "Constrained".into(),
+                targets: vec!["cifs/dc01.test.local".into()],
+                protocol_transition: false,
+            }],
+            rbcd_targets: vec!["SRV03$".into()],
+            laps: vec![overthrone_pilot::goals::LapsInfo {
+                computer_name: "DC01$".into(),
+                dns_name: Some("dc01.test.local".into()),
+                username: "DC01$".into(),
+                password: Some("TempPass123".into()),
+                expiration: Some("2025-12-31".into()),
+                source: "test.local".into(),
+                readable: true,
+            }],
+            ..Default::default()
+        };
         session.engagement_state = Some(state);
         session
     }

