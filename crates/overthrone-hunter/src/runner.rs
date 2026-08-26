@@ -3,10 +3,12 @@
 
 use crate::asreproast::{AsRepRoastConfig, AsRepRoastResult};
 use crate::attacks::{
-    AdDsEopResult, CbaBypassResult, ChecksumBypassConfig, Ipv6RceConfig, KrbBypassConfig,
-    NetCfgOpsResult, SssdLinuxConfig, WacCompromiseConfig, assess_cba_bypass, compromise_wac,
-    exploit_ad_ds_eop, exploit_all_checksum_techniques, exploit_ipv6_rce, exploit_krb_pac_bypass,
-    exploit_netcfg_ops, exploit_sssd_linux,
+    AdDsEopResult, AdRceConfig, AdcsUafConfig, CbaBypassResult, ChecksumBypassConfig,
+    Ipv6RceConfig, KrbBypassConfig, NetCfgOpsResult, NetlogonRceConfig, ResetNightmareConfig,
+    SssdLinuxConfig, WacCompromiseConfig, assess_cba_bypass, compromise_wac, exploit_ad_ds_eop,
+    exploit_ad_rce, exploit_adcs_uaf, exploit_all_checksum_techniques, exploit_ipv6_rce,
+    exploit_krb_pac_bypass, exploit_netcfg_ops, exploit_netlogon_rce, exploit_resetnightmare,
+    exploit_sssd_linux,
 };
 use crate::bad_successor::{BadSuccessorResult, exploit_bad_successor};
 use crate::coerce::{CoerceConfig, CoerceResult};
@@ -109,6 +111,14 @@ pub enum CveAttackType {
         target_exchange: String,
         relay_port: u16,
     },
+    /// CVE-2026-41089: Netlogon RCE (stack-based buffer overflow)
+    NetlogonRce(NetlogonRceConfig),
+    /// CVE-2026-27912: ResetNightmare (Kerberos password reset)
+    ResetNightmare(ResetNightmareConfig),
+    /// CVE-2026-33826: Windows AD RCE via improper input validation
+    AdRce(AdRceConfig),
+    /// CVE-2026-62818: AD CS use-after-free RCE
+    AdcsUaf(AdcsUafConfig),
 }
 
 impl CveAttackType {
@@ -125,6 +135,10 @@ impl CveAttackType {
             Self::WacCompromise(_) => "CVE-2026-26119",
             Self::Ipv6Rce(_) => "CVE-2024-38063",
             Self::ExchangeRelay { .. } => "CVE-2024-21410",
+            Self::NetlogonRce(_) => "CVE-2026-41089",
+            Self::ResetNightmare(_) => "CVE-2026-27912",
+            Self::AdRce(_) => "CVE-2026-33826",
+            Self::AdcsUaf(_) => "CVE-2026-62818",
         }
     }
 
@@ -141,6 +155,10 @@ impl CveAttackType {
             Self::WacCompromise(_) => "WAC Compromise",
             Self::Ipv6Rce(_) => "IPv6 RCE",
             Self::ExchangeRelay { .. } => "Exchange Relay",
+            Self::NetlogonRce(_) => "Netlogon RCE",
+            Self::ResetNightmare(_) => "ResetNightmare",
+            Self::AdRce(_) => "AD RCE",
+            Self::AdcsUaf(_) => "AD CS Use-After-Free",
         }
     }
 }
@@ -166,6 +184,12 @@ pub enum HuntAction {
     Ticket(TicketRequest),
     /// Kerberos username enumeration (zero-knowledge, no creds needed)
     UserEnum(UserEnumConfig),
+    /// NTP Timeroast -- roast machine account passwords via MS-SNTP
+    Timeroast(crate::timeroast::TimeroastConfig),
+    /// Pre-Windows-2000 computer spray (blank machine password)
+    Pre2k(crate::pre2k::Pre2kConfig),
+    /// CVE-2025-33073: NTLM reflection against SMB via marshaled target info
+    SmbReflect(crate::smb_reflect::SmbReflectConfig),
     /// CVE-based attack module
     CveAttack(CveAttackType),
     /// Run all enumeration scans
@@ -218,6 +242,12 @@ pub struct HuntReport {
     pub coerce: Option<CoerceResult>,
     /// user enum field
     pub user_enum: Option<UserEnumResult>,
+    /// timeroast field
+    pub timeroast: Option<crate::timeroast::TimeroastResult>,
+    /// pre2k field
+    pub pre2k: Option<crate::pre2k::Pre2kResult>,
+    /// smb reflect field
+    pub smb_reflect: Option<crate::smb_reflect::SmbReflectResult>,
     /// CVE attack results
     pub cve_results: Vec<CveAttackResult>,
     /// Error information
@@ -239,6 +269,9 @@ impl HuntReport {
             rbcd: None,
             coerce: None,
             user_enum: None,
+            timeroast: None,
+            pre2k: None,
+            smb_reflect: None,
             cve_results: Vec::new(),
             errors: Vec::new(),
         }
@@ -272,6 +305,17 @@ impl HuntReport {
         }
         if let Some(ref r) = self.user_enum {
             count += r.valid_users.len() + r.no_preauth_users.len();
+        }
+        if let Some(ref r) = self.timeroast {
+            count += r.hashes.len();
+        }
+        if let Some(ref r) = self.pre2k {
+            count += r.compromised.len();
+        }
+        if let Some(ref r) = self.smb_reflect
+            && r.coercion_triggered
+        {
+            count += 1;
         }
         count += self.cve_results.iter().filter(|r| r.success).count();
         count
@@ -376,6 +420,43 @@ impl HuntReport {
                 },
                 r.successful_coercions.len(),
                 r.methods_attempted,
+            );
+        }
+        if let Some(ref r) = self.timeroast {
+            println!(
+                "  {} Timeroast:   {} hashes from {} responses ({} queries)",
+                if r.hashes.is_empty() {
+                    "[-]".red()
+                } else {
+                    "[+]".green()
+                },
+                r.hashes.len().to_string().bold(),
+                r.received,
+                r.queried,
+            );
+        }
+        if let Some(ref r) = self.pre2k {
+            println!(
+                "  {} Pre2k:       {} compromised of {} tested",
+                if r.compromised.is_empty() {
+                    "[-]".red()
+                } else {
+                    "[+]".green()
+                },
+                r.compromised.len().to_string().bold(),
+                r.tested,
+            );
+        }
+        if let Some(ref r) = self.smb_reflect {
+            println!(
+                "  {} SmbReflect:  {} (signing_ok={})",
+                if r.coercion_triggered {
+                    "[+]".green()
+                } else {
+                    "[-]".red()
+                },
+                r.target.bold(),
+                r.signing_not_required,
             );
         }
 
@@ -606,6 +687,82 @@ async fn dispatch_cve_attack(config: &HuntConfig, attack: &CveAttackType) -> Cve
                 log: vec![log(format!("Error: {e}"))],
             },
         },
+        CveAttackType::NetlogonRce(nc) => match exploit_netlogon_rce(nc).await {
+            Ok(result) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: result.exploit_success,
+                summary: format!(
+                    "Vulnerable: {}, service alive: {}",
+                    result.vulnerable, result.service_alive
+                ),
+                log: result.log,
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
+        },
+        CveAttackType::ResetNightmare(rc) => match exploit_resetnightmare(rc).await {
+            Ok(result) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: result.reset_success,
+                summary: format!(
+                    "Vulnerable: {}, reset: {}",
+                    result.vulnerable, result.reset_success
+                ),
+                log: result.log,
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
+        },
+        CveAttackType::AdRce(ac) => match exploit_ad_rce(ac).await {
+            Ok(result) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: result.exploit_success,
+                summary: format!(
+                    "Vulnerable: {}, DRS available: {}",
+                    result.vulnerable, result.drs_available
+                ),
+                log: result.log,
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
+        },
+        CveAttackType::AdcsUaf(au) => match exploit_adcs_uaf(au).await {
+            Ok(result) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: result.exploit_success,
+                summary: format!(
+                    "Vulnerable: {}, enrollment: {}",
+                    result.vulnerable, result.enrollment_available
+                ),
+                log: result.log,
+            },
+            Err(e) => CveAttackResult {
+                cve_id: cve_id.to_string(),
+                name: name.to_string(),
+                success: false,
+                summary: format!("Failed: {e}"),
+                log: vec![log(format!("Error: {e}"))],
+            },
+        },
     }
 }
 
@@ -816,6 +973,29 @@ pub async fn run_hunt(config: &HuntConfig, actions: &[HuntAction]) -> Result<Hun
                     Err(e) => {
                         error!("User enumeration failed: {e}");
                         report.errors.push(format!("userenum: {e}"));
+                    }
+                }
+            }
+            HuntAction::Timeroast(tc) => match crate::timeroast::run_timeroast(tc).await {
+                Ok(result) => report.timeroast = Some(result),
+                Err(e) => {
+                    error!("Timeroast failed: {e}");
+                    report.errors.push(format!("timeroast: {e}"));
+                }
+            },
+            HuntAction::Pre2k(pc) => match crate::pre2k::run_pre2k(config, pc).await {
+                Ok(result) => report.pre2k = Some(result),
+                Err(e) => {
+                    error!("pre2k spray failed: {e}");
+                    report.errors.push(format!("pre2k: {e}"));
+                }
+            },
+            HuntAction::SmbReflect(sc) => {
+                match crate::smb_reflect::run_smb_reflect(config, sc).await {
+                    Ok(result) => report.smb_reflect = Some(result),
+                    Err(e) => {
+                        error!("SMB reflection failed: {e}");
+                        report.errors.push(format!("smb_reflect: {e}"));
                     }
                 }
             }

@@ -92,8 +92,14 @@ pub async fn execute(
     info!("WMIExec: Executing on {}", session.target);
     debug!("WMIExec: Command: {}", command);
 
+    // Use both timestamp and random ID to prevent filename collisions
+    // when multiple WMIExec commands run concurrently against the same target.
     let id = rand::random::<u32>();
-    let output_filename = format!("{}_{:08X}.tmp", OUTPUT_PREFIX, id);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let output_filename = format!("{}_{:X}_{:08X}.tmp", OUTPUT_PREFIX, ts, id);
 
     // Build the WMI-style command that captures output to a LOCAL path.
     // UNC paths (\\127.0.0.1\C$\...) may not be writable from the service context;

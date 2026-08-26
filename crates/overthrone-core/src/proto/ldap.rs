@@ -227,9 +227,23 @@ impl RawLdapConn {
                 reason: format!("NTLM challenge parse failed: {e}"),
             })?;
 
+        // Extract the NetBIOS domain name from the server's challenge target_info.
+        // Per MS-NLMP, the NTLMv2 response key should use the server-provided domain
+        // (AvId=2, MsvAvNbDomainName) rather than the caller-supplied FQDN. Using the
+        // FQDN (e.g., "corp.local") when the DC expects "CORP" causes rc=49 on WS2025.
+        let effective_domain = challenge_msg
+            .target_info
+            .as_deref()
+            .and_then(extract_nb_domain_from_target_info)
+            .unwrap_or_else(|| domain.to_uppercase());
+        debug!(
+            "RawLDAP: NTLM domain: caller='{}', challenge='{}'",
+            domain, effective_domain
+        );
+
         // -- Step 3: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE --
         let authenticate = ntlm::build_authenticate_message(
-            domain,
+            &effective_domain,
             username,
             nt_hash,
             &challenge_msg.challenge,
@@ -631,6 +645,39 @@ enum LdapMsgKind {
     SearchDone(u8),
     SearchReferral(Vec<String>),
     Other,
+}
+
+/// Extract the NetBIOS domain name (AvId=2, MsvAvNbDomainName) from NTLM target_info.
+/// Returns the NetBIOS name (e.g., "CORP") if found, None otherwise.
+fn extract_nb_domain_from_target_info(target_info: &[u8]) -> Option<String> {
+    // AV_PAIR layout: AvId(2) + AvLen(2) + Value(AvLen)
+    // AvId=2 = MsvAvNbDomainName (NetBIOS domain name)
+    let mut pos = 0;
+    while pos + 4 <= target_info.len() {
+        let av_id = u16::from_le_bytes([target_info[pos], target_info[pos + 1]]);
+        let av_len = u16::from_le_bytes([target_info[pos + 2], target_info[pos + 3]]) as usize;
+        if av_id == 0 {
+            break; // MsvAvEOL
+        }
+        pos += 4;
+        if pos + av_len > target_info.len() {
+            break;
+        }
+        if av_id == 2 {
+            // MsvAvNbDomainName -- decode UTF-16LE
+            let chars: Vec<u16> = target_info[pos..pos + av_len]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            return Some(
+                String::from_utf16_lossy(&chars)
+                    .trim_matches('\0')
+                    .to_uppercase(),
+            );
+        }
+        pos += av_len;
+    }
+    None
 }
 
 fn classify_ldap_message(msg: &[u8]) -> LdapMsgKind {
@@ -1539,7 +1586,7 @@ impl LdapSession {
         info!("Connecting to LDAP: {url}");
 
         let settings = LdapConnSettings::new()
-            .set_conn_timeout(Duration::from_secs(10))
+            .set_conn_timeout(Duration::from_secs(30))
             .set_no_tls_verify(true);
 
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
@@ -1622,9 +1669,10 @@ impl LdapSession {
         domain: &str,
         username: &str,
         password: &str,
-        _use_tls: bool,
+        use_tls: bool,
     ) -> Result<Self> {
-        let addr = format!("{dc_ip}:{LDAP_PORT}");
+        let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
+        let addr = format!("{dc_ip}:{port}");
         info!("Connecting to LDAP (SASL NTLM): {addr}");
 
         // Convert password to NT hash for raw NTLM bind
@@ -1662,7 +1710,7 @@ impl LdapSession {
         info!("Connecting to Global Catalog: {url}");
 
         let settings = LdapConnSettings::new()
-            .set_conn_timeout(Duration::from_secs(10))
+            .set_conn_timeout(Duration::from_secs(30))
             .set_no_tls_verify(true);
 
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
@@ -1698,16 +1746,63 @@ impl LdapSession {
             Ok(res) => {
                 let rc = res.rc;
                 let reason = ldap_rc_to_string(rc);
-                Err(OverthroneError::Ldap {
-                    target: dc_ip.to_string(),
-                    reason: format!("GC bind failed (rc={rc}): {reason}"),
-                })
+                warn!("GC simple bind rejected (rc={rc}): {reason}");
+                // WS2022/2025: fall back to SASL NTLM bind
+                if rc == 8 {
+                    info!("Attempting GC SASL NTLM bind fallback");
+                    drop(ldap);
+                    Self::connect_gc_with_sasl_ntlm(dc_ip, domain, username, password, use_tls)
+                        .await
+                } else {
+                    Err(OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: format!("GC bind failed (rc={rc}): {reason}"),
+                    })
+                }
             }
-            Err(e) => Err(OverthroneError::Ldap {
-                target: dc_ip.to_string(),
-                reason: format!("GC bind failed: {e}"),
-            }),
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("Strong") || err_str.contains("strong auth") {
+                    info!("GC simple bind failed with strong auth requirement, trying SASL NTLM");
+                    drop(ldap);
+                    Self::connect_gc_with_sasl_ntlm(dc_ip, domain, username, password, use_tls)
+                        .await
+                } else {
+                    Err(OverthroneError::Ldap {
+                        target: dc_ip.to_string(),
+                        reason: format!("GC bind failed: {e}"),
+                    })
+                }
+            }
         }
+    }
+
+    /// Connect to GC using SASL NTLM bind (fallback for WS2022/2025).
+    async fn connect_gc_with_sasl_ntlm(
+        dc_ip: &str,
+        domain: &str,
+        username: &str,
+        password: &str,
+        _use_tls: bool,
+    ) -> Result<Self> {
+        let port = GC_PORT;
+        let addr = format!("{dc_ip}:{port}");
+        info!("Connecting to GC (SASL NTLM): {addr}");
+
+        let nt_hash = crate::proto::ntlm::nt_hash(password);
+        let mut raw = RawLdapConn::connect(&addr).await?;
+        raw.ntlm_bind(domain, username, &nt_hash).await?;
+
+        // GC uses empty base DN for forest-wide search
+        info!("GC SASL NTLM bind successful.");
+        Ok(LdapSession {
+            ldap: None,
+            raw: Some(Box::new(raw)),
+            base_dn: String::new(),
+            domain: domain.to_string(),
+            dc_ip: dc_ip.to_string(),
+            bind_type: BindType::Authenticated,
+        })
     }
 
     /// Connect anonymously to LDAP/LDAPS.
@@ -1720,7 +1815,7 @@ impl LdapSession {
         info!("Connecting anonymously to LDAP: {url}");
 
         let settings = LdapConnSettings::new()
-            .set_conn_timeout(Duration::from_secs(10))
+            .set_conn_timeout(Duration::from_secs(30))
             .set_no_tls_verify(true);
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
             .await
@@ -1831,7 +1926,7 @@ impl LdapSession {
         domain: &str,
         username: &str,
         nt_hash_str: &str,
-        _use_tls: bool,
+        use_tls: bool,
     ) -> Result<Self> {
         let nt_hash = crate::proto::ntlm::parse_ntlm_hash(nt_hash_str).map_err(|e| {
             OverthroneError::Ldap {
@@ -1840,7 +1935,8 @@ impl LdapSession {
             }
         })?;
 
-        let addr = format!("{dc_ip}:{LDAP_PORT}");
+        let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
+        let addr = format!("{dc_ip}:{port}");
         info!("Connecting to LDAP (raw/NTLM): {addr}");
         let mut raw = RawLdapConn::connect(&addr).await?;
         raw.ntlm_bind(domain, username, &nt_hash).await?;

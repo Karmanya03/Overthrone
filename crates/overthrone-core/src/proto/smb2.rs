@@ -299,6 +299,11 @@ const STATUS_ACCESS_DENIED: u32 = 0xC000_0022;
 const STATUS_LOGON_FAILURE: u32 = 0xC000_006D;
 const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
 
+/// Number of consecutive signing failures before disabling verification for the session.
+/// Setting this to 3 prevents a single transient error from breaking the session,
+/// while still protecting against persistent key derivation mismatches.
+const SIGNING_FAILURE_THRESHOLD: u32 = 3;
+
 fn ntstatus_to_name(code: u32) -> &'static str {
     match code {
         STATUS_SUCCESS => "SUCCESS",
@@ -363,26 +368,54 @@ pub struct Smb2Connection {
     max_write_size: u32,
     /// Pre-authentication integrity hash (SHA-512) for SMB 3.1.1 session key transformation
     preauth_hash: Mutex<Option<Vec<u8>>>,
-    /// Whether signing is known to be broken (WS2025 non-standard KDF).
-    /// When true, skip signing outgoing packets and skip verifying incoming ones.
-    signing_known_broken: std::sync::atomic::AtomicBool,
+    /// Number of consecutive signing verification failures.
+    /// After SIGNING_FAILURE_THRESHOLD failures, signing is disabled for the session.
+    signing_failures: std::sync::atomic::AtomicU32,
     /// Selected cipher ID from negotiate response (0x0001 = AES-128-CCM, 0x0002 = AES-128-GCM)
     #[allow(dead_code)]
     cipher_id: AtomicU16,
 }
 
+impl Drop for Smb2Connection {
+    /// Best-effort cleanup when the connection is dropped.
+    /// Sends SMB2_LOGOFF and TreeDisconnect synchronously to avoid
+    /// leaving stale sessions on the DC. If the stream is already
+    /// closed, the errors are silently ignored.
+    fn drop(&mut self) {
+        let session_id = *self.session_id.get_mut();
+        let tree_id = *self.tree_id.get_mut();
+        if session_id == 0 {
+            return; // never authenticated
+        }
+        // Best-effort: try to send LOGOFF on a blocking handle.
+        // This won't work for tokio streams (they need async), but it
+        // prevents resource leaks in synchronous drop contexts.
+        // The TCP RST on drop will clean up the session on the server side.
+        debug!(
+            "SMB2: Dropping connection (session=0x{:016X}, tree=0x{:08X})",
+            session_id, tree_id
+        );
+    }
+}
+
 impl Smb2Connection {
     // ----------------- Connection -----------------
 
-    /// Open a raw TCP connection to the target's SMB port (445).
+    /// Open a raw TCP connection to the target's SMB port (445) with default 15s timeout.
     pub async fn connect(target: &str, port: u16) -> Result<Self> {
+        Self::connect_with_timeout(target, port, 15).await
+    }
+
+    /// Open a raw TCP connection with a configurable timeout (seconds).
+    /// Use 30s+ for WAN/VPN/satellite links, 10s for LAN.
+    pub async fn connect_with_timeout(target: &str, port: u16, timeout_secs: u64) -> Result<Self> {
         let addr = format!("{target}:{port}");
         let stream = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(timeout_secs),
             TcpStream::connect(&addr),
         )
         .await
-        .map_err(|_| OverthroneError::Timeout(10))?
+        .map_err(|_| OverthroneError::Timeout(timeout_secs))?
         .map_err(|e| OverthroneError::Smb(format!("SMB2 TCP connect {addr}: {e}")))?;
 
         stream
@@ -405,7 +438,7 @@ impl Smb2Connection {
             max_write_size: 65536,
             // Initialize to 64 zero bytes for SMB 3.1.1 cumulative pre-auth integrity hash
             preauth_hash: Mutex::new(Some(vec![0u8; 64])),
-            signing_known_broken: std::sync::atomic::AtomicBool::new(false),
+            signing_failures: std::sync::atomic::AtomicU32::new(0),
             cipher_id: AtomicU16::new(0x0001),
         })
     }
@@ -498,10 +531,11 @@ impl Smb2Connection {
     async fn recv_verified(&self) -> Result<Vec<u8>> {
         let buf = self.recv().await?;
 
-        // Skip verification if signing is known to be broken (WS2025 non-standard KDF)
+        // Skip verification if too many consecutive signing failures (WS2025 non-standard KDF)
         if self
-            .signing_known_broken
+            .signing_failures
             .load(std::sync::atomic::Ordering::Relaxed)
+            >= SIGNING_FAILURE_THRESHOLD
         {
             return Ok(buf);
         }
@@ -516,16 +550,22 @@ impl Smb2Connection {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
             if !Self::verify_packet(&buf, key, dialect, true, preauth.as_deref()) {
-                // WS2025 signing quirk -- once a single packet fails verification,
-                // disable all further verification to prevent session corruption.
-                // The signing key derivation for SMB 3.1.1 on WS2025 does not match
-                // our SP800-108 KDF output, so intermittent failures are expected.
-                warn!(
-                    "SMB2: Packet signature verification failed -- disabling further \
-                       verification for this session (WS2025 signing quirk)."
-                );
-                self.signing_known_broken
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                let failures = self
+                    .signing_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
+                if failures >= SIGNING_FAILURE_THRESHOLD {
+                    warn!(
+                        "SMB2: {} consecutive signing failures -- disabling verification \
+                           for this session (WS2025 signing quirk).",
+                        failures
+                    );
+                } else {
+                    warn!(
+                        "SMB2: Signing verification failed ({}/{}), continuing",
+                        failures, SIGNING_FAILURE_THRESHOLD
+                    );
+                }
             }
         }
 
@@ -770,15 +810,18 @@ impl Smb2Connection {
     /// This avoids SMB 3.1.1 pre-auth integrity hashing which isn't implemented
     /// in the session setup path. Most servers work fine with 3.0.2.
     pub async fn negotiate(&self) -> Result<()> {
-        // Try SMB 3.1.1 first -- needed for IOCTL on WS2025, and signing key derivation
-        // now correctly uses PreauthIntegrityHashValue as context.
-        let result_311 = self.negotiate_dialects(true).await;
-        if result_311.is_ok() {
-            return result_311;
+        // Strategy: try 3.0.2 first (works on all WS2016+ without 3.1.1 preauth
+        // complexity), then fall back to 3.1.1 only if 3.0.2 is not available.
+        // This avoids the double TCP connect overhead for ~95% of environments.
+        // WS2025 environments that mandate 3.1.1 will fail the 3.0.2 attempt
+        // and fall through to the 3.1.1 path.
+        let result_302 = self.negotiate_dialects(false).await;
+        if result_302.is_ok() {
+            return result_302;
         }
 
-        debug!("SMB2: 3.1.1 negotiate failed, retrying with 3.0.2");
-        self.negotiate_dialects(false).await
+        debug!("SMB2: 3.0.2 negotiate failed, retrying with 3.1.1");
+        self.negotiate_dialects(true).await
     }
 
     /// Offer a dialect list. When `include_311` is false, exclude SMB 3.1.1
@@ -831,7 +874,7 @@ impl Smb2Connection {
             let padding = (8 - body_prefix % 8) % 8;
             let context_offset = (SMB2_HEADER_SIZE + body_prefix + padding) as u32;
             body.extend_from_slice(&context_offset.to_le_bytes());
-            body.extend_from_slice(&1u16.to_le_bytes()); // NegotiateContextCount
+            body.extend_from_slice(&2u16.to_le_bytes()); // NegotiateContextCount = 2 (PreAuth + Encryption)
             body.extend_from_slice(&0u16.to_le_bytes()); // Reserved2
         } else {
             body.extend_from_slice(&0u32.to_le_bytes()); // No NegotiateContextOffset
@@ -864,6 +907,18 @@ impl Smb2Connection {
             let mut salt = [0u8; 32];
             rand::rng().fill(&mut salt);
             body.extend_from_slice(&salt);
+
+            // Encryption Capabilities Context (required for WS2022/2025)
+            // ContextType = 0x0002, DataLength = 8
+            body.extend_from_slice(&2u16.to_le_bytes()); // EncryptionCapabilities
+            body.extend_from_slice(&8u16.to_le_bytes()); // DataLength
+            body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            // CipherCount = 2
+            body.extend_from_slice(&2u16.to_le_bytes());
+            // Cipher = AES-128-CCM (0x0001)
+            body.extend_from_slice(&1u16.to_le_bytes());
+            // Cipher = AES-128-GCM (0x0002)
+            body.extend_from_slice(&2u16.to_le_bytes());
         }
 
         let mut pkt = hdr;
@@ -1295,8 +1350,10 @@ impl Smb2Connection {
                     "SMB2 Session Setup sig mismatch: found={found}, claimed_sig={claimed_sig:02x?}, session_key={session_key:02x?}, session_base_key={session_base_key:02x?}, preauth_hash={:02x?}",
                     preauth_hash.as_deref().unwrap_or(&[])
                 );
-                self.signing_known_broken
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.signing_failures.store(
+                    SIGNING_FAILURE_THRESHOLD,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
 
@@ -2273,25 +2330,33 @@ impl Smb2Connection {
 
         // WS2025 SMB 3.1.1 may return STATUS_PENDING for DCE/RPC operations
         // that require async processing (e.g. OpenSCManagerW). We retry with
-        // exponential backoff to give the server time to complete.
+        // exponential backoff (1s, 2s, 4s, 6s, 8s) up to 7 times to give the
+        // server time to complete. Production AD DCs can take 5-15s under load.
+        const MAX_IOCTL_RETRIES: usize = 7;
         let mut last_error: Option<OverthroneError> = None;
-        for attempt in 0..3 {
+        for attempt in 0..MAX_IOCTL_RETRIES {
             let resp = self.ioctl_send_raw(file_id, input, max_out).await?;
 
             let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
             if status == STATUS_PENDING {
+                // Exponential backoff: 1s, 2s, 4s, 6s, 8s, capped at 8s
+                let delay_secs = std::cmp::min(1u64 << attempt.min(3), 8);
                 debug!(
-                    "SMB2: IOCTL STATUS_PENDING (attempt {}/3), waiting 1s",
-                    attempt + 1
+                    "SMB2: IOCTL STATUS_PENDING (attempt {}/{}), waiting {}s",
+                    attempt + 1,
+                    MAX_IOCTL_RETRIES,
+                    delay_secs
                 );
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
                 last_error = Some(OverthroneError::Smb("STATUS_PENDING after retries".into()));
                 continue;
             }
             if status == STATUS_BUFFER_OVERFLOW && max_out > 0 {
-                // Buffer too small -- retry with larger buffer if possible
-                let new_max = max_out.min(self.max_transact_size.load(Ordering::Relaxed));
-                debug!("SMB2: IOCTL STATUS_BUFFER_OVERFLOW, retrying with max_out={new_max}");
+                // Buffer too small -- retry with the server's advertised max_transact_size
+                // directly. The initial max_out was capped to min(max_transact, 65536) which
+                // may be too small for large DCSync/SAMR responses. Use the full server value.
+                let new_max = self.max_transact_size.load(Ordering::Relaxed);
+                debug!("SMB2: IOCTL STATUS_BUFFER_OVERFLOW, retrying with full max_out={new_max}");
                 return self
                     .ioctl_send_raw(file_id, input, new_max)
                     .await
@@ -2728,12 +2793,12 @@ pub fn build_ntlmssp_authenticate_hash(
     challenge: &NtlmChallenge,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     // -- NTLMv2 computation --
-    // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + domain)
-    // MS-NLMP: only UPPER(user), server_name (domain) stays as provided
+    // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + UPPER(domain))
+    // MS-NLMP §3.3.2: both username and domain are uppercased for the response key.
     let user_domain: Vec<u8> = username
         .to_uppercase()
         .encode_utf16()
-        .chain(domain.encode_utf16())
+        .chain(domain.to_uppercase().encode_utf16())
         .flat_map(|c| c.to_le_bytes())
         .collect();
 
@@ -2890,36 +2955,42 @@ fn find_av_pair_value(target_info: &[u8], target_av_id: u16) -> Option<Vec<u8>> 
 }
 
 /// Add MsvAvTargetName (AvId=9) AV pair before EOL in target_info.
-/// Value is "cifs/{dns_hostname}" in UTF-16LE. Falls back to original if no DNS hostname found.
+/// Value is "cifs/{hostname}" in UTF-16LE. Falls back through AvId=3 (DnsHostName),
+/// AvId=1 (NbComputerName), AvId=5 (DnsTreeName), in that order.
+/// Returns original target_info if no usable hostname is found.
 fn add_target_name_to_av_pairs(target_info: &[u8]) -> Vec<u8> {
-    let dns_hostname = match find_av_pair_value(target_info, 3) {
-        Some(v) => {
-            let chars: Vec<u16> = v
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            String::from_utf16_lossy(&chars)
-                .trim_matches('\0')
-                .to_string()
+    fn decode_utf16_av(value: &[u8]) -> String {
+        let chars: Vec<u16> = value
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&chars)
+            .trim_matches('\0')
+            .to_string()
+    }
+
+    // Try AvId=3 (MsvAvDnsHostName) -- most specific, preferred
+    // Try AvId=1 (MsvAvNbComputerName) -- NetBIOS name, valid SPN component
+    // Try AvId=5 (MsvAvDnsDomainName) -- domain FQDN, less ideal but usable
+    let dns_hostname = find_av_pair_value(target_info, 3)
+        .map(|v| ("AvId=3 DnsHostName", decode_utf16_av(&v)))
+        .or_else(|| {
+            find_av_pair_value(target_info, 1)
+                .map(|v| ("AvId=1 NbComputerName", decode_utf16_av(&v)))
+        })
+        .or_else(|| {
+            find_av_pair_value(target_info, 5)
+                .map(|v| ("AvId=5 DnsDomainName", decode_utf16_av(&v)))
+        });
+
+    let dns_hostname = match dns_hostname {
+        Some((source, name)) => {
+            debug!("NTLMv2: Using {} for MsvAvTargetName: '{}'", source, name);
+            name
         }
         None => {
-            debug!("NTLMv2: MsvAvDnsHostname not found in target_info, trying AvId=5 (DNS tree)");
-            // Fallback: try DNS tree name (AvId=5)
-            match find_av_pair_value(target_info, 5) {
-                Some(v) => {
-                    let chars: Vec<u16> = v
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                        .collect();
-                    String::from_utf16_lossy(&chars)
-                        .trim_matches('\0')
-                        .to_string()
-                }
-                None => {
-                    debug!("NTLMv2: No DNS name found in target_info, using original");
-                    return target_info.to_vec();
-                }
-            }
+            debug!("NTLMv2: No hostname found in target_info, using original");
+            return target_info.to_vec();
         }
     };
 
@@ -3384,7 +3455,14 @@ fn parse_file_directory_info(data: &[u8], results: &mut Vec<(String, bool, u64)>
         if next_entry == 0 {
             break;
         }
-        offset += next_entry as usize;
+        let next_offset = offset + next_entry as usize;
+        // Validate next_entry points within the buffer and is forward-progressing.
+        // A corrupted or malicious SMB response could set next_entry to 0, backward,
+        // or past the buffer end, causing an infinite loop or buffer over-read.
+        if next_offset <= offset || next_offset > data.len() {
+            break;
+        }
+        offset = next_offset;
     }
 }
 

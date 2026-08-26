@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.4.2-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.4.3-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -42,7 +42,7 @@
   <img src="https://img.shields.io/badge/hashcat-not_needed-ff4444?style=flat-square" alt="no hashcat" />
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
   <img src="https://img.shields.io/badge/config-XDG_TOML_PROFILES-00cc66?style=flat-square" alt="config" />
-  <img src="https://img.shields.io/badge/tests-2%2C074-00cc66?style=flat-square" alt="tests" />
+  <img src="https://img.shields.io/badge/tests-2%2C091-00cc66?style=flat-square" alt="tests" />
 </p>
 
 ***
@@ -287,7 +287,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 | `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy, Q-Learning RL engine (compiled by default), goal-based planning, YAML playbook engine, interactive wizard mode (`ovt wizard`), full kill-chain orchestration, live pipeline visualization, per-step Q-state/decision/reward readout, 9-section final report, **Hostile-DC detection (dc_verify.rs, 5 checks), Session management CLI (ovt session, 7 actions, 12 tests), WizardSession::new_with_state() for skip-Enumerate resume, Coercion cred passthrough** | The "hold my beer" engine. Now with session management - list/show/info/delete/clean/path/stats. Hostile-DC detection keeps you from trusting the enemy. `new_with_state()` skips enumeration on resume. 105 tests. Plans, adapts, executes, explains itself, cleans up, and files your paperwork. All without ever mentioning the words "auto-pwn." |
 | `overthrone-relay` | The Interceptor | NTLM relay engine (SMB->LDAP, HTTP->SMB, mix and match), LLMNR/NBT-NS/mDNS poisoner, network poisoner with stealth controls, ADCS-specific relay (ESC8), Exchange relay (CVE-2024-21410 with EPA bypass), SMB signing awareness (pre-flight check), LDAP signing bypass (CVE-2019-1040 Drop the MIC), **HTTP->SMB asymmetric relay (360 lines, 13 tests), IPv6 transport (16 tests), mTLS/TLS verification mode (TlsVerificationMode, 22 tests), Channel binding validation (CbtMode), Auto-trigger coercion with CoerceCreds + ShadowCoerce, DCE/RPC signature stripping, SOCKS5 proxy output** | Born complete. Stayed complete. Added HTTP->SMB asymmetric relay, IPv6, mTLS verification, auto-coercion, DCE/RPC stripping, and SOCKS5 just because. 165 tests. Responder.py walked so this crate could sprint, then it learned to fly, then it built an airplane. |
 | `overthrone-scribe` | The Chronicler | Report generation - Markdown, JSON, PDF. MITRE ATT&CK mapping, mitigation recommendations, attack narrative prose, session recording, **timeline view, evidence hashing (sha256), operator attribution (OperatorMetadata), findings-population path (auto_generate_findings made pub)** | Turns "I hacked everything" into "here's why you should pay us." All three formats work. PDF renders actual content. Timeline view, evidence integrity, and operator attribution added. 54 tests. The paperwork is immaculate. |
-| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts, 3,263 lines), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), wizard mode, doctor command, C2 implant deploy, PDF/Markdown/JSON report output, **Config file loading (TOML XDG-style, 1,111 lines, 39 tests), Profile system (9 subcommands, 31 tests, OT_CONFIG/OT_PROFILE env), Session management subcommand (7 actions), --dry-run, --output-format json, --downgrade-rc4 flag** | The interactive shell alone is 3,263 lines. Config system with TOML + XDG + env vars. Profile system for named configurations. Session subcommand. 6 TUI modules. Zero `unreachable!()` calls. The banner ASCII art is still *chef's kiss*. `auto-pwn` command graduated to `ovt wizard`. Same kill chain, fewer edge cases. |
+| `overthrone-cli` | The Interface | CLI binary with Clap subcommands, interactive REPL shell with rustyline (command completion, history, context-aware prompts, 3,263 lines), TUI with ratatui (live attack graph visualization, local BloodHound JSON viewer, session panels, logs, crawler integration), **TUI Wizard (click-based module selection with mouse support, 50 modules, 8 categories, input forms)**, wizard mode, doctor command, C2 implant deploy, PDF/Markdown/JSON report output, **Config file loading (TOML XDG-style, 1,111 lines, 39 tests), Profile system (9 subcommands, 31 tests, OT_CONFIG/OT_PROFILE env), Session management subcommand (7 actions), --dry-run, --output-format json, --downgrade-rc4 flag** | The interactive shell alone is 3,263 lines. Config system with TOML + XDG + env vars. Profile system for named configurations. Session subcommand. 7 TUI modules (including TUI Wizard). Zero `unreachable!()` calls. The banner ASCII art is still *chef's kiss*. `auto-pwn` command graduated to `ovt wizard`. Same kill chain, fewer edge cases. TUI Wizard adds mouse-based module selection -- click to attack. |
 | `overthrone-viewer` | The Window | Browser-based graph GUI served locally. D3.js migrated to Three.js (GPU-accelerated WebGL). Node search, path finder, detail panels with ACE/ACL guidance, stats, blank-first search/chunk render with render budgets (50-ALL). mTLS client cert support. Multi-user sessions with per-user rate limits. CSRF middleware. Auth always-on. Random credentials default. Non-loopback TLS enforcement. | When you want BloodHound vibes in a browser tab, but with GPU acceleration and no Neo4j. Three.js migration gave it superpowers. Auth, rate limits, mTLS, and CSRF make it production-safe. 31 tests. No WebSocket yet (you still have to refresh), but everything else is there. |
 
 ### The Crate Report Card
@@ -395,6 +395,21 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **DPAPI masterkey extraction** | `core/src/postex/dpapi_extract.rs` | Masterkey decryption from lsass, offline decryption support. 447 lines, 21 tests. |
 | **File-format-aware carver** | `core/src/postex/file_carver.rs` | Carves secrets from docx/xlsx/etc. 720 lines. |
 | **DCE/RPC signature stripping** | `core/src/proto/ntlm.rs` | `strip_dce_rpc_signature` -- strips NTLM auth verifier from DCE/RPC request PDUs. 10 tests. |
+| **WS2025 SMB2 IOCTL buffer overflow fix** | `core/src/proto/smb2.rs` | STATUS_BUFFER_OVERFLOW retry now uses full `max_transact_size` instead of re-capping to 65536. DCSync/SAMR/LSARPC responses >64KB now work on WS2025. |
+| **NTLMv2 domain uppercasing fix** | `core/src/proto/smb2.rs` | Both username AND domain now uppercased per MS-NLMP §3.3.2. Fixes mixed-case domain PtH failures. |
+| **SMB signing failure counter** | `core/src/proto/smb2.rs` | Signing failures use atomic counter with threshold of 3 (was: permanently disabled on first failure). Prevents session corruption from transient errors. |
+| **cmd.exe metacharacter escaping** | `core/src/exec/smbexec.rs` | Now escapes `%`, `!`, `(`, `)`, `\r`, `\n` in addition to `^`, `&`, `|`, `<`, `>`, `"`. Prevents command injection. |
+| **WMIExec output file collision fix** | `core/src/exec/wmiexec.rs` | Output filename includes millisecond timestamp + random ID. Prevents collisions from concurrent commands. |
+| **LDAP SASL NTLM NetBIOS domain detection** | `core/src/proto/ldap.rs` | Extracts NetBIOS domain from server challenge target_info (AvId=2) instead of using caller-provided FQDN. Fixes WS2025 rc=49 errors. |
+| **Kerberos UDP KDC exchange** | `core/src/proto/kerberos.rs` | KDC UDP exchange enabled for messages ≤1280 bytes with TCP fallback. Per RFC 4120 §5.2. Works on WS2022/2025 KDCs that load-balance via UDP. |
+| **SMB2 directory listing buffer over-read fix** | `core/src/proto/smb2.rs` | `parse_file_directory_info` validates NextEntryOffset is forward-progressing and within buffer bounds. Prevents infinite loops from corrupted responses. |
+| **IOCTL STATUS_PENDING retry enhancement** | `core/src/proto/smb2.rs` | Retries increased to 7 with exponential backoff (1s→2s→4s→6s→8s) for loaded DCs. PSExec/SMBExec no longer fail on busy WS2025 DCs. |
+| **LDAP connection timeout increase** | `core/src/proto/ldap.rs` | Timeout increased from 10s to 30s for large forests with Entra Connect Sync. |
+| **NTLMv2 MsvAvTargetName fallback** | `core/src/proto/smb2.rs` | TargetName fallback chain: AvId=3 (DnsHostName) → AvId=1 (NbComputerName) → AvId=5 (DnsDomainName). Fixes SPN validation on WS2025. |
+| **SMB session cleanup logging** | `core/src/proto/smb2.rs` | `Drop` impl for `Smb2Connection` logs session/tree IDs for debugging stale sessions on DCs. |
+| **SecretsDump boot key ControlSet fallback** | `core/src/proto/secretsdump.rs` | Boot key extraction tries all ControlSetNNN (001-016) if the active one fails. Handles corrupted/restored registry hives. |
+| **SMB negotiate order optimization** | `core/src/proto/smb2.rs` | Now tries 3.0.2 first (works on 95% of envs), falls back to 3.1.1. Eliminates double TCP connect overhead for pre-3.1.1 environments. |
+| **SMB connect timeout for WAN** | `core/src/proto/smb2.rs` | New `connect_with_timeout(target, port, timeout_secs)` method. Default increased from 10s to 15s. Supports high-latency WAN/VPN links. |
 
 ### ⚠️ Still Pending
 
@@ -402,7 +417,7 @@ No sugarcoating. These are genuinely not done.
 
 | What | Why It Matters | Status | Notes |
 |---|---|---|---|
-| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ❌ Ongoing | 86+ techniques verified against GOAD-Light WS2025 (kingslanding.sevenkingdoms.local). Continually expanding coverage — see technique table below for detailed per-technique status. |
+| **Live DC integration tests** | "It compiles" and "it works against a real DC" are two very different sentences. | ❌ Ongoing | 86+ techniques verified against GOAD-Light WS2019 (kingslanding.sevenkingdoms.local). Continually expanding coverage — see technique table below for detailed per-technique status. |
 | **LDAP signing "Require" mode** | When the DC enforces `LdapServerIntegrity = 2`, the "Drop the MIC" technique isn't enough - the server demands signed LDAP messages for every operation. | ⚠️ Partial | Bypass works when policy is "Negotiate". When "Require", can't derive session key in relay scenario. `ovt doctor` tells you which mode the DC uses. |
 | **EDR evasion CLI integration** | `ovt edr assess` / `ovt edr evade` already wired via `EdrAction`. Library: `edr_bypass.rs` - 2,127 lines, 25 tests. | ✅ Wired | Fully integrated CLI. EDR assessment + stealth profile application. |
 | **CG check CLI integration** | Multi-signal CG detection (`ovt cg <target>`) already wired via `CgAction`. | ✅ Wired | Fully integrated CLI. Credential Guard detection with multiple signal sources. |
@@ -416,7 +431,7 @@ No sugarcoating. These are genuinely not done.
 
 ## Technique Coverage & Live Test Status
 
-Comprehensive catalog of every technique in Overthrone, live-tested against GOAD-Light WS2025 (kingslanding.sevenkingdoms.local). Organized by capability area. Status: ✅ = success, ⚠️ = partial/environment-blocked, ❌ = fail, ⏳ = prereq blocked, — = untested.
+Comprehensive catalog of every technique in Overthrone, live-tested against GOAD-Light WS2019 (kingslanding.sevenkingdoms.local). Organized by capability area. Status: ✅ = success, ⚠️ = partial/environment-blocked, ❌ = fail, ⏳ = prereq blocked, — = untested.
 
 ### Reconnaissance & Enumeration
 
@@ -544,8 +559,8 @@ Comprehensive catalog of every technique in Overthrone, live-tested against GOAD
 
 | # | Technique | OVT Command | Live Test | Notes |
 |---|-----------|-------------|:---------:|-------|
-| 88 | DCSync (NTDS via DRSUAPI) | `ovt dump ntds` | ⚠️ | DRSUAPI endpoint unavailable on WS2025 GOAD-Light |
-| 89 | NTDS via VSS+SMB @GMT | `ovt dump ntds-vss` | ⚠️ | Creates VSS snapshot, reads NTDS.dit+SYSTEM via @GMT- SMB path, bypasses WS2025 file-write sandbox. Live test: environment blocked (VSS unavailable via SMBExec sandbox on WS2025 GOAD-Light) |
+| 88 | DCSync (NTDS via DRSUAPI) | `ovt dump ntds` | ⚠️ | DRSUAPI endpoint unavailable on WS2019 GOAD-Light |
+| 89 | NTDS via VSS+SMB @GMT | `ovt dump ntds-vss` | ⚠️ | Creates VSS snapshot, reads NTDS.dit+SYSTEM via @GMT- SMB path, bypasses WS2025 file-write sandbox. Live test: environment blocked (VSS unavailable via SMBExec sandbox on WS2019 GOAD-Light) |
 | 90 | SAM Registry Dump | `ovt dump sam` | ❌ | Requires local system / DA privileges |
 | 90 | Crack Hash (dry-run) | `ovt crack --hash` | ✅ | Hash cracking module functional |
 | 91 | LAPS Check | `ovt laps` | ✅ | 0 computers (not deployed) |
@@ -659,7 +674,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **Remote exec - PsExec** | ✅ | ✅ | ✅ | ✅ | Real `svcctl` named pipe. Creates → starts → reads → deletes the service. 543 lines of legit service control manager abuse. |
 | **Remote exec - SmbExec** | ✅ | ✅ | ✅ | ✅ | Temp service + cmd.exe redirect → output via C$ share. Quieter than PsExec. |
 | **Remote exec - WMI/WinRM** | ✅ | ✅ | ✅ | ✅ | WMI via DCOM over SMB (❌ Windows only - use PsExec/SmbExec on Linux). WinRM via WSMan HTTP/5985. `--method auto` tries them all until something works. |
-| **DCSync** | ✅ | ✅ | ⚠️ | ✅ | MS-DRSR `DRSGetNCChanges` over named pipe or via VSS+SMB @GMT shadow copy read. WS 2025 GOAD-Light has DRSUAPI endpoint disabled but VSS @GMT path implemented as fallback. Also supports EPM pipe resolution (`resolve_uuid_via_epm_pipe`) and authenticated EPM TCP (`resolve_uuid_via_epm_tcp_auth`) for advanced transport discovery. |
+| **DCSync** | ✅ | ✅ | ⚠️ | ✅ | MS-DRSR `DRSGetNCChanges` over named pipe or via VSS+SMB @GMT shadow copy read. WS 2019 GOAD-Light has DRSUAPI endpoint disabled but VSS @GMT path implemented as fallback. Also supports EPM pipe resolution (`resolve_uuid_via_epm_pipe`) and authenticated EPM TCP (`resolve_uuid_via_epm_tcp_auth`) for advanced transport discovery. |
 | **Golden Ticket** | ✅ | ✅ | ✅ | ✅ | Full PAC construction with `KERB_VALIDATION_INFO`, server + KDC checksums. Needs krbtgt hash. WS 2025 may need `FAST` armor depending on config. |
 | **Silver Ticket** | ✅ | ✅ | ✅ | ✅ | Forge a TGS for any service. No DC contact at all. Quieter than Golden, harder to detect. |
 | **Attack graph + path to DA** | ✅ | ✅ | ✅ | ✅ | Reverse Dijkstra from DA back to you. Shows the exact sequence of moves to go from zero to domain admin. Usually 3 hops. Always embarrassing for someone. |
@@ -675,6 +690,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 | **Forge + C2 + ADCS + MSSQL** | ✅ | ✅ | ✅ | ✅ | Diamond tickets, Shadow Creds, Cobalt Strike/Sliver/Havoc integration, MSSQL `xp_cmdshell`, SCCM abuse. It's all in there. |
 | **Skeleton Key (native DLL)** | ✅ | ✅ | ✅ | ✅ | 92KB x64 MSVC-compiled DLL embedded in binary. Reflective LSASS injection with `MsvpPasswordValidate` hook. Exports: Enable/Disable/IsActive. PatchGuard will notice. Credential Guard will block it. Everything else? Game over. |
 | **Wizard (guided kill chain)** | ✅ | ✅ | ✅ | ✅ | `ovt wizard` - interactive or headless, enumerates, graphs, roasts, cracks, escalates, persists, reports. Per-stage pause/approve, Q-learning decisions, session resume. Live kill-chain pipeline with credential tables and loot summary. Use `--no-pause` for full automation, `--stealth` on WS 2025 for quieter ops. |
+| **TUI Wizard (click-based)** | ✅ | ✅ | ✅ | ✅ | `ovt wizard --tui` - Full interactive TUI with mouse support. Click to select modules, fill in target config, watch execution. 50 modules across 8 categories. Arrow keys, scroll wheel, right-click to toggle. No typing required. |
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
@@ -692,6 +708,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 ovt wizard --target "Domain Admins" -H DC -d DOMAIN -u USER          # Interactive killchain
 ovt wizard --target "Domain Admins" --resume session.json            # Resume saved session
 ovt wizard --target DA -H DC -d DOMAIN -u USER --no-pause            # Full auto (headless)
+ovt wizard --tui                                                      # TUI wizard (click-based)
 ovt shell                                                            # Interactive REPL
 ovt enum all -H DC -d DOMAIN -u USER -p PASS                        # Enumerate everything
 ovt enum policy -H DC -d DOMAIN -u USER -p PASS                     # Lockout/password policy
@@ -1455,7 +1472,7 @@ ovt ntlm relay -l 0.0.0.0:8080 -t smb://dc01.corp.local --socks5-proxy 127.0.0.1
 A: It is exactly that, minus the DeLorean. When Windows creates a Volume Shadow Copy, it exposes the snapshot via the `@GMT-YYYY_MM_DD_HHMMSS.SSS` path prefix over SMB. Normally NTDS.dit is locked tighter than a CISO's budget for security tools. But the shadow copy? It's a read-only frozen version that our SMB client can open like any other file. WS2025 introduced a service sandbox that blocks ALL file writes from SMBExec-created services (making the traditional "copy from VSS to temp file" approach fail). The @GMT approach sidesteps that entirely: we create the shadow copy (no file writes), read directly from the `@GMT-` SMB path (also no file writes), then delete the shadow. It's like reading someone's diary through a window instead of picking the lock on their desk drawer.
 
 **Q: What's with the EPM pipe resolution? Wasn't port 135 working?**
-A: Port 135 on WS2025 GOAD-Light is the networking equivalent of a teenager ignoring their parents: it receives the packets but refuses to respond. Our authenticated RPC binds? Ignored. Our NTLMSSP auth verifiers? Ghosted. So we went through the back door: the `\PIPE\epmapper` named pipe (SMB IOCTL over port 445). It opens, accepts binds, resolves interface UUIDs, and then tells us whether the service we're looking for has a TCP endpoint registered. DRSUAPI on this particular DC had NO TCP endpoint — meaning DCSync is straight-up unavailable. The `epmapper` pipe is like a concierge who knows everyone's room number but can't tell you if they're actually home.
+A: Port 135 on WS2019 GOAD-Light is the networking equivalent of a teenager ignoring their parents: it receives the packets but refuses to respond. Our authenticated RPC binds? Ignored. Our NTLMSSP auth verifiers? Ghosted. So we went through the back door: the `\PIPE\epmapper` named pipe (SMB IOCTL over port 445). It opens, accepts binds, resolves interface UUIDs, and then tells us whether the service we're looking for has a TCP endpoint registered. DRSUAPI on this particular DC had NO TCP endpoint — meaning DCSync is straight-up unavailable. The `epmapper` pipe is like a concierge who knows everyone's room number but can't tell you if they're actually home.
 
 **Q: The interactive shell is 3,263 lines? That seems excessive.**
 A: It's a REPL with tab completion, command history, syntax highlighting, context-aware prompts, forge modules (golden/silver/diamond/skeleton), WinRM/SMB/WMI shell types, remote file upload/download, session management, and a module system. It's the Swiss Army knife of AD exploitation, except the Swiss Army knife also makes coffee and files your taxes. Also, we had a bet with the borrow checker. We lost the bet. The borrow checker always wins.

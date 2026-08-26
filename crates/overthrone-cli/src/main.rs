@@ -5,6 +5,7 @@ mod bloodhound_viewer;
 mod cli_config;
 mod commands;
 mod commands_impl;
+mod cred_vault;
 mod interactive_shell;
 mod modules_ext;
 mod tree_viewer;

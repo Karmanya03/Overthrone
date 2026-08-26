@@ -62,15 +62,31 @@ pub struct SmbExecResult {
 }
 
 /// Escape Windows CMD shell metacharacters to prevent command injection.
-/// Prefixes `^`, `&`, `|`, `<`, `>`, and `"` with a caret (`^`) so they
-/// are treated as literals when passed to `cmd.exe /C`.
+/// Prefixes special characters with a caret (`^`) so they are treated as
+/// literals when passed to `cmd.exe /C`.
+///
+/// Escaped characters:
+/// - `^`, `&`, `|`, `<`, `>` -- redirection/execution operators
+/// - `"` -- quote delimiter
+/// - `%` -- environment variable expansion (`%TEMP%`, `%COMSPEC%`)
+/// - `!` -- delayed expansion variable (`!var!`)
+/// - `(`, `)` -- grouping parentheses (can cause `cmd.exe` parsing errors)
+/// - `\r`, `\n` -- carriage return / newline (would split command into multiple lines)
 pub fn escape_cmd_metacharacters(command: &str) -> String {
     let mut escaped = String::with_capacity(command.len());
     for ch in command.chars() {
         match ch {
-            '^' | '&' | '|' | '<' | '>' | '"' => {
+            '^' | '&' | '|' | '<' | '>' | '"' | '%' | '!' | '(' | ')' => {
                 escaped.push('^');
                 escaped.push(ch);
+            }
+            '\r' => {
+                escaped.push('^');
+                escaped.push('r');
+            }
+            '\n' => {
+                escaped.push('^');
+                escaped.push('n');
             }
             _ => escaped.push(ch),
         }

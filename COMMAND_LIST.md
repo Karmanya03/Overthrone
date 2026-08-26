@@ -1,7 +1,8 @@
-# Overthrone v0.4.2 — Complete Command Reference
+# Overthrone v0.4.3 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
-> Tested against GOAD-Light (WS2025) — `sevenkingdoms.local` (192.168.57.10)
+> Tested against GOAD-Light (WS2019 DCs) — `sevenkingdoms.local` (192.168.57.10)
+> GOAD (Game of Active Directory) was originally created in 2019 by TotoRabann.
 
 Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` because life is short and keystrokes are precious.
 
@@ -1439,6 +1440,50 @@ ovt wizard -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --outpu
 | `--jitter-ms` | `1000` | Jitter between operations |
 | `--ldaps` | `false` | Use LDAPS |
 | `--timeout` | `30` | Per-step timeout (seconds) |
+
+### TUI Wizard (Interactive Click-Based Mode)
+
+Launch the full interactive TUI wizard with mouse support. Select modules by clicking, configure targets with input forms, and watch execution in real-time.
+
+```bash
+# Launch TUI wizard
+ovt wizard --tui
+```
+
+**TUI Keyboard Controls:**
+
+| Key | Action |
+|---|---|
+| `j` / `k` or `Up` / `Down` | Move between items |
+| `Enter` | Open category / Edit field |
+| `Space` | Toggle module selection (in sub-menus) |
+| `a` | Select all modules in category |
+| `d` | Deselect all modules in category |
+| `Tab` | Switch between Menu and Target Config |
+| `R` | Run all selected modules |
+| `b` / `Esc` | Go back to previous screen |
+| `q` | Quit |
+
+**TUI Mouse Controls:**
+
+| Mouse Action | Effect |
+|---|---|
+| **Scroll Wheel Up** | Move up in menu / scroll content |
+| **Scroll Wheel Down** | Move down in menu / scroll content |
+| **Left Click** | Select item under cursor |
+| **Left Click (same item)** | Enter edit mode (Target Config) / Toggle selection (Module list) |
+| **Right Click** | Toggle module selection (in sub-menus) |
+| **Left Drag** | Scroll log content (Results/Running screens) |
+
+**TUI Screens:**
+
+| Screen | Description |
+|---|---|
+| **Main Menu** | 8 color-coded attack categories with module counts |
+| **Category Sub-menus** | Toggle individual modules with checkboxes |
+| **Target Config** | Editable form for DC, Domain, Username, Password, NT Hash |
+| **Running** | Live execution log |
+| **Results** | Scrollable results viewer |
 
 ---
 

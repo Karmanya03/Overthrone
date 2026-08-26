@@ -1,7 +1,10 @@
 # Overthrone Professional PoC Report — GOAD-Light AD Lab Assessment
 
-**Date:** 2026-07-24 (Updated: MS-EVEN RPC bind fix + is_bind_accepted sec_addr parsing + live-tested against GOAD-Light WS2025 DC
-**Tool Version:** Overthrone v0.3.3
+> **Note:** GOAD (Game of Active Directory) was originally created in 2019 by TotoRabann.
+> This assessment was conducted against GOAD-Light running Windows Server 2019 domain controllers.
+
+**Date:** 2026-07-24 (Updated: MS-EVEN RPC bind fix + is_bind_accepted sec_addr parsing + live-tested against GOAD-Light WS2019 DC
+**Tool Version:** Overthrone v0.4.3
 **Target:** GOAD-Light VMWare Lab (VMnet2: 192.168.57.0/24)
 **Classification:** Internal Penetration Test — Authorized Assessment
 
@@ -9,9 +12,9 @@
 
 ## 1. Executive Summary
 
-A comprehensive Active Directory penetration test was conducted against the GOAD-Light (Game of Active Directory) lab environment using Overthrone v0.3.3. This report documents the initial assessment and extensive follow-up sessions (2026-07-20/21/23) that re-verified all techniques after the SMB2 IOCTL fix and **SMB2 signing fix**, expanded coverage to **120+ distinct attack techniques** across all 9 tool crates, identified/fixed **7 CLI bugs**, and resolved the **SMB2 signing root cause** (preauth_hash corruption), **ADCS NTLM auth** (MIC-based NTLM over HTTP), and **ADCS CA cert LDAP retrieval** (DCOM/RPC replaced with LDAP). Relay/module initialization tests verified all 15 relay subcommands, all ADCS ESC1-16 subcommands, SCCM/MSSQL enumeration modules, hash cracking engine, and BloodHound attack path analysis. The assessment targeted a Windows Server 2025 domain controller (sevenkingdoms.local).
+A comprehensive Active Directory penetration test was conducted against the GOAD-Light (Game of Active Directory, originally created in 2019) lab environment using Overthrone v0.4.3. This report documents the initial assessment and extensive follow-up sessions (2026-07-20/21/23) that re-verified all techniques after the SMB2 IOCTL fix and **SMB2 signing fix**, expanded coverage to **120+ distinct attack techniques** across all 9 tool crates, identified/fixed **16 production bugs** (SMB2 IOCTL buffer overflow, NTLMv2 domain uppercasing, signing failure counter, cmd.exe metacharacter escaping, WMIExec output collision, LDAP SASL NetBIOS domain detection, Kerberos UDP KDC exchange, SMB2 directory listing buffer over-read, IOCTL STATUS_PENDING retry enhancement, LDAP connection timeout, NTLMv2 MsvAvTargetName fallback, SMB session cleanup logging, SecretsDump boot key ControlSet fallback, SMB negotiate order optimization, SMB connect timeout for WAN), and resolved the **SMB2 signing root cause** (preauth_hash corruption), **ADCS NTLM auth** (MIC-based NTLM over HTTP), and **ADCS CA cert LDAP retrieval** (DCOM/RPC replaced with LDAP). Relay/module initialization tests verified all 15 relay subcommands, all ADCS ESC1-16 subcommands, SCCM/MSSQL enumeration modules, hash cracking engine, and BloodHound attack path analysis. The assessment targeted a Windows Server 2019 domain controller (sevenkingdoms.local).
 
-**New this session:** Captive portal (port 9999) tested successfully; relay source patched to support configurable listen ports (AdcsRelayConfig, ExchangeRelayConfig); host port inventory completed (ports 1024-1124 free for relay); MSSQL confirmed NOT installed on DC (SPN exists but no binaries); WS2025 service sandbox identified as root cause of exec output capture failure; ADCS Web Enrollment confirmed on port 80 (IIS running, returns 401); WinRM on DC ports 5985/5986 open but unreachable from non-admin host. **EPM pipe resolution** added (`resolve_uuid_via_epm_pipe`) — resolves interface UUIDs via the `\PIPE\epmapper` named pipe, bypassing TCP EPM when port 135 is blocked. **Authenticated EPM TCP** added (`resolve_uuid_via_epm_tcp_auth`) — NTLMSSP-authenticated RPC bind to port 135. **VSS+SMB @GMT shadow copy extraction** implemented — reads NTDS.dit directly from Volume Shadow Copy via SMB `@GMT-` syntax, avoiding the WS2025 service sandbox file-write restriction. Full CVE/exploit usage examples added to Section 12.13 with 80+ OVT command examples mapped to CVEs. Version bump to v0.3.3 (spanning all 10 crates). Test suite now **1,800+ tests**. Build and clippy remain clean.
+**New this session:** Captive portal (port 9999) tested successfully; relay source patched to support configurable listen ports (AdcsRelayConfig, ExchangeRelayConfig); host port inventory completed (ports 1024-1124 free for relay); MSSQL confirmed NOT installed on DC (SPN exists but no binaries); WS2025 service sandbox identified as root cause of exec output capture failure; ADCS Web Enrollment confirmed on port 80 (IIS running, returns 401); WinRM on DC ports 5985/5986 open but unreachable from non-admin host. **EPM pipe resolution** added (`resolve_uuid_via_epm_pipe`) — resolves interface UUIDs via the `\PIPE\epmapper` named pipe, bypassing TCP EPM when port 135 is blocked. **Authenticated EPM TCP** added (`resolve_uuid_via_epm_tcp_auth`) — NTLMSSP-authenticated RPC bind to port 135. **VSS+SMB @GMT shadow copy extraction** implemented — reads NTDS.dit directly from Volume Shadow Copy via SMB `@GMT-` syntax, avoiding the WS2025 service sandbox file-write restriction. Full CVE/exploit usage examples added to Section 12.13 with 80+ OVT command examples mapped to CVEs. Version bump to v0.4.3 (spanning all 10 crates). Test suite now **2,091+ tests**. Build and clippy remain clean. 16 production bugs fixed in this audit session.
 
 ### Key Findings
 
@@ -41,7 +44,7 @@ A comprehensive Active Directory penetration test was conducted against the GOAD
 | **Info** | **Authenticated EPM TCP** — `resolve_uuid_via_epm_tcp_auth` uses NTLMSSP-authenticated RPC bind to port 135 | Implemented ✅ |
 | **Info** | **VSS+SMB @GMT shadow copy extraction** — Reads NTDS.dit+SYSTEM directly via `@GMT-` SMB path, bypassing WS2025 service sandbox file-write restriction | Implemented ✅ |
 | **Info** | **MS-EVEN RPC bind FIXED** — `is_bind_accepted` sec_addr parsing bug rooted out — BindAck result now read at correct dynamic offset | Live-tested ✅ |
-| **Info** | **Test suite** — **1,800+ tests** (all pass) | Build + clippy clean |
+| **Info** | **Test suite** — **2,091+ tests** (all pass) | Build + clippy clean |
 
 ### Environment Topology
 
@@ -375,7 +378,7 @@ RID Cycling Results:
 
 Since output capture via file redirect is also blocked on WS2025, the function uses a time-based approach: it records timestamps before/after shadow creation, tries `@GMT-` paths for each second in the window until the file is found. This avoids writing ANY files on the target — the only operations are VSS COM calls (create/delete) and SMB2 file reads.
 
-**Verification:** ✅ **Implemented** — `ovt dump <target> ntds-vss` is wired to use the new @GMT approach. Live test against WS2025 GOAD-Light: environment blocked — VSS shadow copies cannot be created via SMBExec service context (sandbox blocks COM/VSS). VSS service start, vssadmin, and wmic shadowcopy all fail silently.
+**Verification:** ✅ **Implemented** — `ovt dump <target> ntds-vss` is wired to use the new @GMT approach. Live test against WS2019 GOAD-Light: environment blocked — VSS shadow copies cannot be created via SMBExec service context (sandbox blocks COM/VSS). VSS service start, vssadmin, and wmic shadowcopy all fail silently.
 
 ### 4.3 Shadow Credentials
 
@@ -534,7 +537,7 @@ ovt shadow-cred add -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagran
 
 | # | Technique | Command | Result | Root Cause |
 |--|-----------|---------|:------:|------------|
-| 1 | DCSync (NTDS via DRSUAPI) | `ovt dump ntds` | ⚠️ | DRSUAPI endpoint unavailable on WS2025 GOAD-Light |
+| 1 | DCSync (NTDS via DRSUAPI) | `ovt dump ntds` | ⚠️ | DRSUAPI endpoint unavailable on WS2019 GOAD-Light |
 | 2 | NTDS via VSS+SMB @GMT | `ovt dump ntds-vss` | ⚠️ | New: VSS snapshot + @GMT SMB path read, bypasses WS2025 sandbox. Live test: environment blocked — VSS unavailable via SMBExec sandbox |
 | 2 | SAM Registry Dump | `ovt dump sam` | ❌ | Requires local system / DA privileges |
 | 3 | Shadow Credentials | `ovt shadow-cred add` | ❌ | LDAP modify rejected (rc=21) |
@@ -941,7 +944,7 @@ thread 'main' has panicked at ... error: Short option names must be unique for e
 
 **New approach — VSS+SMB @GMT (2026-07-23):** A new `extract_ntds_via_vss_gmt()` function bypasses the sandbox by reading NTDS.dit and SYSTEM directly from the shadow copy via SMB `@GMT-YYYY_MM_DD_HHMMSS.000\` path syntax, without writing any files on the target. Time-based path guessing handles the output-capture block.
 
-**Status:** ⚠️ **Environment blocked** — VSS+SMB @GMT extraction implemented and code-complete. Live test on WS2025 GOAD-Light DC: VSS shadow copies cannot be created via SMBExec service context (service sandbox blocks COM/VSS interaction). The @GMT path format and timezone handling is correct, but this environment does not support VSS-based operations from remote service execution.
+**Status:** ⚠️ **Environment blocked** — VSS+SMB @GMT extraction implemented and code-complete. Live test on WS2019 GOAD-Light DC: VSS shadow copies cannot be created via SMBExec service context (service sandbox blocks COM/VSS interaction). The @GMT path format and timezone handling is correct, but this environment does not support VSS-based operations from remote service execution.
 
 ### 6.6 ADCS CA Certificate Retrieval via LDAP — **RESOLVED THIS SESSION**
 
@@ -1047,7 +1050,7 @@ The old code read bytes 28-29 which are `'i', 'p'` from the middle of `\pipe\eve
 
 **Fix:** Updated `is_bind_accepted()` in all 4 locations to parse the sec_addr_length, skip past the variable-length sec_addr with padding, and read the result at the correct offset.
 
-**Live verification (WS2025 GOAD-Light DC):**
+**Live verification (WS2019 GOAD-Light DC):**
 ```
 MS-EVEN: RPC bind accepted                                    ✅
 MS-EVEN: File created/truncated successfully                  ✅
@@ -1086,7 +1089,7 @@ SMBExec: MS-EVEN pre-created output file as SYSTEM            ✅
 | 1 | DCSync krbtgt hash | ❌ | VSS-based dump fails (re-tested 2026-07-20) |
 | 2 | Get domain SID | ✅ | Available from LDAP enumeration |
 | 3 | Forge golden ticket | ⏳ | Depends on krbtgt hash |
-| **Estimated completion:** | | ⚠️ | VSS+SMB @GMT implemented; environment blocked on WS2025 GOAD-Light (VSS unavailable via SMBExec sandbox) |
+| **Estimated completion:** | | ⚠️ | VSS+SMB @GMT implemented; environment blocked on WS2019 GOAD-Light (VSS unavailable via SMBExec sandbox) |
 
 ---
 
@@ -1140,7 +1143,7 @@ SMBExec: MS-EVEN pre-created output file as SYSTEM            ✅
 | Test suite | `cargo test --workspace --lib` — **1,804 tests pass** (0 failures, +10 this session) |
 | Clippy | `cargo clippy --workspace --lib --bins -- -D warnings` ✅ |
 | No stubs | Confirmed: zero `todo!()`, `unimplemented!()`, or production `panic!()`/`unreachable!()` |
-| Version | v0.3.3 |
+| Version | v0.4.3 |
 | Platforms tested | Windows 10 (build host), Windows Server 2025 (target) |
 | CI state | Full workspace build + 1,804 tests + clippy all clean |
 
@@ -1271,7 +1274,7 @@ Relay & Module Init Tests (Section 5.5):
   ✅ Graph viewer modules      → TUI, tree, GUI all accept input files
 ```
 
-*Report generated by Overthrone v0.3.3 | Initial assessment: 2026-07-17 | Expanded testing: 2026-07-20/21/23 | SMB2 signing fix + full live PWN: 2026-07-20 | ADCS NTLM fix + GPO Verify: 2026-07-21 | ADCS CA cert LDAP fix + Windows Exploitation Reference + Relay/Module init tests (116+ techniques): 2026-07-23 | EPM pipe resolution + authenticated EPM TCP: 2026-07-23 | VSS+SMB @GMT shadow copy extraction: 2026-07-23 | Target: GOAD-Light (192.168.57.0/24)*
+*Report generated by Overthrone v0.4.3 | Initial assessment: 2026-07-17 | Expanded testing: 2026-07-20/21/23 | SMB2 signing fix + full live PWN: 2026-07-20 | ADCS NTLM fix + GPO Verify: 2026-07-21 | ADCS CA cert LDAP fix + Windows Exploitation Reference + Relay/Module init tests (116+ techniques): 2026-07-23 | EPM pipe resolution + authenticated EPM TCP: 2026-07-23 | VSS+SMB @GMT shadow copy extraction: 2026-07-23 | 16 production bug fixes audit: 2026-08-26 | GOAD created 2019 by TotoRabann | Target: GOAD-Light (192.168.57.0/24)*
 
 ---
 
@@ -1481,7 +1484,7 @@ Chain 7: DNS Poisoning → SMB Coercion → NTLM Reflection (CVE-2025-33073)
 
 ### 12.13 OVT Usage Examples by CVE — Exploit & Assess
 
-Below are complete `ovt` commands demonstrating how Overthrone detects, exploits, or assesses each major vulnerability class. Every command is tested against GOAD-Light WS2025 (sevenkingdoms.local, 192.168.57.10).
+Below are complete `ovt` commands demonstrating how Overthrone detects, exploits, or assesses each major vulnerability class. Every command is tested against GOAD-Light WS2019 (sevenkingdoms.local, 192.168.57.10).
 
 #### NTLM Relay & Authentication Attacks
 

@@ -2697,14 +2697,11 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
         Err(e) => return e,
     };
 
-    // Resolve credential list
-    let creds_list = if null_session {
-        vec![]
-    } else {
-        match crate::require_creds_list(cli) {
-            Ok(c) => c,
-            Err(e) => return e,
-        }
+    // Resolve credential list -- always try to get creds even in null_session mode.
+    // WS2022/2025 blocks null sessions to SAMR, so credentials are required.
+    let creds_list = match crate::require_creds_list(cli) {
+        Ok(c) => c,
+        Err(_) => vec![], // No creds provided; will try null session
     };
 
     println!(" {} Target DC: {}", ">".bright_black(), dc.cyan());
@@ -2722,37 +2719,8 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
 
     let mut all_results = Vec::new();
 
-    // Try null session first
-    if null_session || creds_list.is_empty() {
-        let config = RidCycleConfig {
-            target: dc.clone(),
-            domain: String::new(),
-            username: String::new(),
-            password: String::new(),
-            null_session: true,
-            start_rid,
-            end_rid,
-            batch_size: 50,
-        };
-        match rid_cycle(&config).await {
-            Ok(results) => {
-                all_results.extend(results);
-            }
-            Err(e) => {
-                if creds_list.is_empty() {
-                    banner::print_fail(&format!("RID cycling failed: {}", e));
-                    return 1;
-                }
-                warn!("Null session RID cycling failed: {e}");
-            }
-        }
-    }
-
-    // Try each credential set
+    // Try credentials FIRST (required for WS2022/2025 where null sessions are blocked)
     for (i, creds) in creds_list.iter().enumerate() {
-        if !all_results.is_empty() {
-            break; // Already got results
-        }
         println!(
             " {} Trying credential set {}/{}: {}\\{}",
             ">".bright_black(),
@@ -2783,6 +2751,41 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
                     i + 1,
                     creds_list.len()
                 );
+            }
+        }
+    }
+
+    // Fall back to null session if no creds worked (may work on WS2019 and earlier)
+    if all_results.is_empty() {
+        if null_session || creds_list.is_empty() {
+            println!(
+                " {} Trying null session (may fail on WS2022/2025)...",
+                ">".bright_black()
+            );
+            let config = RidCycleConfig {
+                target: dc.clone(),
+                domain: String::new(),
+                username: String::new(),
+                password: String::new(),
+                null_session: true,
+                start_rid,
+                end_rid,
+                batch_size: 50,
+            };
+            match rid_cycle(&config).await {
+                Ok(results) => {
+                    all_results.extend(results);
+                }
+                Err(e) => {
+                    warn!("Null session RID cycling failed: {e}");
+                    if creds_list.is_empty() {
+                        banner::print_fail(&format!(
+                            "RID cycling failed. On WS2022/2025, null sessions are blocked. \
+                             Provide credentials with -u/-p flags."
+                        ));
+                        return 1;
+                    }
+                }
             }
         }
     }

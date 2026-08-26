@@ -123,12 +123,36 @@ pub async fn rid_cycle(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
 async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     info!("[SAMR] Connecting to {} for RID cycling", config.target);
 
-    let smb = if config.null_session || config.username.is_empty() {
+    // WS2022/2025: null sessions to SAMR are blocked by default.
+    // If credentials are provided, always use them (even in null_session mode).
+    let smb = if !config.username.is_empty() && !config.password.is_empty() {
+        // Authenticated session — preferred for WS2022/2025
+        let domain = if config.domain.is_empty() {
+            "."
+        } else {
+            &config.domain
+        };
+        SmbSession::connect(&config.target, domain, &config.username, &config.password)
+            .await
+            .map_err(|e| OverthroneError::Smb(format!("SMB auth failed: {e}")))?
+    } else if config.null_session || config.username.is_empty() {
+        // Null session — may fail on WS2022/2025 (SAMR restricted)
         match SmbSession::connect(&config.target, "", "", "").await {
             Ok(s) => s,
-            Err(_) => SmbSession::connect(&config.target, ".", "guest", "")
-                .await
-                .map_err(|e| OverthroneError::Smb(format!("SMB null session failed: {e}")))?,
+            Err(e1) => {
+                warn!("[SAMR] Null session failed ({e1}), trying anonymous/guest");
+                match SmbSession::connect(&config.target, ".", "guest", "").await {
+                    Ok(s) => s,
+                    Err(e2) => {
+                        // WS2022/2025 blocks both null and guest SAMR access
+                        return Err(OverthroneError::Smb(format!(
+                            "SMB SAMR access denied (null={e1}, guest={e2}). \
+                             WS2022/2025 requires authenticated access to SAMR. \
+                             Provide credentials with -u/-p for RID cycling."
+                        )));
+                    }
+                }
+            }
         }
     } else {
         let domain = if config.domain.is_empty() {
@@ -142,8 +166,9 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     };
 
     use crate::proto::smb::{
-        build_samr_bind, build_samr_connect, build_samr_enumerate_domains, build_samr_lookup_ids,
-        build_samr_open_domain_by_sid, parse_samr_enumerate_domains, parse_samr_lookup_ids,
+        build_samr_bind, build_samr_connect, build_samr_enumerate_domains,
+        build_samr_enumerate_users, build_samr_lookup_ids, build_samr_open_domain_by_sid,
+        parse_samr_enumerate_domains, parse_samr_enumerate_users, parse_samr_lookup_ids,
     };
 
     let bind_resp = smb.pipe_transact("samr", &build_samr_bind()).await?;
@@ -203,6 +228,59 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
             }
         };
 
+        // Try SamEnumerateUsersInDomain (opnum 13) first — this is the proper API
+        // used by nxc/enum4linux for user discovery. Falls back to blind RID cycling
+        // if the server doesn't support enumeration or returns no results.
+        if results.is_empty() && current_rid == config.start_rid {
+            let mut resume = [0u8; 4];
+            loop {
+                let enum_users_req =
+                    build_samr_enumerate_users(&domain_handle, &resume, 0xFFFFFFFF);
+                match smb.pipe_transact("samr", &enum_users_req).await {
+                    Ok(resp) => {
+                        let (users, new_resume, done) = parse_samr_enumerate_users(&resp);
+                        if users.is_empty() {
+                            debug!(
+                                "[SAMR] SamEnumerateUsersInDomain returned no results, falling back to RID cycling"
+                            );
+                            break;
+                        }
+                        for (rid, name, acct_type) in &users {
+                            if !name.is_empty() {
+                                let account_type = samr_type_to_rid_type(*acct_type);
+                                let full_sid = sid_bytes_with_rid(&domain_sid_bytes, *rid);
+                                debug!("  [ENUM] RID {rid}: {name} ({account_type})");
+                                results.push(RidResult {
+                                    rid: *rid,
+                                    name: name.clone(),
+                                    account_type,
+                                    sid: sid_to_string(&full_sid),
+                                });
+                            }
+                        }
+                        resume = new_resume;
+                        if done {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!(
+                            "[SAMR] SamEnumerateUsersInDomain failed: {e}, falling back to RID cycling"
+                        );
+                        break;
+                    }
+                }
+            }
+            if !results.is_empty() {
+                info!(
+                    "[SAMR] SamEnumerateUsersInDomain found {} accounts, skipping blind RID cycling",
+                    results.len()
+                );
+                return Ok(results);
+            }
+        }
+
+        // Fallback: blind RID cycling via LookupIdsInDomain
         let lookup_req = build_samr_lookup_ids(&domain_handle, &rids);
         match smb.pipe_transact("samr", &lookup_req).await {
             Ok(resp) => {
@@ -243,7 +321,20 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
 async fn rid_cycle_ldap(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     info!("[LDAP] RID cycling via LDAP SID lookup");
 
-    let domain_sid = get_domain_sid_ldap(config).await?;
+    // Establish a single LDAP session for all lookups (WS2022/2025: connection per
+    // lookup is extremely slow and may trigger rate limiting).
+    let mut ldap = match connect_for_rid(config).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(OverthroneError::Ldap {
+                target: config.target.clone(),
+                reason: format!("LDAP RID cycling: cannot connect: {e}"),
+            });
+        }
+    };
+    let base_dn = ldap.base_dn.clone();
+
+    let domain_sid = get_domain_sid_ldap_from_session(&mut ldap).await?;
     info!("[LDAP] Domain SID: {domain_sid}");
 
     let mut results = Vec::new();
@@ -262,12 +353,6 @@ async fn rid_cycle_ldap(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
             let filter = format!(
                 "(&(objectSid={sid_filter})(|(objectClass=user)(objectClass=group)(objectClass=computer)))"
             );
-
-            let mut ldap = match connect_for_rid(config).await {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let base_dn = ldap.base_dn.clone();
 
             match ldap
                 .custom_search_with_base(
@@ -346,14 +431,17 @@ async fn rid_cycle_ldap(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     Ok(results)
 }
 
-async fn get_domain_sid_ldap(config: &RidCycleConfig) -> Result<String> {
-    let mut ldap = connect_for_rid(config).await?;
+async fn get_domain_sid_ldap_from_session(ldap: &mut LdapSession) -> Result<String> {
     let base_dn = ldap.base_dn.clone();
     let results = ldap
-        .custom_search_with_base(&base_dn, "(objectClass=domainDNS)", &["objectSid"])
+        .custom_search_with_base(
+            &base_dn,
+            "(|(objectClass=domainDNS)(objectClass=domain))",
+            &["objectSid"],
+        )
         .await
         .map_err(|e| OverthroneError::Ldap {
-            target: config.target.clone(),
+            target: ldap.dc_ip.clone(),
             reason: format!("Failed to query domain SID: {e}"),
         })?;
 
@@ -364,16 +452,17 @@ async fn get_domain_sid_ldap(config: &RidCycleConfig) -> Result<String> {
     }
 
     Err(OverthroneError::Ldap {
-        target: config.target.clone(),
+        target: ldap.dc_ip.clone(),
         reason: "Could not extract domain SID from LDAP".to_string(),
     })
 }
 
 async fn connect_for_rid(config: &RidCycleConfig) -> Result<LdapSession> {
-    if config.null_session || config.username.is_empty() {
-        LdapSession::connect_anonymous(&config.target, &config.domain, false).await
-    } else {
-        LdapSession::connect(
+    // If credentials are provided, always use authenticated bind.
+    // WS2022/2025 blocks anonymous LDAP by default.
+    if !config.username.is_empty() && !config.password.is_empty() {
+        // Try authenticated bind first
+        match LdapSession::connect(
             &config.target,
             &config.domain,
             &config.username,
@@ -381,7 +470,26 @@ async fn connect_for_rid(config: &RidCycleConfig) -> Result<LdapSession> {
             false,
         )
         .await
+        {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                warn!("[LDAP] Authenticated bind failed for RID cycling: {e}, trying SASL NTLM");
+                // Fallback: try SASL NTLM with password → hash conversion
+                return LdapSession::connect_with_sasl_ntlm(
+                    &config.target,
+                    &config.domain,
+                    &config.username,
+                    &config.password,
+                    false,
+                )
+                .await;
+            }
+        }
     }
+
+    // Null session / no credentials: try anonymous bind
+    // (may fail on WS2022/2025 — caller should provide credentials)
+    LdapSession::connect_anonymous(&config.target, &config.domain, false).await
 }
 
 // ===========================================================

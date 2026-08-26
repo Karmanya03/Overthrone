@@ -185,13 +185,24 @@ async fn kdc_recv(stream: &mut TcpStream) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-/// Connect to KDC, send request, receive response
-/// Tries UDP first for small messages, falls back to TCP on failure.
+/// Connect to KDC, send request, receive response.
+/// Tries UDP first for small messages (<1280 bytes, typical AS-REQ/TGS-REQ),
+/// falls back to TCP on failure or for large messages.
+/// Per RFC 4120 §5.2: clients SHOULD try UDP first for messages that fit
+/// in a single datagram. Some WS2022/2025 KDCs load-balance via UDP port 88.
 pub(crate) async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
+    // Small messages: try UDP first (standard Kerberos behavior)
+    if request_bytes.len() <= 1280 {
+        match kdc_exchange_udp(dc_ip, request_bytes).await {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                debug!("KDC UDP failed ({}), falling back to TCP", e);
+            }
+        }
+    }
     kdc_exchange_tcp(dc_ip, request_bytes).await
 }
 
-#[allow(dead_code)]
 /// Kerberos exchange over UDP (connectionless, no length prefix)
 async fn kdc_exchange_udp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
     let addr: SocketAddr = format!("{dc_ip}:{KDC_PORT}")
