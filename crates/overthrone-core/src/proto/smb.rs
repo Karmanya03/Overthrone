@@ -1685,6 +1685,111 @@ pub fn parse_samr_enumerate_domains(resp: &[u8]) -> Vec<String> {
     domains
 }
 
+/// Build SAMR EnumerateUsersInDomain request (opnum 13).
+/// This is the proper API for user discovery used by tools like nxc/enum4linux.
+/// Returns user RIDs, names, and account types without blind RID cycling.
+pub fn build_samr_enumerate_users(
+    domain_handle: &[u8],
+    resume_handle: &[u8; 4],
+    max_size: u32,
+) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(domain_handle);
+    stub.extend_from_slice(resume_handle);
+    stub.extend_from_slice(&max_size.to_le_bytes());
+    build_rpc_request(13, &stub)
+}
+
+/// Parse user entries from SAMR EnumerateUsersInDomain response.
+/// Returns Vec of (rid, name, account_type), the resume handle, and whether enumeration is done.
+pub fn parse_samr_enumerate_users(resp: &[u8]) -> (Vec<(u32, String, u32)>, [u8; 4], bool) {
+    let mut results = Vec::new();
+    let mut resume_handle = [0u8; 4];
+    let mut done = true;
+
+    // DCE/RPC response: 24-byte header + stub
+    // Stub: status(4) + count(4) + buffer_ptr(4) + entries[count] + strings_buffer
+    // Each entry: rid(4) + unknown(4) + name_ptr(4) = 12 bytes
+    if resp.len() < 36 {
+        return (results, resume_handle, done);
+    }
+
+    let stub_start = 24;
+    let status = u32::from_le_bytes([
+        resp[stub_start],
+        resp[stub_start + 1],
+        resp[stub_start + 2],
+        resp[stub_start + 3],
+    ]);
+    if status != 0 {
+        return (results, resume_handle, done);
+    }
+
+    let entry_count = u32::from_le_bytes([
+        resp[stub_start + 4],
+        resp[stub_start + 5],
+        resp[stub_start + 6],
+        resp[stub_start + 7],
+    ]) as usize;
+
+    if entry_count == 0 || entry_count > 10000 {
+        return (results, resume_handle, done);
+    }
+
+    // Parse RIDs from entry headers
+    let entries_start = stub_start + 12; // after status + count + buffer_ptr
+    let mut rids = Vec::with_capacity(entry_count);
+    for i in 0..entry_count {
+        let off = entries_start + i * 12;
+        if off + 4 > resp.len() {
+            break;
+        }
+        rids.push(u32::from_le_bytes([
+            resp[off],
+            resp[off + 1],
+            resp[off + 2],
+            resp[off + 3],
+        ]));
+    }
+
+    // Parse names from the string buffer area (after all entry headers)
+    let mut off = entries_start + entry_count * 12;
+    for &rid in &rids {
+        if off + 8 > resp.len() {
+            break;
+        }
+        let actual_len = u16::from_le_bytes([resp[off + 2], resp[off + 3]]) as usize;
+        off += 8; // skip RPC_UNICODE_STRING header (max_len + actual_len + offset)
+
+        let name = if actual_len > 0 && off + actual_len * 2 <= resp.len() {
+            let name_bytes = &resp[off..off + actual_len * 2];
+            String::from_utf16_lossy(
+                &name_bytes
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            String::new()
+        };
+        off += actual_len * 2;
+        // Align to 4-byte boundary
+        let padding = (4 - (actual_len * 2) % 4) % 4;
+        off += padding;
+
+        results.push((rid, name, 1)); // type=1 (user) by default
+    }
+
+    // Resume handle at end of stub
+    let rh_off = entries_start + entry_count * 12;
+    if rh_off + 4 <= resp.len() {
+        resume_handle.copy_from_slice(&resp[rh_off..rh_off + 4]);
+        done = u32::from_le_bytes(resume_handle) == 0;
+    }
+
+    (results, resume_handle, done)
+}
+
 /// Build SAMR OpenDomain request by SID (opnum 5).
 pub fn build_samr_open_domain_by_sid(sam_handle: &[u8], domain_sid: &[u8]) -> Vec<u8> {
     let mut stub = Vec::new();

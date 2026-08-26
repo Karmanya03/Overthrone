@@ -14,6 +14,7 @@ pub mod kpasswd;
 pub mod laps_ldaps;
 pub mod ldap;
 pub mod netbios;
+pub mod netlogon;
 pub mod ntlm;
 pub mod pkinit;
 pub mod registry;
@@ -44,6 +45,11 @@ pub use kpasswd::{
     KpasswdConfig, KpasswdError, KpasswdResult, kpasswd_change_password, kpasswd_reset_password,
 };
 pub use netbios::{NbnsNodeStatus, SmbNegotiateResult, netbios_discovery, smb_negotiate};
+pub use netlogon::{
+    ZerologonCheckMethod, ZerologonCheckResult, aes_cfb8_decrypt, aes_cfb8_encrypt,
+    compute_netlogon_credential, netlogon_session_key, normalize_computer_name, zerologon_check,
+    zerologon_probe,
+};
 pub use pkinit::{CertificateGenerator, PkinitAuthenticator, PkinitConfig, PkinitResult};
 pub use targeted_kerberoast::{
     TargetedKerberoastConfig, TargetedKerberoastError, TargetedKerberoastResult,

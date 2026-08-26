@@ -570,25 +570,54 @@ fn enumerate_subkeys(data: &[u8], nk_offset: usize) -> Result<Vec<(usize, String
 /// Extract boot key (SysKey) from SYSTEM registry hive.
 /// The boot key is derived from the class names of four keys under
 /// HKLM\SYSTEM\CurrentControlSet\Control\Lsa: JD, Skew1, GBG, Data.
+/// Tries the active ControlSet first, then falls back to all ControlSetNNN
+/// subkeys if the default fails (e.g., corrupted Select key or restored hive).
 fn extract_boot_key(system_data: &[u8]) -> Result<[u8; 16]> {
     // First, find CurrentControlSet (usually ControlSet001)
     // The "Select" key's "Current" value tells us which ControlSet is active.
-    let select_key = navigate_path(system_data, &["Select"])?;
-    let current_value = read_value(system_data, select_key, "Current")?;
-    let current_cs = if current_value.len() >= 4 {
-        u32::from_le_bytes([
-            current_value[0],
-            current_value[1],
-            current_value[2],
-            current_value[3],
-        ])
-    } else {
-        1 // default to ControlSet001
-    };
+    let current_cs = navigate_path(system_data, &["Select"])
+        .and_then(|sk| read_value(system_data, sk, "Current"))
+        .ok()
+        .and_then(|v| {
+            if v.len() >= 4 {
+                Some(u32::from_le_bytes([v[0], v[1], v[2], v[3]]))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(1); // default to ControlSet001
 
+    // Try the active ControlSet first
     let cs_name = format!("ControlSet{:03}", current_cs);
-    let lsa_key = navigate_path(system_data, &[&cs_name, "Control", "Lsa"])?;
+    if let Ok(lsa_key) = navigate_path(system_data, &[&cs_name, "Control", "Lsa"]) {
+        if let Ok(key) = try_extract_boot_key_from_lsa(system_data, lsa_key) {
+            return Ok(key);
+        }
+        tracing::warn!(
+            "Boot key extraction failed from {}, trying other ControlSets",
+            cs_name
+        );
+    }
 
+    // Fallback: try all ControlSetNNN subkeys (001 through 016)
+    for cs_num in 1..=16u32 {
+        if cs_num == current_cs {
+            continue; // already tried
+        }
+        let alt_name = format!("ControlSet{:03}", cs_num);
+        if let Ok(lsa_key) = navigate_path(system_data, &[&alt_name, "Control", "Lsa"])
+            && let Ok(key) = try_extract_boot_key_from_lsa(system_data, lsa_key)
+        {
+            tracing::info!("Boot key found in {}", alt_name);
+            return Ok(key);
+        }
+    }
+
+    Err(anyhow!("Failed to extract boot key from any ControlSet"))
+}
+
+/// Try to extract the boot key from a specific Lsa key offset.
+fn try_extract_boot_key_from_lsa(system_data: &[u8], lsa_key: usize) -> Result<[u8; 16]> {
     // Read class names from JD, Skew1, GBG, Data subkeys
     let mut scrambled = Vec::with_capacity(16);
     for name in &["JD", "Skew1", "GBG", "Data"] {

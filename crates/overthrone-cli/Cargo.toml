@@ -58,6 +58,12 @@ dirs = "5.0"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 futures.workspace = true
 regex = "1"
+aes.workspace = true
+cbc.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+pbkdf2.workspace = true
+tempfile.workspace = true
 
 
 [dev-dependencies]

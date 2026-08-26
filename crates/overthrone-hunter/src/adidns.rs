@@ -23,6 +23,7 @@
 use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::ldap::LdapSession;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 /// DNS record type for ADIDNS operations
@@ -35,7 +36,7 @@ pub enum DnsRecordType {
 }
 
 /// Result of ADIDNS wildcard injection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdidnsInjectionResult {
     /// The FQDN of the injected wildcard record
     pub record_dn: String,

@@ -25,12 +25,15 @@ pub mod delegation_chain;
 pub mod kerberoast;
 pub mod machine_harvest;
 pub mod ntlmv1_roast;
+pub mod pre2k;
 pub mod rbcd;
 pub mod relay_hash_extract;
 pub mod runner;
 pub mod smart_wordlist;
+pub mod smb_reflect;
 pub mod spray;
 pub mod tickets;
+pub mod timeroast;
 pub mod unconstrained;
 pub mod userenum;
 pub mod xp_dirtree;
@@ -61,6 +64,10 @@ pub use machine_harvest::{
     harvest_machine_accounts,
 };
 pub use ntlmv1_roast::{NtlmV1Hash, NtlmV1RoastConfig, NtlmV1RoastResult, run_ntlmv1_roast};
+pub use pre2k::{
+    Pre2kAccount, Pre2kConfig, Pre2kResult, derive_candidate_password, has_passwd_notreqd,
+    run_pre2k,
+};
 pub use rbcd::{RbcdConfig, RbcdResult, run as run_rbcd};
 pub use relay_hash_extract::{
     ExtractedHash, ExtractionStats, HashFormat, HashType, RelayHashConfig, RelayHashResult,
@@ -70,6 +77,14 @@ pub use runner::{HuntAction, HuntConfig, HuntReport, run_hunt};
 pub use smart_wordlist::{
     SmartWordlistResult, WordlistConfig, WordlistStats, generate_smart_wordlist,
 };
+pub use smb_reflect::{
+    SmbReflectConfig, SmbReflectResult, build_poisoned_name, check_smb_signing, check_webclient,
+    run_smb_reflect,
+};
 pub use spray::{SprayConfig, SprayResult, run_spray};
 pub use tickets::{TicketFormat, TicketOps};
+pub use timeroast::{
+    TimeroastConfig, TimeroastHash, TimeroastResult, build_query, hashcat_format, parse_reply,
+    parse_rid_ranges, run_timeroast, verify_machine_password,
+};
 pub use userenum::{UserEnumConfig, UserEnumResult};

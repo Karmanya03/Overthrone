@@ -1,4 +1,9 @@
 #![doc = "Core types, protocols, and utilities for Overthrone AD assessment framework."]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::needless_range_loop)]
+#![allow(unknown_lints)]
+// Allow chunks_exact_to_as_chunks (stable as_chunks not yet available)
+#![allow(clippy::chunks_exact_to_as_chunks)]
 pub mod adcs;
 pub mod azure_ad;
 pub mod c2;
