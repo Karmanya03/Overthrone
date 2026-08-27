@@ -736,10 +736,10 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
                         let prev = app.menu_state.selected();
                         app.menu_state.select(Some(content_row));
                         // If clicking the same item, toggle selection
-                        if prev == Some(content_row) {
-                            if let Some(&idx) = modules_in_screen.get(content_row) {
-                                app.modules[idx].selected = !app.modules[idx].selected;
-                            }
+                        if prev == Some(content_row)
+                            && let Some(&idx) = modules_in_screen.get(content_row)
+                        {
+                            app.modules[idx].selected = !app.modules[idx].selected;
                         }
                     }
                 }
@@ -897,17 +897,17 @@ fn handle_sub_menu(app: &mut WizardApp, key: KeyEvent) {
                 .select(Some(if cur < max { cur + 1 } else { 0 }));
         }
         KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
-            if let Some(selected) = app.menu_state.selected() {
-                if let Some(&idx) = modules_in_screen.get(selected) {
-                    app.modules[idx].selected = !app.modules[idx].selected;
-                }
+            if let Some(selected) = app.menu_state.selected()
+                && let Some(&idx) = modules_in_screen.get(selected)
+            {
+                app.modules[idx].selected = !app.modules[idx].selected;
             }
         }
         KeyCode::Left | KeyCode::Char('h') => {
-            if let Some(selected) = app.menu_state.selected() {
-                if let Some(&idx) = modules_in_screen.get(selected) {
-                    app.modules[idx].selected = false;
-                }
+            if let Some(selected) = app.menu_state.selected()
+                && let Some(&idx) = modules_in_screen.get(selected)
+            {
+                app.modules[idx].selected = false;
             }
         }
         KeyCode::Char('a') => {

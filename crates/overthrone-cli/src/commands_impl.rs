@@ -2699,10 +2699,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
 
     // Resolve credential list -- always try to get creds even in null_session mode.
     // WS2022/2025 blocks null sessions to SAMR, so credentials are required.
-    let creds_list = match crate::require_creds_list(cli) {
-        Ok(c) => c,
-        Err(_) => vec![], // No creds provided; will try null session
-    };
+    let creds_list = crate::require_creds_list(cli).unwrap_or_default();
 
     println!(" {} Target DC: {}", ">".bright_black(), dc.cyan());
     if !creds_list.is_empty() {
@@ -2756,8 +2753,7 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
     }
 
     // Fall back to null session if no creds worked (may work on WS2019 and earlier)
-    if all_results.is_empty() {
-        if null_session || creds_list.is_empty() {
+    if all_results.is_empty() && (null_session || creds_list.is_empty()) {
             println!(
                 " {} Trying null session (may fail on WS2022/2025)...",
                 ">".bright_black()
@@ -2779,15 +2775,14 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
                 Err(e) => {
                     warn!("Null session RID cycling failed: {e}");
                     if creds_list.is_empty() {
-                        banner::print_fail(&format!(
+                        banner::print_fail(
                             "RID cycling failed. On WS2022/2025, null sessions are blocked. \
                              Provide credentials with -u/-p flags."
-                        ));
+                        );
                         return 1;
                     }
                 }
             }
-        }
     }
 
     if all_results.is_empty() {

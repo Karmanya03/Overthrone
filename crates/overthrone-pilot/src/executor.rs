@@ -4089,7 +4089,9 @@ fn extract_sam_username_from_v(v_data: &[u8]) -> Option<String> {
     }
     // Username is stored as UTF-16LE
     let u16s: Vec<u16> = v_data[name_offset..name_offset + name_len]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     Some(

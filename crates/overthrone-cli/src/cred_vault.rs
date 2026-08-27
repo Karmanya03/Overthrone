@@ -162,7 +162,7 @@ fn encrypt_payload(passphrase: &str, payload: &[u8], iterations: u32) -> Result<
     // AES-256-CBC encrypt with PKCS7 padding
     let key_ga = GenericArray::from_slice(&key);
     let iv_ga = GenericArray::from_slice(&iv);
-    let encryptor = Encryptor::<Aes256>::new(&iv_ga, &key_ga);
+    let encryptor = Encryptor::<Aes256>::new(iv_ga, key_ga);
     let ciphertext = encryptor.encrypt_padded_vec_mut::<Pkcs7>(payload);
 
     // Encrypt-then-MAC: HMAC over (version || salt || iv || ciphertext)
@@ -207,7 +207,7 @@ fn decrypt_payload(passphrase: &str, file: &VaultFile) -> Result<Vec<u8>> {
     // Decrypt
     let key_ga = GenericArray::from_slice(&key);
     let iv_ga = GenericArray::from_slice(&file.iv);
-    let decryptor = Decryptor::<Aes256>::new(&iv_ga, &key_ga);
+    let decryptor = Decryptor::<Aes256>::new(iv_ga, key_ga);
     let plaintext = decryptor
         .decrypt_padded_vec_mut::<Pkcs7>(&file.ciphertext)
         .map_err(|e| anyhow::anyhow!("decryption failed (wrong passphrase?): {e}"))?;
