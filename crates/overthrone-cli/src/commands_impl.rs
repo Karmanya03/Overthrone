@@ -2754,35 +2754,35 @@ pub async fn cmd_rid(cli: &Cli, start_rid: u32, end_rid: u32, null_session: bool
 
     // Fall back to null session if no creds worked (may work on WS2019 and earlier)
     if all_results.is_empty() && (null_session || creds_list.is_empty()) {
-            println!(
-                " {} Trying null session (may fail on WS2022/2025)...",
-                ">".bright_black()
-            );
-            let config = RidCycleConfig {
-                target: dc.clone(),
-                domain: String::new(),
-                username: String::new(),
-                password: String::new(),
-                null_session: true,
-                start_rid,
-                end_rid,
-                batch_size: 50,
-            };
-            match rid_cycle(&config).await {
-                Ok(results) => {
-                    all_results.extend(results);
-                }
-                Err(e) => {
-                    warn!("Null session RID cycling failed: {e}");
-                    if creds_list.is_empty() {
-                        banner::print_fail(
-                            "RID cycling failed. On WS2022/2025, null sessions are blocked. \
-                             Provide credentials with -u/-p flags."
-                        );
-                        return 1;
-                    }
+        println!(
+            " {} Trying null session (may fail on WS2022/2025)...",
+            ">".bright_black()
+        );
+        let config = RidCycleConfig {
+            target: dc.clone(),
+            domain: String::new(),
+            username: String::new(),
+            password: String::new(),
+            null_session: true,
+            start_rid,
+            end_rid,
+            batch_size: 50,
+        };
+        match rid_cycle(&config).await {
+            Ok(results) => {
+                all_results.extend(results);
+            }
+            Err(e) => {
+                warn!("Null session RID cycling failed: {e}");
+                if creds_list.is_empty() {
+                    banner::print_fail(
+                        "RID cycling failed. On WS2022/2025, null sessions are blocked. \
+                             Provide credentials with -u/-p flags.",
+                    );
+                    return 1;
                 }
             }
+        }
     }
 
     if all_results.is_empty() {
