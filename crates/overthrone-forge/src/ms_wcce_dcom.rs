@@ -237,7 +237,9 @@ async fn get_ca_name_internal(smb: &SmbSession, ipid: &[u8; 16]) -> Result<Strin
 
     // CA name is a null-terminated UTF-16 string
     let ca_name_utf16: Vec<u16> = ca_name_raw
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .take_while(|&c| c != 0)
         .collect();

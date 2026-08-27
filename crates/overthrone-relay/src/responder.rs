@@ -178,7 +178,9 @@ fn decode_utf16le(data: &[u8]) -> String {
     }
 
     let chars: Vec<u16> = data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
 

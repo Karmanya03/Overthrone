@@ -290,7 +290,9 @@ pub fn extract_domain_from_target_info(target_info: &[u8]) -> Option<String> {
         if av_id == 0x0002 {
             // MsvAvNbDomainName -- UTF-16LE
             let domain_chars: Vec<u16> = target_info[pos..pos + av_len]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             return Some(String::from_utf16_lossy(&domain_chars));

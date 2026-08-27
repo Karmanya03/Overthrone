@@ -1779,7 +1779,9 @@ impl SmbDaemon {
                 let bytes = &ntlmssp[buf_off..buf_off + len];
                 String::from_utf16_lossy(
                     &bytes
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| u16::from_le_bytes([c[0], c[1]]))
                         .collect::<Vec<_>>(),
                 )
