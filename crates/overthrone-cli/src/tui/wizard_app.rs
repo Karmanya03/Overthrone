@@ -850,11 +850,9 @@ fn handle_main_menu(app: &mut WizardApp, key: KeyEvent) {
         KeyCode::Tab | KeyCode::Char('t') => {
             app.screen = WizardScreen::TargetConfig;
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => {
-            if app.selected_count() > 0 {
-                app.screen = WizardScreen::Running;
-                app.running = true;
-            }
+        KeyCode::Char('r') | KeyCode::Char('R') if app.selected_count() > 0 => {
+            app.screen = WizardScreen::Running;
+            app.running = true;
         }
         _ => {}
     }
@@ -929,11 +927,9 @@ fn handle_sub_menu(app: &mut WizardApp, key: KeyEvent) {
         KeyCode::Tab | KeyCode::Char('t') => {
             app.screen = WizardScreen::TargetConfig;
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => {
-            if app.selected_count() > 0 {
-                app.screen = WizardScreen::Running;
-                app.running = true;
-            }
+        KeyCode::Char('r') | KeyCode::Char('R') if app.selected_count() > 0 => {
+            app.screen = WizardScreen::Running;
+            app.running = true;
         }
         _ => {}
     }
@@ -991,11 +987,9 @@ fn handle_target_config(app: &mut WizardApp, key: KeyEvent) {
             app.screen = WizardScreen::MainMenu;
             app.menu_state.select(Some(0));
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => {
-            if app.selected_count() > 0 {
-                app.screen = WizardScreen::Running;
-                app.running = true;
-            }
+        KeyCode::Char('r') | KeyCode::Char('R') if app.selected_count() > 0 => {
+            app.screen = WizardScreen::Running;
+            app.running = true;
         }
         _ => {}
     }
