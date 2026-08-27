@@ -62,7 +62,7 @@ impl PdfContext {
     fn new_page(&mut self, _label: &str) {
         // Flush current page if it has content
         if !self.current_ops.is_empty() {
-            let page = PdfPage::new(PAGE_W, PAGE_H, self.current_ops.drain(..).collect());
+            let page = PdfPage::new(PAGE_W, PAGE_H, std::mem::take(&mut self.current_ops));
             self.pages.push(page);
         }
         self.page_num += 1;
