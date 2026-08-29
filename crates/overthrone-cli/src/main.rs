@@ -8351,23 +8351,52 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
                 .map(|r| (r.success, r.output))
         }
         ExecMethod::Auto => {
-            // Try smbexec first (most reliable), fall back to psexec
+            // Try all methods in order of reliability: SmbExec -> PsExec -> WmiExec
+            // SmbExec: most reliable, uses SCM pipe directly
+            // PsExec: classic, creates a service
+            // WmiExec: uses DCOM/WMI, good when SCM is monitored
             match smbexec::exec_command(&smb, command).await {
+                Ok(r) if r.output.trim().is_empty() && !r.success => {
+                    // SmbExec returned empty output — try PsExec
+                    tracing::debug!("Auto-exec: SmbExec returned empty, trying PsExec");
+                    let cfg = psexec::PsExecConfig {
+                        command: command.to_string(),
+                        ..Default::default()
+                    };
+                    match psexec::execute(&smb, &cfg).await {
+                        Ok(r) => Ok((r.success, r.output.unwrap_or_default())),
+                        Err(_) => {
+                            // PsExec failed too — try WmiExec
+                            tracing::debug!("Auto-exec: PsExec failed, trying WmiExec");
+                            wmiexec::exec_command(&smb, command)
+                                .await
+                                .map(|r| (r.success, r.output))
+                        }
+                    }
+                }
                 Ok(r) => Ok((r.success, r.output)),
                 Err(_) => {
                     let cfg = psexec::PsExecConfig {
                         command: command.to_string(),
                         ..Default::default()
                     };
-                    psexec::execute(&smb, &cfg)
-                        .await
-                        .map(|r| (r.success, r.output.unwrap_or_default()))
+                    match psexec::execute(&smb, &cfg).await {
+                        Ok(r) => Ok((r.success, r.output.unwrap_or_default())),
+                        Err(_) => {
+                            tracing::debug!("Auto-exec: PsExec failed, trying WmiExec");
+                            wmiexec::exec_command(&smb, command)
+                                .await
+                                .map(|r| (r.success, r.output))
+                        }
+                    }
                 }
             }
         }
         ExecMethod::Dcom => {
-            // Handled before SMB connection; this arm is unreachable but required for exhaustiveness.
-            unreachable!("DCOM execution should have been dispatched before SMB connection")
+            Err(overthrone_core::OverthroneError::Exec {
+                target: String::new(),
+                reason: "DCOM execution should be dispatched before SMB connection (use --method dcom with --target)".to_string(),
+            })
         }
     };
 

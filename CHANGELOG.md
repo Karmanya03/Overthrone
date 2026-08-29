@@ -16,6 +16,12 @@
 - Added PKEY blob parser supporting v1/v2 structures (version + GUID + keyMaterial)
 - Added remote DPAPI masterkey file reading via SMB from target user profile directories
 
+### UX Improvements
+
+- Improved `ovt exec --method auto` to try all execution methods (SmbExec -> PsExec -> WmiExec) instead of only two
+- Replaced `unreachable!()` in DCOM execution path with proper error message
+- Added debug logging for auto-exec fallback chain
+
 ### Bug Fixes
 
 - Fixed collapsible if clippy warning in DPAPI PKEY parsing
