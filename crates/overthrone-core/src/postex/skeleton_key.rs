@@ -588,11 +588,35 @@ impl SkeletonKeyExploiter {
                 parse_reg_query_dword(&String::from_utf8_lossy(&output.stdout), value_name)
             };
 
-            assess_lsa_protection_values(
+            let vbs_cred_guard_running = {
+                let output = Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        "(Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\\Microsoft\\Windows\\DeviceGuard).SecurityServicesRunning -contains 1",
+                    ])
+                    .output();
+                if let Ok(out) = output {
+                    String::from_utf8_lossy(&out.stdout).trim() == "True"
+                } else {
+                    false
+                }
+            };
+
+            let mut preflight = assess_lsa_protection_values(
                 self.config.target_dc.clone(),
                 read_local("LsaCfgFlags"),
                 read_local("RunAsPPL"),
-            )
+            );
+
+            if vbs_cred_guard_running {
+                preflight.status = SkeletonKeyPreflightStatus::Blocked;
+                preflight.credential_guard_enabled = true;
+                preflight.warnings.push("VBS/Credential Guard is actively running (Win32_DeviceGuard). Skeleton Key LSASS injection blocked by Credential Guard.".to_string());
+                preflight.evidence.push("Win32_DeviceGuard.SecurityServicesRunning contains 1 (Credential Guard active)".to_string());
+            }
+
+            preflight
         }
         #[cfg(not(windows))]
         {

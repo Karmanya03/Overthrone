@@ -7780,8 +7780,95 @@ pub async fn cmd_dcomexec(
             }
         }
         Err(e) => {
-            banner::print_fail(&format!("DCOMexec failed: {e}"));
-            1
+            let err_str = e.to_string().to_lowercase();
+            if err_str.contains("access denied") || err_str.contains("rpc") {
+                println!(
+                    "{} DCOM execution failed ({}), attempting fallback to WMIExec...",
+                    "!".yellow(),
+                    e
+                );
+
+                let creds = match crate::require_creds(cli) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        banner::print_fail(&format!("DCOMexec failed: {e} (Fallback failed: {err})"));
+                        return 1;
+                    }
+                };
+                let domain = cli.domain.as_deref().unwrap_or("").to_string();
+                let pass = creds.password().unwrap_or("");
+
+                let smb_result = overthrone_core::proto::smb::SmbSession::connect(
+                    target, &domain, &creds.username, pass,
+                ).await;
+
+                match smb_result {
+                    Ok(smb) => {
+                        let full_cmd = if arguments.is_empty() {
+                            command.to_string()
+                        } else {
+                            format!("{} {}", command, arguments)
+                        };
+
+                        match overthrone_core::exec::wmiexec::exec_command(&smb, &full_cmd).await {
+                            Ok(res) => {
+                                if wants_json(cli) {
+                                    return emit_json(
+                                        cli,
+                                        serde_json::json!({
+                                            "status": "success",
+                                            "target": target,
+                                            "command": full_cmd,
+                                            "method": "WMIExec (Fallback)",
+                                            "message": res.output,
+                                        }),
+                                    );
+                                }
+                                println!("{} {}", "[+]".green(), res.output.cyan());
+                                banner::print_success("WMIExec fallback completed");
+                                0
+                            }
+                            Err(e_wmi) => {
+                                println!(
+                                    "{} WMIExec fallback failed ({}), attempting ATExec...",
+                                    "!".yellow(),
+                                    e_wmi
+                                );
+                                match overthrone_core::exec::atexec::exec_command(&smb, &full_cmd).await {
+                                    Ok(res_at) => {
+                                        if wants_json(cli) {
+                                            return emit_json(
+                                                cli,
+                                                serde_json::json!({
+                                                    "status": "success",
+                                                    "target": target,
+                                                    "command": full_cmd,
+                                                    "method": "ATExec (Fallback)",
+                                                    "message": res_at.output,
+                                                }),
+                                            );
+                                        }
+                                        println!("{} {}", "[+]".green(), res_at.output.cyan());
+                                        banner::print_success("ATExec fallback completed");
+                                        0
+                                    }
+                                    Err(e_at) => {
+                                        banner::print_fail(&format!("All execution methods failed. DCOM: {}, WMIExec: {}, ATExec: {}", e, e_wmi, e_at));
+                                        1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(smb_e) => {
+                        banner::print_fail(&format!("DCOMexec failed: {e} (SMB connect for fallback failed: {smb_e})"));
+                        1
+                    }
+                }
+            } else {
+                banner::print_fail(&format!("DCOMexec failed: {e}"));
+                1
+            }
         }
     }
 }

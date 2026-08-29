@@ -42,7 +42,7 @@
   <img src="https://img.shields.io/badge/hashcat-not_needed-ff4444?style=flat-square" alt="no hashcat" />
   <img src="https://img.shields.io/badge/binary-overthrone_or_ovt-00cc66?style=flat-square" alt="ovt shorthand" />
   <img src="https://img.shields.io/badge/config-XDG_TOML_PROFILES-00cc66?style=flat-square" alt="config" />
-  <img src="https://img.shields.io/badge/tests-2%2C091-00cc66?style=flat-square" alt="tests" />
+  <img src="https://img.shields.io/badge/tests-2%2C148-00cc66?style=flat-square" alt="tests" />
 </p>
 
 ***
@@ -281,7 +281,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 |---|---|---|---|
 | `overthrone-core` | The Absolute Unit | Protocol engine (LDAP, Kerberos, SMB, NTLM, MS-DRSR, MSSQL, DNS, Registry, PKINIT), attack graph with Dijkstra pathfinding, port scanner, full ADCS exploitation (ESC1-ESC16), crypto primitives (AES-CTS, RC4, HMAC, MD4, DPAPI, ticket crypto, GPP decryption), C2 integration (Sliver, Havoc, Cobalt Strike), plugin system (native DLL + WASM via wasmtime), remote execution (PsExec, SmbExec, WmiExec, WinRM, AtExec), interactive shell abstraction, secretsdump, RID cycling, **EDR evasion (ntdll unhooking, ETW abolition, sleep masking, syscall resurrection), Credential Guard bypass (3-tier: ALPC/process-memory/WDigest), DPAPI masterkey extraction, file-format carver (docx/xlsx/etc), raw asm! syscalls with DynamicSyscallStub, SMB OPLOCK hijacking, Azure AD / Entra ID hybrid attack depth (8 ops), EPM pipe resolution (resolve_uuid_via_epm_pipe), Authenticated EPM TCP (resolve_uuid_via_epm_tcp_auth)** | The absolute unit that ate the gym, then built a home gym, then ate that too. Every protocol is real. 821 tests. Credential Guard bypass now has 3 tiers because one wasn't enough. DPAPI extraction, file carver, OPLOCK, EPM pipe resolution, and authenticated EPM TCP joined the party. The borrow checker needed therapy. Multiple sessions. |
 | `overthrone-reaper` | The Collector | AD enumeration - users, groups, computers, ACLs, delegations, GPOs, OUs, SPNs, trusts, LAPS (v1 + v2), GPP password decryption, **Snaffler module (configurable share crawling with pattern matching, 23 tests)**, **LAPS/gMSA-specific enumeration (276 lines, 12 tests)**, MSSQL instances, ADCS template enumeration, BloodHound JSON export, CSV export, **NTLM-to-TGT pipeline, NTLMv1 detection, full BH edge-type coverage (19 new variants)** | BloodHound's data collection arc but without Neo4j eating 4GB of RAM. Snaffler module audited and fixed. LAPS/gMSA purpose-built. NTLM hashes go straight to TGTs now. 202 tests. The Collector became a curator. |
-| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, zero-knowledge username enumeration via Kerberos AS-REQ, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism, **auto-crack loop, delegation chain automation (628 lines), ACL reasoning (439 lines), machine account harvesting (328 lines), smart wordlists (374 lines), NTLMv1 downgrade roast (496 lines), relay hash extraction (588 lines)** | The crate that did all its homework, extra credit, and the teacher's homework too. 76 tests. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class, got a PhD, and came back to teach the other crates. |
+| `overthrone-hunter` | The Overachiever | Kerberoasting, AS-REP roasting, zero-knowledge username enumeration via Kerberos AS-REQ, auth coercion (PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, MS-EFSRPC), RBCD abuse, constrained/unconstrained delegation exploitation, ticket manipulation (.kirbi/.ccache conversion), inline hash cracking with embedded wordlist + rayon parallelism, **auto-crack loop, delegation chain automation (628 lines), ACL reasoning (439 lines), machine account harvesting (328 lines), smart wordlists (374 lines), NTLMv1 downgrade roast (496 lines), relay hash extraction (588 lines)** | The crate that did all its homework, extra credit, and the teacher's homework too. 225 tests. Zero stubs. Zero placeholders. Every attack works. This crate graduated top of its class, got a PhD, and came back to teach the other crates. |
 | `overthrone-crawler` | The Explorer | Cross-domain trust mapping, inter-realm TGT forging, SID filter analysis, PAM trust detection, MSSQL linked server crawling, foreign trust LDAP enumeration (users, groups, computers, SPNs, ACLs across trust boundaries), cross-domain escalation planning, **TCP source-port rotation (PortRotator, 12 tests), JA3/JA4 TLS fingerprint randomization (9 tests), SMB OPLOCK hijacking (3 tests), Responder integration (CrawlerResponder, 9 tests)** | Used to have 5 functions that all returned "not implemented." Now `foreign.rs` is 25KB of real cross-trust LDAP queries, AND the missing gaps got filled. Source-port rotation, JA3/JA4, OPLOCK, and Responder all done. 121 tests. ALL GAPS CLOSED. |
 | `overthrone-forge` | The Blacksmith | Golden/Silver/Diamond/Sapphire ticket forging with full PAC construction, Enhanced Diamond (KDC checksum preservation), Bronze Bit (CVE-2020-17049), DCSync per-user extraction via MS-DRSR, Shadow Credentials (msDS-KeyCredentialLink + PKINIT auth), ACL backdoors via DACL modification, Skeleton Key orchestration via SMB/SVCCTL/PKINIT, DSRM backdoor via remote registry, forensic cleanup, **ADCS Dispatcher (ESC1-9 orchestration, 1,147 lines, 9 tests), S4U2Self with PKINIT chain, AS-REP-to-TGT pipeline, PKINIT-keyed InterRealmTgt + SkeletonKey, MS-WCCE DCOM (30 tests)** | Golden Tickets? Forged. Silver? Minted. Diamond? Polished. Sapphire? Cut. Bronze Bit? Bent. ADCS dispatcher orchestrates ESC1-9 automatically. PKINIT-keyed everything. S4U2Self with certificates. MS-WCCE DCOM direct enrollment. 17 ForgeAction variants. 103 tests. The forge is now a factory. |
 | `overthrone-pilot` | The Strategist | Autonomous attack planning from graph data, step-by-step execution with rollback, adaptive strategy, Q-Learning RL engine (compiled by default), goal-based planning, YAML playbook engine, interactive wizard mode (`ovt wizard`), full kill-chain orchestration, live pipeline visualization, per-step Q-state/decision/reward readout, 9-section final report, **Hostile-DC detection (dc_verify.rs, 5 checks), Session management CLI (ovt session, 7 actions, 12 tests), WizardSession::new_with_state() for skip-Enumerate resume, Coercion cred passthrough** | The "hold my beer" engine. Now with session management - list/show/info/delete/clean/path/stats. Hostile-DC detection keeps you from trusting the enemy. `new_with_state()` skips enumeration on resume. 105 tests. Plans, adapts, executes, explains itself, cleans up, and files your paperwork. All without ever mentioning the words "auto-pwn." |
@@ -295,7 +295,7 @@ Here's what's inside the box. Every module. Every protocol. Every hilarious amou
 These are real numbers from `cargo test --workspace --lib`. No rounding up.
 
 ```
-overthrone-core     ████████████████████░  99%  856 tests. EDR evasion (ntdll unhooking, ETW abolition, sleep
+overthrone-core     ████████████████████░  99%  1107 tests. EDR evasion (ntdll unhooking, ETW abolition, sleep
                                                      masking, syscall resurrection), Credential Guard multi-signal
                                                      detection (3-tier: ALPC/process-memory/WDigest), DPAPI extraction,
                                                      file carver, Azure AD ops (8 total), SMB OPLOCK. Still hungry.
@@ -304,7 +304,7 @@ overthrone-reaper   ████████████████████
                                                      tests). LAPS/gMSA enumeration purpose-built (276 lines, 12 tests).
                                                      NTLM->TGT pipeline, GPP full, BH edge coverage, NTLMv1 detection.
 
-overthrone-hunter   █████████████████████  100%  76 tests. All 8 modules complete. Auto-crack, delegation chains,
+overthrone-hunter   █████████████████████  100%  225 tests. All 8 modules complete. Auto-crack, delegation chains,
                                                      ACL reasoning, machine harvesting, smart wordlists, NTLMv1 downgrade,
                                                      relay hash extraction. The overachiever.
 
@@ -322,7 +322,7 @@ overthrone-pilot    ████████████████████
                                                      detection (dc_verify.rs, 5 checks). Q-learner with policy/lockout
                                                      awareness.
 
-overthrone-relay    █████████████████████  100%  225 tests. HTTP->SMB asymmetric relay (13 tests). IPv6 transport
+overthrone-relay    █████████████████████  100%  128 tests. HTTP->SMB asymmetric relay (13 tests). IPv6 transport
                                                      (16 tests). mTLS/TLS verification mode (22 tests). Channel binding
                                                      validation. Auto-trigger coercion with Creds passthrough +
                                                      ShadowCoerce. Exchange relay (CVE-2024-21410, EPA bypass).
@@ -694,7 +694,7 @@ Yes. Here's proof. One table. Every major feature. Every target OS you care abou
 
 > ⚠️ = works, but WS 2025 security defaults are spicy: LDAP signing is required by default on new AD deployments, LDAP channel binding is audited/encouraged, SMB signing is required by default for outbound connections, and NTLM blocking exists to ruin relay goblin dreams. `ovt doctor` tells you what terrain you're standing on before you sprint into a wall.
 
-~210,000 lines of Rust across 10 crates (~230,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **2,074 library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
+~210,000 lines of Rust across 10 crates (~230,000 total tracked source/doc/static lines). Zero Python wrappers. Minimal shell-outs where strictly needed. `cargo test --workspace --lib` exercises **2,148 library tests** across core, reaper, hunter, crawler, forge, relay, scribe, pilot, and viewer code paths, with integration tests covering graph, C2, module execution, and live DC infrastructure. The code is real. The protocols are real. Go break some labs.
 
 ## Commands
 
@@ -1579,7 +1579,7 @@ MIT - use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 <p align="center">
   <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>10 crates. ~210,000 lines of Rust. 2,074 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
+  <sub>10 crates. ~210,000 lines of Rust. 2,148 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>
