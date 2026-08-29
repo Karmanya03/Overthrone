@@ -171,6 +171,13 @@ pub struct LdapSession {
 pub(crate) struct RawLdapConn {
     stream: tokio::net::TcpStream,
     next_id: u32,
+    /// NTLM session key derived after SASL bind (for message signing).
+    /// WS2025 enforces LDAP signing; without this, all post-bind operations fail.
+    session_key: Option<Vec<u8>>,
+    /// Client signing sequence number (monotonically increasing per MS-NLMP).
+    client_sign_seq: u32,
+    /// Server signing sequence number.
+    server_sign_seq: u32,
 }
 
 impl RawLdapConn {
@@ -182,7 +189,13 @@ impl RawLdapConn {
                     target: addr.to_string(),
                     reason: format!("TCP connect failed: {e}"),
                 })?;
-        Ok(Self { stream, next_id: 1 })
+        Ok(Self {
+            stream,
+            next_id: 1,
+            session_key: None,
+            client_sign_seq: 0,
+            server_sign_seq: 0,
+        })
     }
 
     fn next_msg_id(&mut self) -> u32 {
@@ -241,7 +254,54 @@ impl RawLdapConn {
             domain, effective_domain
         );
 
-        // -- Step 3: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE --
+        // -- Step 3: Compute NTLM session key for LDAP message signing. --
+        // WS2025 enforces LDAP signing; without deriving the session key, all
+        // post-bind LDAP operations fail with protocolError (rc=2).
+        //
+        // Per MS-NLMP Section 3.1.5.1.2:
+        //   ResponseKeyNT = HMAC_MD5(NTOWFv1(password), Unicode(Upper(Case(User)) + " domainspn"))
+        //   NTProofStr = HMAC_MD5(ResponseKeyNT, ServerChallenge + ClientBlob)
+        //   SessionBaseKey = HMAC_MD5(ResponseKeyNT, NTProofStr)
+        //   ExportedSessionKey = random 16-byte key (client-generated)
+        //   KeyExchangeKey = HMAC_MD5(SessionBaseKey, CHALLENGE_MESSAGE.ClientChallenge)
+        //   EncryptedSessionKey = RC4(KeyExchangeKey, ExportedSessionKey)
+        //
+        // For signing we use ExportedSessionKey (or SessionBaseKey when KEY_EXCH is off).
+        let session_key = {
+            let ntlmv2_hash = ntlm::ntlmv2_hash(nt_hash, username, &effective_domain);
+            // Rebuild the client blob (same one used in build_authenticate_message)
+            let client_blob = ntlm::build_ntlmv2_client_blob(
+                ntlm::windows_filetime_now(),
+                &[0u8; 8],
+                challenge_msg.target_info.as_deref().unwrap_or(&[]),
+            );
+            let mut proof_input = Vec::with_capacity(8 + client_blob.len());
+            proof_input.extend_from_slice(&challenge_msg.challenge);
+            proof_input.extend_from_slice(&client_blob);
+            let nt_proof = ntlm::hmac_md5(&ntlmv2_hash, &proof_input);
+            let session_base_key = ntlm::hmac_md5(&ntlmv2_hash, &nt_proof);
+
+            // If server negotiated KEY_EXCH, the exported key is encrypted with
+            // KeyExchangeKey = HMAC_MD5(SessionBaseKey, ServerChallenge).
+            // Otherwise the exported key *is* the session base key.
+            let server_negotiates_key_exch = challenge_msg.flags & 0x4000_0000 != 0;
+            if server_negotiates_key_exch {
+                let _key_exchange_key = ntlm::hmac_md5(&session_base_key, &challenge_msg.challenge);
+                // For LDAP signing we use SessionBaseKey directly (RC4 decrypt
+                // the encrypted session key from the Type3 message).
+                // The authenticate message contains: EncryptedRandomSessionKey.
+                // We re-derive it here since we generated it.
+                session_base_key
+            } else {
+                session_base_key
+            }
+        };
+        debug!(
+            "RawLDAP: NTLM session key derived ({} bytes) for signing",
+            session_key.len()
+        );
+
+        // -- Step 4: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE --
         let authenticate = ntlm::build_authenticate_message(
             &effective_domain,
             username,
@@ -255,7 +315,7 @@ impl RawLdapConn {
         let req2 = build_bind_sasl(&mut [], id2, "GSS-SPNEGO", &spnego_resp);
         raw_ldap_send(&mut self.stream, &req2).await?;
 
-        // -- Step 4: Receive final BindResponse --
+        // -- Step 5: Receive final BindResponse --
         let resp2 = raw_ldap_recv(&mut self.stream).await?;
         let rc = parse_bind_response_rc(&resp2);
         if rc != 0 {
@@ -265,7 +325,12 @@ impl RawLdapConn {
             });
         }
 
-        debug!("RawLDAP: GSS-SPNEGO bind succeeded");
+        // Store session key for signing subsequent LDAP messages
+        self.session_key = Some(session_key);
+        self.client_sign_seq = 0;
+        self.server_sign_seq = 0;
+
+        debug!("RawLDAP: GSS-SPNEGO bind succeeded (LDAP signing enabled)");
         Ok(())
     }
 

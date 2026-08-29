@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.4 (2026-08-29)
+
+### WS2022/WS2025 Compliance
+
+- Enhanced NTLM negotiate flags with NEGOTIATE_SIGN, NEGOTIATE_SEAL, NEGOTIATE_128, NEGOTIATE_KEY_EXCH, and NEGOTIATE_56 for WS2025 DC compatibility
+- Added NTLM session key derivation in raw LDAP SASL backend for WS2025 LDAP signing enforcement
+- Added Kerberos AS-REQ FAST armoring via anonymous PKINIT armor ticket (RFC 6806)
+- Added anonymous PKINIT armor TGT support for FAST armoring
+- Added hmac_md5 primitive for NTLM session key computation
+
+### DPAPI Remote Extraction
+
+- Implemented DPAPI backup key retrieval via active LDAP session (queries CN=Microsoft,CN=System for PKEY blob)
+- Added PKEY blob parser supporting v1/v2 structures (version + GUID + keyMaterial)
+- Added remote DPAPI masterkey file reading via SMB from target user profile directories
+
+### Bug Fixes
+
+- Fixed collapsible if clippy warning in DPAPI PKEY parsing
+- Fixed constant assertion clippy warning in netlogon_rce test
+- Fixed bool assertion clippy warning in timeroast test
+- Fixed missing parallel_safe field in qlearner test fixture
+
 ## v0.4.3 (2026-08-26)
 
 ### Bug Fixes

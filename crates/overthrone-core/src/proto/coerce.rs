@@ -197,18 +197,20 @@ async fn trigger_printer_bug_inner(
         Ok(resp) => resp,
         Err(e) => {
             let err_msg = e.to_string().to_uppercase();
-            let is_disabled = err_msg.contains("STATUS_OBJECT_NAME_NOT_FOUND") 
+            let is_disabled = err_msg.contains("STATUS_OBJECT_NAME_NOT_FOUND")
                 || err_msg.contains("STATUS_PIPE_NOT_AVAILABLE")
                 || err_msg.contains("STATUS_ACCESS_DENIED")
                 || err_msg.contains("NOT FOUND");
-            
+
             return Ok(CoercionResult {
                 target: target.to_string(),
                 technique: "printer-bug".to_string(),
                 listener: listener.to_string(),
                 success: false,
                 message: if is_disabled {
-                    format!("Print Spooler service appears to be disabled or inaccessible (WS2025 default). Pipe error: {e}")
+                    format!(
+                        "Print Spooler service appears to be disabled or inaccessible (WS2025 default). Pipe error: {e}"
+                    )
                 } else {
                     format!("Failed to connect to spoolss pipe: {e}")
                 },

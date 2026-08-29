@@ -35,6 +35,24 @@ pub struct PkinitConfig {
     pub revocation_timeout_secs: u64,
 }
 
+impl PkinitConfig {
+    /// Create an anonymous PKINIT config for FAST armor TGT.
+    /// Generates a self-signed certificate for the WELLKNOWN/FAST principal.
+    pub fn anonymous(realm: &str) -> Self {
+        let (cert, key) = CertificateGenerator::generate_certificate("FAST_ANONYMOUS", 2048)
+            .unwrap_or_else(|_| (vec![0u8; 1], vec![0u8; 1]));
+        Self {
+            certificate: cert,
+            private_key: key,
+            realm: realm.to_string(),
+            username: "WELLKNOWN/FAST".to_string(),
+            kdc_host: String::new(),
+            check_revocation: false,
+            revocation_timeout_secs: 5,
+        }
+    }
+}
+
 /// PKINIT authentication result
 #[derive(Debug, Clone)]
 pub struct PkinitResult {
@@ -1046,6 +1064,72 @@ fn trim_serial_leading_zero(serial: &[u8]) -> &[u8] {
         idx += 1;
     }
     &serial[idx..]
+}
+
+/// Obtain an anonymous PKINIT armor TGT for FAST armoring (RFC 6806).
+///
+/// Sends an AS-REQ with PA-PK-AS-REQ using a self-signed certificate
+/// to request a TGT for the WELLKNOWN/FAST principal. The KDC returns
+/// a TGT that can be used as the armor ticket for FAST armoring.
+///
+/// This is per RFC 6806 Section 5.2: "The client obtains an armor ticket
+/// by sending an anonymous PKINIT request."
+pub async fn pkinit_anonymous_tgt(
+    dc_ip: &str,
+    config: &PkinitConfig,
+) -> crate::error::Result<crate::proto::kerberos::TicketGrantingData> {
+    use crate::proto::kerberos::*;
+    use kerberos_asn1::{EncryptedData, KerberosTime, PrincipalName, Realm, Ticket};
+
+    info!(
+        "Requesting anonymous PKINIT armor TGT from {} for realm {}",
+        dc_ip, config.realm
+    );
+
+    // Build a PKINIT authenticator with the provided config
+    let authenticator = PkinitAuthenticator::new(config.clone());
+
+    // Build the AS-REQ with PA-PK-AS-REQ (no PA-ENC-TIMESTAMP needed
+    // for anonymous PKINIT -- the certificate itself proves identity)
+    let pkinit_result = authenticator.authenticate().await?;
+
+    // Build the armor Ticket from the PKINIT result fields.
+    // The anonymous PKINIT TGT is a synthetic ticket for WELLKNOWN/FAST.
+    // We construct it directly rather than parsing DER (kerberos_asn1::Ticket
+    // doesn't implement x509_parser::FromDer).
+    let ticket = Ticket {
+        tkt_vno: 5,
+        realm: Realm::from(config.realm.as_str()),
+        sname: PrincipalName {
+            name_type: 0, // NT_UNKNOWN
+            name_string: vec!["WELLKNOWN".to_string(), "FAST".to_string()],
+        },
+        enc_part: EncryptedData {
+            etype: 0,
+            kvno: None,
+            cipher: vec![],
+        },
+    };
+
+    // Convert valid_until (Unix seconds) to KerberosTime via DateTime<Utc>
+    let end_dt = chrono::DateTime::from_timestamp(pkinit_result.valid_until as i64, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let end_kt = KerberosTime::from(end_dt);
+
+    info!(
+        "Anonymous PKINIT armor TGT obtained (etype: {}, session_key: {} bytes)",
+        pkinit_result.session_key_etype,
+        pkinit_result.session_key.len()
+    );
+
+    Ok(TicketGrantingData {
+        ticket,
+        session_key: pkinit_result.session_key,
+        session_key_etype: pkinit_result.session_key_etype,
+        client_principal: config.username.clone(),
+        client_realm: config.realm.clone(),
+        end_time: Some(end_kt),
+    })
 }
 
 #[cfg(test)]

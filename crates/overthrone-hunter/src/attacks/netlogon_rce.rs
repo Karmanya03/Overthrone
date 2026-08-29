@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn test_overflow_trigger_len() {
         assert_eq!(OVERFLOW_TRIGGER_LEN, 256);
-        assert!(OVERFLOW_TRIGGER_LEN + 64 > 256);
+        const { assert!(OVERFLOW_TRIGGER_LEN + 64 > 256) };
     }
 
     #[test]

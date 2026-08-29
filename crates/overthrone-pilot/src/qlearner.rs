@@ -1147,6 +1147,7 @@ mod tests {
             depends_on: vec![],
             executed: false,
             result: None,
+            parallel_safe: false,
             retries: 0,
             max_retries: 3,
             reversible: false,

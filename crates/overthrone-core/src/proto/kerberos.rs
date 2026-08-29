@@ -51,6 +51,7 @@ pub const ETYPE_AES128_CTS: i32 = 17;
 pub const ETYPE_AES256_CTS: i32 = 18;
 
 // Principal name types
+pub const NT_UNKNOWN: i32 = 0;
 pub const NT_PRINCIPAL: i32 = 1;
 pub const NT_SRV_INST: i32 = 2;
 
@@ -1255,6 +1256,239 @@ pub async fn request_tgt_opsec(
     Err(OverthroneError::Kerberos(
         "request_tgt_opsec: referral loop exhausted".to_string(),
     ))
+}
+
+/// Request a TGT with FAST armoring (RFC 6806/6113).
+///
+/// This is the weaponized version of `request_tgt` that wraps the AS-REQ
+/// in a KrbFastRequest using an anonymous PKINIT TGT as the armor ticket.
+/// Required for WS2025 domains with FAST enforcement (KDC_ERR_PREAUTH_REQUIRED
+/// with required FAST).
+///
+/// Flow:
+/// 1. Obtain anonymous PKINIT armor TGT (WELLKNOWN/FAST)
+/// 2. Wrap the real AS-REQ in PA-FX-FAST using the armor TGT
+/// 3. Send armored AS-REQ to KDC
+/// 4. Parse armored AS-REP and extract TGT
+///
+/// Falls back to unarmored AS-REQ if the KDC doesn't enforce FAST.
+pub async fn request_tgt_fast(
+    dc_ip: &str,
+    domain: &str,
+    username: &str,
+    secret: &str,
+    use_hash: bool,
+    aes_only: bool,
+) -> Result<TicketGrantingData> {
+    let realm = normalize_realm(domain);
+    let clean_username = normalize_username(username);
+
+    info!("Requesting FAST-armored TGT for {clean_username}@{realm}");
+
+    // Step 1: Try to obtain an anonymous PKINIT armor TGT.
+    // If PKINIT is not available, fall back to unarmored (most WS2016/2019 domains).
+    let armor_tgt = obtain_anonymous_pkinit_armor(dc_ip, &realm).await;
+    let use_armor = armor_tgt.is_ok();
+    let armor = armor_tgt.unwrap_or_else(|e| {
+        warn!("Anonymous PKINIT armor unavailable ({e}); using unarmored AS-REQ");
+        // Synthetic armor: a TicketGrantingData with empty ticket and zero session key.
+        // The build_fast_armor function will skip armoring when it sees this.
+        TicketGrantingData {
+            ticket: Ticket {
+                tkt_vno: 5,
+                realm: realm.clone(),
+                sname: PrincipalName {
+                    name_type: NT_UNKNOWN,
+                    name_string: vec!["WELLKNOWN".to_string(), "FAST".to_string()],
+                },
+                enc_part: EncryptedData {
+                    etype: 0,
+                    kvno: None,
+                    cipher: vec![],
+                },
+            },
+            session_key: vec![0u8; 16],
+            session_key_etype: ETYPE_AES256_CTS,
+            client_principal: "WELLKNOWN/FAST".to_string(),
+            client_realm: realm.clone(),
+            end_time: None,
+        }
+    });
+
+    let supported_etypes: &[i32] = if aes_only {
+        &[ETYPE_AES256_CTS, ETYPE_AES128_CTS, ETYPE_RC4_HMAC]
+    } else {
+        &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS]
+    };
+
+    // Derive client key
+    let (key, primary_etype) = if use_hash {
+        (ntlm::parse_ntlm_hash(secret)?, ETYPE_RC4_HMAC)
+    } else if aes_only {
+        let salt = format!("{}{}", realm.to_uppercase(), clean_username);
+        let aes_key = crate::crypto::derive_key_aes256(secret, &salt);
+        (aes_key.to_vec(), ETYPE_AES256_CTS)
+    } else {
+        (ntlm::nt_hash(secret), ETYPE_RC4_HMAC)
+    };
+
+    let mut current_dc = dc_ip.to_string();
+    let mut current_realm = realm.clone();
+
+    for hop in 0..=2 {
+        let pa_timestamp = build_pa_enc_timestamp(&key, primary_etype)?;
+        let pa_pac = build_pa_pac_request(true);
+        let req_body = build_as_req_body(clean_username, &current_realm, supported_etypes);
+        let req_body_der = req_body.build();
+
+        // Build FAST armor if we have a valid PKINIT armor TGT
+        let pa_data = if use_armor
+            && !armor.session_key.is_empty()
+            && armor.session_key.iter().any(|&b| b != 0)
+        {
+            let ticket_der = armor.ticket.build();
+            match build_fast_armor(&FastArmorParams {
+                inner_req_body_der: &req_body_der,
+                tgt_ticket_der: &ticket_der,
+                tgt_session_key: &armor.session_key,
+                session_key_etype: armor.session_key_etype,
+                client_realm: &current_realm,
+            }) {
+                Ok(fast_pa) => {
+                    info!("AS-REQ: FAST armoring active");
+                    vec![
+                        pa_timestamp,
+                        pa_pac,
+                        PaData {
+                            padata_type: PA_FX_FAST,
+                            padata_value: fast_pa,
+                        },
+                    ]
+                }
+                Err(e) => {
+                    warn!("FAST armor build failed ({e}), falling back to unarmored");
+                    vec![pa_timestamp, pa_pac]
+                }
+            }
+        } else {
+            vec![pa_timestamp, pa_pac]
+        };
+
+        let as_req = AsReq {
+            pvno: 5,
+            msg_type: 10,
+            padata: Some(pa_data),
+            req_body,
+        };
+
+        let response_bytes = kdc_exchange(&current_dc, &as_req.build()).await?;
+
+        let decryption_etypes: &[i32] = if aes_only {
+            &[ETYPE_AES256_CTS, ETYPE_AES128_CTS, ETYPE_RC4_HMAC]
+        } else {
+            &[ETYPE_RC4_HMAC, ETYPE_AES256_CTS, ETYPE_AES128_CTS]
+        };
+
+        match AsRep::parse(&response_bytes) {
+            Ok((_, as_rep)) => {
+                let mut decrypted: Option<Vec<u8>> = None;
+
+                for &try_etype in decryption_etypes {
+                    let try_key = if try_etype == ETYPE_RC4_HMAC {
+                        ntlm::nt_hash(secret)
+                    } else if try_etype == ETYPE_AES256_CTS {
+                        let salt = format!("{}{}", realm.to_uppercase(), clean_username);
+                        crate::crypto::derive_key_aes256(secret, &salt).to_vec()
+                    } else if try_etype == ETYPE_AES128_CTS {
+                        let salt = format!("{}{}", realm.to_uppercase(), clean_username);
+                        crate::crypto::derive_key_aes128(secret, &salt).to_vec()
+                    } else {
+                        continue;
+                    };
+
+                    match new_kerberos_cipher(try_etype) {
+                        Ok(cipher) => {
+                            if let Ok(d) = cipher.decrypt(&try_key, 2, &as_rep.enc_part.cipher) {
+                                decrypted = Some(d);
+                                break;
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                }
+
+                match decrypted {
+                    Some(enc_part) => {
+                        let (_, enc_as_rep) = EncAsRepPart::parse(&enc_part).map_err(|e| {
+                            OverthroneError::Kerberos(format!("FAST TGT: parse EncAsRepPart: {e}"))
+                        })?;
+
+                        info!(
+                            "FAST-armored TGT obtained for {clean_username}@{realm} (etype: {})",
+                            enc_as_rep.key.keytype
+                        );
+
+                        return Ok(TicketGrantingData {
+                            ticket: as_rep.ticket,
+                            session_key: enc_as_rep.key.keyvalue,
+                            session_key_etype: enc_as_rep.key.keytype,
+                            client_principal: clean_username.to_string(),
+                            client_realm: current_realm,
+                            end_time: Some(enc_as_rep.endtime),
+                        });
+                    }
+                    None => {
+                        return Err(OverthroneError::Kerberos(
+                            "FAST TGT: no etype could decrypt AS-REP".to_string(),
+                        ));
+                    }
+                }
+            }
+            Err(_) => {
+                if let Some(suggested) = extract_wrong_realm(&response_bytes) {
+                    if hop >= 2 {
+                        return Err(OverthroneError::Kerberos(format!(
+                            "request_tgt_fast: exceeded max referral hops (referred to '{suggested}')"
+                        )));
+                    }
+                    info!("FAST TGT: KDC referred to realm '{suggested}' (hop {hop})");
+                    match resolve_realm_kdc(&suggested, None).await {
+                        Ok(new_dc) => {
+                            current_dc = new_dc;
+                            current_realm = suggested;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(OverthroneError::Kerberos(format!(
+                                "request_tgt_fast: referred to '{suggested}' but DNS SRV resolution failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(parse_krb_error(&response_bytes));
+            }
+        }
+    }
+
+    Err(OverthroneError::Kerberos(
+        "request_tgt_fast: referral loop exhausted".to_string(),
+    ))
+}
+
+/// Obtain an anonymous PKINIT armor TGT for FAST armoring.
+/// Sends an AS-REQ with PA-PK-AS-REQ (anonymous, no client cert) to get
+/// a WELLKNOWN/FAST armor ticket. This is per RFC 6806 Section 5.2.
+async fn obtain_anonymous_pkinit_armor(dc_ip: &str, realm: &str) -> Result<TicketGrantingData> {
+    use crate::proto::pkinit::PkinitConfig;
+
+    // Build anonymous PKINIT AS-REQ for WELLKNOWN/FAST principal.
+    // Per RFC 6806, the armor ticket principal is "WELLKNOWN/FAST" with
+    // name-type NT_UNKNOWN (0). The PA-PK-AS-REQ contains a self-signed
+    // certificate for anonymous PKINIT.
+    let pkinit_config = PkinitConfig::anonymous(realm);
+    let armor_result = crate::proto::pkinit::pkinit_anonymous_tgt(dc_ip, &pkinit_config).await?;
+
+    Ok(armor_result)
 }
 
 // ===========================================================

@@ -7791,7 +7791,9 @@ pub async fn cmd_dcomexec(
                 let creds = match crate::require_creds(cli) {
                     Ok(c) => c,
                     Err(err) => {
-                        banner::print_fail(&format!("DCOMexec failed: {e} (Fallback failed: {err})"));
+                        banner::print_fail(&format!(
+                            "DCOMexec failed: {e} (Fallback failed: {err})"
+                        ));
                         return 1;
                     }
                 };
@@ -7799,8 +7801,12 @@ pub async fn cmd_dcomexec(
                 let pass = creds.password().unwrap_or("");
 
                 let smb_result = overthrone_core::proto::smb::SmbSession::connect(
-                    target, &domain, &creds.username, pass,
-                ).await;
+                    target,
+                    &domain,
+                    &creds.username,
+                    pass,
+                )
+                .await;
 
                 match smb_result {
                     Ok(smb) => {
@@ -7834,7 +7840,9 @@ pub async fn cmd_dcomexec(
                                     "!".yellow(),
                                     e_wmi
                                 );
-                                match overthrone_core::exec::atexec::exec_command(&smb, &full_cmd).await {
+                                match overthrone_core::exec::atexec::exec_command(&smb, &full_cmd)
+                                    .await
+                                {
                                     Ok(res_at) => {
                                         if wants_json(cli) {
                                             return emit_json(
@@ -7853,7 +7861,10 @@ pub async fn cmd_dcomexec(
                                         0
                                     }
                                     Err(e_at) => {
-                                        banner::print_fail(&format!("All execution methods failed. DCOM: {}, WMIExec: {}, ATExec: {}", e, e_wmi, e_at));
+                                        banner::print_fail(&format!(
+                                            "All execution methods failed. DCOM: {}, WMIExec: {}, ATExec: {}",
+                                            e, e_wmi, e_at
+                                        ));
                                         1
                                     }
                                 }
@@ -7861,7 +7872,9 @@ pub async fn cmd_dcomexec(
                         }
                     }
                     Err(smb_e) => {
-                        banner::print_fail(&format!("DCOMexec failed: {e} (SMB connect for fallback failed: {smb_e})"));
+                        banner::print_fail(&format!(
+                            "DCOMexec failed: {e} (SMB connect for fallback failed: {smb_e})"
+                        ));
                         1
                     }
                 }

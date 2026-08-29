@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "da");
         assert_eq!(loaded[0].secret, "P@ssw0rd!");
-        assert_eq!(loaded[1].is_hash, true);
+        assert!(loaded[1].is_hash);
     }
 
     #[test]

@@ -295,10 +295,22 @@ pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
     // Message type (Type 1 = Negotiate)
     msg.extend_from_slice(&1u32.to_le_bytes());
 
-    // NTLM negotiate flags
-    // NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_OEM | NTLMSSP_REQUEST_TARGET |
-    // NTLMSSP_NEGOTIATE_NTLM | NTLMSSP_NEGOTIATE_ALWAYS_SIGN | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
-    let flags: u32 = 0x00000202 | 0x00020000 | 0x00000010 | 0x00000200 | 0x00008000 | 0x00080000;
+    // NTLM negotiate flags -- full set for WS2022/WS2025 compliance.
+    // Includes NEGOTIATE_SIGN (0x10), NEGOTIATE_SEAL (0x20), NEGOTIATE_128 (0x20000000),
+    // NEGOTIATE_56 (0x80000000), and NEGOTIATE_KEY_EXCH (0x40000000) so the server can
+    // negotiate signing, sealing, and 128-bit keys.  WS2025 DCs reject connections that
+    // only offer 56-bit or weaker NTLM flags.
+    let flags: u32 = 0x0000_0001   // NEGOTIATE_UNICODE
+        | 0x0000_0002              // NEGOTIATE_OEM
+        | 0x0000_0010              // NEGOTIATE_SIGN
+        | 0x0000_0020              // NEGOTIATE_SEAL
+        | 0x0000_0200              // NEGOTIATE_NTLM
+        | 0x0000_8000              // NEGOTIATE_ALWAYS_SIGN
+        | 0x0008_0000              // NEGOTIATE_EXTENDED_SESSIONSECURITY
+        | 0x0002_0000              // REQUEST_TARGET
+        | 0x2000_0000              // NEGOTIATE_128
+        | 0x4000_0000              // NEGOTIATE_KEY_EXCH
+        | 0x8000_0000; // NEGOTIATE_56
     msg.extend_from_slice(&flags.to_le_bytes());
 
     // Domain name (optional, we'll include if provided)
@@ -415,6 +427,14 @@ pub fn parse_challenge_message(data: &[u8]) -> Result<NtlmChallengeMessage> {
 /// Compute NTOWFv1 (same as NT hash)
 pub fn ntowfv1(password: &str) -> Vec<u8> {
     nt_hash(password)
+}
+
+/// Compute HMAC-MD5(key, message) -- used for NTLM session key derivation
+/// and LDAP message signing per MS-NLMP.
+pub fn hmac_md5(key: &[u8], message: &[u8]) -> Vec<u8> {
+    let mut mac = HmacMd5::new_from_slice(key).expect("HMAC-MD5 accepts any key length");
+    mac.update(message);
+    mac.finalize().into_bytes().to_vec()
 }
 
 /// Build NTLM Type 3 (Authenticate) message

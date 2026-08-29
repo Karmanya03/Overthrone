@@ -456,10 +456,7 @@ mod tests {
         assert_eq!(result.hashes[0].rid, expected_rid);
         assert_eq!(result.hashes[0].hash, hash);
         assert_eq!(result.hashes[0].salt, salt);
-        assert_eq!(
-            result.hashes[0].hashcat_line().starts_with("512:$sntp-ms$"),
-            true
-        );
+        assert!(result.hashes[0].hashcat_line().starts_with("512:$sntp-ms$"));
     }
 
     #[tokio::test]
