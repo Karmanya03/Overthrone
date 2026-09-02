@@ -547,19 +547,32 @@ pilot checks what data already exists and skips any completed work.
 
 ### 7b. Wizard-Guided Mode
 
-The wizard provides an interactive workflow that walks the operator through each
-phase with prompts, suggestions, and rollback on failure:
+The wizard provides two modes: CLI headless and TUI interactive.
+
+**CLI mode** (`ovt wizard -H <dc> -d <dom> -u <user> -p <pass>`):
+Headless autonomous kill-chain with pause/approve at each stage, checkpoint resume,
+and Q-learning adaptive decisions.
+
+**TUI mode** (`ovt wizard --tui`):
+Interactive click-based module selection with 50 modules across 8 categories.
+No credentials required at launch -- fill them in the Target Config tab.
 
 ```mermaid
 flowchart TD
-    WIZ["ovt wizard --goal &lt;target&gt;"] --> PHASE1["Phase: Enumerate<br/>Run reaper::enum_all()<br/>Show summary, ask to proceed"]
+    WIZ["ovt wizard<br/>--tui OR CLI flags"] --> MODE{Mode?}
+    MODE -->|"--tui"| TUI["TUI Wizard<br/>Click-based module selection<br/>Target Config form<br/>50 modules, 8 categories"]
+    MODE -->|"CLI flags"| CLI["CLI Wizard<br/>Autonomous kill-chain<br/>Pause/approve each stage"]
+    
+    TUI --> EXEC["execute_wizard_modules()<br/>Run selected modules"]
+    CLI --> PHASE1["Phase: Enumerate<br/>Run reaper::enum_all()<br/>Show summary, ask to proceed"]
+    
     PHASE1 -->|Proceed| PHASE2["Phase: Attack Graph<br/>Build petgraph from data<br/>Display shortest paths"]
     PHASE2 -->|Proceed| PHASE3["Phase: Attack<br/>Choose: roast / spray / coerce<br/>Run hunter or relay"]
     PHASE3 -->|Fail| RETRY["Suggest alternatives<br/>Roll back last action"]
     RETRY --> PHASE3
     PHASE3 -->|Proceed| PHASE4["Phase: Escalate / Persist<br/>Choose technique<br/>Run forge or core exec"]
     PHASE4 -->|Done| REPORT["Phase: Report<br/>Run scribe::generate()"]
-
+    
     WIZ --> DETECT["Hostile-DC Detection<br/>dc_verify.rs — 5 checks<br/>LDAP rootDSE, domain match,<br/>DNS SRV, hostname, Kerberos port"]
     DETECT --> PHASE1
 ```

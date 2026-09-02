@@ -1196,9 +1196,7 @@ impl Smb2Connection {
 
         let status = u32::from_le_bytes([raw_resp[8], raw_resp[9], raw_resp[10], raw_resp[11]]);
         if status != STATUS_SUCCESS {
-            return Err(OverthroneError::Auth(format!(
-                "SMB2 NTLMSSP auth failed for {domain}\\{username}: 0x{status:08X}"
-            )));
+            return Err(OverthroneError::Auth(crate::error::format_ntstatus(status)));
         }
 
         debug!("SMB2: Authenticated as {domain}\\{username}");
@@ -1504,9 +1502,7 @@ impl Smb2Connection {
 
         let status = u32::from_le_bytes([raw_resp[8], raw_resp[9], raw_resp[10], raw_resp[11]]);
         if status != STATUS_SUCCESS {
-            return Err(OverthroneError::Auth(format!(
-                "SMB2 PtH auth failed for {domain}\\{username}: 0x{status:08X}"
-            )));
+            return Err(OverthroneError::Auth(crate::error::format_ntstatus(status)));
         }
 
         *self.session_key.lock().await = Some(session_key.clone());
@@ -1759,9 +1755,7 @@ impl Smb2Connection {
 
         let status = u32::from_le_bytes([raw_resp[8], raw_resp[9], raw_resp[10], raw_resp[11]]);
         if status != STATUS_SUCCESS && status != STATUS_MORE_PROCESSING_REQUIRED {
-            return Err(OverthroneError::Auth(format!(
-                "SMB2 Kerberos auth failed: 0x{status:08X}"
-            )));
+            return Err(OverthroneError::Auth(crate::error::format_ntstatus(status)));
         }
 
         // Store session ID

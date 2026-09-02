@@ -207,7 +207,13 @@ impl Credentials {
                 AuthData::NtlmHash(hash.to_string())
             }
             Some(AuthMethod::Ticket) => {
-                let path = ticket_path.ok_or("--ticket required for ticket auth")?;
+                // Check --ticket flag first, then KRB5CCNAME env var
+                let resolved_path: Option<String> = ticket_path
+                    .map(|s| s.to_string())
+                    .or_else(|| std::env::var("KRB5CCNAME").ok());
+                let path = resolved_path
+                    .as_deref()
+                    .ok_or("--ticket required for ticket auth (or set KRB5CCNAME env var)")?;
                 if !std::path::Path::new(path).exists() {
                     return Err(format!("Ticket file not found: {}", path));
                 }
@@ -252,21 +258,47 @@ impl Credentials {
         use_ldaps: bool,
         dry_run: bool,
     ) -> Result<overthrone_pilot::executor::ExecContext, String> {
-        let (secret, use_hash) = self.secret_and_hash_flag()?;
-        Ok(overthrone_pilot::executor::ExecContext {
-            dc_ip: dc_host.to_string(),
-            domain: self.domain.clone(),
-            username: self.username.clone(),
-            secret,
-            use_hash,
-            use_ldaps,
-            timeout: 10,
-            jitter_ms: 0,
-            dry_run,
-            override_creds: None,
-            ldap_available: true,
-            preferred_method: "smbexec".to_string(),
-        })
+        match &self.auth {
+            AuthData::KerberosTicket(ticket_path) => {
+                // Ticket-based auth: the executor will use the ticket file for
+                // Kerberos authentication instead of password/hash.
+                Ok(overthrone_pilot::executor::ExecContext {
+                    dc_ip: dc_host.to_string(),
+                    domain: self.domain.clone(),
+                    username: self.username.clone(),
+                    // Store the ticket path as the "secret"; use_hash=false signals
+                    // that this is a ticket, not a raw NT hash.
+                    secret: ticket_path.clone(),
+                    use_hash: false,
+                    use_ldaps,
+                    timeout: 10,
+                    jitter_ms: 0,
+                    dry_run,
+                    override_creds: None,
+                    ldap_available: true,
+                    preferred_method: "smbexec".to_string(),
+                    ticket_path: Some(ticket_path.clone()),
+                })
+            }
+            _ => {
+                let (secret, use_hash) = self.secret_and_hash_flag()?;
+                Ok(overthrone_pilot::executor::ExecContext {
+                    dc_ip: dc_host.to_string(),
+                    domain: self.domain.clone(),
+                    username: self.username.clone(),
+                    secret,
+                    use_hash,
+                    use_ldaps,
+                    timeout: 10,
+                    jitter_ms: 0,
+                    dry_run,
+                    override_creds: None,
+                    ldap_available: true,
+                    preferred_method: "smbexec".to_string(),
+                    ticket_path: None,
+                })
+            }
+        }
     }
 
     pub fn password(&self) -> Option<&str> {

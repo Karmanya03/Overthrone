@@ -333,3 +333,37 @@ impl From<windows::core::Error> for OverthroneError {
         OverthroneError::PostExploitation(format!("Windows API error: {err}"))
     }
 }
+
+/// Map common NTSTATUS error codes to human-readable messages.
+pub fn format_ntstatus(code: u32) -> String {
+    match code {
+        0x00000000 => "STATUS_SUCCESS".into(),
+        0xC0000022 => {
+            "STATUS_ACCESS_DENIED: Insufficient privileges or object not accessible".into()
+        }
+        0xC0000034 => "STATUS_OBJECT_NAME_NOT_FOUND: Resource does not exist".into(),
+        0xC000006A => "STATUS_BAD_NETWORK_NAME: Share not found or network name invalid".into(),
+        0xC000006D => "STATUS_LOGON_FAILURE: Invalid credentials (bad username or password)".into(),
+        0xC000006E => "STATUS_ACCOUNT_RESTRICTION: Account restrictions prevent logon".into(),
+        0xC0000070 => "STATUS_LOGON_TYPE_NOT_GRANTED: Logon type not granted".into(),
+        0xC000009A => "STATUS_INSUFFICIENT_RESOURCES: Insufficient server resources".into(),
+        0xC00000CC => "STATUS_BAD_NETWORK_NAME: Share not found".into(),
+        0xC0000133 => "STATUS_CLOCK_SKEW: Time skew between client and server".into(),
+        0xC000015B => "STATUS_TRUSTED_DOMAIN_FAILURE: Trusted domain failure".into(),
+        0xC000018C => "STATUS_TRUSTED_RELATIONSHIP_FAILURE: Trust relationship failure".into(),
+        0xC0000193 => "STATUS_ACCOUNT_EXPIRED: Account has expired".into(),
+        0xC0000205 => "STATUS_ACCOUNT_DISABLED: Account is disabled".into(),
+        0xC0000234 => "STATUS_ACCOUNT_LOCKED_OUT: Account locked out".into(),
+        0xC000A000 => "KDC_ERR_GENERICT: Kerberos generic error".into(),
+        0xC000A002 => "KDC_ERR_CLIENT_KEY_EXPIRED: Client key expired".into(),
+        0xC000A003 => "KDC_ERR_SERVICE_EXP: Service ticket expired".into(),
+        0xC000A010 => "KDC_ERR_SKEY_REQUIRED: Session key required".into(),
+        0xC000A020 => "KDC_ERR_TGT_REVOKED: TGT revoked".into(),
+        0xC000A025 => "KDC_ERR_SERVER_TRUST_NOT_TRUSTED: Server trust not trusted".into(),
+        0xC000A032 => "KDC_ERR_INVALID_REQ: Invalid request".into(),
+        0xC000A033 => "KDC_ERR_BADCHECKSUM: Bad checksum".into(),
+        0xC000A041 => "KDC_ERR_POLICY_RESTRICTION: Policy restriction".into(),
+        0xC000A060 => "KDC_ERR_WRONG_REALM: Wrong realm (cross-realm referral)".into(),
+        _ => format!("NTSTATUS 0x{:08X}", code),
+    }
+}

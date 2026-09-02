@@ -11,9 +11,9 @@ use tracing::info;
 
 use super::wizard_app::{self, WizardApp, WizardScreen};
 
-/// Run the TUI wizard. Returns Ok(true) if the user wants to execute modules,
-/// Ok(false) if they quit early.
-pub async fn run_tui_wizard() -> anyhow::Result<bool> {
+/// Run the TUI wizard. Returns Ok(Some(app)) with populated inputs and
+/// selected modules if the user wants to execute, or Ok(None) if they quit.
+pub async fn run_tui_wizard() -> anyhow::Result<Option<WizardApp>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -33,7 +33,7 @@ pub async fn run_tui_wizard() -> anyhow::Result<bool> {
             disable_raw_mode()?;
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             terminal.show_cursor()?;
-            return Ok(false);
+            return Ok(None);
         }
 
         // If the user pressed R and we have modules selected, exit TUI and run
@@ -45,7 +45,7 @@ pub async fn run_tui_wizard() -> anyhow::Result<bool> {
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             terminal.show_cursor()?;
 
-            return Ok(true);
+            return Ok(Some(app));
         }
     }
 }

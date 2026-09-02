@@ -274,6 +274,31 @@ impl SmbSession {
             reconnect_nt_hash: Some(nt_hash.to_string()),
         })
     }
+
+    /// Connect using an anonymous/null session (no credentials).
+    /// Equivalent to impacket's `login(user='', password='', domain='')`
+    /// or smbclient's `-N` (null session) flag.
+    pub async fn connect_anonymous(target: &str) -> Result<Self> {
+        info!("SMB: Anonymous connection to \\\\{target}");
+
+        let conn = super::smb2::Smb2Connection::connect(target, SMB_PORT).await?;
+        conn.negotiate().await?;
+        let session_key = conn.session_setup(target, "", "").await?;
+
+        info!("SMB: Anonymous session established to \\\\{target}");
+        Ok(SmbSession {
+            client: None,
+            inner: Some(std::sync::Arc::new(tokio::sync::Mutex::new(conn))),
+            target: target.to_string(),
+            username: String::new(),
+            domain: target.to_string(),
+            ticket: None,
+            session_key: Some(session_key),
+            reconnect_password: None,
+            reconnect_nt_hash: None,
+        })
+    }
+
     pub fn session_key(&self) -> Option<Vec<u8>> {
         self.session_key.clone()
     }
@@ -1891,6 +1916,33 @@ impl SmbSession {
             session_key: Some(session_key),
             reconnect_password: None,
             reconnect_nt_hash: Some(nt_hash.to_string()),
+        })
+    }
+
+    /// Connect using an anonymous/null session (no credentials).
+    /// Equivalent to impacket's `login(user='', password='', domain='')`
+    /// or smbclient's `-N` (null session) flag.
+    ///
+    /// Sends NTLMSSP negotiate -> challenge -> authenticate with empty
+    /// username and password. The server accepts this as anonymous logon
+    /// when the target allows null sessions.
+    pub async fn connect_anonymous(target: &str) -> Result<Self> {
+        info!("SMB: Anonymous connection to \\\\{target}");
+
+        let conn = super::smb2::Smb2Connection::connect(target, SMB_PORT).await?;
+        conn.negotiate().await?;
+        let session_key = conn.session_setup(target, "", "").await?;
+
+        info!("SMB: Anonymous session established to \\\\{target}");
+        Ok(Self {
+            inner: Arc::new(Mutex::new(conn)),
+            target: target.to_string(),
+            username: String::new(),
+            domain: target.to_string(),
+            ticket: None,
+            session_key: Some(session_key),
+            reconnect_password: None,
+            reconnect_nt_hash: None,
         })
     }
 

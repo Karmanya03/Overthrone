@@ -553,6 +553,7 @@ impl WizardApp {
             .unwrap_or("")
     }
 
+    #[allow(dead_code)]
     pub fn set_input(&mut self, field: &InputField, value: String) {
         if let Some((_, v)) = self.input_fields.iter_mut().find(|(f, _)| f == field) {
             *v = value;

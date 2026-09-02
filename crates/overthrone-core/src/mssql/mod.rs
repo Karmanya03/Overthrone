@@ -44,6 +44,8 @@ pub struct MssqlConfig {
     pub password: Option<String>,
     /// Domain for NTLM auth
     pub domain: Option<String>,
+    /// NT hash for pass-the-hash auth (hex string, 32 chars)
+    pub nt_hash: Option<String>,
     /// Trust server certificate
     pub trust_cert: bool,
     /// Connection timeout in seconds
@@ -63,6 +65,7 @@ impl Default for MssqlConfig {
             username: None,
             password: None,
             domain: None,
+            nt_hash: None,
             trust_cert: true,
             timeout_secs: 30,
             encrypt: false,
@@ -87,11 +90,21 @@ impl MssqlConfig {
         self
     }
 
-    /// Set credentials for Windows/NTLM authentication
+    /// Set credentials for Windows/NTLM authentication (password)
     pub fn with_ntlm_auth(mut self, domain: &str, username: &str, password: &str) -> Self {
         self.domain = Some(domain.to_string());
         self.username = Some(username.to_string());
         self.password = Some(password.to_string());
+        self.nt_hash = None;
+        self
+    }
+
+    /// Set credentials for Windows/NTLM pass-the-hash authentication
+    pub fn with_ntlm_hash_auth(mut self, domain: &str, username: &str, nt_hash: &str) -> Self {
+        self.domain = Some(domain.to_string());
+        self.username = Some(username.to_string());
+        self.nt_hash = Some(nt_hash.to_string());
+        self.password = None;
         self
     }
 

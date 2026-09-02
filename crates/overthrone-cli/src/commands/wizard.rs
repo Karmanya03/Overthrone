@@ -432,71 +432,48 @@ async fn run_tui_mode() -> anyhow::Result<()> {
 
     wizard_runner::print_wizard_banner();
 
-    let should_execute = wizard_runner::run_tui_wizard().await?;
+    // The TUI wizard has its own input forms (Target Config tab, Tab key).
+    // When the user presses 'R' (Run), the TUI exits with the populated app.
+    let app = match wizard_runner::run_tui_wizard().await? {
+        Some(app) => app,
+        None => return Ok(()), // User quit
+    };
 
-    if should_execute {
+    // Validate that the user filled in the required fields in the Target Config form
+    let dc = app.get_input(&crate::tui::wizard_app::InputField::DomainController);
+    let domain = app.get_input(&crate::tui::wizard_app::InputField::Domain);
+    let username = app.get_input(&crate::tui::wizard_app::InputField::Username);
+
+    if dc.is_empty() || domain.is_empty() || username.is_empty() {
         println!();
-        println!("{}", "Launching selected modules...".cyan().bold());
+        println!("{}", "Target configuration incomplete:".yellow());
+        println!(
+            "{}",
+            "  Domain Controller, Domain, and Username are required.".yellow()
+        );
+        println!(
+            "{}",
+            "  Fill them in the Target Config tab (Tab key) before pressing R.".yellow()
+        );
         println!();
-
-        println!("{}", "Please enter target configuration:".yellow());
-        print!("  Domain Controller IP: ");
-        use std::io::Write;
-        std::io::stdout().flush()?;
-        let mut dc = String::new();
-        std::io::stdin().read_line(&mut dc)?;
-        let dc = dc.trim().to_string();
-
-        print!("  Domain (e.g., corp.local): ");
-        std::io::stdout().flush()?;
-        let mut domain = String::new();
-        std::io::stdin().read_line(&mut domain)?;
-        let domain = domain.trim().to_string();
-
-        print!("  Username: ");
-        std::io::stdout().flush()?;
-        let mut username = String::new();
-        std::io::stdin().read_line(&mut username)?;
-        let username = username.trim().to_string();
-
-        print!("  Password (or press Enter for hash): ");
-        std::io::stdout().flush()?;
-        let mut password = String::new();
-        std::io::stdin().read_line(&mut password)?;
-        let password = password.trim().to_string();
-
-        let nt_hash = if password.is_empty() {
-            print!("  NT Hash: ");
-            std::io::stdout().flush()?;
-            let mut h = String::new();
-            std::io::stdin().read_line(&mut h)?;
-            h.trim().to_string()
-        } else {
-            String::new()
-        };
-
-        println!();
-        println!("{}", "=== Executing Selected Modules ===".green().bold());
-        println!("  DC: {}", dc.green());
-        println!("  Domain: {}", domain.green());
-        println!("  User: {}", username.green());
-        println!();
-
-        let mut app = crate::tui::wizard_app::WizardApp::new();
-        app.set_input(&crate::tui::wizard_app::InputField::DomainController, dc);
-        app.set_input(&crate::tui::wizard_app::InputField::Domain, domain);
-        app.set_input(&crate::tui::wizard_app::InputField::Username, username);
-        app.set_input(&crate::tui::wizard_app::InputField::Password, password);
-        if !nt_hash.is_empty() {
-            app.set_input(&crate::tui::wizard_app::InputField::NtHash, nt_hash);
-        }
-
-        for module in &mut app.modules {
-            module.selected = true;
-        }
-
-        wizard_runner::execute_wizard_modules(&app).await?;
+        println!(
+            "{}",
+            "  Tip: You can also set env vars before launching:".dimmed()
+        );
+        println!("{}", "    export OT_DC_HOST=10.10.10.1 OT_DOMAIN=corp.local OT_USERNAME=admin OT_PASSWORD=P@ss1".dimmed());
+        anyhow::bail!(
+            "Missing target configuration. Fill in the Target Config form and try again."
+        );
     }
+
+    println!();
+    println!("{}", "=== Executing Selected Modules ===".green().bold());
+    println!("  DC: {}", dc.green());
+    println!("  Domain: {}", domain.green());
+    println!("  User: {}", username.green());
+    println!();
+
+    wizard_runner::execute_wizard_modules(&app).await?;
 
     Ok(())
 }

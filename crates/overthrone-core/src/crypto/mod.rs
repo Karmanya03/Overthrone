@@ -11,6 +11,7 @@ pub mod md4;
 pub mod rc4_util;
 pub mod smart_wordlist;
 pub mod ticket;
+pub mod wordlist_discovery;
 
 // Re-export key types for convenience
 pub use cracker::{
@@ -18,6 +19,10 @@ pub use cracker::{
     get_embedded_wordlist, is_hashcat_available, password_to_nt_hash,
 };
 pub use smart_wordlist::SmartWordlist;
+pub use wordlist_discovery::{
+    WordlistCategory, WordlistPath, find_password_wordlist, find_rules_file, find_seclists_root,
+    find_username_wordlist, print_wordlist_status,
+};
 
 pub use dpapi::{
     DpapiBackupKey, DpapiBlob, DpapiCredential, DpapiDecryptor, DpapiMasterkey, DpapiMasterkeyFile,

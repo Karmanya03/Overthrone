@@ -133,3 +133,4 @@ opsec = []                             # OPSEC-safe mode — disables subprocess
 tokio-test.workspace = true
 pretty_assertions.workspace = true
 proptest = "1.11"       # Property-based testing
+tempfile.workspace = true

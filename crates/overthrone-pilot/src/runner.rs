@@ -339,6 +339,7 @@ impl AutoPwnConfig {
             override_creds: None,
             ldap_available: true,
             preferred_method: format!("{:?}", self.exec_method).to_lowercase(),
+            ticket_path: None,
         }
     }
 

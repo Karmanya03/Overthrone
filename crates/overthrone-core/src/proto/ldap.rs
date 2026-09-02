@@ -2468,6 +2468,7 @@ impl LdapSession {
     /// Perform an LDAP search with automatic paging (RFC 2696).
     /// Uses the Simple Paged Results Control to iterate through all results
     /// in chunks of 1000, avoiding the server's default size limit.
+    /// Includes retry logic with exponential backoff for connection resets.
     async fn search_entries(
         &mut self,
         base: &str,
@@ -2476,6 +2477,42 @@ impl LdapSession {
     ) -> Result<Vec<SearchEntry>> {
         debug!("LDAP search: base={base}, filter={filter}");
 
+        const MAX_RETRIES: u32 = 3;
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay_ms = 500 * 2u64.pow(attempt - 1);
+                warn!("LDAP search retry {attempt}/{MAX_RETRIES} after {delay_ms}ms");
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            match self.search_entries_inner(base, filter, attrs).await {
+                Ok(entries) => return Ok(entries),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("Connection reset")
+                        || msg.contains("broken pipe")
+                        || msg.contains("eof")
+                    {
+                        warn!("LDAP connection lost: {e}");
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| OverthroneError::Ldap {
+            target: base.to_string(),
+            reason: "LDAP search failed after retries".to_string(),
+        }))
+    }
+
+    async fn search_entries_inner(
+        &mut self,
+        base: &str,
+        filter: &str,
+        attrs: &[&str],
+    ) -> Result<Vec<SearchEntry>> {
         // -- Raw NTLM backend --
         if let Some(raw) = self.raw.as_mut() {
             let entries = raw.search(base, filter, attrs).await?;

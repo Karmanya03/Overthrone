@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.4.5 (2026-09-02)
+
+### Bug Fixes
+
+- **SMB null session support**: `ovt smb shares --target <IP>` now works without credentials when the target allows null sessions. Uses anonymous NTLM logon when no `-u/-p` provided.
+- **S4U impersonation**: Added `--impersonate`, `--altservice`, `--force-forwardable` flags to `ovt kerberos get-tgs` for constrained delegation abuse (S4U2Self + S4U2Proxy flow).
+- **PtH auth error messages**: NTSTATUS error codes now mapped to human-readable descriptions (e.g., `STATUS_LOGON_FAILURE (0xC000006D): Invalid username or password`). 35+ error codes mapped.
+- **Kerberos ticket auth for exec**: `ovt exec -A ticket` now works instead of returning "not supported". Loads ccache/kirbi and uses Kerberos session setup.
+- **WinRM execution**: `--method winrm` now dispatches to the actual WinRM executor instead of falling back to smbexec.
+- **MSSQL NT hash auth**: `ovt mssql` now accepts `-A hash` with `--nt-hash` for NTLM hash authentication.
+- **LDAP stability**: Added retry logic with exponential backoff (3 retries) for LDAP connection resets and broken pipes.
+- **DCSync with ticket auth**: Pilot executor now properly handles ticket-based authentication for DCSync operations.
+
+### New Features
+
+- **TUI Wizard rework**: `ovt wizard --tui` no longer requires credentials at launch. Fill them in the TUI Target Config tab (Tab key) or set via env vars (`OT_DC_HOST`, `OT_DOMAIN`, `OT_USERNAME`, `OT_PASSWORD`). The TUI collects inputs and passes them to module execution.
+- **SecLists wordlist auto-discovery**: Commands that need wordlists (kerberoast, asreproast, user-enum, spray) now auto-detect SecLists installation paths. Set `OT_SECLISTS_DIR` for custom location. Checks 15+ common paths across Kali, Parrot, Ubuntu, Arch.
+- **`--target-ip` flag for exec**: Bypass DNS resolution with `ovt exec --target DC01.local --target-ip 10.0.0.1`.
+- **BloodHound collect subcommand**: `ovt blood-hound collect` subcommand added with `--collection`, `--output-dir`, `--zip` flags.
+- **Detailed share permissions**: `ovt smb shares` now shows share type (Admin/Disk/IPC), permission flags, and read/write counts.
+- **Wordlist discovery module**: New `wordlist_discovery.rs` in `overthrone-core/src/crypto/` for unified wordlist path resolution.
+
+### Internal
+
+- Added `format_ntstatus()` function mapping 35+ NTSTATUS codes to human-readable messages.
+- Added `connect_anonymous()` to SmbSession for null session support.
+- Updated `to_exec_context()` to handle Kerberos ticket authentication.
+- Pilot executor SMB/LDAP connect now handles ticket auth context.
+- All tests pass, build compiles clean.
+
 ## v0.4.4 (2026-08-29)
 
 ### WS2022/WS2025 Compliance

@@ -4009,7 +4009,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -4062,7 +4062,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-core"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -4115,6 +4115,7 @@ dependencies = [
  "sha2 0.10.9",
  "shellexpand",
  "smb",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
@@ -4131,7 +4132,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-crawler"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -4158,7 +4159,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-forge"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64",
  "chrono",
@@ -4186,7 +4187,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-hunter"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -4214,7 +4215,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-pilot"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4240,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-reaper"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -4264,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-relay"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes 0.8.4",
  "async-trait",
@@ -4290,7 +4291,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-scribe"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -4312,7 +4313,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-viewer"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "axum 0.8.9",

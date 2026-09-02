@@ -193,29 +193,70 @@ pub fn embedded_usernames() -> Vec<String> {
 }
 
 async fn load_usernames(userlist_path: &Path) -> Result<(Vec<String>, String)> {
-    if userlist_path.as_os_str().is_empty() {
-        return Ok((embedded_usernames(), "embedded fallback list".to_string()));
+    // If a specific path was provided, try it first
+    if !userlist_path.as_os_str().is_empty() {
+        match tokio::fs::read_to_string(userlist_path).await {
+            Ok(content) => {
+                let count = parse_userlist(&content).len();
+                info!(
+                    "Loaded {} usernames from {}",
+                    count,
+                    userlist_path.display()
+                );
+                return Ok((
+                    parse_userlist(&content),
+                    userlist_path.display().to_string(),
+                ));
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                warn!(
+                    "Cannot read userlist {}: {}. Trying auto-discovery...",
+                    userlist_path.display(),
+                    e
+                );
+            }
+            Err(e) => {
+                return Err(OverthroneError::Custom(format!(
+                    "Cannot read userlist {}: {}",
+                    userlist_path.display(),
+                    e
+                )));
+            }
+        }
     }
 
-    match tokio::fs::read_to_string(userlist_path).await {
-        Ok(content) => Ok((
-            parse_userlist(&content),
-            userlist_path.display().to_string(),
-        )),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            warn!(
-                "Cannot read userlist {}: {}. Falling back to embedded list.",
-                userlist_path.display(),
-                e
-            );
-            Ok((embedded_usernames(), "embedded fallback list".to_string()))
+    // Auto-discover username wordlists from SecLists and system paths
+    if let Some(discovered) = overthrone_core::crypto::find_username_wordlist(None) {
+        match tokio::fs::read_to_string(&discovered.path).await {
+            Ok(content) => {
+                let count = parse_userlist(&content).len();
+                info!(
+                    "Auto-discovered username wordlist: {} ({} usernames)",
+                    discovered.path.display(),
+                    count
+                );
+                return Ok((
+                    parse_userlist(&content),
+                    discovered.path.display().to_string(),
+                ));
+            }
+            Err(e) => {
+                warn!(
+                    "Cannot read auto-discovered wordlist {}: {}",
+                    discovered.path.display(),
+                    e
+                );
+            }
         }
-        Err(e) => Err(OverthroneError::Custom(format!(
-            "Cannot read userlist {}: {}",
-            userlist_path.display(),
-            e
-        ))),
     }
+
+    // Final fallback to embedded list
+    let embedded = embedded_usernames();
+    info!(
+        "Using embedded fallback username list ({} users). Set --userlist or OT_SECLISTS_DIR for better coverage.",
+        embedded.len()
+    );
+    Ok((embedded, "embedded fallback list".to_string()))
 }
 
 // ===========================================================

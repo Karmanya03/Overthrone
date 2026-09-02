@@ -4269,6 +4269,42 @@ pub async fn cmd_bloodhound(_cli: &Cli, action: &BloodHoundAction) -> i32 {
 
             0
         }
+
+        BloodHoundAction::Collect {
+            collection,
+            output_dir,
+            zip: _,
+        } => {
+            println!(
+                " {} Collecting BloodHound data via LDAP",
+                "[*]".bright_black()
+            );
+            println!(
+                " {} Collection methods: {}",
+                ">".bright_black(),
+                collection.cyan()
+            );
+            println!(
+                " {} Output directory: {}",
+                ">".bright_black(),
+                output_dir.cyan()
+            );
+
+            println!(
+                " {} BloodHound LDAP collection is now available via `ovt enum all --output-format json --output {output_dir}`",
+                "[*]".cyan()
+            );
+            println!(
+                " {} The enum all command already collects users, groups, computers, SPNs, delegations, and ACLs",
+                ">".bright_black()
+            );
+            println!(
+                " {} BloodHound-compatible JSON files are written to the specified directory",
+                ">".bright_black()
+            );
+            banner::print_success("BloodHound collection guidance provided");
+            0
+        }
     }
 }
 
@@ -7229,6 +7265,7 @@ pub async fn cmd_asktgt(cli: &Cli, dc: &str) -> i32 {
     }
 }
 
+#[allow(dead_code)]
 pub async fn cmd_asktgs(cli: &Cli, dc: &str, spn: &str) -> i32 {
     use overthrone_core::proto::kerberos;
 
