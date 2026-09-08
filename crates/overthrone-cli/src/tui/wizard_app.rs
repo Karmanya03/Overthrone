@@ -35,6 +35,12 @@ pub enum WizardScreen {
     CoercionRelay,
     /// Enumeration sub-menu
     Enumeration,
+    /// AMSI bypass / EDR evasion sub-menu
+    AmsiBypass,
+    /// PowerUpSQL (MSSQL attacks) sub-menu
+    PowerUpSqlAttacks,
+    /// PowerView (LDAP recon) sub-menu
+    PowerViewRecon,
     /// Target configuration form
     TargetConfig,
     /// Running selected modules
@@ -66,6 +72,9 @@ pub enum ModuleCategory {
     Cve,
     Coercion,
     Enum,
+    Amsi,
+    PowerUpSql,
+    PowerView,
 }
 
 impl ModuleCategory {
@@ -79,6 +88,9 @@ impl ModuleCategory {
             Self::Cve => "CVE Exploits",
             Self::Coercion => "Coercion / Relay",
             Self::Enum => "Enumeration",
+            Self::Amsi => "AMSI Bypass & EDR Evasion",
+            Self::PowerUpSql => "PowerUpSQL (MSSQL Attacks)",
+            Self::PowerView => "PowerView (LDAP Recon)",
         }
     }
 
@@ -92,6 +104,9 @@ impl ModuleCategory {
             Self::Cve => Color::Cyan,
             Self::Coercion => Color::LightMagenta,
             Self::Enum => Color::Green,
+            Self::Amsi => Color::LightYellow,
+            Self::PowerUpSql => Color::LightBlue,
+            Self::PowerView => Color::LightGreen,
         }
     }
 }
@@ -413,6 +428,159 @@ pub fn build_module_catalog() -> Vec<AttackModule> {
             category: ModuleCategory::Enum,
             selected: false,
         },
+        // AMSI Bypass & EDR Evasion
+        AttackModule {
+            name: "AMSI Patch (AmsiScanBuffer)",
+            description: "Patch amsi.dll to return AMSI_RESULT_CLEAN",
+            category: ModuleCategory::Amsi,
+            selected: false,
+        },
+        AttackModule {
+            name: "AMSI Patch (Direct Syscall)",
+            description: "Bypass EDR hooks via direct NtProtectVirtualMemory syscall",
+            category: ModuleCategory::Amsi,
+            selected: false,
+        },
+        AttackModule {
+            name: "ETW Suppression",
+            description: "Patch EtwEventWrite to NOP -- block ETW telemetry",
+            category: ModuleCategory::Amsi,
+            selected: false,
+        },
+        AttackModule {
+            name: "EDR Assessment",
+            description: "Detect EDR vendors (22+) and hook points on target",
+            category: ModuleCategory::Amsi,
+            selected: false,
+        },
+        AttackModule {
+            name: "ntdll Unhook",
+            description: "Reload ntdll from disk to clear userland hooks",
+            category: ModuleCategory::Amsi,
+            selected: false,
+        },
+        AttackModule {
+            name: "Sleep Masking",
+            description: "XOR-encrypt sleep state to hide from EDR scanners",
+            category: ModuleCategory::Amsi,
+            selected: false,
+        },
+        // PowerUpSQL (MSSQL Attacks)
+        AttackModule {
+            name: "SQL Instance Discovery",
+            description: "Find MSSQL instances via SPN scanning (MSSQLSvc/*)",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Login Check",
+            description: "Test SQL authentication on discovered instances",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Privilege Audit",
+            description: "Check sysadmin, db_owner, impersonation privileges",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Linked Server Enum",
+            description: "Enumerate and crawl linked SQL servers",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL xp_cmdshell",
+            description: "Enable and execute OS commands via xp_cmdshell",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Database Enum",
+            description: "List databases, tables, and sensitive columns",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Credential Dump",
+            description: "Extract SQL logins, passwords, service credentials",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Agent Job Abuse",
+            description: "Create/modify SQL Agent jobs for command execution",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        AttackModule {
+            name: "SQL Audit (Full)",
+            description: "Full PowerUpSQL-style security audit (20+ checks)",
+            category: ModuleCategory::PowerUpSql,
+            selected: false,
+        },
+        // PowerView (LDAP Recon)
+        AttackModule {
+            name: "PV: Domain Users",
+            description: "Detailed user enumeration with UAC, SID, membership",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: Domain Computers",
+            description: "Enumerate computers with OS, SPN, delegation info",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: Domain Groups",
+            description: "Enumerate groups and nested memberships",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: Domain Trusts",
+            description: "Enumerate trust relationships and SID filtering",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: SPN Discovery",
+            description: "Find all Service Principal Names for kerberoasting",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: ACL Enumeration",
+            description: "Enumerate DACLs for privilege escalation paths",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: GPO Details",
+            description: "Enumerate GPOs with linked OUs and status",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: Delegation Check",
+            description: "Find constrained/unconstrained/RBCD delegation",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: LAPS Passwords",
+            description: "Read LAPS v1/v2 local admin passwords via LDAP",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
+        AttackModule {
+            name: "PV: Password Policy",
+            description: "Enumerate domain password policy and lockout settings",
+            category: ModuleCategory::PowerView,
+            selected: false,
+        },
     ]
 }
 
@@ -509,6 +677,9 @@ impl WizardApp {
             ModuleCategory::Cve,
             ModuleCategory::Coercion,
             ModuleCategory::Enum,
+            ModuleCategory::Amsi,
+            ModuleCategory::PowerUpSql,
+            ModuleCategory::PowerView,
         ];
 
         let input_fields: Vec<(InputField, String)> = ALL_INPUT_FIELDS
@@ -621,7 +792,10 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
             | WizardScreen::PostExploitation
             | WizardScreen::CVEModules
             | WizardScreen::CoercionRelay
-            | WizardScreen::Enumeration => {
+            | WizardScreen::Enumeration
+            | WizardScreen::AmsiBypass
+            | WizardScreen::PowerUpSqlAttacks
+            | WizardScreen::PowerViewRecon => {
                 let cur = app.menu_state.selected().unwrap_or(0);
                 app.menu_state
                     .select(Some(if cur > 0 { cur - 1 } else { 0 }));
@@ -652,7 +826,10 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
             | WizardScreen::PostExploitation
             | WizardScreen::CVEModules
             | WizardScreen::CoercionRelay
-            | WizardScreen::Enumeration => {
+            | WizardScreen::Enumeration
+            | WizardScreen::AmsiBypass
+            | WizardScreen::PowerUpSqlAttacks
+            | WizardScreen::PowerViewRecon => {
                 let cur = app.menu_state.selected().unwrap_or(0);
                 let max = app
                     .modules
@@ -668,6 +845,9 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
                                 | (ModuleCategory::Cve, WizardScreen::CVEModules)
                                 | (ModuleCategory::Coercion, WizardScreen::CoercionRelay)
                                 | (ModuleCategory::Enum, WizardScreen::Enumeration)
+                                | (ModuleCategory::Amsi, WizardScreen::AmsiBypass)
+                                | (ModuleCategory::PowerUpSql, WizardScreen::PowerUpSqlAttacks)
+                                | (ModuleCategory::PowerView, WizardScreen::PowerViewRecon)
                         )
                     })
                     .count();
@@ -712,7 +892,10 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
                 | WizardScreen::PostExploitation
                 | WizardScreen::CVEModules
                 | WizardScreen::CoercionRelay
-                | WizardScreen::Enumeration => {
+                | WizardScreen::Enumeration
+                | WizardScreen::AmsiBypass
+                | WizardScreen::PowerUpSqlAttacks
+                | WizardScreen::PowerViewRecon => {
                     let content_row = mouse.row.saturating_sub(3) as usize;
                     let modules_in_screen: Vec<usize> = app
                         .modules
@@ -729,6 +912,9 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
                                     | (ModuleCategory::Cve, WizardScreen::CVEModules)
                                     | (ModuleCategory::Coercion, WizardScreen::CoercionRelay)
                                     | (ModuleCategory::Enum, WizardScreen::Enumeration)
+                                    | (ModuleCategory::Amsi, WizardScreen::AmsiBypass)
+                                    | (ModuleCategory::PowerUpSql, WizardScreen::PowerUpSqlAttacks)
+                                    | (ModuleCategory::PowerView, WizardScreen::PowerViewRecon)
                             )
                         })
                         .map(|(i, _)| i)
@@ -771,7 +957,10 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
             | WizardScreen::PostExploitation
             | WizardScreen::CVEModules
             | WizardScreen::CoercionRelay
-            | WizardScreen::Enumeration => {
+            | WizardScreen::Enumeration
+            | WizardScreen::AmsiBypass
+            | WizardScreen::PowerUpSqlAttacks
+            | WizardScreen::PowerViewRecon => {
                 let content_row = mouse.row.saturating_sub(3) as usize;
                 let modules_in_screen: Vec<usize> = app
                     .modules
@@ -788,6 +977,9 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
                                 | (ModuleCategory::Cve, WizardScreen::CVEModules)
                                 | (ModuleCategory::Coercion, WizardScreen::CoercionRelay)
                                 | (ModuleCategory::Enum, WizardScreen::Enumeration)
+                                | (ModuleCategory::Amsi, WizardScreen::AmsiBypass)
+                                | (ModuleCategory::PowerUpSql, WizardScreen::PowerUpSqlAttacks)
+                                | (ModuleCategory::PowerView, WizardScreen::PowerViewRecon)
                         )
                     })
                     .map(|(i, _)| i)
@@ -845,6 +1037,9 @@ fn handle_main_menu(app: &mut WizardApp, key: KeyEvent) {
                 ModuleCategory::Cve => WizardScreen::CVEModules,
                 ModuleCategory::Coercion => WizardScreen::CoercionRelay,
                 ModuleCategory::Enum => WizardScreen::Enumeration,
+                ModuleCategory::Amsi => WizardScreen::AmsiBypass,
+                ModuleCategory::PowerUpSql => WizardScreen::PowerUpSqlAttacks,
+                ModuleCategory::PowerView => WizardScreen::PowerViewRecon,
             };
             app.menu_state.select(Some(0));
         }
@@ -875,6 +1070,9 @@ fn handle_sub_menu(app: &mut WizardApp, key: KeyEvent) {
                     | (ModuleCategory::Cve, WizardScreen::CVEModules)
                     | (ModuleCategory::Coercion, WizardScreen::CoercionRelay)
                     | (ModuleCategory::Enum, WizardScreen::Enumeration)
+                    | (ModuleCategory::Amsi, WizardScreen::AmsiBypass)
+                    | (ModuleCategory::PowerUpSql, WizardScreen::PowerUpSqlAttacks)
+                    | (ModuleCategory::PowerView, WizardScreen::PowerViewRecon)
             )
         })
         .map(|(i, _)| i)
@@ -1048,7 +1246,10 @@ pub fn draw(frame: &mut Frame, app: &WizardApp) {
         | WizardScreen::PostExploitation
         | WizardScreen::CVEModules
         | WizardScreen::CoercionRelay
-        | WizardScreen::Enumeration => draw_module_list(frame, chunks[1], app),
+        | WizardScreen::Enumeration
+        | WizardScreen::AmsiBypass
+        | WizardScreen::PowerUpSqlAttacks
+        | WizardScreen::PowerViewRecon => draw_module_list(frame, chunks[1], app),
         WizardScreen::TargetConfig => draw_target_config(frame, chunks[1], app),
         WizardScreen::Running => draw_running(frame, chunks[1], app),
         WizardScreen::Results => draw_results(frame, chunks[1], app),
@@ -1297,6 +1498,9 @@ fn draw_module_list(frame: &mut Frame, area: Rect, app: &WizardApp) {
         WizardScreen::CVEModules => ModuleCategory::Cve,
         WizardScreen::CoercionRelay => ModuleCategory::Coercion,
         WizardScreen::Enumeration => ModuleCategory::Enum,
+        WizardScreen::AmsiBypass => ModuleCategory::Amsi,
+        WizardScreen::PowerUpSqlAttacks => ModuleCategory::PowerUpSql,
+        WizardScreen::PowerViewRecon => ModuleCategory::PowerView,
         _ => ModuleCategory::Credential,
     };
 

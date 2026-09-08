@@ -1565,7 +1565,7 @@ export OT_DC_HOST=192.168.57.10 OT_DOMAIN=sevenkingdoms.local OT_USERNAME=vagran
 ovt wizard --tui
 ```
 
-> **How it works:** The TUI presents 8 attack categories with 50 modules. Navigate to Target Config (Tab key), fill in DC/Domain/Username/Password, select modules, and press `R` to execute. Credentials can also be set via env vars before launch.
+> **How it works:** The TUI presents 11 attack categories with 76 modules -- Credential, Ticket, Execution, Lateral, PostEx, CVE, Coercion, Enum, AMSI/EDR Bypass, PowerUpSQL, and PowerView. Navigate to Target Config (Tab key), fill in DC/Domain/Username/Password, select modules, and press `R` to execute. Credentials can also be set via env vars before launch.
 
 **TUI Keyboard Controls:**
 
@@ -1596,8 +1596,11 @@ ovt wizard --tui
 
 | Screen | Description |
 |---|---|
-| **Main Menu** | 8 color-coded attack categories with module counts |
+| **Main Menu** | 11 color-coded attack categories with module counts |
 | **Category Sub-menus** | Toggle individual modules with checkboxes |
+| **AMSI/EDR Bypass** | AMSI patch, ETW suppress, EDR assess, NTDLL unhook, driver enumerate |
+| **PowerUpSQL** | Instance discover, login check, syslog check, linked servers, GPO abuse, sa brute |
+| **PowerView** | Domain/forest/user/group/computer/GPO enumeration, ACL analysis, trusts |
 | **Target Config** | Editable form for DC, Domain, Username, Password, NT Hash, Wordlist, Output Dir |
 | **Running** | Live execution log |
 | **Results** | Scrollable results viewer |

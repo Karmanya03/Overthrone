@@ -554,13 +554,15 @@ Headless autonomous kill-chain with pause/approve at each stage, checkpoint resu
 and Q-learning adaptive decisions.
 
 **TUI mode** (`ovt wizard --tui`):
-Interactive click-based module selection with 50 modules across 8 categories.
+Interactive click-based module selection with 76 modules across 11 categories
+(Credential, Ticket, Execution, Lateral, PostEx, CVE, Coercion, Enum,
+AMSI/EDR Bypass, PowerUpSQL, PowerView).
 No credentials required at launch -- fill them in the Target Config tab.
 
 ```mermaid
 flowchart TD
     WIZ["ovt wizard<br/>--tui OR CLI flags"] --> MODE{Mode?}
-    MODE -->|"--tui"| TUI["TUI Wizard<br/>Click-based module selection<br/>Target Config form<br/>50 modules, 8 categories"]
+    MODE -->|"--tui"| TUI["TUI Wizard<br/>Click-based module selection<br/>Target Config form<br/>76 modules, 11 categories"]
     MODE -->|"CLI flags"| CLI["CLI Wizard<br/>Autonomous kill-chain<br/>Pause/approve each stage"]
     
     TUI --> EXEC["execute_wizard_modules()<br/>Run selected modules"]

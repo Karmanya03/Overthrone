@@ -200,6 +200,26 @@ pub async fn run(args: WizardArgs) -> anyhow::Result<()> {
         return resume_from_saved_session(&args, session_name).await;
     }
 
+    // -- If no credentials provided and no resume, launch TUI automatically --
+    let has_creds = args.dc_host.is_some()
+        && args.domain.is_some()
+        && args.username.is_some()
+        && (args.password.is_some() || args.nt_hash.is_some());
+
+    if !has_creds {
+        println!(
+            "{}",
+            "No credentials provided -- launching TUI wizard.".yellow()
+        );
+        println!(
+            "{}",
+            "  Fill in credentials in the Target Config tab (Tab key) before running modules."
+                .dimmed()
+        );
+        println!();
+        return run_tui_mode().await;
+    }
+
     // -- New session -- validate required args --
     let target = args
         .target

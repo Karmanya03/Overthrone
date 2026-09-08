@@ -80,7 +80,7 @@
 ### New Features
 
 - TUI Wizard (ovt wizard --tui): Interactive click-based module selection with full mouse support
-  - 50 modules across 8 categories (Credential, Ticket, Execution, Lateral, PostEx, CVE, Coercion, Enum)
+  - 76 modules across 11 categories (Credential, Ticket, Execution, Lateral, PostEx, CVE, Coercion, Enum, AMSI/EDR Bypass, PowerUpSQL, PowerView)
   - Mouse controls: scroll wheel navigation, left-click select, right-click toggle, drag to scroll
   - Target configuration form with editable fields for DC, Domain, Username, Password, NT Hash
   - Live execution log and scrollable results viewer
