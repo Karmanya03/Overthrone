@@ -2848,6 +2848,7 @@ fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8>
 /// SP800-108 Counter Mode KDF variant with extra 0x00 separator between label and context.
 /// Kept as reference; the primary `sp800_108_counter_kdf` matches Impacket's implementation.
 #[cfg(test)]
+#[expect(dead_code, reason = "reference implementation kept for comparison")]
 fn sp800_108_counter_kdf_sep(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
     let mut input = Vec::with_capacity(4 + label.len() + 1 + context.len() + 4);
     input.extend_from_slice(&1u32.to_be_bytes()); // i = 1
