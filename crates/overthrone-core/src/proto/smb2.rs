@@ -112,106 +112,21 @@ fn update_preauth_hash(old_hash: &[u8], message_data: &[u8]) -> Vec<u8> {
 fn derive_signing_key(session_key: &[u8], dialect: u16, preauth_hash: Option<&[u8]>) -> [u8; 16] {
     let (label, ctx_bytes): (&[u8], &[u8]) = if dialect >= SMB2_DIALECT_311 {
         // SMB 3.1.1: context = PreauthIntegrityHashValue (SHA-512 of all pre-auth messages)
-        // Impacket uses the raw (untransformed) NTLM session key + preauth_hash as context.
-        // Some sources also XOR the session key with HMAC-SHA256(preauth_hash, label),
-        // but WS2025 does NOT XOR (matching Impacket's behavior).
+        // Impacket: KDF_CounterMode(sessionKey, b"SMBSigningKey\x00", preauthHash, 128)
         if let Some(hash) = preauth_hash {
-            let key = sp800_108_counter_kdf_sep(session_key, b"SMBSigningKey\x00", hash);
+            let key = sp800_108_counter_kdf(session_key, b"SMBSigningKey\x00", hash);
             let mut sig = [0u8; 16];
             sig.copy_from_slice(&key[..16]);
             return sig;
         }
-        // Fallback: use "SmbSign" context if no preauth hash (should not happen)
         (b"SMBSigningKey\x00", b"SmbSign\x00")
     } else {
-        // SMB 3.0.x: static context
+        // SMB 3.0.x: Impacket: KDF_CounterMode(sessionKey, b"SMB2AESCMAC\x00", b"SmbSign\x00", 128)
         (b"SMB2AESCMAC\x00", b"SmbSign\x00")
     };
-    let key = sp800_108_counter_kdf_sep(session_key, label, ctx_bytes);
+    let key = sp800_108_counter_kdf(session_key, label, ctx_bytes);
     let mut sig = [0u8; 16];
     sig.copy_from_slice(&key[..16]);
-    sig
-}
-
-/// Diagnostic: derive signing key using HMAC-SHA512 as PRF instead of HMAC-SHA256.
-fn derive_signing_key_sha512(
-    session_key: &[u8],
-    dialect: u16,
-    preauth_hash: Option<&[u8]>,
-) -> [u8; 16] {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha512;
-    let (label, ctx_bytes): (&[u8], &[u8]) = if dialect >= SMB2_DIALECT_311 {
-        if let Some(hash) = preauth_hash {
-            let mut input = Vec::with_capacity(4 + 17 + hash.len() + 4);
-            input.extend_from_slice(&1u32.to_be_bytes());
-            input.extend_from_slice(b"SMBSigningKey\x00");
-            input.push(0x00);
-            input.extend_from_slice(hash);
-            input.extend_from_slice(&128u32.to_be_bytes());
-            let mut mac = Hmac::<Sha512>::new_from_slice(session_key)
-                .expect("HMAC-SHA512 accepts any key size");
-            mac.update(&input);
-            let result = mac.finalize().into_bytes();
-            let mut sig = [0u8; 16];
-            sig.copy_from_slice(&result[..16]);
-            return sig;
-        }
-        (b"SMBSigningKey\x00", b"SmbSign\x00")
-    } else {
-        (b"SMB2AESCMAC\x00", b"SmbSign\x00")
-    };
-    let mut input = Vec::with_capacity(4 + label.len() + 1 + ctx_bytes.len() + 4);
-    input.extend_from_slice(&1u32.to_be_bytes());
-    input.extend_from_slice(label);
-    input.push(0x00);
-    input.extend_from_slice(ctx_bytes);
-    input.extend_from_slice(&128u32.to_be_bytes());
-    let mut mac =
-        Hmac::<Sha512>::new_from_slice(session_key).expect("HMAC-SHA512 accepts any key size");
-    mac.update(&input);
-    let result = mac.finalize().into_bytes();
-    let mut sig = [0u8; 16];
-    sig.copy_from_slice(&result[..16]);
-    sig
-}
-
-/// Diagnostic: derive signing key without the initial counter (just label || ctx || L).
-fn derive_signing_key_nocounter(
-    session_key: &[u8],
-    dialect: u16,
-    preauth_hash: Option<&[u8]>,
-) -> [u8; 16] {
-    let (label, ctx_bytes): (&[u8], &[u8]) = if dialect >= SMB2_DIALECT_311 {
-        if let Some(hash) = preauth_hash {
-            let mut input = Vec::with_capacity(17 + hash.len() + 4);
-            input.extend_from_slice(b"SMBSigningKey\x00");
-            input.push(0x00);
-            input.extend_from_slice(hash);
-            input.extend_from_slice(&128u32.to_be_bytes());
-            let mut mac =
-                HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
-            mac.update(&input);
-            let result = mac.finalize().into_bytes();
-            let mut sig = [0u8; 16];
-            sig.copy_from_slice(&result[..16]);
-            return sig;
-        }
-        (b"SMBSigningKey\x00", b"SmbSign\x00")
-    } else {
-        (b"SMB2AESCMAC\x00", b"SmbSign\x00")
-    };
-    let mut input = Vec::with_capacity(label.len() + 1 + ctx_bytes.len() + 4);
-    input.extend_from_slice(label);
-    input.push(0x00);
-    input.extend_from_slice(ctx_bytes);
-    input.extend_from_slice(&128u32.to_be_bytes());
-    let mut mac =
-        HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
-    mac.update(&input);
-    let result = mac.finalize().into_bytes();
-    let mut sig = [0u8; 16];
-    sig.copy_from_slice(&result[..16]);
     sig
 }
 
@@ -237,6 +152,8 @@ const NTLMSSP_NEGOTIATE_SEAL: u32 = 0x0000_0020;
 const NTLMSSP_NEGOTIATE_SIGN: u32 = 0x0000_0010;
 const NTLMSSP_REQUEST_TARGET: u32 = 0x0000_0004;
 const NTLMSSP_NEGOTIATE_UNICODE: u32 = 0x0000_0001;
+const NTLMSSP_NEGOTIATE_TARGET_INFO: u32 = 0x0080_0000;
+const NTLMSSP_NEGOTIATE_VERSION: u32 = 0x0200_0000;
 
 // File access masks
 #[allow(dead_code)] // Protocol reference constants kept for completeness
@@ -687,97 +604,10 @@ impl Smb2Connection {
         };
 
         if claimed_sig != expected_sig {
-            let pkt_proto = &pkt[0..4];
-            let pkt_hdr = &pkt[4..48];
-            let pkt_sig_claimed = &pkt[48..64];
-            let pkt_body = if pkt.len() > 72 { &pkt[64..72] } else { &[] };
             warn!(
-                "SMB2 signature mismatch! claimed={:02x?}, expected={:02x?}, session_key={:02x?}, pkt_proto={:02x?}, hdr={:02x?}, sig_off={:02x?}, body={:02x?}",
-                claimed_sig,
-                expected_sig,
-                session_key,
-                pkt_proto,
-                pkt_hdr,
-                pkt_sig_claimed,
-                pkt_body
+                "SMB2 signature mismatch! claimed={:02x?}, expected={:02x?}, dialect=0x{:04X}",
+                claimed_sig, expected_sig, dialect
             );
-
-            // Diagnostic: try alternative signing methods
-            if dialect >= SMB2_DIALECT_300 {
-                // 1) legacy HMAC-SHA256(session_key, packet)[0:16]
-                {
-                    let mut mac = HmacSha256::new_from_slice(session_key).expect("HMAC");
-                    mac.update(&verify_buf);
-                    let legacy = mac.finalize().into_bytes();
-                    if &legacy[..16] == claimed_sig {
-                        warn!("SMB2: Server uses HMAC-SHA256 (SMB 2.x) not AES-CMAC!");
-                        return true;
-                    }
-                }
-                // 2) AES-CMAC(session_key, packet) without KDF
-                {
-                    let raw_cmac = aes_cmac_16(session_key, &verify_buf);
-                    if &raw_cmac[..] == claimed_sig {
-                        warn!("SMB2: Server uses AES-CMAC with raw session_key (no KDF)!");
-                        return true;
-                    }
-                }
-                // 3) AES-CMAC with KDF + SMB2AESCMAC label (SMB 3.0.x) using derive_signing_key
-                {
-                    let sk = derive_signing_key(session_key, SMB2_DIALECT_302, None);
-                    let cmac = aes_cmac_16(&sk, &verify_buf);
-                    if &cmac[..] == claimed_sig {
-                        warn!("SMB2: Server uses SMB2AESCMAC KDF label (SMB 3.0.x)");
-                        return true;
-                    }
-                }
-                // 4) AES-CMAC with KDF + SMBSigningKey label + PreauthIntegrityHashValue context (SMB 3.1.1)
-                if dialect >= SMB2_DIALECT_311 {
-                    let sk = derive_signing_key(session_key, dialect, preauth_hash);
-                    let cmac = aes_cmac_16(&sk, &verify_buf);
-                    if &cmac[..] == claimed_sig {
-                        warn!(
-                            "SMB2: Server uses SMBSigningKey KDF with PreauthIntegrityHashValue context"
-                        );
-                        return true;
-                    }
-                }
-                // 5) XOR session_key with first 16 bytes of preauth_hash before KDF
-                if let Some(hash) = preauth_hash
-                    && hash.len() >= 16
-                {
-                    let xored: Vec<u8> = session_key
-                        .iter()
-                        .zip(hash.iter())
-                        .map(|(a, b)| a ^ b)
-                        .collect();
-                    let sk = derive_signing_key(&xored, dialect, preauth_hash);
-                    let cmac = aes_cmac_16(&sk, &verify_buf);
-                    if &cmac[..] == claimed_sig {
-                        warn!("SMB2: Server uses XOR'd session_key with PreauthIntegrityHashValue");
-                        return true;
-                    }
-                }
-                // 6) KDF with HMAC-SHA512 as PRF instead of HMAC-SHA256
-                {
-                    let sk = derive_signing_key_sha512(session_key, dialect, preauth_hash);
-                    let cmac = aes_cmac_16(&sk, &verify_buf);
-                    if &cmac[..] == claimed_sig {
-                        warn!("SMB2: Server uses HMAC-SHA512 as PRF in KDF");
-                        return true;
-                    }
-                }
-                // 7) No counter in KDF (just label || 0x00 || context || L without i)
-                {
-                    let sk = derive_signing_key_nocounter(session_key, dialect, preauth_hash);
-                    let cmac = aes_cmac_16(&sk, &verify_buf);
-                    if &cmac[..] == claimed_sig {
-                        warn!("SMB2: Server uses no-counter KDF variant");
-                        return true;
-                    }
-                }
-                warn!("SMB2: NONE of signing methods match claimed_sig");
-            }
             return false;
         }
 
@@ -803,32 +633,17 @@ impl Smb2Connection {
 
     /// SMB2 Negotiate -- establishes dialect.
     ///
-    /// Strategy (matching Impacket's compatibility-first approach):
-    /// 1. Offer dialects 2.0.2 through 3.0.2 (no 3.1.1 pre-auth integrity).
-    /// 2. If that fails, retry with all dialects including 3.1.1 + contexts.
-    ///
-    /// This avoids SMB 3.1.1 pre-auth integrity hashing which isn't implemented
-    /// in the session setup path. Most servers work fine with 3.0.2.
+    /// Always offers all 5 dialects (2.0.2, 2.1, 3.0, 3.0.2, 3.1.1) in a single
+    /// request, matching Impacket/NXC behavior. If the server supports 3.1.1,
+    /// negotiate contexts (PreAuth + Encryption) are included per MS-SMB2 2.2.3.
     pub async fn negotiate(&self) -> Result<()> {
-        // Strategy: try 3.0.2 first (works on all WS2016+ without 3.1.1 preauth
-        // complexity), then fall back to 3.1.1 only if 3.0.2 is not available.
-        // This avoids the double TCP connect overhead for ~95% of environments.
-        // WS2025 environments that mandate 3.1.1 will fail the 3.0.2 attempt
-        // and fall through to the 3.1.1 path.
-        let result_302 = self.negotiate_dialects(false).await;
-        if result_302.is_ok() {
-            return result_302;
-        }
-
-        debug!("SMB2: 3.0.2 negotiate failed, retrying with 3.1.1");
-        self.negotiate_dialects(true).await
+        debug!("SMB2: Negotiate");
+        self.negotiate_with_311(true).await
     }
 
-    /// Offer a dialect list. When `include_311` is false, exclude SMB 3.1.1
-    /// (avoiding pre-auth integrity complexity in session setup).
-    async fn negotiate_dialects(&self, include_311: bool) -> Result<()> {
-        debug!("SMB2: Negotiate (include_311={include_311})");
-
+    /// Offer all 5 dialects. When `include_311` is true (always, in practice),
+    /// include SMB 3.1.1 negotiate contexts for PreAuth Integrity + Encryption.
+    async fn negotiate_with_311(&self, include_311: bool) -> Result<()> {
         let hdr = self.build_header(SMB2_NEGOTIATE, 0).await;
 
         let dialects: Vec<u16> = if include_311 {
@@ -909,9 +724,9 @@ impl Smb2Connection {
             body.extend_from_slice(&salt);
 
             // Encryption Capabilities Context (required for WS2022/2025)
-            // ContextType = 0x0002, DataLength = 8
+            // ContextType = 0x0002, DataLength = 6 (CipherCount + 2 ciphers)
             body.extend_from_slice(&2u16.to_le_bytes()); // EncryptionCapabilities
-            body.extend_from_slice(&8u16.to_le_bytes()); // DataLength
+            body.extend_from_slice(&6u16.to_le_bytes()); // DataLength
             body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
             // CipherCount = 2
             body.extend_from_slice(&2u16.to_le_bytes());
@@ -1023,17 +838,107 @@ impl Smb2Connection {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // MaxTransactSize (offset 28)
-        let max_transact = u32::from_le_bytes([body[28], body[29], body[30], body[31]]);
-        let max_read = u32::from_le_bytes([body[32], body[33], body[34], body[35]]);
-        let max_write = u32::from_le_bytes([body[36], body[37], body[38], body[39]]);
+        // MaxTransactSize (offset 28) -- cap at 1MB like Impacket
+        let max_transact =
+            u32::from_le_bytes([body[28], body[29], body[30], body[31]]).min(0x100000);
+        let max_read = u32::from_le_bytes([body[32], body[33], body[34], body[35]]).min(0x100000);
+        let max_write = u32::from_le_bytes([body[36], body[37], body[38], body[39]]).min(0x100000);
         debug!("SMB2: MaxTransact={max_transact}, MaxRead={max_read}, MaxWrite={max_write}");
 
         // Store negotiated sizes -- used when building IOCTL MaxOutputResponse
         self.max_transact_size
             .store(max_transact, Ordering::Relaxed);
 
+        // Store max_read and max_write (currently hardcoded to 65536, override with server values)
+        // Note: max_read_size and max_write_size are not atomic; they're set once here.
+
+        // Parse negotiate contexts for SMB 3.1.1 (PreAuth Integrity + Encryption)
+        if dialect == SMB2_DIALECT_311 {
+            // Per MS-SMB2 and Impacket SMB2Negotiate_Response body layout:
+            // [0-1]   StructureSize = 65
+            // [2-3]   SecurityMode
+            // [4-5]   DialectRevision
+            // [6-7]   NegotiateContextCount (3.1.1 only)
+            // [8-23]  ServerGuid
+            // [24-27] Capabilities
+            // [28-31] MaxTransactSize
+            // [32-35] MaxReadSize
+            // [36-39] MaxWriteSize
+            // [40-47] SystemTime
+            // [48-55] ServerStartTime
+            // [56-57] SecurityBufferOffset
+            // [58-59] SecurityBufferLength
+            // [60-63] NegotiateContextOffset (3.1.1 only)
+            let out_ctx_offset =
+                u32::from_le_bytes([body[60], body[61], body[62], body[63]]) as usize;
+            let out_ctx_count = u16::from_le_bytes([body[6], body[7]]) as usize;
+
+            if out_ctx_count > 0 && out_ctx_offset > 0 && out_ctx_offset >= SMB2_HEADER_SIZE {
+                let ctx_data_start = out_ctx_offset - SMB2_HEADER_SIZE;
+                if ctx_data_start < body.len() {
+                    let ctx_data = &body[ctx_data_start..];
+                    self.parse_negotiate_contexts(ctx_data, out_ctx_count);
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Parse SMB 3.1.1 negotiate contexts from the server response.
+    /// Matches Impacket's processContextList() -- extracts CipherId for encryption
+    /// and PreauthIntegrityHashId for the signing key KDF context.
+    fn parse_negotiate_contexts(&self, data: &[u8], context_count: usize) {
+        let mut offset = 0;
+        let mut remaining = context_count;
+
+        while remaining > 0 && offset + 8 <= data.len() {
+            let ctx_type = u16::from_le_bytes([data[offset], data[offset + 1]]);
+            let ctx_data_len = u16::from_le_bytes([data[offset + 2], data[offset + 3]]) as usize;
+
+            let ctx_data_start = offset + 8;
+            let ctx_data_end = ctx_data_start + ctx_data_len;
+
+            if ctx_data_end > data.len() {
+                break;
+            }
+
+            let ctx_data = &data[ctx_data_start..ctx_data_end];
+
+            match ctx_type {
+                0x0001 => {
+                    // SMB2_PREAUTH_INTEGRITY_CAPABILITIES
+                    debug!("SMB2: Server PreAuth Integrity Capabilities parsed");
+                }
+                0x0002 => {
+                    // SMB2_ENCRYPTION_CAPABILITIES
+                    if ctx_data.len() >= 4 {
+                        let cipher_id = u16::from_le_bytes([ctx_data[2], ctx_data[3]]);
+                        self.cipher_id.store(cipher_id, Ordering::Relaxed);
+                        debug!(
+                            "SMB2: Server selected cipher 0x{cipher_id:04X} ({})",
+                            match cipher_id {
+                                0x0001 => "AES-128-CCM",
+                                0x0002 => "AES-128-GCM",
+                                _ => "unknown",
+                            }
+                        );
+                        if cipher_id != 0 {
+                            self.encryption_required
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+                _ => {
+                    debug!("SMB2: Ignoring negotiate context type 0x{ctx_type:04X}");
+                }
+            }
+
+            // Advance to next context with 8-byte alignment padding
+            let padding = (8 - (ctx_data_len % 8)) % 8;
+            offset = ctx_data_start + ctx_data_len + padding;
+            remaining -= 1;
+        }
     }
 
     // ----------------- Session Setup (NTLMSSP) -----------------
@@ -1052,31 +957,42 @@ impl Smb2Connection {
         let type1 = build_ntlmssp_negotiate();
         let spnego_init = wrap_spnego_init(&type1);
 
-        let hdr = self.build_header(SMB2_SESSION_SETUP, 0).await;
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
         let mut body = Vec::new();
-        // StructureSize = 25
+        // StructureSize = 25 (MS-SMB2), but SecurityMode is 1 byte (Impacket-compatible)
         body.extend_from_slice(&25u16.to_le_bytes());
         // Flags = 0
         body.push(0);
-        // SecurityMode = Signing Enabled (0x01)
+        // SecurityMode = Signing Enabled (0x01) -- 1 byte per Impacket SMB2SessionSetup
         body.push(0x01);
         // Capabilities = 0
         body.extend_from_slice(&0u32.to_le_bytes());
         // Channel = 0
         body.extend_from_slice(&0u32.to_le_bytes());
-        // SecurityBufferOffset (fixed at header + 24 bytes of body = 88)
+        // SecurityBufferOffset = header(64) + body(24) = 88
         let sec_offset = (SMB2_HEADER_SIZE + 24) as u16;
         body.extend_from_slice(&sec_offset.to_le_bytes());
         // SecurityBufferLength
         body.extend_from_slice(&(spnego_init.len() as u16).to_le_bytes());
         // PreviousSessionId = 0
         body.extend_from_slice(&0u64.to_le_bytes());
-        // Pad to offset 24
+        // Pad to offset 24 (body size per Impacket layout)
         while body.len() < 24 {
             body.push(0);
         }
         // Security buffer (SPNEGO token)
         body.extend_from_slice(&spnego_init);
+
+        debug!(
+            "SMB2: Session setup leg1 body_len={} spnego_len={} sec_buf_offset={}",
+            body.len(),
+            spnego_init.len(),
+            SMB2_HEADER_SIZE + 24
+        );
+        debug!(
+            "SMB2: Session setup body hex: {:02x?}",
+            &body[..24.min(body.len())]
+        );
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
@@ -1097,11 +1013,11 @@ impl Smb2Connection {
             }
         }
 
-        if resp.len() < SMB2_HEADER_SIZE + 9 {
+        if resp.len() < SMB2_HEADER_SIZE + 8 {
             return Err(OverthroneError::Smb(format!(
-                "SMB2 Session Setup Type1 response too short: {} bytes (expected >={})",
+                "SMB2 Session Setup Type1 response too short: {} bytes (need at least {})",
                 resp.len(),
-                SMB2_HEADER_SIZE + 9
+                SMB2_HEADER_SIZE + 8
             )));
         }
 
@@ -1151,7 +1067,7 @@ impl Smb2Connection {
         );
 
         // -- Step 3: Build NTLMSSP Authenticate (Type 3) --
-        let (mut type3, session_key, session_base_key) =
+        let (mut type3, session_key, _session_base_key) =
             build_ntlmssp_authenticate(domain, username, password, &challenge)?;
 
         // Compute NTLMv2 MIC if SIGN or SEAL is negotiated
@@ -1166,7 +1082,7 @@ impl Smb2Connection {
         let spnego_resp = wrap_spnego_response(&type3);
 
         // Send authentication
-        let hdr = self.build_header(SMB2_SESSION_SETUP, 0).await;
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
         let mut body = Vec::new();
         body.extend_from_slice(&25u16.to_le_bytes());
         body.push(0);
@@ -1217,141 +1133,17 @@ impl Smb2Connection {
             .load(std::sync::atomic::Ordering::Relaxed)
         {
             let dialect = self.dialect.load(std::sync::atomic::Ordering::Relaxed);
-            let claimed_sig = &raw_resp[48..64];
-            let mut verify_buf = raw_resp.to_vec();
-            verify_buf[48..64].fill(0);
             let preauth_hash = self.preauth_hash.lock().await.clone();
-            let expected = derive_signing_key(&session_key, dialect, preauth_hash.as_deref());
-            let expected_cmac = aes_cmac_16(&expected, &verify_buf);
-            if &expected_cmac[..] != claimed_sig {
-                warn!("SMB2 Session Setup sig mismatch -- trying all diagnostic KDF variants");
-                // -- Comprehensive diagnostic: try ALL KDF variants --
-                let ph = preauth_hash.as_deref();
-                let mut found = "none";
-                // A: primary _sep already tried above
-                // B: _imp (no 0x00 separator, mimic older Windows)
-                {
-                    let key_b = sp800_108_counter_kdf_imp(
-                        &session_key,
-                        b"SMBSigningKey\x00",
-                        ph.unwrap_or(b""),
-                    );
-                    let arr: [u8; 16] = key_b[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "B (_imp)";
-                    }
-                }
-                // C: label without trailing null, _sep
-                if found == "none" {
-                    let key_c = sp800_108_counter_kdf_sep(
-                        &session_key,
-                        b"SMBSigningKey",
-                        ph.unwrap_or(b""),
-                    );
-                    let arr: [u8; 16] = key_c[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "C (_sep, no-null label)";
-                    }
-                }
-                // D: label without trailing null, _imp
-                if found == "none" {
-                    let key_d = sp800_108_counter_kdf_imp(
-                        &session_key,
-                        b"SMBSigningKey",
-                        ph.unwrap_or(b""),
-                    );
-                    let arr: [u8; 16] = key_d[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "D (_imp, no-null label)";
-                    }
-                }
-                // E: XOR session_key with first 16 bytes of preauth_hash
-                if found == "none" && ph.is_some_and(|h| h.len() >= 16) {
-                    let hash = ph.unwrap();
-                    let xored: Vec<u8> = session_key
-                        .iter()
-                        .zip(hash.iter())
-                        .map(|(a, b)| a ^ b)
-                        .collect();
-                    let key_e = sp800_108_counter_kdf_sep(&xored, b"SMBSigningKey\x00", hash);
-                    let arr: [u8; 16] = key_e[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "E (XOR'd session_key)";
-                    }
-                }
-                // F: HMAC-SHA512 as PRF
-                if found == "none"
-                    && aes_cmac_16(
-                        &derive_signing_key_sha512(&session_key, dialect, ph),
-                        &verify_buf,
-                    ) == claimed_sig
-                {
-                    found = "F (SHA-512 PRF)";
-                }
-                // G: no counter
-                if found == "none"
-                    && aes_cmac_16(
-                        &derive_signing_key_nocounter(&session_key, dialect, ph),
-                        &verify_buf,
-                    ) == claimed_sig
-                {
-                    found = "G (no counter)";
-                }
-                // H: raw session_key (no KDF at all)
-                if found == "none" && aes_cmac_16(&session_key, &verify_buf) == claimed_sig {
-                    found = "H (raw session_key, no KDF)";
-                }
-                // I: session_base_key (without KDF)
-                if found == "none" && aes_cmac_16(&session_base_key, &verify_buf) == claimed_sig {
-                    found = "I (raw session_base_key, no KDF)";
-                }
-                // J: session_key + SMB2AESCMAC with _sep (SMB 3.0.x label)
-                if found == "none"
-                    && let Some(hash) = ph
-                {
-                    let key_j = sp800_108_counter_kdf_sep(&session_key, b"SMB2AESCMAC\x00", hash);
-                    let arr: [u8; 16] = key_j[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "J (SMB2AESCMAC label, _sep, 3.1.1 context)";
-                    }
-                }
-                // K: session_key + SmbSign context + SMBSigningKey label (no preauth_hash context)
-                if found == "none" {
-                    let key_k = sp800_108_counter_kdf_sep(
-                        &session_key,
-                        b"SMBSigningKey\x00",
-                        b"SmbSign\x00",
-                    );
-                    let arr: [u8; 16] = key_k[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "K (SmbSign context, SMBSigningKey label)";
-                    }
-                }
-                // L: HMAC-SHA256(session_key, preauth_hash[0:16]) as signing key (non-standard KDF extraction)
-                if found == "none" && ph.is_some_and(|h| h.len() >= 16) {
-                    let mut mac = HmacSha256::new_from_slice(&session_key).expect("HMAC");
-                    mac.update(&ph.unwrap()[..16]);
-                    let result = mac.finalize().into_bytes();
-                    let arr: [u8; 16] = result[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "L (HMAC-SHA256(session_key, preauth_hash[0:16]))";
-                    }
-                }
-                // M: preauth_hash first 16 bytes AS signing key
-                if found == "none" && ph.is_some_and(|h| h.len() >= 16) {
-                    let arr: [u8; 16] = ph.unwrap()[..16].try_into().unwrap_or([0u8; 16]);
-                    if aes_cmac_16(&arr, &verify_buf) == claimed_sig {
-                        found = "M (preauth_hash[0:16] as signing key)";
-                    }
-                }
-                warn!(
-                    "SMB2 Session Setup sig mismatch: found={found}, claimed_sig={claimed_sig:02x?}, session_key={session_key:02x?}, session_base_key={session_base_key:02x?}, preauth_hash={:02x?}",
-                    preauth_hash.as_deref().unwrap_or(&[])
-                );
-                self.signing_failures.store(
-                    SIGNING_FAILURE_THRESHOLD,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
+            if !Self::verify_packet(
+                &raw_resp,
+                &session_key,
+                dialect,
+                true,
+                preauth_hash.as_deref(),
+            ) {
+                warn!("SMB2 Session Setup response signature verification failed");
+                self.signing_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -1386,7 +1178,7 @@ impl Smb2Connection {
         let type1 = build_ntlmssp_negotiate();
         let spnego_init = wrap_spnego_init(&type1);
 
-        let hdr = self.build_header(SMB2_SESSION_SETUP, 0).await;
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
         let mut body = Vec::new();
         body.extend_from_slice(&25u16.to_le_bytes());
         body.push(0);
@@ -1459,7 +1251,7 @@ impl Smb2Connection {
         );
 
         // -- Step 3: Build Type 3 with raw NT hash (no password needed) --
-        let (mut type3, session_key, session_base_key) =
+        let (mut type3, session_key, _session_base_key) =
             build_ntlmssp_authenticate_hash(domain, username, &nt_hash, &challenge)?;
 
         // Compute NTLMv2 MIC if SIGN or SEAL is negotiated
@@ -1472,7 +1264,7 @@ impl Smb2Connection {
         }
 
         let spnego_resp = wrap_spnego_response(&type3);
-        let hdr = self.build_header(SMB2_SESSION_SETUP, 0).await;
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
         let mut body = Vec::new();
         body.extend_from_slice(&25u16.to_le_bytes());
         body.push(0);
@@ -1518,177 +1310,17 @@ impl Smb2Connection {
             .load(std::sync::atomic::Ordering::Relaxed)
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
-            let claimed_sig = &raw_resp[48..64];
-            let mut verify_buf = raw_resp.to_vec();
-            verify_buf[48..64].fill(0);
             let preauth_hash = self.preauth_hash.lock().await.clone();
-            let signing_key = derive_signing_key(&session_key, dialect, preauth_hash.as_deref());
-            let expected = aes_cmac_16(&signing_key, &verify_buf);
-            if &expected[..] == claimed_sig {
-                debug!("SMB2 PtH: Session setup resp sig OK (dialect-appropriate label)");
-            } else {
-                // Try all signing key derivations for diagnostic
-                let try_method_sep = |label, ctx| {
-                    let sk = sp800_108_counter_kdf_sep(&session_key, label, ctx);
-                    aes_cmac_16(&sk, &verify_buf) == claimed_sig
-                };
-                let try_method_sbk_sep = |label, ctx| {
-                    let sk = sp800_108_counter_kdf_sep(&session_base_key, label, ctx);
-                    aes_cmac_16(&sk, &verify_buf) == claimed_sig
-                };
-                let try_method_imp = |label, ctx| {
-                    let sk = sp800_108_counter_kdf_imp(&session_key, label, ctx);
-                    aes_cmac_16(&sk, &verify_buf) == claimed_sig
-                };
-                let try_method_sbk_imp = |label, ctx| {
-                    let sk = sp800_108_counter_kdf_imp(&session_base_key, label, ctx);
-                    aes_cmac_16(&sk, &verify_buf) == claimed_sig
-                };
-                let mut found = "none";
-                // -- Separator-style KDF (our original) --
-                // A: KDF bare labels with separator
-                if try_method_sep(b"SMBSigningKey", b"SmbSign") {
-                    found = "A";
-                }
-                // B: KDF bare labels with SBK
-                else if try_method_sbk_sep(b"SMBSigningKey", b"SmbSign") {
-                    found = "B";
-                }
-                // C: KDF embedded-\0 labels
-                else if try_method_sep(b"SMBSigningKey\x00", b"SmbSign\x00") {
-                    found = "C";
-                }
-                // D: KDF embedded-\0 with SBK
-                else if try_method_sbk_sep(b"SMBSigningKey\x00", b"SmbSign\x00") {
-                    found = "D";
-                }
-                // E: KDF joined label-context with \0, empty context
-                else if try_method_sep(b"SMBSigningKey\x00SmbSign\x00", b"") {
-                    found = "E";
-                }
-                // F: same with SBK
-                else if try_method_sbk_sep(b"SMBSigningKey\x00SmbSign\x00", b"") {
-                    found = "F";
-                }
-                // G: label has \0, context bare
-                else if try_method_sep(b"SMBSigningKey\x00", b"SmbSign") {
-                    found = "G";
-                }
-                // H: with SBK
-                else if try_method_sbk_sep(b"SMBSigningKey\x00", b"SmbSign") {
-                    found = "H";
-                }
-                // I: label bare, context has \0
-                else if try_method_sep(b"SMBSigningKey", b"SmbSign\x00") {
-                    found = "I";
-                }
-                // J: with SBK
-                else if try_method_sbk_sep(b"SMBSigningKey", b"SmbSign\x00") {
-                    found = "J";
-                }
-                // -- SMB2AESCMAC label (SMB 3.0.x) --
-                // a: sep with SMB2AESCMAC null-terminated
-                else if try_method_sep(b"SMB2AESCMAC\x00", b"SmbSign\x00") {
-                    found = "a";
-                }
-                // b: sep with SMB2AESCMAC + SBK
-                else if try_method_sbk_sep(b"SMB2AESCMAC\x00", b"SmbSign\x00") {
-                    found = "b";
-                }
-                // c: sep with SMB2AESCMAC bare (no null)
-                else if try_method_sep(b"SMB2AESCMAC", b"SmbSign") {
-                    found = "c";
-                }
-                // d: sep with SMB2AESCMAC bare + SBK
-                else if try_method_sbk_sep(b"SMB2AESCMAC", b"SmbSign") {
-                    found = "d";
-                }
-                // -- Impacket-style KDF (no separator, null-terminated labels) --
-                // K: imp-style with exported key
-                else if try_method_imp(b"SMBSigningKey\x00", b"SmbSign\x00") {
-                    found = "K";
-                }
-                // L: imp-style with SBK
-                else if try_method_sbk_imp(b"SMBSigningKey\x00", b"SmbSign\x00") {
-                    found = "L";
-                }
-                // M: imp-style bare labels (no null terminators)
-                else if try_method_imp(b"SMBSigningKey", b"SmbSign") {
-                    found = "M";
-                }
-                // N: imp-style bare with SBK
-                else if try_method_sbk_imp(b"SMBSigningKey", b"SmbSign") {
-                    found = "N";
-                }
-                // O: imp-style label has \0, context bare
-                else if try_method_imp(b"SMBSigningKey\x00", b"SmbSign") {
-                    found = "O";
-                }
-                // P: with SBK
-                else if try_method_sbk_imp(b"SMBSigningKey\x00", b"SmbSign") {
-                    found = "P";
-                }
-                // Q: imp-style label bare, context has \0
-                else if try_method_imp(b"SMBSigningKey", b"SmbSign\x00") {
-                    found = "Q";
-                }
-                // R: with SBK
-                else if try_method_sbk_imp(b"SMBSigningKey", b"SmbSign\x00") {
-                    found = "R";
-                }
-                // -- Legacy / fallback --
-                // S: HMAC-SHA256(session_key, packet)
-                // T: HMAC-SHA256(session_base_key, packet)
-                let hmac_s = {
-                    let mut mac = HmacSha256::new_from_slice(&session_key).unwrap();
-                    mac.update(&verify_buf);
-                    mac.finalize().into_bytes()
-                };
-                let hmac_t = {
-                    let mut mac = HmacSha256::new_from_slice(&session_base_key).unwrap();
-                    mac.update(&verify_buf);
-                    mac.finalize().into_bytes()
-                };
-                if &hmac_s[..16] == claimed_sig {
-                    found = "S";
-                } else if &hmac_t[..16] == claimed_sig {
-                    found = "T";
-                }
-                // U: raw AES-CMAC(session_key, packet) -- no KDF
-                else if &aes_cmac_16(&session_key, &verify_buf)[..] == claimed_sig {
-                    found = "U";
-                }
-                // V: raw AES-CMAC(session_base_key, packet) -- no KDF
-                else if &aes_cmac_16(&session_base_key, &verify_buf)[..] == claimed_sig {
-                    found = "V";
-                }
-                // W: imp-style, joined single label with SBK
-                else if try_method_sbk_imp(b"SMBSigningKey\x00SmbSign\x00", b"") {
-                    found = "W";
-                }
-                // X: imp-style, joined single label with exported key
-                else if try_method_imp(b"SMBSigningKey\x00SmbSign\x00", b"") {
-                    found = "X";
-                }
-                if found != "none" {
-                    debug!("SMB2: Session setup resp sig matches via method {found}");
-                } else {
-                    let resp_flags = u32::from_le_bytes([
-                        raw_resp[16],
-                        raw_resp[17],
-                        raw_resp[18],
-                        raw_resp[19],
-                    ]);
-                    warn!(
-                        "SMB2: Session setup resp sig: NONE of methods match. resp_flags=0x{:08X}, SIGNED_bit={}, claimed={:02x?}, session_key={:02x?}, session_base_key={:02x?}, dialect=0x{:04X}",
-                        resp_flags,
-                        resp_flags & SMB2_FLAGS_SIGNED != 0,
-                        claimed_sig,
-                        session_key,
-                        session_base_key,
-                        dialect
-                    );
-                }
+            if !Self::verify_packet(
+                &raw_resp,
+                &session_key,
+                dialect,
+                true,
+                preauth_hash.as_deref(),
+            ) {
+                warn!("SMB2 PtH Session Setup response signature verification failed");
+                self.signing_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -1713,11 +1345,11 @@ impl Smb2Connection {
 
         let spnego_init = wrap_spnego_kerberos(ap_req_bytes);
 
-        let hdr = self.build_header(SMB2_SESSION_SETUP, 0).await;
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
         let mut body = Vec::new();
         body.extend_from_slice(&25u16.to_le_bytes()); // StructureSize
         body.push(0); // Flags
-        body.push(0x01); // SecurityMode = Signing Enabled
+        body.push(0x01); // SecurityMode = Signing Enabled (1 byte)
         body.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
         body.extend_from_slice(&0u32.to_le_bytes()); // Channel
         let sec_offset = (SMB2_HEADER_SIZE + 24) as u16;
@@ -2637,8 +2269,12 @@ impl Smb2Connection {
         }
 
         // Derive C2S (encryption) and S2C (decryption) keys
-        let enc_key = derive_smb3_encryption_key(&session_key, false);
-        let dec_key = derive_smb3_encryption_key(&session_key, true);
+        let dialect = self.dialect.load(Ordering::Relaxed);
+        let preauth_hash = self.preauth_hash.lock().await.clone();
+        let enc_key =
+            derive_smb3_encryption_key(&session_key, false, preauth_hash.as_deref(), dialect);
+        let dec_key =
+            derive_smb3_encryption_key(&session_key, true, preauth_hash.as_deref(), dialect);
 
         *self.encryption_key.lock().await = Some(enc_key);
         *self.decryption_key.lock().await = Some(dec_key);
@@ -2683,10 +2319,17 @@ pub struct NtlmChallenge {
 
 /// Build NTLMSSP Type 1 (Negotiate) message.
 pub fn build_ntlmssp_negotiate() -> Vec<u8> {
+    // Flags matching Impacket/nxc NTLM Negotiate:
+    // - NEGOTIATE_TARGET_INFO: server must include TargetInfo in CHALLENGE
+    // - NEGOTIATE_VERSION: client supports OS version in messages
+    // Without TARGET_INFO, the server's target_info behavior is undefined,
+    // which can cause STATUS_LOGON_FAILURE on WS2019+ DCs.
     let flags = NTLMSSP_NEGOTIATE_56
         | NTLMSSP_NEGOTIATE_KEY_EXCH
         | NTLMSSP_NEGOTIATE_128
         | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+        | NTLMSSP_NEGOTIATE_TARGET_INFO
+        | NTLMSSP_NEGOTIATE_VERSION
         | NTLMSSP_NEGOTIATE_ALWAYS_SIGN
         | NTLMSSP_NEGOTIATE_NTLM
         | NTLMSSP_NEGOTIATE_SEAL
@@ -2845,8 +2488,20 @@ pub fn build_ntlmssp_authenticate_hash(
         .flat_map(|c| c.to_le_bytes())
         .collect();
 
-    // LM response (24 bytes of zeros for NTLMv2)
-    let lm_response = vec![0u8; 24];
+    // LMv2 response: HMAC-MD5(ResponseKeyNT, ServerChallenge + ClientChallenge) || ClientChallenge
+    // Sending zeros causes STATUS_LOGON_FAILURE on WS2019+ DCs configured with
+    // strict NTLM policies (LM compatibility level 4-5). nxc/Impacket always
+    // sends a valid LMv2 response -- we must match that behavior.
+    let lm_client_challenge: [u8; 8] = rand::rng().random();
+    let lm_response = {
+        let mut lm_input = Vec::with_capacity(16);
+        lm_input.extend_from_slice(&challenge.server_challenge);
+        lm_input.extend_from_slice(&lm_client_challenge);
+        let lm_proof = hmac_md5(&response_key, &lm_input)?;
+        let mut lm_resp = lm_proof;
+        lm_resp.extend_from_slice(&lm_client_challenge);
+        lm_resp
+    };
 
     // KEY_EXCH: export random session key encrypted with SessionBaseKey
     debug!(
@@ -3058,7 +2713,9 @@ fn filetime_now() -> [u8; 8] {
 
 /// Wrap an NTLMSSP token in a SPNEGO NegTokenInit.
 pub fn wrap_spnego_init(ntlmssp: &[u8]) -> Vec<u8> {
-    // Build inner mechTypes sequence [NTLMSSP OID]
+    // Build inner mechTypes sequence [NTLMSSP OID] -- single mechanism.
+    // Impacket/NXC use single-mechanism NTLMSSP in NegTokenInit for NTLM auth.
+    // Multi-mechanism (NTLMSSP+Kerberos) causes STATUS_INVALID_PARAMETER on WS2019+.
     let mech_types = asn1_sequence(NTLMSSP_OID);
     // mechToken [2] OCTET STRING
     let mech_token = asn1_context_tag(2, &asn1_octet_string(ntlmssp));
@@ -3174,10 +2831,9 @@ pub fn compute_ntlmv2_mic(
 
 /// NIST SP800-108 Counter Mode KDF using HMAC-SHA256.
 /// Derives a 16-byte key from `key_in`, `label`, and `context`.
-/// Used to produce SMB 3.x signing and encryption keys from the exported session key.
-/// This variant matches impacket's implementation: `\x00\x00\x00\x01 || label || context || \x00\x00\x00\x80`
-/// where `label` and `context` are expected to include their own null terminators.
-fn sp800_108_counter_kdf_imp(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
+/// Matches Impacket's `crypto.KDF_CounterMode`: `counter || label || context || L`
+/// where `label` already includes its own null terminator (e.g. b"SMBSigningKey\x00").
+fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
     let mut input = Vec::with_capacity(4 + label.len() + context.len() + 4);
     input.extend_from_slice(&1u32.to_be_bytes()); // i = 1
     input.extend_from_slice(label);
@@ -3189,8 +2845,9 @@ fn sp800_108_counter_kdf_imp(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec
     mac.finalize().into_bytes()[..16].to_vec()
 }
 
-/// NIST SP800-108 Counter Mode KDF using HMAC-SHA256.
-/// Variant with extra 0x00 separator between label and context (per SP800-108 format).
+/// SP800-108 Counter Mode KDF variant with extra 0x00 separator between label and context.
+/// Kept as reference; the primary `sp800_108_counter_kdf` matches Impacket's implementation.
+#[cfg(test)]
 fn sp800_108_counter_kdf_sep(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
     let mut input = Vec::with_capacity(4 + label.len() + 1 + context.len() + 4);
     input.extend_from_slice(&1u32.to_be_bytes()); // i = 1
@@ -3205,14 +2862,31 @@ fn sp800_108_counter_kdf_sep(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec
 }
 
 /// Derive SMB 3.x encryption key for the given direction.
-/// Uses SP800-108 KDF with direction-specific labels.
-fn derive_smb3_encryption_key(session_key: &[u8], is_server_to_client: bool) -> Vec<u8> {
+/// Uses SP800-108 KDF with direction-specific labels, matching Impacket's key derivation.
+/// SMB 3.1.1: label=SMBC2SCipherKey/SMBS2CCipherKey +0x00, context=PreauthIntegrityHashValue
+/// SMB 3.0.x: label=SMB2AESCCM +0x00, context=ServerIn /ServerOut +0x00
+fn derive_smb3_encryption_key(
+    session_key: &[u8],
+    is_server_to_client: bool,
+    preauth_hash: Option<&[u8]>,
+    dialect: u16,
+) -> Vec<u8> {
+    if dialect >= SMB2_DIALECT_311 {
+        let label = if is_server_to_client {
+            b"SMBS2CCipherKey\x00"
+        } else {
+            b"SMBC2SCipherKey\x00"
+        };
+        if let Some(hash) = preauth_hash {
+            return sp800_108_counter_kdf(session_key, label, hash);
+        }
+    }
     let label = if is_server_to_client {
         SMB3_ENCRYPTION_KEY_LABEL_S2C
     } else {
         SMB3_ENCRYPTION_KEY_LABEL_C2S
     };
-    sp800_108_counter_kdf_sep(session_key, label, SMB3_ENCRYPTION_KEY_CONTEXT)
+    sp800_108_counter_kdf(session_key, label, SMB3_ENCRYPTION_KEY_CONTEXT)
 }
 
 /// Encrypt an SMB3 payload using AES-128-GCM and build a Transform_Header.
@@ -3582,25 +3256,19 @@ mod tests {
 
     #[test]
     fn test_sp800_108_kdf_smb_signing() {
-        // Known test vector for SMB 3.x signing key derivation
-        // Using a known session_key, verify the signing key
-        let session_key = [0x01u8; 16]; // 16 bytes of 0x01
-        let signing_key = sp800_108_counter_kdf_sep(&session_key, b"SMBSigningKey", b"SmbSign");
-        // AES-128-CMAC uses a 128-bit key (16 bytes)
+        let session_key = [0x01u8; 16];
+        let signing_key = sp800_108_counter_kdf(&session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
         assert_eq!(signing_key.len(), 16);
-        // Not comparing against a known value, just ensuring deterministic
-        let signing_key2 = sp800_108_counter_kdf_sep(&session_key, b"SMBSigningKey", b"SmbSign");
+        let signing_key2 =
+            sp800_108_counter_kdf(&session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
         assert_eq!(signing_key, signing_key2);
     }
 
     #[test]
     fn test_sp800_108_kdf_smb_signing_null() {
-        // Same test but with null-terminated labels
         let session_key = [0x01u8; 16];
-        let with_null =
-            sp800_108_counter_kdf_sep(&session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
-        let without = sp800_108_counter_kdf_sep(&session_key, b"SMBSigningKey", b"SmbSign");
-        // These should be different since labels differ
+        let with_null = sp800_108_counter_kdf(&session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
+        let without = sp800_108_counter_kdf(&session_key, b"SMBSigningKey", b"SmbSign");
         assert_ne!(with_null, without);
     }
 

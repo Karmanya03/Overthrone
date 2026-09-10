@@ -300,14 +300,20 @@ pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
     // NEGOTIATE_56 (0x80000000), and NEGOTIATE_KEY_EXCH (0x40000000) so the server can
     // negotiate signing, sealing, and 128-bit keys.  WS2025 DCs reject connections that
     // only offer 56-bit or weaker NTLM flags.
+    // Flags matching Impacket/nxc NTLM Negotiate:
+    // - NEGOTIATE_TARGET_INFO: server must include TargetInfo in CHALLENGE
+    // - NEGOTIATE_VERSION: client supports OS version in messages
+    // - NEGOTIATE_OEM REMOVED: causes encoding mismatch with some servers
+    //   that respond in OEM when NEGOTIATE_UNICODE is also set
     let flags: u32 = 0x0000_0001   // NEGOTIATE_UNICODE
-        | 0x0000_0002              // NEGOTIATE_OEM
         | 0x0000_0010              // NEGOTIATE_SIGN
         | 0x0000_0020              // NEGOTIATE_SEAL
         | 0x0000_0200              // NEGOTIATE_NTLM
         | 0x0000_8000              // NEGOTIATE_ALWAYS_SIGN
         | 0x0008_0000              // NEGOTIATE_EXTENDED_SESSIONSECURITY
+        | 0x0080_0000              // NEGOTIATE_TARGET_INFO
         | 0x0002_0000              // REQUEST_TARGET
+        | 0x0200_0000              // NEGOTIATE_VERSION
         | 0x2000_0000              // NEGOTIATE_128
         | 0x4000_0000              // NEGOTIATE_KEY_EXCH
         | 0x8000_0000; // NEGOTIATE_56

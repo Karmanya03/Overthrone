@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.6 (2026-09-10)
+
+### SMB2 Protocol Compliance (WS2019/2022/2025)
+
+- **Session setup body layout fix**: SecurityMode changed from 2-byte `<H` to 1-byte `<B` per Impacket's `SMB2SessionSetup`, matching the actual on-wire format that Windows servers expect. SecurityBufferOffset corrected from 89 to 88 (header 64 + body 24). This was the root cause of `STATUS_INVALID_PARAMETER` (0xC000000D) on session setup.
+- **CreditCharge**: Session setup requests now send CreditCharge=1 (matching Impacket default) instead of 0.
+- **SPNEGO single-mechanism**: NTLM auth now lists only NTLMSSP in NegTokenInit MechTypes (was listing both NTLMSSP + Kerberos). Multi-mechanism caused server rejection.
+- **SMB 3.1.1 re-enabled**: Negotiate now offers all 5 dialects including 3.1.1 (was disabled during debugging).
+- **NegotiateContextOffset parsing**: Corrected from body[48] to body[60] for SMB 3.1.1 negotiate responses. NegotiateContextCount corrected from body[52] to body[6]. These offsets match the `SMB2Negotiate_Response` structure in Impacket.
+
 ## v0.4.5 (2026-09-02)
 
 ### Bug Fixes

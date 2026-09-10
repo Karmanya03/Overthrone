@@ -1126,6 +1126,14 @@ fn handle_sub_menu(app: &mut WizardApp, key: KeyEvent) {
         KeyCode::Tab | KeyCode::Char('t') => {
             app.screen = WizardScreen::TargetConfig;
         }
+        KeyCode::Enter => {
+            // Toggle selection on current item (same as Space)
+            if let Some(selected) = app.menu_state.selected()
+                && let Some(&idx) = modules_in_screen.get(selected)
+            {
+                app.modules[idx].selected = !app.modules[idx].selected;
+            }
+        }
         KeyCode::Char('r') | KeyCode::Char('R') if app.selected_count() > 0 => {
             app.screen = WizardScreen::Running;
             app.running = true;

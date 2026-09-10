@@ -192,19 +192,13 @@ async fn kdc_recv(stream: &mut TcpStream) -> Result<Vec<u8>> {
 /// Per RFC 4120 §5.2: clients SHOULD try UDP first for messages that fit
 /// in a single datagram. Some WS2022/2025 KDCs load-balance via UDP port 88.
 pub(crate) async fn kdc_exchange(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
-    // Small messages: try UDP first (standard Kerberos behavior)
-    if request_bytes.len() <= 1280 {
-        match kdc_exchange_udp(dc_ip, request_bytes).await {
-            Ok(resp) => return Ok(resp),
-            Err(e) => {
-                debug!("KDC UDP failed ({}), falling back to TCP", e);
-            }
-        }
-    }
+    // Always use TCP: avoids KRB_ERR_RESPONSE_TOO_BIG (error 52) when AS-REP
+    // with PAC exceeds UDP datagram size. Matches Impacket/Rubeus behavior.
     kdc_exchange_tcp(dc_ip, request_bytes).await
 }
 
 /// Kerberos exchange over UDP (connectionless, no length prefix)
+#[expect(dead_code, reason = "kept for connectionless KDC environments")]
 async fn kdc_exchange_udp(dc_ip: &str, request_bytes: &[u8]) -> Result<Vec<u8>> {
     let addr: SocketAddr = format!("{dc_ip}:{KDC_PORT}")
         .parse()
@@ -2700,8 +2694,9 @@ pub fn krb_error_to_string(code: i32) -> &'static str {
         36 => "KRB_AP_ERR_BADMATCH - Ticket and authenticator do not match",
         32 => "KRB_AP_ERR_BADADDR - Incorrect network address",
         37 => "KRB_AP_ERR_MODIFIED - Message stream modified",
-        41 => "KRB_ERR_RESPONSE_TOO_BIG - Response too big for UDP",
+        41 => "KRB_AP_ERR_MODIFIED - Message stream modified",
         50 => "KDC_ERR_BADOPTION - Bad option in request",
+        52 => "KRB_ERR_RESPONSE_TOO_BIG - Response too big for UDP, retry TCP",
         60 => "KRB_ERR_GENERIC - Generic error",
         68 => "KDC_ERR_WRONG_REALM - Wrong realm",
         _ => "UNKNOWN_ERROR",
@@ -3709,7 +3704,7 @@ pub async fn probe_kdc(dc_ip: &str) -> Result<String> {
             0 => "KDC_ERR_NONE",
             6 => "KDC_ERR_C_PRINCIPAL_UNKNOWN",
             25 => "KDC_ERR_PREAUTH_REQUIRED",
-            52 => "KDC_ERR_GENERIC",
+            52 => "KRB_ERR_RESPONSE_TOO_BIG",
             68 => "KDC_ERR_WRONG_REALM",
             _ => "unknown",
         };

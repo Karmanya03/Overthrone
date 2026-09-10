@@ -229,6 +229,10 @@ async fn dispatch_credential(
                 Err(e) => Err(anyhow::anyhow!("{}", e)),
             }
         }
+        "NTLMv1 Roast" => {
+            Ok("NTLMv1 Roast -- downgrade NTLMv1 and extract crackable hashes".to_string())
+        }
+        "Timeroast" => Ok("Timeroast -- roast machine passwords via MS-SNTP".to_string()),
         _ => Ok(format!("Module '{}' dispatched", name)),
     }
 }
